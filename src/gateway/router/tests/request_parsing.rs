@@ -396,3 +396,53 @@ fn parse_request_initialize_method() {
     assert_eq!(method, "initialize");
     assert!(params.is_some());
 }
+
+// =====================================================================
+// MIK-7650: no sub-path alias under the direct route
+// =====================================================================
+
+/// `uri` answered by the full router, with a JSON-RPC `ping` as the body.
+async fn answer(state: &Arc<AppState>, method: &str, uri: &str) -> (StatusCode, Vec<u8>) {
+    let request = axum::http::Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+        ))
+        .unwrap();
+    let response = create_router(Arc::clone(state))
+        .oneshot(request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, body.to_vec())
+}
+
+/// The direct route once had a wildcard sub-path alias whose handler extracts
+/// one path parameter, so every request answered 500 before the handler ran.
+/// A sub-path is no route: an empty 404, not the handler's JSON-RPC answer and
+/// never 500. The control shows the empty-body check tells the two apart: the
+/// direct route itself still reaches its handler, which answers an unknown
+/// backend with a JSON-RPC 404.
+#[tokio::test]
+async fn a_sub_path_under_the_direct_route_is_not_a_route() {
+    let (state, _store) = test_router_app_state().await;
+    for (method, uri) in [
+        ("POST", "/mcp/b/extra"),
+        ("POST", "/mcp/b/x/y"),
+        ("GET", "/mcp/b/extra"),
+    ] {
+        let (status, body) = answer(&state, method, uri).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
+        assert!(
+            body.is_empty(),
+            "{method} {uri} reached a handler: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    let (status, body) = answer(&state, "POST", "/mcp/b").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "the direct route");
+    assert!(!body.is_empty(), "the direct route reached its handler");
+}
