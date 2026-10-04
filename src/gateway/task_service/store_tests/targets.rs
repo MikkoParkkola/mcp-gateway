@@ -315,7 +315,7 @@ async fn a_peer_failure_on_a_row_with_calls_is_version_6() {
         .settle_bounded_by(
             OWNER,
             task.id(),
-            2,
+            1,
             (peer_failure(), None),
             ErrorAuthor::Peer,
             Utc::now(),
