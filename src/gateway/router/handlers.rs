@@ -1967,6 +1967,23 @@ async fn meta_mcp_dispatch(
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");
+    // MIK-7887.RECEIPT.4: the receipt describes this, the delivered answer.
+    {
+        use crate::gateway::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
+        let stamps = if is_modern {
+            GatewayStamps::Modern
+        } else {
+            GatewayStamps::Legacy
+        };
+        let shape = if external_tool == "gateway_invoke" {
+            AnswerShape::InvokeWrapped
+        } else {
+            AnswerShape::Literal
+        };
+        state
+            .meta_mcp
+            .rebuild_receipt_from_final(response.result.as_ref(), stamps, shape);
+    }
     // COLLUDE.1: receipts ride on the response to `emit_http`, after the last replacer.
     state.meta_mcp.settle_relay_receipts(response);
 
