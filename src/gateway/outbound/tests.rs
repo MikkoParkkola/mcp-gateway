@@ -431,20 +431,32 @@ fn the_message_member_of_an_error_is_scanned() {
 /// MIK-7883.SCAN.2: `error.data` judged under a wrapper `arg_keys` entry. A
 /// configured key equal to the envelope member `data` matches the error's own
 /// `data`, whether it holds the tenant directly or wraps it, so a refusal that
-/// carries another tenant in its data is withheld like any other frame.
+/// carries another tenant in its data is withheld like any other frame. The
+/// bare scalar is the load-bearing case: only the emitted-document scan sees
+/// it under the member name `data`. The owner's own tenant in the same place
+/// is admitted, so blocking every `error.data` cannot pass.
 #[test]
 fn the_data_member_of_an_error_is_scanned() {
     let fw = firewall_with(CrossTenantReads::Block, &["customer_id", "data"]);
     let _a = read_a(&fw);
-    for data in [json!(B), json!({ "data": B })] {
+    let refusal = |data: &serde_json::Value| {
         let refused = JsonRpcResponse::error_with_data(
             Some(RequestId::Number(2)),
             -32000,
             "refused",
             data.clone(),
         );
-        let frame = delivered(&fw, Some(KEY), Payload::Response(refused), None, None);
-        assert_eq!(frame.verdict(), Some(ReadVerdict::Blocked), "{data}");
+        delivered(&fw, Some(KEY), Payload::Response(refused), None, None)
+    };
+    for data in [json!(B), json!({ "data": B })] {
+        assert_eq!(
+            refusal(&data).verdict(),
+            Some(ReadVerdict::Blocked),
+            "{data}"
+        );
+    }
+    for data in [json!(A), json!({ "data": A })] {
+        assert_eq!(refusal(&data).verdict(), None, "the owner's own {data}");
     }
 }
 
