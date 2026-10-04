@@ -1,0 +1,163 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-7684: the stdio reader never waits for stdout room.
+//!
+//! A client that stops reading stdout fills the writer queue. Parse errors and
+//! batches used to be answered from the reader itself, so the reader parked on
+//! the full queue and never read EOF: `run_stdio_on` did not return. Driven
+//! through `Gateway::run_stdio_on` over in-memory pipes, with no backends.
+
+use std::time::Duration;
+
+use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines};
+use tokio::task::JoinHandle;
+use tokio::time::timeout;
+
+use crate::config::Config;
+use crate::gateway::Gateway;
+
+/// More lines than the writer queue holds (`STDOUT_QUEUE_DEPTH`), so on the
+/// old code the reader parks before it reaches EOF.
+const FLOOD: usize = super::super::STDOUT_QUEUE_DEPTH + 200;
+/// Bound on each wait for a frame in the reading control.
+const ARRIVAL: Duration = Duration::from_secs(10);
+
+struct Served {
+    stdin: DuplexStream,
+    stdout: Lines<BufReader<DuplexStream>>,
+    task: JoinHandle<crate::Result<()>>,
+    _dir: tempfile::TempDir,
+}
+
+/// A gateway with no backends serving stdio. stdin is large, so the test's
+/// own writes never wait on a parked reader; stdout holds `output_capacity`
+/// bytes. The handshake is done and its answer read.
+async fn serve(output_capacity: usize) -> Served {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let yaml = format!(
+        "backends: {{}}\ntasks:\n  store_dir: {}\n",
+        serde_json::to_string(&dir.path().join("tasks").display().to_string())
+            .expect("a JSON string")
+    );
+    crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
+    let config = Config::load(Some(&path)).expect("config loads");
+    let gateway = Gateway::new(config)
+        .await
+        .expect("gateway boots")
+        .with_data_dir(dir.path().to_path_buf());
+    let (stdin, input) = tokio::io::duplex(8 << 20);
+    let (output, reader) = tokio::io::duplex(output_capacity);
+    let task = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
+    let mut served = Served {
+        stdin,
+        stdout: BufReader::new(reader).lines(),
+        task,
+        _dir: dir,
+    };
+    let initialize = json!({
+        "jsonrpc": "2.0", "id": "init", "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "mik7684", "version": "0"},
+        },
+    });
+    send(&mut served.stdin, &initialize.to_string()).await;
+    let line = timeout(ARRIVAL, served.stdout.next_line())
+        .await
+        .expect("the handshake is answered")
+        .expect("stdout reads")
+        .expect("stdout is open");
+    let answer: Value = serde_json::from_str(&line).expect("one JSON frame");
+    assert_eq!(answer["id"], json!("init"), "{answer}");
+    served
+}
+
+async fn send(stdin: &mut DuplexStream, lines: &str) {
+    stdin
+        .write_all(format!("{lines}\n").as_bytes())
+        .await
+        .expect("write to the gateway's stdin");
+}
+
+fn batch(id: usize) -> String {
+    json!([{"jsonrpc": "2.0", "id": id, "method": "ping"}]).to_string()
+}
+
+/// Close stdin with stdout still unread and require `run_stdio_on` to return
+/// `Ok` within the drain deadline plus a margin.
+async fn eof_returns_while_stdout_is_unread(mut served: Served) {
+    drop(served.stdin);
+    let bound = super::super::STDIO_DRAIN_TIMEOUT + Duration::from_secs(15);
+    timeout(bound, &mut served.task)
+        .await
+        .unwrap_or_else(|_| panic!("run_stdio_on must return within {bound:?} of EOF"))
+        .expect("the serve task does not panic")
+        .expect("run_stdio_on returns Ok");
+    // Held until here: dropping the reader would unblock the writer.
+    drop(served.stdout);
+}
+
+/// T1. Parse errors past a full queue do not park the reader.
+#[tokio::test]
+async fn parse_errors_on_a_full_stdout_do_not_park_the_reader() {
+    let mut served = serve(64).await;
+    let flood = vec!["{not json"; FLOOD].join("\n");
+    send(&mut served.stdin, &flood).await;
+    eof_returns_while_stdout_is_unread(served).await;
+}
+
+/// T2 (AC2). Batches past a full queue do not park the reader.
+#[tokio::test]
+async fn batches_on_a_full_stdout_do_not_park_the_reader() {
+    let mut served = serve(64).await;
+    let flood: Vec<String> = (0..FLOOD).map(batch).collect();
+    send(&mut served.stdin, &flood.join("\n")).await;
+    eof_returns_while_stdout_is_unread(served).await;
+}
+
+/// T3. Positive control: a client that reads loses nothing. Every batch item,
+/// every single request and every parse error is answered exactly once.
+#[tokio::test]
+async fn a_reading_client_gets_every_answer() {
+    let mut served = serve(1 << 20).await;
+    let mut lines = Vec::new();
+    for k in 0..10 {
+        lines.push(batch(k));
+        lines.push("{not json".to_string());
+        lines.push(json!({"jsonrpc": "2.0", "id": 100 + k, "method": "ping"}).to_string());
+    }
+    send(&mut served.stdin, &lines.join("\n")).await;
+    let mut batch_ids = Vec::new();
+    let mut single_ids = Vec::new();
+    let mut parse_errors = 0;
+    while batch_ids.len() + single_ids.len() + parse_errors < 30 {
+        let line = timeout(ARRIVAL, served.stdout.next_line())
+            .await
+            .expect("every answer arrives")
+            .expect("stdout reads")
+            .expect("stdout is open");
+        let frame: Value = serde_json::from_str(&line).expect("one JSON frame");
+        match &frame {
+            Value::Array(items) => {
+                batch_ids.extend(items.iter().map(|item| item["id"].clone()));
+            }
+            _ if frame["error"]["code"] == json!(-32700) => parse_errors += 1,
+            _ if frame.get("method").is_none() => single_ids.push(frame["id"].clone()),
+            _ => {}
+        }
+    }
+    batch_ids.sort_by_key(|id| id.as_u64());
+    single_ids.sort_by_key(|id| id.as_u64());
+    assert_eq!(batch_ids, (0..10).map(|k| json!(k)).collect::<Vec<_>>());
+    assert_eq!(single_ids, (100..110).map(|k| json!(k)).collect::<Vec<_>>());
+    assert_eq!(parse_errors, 10);
+    drop(served.stdin);
+    timeout(ARRIVAL, &mut served.task)
+        .await
+        .expect("EOF returns promptly when stdout is read")
+        .expect("no panic")
+        .expect("Ok");
+}
