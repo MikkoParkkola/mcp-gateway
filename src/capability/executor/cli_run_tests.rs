@@ -175,6 +175,57 @@ async fn output_past_the_cap_fails_the_call() {
     assert!(err.contains("byte limit"), "{err}");
 }
 
+/// Whether `pid` names a running process.
+#[cfg(unix)]
+fn alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// Whether `pid` names a running process.
+#[cfg(windows)]
+fn alive(pid: u32) -> bool {
+    let out = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .output()
+        .unwrap();
+    // A failed query is not evidence that the process is gone.
+    assert!(out.status.success(), "tasklist failed: {out:?}");
+    let pid = pid.to_string();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|row| row.split(',').nth(1).map(|f| f.trim_matches('"')) == Some(pid.as_str()))
+}
+
+/// Whether `pid` is gone within five seconds.
+async fn gone_within_five_seconds(pid: u32) -> bool {
+    for _ in 0..50 {
+        if !alive(pid) {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    false
+}
+
+/// The grandchild's pid, once `argv_echo.py grandchild` has written it.
+async fn grandchild_pid(pidfile: &Path) -> u32 {
+    for _ in 0..200 {
+        if let Some(pid) = std::fs::read_to_string(pidfile)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+        {
+            return pid;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("no grandchild pid in {}", pidfile.display());
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn a_timeout_kills_the_child_and_its_grandchild() {
@@ -183,24 +234,36 @@ async fn a_timeout_kills_the_child_and_its_grandchild() {
     let cap = capability("grandchild", &format!("'{}'", pidfile.display()), "", 5);
     let err = call(&cap, json!({})).await.unwrap_err().to_string();
     assert!(err.contains("did not finish"), "{err}");
-    let pid: i32 = std::fs::read_to_string(&pidfile)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    let mut alive = true;
-    for _ in 0..50 {
-        let status = std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .status()
-            .unwrap();
-        if !status.success() {
-            alive = false;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    assert!(!alive, "grandchild {pid} outlived the timeout");
+    let pid = grandchild_pid(&pidfile).await;
+    assert!(
+        gone_within_five_seconds(pid).await,
+        "grandchild {pid} outlived the timeout"
+    );
+}
+
+/// MIK-7815.FIX.2 and FIX.3: a call aborted while its child runs tears down
+/// the whole tree, the grandchild included: the process group on Unix, the
+/// Job on Windows.
+#[tokio::test]
+async fn an_aborted_call_kills_the_child_and_its_grandchild() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("grandchild.pid");
+    let cap = capability("grandchild", &format!("'{}'", pidfile.display()), "", 60);
+    let task = tokio::spawn(async move { call(&cap, json!({})).await });
+    let pid = grandchild_pid(&pidfile).await;
+    assert!(
+        alive(pid),
+        "premise: grandchild {pid} runs before the abort"
+    );
+    task.abort();
+    assert!(
+        task.await.unwrap_err().is_cancelled(),
+        "the call was aborted"
+    );
+    assert!(
+        gone_within_five_seconds(pid).await,
+        "grandchild {pid} outlived the aborted call"
+    );
 }
 
 #[test]
