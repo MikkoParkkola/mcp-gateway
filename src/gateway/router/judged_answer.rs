@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-//! The delivery record of a judged POST answer (MIK-7799): written after the
-//! outbound judge, with the answer's `tenant_read` fields in it.
+//! The delivery record of a judged answer on `POST /mcp` and stdio (MIK-7799,
+//! MIK-7920): written after the outbound judge, with the answer's
+//! `tenant_read` fields in it.
 
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::outbound::OutboundFrame;
@@ -14,7 +15,7 @@ use crate::security::response_policy::ResponseCorrelation;
 /// the answer is withheld: the frame becomes the audit-unavailable refusal,
 /// and so does `finalized`, the answer a stored delivery keeps (`None` when
 /// no execution stores one).
-pub(super) async fn record_delivery(
+pub(in crate::gateway) async fn record_delivery(
     meta: &MetaMcp,
     mut frame: OutboundFrame,
     correlation: &ResponseCorrelation<'_>,

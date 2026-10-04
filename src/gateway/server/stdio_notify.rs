@@ -121,8 +121,14 @@ impl Gateway {
             .await;
             match resp {
                 Some(resp) => frames.push(
-                    Self::judge_and_commit(reads, (resp, params.as_ref(), read.as_ref()), staged)
-                        .await,
+                    Self::judge_and_commit(
+                        meta_mcp,
+                        reads,
+                        session_id,
+                        (resp, params.as_ref(), read.as_ref()),
+                        staged,
+                    )
+                    .await,
                 ),
                 None => staged.commit(false),
             }

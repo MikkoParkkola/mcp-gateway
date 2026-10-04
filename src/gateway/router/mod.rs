@@ -109,6 +109,8 @@ mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
+/// The meta route's post-judge delivery record, shared with stdio (MIK-7920).
+pub(in crate::gateway) use judged_answer::record_delivery as record_judged_delivery;
 #[cfg(test)]
 mod log_level_admin_tests;
 #[cfg(test)]

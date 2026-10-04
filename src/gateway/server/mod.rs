@@ -36,6 +36,7 @@ mod signing_allocation_tests;
 mod start_checks;
 mod stdio_catalogue;
 mod stdio_channel;
+mod stdio_delivery;
 mod stdio_dispatches;
 mod stdio_nonce;
 mod stdio_notify;
@@ -2655,7 +2656,9 @@ impl Gateway {
                     let response = match response {
                         Some(value) => Some(
                             Self::judge_and_commit(
+                                &meta_mcp,
                                 &reads,
+                                session_id,
                                 (value, params.as_ref(), hidden.as_ref()),
                                 staged,
                             )
@@ -2847,23 +2850,6 @@ impl Gateway {
         }
     }
 
-    /// Judge one finalized stdio answer, then record the receipts its dispatch
-    /// staged, only when the frame as written delivers a result: a read the
-    /// judge withholds, or an audit failure replaces, leaves none.
-    async fn judge_and_commit(
-        reads: &crate::gateway::outbound::StdioReads,
-        (value, params, hidden): (
-            serde_json::Value,
-            Option<&serde_json::Value>,
-            Option<&crate::security::tenant_reads::ReadAttribution>,
-        ),
-        staged: crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
-    ) -> crate::gateway::outbound::OutboundFrame {
-        let frame = reads.answer(value, params, hidden).await;
-        staged.commit(frame.delivers_result());
-        frame
-    }
-
     /// [`Self::dispatch_single_staged`] recording the receipts straight away,
     /// for a caller that judges no frame (a test).
     #[cfg(test)]
@@ -2875,12 +2861,19 @@ impl Gateway {
         client: StdioClient<'_>,
         sink: &StdioTelemetry,
     ) -> Option<serde_json::Value> {
+        let session_id = client.session_id;
         let (answer, staged) =
             Self::dispatch_single_staged(meta_mcp, tool_policy, mtls_policy, request, client, sink)
                 .await;
-        // No frame is judged here: the receipts follow the answer as built.
-        staged.commit(answer.as_ref().is_some_and(|a| a.get("error").is_none()));
-        answer
+        // No frame is judged here: recorded and settled as built, and the
+        // receipts follow the frame as `judge_and_commit` has them follow it.
+        let Some(answer) = answer else {
+            staged.commit(false);
+            return None;
+        };
+        let frame = answer.delivered_unjudged(meta_mcp, session_id).await;
+        staged.commit(frame.delivers_result());
+        frame.stdio_value().map(std::borrow::Cow::into_owned)
     }
 
     /// [`Self::dispatch_relay_scoped`] inside one relay-receipt collector,
@@ -2899,7 +2892,7 @@ impl Gateway {
         client: StdioClient<'_>,
         sink: &StdioTelemetry,
     ) -> (
-        Option<serde_json::Value>,
+        Option<stdio_delivery::StdioAnswer>,
         crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
     ) {
         let dispatch =
@@ -2924,7 +2917,7 @@ impl Gateway {
         mut request: serde_json::Value,
         client: StdioClient<'_>,
         protocol_telemetry_sink: &StdioTelemetry,
-    ) -> Option<serde_json::Value> {
+    ) -> Option<stdio_delivery::StdioAnswer> {
         // Borrowed views throughout: a refused request is never copied.
         // Ownership is taken once, after admission, where it executes.
         use super::router::helpers::extract_tools_call_params_ref;
@@ -2934,7 +2927,7 @@ impl Gateway {
         let prepared = Self::prepare_signing(meta_mcp, &mut request);
         let (mut signing_context, chain_nonce) = match prepared {
             Ok(prepared) => prepared,
-            Err(response) => return Some(response),
+            Err(response) => return Some(stdio_delivery::StdioAnswer::Built(response)),
         };
 
         // Scoped so the guard is gone before the first await below: see
@@ -2947,7 +2940,7 @@ impl Gateway {
         };
         let (id, method, params, request_shape) = match parsed {
             Ok(parsed) => parsed,
-            Err(early) => return early,
+            Err(early) => return early.map(stdio_delivery::StdioAnswer::Built),
         };
 
         let (external_tool, response_targets) = {
@@ -3051,7 +3044,7 @@ impl Gateway {
         };
 
         let chain_source = response.chain_source;
-        let response = meta_mcp.finalize_response_for_delivery(
+        let response = meta_mcp.finalize_content(
             response,
             &super::meta_mcp::response_security::ResponseDeliveryContext {
                 method: &method,
@@ -3068,9 +3061,12 @@ impl Gateway {
                 chain_source,
                 chain_nonce: chain_nonce.as_deref(),
             },
-        ).await;
+            super::meta_mcp::response_security::DeliveryInspection::Required,
+        );
         // MIK-7887.RECEIPT.4: the receipt describes the delivered answer. The
-        // stdio route stamps no `serverInfo` over a backend's.
+        // stdio route stamps no `serverInfo` over a backend's. Rebuilt here,
+        // inside the relay-receipt scope; the judge can only replace the
+        // answer, and a replaced answer commits no receipt.
         {
             use super::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
             let shape = if external_tool == "gateway_invoke" {
@@ -3084,12 +3080,14 @@ impl Gateway {
                 shape,
             );
         }
-        // COLLUDE.1: the receipts staged here are recorded by the caller once
-        // the answer has been judged (`judge_and_commit`).
-        if let Some(execution) = execution {
-            execution.complete_delivery(&response, signing_context.as_ref());
-        }
-        Some(response.to_value_lossy())
+        // MIK-7920: recorded after the judge, then settled, by the caller
+        // (`judge_and_commit`), as `POST /mcp` does.
+        Some(stdio_delivery::StdioAnswer::finalized(
+            response,
+            external_tool,
+            execution,
+            signing_context,
+        ))
     }
 
     /// Capture the signing envelope and the chain nonce ahead of parsing:

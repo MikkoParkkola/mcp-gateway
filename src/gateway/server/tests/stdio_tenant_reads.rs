@@ -100,19 +100,43 @@ struct Session {
     client: tokio::io::DuplexStream,
     lines: tokio::io::Lines<BufReader<tokio::io::DuplexStream>>,
     task: tokio::task::JoinHandle<()>,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
 }
+
+/// Whether the session's gateway keeps a transparency log.
+#[derive(Clone, Copy)]
+enum Log {
+    Off,
+    On,
+}
+
+/// The transparency log's file, under the session's directory.
+const AUDIT: &str = "audit.jsonl";
 
 impl Session {
     async fn open(backend_url: &str, mode: &str) -> Self {
+        Self::open_with(backend_url, mode, Log::Off).await
+    }
+
+    async fn open_with(backend_url: &str, mode: &str, log: Log) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
+        let quoted = |name: &str| {
+            serde_json::to_string(&dir.path().join(name).display().to_string())
+                .expect("a JSON string")
+        };
+        let log = match log {
+            Log::Off => String::new(),
+            Log::On => format!(
+                "  transparency_log:\n    enabled: true\n    path: {}\n",
+                quoted(AUDIT)
+            ),
+        };
         let yaml = format!(
             "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n\
              tasks:\n  store_dir: {}\n\
-             security:\n  firewall:\n    tenant_guard:\n      arg_keys: [customer_id]\n      cross_tenant_reads: {mode}\n",
-            serde_json::to_string(&dir.path().join("tasks").display().to_string())
-                .expect("a JSON string")
+             security:\n{log}  firewall:\n    tenant_guard:\n      arg_keys: [customer_id]\n      cross_tenant_reads: {mode}\n",
+            quoted("tasks")
         );
         crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
         let config = Config::load(Some(&path)).expect("config loads");
@@ -129,7 +153,7 @@ impl Session {
             client,
             lines: BufReader::new(reader).lines(),
             task,
-            _dir: dir,
+            dir,
         };
         let init = json!({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -147,6 +171,24 @@ impl Session {
             .await
             .expect("stdin");
         answer(&mut self.lines, id).await
+    }
+
+    /// Every record the session's transparency log holds, in order.
+    fn records(&self) -> Vec<Value> {
+        std::fs::read_to_string(self.dir.path().join(AUDIT))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("log line is JSON"))
+            .collect()
+    }
+
+    /// The delivery-attempt records of the session's tool calls, in order.
+    fn call_deliveries(&self) -> Vec<Value> {
+        self.records()
+            .into_iter()
+            .filter(|r| r["event"] == "response_delivery_attempt")
+            .filter(|r| r["tool"] == "gateway_invoke")
+            .collect()
     }
 }
 
@@ -255,6 +297,106 @@ async fn stdio_batch_items_judged() {
         assert!(
             answers[1].get("error").is_some(),
             "ids {id_a}/{id_b}: the B item after A in one batch is refused: {answers:?}"
+        );
+    }
+}
+
+/// The delivery record's form of a served frame's hash.
+fn hash_of(frame: &Value) -> String {
+    format!("sha256:{}", crate::hashing::canonical_json_sha256(frame))
+}
+
+/// A logged session's answers to A then B under block.
+async fn logged_a_then_b() -> (Session, Value, Value) {
+    let backend_url = spawn_backend().await;
+    let mut session = Session::open_with(&backend_url, "block", Log::On).await;
+    let a = session
+        .ask(&serde_json::from_str(&call(2, "cust-a")).expect("call"), 2)
+        .await;
+    let b = session
+        .ask(&serde_json::from_str(&call(3, "cust-b")).expect("call"), 3)
+        .await;
+    assert!(a.get("result").is_some(), "base: A is delivered: {a}");
+    assert!(b.get("error").is_some(), "base: B is refused: {b}");
+    (session, a, b)
+}
+
+/// MIK-7920.STDIO.1 (MIK-7407.RESPONSE.5): the delivery record of a stdio read
+/// the cross-tenant judge refused hashes the refusal the client received, not
+/// the result it withheld. A's record is the control: it hashes A as served.
+#[tokio::test]
+async fn stdio_refused_read_records_the_refusal() {
+    let (session, a, b) = logged_a_then_b().await;
+    let deliveries = session.call_deliveries();
+    assert_eq!(deliveries.len(), 2, "one record per call: {deliveries:#?}");
+    assert_eq!(
+        deliveries[0]["response_hash"],
+        hash_of(&a).as_str(),
+        "control: A's record is A as served: {:#}",
+        deliveries[0]
+    );
+    assert_eq!(
+        deliveries[1]["response_hash"],
+        hash_of(&b).as_str(),
+        "B's record must be the refusal served, not the withheld result: {:#}",
+        deliveries[1]
+    );
+    assert_eq!(
+        deliveries[1]["error_code"], b["error"]["code"],
+        "{:#}",
+        deliveries[1]
+    );
+}
+
+/// MIK-7920.STDIO.2: a judged stdio read is one record, as on `/mcp` and the
+/// direct route (MIK-7799): its verdict rides the delivery record, and no
+/// standalone `tenant_read` record is written.
+#[tokio::test]
+async fn stdio_judged_read_is_one_record() {
+    let (session, _a, _b) = logged_a_then_b().await;
+    let records = session.records();
+    assert!(
+        !records.iter().any(|r| r["event"] == "tenant_read"),
+        "a standalone tenant_read record: {records:#?}"
+    );
+    let deliveries = session.call_deliveries();
+    assert!(
+        deliveries
+            .last()
+            .is_some_and(|r| r.get("cross_tenant_read").is_some()),
+        "B's delivery record carries its verdict: {deliveries:#?}"
+    );
+}
+
+/// MIK-7920.STDIO.4: each batch item's delivery record hashes the item served.
+#[tokio::test]
+async fn stdio_batch_items_record_what_is_served() {
+    let backend_url = spawn_backend().await;
+    let mut session = Session::open_with(&backend_url, "block", Log::On).await;
+    let batch = format!("[{},{}]", call(2, "cust-a"), call(3, "cust-b"));
+    session
+        .client
+        .write_all(format!("{batch}\n").as_bytes())
+        .await
+        .expect("stdin");
+    let line = tokio::time::timeout(Duration::from_secs(10), session.lines.next_line())
+        .await
+        .expect("the batch answer within the bound")
+        .expect("stdout readable")
+        .expect("stdout open");
+    let answers: Vec<Value> = serde_json::from_str(&line).expect("one JSON array");
+    assert_eq!(answers.len(), 2, "{answers:?}");
+    assert!(
+        answers[1].get("error").is_some(),
+        "base: B is refused: {answers:?}"
+    );
+    let deliveries = session.call_deliveries();
+    assert_eq!(deliveries.len(), 2, "one record per item: {deliveries:#?}");
+    for (item, record) in answers.iter().zip(&deliveries) {
+        assert_eq!(
+            record["response_hash"],
+            hash_of(item).as_str(),
+            "the record hashes the item served: {item} vs {record:#}"
         );
     }
 }
