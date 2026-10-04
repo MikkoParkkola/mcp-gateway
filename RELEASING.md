@@ -96,7 +96,9 @@ or its mention removed from the draft.
    the `[4.0.0]` section above as the complete list. Remove any text under `[4.0.0]` that calls
    criteria open or lists known gaps.
 5. Give every Security entry in the new heading the versions it affects and what an operator
-   has to do, or "no action" when there is nothing to do.
+   has to do, or "no action" when there is nothing to do. Each `changelog.d/*.security.md`
+   bullet already carries an `Affects: ... Operator action: ...` line;
+   `python3 scripts/release/check_security_fragments.py` exits 1 naming any bullet without one.
 6. Add a new empty `## [Unreleased]` above.
 
 Then, once that pull request has merged:

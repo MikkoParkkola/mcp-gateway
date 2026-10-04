@@ -67,10 +67,17 @@ class CheckSecurityFragments(unittest.TestCase):
 
     def test_unverified_anywhere_in_any_affects_clause_fails(self):
         for text in ("- X. Affects: **UNVERIFIED**. Operator action: none.\n",
-                     "- X. Affects: 3.x. Affects: still unverified. Operator action: none.\n"):
+                     "- X. Affects: 3.x. Affects: still unverified. Operator action: none.\n",
+                     "- X. Affects: _UNVERIFIED_. Operator action: none.\n",
+                     "- X. Affects: __UNVERIFIED__. Operator action: none.\n"):
             out = run({"1.security.md": text})
             self.assertEqual(len(out), 1, text)
             self.assertIn("UNVERIFIED", out[0])
+
+    def test_a_value_without_a_closing_period_is_named(self):
+        out = run({"1.security.md": "- X. Affects: 3.x up to 3.5.1 Operator action: none.\n"})
+        self.assertEqual(len(out), 1)
+        self.assertIn("no closing period", out[0])
 
     def test_a_value_may_start_with_a_dot(self):
         text = "- X. Affects: .NET clients on 3.x. Operator action: .env files need `a`.\n"

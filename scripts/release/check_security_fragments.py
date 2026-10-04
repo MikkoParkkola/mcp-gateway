@@ -17,7 +17,8 @@ import sys
 
 LABEL = re.compile(r"\b(Affects|Operator action):")
 SENTENCE = re.compile(r"(.+?)\.(\s|$)")
-UNVERIFIED = re.compile(r"\bUNVERIFIED\b", re.IGNORECASE)
+# Letters and digits only bound the marker, so `_UNVERIFIED_` emphasis still matches.
+UNVERIFIED = re.compile(r"(?<![A-Za-z0-9])UNVERIFIED(?![A-Za-z0-9])", re.IGNORECASE)
 
 
 def clauses(item):
@@ -27,10 +28,14 @@ def clauses(item):
     return [(m.group(1), item[m.end():end].strip()) for m, end in zip(marks, ends)]
 
 
-def complete(value):
-    """A value is one non-empty sentence ending in a period."""
+def value_problem(value):
+    """None when the value is one non-empty sentence ending in a period."""
+    if not value.strip(" .*_`"):
+        return "an empty '{}' value"
     sentence = SENTENCE.match(value)
-    return bool(sentence) and bool(sentence.group(1).strip(" .*_`"))
+    if not sentence or not sentence.group(1).strip(" .*_`"):
+        return "a '{}' value with no closing period"
+    return None
 
 
 def bullets(text):
@@ -67,8 +72,8 @@ def bullet_problems(item):
         values = [v for l, v in pairs if l == label]
         if not values:
             found.append(f"no '{label}: ...' clause")
-        elif not all(complete(v) for v in values):
-            found.append(f"an empty '{label}' value")
+        else:
+            found += sorted({p.format(label) for p in map(value_problem, values) if p})
     if any(UNVERIFIED.search(v) for l, v in pairs if l == "Affects"):
         found.append("'Affects' is UNVERIFIED")
     return found
