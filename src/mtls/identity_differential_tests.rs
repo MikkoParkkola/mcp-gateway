@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use rcgen::string::{BmpString, UniversalString};
 use rcgen::{
-    BasicConstraints, CertificateParams, CustomExtension, DnType, DnValue,
-    ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair, SanType, SerialNumber,
+    BasicConstraints, CertificateParams, CustomExtension, DnType, DnValue, ExtendedKeyUsagePurpose,
+    IsCa, Issuer, KeyPair, SanType, SerialNumber,
 };
 use rustls::pki_types::{CertificateDer, UnixTime};
 use rustls::server::WebPkiClientVerifier;
@@ -104,11 +104,17 @@ fn no_leaf_webpki_accepts_is_one_the_identity_parser_rejects() {
         ),
         (
             "unknown critical extension",
-            leaf(|p| p.custom_extensions = vec![custom(&[1, 3, 6, 1, 4, 1, 99999, 1], &[0x05, 0x00], true)]),
+            leaf(|p| {
+                p.custom_extensions =
+                    vec![custom(&[1, 3, 6, 1, 4, 1, 99999, 1], &[0x05, 0x00], true)]
+            }),
         ),
         (
             "unknown non-critical extension",
-            leaf(|p| p.custom_extensions = vec![custom(&[1, 3, 6, 1, 4, 1, 99999, 2], &[0x05, 0x00], false)]),
+            leaf(|p| {
+                p.custom_extensions =
+                    vec![custom(&[1, 3, 6, 1, 4, 1, 99999, 2], &[0x05, 0x00], false)]
+            }),
         ),
         (
             "negative serial",
@@ -144,7 +150,10 @@ fn no_leaf_webpki_accepts_is_one_the_identity_parser_rejects() {
             "{name:42} | webpki {:8} | from_der {:8} | cn {:?}",
             if webpki.is_ok() { "accepts" } else { "refuses" },
             if parsed.is_ok() { "parses" } else { "rejects" },
-            parsed.as_ref().ok().and_then(|identity| identity.common_name.clone()),
+            parsed
+                .as_ref()
+                .ok()
+                .and_then(|identity| identity.common_name.clone()),
         );
         if webpki.is_ok() && parsed.is_err() {
             split.push(name);
