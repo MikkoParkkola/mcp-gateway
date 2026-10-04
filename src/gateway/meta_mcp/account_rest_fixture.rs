@@ -422,7 +422,7 @@ pub(super) fn cacheable_base_url(port: u16) -> String {
 }
 
 /// Finite-timeout client for the swapped-client caching fixtures, mirroring
-/// `capability::executor_tests::finite_http_client`: a bare client has no
+/// `capability::executor::tests::cache_partitioning::finite_http_client`: a bare client has no
 /// request timeout and a hung listener would stall the suite.
 fn finite_http_client() -> reqwest::Client {
     reqwest::Client::builder()
