@@ -93,6 +93,11 @@ mod source_checks {
             // MIK-7910: pins that a bridged prompt reaches the client with its
             // scope clamped; it writes the key only into a test prompt.
             "src/gateway/meta_mcp/invoke/relay_tests.rs",
+            // MIK-7887.RECEIPT.4 rows: they write the key only into backend
+            // fixtures.
+            "src/gateway/meta_mcp/invoke/relay_delivery_tests.rs",
+            "src/gateway/router/tests/task_execution_adapter/relay_upstream.rs",
+            "src/gateway/server/tests/collusion_stdio_delivered.rs",
             "src/gateway/meta_mcp/response_delivery_scope_tests.rs",
             "src/gateway/meta_mcp/signing_delivery_scope_tests.rs",
             "src/gateway/outbound/tests.rs",

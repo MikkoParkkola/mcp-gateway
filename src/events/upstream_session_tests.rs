@@ -25,6 +25,101 @@ fn shared_with(ineligible: crate::events::backend_source::Ineligible) -> Arc<Sha
     })
 }
 
+/// Admit `backend.b.resources_changed` (listener-only) and
+/// `backend.b.tools_changed` (the gateway announces it itself).
+fn admit_both(hub: &EventsHub) {
+    let (config, now) = (crate::config::EventsConfig::default(), chrono::Utc::now());
+    for name in ["backend.b.resources_changed", "backend.b.tools_changed"] {
+        let sub: crate::events::records::Subscription = serde_json::from_value(json!({
+            "v": 1, "id": format!("sub_{name}"), "principal": "p", "url": "https://h/x",
+            "name": name, "arguments": {}, "secret": "whsec_x", "previous_secret": null,
+            "previous_until": null, "granted_at": now, "expires_at": null, "active": true,
+            "failed_since": null, "last_delivery_at": null, "last_error": null
+        }))
+        .expect("subscription");
+        hub.store
+            .admit(
+                sub,
+                true,
+                crate::events::store::Caps {
+                    per_principal: 10,
+                    global: 10,
+                },
+                chrono::Duration::zero(),
+                now,
+                crate::events::tail_policy(&config),
+            )
+            .expect("io")
+            .expect("admitted");
+    }
+}
+
+/// The subscription names left once a withdrawal removed one of the two.
+async fn after_withdrawal(hub: &EventsHub) -> Vec<String> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let left: Vec<String> = hub
+                .store
+                .subscriptions()
+                .into_iter()
+                .map(|s| s.name)
+                .collect();
+            if left.len() < 2 {
+                return left;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the withdrawal ran")
+}
+
+/// A gateway config file and the reload pipeline the watcher and admin API
+/// run over it, starting from an empty running config.
+struct Reload {
+    path: std::path::PathBuf,
+    ctx: crate::config_reload::ReloadContext,
+    live: Arc<crate::config_reload::LiveConfig>,
+    registry: Arc<BackendRegistry>,
+}
+
+impl Reload {
+    fn new(dir: &std::path::Path) -> Self {
+        let path = dir.join("gateway.yaml");
+        let live = Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        ));
+        let registry = Arc::new(BackendRegistry::new());
+        let ctx = crate::config_reload::ReloadContext::new(
+            path.clone(),
+            Arc::clone(&live),
+            Arc::clone(&registry),
+            crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        )
+        .expect("context");
+        Self {
+            path,
+            ctx,
+            live,
+            registry,
+        }
+    }
+
+    /// Rewrite the file with backend `b` (Streamable HTTP or not), then reload.
+    async fn to(&self, streamable: bool) {
+        crate::gateway::test_helpers::write_owner_only(
+            &self.path,
+            format!(
+                "backends:\n  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    \
+                 streamable_http: {streamable}\n"
+            ),
+        )
+        .expect("write");
+        self.ctx.reload_outcome().await.expect("reload");
+    }
+}
+
 /// A graceful end of the current stream ends the session (so it reconnects);
 /// the end of a replacement still being opened ends nothing.
 #[test]
@@ -100,30 +195,7 @@ async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
         .expect("room");
     // The backend's listener-only subscription and the one the gateway also
     // announces itself.
-    let (config, now) = (crate::config::EventsConfig::default(), chrono::Utc::now());
-    for name in ["backend.b.resources_changed", "backend.b.tools_changed"] {
-        let sub: crate::events::records::Subscription = serde_json::from_value(json!({
-            "v": 1, "id": format!("sub_{name}"), "principal": "p", "url": "https://h/x",
-            "name": name, "arguments": {}, "secret": "whsec_x", "previous_secret": null,
-            "previous_until": null, "granted_at": now, "expires_at": null, "active": true,
-            "failed_since": null, "last_delivery_at": null, "last_error": null
-        }))
-        .expect("subscription");
-        hub.store
-            .admit(
-                sub,
-                true,
-                crate::events::store::Caps {
-                    per_principal: 10,
-                    global: 10,
-                },
-                chrono::Duration::zero(),
-                now,
-                crate::events::tail_policy(&config),
-            )
-            .expect("io")
-            .expect("admitted");
-    }
+    admit_both(&hub);
     let mut state = State::new(&shared, Era::Modern);
     let changed = || UpstreamNote::Notice {
         kind: NoteKind::ResourcesChanged,
@@ -160,22 +232,7 @@ async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
     // Still ineligible when the lock is had: the listener-only one goes.
     refused.store(true, std::sync::atomic::Ordering::SeqCst);
     super::end_ineligible(&shared, &weak);
-    let left = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let left: Vec<String> = hub
-                .store
-                .subscriptions()
-                .into_iter()
-                .map(|s| s.name)
-                .collect();
-            if left.len() < 2 {
-                return left;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("the withdrawal ran");
+    let left = after_withdrawal(&hub).await;
     assert_eq!(
         left,
         ["backend.b.tools_changed"],
@@ -198,4 +255,104 @@ async fn a_listener_for_an_ineligible_backend_ends_at_the_loop_head() {
     .await
     .expect("the task ended instead of parking or connecting");
     assert!(shared.stop.is_cancelled());
+}
+
+/// MIK-7894 ELIG.4: a real config reload (the file rewritten, then
+/// `ReloadContext::reload_outcome`, as the watcher and admin API run it) that
+/// makes a running listener's backend ineligible. The live predicate the
+/// gateway wires refuses authorization, the listener task ends on its own,
+/// nothing more reaches intake, and only the listener-only subscription goes.
+#[tokio::test]
+async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
+    use crate::events::EventSource as _;
+    use crate::events::backend_source::{BackendSource, Upstream};
+
+    let dir = tempfile::tempdir().expect("dir");
+    let reload = Reload::new(dir.path());
+    let registry = Arc::clone(&reload.registry);
+    let ineligible = crate::events::upstream_live_ineligible(Arc::clone(&reload.live));
+
+    // Reload 1 adds `b`, eligible (Streamable HTTP).
+    reload.to(true).await;
+    assert!(registry.get("b").is_some(), "reload 1 did not register b");
+    assert!(ineligible().is_empty(), "b must start eligible");
+
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    admit_both(&hub);
+    let source = BackendSource {
+        names: Arc::new(|| vec!["b".to_owned()]),
+        upstream: Some(Upstream {
+            listeners: crate::events::upstream_listener::UpstreamListeners::new(
+                Arc::clone(&registry),
+                weak.clone(),
+                Arc::clone(&ineligible),
+            ),
+            ineligible: Arc::clone(&ineligible),
+        }),
+    };
+    let shared = shared_with(Arc::clone(&ineligible));
+    shared
+        .need
+        .lock()
+        .add(&Interest::ResourcesChanged)
+        .expect("room");
+    let task = tokio::spawn(run(
+        Arc::clone(&shared),
+        Arc::clone(&registry),
+        weak.clone(),
+    ));
+
+    // Control: past one failed connect and its backoff, the loop head
+    // re-checked an eligible backend and kept going; it emits and authorizes.
+    tokio::time::sleep(Duration::from_millis(2600)).await;
+    assert!(!task.is_finished(), "control: an eligible listener ended");
+    assert!(!shared.stop.is_cancelled());
+    let mut state = State::new(&shared, Era::Modern);
+    let changed = || UpstreamNote::Notice {
+        kind: NoteKind::ResourcesChanged,
+        uri: None,
+    };
+    state.note(changed(), false);
+    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
+    state.flush(&weak);
+    assert!(intake.try_recv().is_ok(), "control: eligible, one event");
+    assert!(
+        source
+            .authorize("p", "backend.b.resources_changed", &json!({}))
+            .await
+            .is_ok()
+    );
+
+    // Reload 2: the file drops Streamable HTTP, so `b` is ineligible.
+    reload.to(false).await;
+    assert!(
+        ineligible().contains("b"),
+        "reload 2 did not reach the live predicate"
+    );
+
+    let refused = source
+        .authorize("p", "backend.b.resources_changed", &json!({}))
+        .await
+        .expect_err("an ineligible backend was authorized after the reload");
+    assert_eq!(refused.code, -32012);
+
+    // The task ends by itself (no flush drives it), at its loop head.
+    tokio::time::timeout(Duration::from_secs(15), task)
+        .await
+        .expect("the listener kept running after the reload")
+        .expect("task");
+    assert!(shared.stop.is_cancelled(), "the listener was not stopped");
+
+    state.note(changed(), false);
+    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
+    state.flush(&weak);
+    assert!(
+        intake.try_recv().is_err(),
+        "an ineligible backend still delivered"
+    );
+
+    let left = after_withdrawal(&hub).await;
+    assert_eq!(left, ["backend.b.tools_changed"]);
 }

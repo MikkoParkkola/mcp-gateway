@@ -184,6 +184,16 @@ class Check(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("without folding", errors[0])
 
+    def test_retyping_a_fragment_under_its_own_number_passes(self):
+        changes = [("D", "changelog.d/1.fixed.md"), ("A", "changelog.d/1.security.md")]
+        self.assertEqual(cf.check(changes, set()), [])
+
+    def test_a_delete_beside_another_numbers_add_still_fails(self):
+        changes = [("D", "changelog.d/1.fixed.md"), ("A", "changelog.d/2.security.md")]
+        errors = cf.check(changes, set())
+        self.assertEqual(len(errors), 1)
+        self.assertIn("changelog.d/1.fixed.md", errors[0])
+
 
 class CheckAgainstGit(unittest.TestCase):
     """`check` end to end: the git diff, the fragment listing and labels."""
@@ -232,6 +242,15 @@ class CheckAgainstGit(unittest.TestCase):
         (self.root / "src/lib.rs").write_text("fn b() {}\n", encoding="utf-8")
         self.git("commit", "-qam", "change")
         self.assertEqual(self.run_check("docs, no-changelog")[0], 0)
+
+    def test_a_committed_retype_passes_through_the_git_diff(self):
+        (self.root / "changelog.d/7.fixed.md").write_text("- b (#7)\n", encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "fragment")
+        self.git("branch", "-f", "base")
+        self.git("mv", "changelog.d/7.fixed.md", "changelog.d/7.security.md")
+        self.git("commit", "-qm", "retype")
+        self.assertEqual(self.run_check()[0], 0)
 
     def test_a_committed_fragment_passes(self):
         (self.root / "src/lib.rs").write_text("fn b() {}\n", encoding="utf-8")

@@ -396,3 +396,115 @@ async fn a_non_message_event_is_judged_with_its_wrapper_fields() {
         "another tenant named by `source` must be withheld under block"
     );
 }
+
+/// MIK-7848.READS.2, the destructive-confirmation case: with every audit
+/// append failing under `FailClosed`, an item that names a tenant is withheld
+/// at write (the control), but the `elicitation/create` confirmation prompt
+/// names none, attempts no record, and reaches the stream. So a failing log
+/// cannot hide the prompt and time the gate out into a legacy proceed.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_failing_audit_log_cannot_withhold_the_confirmation_prompt() {
+    use crate::gateway::outbound::{RejectionAudit, SessionJudge};
+    use crate::gateway::proxy::ProxyManager;
+    use crate::security::TransparencyLogger;
+    use crate::security::audit::AuditFailurePolicy;
+    use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
+    use crate::security::firewall::{Firewall, FirewallConfig};
+    use crate::security::transparency_log::TransparencyLogConfig;
+    use axum::response::IntoResponse;
+    use futures::StreamExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: dir.path().join("audit.jsonl").display().to_string(),
+            key_id: "r2".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .unwrap()
+        .with_failure_policy(AuditFailurePolicy::FailClosed),
+    );
+    let firewall = Firewall::from_config(
+        FirewallConfig {
+            tenant_guard: TenantGuardConfig {
+                enabled: false,
+                window_secs: 3600,
+                arg_keys: vec!["customer_id".to_string()],
+                cross_tenant_reads: CrossTenantReads::Observe,
+                ..TenantGuardConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    );
+    let multiplexer = Arc::new(NotificationMultiplexer::new(
+        Arc::new(BackendRegistry::new()),
+        StreamingConfig::default(),
+    ));
+    multiplexer.set_read_judge(
+        SessionJudge::new(
+            Some(Arc::new(firewall)),
+            Arc::new(RejectionAudit::new(None, 1)),
+            Some(Arc::clone(&log)),
+        )
+        .expect("the guard judges"),
+    );
+    let (id, _rx) = multiplexer.get_or_create_session(Some("s"));
+    multiplexer.bind_session_reader(&id, "api_key:one".to_owned());
+    let sse = create_sse_response(
+        Arc::clone(&multiplexer),
+        id.clone(),
+        None,
+        Duration::from_secs(3600),
+    )
+    .expect("the session exists");
+    let mut body = sse.into_response().into_body().into_data_stream();
+    log.set_append_failure_for_test(true);
+
+    let control = TaggedNotification {
+        source: "demo".to_string(),
+        event_type: "message".to_string(),
+        data: json!({"jsonrpc": "2.0", "method": "notifications/x",
+            "params": {"customer_id": "cust-b"}}),
+        event_id: None,
+    };
+    assert!(
+        multiplexer.send_to_session(&id, control),
+        "the control is queued"
+    );
+    let proxy = ProxyManager::new(Arc::clone(&multiplexer));
+    let ask = crate::protocol::ElicitationCreateParams {
+        mode: None,
+        message: "Are you sure you want to kill server 'payments'?".to_string(),
+        requested_schema: None,
+        url: None,
+    };
+    let asked = proxy.forward_elicitation_with_response(&id, &ask, Duration::from_secs(2));
+
+    let mut seen = String::new();
+    let read = async {
+        while let Some(chunk) = body.next().await {
+            seen.push_str(&String::from_utf8_lossy(&chunk.unwrap()));
+            if seen.contains("elicitation/create") {
+                break;
+            }
+        }
+    };
+    let (_, _) = tokio::join!(asked, tokio::time::timeout(Duration::from_secs(2), read));
+
+    assert!(
+        seen.contains("elicitation/create"),
+        "the prompt was withheld: {seen}"
+    );
+    assert!(
+        !seen.contains("cust-b"),
+        "control: a tenant item is withheld: {seen}"
+    );
+    assert_eq!(
+        log.append_attempts_for_test(),
+        1,
+        "only the control tried a record"
+    );
+}

@@ -536,6 +536,18 @@ impl ClientChannel for ProxyManager {
         method: &str,
         params: Option<Value>,
     ) -> Result<Value, DeliveryError> {
+        self.send_request_committing(session_id, id, method, params, None)
+            .await
+    }
+
+    async fn send_request_committing(
+        &self,
+        session_id: &str,
+        id: &str,
+        method: &str,
+        params: Option<Value>,
+        commit: Option<crate::gateway::input_bridge::DeliveryCommit>,
+    ) -> Result<Value, DeliveryError> {
         let rx = self.register_pending(id.to_string(), session_id);
         // Held across the await, for the reason on `PendingSampleGuard`.
         let _cleanup = PendingSampleGuard { proxy: self, id };
@@ -558,6 +570,12 @@ impl ClientChannel for ProxyManager {
         // elicitation: a prompt another client can answer is not a prompt.
         if !self.multiplexer.send_to_session(session_id, notification) {
             return Err(DeliveryError::NoSession);
+        }
+        // MIK-7887.RECEIPT.3: in the live session's stream is delivered as far
+        // as this channel can tell (SSE has no write acknowledgement), and it
+        // stays delivered if the wait below is cancelled.
+        if let Some(commit) = commit {
+            commit.commit();
         }
         debug!(%id, session_id = %session_fp(session_id), %method, "Sent bridged request to the originating session");
 

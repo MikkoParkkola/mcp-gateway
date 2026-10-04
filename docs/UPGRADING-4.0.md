@@ -93,7 +93,7 @@ backend" and "fails a capability file" first.**
 | 66 | A non-admin call to a callback-registering capability is refused with HTTP 403 and JSON-RPC -32600 and logged as an authorization refusal | Match 403/-32600 where clients or alerts matched the old 400/-32603 "Configuration error" |
 | 67 | Every `tasks/*` method, and `subscriptions/listen` naming `taskIds`, on `POST /mcp/{name}` is refused with JSON-RPC -32601 and never reaches the backend | Poll and cancel tasks through `POST /mcp` |
 | 68 | Windows: the task store and the personal-account store run, with owner-only DACLs; a store directory on a junction, network drive or FAT/exFAT volume, and a 3.x token file other accounts can read, are refused | Windows only: put the stores on a local NTFS or ReFS path; run the `icacls` lines the refusal prints, in PowerShell, on a flagged 3.x token file |
-| 69 | `POST /mcp/{name}` `tools/call` runs the dispatch controls `gateway_invoke` runs (kill switch, capability auto-disable, session profile, cost and error budgets, response gates, response-firewall Block); with message signing on it is refused with -32001 | Move direct callers under message signing to `gateway_invoke`; expect direct calls refused, accounted and gated as `gateway_invoke` calls are |
+| 69 | `POST /mcp/{name}` `tools/call` runs the dispatch controls `gateway_invoke` runs (kill switch, capability auto-disable, session profile, cost and error budgets, response gates, response-firewall Block); with message signing on, outside `security.posture: hardened`, it is refused with -32001 | Move direct callers under message signing, outside `hardened`, to `gateway_invoke`; expect direct calls refused, accounted and gated as `gateway_invoke` calls are |
 | 70 | `/api/costs` takes a session id only in the `X-Cost-Session-Id` header (`?session=` is 400); the HTTP trace span records the method and route, never the URI; a dashboard link presented from another machine is used up | Move `?session=<id>` to the header; open the dashboard link on the gateway's own machine, by its loopback URL, first time |
 | 71 | Dashboard sessions end after 30 minutes idle or 8 hours total; the dashboard's own refresh is not activity; an ended session gets a 401 that clears the cookie | Log in again with `mcp-gateway dashboard-link`; set `auth.dashboard_session` to change the limits |
 | 72 | Env files are re-read every 2 s and reloaded when their content changes; after any failed reload, including a refused `config.yaml`, the gateway retries every 2 s until one succeeds | Expect a broken or refused config to be retried, with its warning at most once a minute; fix or revert it rather than waiting for a file event |
@@ -101,7 +101,7 @@ backend" and "fails a capability file" first.**
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
 | 75 | A backend tool whose description fails the tool-poisoning check is withheld from every tool list and refused by name; `allow_flagged_tools` serves one explicitly; `BackendConfig` gains a field; `security::scope_collision::detect_collisions` is removed | Read the `Tool withheld` warnings; pin a tool you trust; add `allow_flagged_tools` to any `BackendConfig` struct literal; drop calls to `detect_collisions` |
 | 76 | Opt-in anomaly detection learns from admitted calls, warms up before scoring, scores never-seen transitions 1.0, and its blocks cannot be downgraded by a rule; out-of-range anomaly thresholds, or an HTTP start where no caller can have a caller key, refuse the start when detection is on | With `anomaly_detection: true`, keep `anomaly_threshold` above 0.5, enable a caller identity source on HTTP, and drop rules that softened anomaly blocks |
-| 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
+| 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy (not under `security.posture: hardened`, which refuses it) |
 | 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
 | 79 | Identity grant changes (CLI, direct edits, the grants each start serves) are governance audit records with actor `unknown`; with auth on and grants on, a governance store that cannot open refuses the start | Set `control_plane.store_dir` to a writable directory; keep `<grant file>.journal.jsonl` beside the grant file |
 | 80 | Discovery keeps a server's `env`, `headers` and argument boundaries and reads commented Zed settings; `DiscoveredServer` is `#[non_exhaustive]` | Library users build it with `DiscoveredServer::new`; check that `cap discover --write-config` output holds only credentials you mean to keep |
@@ -141,7 +141,7 @@ backend" and "fails a capability file" first.**
 | 114 | Under `security.posture: hardened`, backends named in `security.hardened.private_backends` may reach loopback, RFC 1918 and unique-local addresses (never link-local or `fd00:ec2::254`); every other backend stays public-only. A listed name that is not a configured backend refuses start, and changing the list needs a restart | To run a local or in-cluster HTTP backend under `hardened`, list it; list only what needs it |
 | 115 | A legacy session now expires after `streaming.session_ttl` of inactivity, not at that age; when it ends (an owned `DELETE /mcp` or the reaper), its routing profile, workflow state, cost bucket and other per-session state are reclaimed, and its cost stays in the aggregate | None. A client that kept a session open across the 30-minute mark keeps it, and its profile, while it stays active |
 | 116 | A key-server OIDC issuer, `jwks_uri` or `discovery_url` that is `http://` to a host off this machine refuses to start; a token naming such an issuer is refused; an https issuer's discovery document may not name a cleartext `jwks_uri`. `http://` to a loopback host is allowed and now works | Use `https://` for every `key_server.oidc` URL, or a loopback host for local testing |
-| 117 | A read of a finished task that meets the same grant decision as the last record written for that task, caller and target, in every field but the timestamp and trace id, writes no new `identity_grant_decision` record for 10 minutes; a changed decision (such as a revoked grant) is written at once, and dispatch decisions are never suppressed | A SIEM rule that counted one decision record per poll of a finished task should count per decision change instead |
+| 117 | A read of a finished task that meets the same grant decision as the last record written for that task, caller and target, in every field but the timestamp and trace id, writes no new `identity_grant_decision` record for 10 minutes (held in memory: not across a restart, nor for new keys once 4,096 are tracked); a changed decision (such as a revoked grant) is written at once, and dispatch decisions are never suppressed | A SIEM rule that counted one decision record per poll of a finished task should count per decision change instead |
 | 118 | Audit log: a restart that finds the active segment ending below the signed `.hwm` writes `audit_segment_hwm_missing`, whether the tail was torn or cut at a line; a torn-tail repair record whose dropped line `.hwm` already counted carries `committed: true` and is a finding in its own right; Live verify also fails when the record at `.hwm`'s counter is not the one `.hwm` recorded | None; a log that verified before still verifies. Investigate a new finding as tail loss or an edit |
 | 119 | A stdio or WebSocket backend whose `initialize` answer selects a protocol revision the gateway does not speak fails its start; a WebSocket backend that rejects the proposed revision is retried once at the highest revision both sides speak | A backend that fails to start with "Backend selected protocol version" needs a revision from the supported list, or a `protocol_version` pin it accepts |
 | 120 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is delivered only when its upstream descriptor names the call, checked against current policy; otherwise `tasks/get` and a repeat of its task-augmented call answer -32003 | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
@@ -2144,14 +2144,15 @@ In 4.0, both routes run one implementation of each control:
 - Response contract, inspection and context-integrity settings apply to direct results.
 - A result the response firewall blocks is refused with -32600 "Response blocked by security
   firewall", as on `gateway_invoke`; a retry with the same idempotency key replays that refusal.
-- With message signing on, `tools/call` on `POST /mcp/{name}` is refused with -32001
-  "message signing is enabled; use gateway_invoke".
+- With message signing on, outside `security.posture: hardened`, `tools/call` on
+  `POST /mcp/{name}` is refused with -32001 "message signing is enabled; use gateway_invoke".
+  Under `hardened` the direct route signs its results instead (item 112).
 - The kill switch and capability auto-disable are now checked at admission: task creation,
   admission plans and signing preparation refuse a killed backend or disabled capability up
   front (-32000) instead of at dispatch.
 
-**Action:** a client that called backends directly under message signing must move to
-`gateway_invoke`. Expect direct calls to be refused, accounted and gated exactly as
+**Action:** a client that called backends directly under message signing, outside the
+`hardened` posture, must move to `gateway_invoke`. Expect direct calls to be refused, accounted and gated exactly as
 `gateway_invoke` calls are.
 
 ## 70. Secrets stay out of the request URI and its trace
@@ -2599,8 +2600,9 @@ URL, before anything is sent:
   fragment.
 
 **Action:** if a capability's identity provider lives on a private network, name it by
-hostname and set `capabilities.egress_proxy` to a proxy that can reach it (item 77): the
-proxy resolves the name, so the refresh goes through it. An IP-literal private endpoint is
+hostname and set `capabilities.egress_proxy` to a proxy that can reach it (item 77; under
+`security.posture: standard`, since `hardened` refuses the key): the proxy resolves the name,
+so the refresh goes through it. An IP-literal private endpoint is
 refused either way.
 
 ## 85. The response firewall scans object keys
@@ -3061,7 +3063,7 @@ re-initialize with the new token and use the new `Mcp-Session-Id`. Other clients
 
 **Startup:** no notice
 
-In 3.x and the betas, `tasks/get` returned a finished task's stored result with no invocation
+In the 4.0.0 betas, `tasks/get` returned a finished task's stored result with no invocation
 policy, and a repeated task call with the same key answered from the stored task. A tool that was
 withheld, a backend that was killed, or a grant that was revoked after the task finished did not
 stop either. In 4.0 both paths run the policy for the calls that produced the result before
@@ -3072,8 +3074,9 @@ on. A refused read returns the policy error and no result.
 The task record now lists those calls (server and tool names, never arguments). A
 `gateway_invoke` or surfaced-tool task records its call at creation; a playbook or `gateway_execute`
 task records the calls it actually dispatched when it settles. A row written by a beta has no
-list: a finished playbook or `gateway_execute` row is refused, and any other legacy row is
-checked at the backend level only. Only beta task stores contain such plan rows.
+list: its one call is recovered from its upstream descriptor when that is consistent and checked
+as above, and a row that holds backend output without recoverable provenance, every such
+playbook or `gateway_execute` row included, is refused -32003 (item 120). Only beta task stores contain such rows.
 
 **Rollback:** a record that carries calls is written as version 5, and a version 4 or 5 row makes
 a beta (which reads versions 1 to 3) refuse to open the task store, so the gateway does not start.
@@ -3081,7 +3084,7 @@ a beta (which reads versions 1 to 3) refuse to open the task store, so the gatew
 `tasks.store_dir` (default `~/.mcp-gateway/tasks`). Back it up before upgrading. Clearing it to
 start a beta is destructive: it abandons every task and every task idempotency key, it is not a
 migration, and a repeated call then runs again. Restoring an older backup can lose completion and
-idempotency knowledge and replay external effects that already completed. 3.5.x has no task store
+idempotency knowledge and replay external effects that already completed. 3.x has no task store
 and is not affected.
 
 Three client-visible changes follow from that check:
@@ -3091,13 +3094,15 @@ Three client-visible changes follow from that check:
   one the read returns -32002 and no result. Under `observe` the read is delivered.
 - A task whose dispatch an identity grant refused now reads back as the current grant denial
   (-32004), not as the failure it stored, for as long as the grant stays denied.
-- Every read of a finished task writes one `identity_grant_decision` record to the audit log when
-  the target is a personal capability, beside the record the worker wrote at dispatch.
+- A read of a finished task writes an `identity_grant_decision` record to the audit log when the
+  target is a personal capability, beside the record the worker wrote at dispatch; an unchanged
+  decision is usually suppressed for 10 minutes (item 117; not across a restart, and not for a
+  new task, caller and target key once 4,096 live keys are tracked).
 
 **Action:** none on upgrade. A client that attests calls must send a fresh recovery token in
 `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task, as it already
-does for a working one. Where a SIEM rule counts decision records per call, expect one more per
-read.
+does for a working one. Where a SIEM rule counts decision records per call, expect more records
+for polled tasks, reduced as item 117 describes.
 
 ## 106. Hardened requires a per-caller identity
 
@@ -3283,7 +3288,12 @@ Everything here applies only under `security.posture: hardened`; `standard` is u
   routes: a resent nonce, including on a confirmation follow-up or a retry after a failed
   dispatch, is refused, so send a new one per request (after a task-augmented call's challenge
   the first nonce was never spent, so resending it there is accepted). `require_nonce` stays your choice. A
-  malformed nonce is refused `-32602` before anything else. Answers given before the nonce is
+  malformed nonce is refused `-32602` early, but not first: authentication runs before it on
+  both HTTP routes, session admission on `/mcp`, and backend routing and the task-method and
+  retry-field checks on `/mcp/{backend}`. It runs before tool policy and dispatch, so a call
+  the policy would refuse gets `-32602` for a malformed nonce instead of the policy refusal, and
+  is counted as an invalid-nonce rejection. Under `standard` with `message_signing` enabled, the
+  same check applies to a `gateway_invoke` on `/mcp`. Answers given before the nonce is
   admitted are delivered unsigned and leave the nonce unspent: a task-augmented destructive
   call's confirmation challenge or refusal, and on `/mcp/{backend}` a tool-policy or
   undeclared-key refusal. A result that cannot be signed is refused `-32603`.
@@ -3362,7 +3372,10 @@ creation. A session that only POSTs holds no stream, so a busy one was reaped at
 since 4.0 never adopts a presented id, its next request got a new session on the default routing
 profile, losing a profile narrowed by `gateway_set_profile`. The TTL is now idle time: every
 request that resumes or acts under the session, on `/mcp` and on the direct `/mcp/{name}` route,
-renews it. A session with no request and no open stream for the TTL is still reaped.
+renews it. The reaper sweeps every `streaming.session_reaper_interval` (default 60 seconds) and
+reaps a session that has had no request for the TTL and has no open stream at the sweep. An open
+stream holds the session but does not renew the TTL, so a session whose stream closes after the
+TTL has passed with no request is reaped at the next sweep, not a full TTL later.
 
 When a session ends, by its owner's `DELETE /mcp` or by the reaper, the state kept under its id
 is reclaimed: routing profile, workflow state, cost bucket, last-tool entry, cached-token counter
@@ -3379,8 +3392,9 @@ call that runs longer than that (a backend `timeout` above two minutes) can stil
 **Startup:** refuses to start, only when a `key_server.oidc` issuer, `jwks_uri` or `discovery_url` is `http://` to a host that is not loopback
 
 The gateway fetches each provider's discovery document and signing keys from these URLs. Over
-cleartext, anyone on the path can swap the keys and mint tokens the key server accepts. The
-issuer check only logged a warning; it now refuses.
+cleartext, anyone on the path could swap the keys and mint tokens the key server accepts. Earlier
+releases already fetched only over HTTPS (a redirect to `http://` included), so that swap was not
+reachable; but the issuer check only logged a warning, and it now refuses at load.
 
 - `key_server.oidc[N] issuer '...' is non-HTTPS and off this machine` (or
   `key_server.oidc[N].jwks_uri` / `.discovery_url`) at load. The `jwks_uri` and
@@ -3413,6 +3427,8 @@ client polling once a second wrote about 86,400 identical records a day for one 
 - Any change is written at once: a revoked grant, another reason, another grant id.
 - An unchanged decision is written again once 10 minutes have passed, so polling stays visible.
 - Decisions made while dispatching a call are never suppressed.
+- Suppression is held in memory: a restart writes the next decision again, and once 4,096 live
+  task, caller and target keys are tracked a new key is recorded on every read.
 
 **Action:** a SIEM rule that counted one decision record per poll should count decision changes.
 
@@ -3772,7 +3788,7 @@ With relay detection set to `block`, a `prompts/get` whose arguments, or a `reso
 
 **Startup:** no notice, the first successful `cli` or `mcp` capability call returns the redacted result
 
-A `cli` or `mcp` capability is started with credentials the gateway injects (an `env` value, or the resolved `token_env`). Before 4.0 a tool that echoed one of them in a successful result handed it to the caller. Now every string value and key of the result that contains an injected value has it replaced with `[redacted]`, and the rest of the document is unchanged; numbers are redacted only for an injected value of 4 or more digits, and a redacted key that collides with another is renamed `[redacted]#2`, `#3`, and so on. With the `firewall` feature the credential scanner also runs on the result. Values the caller sent are left in place, since a tool legitimately returns them. The match is literal: a credential the child encodes (base64, URL escapes) or splits across values is not found, and without the `firewall` feature a credential the child reads from elsewhere is not recognised.
+A `cli` or `mcp` capability is started with credentials the gateway injects (an `env` value, or the resolved `token_env`). Before 4.0 a tool that echoed one of them in a successful result handed it to the caller. Now every string value and key of the result that contains an injected value has it replaced with `[redacted]`, and the rest of the document is unchanged; numbers are redacted only for an injected value of 4 or more digits, and a redacted key that collides with another is renamed `[redacted]#2`, `#3`, and so on. With the `firewall` feature the credential scanner also runs on the result. Values the caller sent are left in place, since a tool legitimately returns them. The match is literal: a credential the child encodes (base64, URL escapes) or splits across values is not found, nor is an all-digit credential with leading zeros (for example `012345`) that the child prints back as a JSON number (`12345`), and without the `firewall` feature a credential the child reads from elsewhere is not recognised.
 
 **Action:** a capability whose tool must return an injected value can no longer do so through the result; read the value from its own source instead. A client that compares results byte for byte should expect `[redacted]` where an injected value used to appear.
 

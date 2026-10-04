@@ -216,6 +216,7 @@ pub(crate) fn delivered(
         ticket,
         record_taken: false,
         key: key.map(Arc::from),
+        delivery: None,
     }
 }
 
@@ -249,6 +250,7 @@ pub(crate) fn admit(
         ticket,
         record_taken: false,
         key: key.map(Arc::from),
+        delivery: None,
     })
 }
 
@@ -295,5 +297,6 @@ pub(crate) fn admit_stream_item(
         ticket,
         record_taken: false,
         key: key.map(Arc::from),
+        delivery: None,
     })
 }

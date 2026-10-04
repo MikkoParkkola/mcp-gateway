@@ -371,7 +371,10 @@ impl Firewall {
     }
 
     /// Record `result` as delivered to `caller` from `server:tool`. Call it
-    /// only with what the caller actually receives.
+    /// only with what the caller actually receives. Production records go
+    /// through a staged or committed [`DeliveryDigest`]; this one-step form
+    /// is the tests' shorthand.
+    #[cfg(test)]
     pub(crate) fn record_delivery(
         &self,
         caller: RelayCaller<'_>,
