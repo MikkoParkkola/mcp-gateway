@@ -119,7 +119,8 @@ async fn a_read_record_failure_leaves_no_direct_receipt() {
         .transparency_log = Some(Arc::clone(&log));
     let text = named("t1", PROSE);
     fx.answer_read(Read::Text(text.clone()));
-    log.fail_next_append_of_kind_for_test("tenant_read");
+    // The read verdict rides the delivery record (MIK-7669, as MIK-7799 on /mcp).
+    log.fail_next_append_of_kind_for_test("response_delivery_attempt");
     let body = withheld_read(&fx, "a").await;
     assert!(
         body.contains("-32005"),

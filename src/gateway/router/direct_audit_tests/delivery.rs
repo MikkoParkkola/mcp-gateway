@@ -92,5 +92,8 @@ async fn an_unrecorded_direct_delivery_is_withheld() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["error"]["code"], -32005, "{body}");
     assert_eq!(body["id"], 5, "{body}");
-    assert!(body.get("result").is_none(), "the result was delivered: {body}");
+    assert!(
+        body.get("result").is_none(),
+        "the result was delivered: {body}"
+    );
 }

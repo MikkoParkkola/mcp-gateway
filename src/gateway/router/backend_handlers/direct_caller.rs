@@ -204,7 +204,7 @@ pub(super) async fn read_envelope(
         caller.client.as_ref(),
         caller.grant_subject.as_ref(),
     );
-    reads.capture(state, &json_request, || {
+    reads.capture(state, &json_request, caller.client.as_ref(), || {
         super::super::identity::caller_key(
             caller.grant_subject.as_ref(),
             caller.cert_identity.as_ref(),
