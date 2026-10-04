@@ -69,10 +69,12 @@ pub struct RuntimeProvenanceReceipt {
     /// observed (NOT zero — see module contract).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_count: Option<u64>,
-    /// Whether the backend reported success (`isError == false`). For an
-    /// event receipt this is `true` by construction (there is no tool result
-    /// to judge): read `subject_kind` first.
-    pub backend_ok: bool,
+    /// Whether the backend reported success (`isError == false`). `None` on
+    /// an event receipt, which describes a delivery and has no tool result
+    /// to judge; a record written before this field was optional reads as
+    /// `Some`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_ok: Option<bool>,
     /// Opaque gateway call id (`gw-<uuid>`), equal to the result-level
     /// `trace_id` this receipt describes. This is the join key that ties the
     /// receipt to the agent's rendered claim about the same call. `None` when no
@@ -93,6 +95,7 @@ impl RuntimeProvenanceReceipt {
     ) -> Self {
         Self {
             subject_kind: CbomSubjectKind::Event,
+            backend_ok: None,
             ..Self::observed(backend_id, name, observed_at, CacheOutcome::Bypass, true)
         }
     }
@@ -117,7 +120,7 @@ impl RuntimeProvenanceReceipt {
             auth_context_ref: None,
             cache,
             row_count: None,
-            backend_ok,
+            backend_ok: Some(backend_ok),
             call_id: None,
             evidence_kind: TrustEvidenceKind::Observed,
         }
@@ -284,6 +287,35 @@ mod tests {
         );
     }
 
+    /// MIK-7859 AC1: an event is not a tool result, so its receipt makes no
+    /// `backend_ok` claim.
+    #[test]
+    fn an_event_receipt_carries_no_backend_ok() {
+        let event = RuntimeProvenanceReceipt::event("hooks", "webhook.c.r.received", "t");
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert!(json.get("backend_ok").is_none(), "{json}");
+    }
+
+    /// A receipt written before `backend_ok` was optional still reads, and
+    /// one without the field reads as not observed.
+    #[test]
+    fn old_records_still_read_their_backend_ok() {
+        let mut old = serde_json::to_value(RuntimeProvenanceReceipt::observed(
+            "b",
+            "t",
+            "now",
+            CacheOutcome::Miss,
+            false,
+        ))
+        .expect("serialize");
+        assert_eq!(old["backend_ok"], false);
+        let read: RuntimeProvenanceReceipt = serde_json::from_value(old.clone()).expect("read");
+        assert_eq!(read.backend_ok, Some(false));
+        old.as_object_mut().expect("object").remove("backend_ok");
+        let read: RuntimeProvenanceReceipt = serde_json::from_value(old).expect("read");
+        assert_eq!(read.backend_ok, None);
+    }
+
     #[test]
     fn an_event_receipt_is_observed_event_evidence_never_cached() {
         let r = RuntimeProvenanceReceipt::event("hooks", "webhook.c.r.received", "t");
@@ -294,6 +326,6 @@ mod tests {
             ("hooks", "webhook.c.r.received")
         );
         assert_eq!(r.cache, CacheOutcome::Bypass);
-        assert!(r.backend_ok);
+        assert_eq!(r.backend_ok, None);
     }
 }
