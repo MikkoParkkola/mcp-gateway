@@ -63,11 +63,13 @@ impl DailyAccumulator {
     ///
     /// Race-safety: the rollover check, the clear and the add share one
     /// critical section, so an add on the new day cannot be erased by the
-    /// reset (MIK-7880).
+    /// reset (MIK-7880). A rollover only moves forward: an add that read the
+    /// clock before midnight but locked after a later add rolled over counts
+    /// on the newer day instead of resetting it backward.
     pub fn add(&self, micro: u64) -> u64 {
         let today = current_day();
         let mut state = self.lock();
-        if state.0 != today {
+        if today > state.0 {
             state.0 = today;
             #[cfg(test)]
             fire_after_day_publish();
@@ -79,10 +81,11 @@ impl DailyAccumulator {
 
     /// Current daily spend in micro-USD.
     ///
-    /// Returns 0 if the stored day is not today (stale — caller treats as fresh day).
+    /// Returns 0 if the stored day is before today (stale — caller treats as
+    /// fresh day). A stored day ahead of this read's clock is still counted.
     pub fn current(&self) -> u64 {
         let state = self.lock();
-        if state.0 == current_day() { state.1 } else { 0 }
+        if state.0 >= current_day() { state.1 } else { 0 }
     }
 }
 
@@ -304,8 +307,8 @@ pub struct EnforcerSnapshot {
 ///
 /// Wrap in `Arc` and share via `MetaMcp`.  Free tools and a disabled
 /// governance take no lock; a check of a paid tool takes one short mutex
-/// (the reservation ledger) and allocates its hold. Spend recording and
-/// snapshots stay lock-free.
+/// (the reservation ledger) and allocates its hold. Spend recording, snapshots
+/// and each daily read take one short accumulator lock (MIK-7880).
 #[cfg(feature = "cost-governance")]
 pub struct BudgetEnforcer {
     pub(crate) config: CostGovernanceConfig,
@@ -342,7 +345,7 @@ impl BudgetEnforcer {
     /// is recorded. Refusals, warnings and reasons are those of a check with
     /// nothing in flight.
     ///
-    /// Hot path: single `DashMap` lookup + ≤3 atomic loads.  No allocation
+    /// Hot path: single `DashMap` lookup + ≤3 short accumulator locks.  No allocation
     /// when the tool is free or governance is disabled.
     #[allow(clippy::too_many_lines)]
     pub fn check(&self, tool_name: &str, api_key_name: Option<&str>) -> EnforcementResult {

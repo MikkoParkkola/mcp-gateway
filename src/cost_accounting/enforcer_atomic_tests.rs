@@ -172,3 +172,13 @@ fn a_daily_total_saturates_instead_of_wrapping() {
     let acc = DailyAccumulator::stale(current_day(), u64::MAX - 1);
     assert_eq!(acc.add(5), u64::MAX);
 }
+
+/// An add that sampled an earlier day than the stored one (it read the clock
+/// before midnight and took the lock after a later add rolled over) must not
+/// reset the day backward and erase the newer day's spend.
+#[test]
+fn an_add_on_an_earlier_day_never_resets_backward() {
+    let acc = DailyAccumulator::stale(current_day() + 1, 700);
+    assert_eq!(acc.add(5), 705, "the newer day's spend was erased");
+    assert_eq!(acc.current(), 705, "the newer day's spend is still counted");
+}
