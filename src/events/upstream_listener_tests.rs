@@ -99,3 +99,73 @@ async fn a_replaced_listener_keeps_the_interest_that_stayed() {
     hub.remove("b", &Interest::ToolsChanged);
     assert!(!hub.backends.lock().contains_key("b"));
 }
+
+/// MIK-7894 ELIG.2: authorization consults the live eligibility predicate,
+/// so subscribe, fan-out and the worker (all three call it) refuse a backend
+/// a reload made ineligible. The predicate wins over a snapshot that lists
+/// the URI; `tools_changed` stays, since the gateway announces it itself.
+#[tokio::test]
+async fn authorize_refuses_an_ineligible_backend() {
+    use crate::events::EventSource as _;
+    use crate::events::backend_source::{BackendSource, Upstream};
+
+    let refused = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&refused);
+    let ineligible: crate::events::backend_source::Ineligible = Arc::new(move || {
+        if flag.load(std::sync::atomic::Ordering::SeqCst) {
+            std::iter::once("b".to_owned()).collect()
+        } else {
+            std::collections::BTreeSet::new()
+        }
+    });
+    let listeners = UpstreamListeners::new(
+        Arc::new(BackendRegistry::new()),
+        Weak::new(),
+        Arc::clone(&ineligible),
+    );
+    listeners.add("b", &watched("file:///a")).expect("room");
+    listeners
+        .backends
+        .lock()
+        .get("b")
+        .expect("listener")
+        .snapshot
+        .lock()
+        .read(["file:///a".to_owned()].into(), true);
+    let source = BackendSource {
+        names: Arc::new(|| vec!["b".to_owned()]),
+        upstream: Some(Upstream {
+            listeners,
+            ineligible,
+        }),
+    };
+    let (uri, none) = (
+        serde_json::json!({"uri": "file:///a"}),
+        serde_json::json!({}),
+    );
+
+    // Control: eligible, every kind is admitted.
+    for (name, args) in [
+        ("backend.b.resource_updated", &uri),
+        ("backend.b.resources_changed", &none),
+    ] {
+        assert!(source.authorize("p", name, args).await.is_ok(), "{name}");
+    }
+
+    refused.store(true, std::sync::atomic::Ordering::SeqCst);
+    for (name, args) in [
+        ("backend.b.resource_updated", &uri),
+        ("backend.b.resources_changed", &none),
+        ("backend.b.prompts_changed", &none),
+    ] {
+        let err = source.authorize("p", name, args).await.expect_err(name);
+        assert_eq!(err.code, -32012, "{name}");
+    }
+    assert!(
+        source
+            .authorize("p", "backend.b.tools_changed", &none)
+            .await
+            .is_ok(),
+        "tools_changed is the gateway's own announcement"
+    );
+}
