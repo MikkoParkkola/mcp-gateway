@@ -175,4 +175,8 @@ fn an_unenforced_root_combinator_stays_in_the_advertised_schema() {
         shown.get("oneOf").is_none(),
         "enforced list advertised: {shown}"
     );
+    // Without root `properties` the validator reads nothing, so nothing is
+    // enforced and the list stays listed.
+    let bare = json!({ "type": "object", "anyOf": [{ "required": ["a"] }] });
+    assert_eq!(advertised_input_schema(&bare), bare);
 }

@@ -449,7 +449,11 @@ fn alternative_is_supported(alternative: &Value) -> bool {
 #[must_use]
 pub(crate) fn advertised_input_schema(schema: &Value) -> Value {
     let mut shown = schema.clone();
-    if let Some(object) = shown.as_object_mut() {
+    if let Some(object) = shown.as_object_mut()
+        // `validate_object` reads nothing, alternatives included, without
+        // root `properties`; so nothing is enforced and nothing may be hidden.
+        && object.get("properties").is_some_and(Value::is_object)
+    {
         for keyword in ["anyOf", "oneOf"] {
             let enforced = object
                 .get(keyword)
