@@ -792,14 +792,20 @@ async fn re_registering_a_capability_strands_its_cached_answers() {
     let path = dir.path().join("pin_probe.yaml");
     std::fs::write(
         &path,
-        crate::capability::rewrite_with_pin(&body, &crate::capability::compute_capability_hash(&body)),
+        crate::capability::rewrite_with_pin(
+            &body,
+            &crate::capability::compute_capability_hash(&body),
+        ),
     )
     .unwrap();
     let pinned = crate::capability::parse_capability_file(&path)
         .await
         .expect("pinned file loads");
     let unpinned = crate::capability::parse_capability(&body).expect("unpinned parses");
-    assert_eq!(unpinned.providers.integrity(), crate::capability::Integrity::Unpinned);
+    assert_eq!(
+        unpinned.providers.integrity(),
+        crate::capability::Integrity::Unpinned
+    );
 
     let epoch = Arc::new(AtomicU64::new(0));
     let mut executor = CapabilityExecutor::new().with_policy_epoch(Arc::clone(&epoch));
@@ -809,12 +815,11 @@ async fn re_registering_a_capability_strands_its_cached_answers() {
     }];
     let backend = CapabilityBackend::new("test", Arc::new(executor));
     // The gateway snapshots the epoch, revision and profile per request.
-    let request = || {
-        let mut context = CapabilityExecutionContext::default();
-        context.policy_epoch = Some(epoch.load(Ordering::SeqCst));
-        context.protocol_revision = Some(crate::protocol::PROTOCOL_VERSION.to_owned());
-        context.routing_profile = Some("default".to_owned());
-        context
+    let request = || CapabilityExecutionContext {
+        policy_epoch: Some(epoch.load(Ordering::SeqCst)),
+        protocol_revision: Some(crate::protocol::PROTOCOL_VERSION.to_owned()),
+        routing_profile: Some("default".to_owned()),
+        ..CapabilityExecutionContext::default()
     };
 
     backend.register_capability(pinned).unwrap();
