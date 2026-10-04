@@ -270,6 +270,7 @@ impl Firewall {
 
     /// Plans whose receipts were dropped because their answer was over the
     /// bound they are kept against (MIK-7887.RECEIPT.2).
+    #[cfg(test)]
     pub(crate) fn relay_plan_drops(&self) -> u64 {
         self.relay.plan_drop.load(Ordering::Relaxed)
     }

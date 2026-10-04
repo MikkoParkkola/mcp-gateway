@@ -6,7 +6,7 @@
 //! or a leaf a later change removed, so no fingerprint joins text the source
 //! never produced contiguously. A plan step's receipt is then kept to what the
 //! plan's final answer delivered: leaves delivered verbatim stay whole, and any
-//! other leaf keeps only the fingerprints also found in a delivered leaf.
+//! other leaf keeps only the fingerprints whose k-gram a delivered leaf holds.
 
 use std::cell::OnceCell;
 use std::collections::HashSet;
@@ -148,8 +148,9 @@ impl DeliveryDigest {
 
     /// Kept to what `delivered` carries (a plan step's receipt against the
     /// plan's final answer): a whole leaf delivered verbatim stays in its run;
-    /// any other segment leaves its run behind a seam and keeps only its
-    /// fingerprints also found in a delivered leaf, as do earlier retained ones.
+    /// any other segment leaves its run behind a seam and keeps only those of
+    /// its fingerprints whose k-gram occurs in a delivered leaf, as do earlier
+    /// retained ones.
     pub(super) fn retaining(self, detector: &CollusionDetector, delivered: &Delivered<'_>) -> Self {
         let mut segments = Vec::with_capacity(self.segments.len());
         let mut retained = Vec::new();
@@ -162,7 +163,7 @@ impl DeliveryDigest {
                 });
                 gap = false;
             } else {
-                let found = delivered.fingerprints(detector);
+                let found = delivered.kgrams(detector);
                 retained.extend(
                     detector
                         .fingerprints(&segment.text)
@@ -173,7 +174,7 @@ impl DeliveryDigest {
             }
         }
         if !self.retained.is_empty() {
-            let found = delivered.fingerprints(detector);
+            let found = delivered.kgrams(detector);
             retained.extend(self.retained.into_iter().filter(|fp| found.contains(fp)));
         }
         Self {
@@ -184,8 +185,10 @@ impl DeliveryDigest {
     }
 }
 
-/// The string leaves of a plan's final answer, and their fingerprints taken
-/// leaf by leaf when first needed.
+/// The string leaves of a plan's final answer, and every k-gram hash in them,
+/// taken leaf by leaf when first needed: a retained fingerprint is a k-gram
+/// the source produced that the caller was delivered, whichever window
+/// selected it on either side.
 pub(crate) struct Delivered<'v> {
     leaves: HashSet<&'v str>,
     all: Vec<&'v str>,
@@ -203,11 +206,11 @@ impl<'v> Delivered<'v> {
         })
     }
 
-    fn fingerprints(&self, detector: &CollusionDetector) -> &HashSet<u64> {
+    fn kgrams(&self, detector: &CollusionDetector) -> &HashSet<u64> {
         self.found.get_or_init(|| {
             self.all
                 .iter()
-                .flat_map(|leaf| detector.fingerprints(leaf))
+                .flat_map(|leaf| detector.kgram_hashes(leaf))
                 .collect()
         })
     }
