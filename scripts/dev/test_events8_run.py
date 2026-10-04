@@ -277,6 +277,22 @@ class UpCleanupTests(unittest.TestCase):
                 self.assertIn("not an events8 run directory", done.stderr)
                 self.assertTrue((d / "keep.txt").exists(), "a directory the script does not own was emptied")
 
+    def test_a_foreign_directory_is_refused_while_a_port_is_busy(self):
+        """Ownership is judged before the ports, so a busy port on a shared
+        host cannot mask the refusal of a directory the script does not own."""
+        import socket
+        busy = socket.socket()
+        self.addCleanup(busy.close)
+        busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            busy.bind(("127.0.0.1", 39560))
+            busy.listen()
+        except OSError:
+            pass  # already held by something else: busy either way
+        d, done = self.up("{}")
+        self.assertIn("not an events8 run directory", done.stderr)
+        self.assertTrue((d / "keep.txt").exists(), "a directory the script does not own was emptied")
+
     def test_a_symlinked_state_json_does_not_lend_ownership(self):
         owner = tempfile.TemporaryDirectory()
         self.addCleanup(owner.cleanup)

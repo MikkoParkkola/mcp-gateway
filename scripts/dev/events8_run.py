@@ -121,13 +121,14 @@ def cmd_up(a):
     sys.stdout.reconfigure(line_buffering=True)
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt))
     d = Path(a.dir).expanduser()
+    # Ownership first: a foreign directory is refused whatever holds the ports.
+    if d.exists() and any(d.iterdir()) and not owned(d):
+        sys.exit(f"{d} is not an events8 run directory; pass an empty --dir")
     for port in (GW_PORT, SHIM_PORT):
         with socket.socket() as probe:
             if probe.connect_ex(("127.0.0.1", port)) == 0:
                 sys.exit(f"port {port} is already in use; stop the previous run first")
     if d.exists() and any(d.iterdir()):
-        if not owned(d):
-            sys.exit(f"{d} is not an events8 run directory; pass an empty --dir")
         for old in d.iterdir():  # a previous run's files only: the run starts clean
             shutil.rmtree(old) if old.is_dir() else old.unlink()
     d.mkdir(parents=True, exist_ok=True)
