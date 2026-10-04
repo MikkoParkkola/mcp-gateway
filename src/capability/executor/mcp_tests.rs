@@ -677,7 +677,7 @@ async fn the_child_starts_with_the_snapshot_the_call_redacts_against() {
     let (_other, reloaded) = executor_holding("new-value-after-reload");
     executor.env.set(reloaded.env.get());
 
-    let (backend, _workdir) = CapabilityExecutor::start_mcp(&cap, config, &snapshot).unwrap();
+    let (backend, _workdir) = CapabilityExecutor::start_mcp(&cap, config, &snapshot, &[]).unwrap();
     let args = serde_json::Map::from_iter([("message".to_owned(), json!("x"))]);
     let echoed = super::call_tool(&backend, "echo", args).await.unwrap();
     assert_eq!(

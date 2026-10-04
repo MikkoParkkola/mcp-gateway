@@ -534,6 +534,19 @@ fn t8_no_control_primitive_runs_outside_the_shared_stages() {
     let guards = include_str!("direct_guards.rs");
     let sites = [
         ("invoke_tool_traced", fn_body(invoke, "invoke_tool_traced")),
+        // `invoke_tool_traced`'s steps live in whole files of their own.
+        (
+            "pre_dispatch.rs",
+            include_str!("../meta_mcp/invoke/pre_dispatch.rs"),
+        ),
+        (
+            "post_dispatch.rs",
+            include_str!("../meta_mcp/invoke/post_dispatch.rs"),
+        ),
+        (
+            "legacy_bridge.rs",
+            include_str!("../meta_mcp/invoke/legacy_bridge.rs"),
+        ),
         (
             "check_invocation_policy",
             fn_body(policy, "check_invocation_policy"),

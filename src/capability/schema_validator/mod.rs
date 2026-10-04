@@ -582,12 +582,19 @@ fn coerce_to_integer(value: &Value) -> Result<Value, String> {
     match value {
         Value::Number(n) if n.is_i64() || n.is_u64() => Ok(value.clone()),
         Value::Number(n) => {
-            // Float with no fractional part → integer.
+            // A whole float is an integer (JSON Schema). Inside the i64 range
+            // it becomes one; outside it is kept as sent, since `as i64`
+            // would clamp it to i64::MIN or i64::MAX.
             if let Some(f) = n.as_f64()
                 && f.fract() == 0.0
             {
-                #[allow(clippy::cast_possible_truncation)]
-                return Ok(Value::Number((f as i64).into()));
+                // 2^63: the first whole float past i64::MAX.
+                const I64_END: f64 = 9_223_372_036_854_775_808.0;
+                if (-I64_END..I64_END).contains(&f) {
+                    #[allow(clippy::cast_possible_truncation)]
+                    return Ok(Value::Number((f as i64).into()));
+                }
+                return Ok(value.clone());
             }
             Err(format!("expected integer, got float {n}"))
         }
@@ -724,5 +731,9 @@ fn collect_valid_params(schema: &Value) -> Vec<(String, String)> {
 #[cfg(test)]
 #[path = "alternatives_tests.rs"]
 mod alternatives_tests;
+
+#[cfg(test)]
+#[path = "integer_range_tests.rs"]
+mod integer_range_tests;
 #[cfg(test)]
 mod tests;

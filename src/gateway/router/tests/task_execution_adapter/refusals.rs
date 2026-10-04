@@ -251,7 +251,7 @@ async fn x14_a_refusal_above_the_handoff_creates_no_task_and_leaves_the_key_free
 ///
 /// The gate answers a modern caller with the in-band confirmation question
 /// rather than a refusal; the refusal path, for a caller nobody can ask, is
-/// covered by `meta_mcp::tests::an_unconfirmable_destructive_call_is_refused_and_marked`.
+/// covered by `meta_mcp::tests::input_requests::an_unconfirmable_destructive_call_is_refused_and_marked`.
 /// What this row measures is the same either way: the answer came from the
 /// gate, above the handoff, and left nothing behind.
 ///

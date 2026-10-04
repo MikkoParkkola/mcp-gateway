@@ -297,7 +297,9 @@ fn cause_phrases_are_the_gateways_own_text() {
             .map(|(i, piece)| if i == 0 { piece } else { piece.trim_start() })
             .collect()
     }
-    let invoke = joined(include_str!("../src/gateway/meta_mcp/invoke.rs"));
+    let invoke = joined(include_str!(
+        "../src/gateway/meta_mcp/invoke/legacy_bridge.rs"
+    ));
     // The capability-disable refusal is the shared dispatch control (#1452).
     let guards = joined(include_str!(
         "../src/gateway/meta_mcp/invoke/dispatch_guards.rs"
@@ -310,7 +312,7 @@ fn cause_phrases_are_the_gateways_own_text() {
             &guards,
             "meta_mcp/invoke/dispatch_guards.rs",
         ),
-        (ASK_EXPIRED, &invoke, "meta_mcp/invoke.rs"),
+        (ASK_EXPIRED, &invoke, "meta_mcp/invoke/legacy_bridge.rs"),
         (BREAKER_OPEN, &error, "error.rs"),
         (SERVER_BUSY, &server, "gateway/server/mod.rs"),
     ] {
