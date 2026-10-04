@@ -4,6 +4,9 @@
 //! invocation policy on the real `/mcp` route, as `prepare_signing_invocation`
 //! orders it. A denied call gets the policy refusal and counts no nonce
 //! rejection; an allowed one is still refused for its malformed nonce, once.
+//! On `/mcp` the denied call is answered by the router's scope check
+//! (`authorize_tool_target`); `policy_refusal_is_not_counted_as_a_nonce_rejection`
+//! pins the same order inside `prepare_signing_invocation`.
 //!
 //! The route is driven on a current-thread runtime inside the scoped metrics
 //! recorder (`nonce_metrics_support::observe`), so every metric the request
@@ -65,12 +68,13 @@ async fn signed_state() -> (Arc<AppState>, tempfile::TempDir) {
     (state, store)
 }
 
-/// A `gateway_invoke` of `server` carrying a `null` nonce, the malformed shape.
-fn invoke_with_null_nonce(server: &str) -> String {
+/// A `gateway_invoke` of `server` carrying `nonce`; `null` is the malformed
+/// shape.
+fn invoke_with_nonce(server: &str, nonce: &Value) -> String {
     json!({
         "jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": {"name": "gateway_invoke", "arguments": {
-            "server": server, "tool": "read", "arguments": {}, "nonce": null,
+            "server": server, "tool": "read", "arguments": {}, "nonce": nonce,
         }},
     })
     .to_string()
@@ -96,6 +100,7 @@ async fn post(state: Arc<AppState>, body: String) -> (StatusCode, Value) {
 /// One request on a current-thread runtime, observed by the scoped recorder.
 fn observed(
     server: &str,
+    nonce: &Value,
 ) -> (
     Value,
     Vec<crate::security::message_signing::nonce_metrics_support::Observed>,
@@ -106,7 +111,7 @@ fn observed(
         .expect("runtime");
     let (state, _store) = runtime.block_on(signed_state());
     let ((_, body), events) =
-        observe(|| runtime.block_on(post(state, invoke_with_null_nonce(server))));
+        observe(|| runtime.block_on(post(state, invoke_with_nonce(server, nonce))));
     (body, events)
 }
 
@@ -114,19 +119,22 @@ fn observed(
 /// malformed nonce gets the policy refusal and counts no nonce rejection.
 #[test]
 fn a_denied_invoke_with_a_malformed_nonce_gets_the_policy_refusal() {
-    let (body, events) = observed("beta");
+    let (body, events) = observed("beta", &Value::Null);
     let error = &body["error"];
     assert!(error.is_object(), "the call is refused: {body}");
     assert_ne!(error["code"], json!(-32602), "policy answers first: {body}");
     assert_ne!(error["message"], json!(INVALID_REFUSAL), "{body}");
     assert_no_rejections(&events);
+    // The same refusal a well-formed nonce gets: the policy's, whatever it says.
+    let (policy, _) = observed("beta", &json!("a-well-formed-nonce"));
+    assert_eq!(body, policy, "the policy refusal, not another error");
 }
 
 /// R2 (control): the same call, allowed by policy, is still refused for its
 /// malformed nonce, and counted once.
 #[test]
 fn an_allowed_invoke_with_a_malformed_nonce_is_still_refused_and_counted() {
-    let (body, events) = observed("alpha");
+    let (body, events) = observed("alpha", &Value::Null);
     assert_eq!(body["error"]["code"], json!(-32602), "{body}");
     assert_eq!(body["error"]["message"], json!(INVALID_REFUSAL), "{body}");
     assert_single_rejection(&events, "invalid");
