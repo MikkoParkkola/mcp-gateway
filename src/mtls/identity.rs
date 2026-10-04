@@ -147,6 +147,10 @@ fn build_display_name(cn: Option<&String>, san_uris: &[String]) -> String {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "identity_differential_tests.rs"]
+mod differential_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use rcgen::string::Ia5String;

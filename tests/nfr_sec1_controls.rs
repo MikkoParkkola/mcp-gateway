@@ -189,6 +189,66 @@ async fn control_13_a_modern_caller_outside_its_tool_scope_is_refused() {
 }
 
 // ============================================================================
+// NFR.SEC.1 control 12 — admin meta-tools
+// `require_admin_tool_access`, at the handler's pre-check. Earlier coverage
+// framed the call legacy-style or called the gate directly.
+// ============================================================================
+fn reload_config() -> Value {
+    modern(
+        "tools/call",
+        json!({ "name": "gateway_reload_config", "arguments": {} }),
+    )
+}
+
+#[tokio::test]
+async fn control_12_a_modern_non_admin_caller_of_an_admin_meta_tool_is_refused() {
+    let (app, _store_dir) = state(Fixture {
+        auth: auth_with(vec![api_key("k", 0, None)], None),
+        ..Default::default()
+    })
+    .await;
+    let (status, body) = post(&app, reload_config(), &[("authorization", "Bearer k")]).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "the admin gate must bind a modern caller; body: {body}"
+    );
+    assert_eq!(body["error"]["code"], json!(-32600), "{body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("requires admin access")),
+        "{body}"
+    );
+    // Falsifier: an admin key with the same frame clears the gate, so the
+    // refusal above is the admin check and not the call failing anyway.
+    let mut admin = api_key("k", 0, None);
+    admin.admin = true;
+    let (admin_app, _admin_store_dir) = state(Fixture {
+        auth: auth_with(vec![admin], None),
+        ..Default::default()
+    })
+    .await;
+    let (served, body) = post(
+        &admin_app,
+        reload_config(),
+        &[("authorization", "Bearer k")],
+    )
+    .await;
+    // Past the gate, the tool's own answer: this fixture attaches no reload
+    // context, so the call reaches the dispatcher and is declined there.
+    assert_eq!(
+        served,
+        StatusCode::OK,
+        "an admin key must clear the admin gate; body: {body}"
+    );
+    assert!(
+        body.to_string().contains("Config reload is not enabled"),
+        "the admin call must reach the tool itself; body: {body}"
+    );
+}
+
+// ============================================================================
 // NFR.SEC.1 control 8 — JSON well-formedness
 // `-32700` from `serde_json::from_slice` at `handlers.rs:526`. The inventory
 // recorded this as "covered by 10" and it was not: a body that fails here
