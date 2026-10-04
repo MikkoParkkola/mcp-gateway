@@ -227,11 +227,22 @@ struct Receipt {
     tool: String,
     #[cfg(feature = "firewall")]
     digest: crate::security::firewall::DeliveryDigest,
+    /// Staged by a plan step (`gateway_run_playbook`, `gateway_execute`): the
+    /// plan's answer is not this step's text, so it is never rebuilt from it
+    /// (MIK-7887.RECEIPT.2).
+    in_plan: bool,
 }
 
 tokio::task_local! {
     /// The receipts of the delivery this task owns (§13.3 "Recording").
     static RELAY_RECEIPTS: RefCell<Vec<Receipt>>;
+    /// Set while one step of a plan dispatches.
+    static PLAN_STEP: ();
+}
+
+/// Run one plan step's dispatch: the receipts it stages are a plan's.
+pub(crate) async fn plan_step<F: std::future::Future>(step: F) -> F::Output {
+    PLAN_STEP.scope((), step).await
 }
 
 /// Run `delivery` with a receipt collector: the HTTP and stdio dispatches
@@ -598,6 +609,7 @@ impl MetaMcp {
                     server: one.server.clone(),
                     tool: one.tool.clone(),
                     digest,
+                    in_plan: one.in_plan,
                 });
             }
             #[cfg(not(feature = "firewall"))]
@@ -689,6 +701,7 @@ fn receipt_with(
         server: server.to_owned(),
         tool: tool.to_owned(),
         digest,
+        in_plan: PLAN_STEP.try_with(|()| ()).is_ok(),
     })
 }
 

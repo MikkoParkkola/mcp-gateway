@@ -758,3 +758,6 @@ async fn a_bridged_prompt_is_recorded_as_it_is_delivered() {
 
 #[path = "relay_delivery_tests.rs"]
 mod delivery;
+
+#[path = "relay_plan_tests.rs"]
+mod plan;

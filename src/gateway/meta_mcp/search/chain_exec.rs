@@ -87,9 +87,12 @@ impl MetaMcp {
                 &crate::protocol::mrtr::NO_RETRY
             });
 
-            match self
-                .invoke_tool(&invoke_args, session_id, &step_caller)
-                .await
+            match crate::gateway::meta_mcp::invoke::relay::plan_step(self.invoke_tool(
+                &invoke_args,
+                session_id,
+                &step_caller,
+            ))
+            .await
             {
                 // A tool error in the success channel is still an error.
                 Ok(result) => chain_step_result(idx, &tool_ref, result),
