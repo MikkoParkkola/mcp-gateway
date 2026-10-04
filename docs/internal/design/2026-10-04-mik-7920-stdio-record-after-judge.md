@@ -85,7 +85,12 @@ third record variant.
   before.
 - **Fail-closed.** If the log refuses the record, the frame becomes the audit-unavailable
   refusal, and so does the stored delivery (`judged_answer.rs:35-37`). That is today's stdio
-  behaviour, now applied after the judge.
+  behaviour, now applied after the judge. When the log accepts the record, a read-judge Block
+  leaves the stored copy as the original answer, taken before the judge ran
+  (`stdio_delivery.rs:78`, `:113`; `judged_answer.rs:34-35`), and a replay restores that
+  answer's first reading (`admission.rs:209`) and is judged again (`server/mod.rs:3429` →
+  `:3085` → `stdio_delivery.rs:113`), so it is served only when a fresh call returning that
+  answer would be.
 - **`complete_delivery` runs later**: after the judge and the record, outside the relay
   collector. It touches no relay state. The meta route has the same order.
 - **Code that loses its last non-test caller**: `finalize_response_for_delivery`,
