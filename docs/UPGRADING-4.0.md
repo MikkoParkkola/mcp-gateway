@@ -2599,8 +2599,9 @@ URL, before anything is sent:
   fragment.
 
 **Action:** if a capability's identity provider lives on a private network, name it by
-hostname and set `capabilities.egress_proxy` to a proxy that can reach it (item 77): the
-proxy resolves the name, so the refresh goes through it. An IP-literal private endpoint is
+hostname and set `capabilities.egress_proxy` to a proxy that can reach it (item 77; under
+`security.posture: standard`, since `hardened` refuses the key): the proxy resolves the name,
+so the refresh goes through it. An IP-literal private endpoint is
 refused either way.
 
 ## 85. The response firewall scans object keys
