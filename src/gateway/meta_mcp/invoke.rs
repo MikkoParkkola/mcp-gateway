@@ -12,15 +12,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
-#[cfg(feature = "cost-governance")]
-use crate::cost_accounting::suggestions;
-use crate::gateway::input_bridge::BridgeError;
-use crate::idempotency::{GuardOutcome, IdempotencyReservation, derive_key, enforce};
+use crate::Result;
+use crate::idempotency::{IdempotencyReservation, derive_key};
 use crate::identity_propagation::CallerProof;
-use crate::protocol::LoggingLevel;
-use crate::security::http_diagnostics::is_upstream_unauthorized;
-use crate::transport::notification_sink::emit_log;
-use crate::{Error, Result};
 
 /// `logger` field on every `notifications/message` this module raises
 /// (ADR-014 §3). One name for both sites: a caller filtering on the logger
@@ -80,9 +74,7 @@ use guarded::GuardedValue;
 use super::super::meta_mcp_helpers::{extract_required_str, parse_tool_arguments};
 #[cfg(test)]
 use super::super::recovery::ErrorCategory;
-use super::super::recovery::{RecoveryContext, attach_recovery, recovery_for};
 use super::MetaMcp;
-use super::prompt_cache::CacheKeyDeriver;
 mod side_effect_markers;
 mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
@@ -98,9 +90,7 @@ mod withheld_evidence;
 // #1961: the account-bound MCP mint, kept out of this file's size baseline.
 mod account_mint;
 
-use super::support::{
-    augment_with_predictions, augment_with_trace, idempotency_key_for, response_cache_key_for,
-};
+use super::support::{augment_with_predictions, augment_with_trace, idempotency_key_for};
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
 mod output_shape;
 mod provenance_stamp;
@@ -113,7 +103,10 @@ mod budget;
 mod continuation;
 mod dispatch;
 mod errors;
+mod legacy_bridge;
 mod policy;
+mod post_dispatch;
+mod pre_dispatch;
 mod projection;
 mod propagation;
 use bridge_dispatch::{BridgeDispatcher, run_input_bridge, undeclared_input_request};
@@ -126,6 +119,8 @@ pub(super) use errors::BudgetOutcome;
 #[cfg(test)]
 use errors::classify_dispatch_error;
 use errors::{classify_from_detail, dispatch_error_result};
+use post_dispatch::attach_tool_error_recovery;
+use pre_dispatch::{derive_prompt_cache_key, log_tool_invoked};
 use projection::{
     apply_capability_projection, call_capability_tool_with_identity, emit_projection_ab_event,
     extract_client_claim, json_is_populated,
@@ -153,7 +148,6 @@ impl MetaMcp {
         // boundary for the same reason `invoke_tool` takes it whole: no call
         // site can pass an authorizer without the identity it authorizes.
         let api_key_name = caller.api_key_name;
-        let agent_id = caller.agent_id;
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
         let provenance = caller.provenance();
@@ -240,50 +234,7 @@ impl MetaMcp {
             CallerCredential::default()
         };
 
-        // ADR-008 INV-2 fail-closed guard. On a multi-user gateway, a backend
-        // whose OAuth token is held once by the gateway (keyed by backend, not
-        // by user — src/oauth/storage.rs) must NOT have that token attached for
-        // an arbitrary caller: doing so serves user A's login to user B. Refuse
-        // UNLESS a per-user credential was resolved above (identity propagation
-        // minted caller-specific headers) or the operator blessed the account
-        // as shared (`oauth.shared_account = true`, logged). A single-user
-        // gateway never enters this branch. This never falls back to the shared
-        // token (INV-1): it refuses.
-        if self.multi_user.load(Ordering::Relaxed)
-            && caller_credential.headers.is_empty()
-            && backend
-                .as_deref()
-                .is_some_and(crate::backend::Backend::oauth_requires_per_user_isolation)
-        {
-            tracing::warn!(
-                server = %server,
-                "refused: multi-user gateway would serve a gateway-held OAuth token \
-                 that is not isolated per user (ADR-008 INV-2)"
-            );
-            // ADR-014 §3: the same fact, on the caller's own stream. A refusal
-            // the client can see beats one it has to ask an operator to read
-            // out of a log, and the `-32001` below carries the remedy but not
-            // the severity.
-            emit_log(LoggingLevel::Warning, GATEWAY_INVOKE_LOGGER, || {
-                serde_json::json!({
-                    "message": "refused: multi-user gateway would serve a gateway-held \
-                                OAuth token that is not isolated per user (ADR-008 INV-2)",
-                    "server": server,
-                    "tool": tool,
-                })
-            });
-            return Err(Error::json_rpc(
-                -32001,
-                format!(
-                    "Backend '{server}' uses a gateway-held OAuth login that is not \
-                     isolated per user. On a multi-user gateway this call is refused so \
-                     one user's token is never served to another. Fix: supply a per-user \
-                     credential (enable identity propagation for this backend), or set \
-                     `oauth.shared_account = true` if this is a genuinely shared service \
-                     account."
-                ),
-            ));
-        }
+        self.refuse_shared_oauth_login(server, tool, &caller_credential, backend.as_deref())?;
         // THE CAPABILITY ROUTE'S ACCOUNT BOUNDARY, RESOLVED HERE — BEFORE THE
         // OUTER RESPONSE CACHE IS CONSULTED.
         //
@@ -359,76 +310,18 @@ impl MetaMcp {
         // `Drop` releases the key, so an early return after dispatch cannot
         // strand the entry as in-flight until the guard times out.
         let mut idem_reservation: Option<IdempotencyReservation> = None;
-        if let (Some(idem_cache), Some(key), Some(fingerprint)) =
-            (&self.idempotency_cache, &idem_key, &idem_fingerprint)
-        {
-            match enforce(idem_cache, key, fingerprint)? {
-                // A dispatched call that failed is terminal: serving the stored
-                // error is what stops the retry re-running a side effect that
-                // may already have committed (ADR-012 consequence 1).
-                GuardOutcome::CachedError(error) => {
-                    audit::note_cached();
-                    // A refusal keeps its provenance across the replay as well
-                    // as across the bridge boundary. Served as a generic error
-                    // it would skip the delivery-refusal projection and count
-                    // as a client failure — a retry could then open the circuit
-                    // breaker on a client whose only fault was retrying a call
-                    // the gateway itself refused.
-                    if crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal(
-                        &error,
-                    ) {
-                        debug!(
-                            server,
-                            tool, key, trace_id, "Idempotency cache hit (firewall refusal)"
-                        );
-                        return Err(Error::ResponseFirewallRefused);
-                    }
-                    let (code, message) = crate::idempotency::cached_error_parts(&error);
-                    debug!(
-                        server,
-                        tool, key, trace_id, "Idempotency cache hit (failed)"
-                    );
-                    return Err(Error::json_rpc(code, message));
-                }
-                GuardOutcome::CachedResult(cached) => {
-                    debug!(server, tool, key, trace_id, "Idempotency cache hit");
-                    self.stage_relay_receipt(
-                        caller.relay_caller(session_id),
-                        (server, tool),
-                        &cached,
-                    );
-                    if let Some(ref stats) = self.stats {
-                        stats.record_cache_hit();
-                    }
-                    telemetry_metrics::counter!(
-                        "mcp_cache_hits_total",
-                        "server" => server.to_owned(),
-                        "kind" => "idempotency"
-                    )
-                    .increment(1);
-                    let predictions =
-                        self.record_and_predict(session_id, arm_key, &tool_key, caller.scope());
-                    return Ok(GuardedValue::from_cache(cached).augment(|v| {
-                        let v =
-                            augment_with_trace(augment_with_predictions(v, predictions), trace_id);
-                        self.maybe_stamp_provenance(
-                            v,
-                            server,
-                            tool,
-                            api_key_name,
-                            crate::trust::CacheOutcome::Hit,
-                            client_claim.as_ref(),
-                        )
-                    }));
-                }
-                GuardOutcome::Proceed(reservation) => {
-                    idem_reservation = Some(reservation);
-                    debug!(
-                        server,
-                        tool, key, trace_id, "Idempotency key registered as in-flight"
-                    );
-                }
-            }
+        if let Some(stored) = self.admit_idempotency_key(
+            caller,
+            session_id,
+            (server, tool),
+            trace_id,
+            (idem_key.as_deref(), idem_fingerprint.as_deref()),
+            (arm_key, &tool_key),
+            api_key_name,
+            client_claim.as_ref(),
+            &mut idem_reservation,
+        )? {
+            return Ok(stored);
         }
 
         // Defense in depth on an already-classified value: the exact set both
@@ -440,45 +333,21 @@ impl MetaMcp {
             .protocol_revision
             .and_then(crate::protocol::meta::served_revision);
 
-        // MIK-7570.SCHEMA.1 (R2): refused above the response cache, so a result
-        // cached before the rule (or under `off`) is never served to a call the
-        // rule refuses, and before `mark_dispatched`, so a refusal is never
-        // dispatched, charged or counted as an invocation. Nothing ran, so the
-        // idempotency key is released for an honest retry.
-        // F13: a cold slot is listed first, as this caller; the slot's
-        // failsafe refusing that list answers as a refused dispatch does.
-        let checked_at = std::time::Instant::now();
-        let refusal = self.undeclared_key_refusal(
-            (server, backend.as_ref()),
-            tool,
-            &arguments,
-            dispatch_binding.as_deref(),
-            &caller_credential.headers,
-            (caller.scope(), session_id),
-        );
-        let refusal = match refusal.await {
-            Ok(refusal) => refusal,
-            Err(e) => {
-                let managed = caller_credential.managed.as_ref();
-                match self
-                    .answer_refused_fill((server, tool), e, managed, checked_at)
-                    .await
-                {
-                    Ok((value, _)) => Some(value),
-                    Err(e) => {
-                        if let Some(reservation) = idem_reservation.as_mut() {
-                            reservation.release();
-                        }
-                        return self.with_connect_offer(Err(e), verified_identity).await;
-                    }
-                }
-            }
-        };
-        if let Some(refusal) = refusal {
-            if let Some(reservation) = idem_reservation.as_mut() {
-                reservation.release();
-            }
-            return Ok(GuardedValue::sealed_by_guard(refusal));
+        if let Some(refusal) = self
+            .answer_undeclared_key(
+                caller,
+                session_id,
+                (server, tool),
+                backend.as_ref(),
+                &arguments,
+                dispatch_binding.as_deref(),
+                &caller_credential,
+                verified_identity,
+                &mut idem_reservation,
+            )
+            .await?
+        {
+            return Ok(refusal);
         }
 
         // Counted only for a call the cache would otherwise have served, so an
@@ -488,55 +357,22 @@ impl MetaMcp {
         }
         // A chained backend's answer is bound to one challenge: no cache (D7).
         let chained = self.is_chained(backend.as_deref());
-        if !want_full
-            && !chained
-            && protocol_revision.is_some()
-            && let Some(ref cache) = self.cache
-            && let Some(cache_key) = response_cache_key_for(
-                server,
-                tool,
-                &arguments,
-                &projection_key_suffix,
-                &caller_principal,
-                caller.retry,
-                crate::cache::KeyContext {
-                    routing_profile: &profile.name,
-                    protocol_revision,
-                    policy_epoch,
-                },
-            )
-            && let Some((cached, read)) = cache.get_read(&cache_key)
-        {
-            cache_reads::restore(read.as_ref());
-            debug!(server, tool, trace_id, "Cache hit");
-            self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &cached);
-            if let Some(ref stats) = self.stats {
-                stats.record_cache_hit();
-            }
-            telemetry_metrics::counter!(
-                "mcp_cache_hits_total",
-                "server" => server.to_owned(),
-                "kind" => "response"
-            )
-            .increment(1);
-            // Terminal state on the response-cache-hit return: settle through
-            // the reservation, or its `Drop` would remove what was just stored.
-            if let Some(reservation) = idem_reservation.as_mut() {
-                reservation.complete_read(&cached, read);
-            }
-            let predictions =
-                self.record_and_predict(session_id, arm_key, &tool_key, caller.scope());
-            return Ok(GuardedValue::from_cache(cached).augment(|v| {
-                let v = augment_with_trace(augment_with_predictions(v, predictions), trace_id);
-                self.maybe_stamp_provenance(
-                    v,
-                    server,
-                    tool,
-                    api_key_name,
-                    crate::trust::CacheOutcome::Hit,
-                    client_claim.as_ref(),
-                )
-            }));
+        if let Some(cached) = self.serve_cached_response(
+            caller,
+            session_id,
+            (server, tool),
+            trace_id,
+            (want_full, chained),
+            protocol_revision,
+            &arguments,
+            (&projection_key_suffix, &caller_principal),
+            (&profile.name, policy_epoch),
+            (arm_key, &tool_key),
+            api_key_name,
+            client_claim.as_ref(),
+            &mut idem_reservation,
+        ) {
+            return Ok(cached);
         }
 
         if let Some(ref stats) = self.stats {
@@ -546,40 +382,7 @@ impl MetaMcp {
             ranker.record_use(server, tool);
         }
 
-        // === OWASP ASI03: per-agent identity audit log ===
-        //
-        // Proven and declared are recorded as DISTINCT fields, always. A record
-        // that collapses them cannot tell "agent-a proved it" from "someone
-        // said agent-a", which is the signal funded change 4 exists to create.
-        // `agent_id` keeps its name and its meaning tightens: it is now the
-        // proven principal only, never a caller-supplied tag.
-        let agent_label = agent_id.map_or("anonymous", |a| a.as_str());
-        let declared_label = caller
-            .agent_declared
-            .map(crate::security::DeclaredAgentLabel::as_str);
-        tracing::info!(
-            agent_id = %agent_label,
-            agent_declared = declared_label,
-            server   = %server,
-            tool     = %tool,
-            trace_id = %trace_id,
-            "tool invoked"
-        );
-        // ADR-014 §3: the audit line, on the stream of the request that asked
-        // for it. Same fields as the `tracing` call above, deliberately -- a
-        // caller correlating its own invocations should not have to map one
-        // vocabulary onto another.
-        emit_log(LoggingLevel::Info, GATEWAY_INVOKE_LOGGER, || {
-            serde_json::json!({
-                "message": "tool invoked",
-                "agent_id": agent_label,
-                "agent_declared": declared_label,
-                "server": server,
-                "tool": tool,
-                "trace_id": trace_id,
-            })
-        });
-        debug!(server, tool, trace_id, "Invoking tool");
+        log_tool_invoked(caller, server, tool, trace_id);
 
         // === PRE-INVOKE: Cost governance budget check ===
         //
@@ -596,22 +399,7 @@ impl MetaMcp {
         #[cfg(feature = "cost-governance")]
         let cost_warnings = std::mem::take(&mut admission.warnings);
 
-        // Derive a prompt_cache_key for OpenAI-compatible backends.
-        // Priority: explicit _meta.prompt_cache_key > hash of a real session id.
-        let prompt_cache_key: Option<String> = args
-            .get("_meta")
-            .and_then(|m| m.get("prompt_cache_key"))
-            .and_then(Value::as_str)
-            .map(CacheKeyDeriver::from_header)
-            .or_else(|| {
-                session_id.filter(|sid| !sid.is_empty()).map(|sid| {
-                    let deriver = CacheKeyDeriver::with_slots(3);
-                    let base = CacheKeyDeriver::from_context(sid);
-                    let req_idx = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-                    let slot = deriver.slot_for_request(req_idx);
-                    deriver.key_for_slot(&base, slot)
-                })
-            });
+        let prompt_cache_key: Option<String> = derive_prompt_cache_key(args, session_id);
 
         // MRTR.1: a retry's answers and the backend's own state go out beside
         // `arguments`. Redeemed here rather than at the router, because this is
@@ -621,7 +409,7 @@ impl MetaMcp {
         // Cloned before `accounted_dispatch` takes it: a bridged round must reach
         // the backend with the credential the first round used, and an `Arc` clone
         // is that same credential rather than a second resolution of it.
-        let bridge_account_credential = account_credential.clone();
+        let mut bridge_account_credential = account_credential.clone();
         let outbound_retry =
             match redeem_retry(&self.continuation, caller, server, tool, &arguments).await {
                 Ok(retry) => retry,
@@ -700,85 +488,16 @@ impl MetaMcp {
         }
         let mut answered = mcp_backend && dispatch_result.is_ok();
         let mut result = match dispatch_result {
-            Ok(value) => {
-                // When the capability backend returns a tool-level error
-                // (schema validation, executor failure) it sets `isError: true`
-                // in the JSON value without propagating a Rust `Err`.  Attach a
-                // recovery hint so the LLM has structured guidance to fix the
-                // call — but only when the `recovery` field is not already set.
-                if value
-                    .get("isError")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-                    && value.get("recovery").is_none()
-                {
-                    let detail = value
-                        .get("content")
-                        .and_then(|c| c.as_array())
-                        .and_then(|arr| arr.first())
-                        .and_then(|item| item.get("text"))
-                        .and_then(serde_json::Value::as_str);
-                    // A tool-level `isError` body is not always a schema
-                    // violation — capability backends surface upstream HTTP
-                    // failures (429 rate limit, 5xx, timeouts) here too.
-                    // Read the detail text for status signals so the LLM gets
-                    // the right recovery class (e.g. RATE_LIMITED, retryable)
-                    // instead of a misleading "fix your params" INVALID_PARAM.
-                    let category = classify_from_detail(detail);
-                    let hint = recovery_for(
-                        category,
-                        RecoveryContext {
-                            tool: Some(tool),
-                            backend: Some(server),
-                            detail,
-                            ..Default::default()
-                        },
-                    );
-                    attach_recovery(value, hint)
-                } else {
-                    value
-                }
-            }
+            Ok(value) => attach_tool_error_recovery(value, tool, server),
             Err(e) => {
-                // A11-c: a 401 on a managed credential forces at most one
-                // refresh, then either asks the user to reconnect (an offer,
-                // returned as the refusal it is) or tells the caller whether a
-                // retry can help (the recovery hint below).
-                let e = match caller_credential.managed.as_ref() {
-                    Some(managed) if is_upstream_unauthorized(&e) => {
-                        managed.after_upstream_401(e).await
-                    }
-                    _ => e,
-                };
-                if crate::personal_accounts::refusal::marked(&e).is_some() {
-                    // Settled like every dispatched failure (ADR-012).
-                    if let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.commit(&withheld_side_effect());
-                    }
-                    return self.with_connect_offer(Err(e), verified_identity).await;
-                }
-                // ADR-012 consequence 1: a reservation may be released only
-                // when the backend cannot have acted, because a released key
-                // readmits the retry that would execute the side effect a
-                // second time. `is_pre_dispatch()` is that allowlist, and it
-                // is deliberately tight (`src/error.rs`); every other dispatch
-                // error is a call that may already have acted, so its
-                // reservation stays live and is settled as a terminal failure
-                // by the commit below.
-                //
-                // `take()` is load-bearing rather than stylistic: a released
-                // reservation left in the `Option` would be picked up by that
-                // commit and re-inserted as a completed entry, which makes the
-                // release a no-op and the key permanently wrong.
-                if e.is_pre_dispatch()
-                    && let Some(mut reservation) = idem_reservation.take()
-                {
-                    reservation.release();
-                }
-                // The error budget already counted this failure (the shared
-                // accounting stage).  The idempotency reservation is left
-                // for the commit below unless the refusal was pre-dispatch.
-                dispatch_error_result(&e, tool, server)
+                self.settle_dispatch_error(
+                    e,
+                    caller_credential.managed.as_ref(),
+                    &mut idem_reservation,
+                    verified_identity,
+                    (server, tool),
+                )
+                .await?
             }
         };
 
@@ -831,256 +550,32 @@ impl MetaMcp {
         // holding an exchange that can never be completed.
         undeclared_gate::refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
 
-        // MIK-7212.WIRE: a legacy client is asked here, in-band, instead of
-        // being handed a continuation envelope it has no vocabulary for. A 2025
-        // client does not know to send one back, so relaying it strands the
-        // exchange at both ends. The envelope is the fallback, not the path.
-        //
-        // Placed between the two gates on purpose. After MRTR.9, because
-        // reaching this line means the question has already been found
-        // answerable by this client. Before the mint below, because an exchange
-        // the bridge carries to completion has no continuation to redeem: on
-        // success `interim` is cleared and the mint is skipped, and the
-        // completed body then runs the same post-invoke contract and anomaly
-        // gates every non-bridged result runs. Returning early here would buy a
-        // shorter diff by skipping them.
-        //
-        // `!requests.is_empty()` is load-bearing, not defensive. An interim
-        // result may carry `requestState` and no questions at all — MRTR.2's
-        // own shape — and handing that to the bridge makes it spin rather than
-        // refuse: `plan` yields no prompts, `ask` sends nothing, the backend is
-        // re-invoked, answers the same empty interim, and `run` exhausts its
-        // rounds. There is nothing here for a client to answer, so there is
-        // nothing to bridge, and the continuation mint below is the whole of
-        // the correct behaviour for that shape.
-        if caller.era == crate::protocol::meta::Era::Legacy
-            && let Some(pending) = interim.clone()
-            && !pending.requests.is_empty()
-            && let Some(session) = session_id
-        {
-            // Boxed: the exchange runs in `run_input_bridge`'s frame, and one
-            // allocation on the branch a legacy client with a pending question
-            // takes is cheaper than a wider `invoke` frame on every dispatch.
-            let account_refusal = parking_lot::Mutex::new(None);
-            let relay_refused = parking_lot::Mutex::new(None);
-            let recording = self.recording_channel(caller, session_id, (server, tool), trace_id);
-            let held = parking_lot::Mutex::new(idem_reservation.take());
-            let bridged = Box::pin(run_input_bridge(
-                BridgeDispatcher {
-                    meta: self,
-                    server,
-                    tool,
-                    arguments: &arguments,
-                    prompt_cache_key: prompt_cache_key.as_deref(),
-                    inbound_meta: args.get("_meta"),
-                    want_full,
-                    session_id,
-                    arm_key,
-                    caller_identity,
-                    caller_proof,
-                    headers: &caller_credential.headers,
-                    cache_binding: dispatch_binding.as_deref(),
-                    account_credential: bridge_account_credential,
-                    api_key_name,
-                    trace_id,
-                    policy_epoch,
-                    protocol_revision,
-                    routing_profile: &profile.name,
-                    scope: caller.scope(),
-                    captured: backend.clone(),
-                    managed: caller_credential.managed.as_ref(),
-                    account_refusal: &account_refusal,
-                    reservation: &held,
-                    relay: caller.relay_caller(session_id),
-                    relay_refused: &relay_refused,
-                },
-                &recording,
-                session,
-                caller.input_capabilities,
-                pending,
+        if let Some(answer) = self
+            .bridge_legacy_ask(
+                caller,
+                args,
+                session_id,
+                (server, tool),
                 trace_id,
-            ))
-            .await;
-            // Taken once, here: a guard held into a match arm would be held
-            // across that arm's awaits and make this future non-Send.
-            let mut parked = account_refusal.into_inner();
-            idem_reservation = held.into_inner();
-            // A relay refusal answers first, before the parked and generic arms.
-            if let Some(refused) = relay_refused.into_inner() {
-                if let Some(reservation) = idem_reservation.as_mut() {
-                    reservation.release();
-                }
-                // The outer lease was marked before round one; this refusal
-                // is no result of a call that acted, so it is not retained.
-                if let Some(execution) = caller.execution {
-                    execution.withdraw_dispatch();
-                }
-                return Err(refused);
-            }
-            match bridged {
-                Ok(completed) => {
-                    // The exchange finished, so the backend has now acted and
-                    // the key may be settled. The commit above declined this
-                    // reservation precisely because the backend had stopped to
-                    // ask; that is no longer true.
-                    //
-                    // The withheld marker rather than `completed`, for the
-                    // reason the commit above uses it: the gates between here
-                    // and `complete` may yet block this body, and committing it
-                    // would hand a retry under the same key the response the
-                    // gate refused.
-                    if let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.commit(&withheld_side_effect());
-                    }
-                    result = completed;
-                    interim = None;
-                    // `stopped_to_ask` stays true, and that is the point: it
-                    // gates the response cache below, and a bridged body is
-                    // derived from answers this caller gave in-band. The cache
-                    // key covers `arguments`, not the answers, so caching one
-                    // would serve the next identical call somebody else's
-                    // reply instead of asking. Recomputing the flag from
-                    // `result` here would look tidier and cache exactly the
-                    // bodies that must not be cached.
-                }
-                // No client session to reach is not a failed exchange: it is
-                // the absence of one. A legacy caller can arrive with a
-                // declared capability and no session to carry the request on —
-                // every stateless caller does — and the bridge is the wrong
-                // messenger for it, not the last one. Fall through with
-                // `interim` still set and the ask goes out as a continuation,
-                // which is what this path did before the bridge was wired in
-                // front of it.
-                //
-                // Stdio does not reach this arm. The serve loop passes a live
-                // channel (MIK-7387), so its legacy caller is asked in-band;
-                // the dispatchers outside it (a batch, `dispatch_single`)
-                // carry `NoClientChannel` but declare `Declared::NONE`, so the
-                // MRTR.9 gate above refuses the interim before the bridge. A
-                // stdio context that did fall through would mint, bound by its
-                // process nonce (MIK-7570.STDIO.1).
-                //
-                // ponytail: `run` walks rounds internally and a session lost on
-                // round two surfaces the same way, so the mint would replay
-                // prompts already answered. `RoundsExhausted` carries its last
-                // round for exactly this; `Delivery` does not yet, because no
-                // channel in tree fails later than round one.
-                Err(crate::gateway::input_bridge::BridgeError::Delivery {
-                    error: crate::gateway::input_bridge::DeliveryError::NoSession,
-                    ..
-                }) => {}
-                // Out of rounds: hand back the LAST round, sealed (#569).
-                Err(crate::gateway::input_bridge::BridgeError::RoundsExhausted { last }) => {
-                    if let Some(last) = last {
-                        result = *last;
-                        interim = crate::protocol::mrtr::InputRequired::from_result(&result);
-                    }
-                }
-                Err(BridgeError::Undeclared {
-                    key,
-                    method,
-                    reason,
-                }) => {
-                    return Err(undeclared_gate::bridge_refusal(
-                        &key, &method, reason, server, tool, trace_id,
-                    ));
-                }
-                // A policy refusal keeps its type across the bridge boundary.
-                // `error_response_preserving_status` carries a dedicated
-                // `ResponseFirewallRefused` arm that builds the delivery-refusal
-                // projection; flattening it into the -32003 below would report
-                // the gateway's own refusal as a client-attributable error and
-                // never reach that arm. The type survives either way; what the
-                // refusal decides is the key. A refusal on round one ends a
-                // call that never dispatched, so falling through releases it.
-                // From round two on the tool has already run, and a released
-                // key would readmit a retry of a side effect that may have
-                // taken effect (ADR-012 consequence 1), so the key settles.
-                Err(crate::gateway::input_bridge::BridgeError::ChallengeRefused { dispatched }) => {
-                    if dispatched && let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.fail(&crate::gateway::meta_mcp::invoke::dispatch_guards::firewall_refusal_body());
-                    }
-                    warn!(
-                        server,
-                        tool,
-                        trace_id,
-                        dispatched,
-                        "Bridged challenge refused by the response firewall"
-                    );
-                    return Err(Error::ResponseFirewallRefused);
-                }
-                // A11-c: a round's 401 on a managed account answers with the
-                // reconnect refusal or the rejection, not the generic refusal.
-                // Settled like any round that reached the backend; one refused
-                // at its cold-slot list (NotAdmitted, F13) is released.
-                Err(round) if parked.is_some() => {
-                    let refused = parked.take().expect("the arm's guard checked it");
-                    let not_admitted = matches!(round, BridgeError::NotAdmitted { .. });
-                    match idem_reservation.as_mut() {
-                        Some(reservation) if not_admitted => reservation.release(),
-                        Some(reservation) => reservation.commit(&uncertain_side_effect()),
-                        None => {}
-                    }
-                    if crate::personal_accounts::refusal::marked(&refused).is_some() {
-                        return self
-                            .with_connect_offer(Err(refused), verified_identity)
-                            .await;
-                    }
-                    // Anything else the 401 site produced (a rejection mark, or
-                    // a custody refusal connecting cannot fix) answers exactly
-                    // as the same failure on the first dispatch would. Sealed
-                    // like the undeclared-key refusal above: the result is
-                    // gateway-built from a typed error, never backend bytes.
-                    return Ok(GuardedValue::sealed_by_guard(dispatch_error_result(
-                        &refused, tool, server,
-                    )));
-                }
-                Err(error) => {
-                    // A round that reached the backend may have acted, so its
-                    // key must not be readmitted. `BackendFailed` is the only
-                    // variant raised from the backend call itself; `NotAdmitted`
-                    // was refused above the dispatch, and `Deadline`,
-                    // `RequestBudgetExhausted`, `Refused`, `Delivery` and `MalformedInterim` all
-                    // leave the backend parked on a question that was never
-                    // answered, and a backend that stopped to ask has not
-                    // acted yet — the premise the `Ok` arm below rests on too.
-                    // So their release-on-drop default still stands. A round
-                    // that never left the gateway — no such backend, no such
-                    // tool, an open circuit, a transport that never connected
-                    // — is `NotAdmitted` rather than
-                    // `BackendFailed`, because `classify_bridged_dispatch_error`
-                    // defers to the error type's own pre-dispatch allowlist; it
-                    // is provably unexecuted, so it keeps the default too. Only
-                    // a round that may have acted settles with the
-                    // uncertain-side-effect marker, which tells a retry of the
-                    // same key that the effect is unknown — not that it ran.
-                    if matches!(
-                        error,
-                        crate::gateway::input_bridge::BridgeError::BackendFailed {
-                            dispatch: crate::gateway::input_bridge::Dispatch::MayHaveActed,
-                            ..
-                        }
-                    ) && let Some(reservation) = idem_reservation.as_mut()
-                    {
-                        reservation.commit(&uncertain_side_effect());
-                    }
-                    warn!(
-                        server,
-                        tool,
-                        trace_id,
-                        error = ?error,
-                        "Bridged input exchange failed for a legacy client"
-                    );
-                    return Err(Error::JsonRpc {
-                        code: -32003,
-                        message: format!(
-                            "Tool '{tool}' on server '{server}' asked for input and the bridged \
-                             exchange could not be completed"
-                        ),
-                        data: None,
-                    });
-                }
-            }
+                &arguments,
+                prompt_cache_key.as_deref(),
+                want_full,
+                (arm_key, api_key_name),
+                (caller_identity, caller_proof),
+                verified_identity,
+                &caller_credential,
+                dispatch_binding.as_deref(),
+                &mut bridge_account_credential,
+                (policy_epoch, protocol_revision),
+                &profile.name,
+                backend.as_ref(),
+                &mut idem_reservation,
+                &mut result,
+                &mut interim,
+            )
+            .await?
+        {
+            return Ok(answer);
         }
 
         // MRTR.2: the backend's own `requestState` never reaches the client.
@@ -1132,81 +627,21 @@ impl MetaMcp {
         );
         answered &= source == crate::protocol::ChainSource::Backend;
 
-        // === POST-INVOKE: Inject cost warnings and suggestions ===
-        //
-        // `_cost_warnings` — active at ≥80% budget consumption (Notify tier).
-        // `_cost_suggestion` — present when a cheaper alternative exists.
         #[cfg(feature = "cost-governance")]
-        {
-            if !cost_warnings.is_empty()
-                && let Some(obj) = result.as_object_mut()
-            {
-                obj.insert(
-                    "_cost_warnings".to_string(),
-                    serde_json::json!(cost_warnings),
-                );
-            }
+        self.inject_cost_advice(&mut result, &cost_warnings, tool, caller, session_id);
 
-            if let Some(ref enforcer) = self.budget_enforcer {
-                let cost = enforcer.registry.cost_for(tool);
-                if cost > 0.0 {
-                    let all_costs = enforcer.registry.snapshot();
-                    let alternatives = enforcer.config.alternatives.as_ref();
-                    if let Some(suggestion) =
-                        suggestions::suggest_cheaper(tool, cost, &all_costs, alternatives)
-                        // Never point a caller at a tool it could not call (A3).
-                        && self.admits_tool_named(&suggestion.alternative, caller.scope(), session_id)
-                        && let Some(obj) = result.as_object_mut()
-                    {
-                        obj.insert(
-                            "_cost_suggestion".to_string(),
-                            serde_json::json!({
-                                "message": suggestion.reason,
-                                "alternative": suggestion.alternative,
-                                "savings_per_call": suggestion.savings_per_call,
-                                "alternative_cost": suggestion.alternative_cost,
-                            }),
-                        );
-                    }
-                }
-            }
-        }
-
-        // `!stopped_to_ask` for the reason the idempotency commit above is
-        // gated the same way: a question is not an answer. A cached one would be
-        // served to a later caller as though the backend had replied, and the
-        // continuation it carries is redeemable only by the caller it was minted
-        // for — so the reply they were handed could never be completed. Asking
-        // the backend's claim rather than "was a continuation minted" also
-        // covers the shapes `from_result` declines, which mint nothing and are
-        // not answers either.
-        if !want_full
-            && !stopped_to_ask
-            && !chained
-            && protocol_revision.is_some()
-            && let Some(ref cache) = self.cache
-            && let Some(cache_key) = response_cache_key_for(
-                server,
-                tool,
-                &arguments,
-                &projection_key_suffix,
-                &caller_principal,
-                caller.retry,
-                crate::cache::KeyContext {
-                    routing_profile: &profile.name,
-                    protocol_revision,
-                    policy_epoch,
-                },
-            )
-            && cache.set_read(
-                &cache_key,
-                result.clone(),
-                self.dispatch_reading(args),
-                self.default_cache_ttl,
-            )
-        {
-            debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
-        }
+        self.store_response(
+            caller,
+            args,
+            (server, tool),
+            trace_id,
+            (want_full, stopped_to_ask, chained),
+            protocol_revision,
+            &arguments,
+            (&projection_key_suffix, &caller_principal),
+            (&profile.name, policy_epoch),
+            &result,
+        );
 
         if let Some(reservation) = idem_reservation.as_mut()
             && reservation.complete_read(&result, self.dispatch_reading(args))
