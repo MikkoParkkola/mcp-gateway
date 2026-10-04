@@ -22,6 +22,7 @@ if ! [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
 fi
 
 work=$(mktemp -d)
+trap 'rm -rf -- "$work"' EXIT
 git archive "$TAG_COMMIT" deploy/helm/mcp-gateway | tar -x -C "$work"
 chart="$work/deploy/helm/mcp-gateway"
 version=$(yq '.version' "$chart/Chart.yaml") # the chart's own version, not the app's
@@ -38,4 +39,8 @@ mkdir -p "$work/pulled"
 helm pull "$repo/mcp-gateway" --version "$version" -d "$work/pulled"
 published=$(tar -xOzf "$work/pulled/mcp-gateway-$version.tgz" mcp-gateway/values.yaml | yq '.image.digest')
 [[ $published == "$digest" ]] || { echo "published chart pins $published, not $digest" >&2; exit 1; }
+# And the Deployment it renders runs that exact image.
+want="$(yq '.image.registry' "$chart/values.yaml")/$(yq '.image.repository' "$chart/values.yaml")@$digest"
+rendered=$(helm template probe "$work/pulled/mcp-gateway-$version.tgz" | yq 'select(.kind == "Deployment") | .spec.template.spec.containers[0].image')
+[[ $rendered == "$want" ]] || { echo "rendered image is $rendered, not $want" >&2; exit 1; }
 echo "chart $version pins $digest"
