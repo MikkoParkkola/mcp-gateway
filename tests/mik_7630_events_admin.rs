@@ -445,15 +445,17 @@ async fn search_rows_fit_the_published_schema_and_the_limit() {
         .map(|e| e.to_string())
         .collect();
     assert!(errors.is_empty(), "{errors:?} in {found}");
-    let mut forged = found.clone();
-    forged["matches"]
-        .as_array_mut()
-        .expect("matches")
-        .push(json!({"kind": "event", "description": "no name"}));
-    assert!(
-        !validator.is_valid(&forged),
-        "a row matching neither passed"
-    );
+    for neither in [
+        json!({"kind": "event", "description": "no name"}),
+        json!({"kind": "tool", "name": "x", "description": "not an event"}),
+    ] {
+        let mut forged = found.clone();
+        forged["matches"]
+            .as_array_mut()
+            .expect("matches")
+            .push(neither.clone());
+        assert!(!validator.is_valid(&forged), "{neither} passed");
+    }
     let one = gw
         .tool_call(
             ALICE,
