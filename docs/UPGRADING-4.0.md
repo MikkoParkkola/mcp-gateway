@@ -3094,8 +3094,8 @@ Three client-visible changes follow from that check:
   (-32004), not as the failure it stored, for as long as the grant stays denied.
 - A read of a finished task writes an `identity_grant_decision` record to the audit log when the
   target is a personal capability, beside the record the worker wrote at dispatch; an unchanged
-  decision is usually suppressed for 10 minutes (item 117; not across a restart, and not once
-  4,096 live task, caller and target keys are tracked).
+  decision is usually suppressed for 10 minutes (item 117; not across a restart, and not for a
+  new task, caller and target key once 4,096 live keys are tracked).
 
 **Action:** none on upgrade. A client that attests calls must send a fresh recovery token in
 `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task, as it already
