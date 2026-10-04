@@ -302,6 +302,56 @@ fn empty_leaves_past_the_cap_add_no_segments() {
     assert_eq!(digest.segment_texts().len(), 2, "the two edge leaves only");
 }
 
+/// MIK-7887.RECEIPT.2: removing a middle leaf splits its run, and the
+/// neighbours re-winnowed alone can select other minima. Every fingerprint of
+/// the original run whose k-gram was delivered is kept all the same.
+#[test]
+fn a_split_run_keeps_its_original_delivered_fingerprints() {
+    use std::collections::HashSet;
+
+    use super::super::collusion::{CollusionDetector, RelayParams};
+    use super::Delivered;
+    let detector = CollusionDetector::new(RelayParams::default());
+    let words = |tag: String| {
+        (0..40)
+            .map(|i| format!("{tag}{i:04}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut premise = false;
+    for round in 0..20 {
+        let (left, gone, right) = (
+            words(format!("l{round}x")),
+            words(format!("g{round}x")),
+            words(format!("r{round}x")),
+        );
+        let (digest, _) = DeliveryDigest::of_leaves(&[&left, &gone, &right], false);
+        let original = digest.fingerprints(&detector);
+        let delivered = Delivered::of_leaves(vec![left.as_str(), right.as_str()]).expect("bounded");
+        let kept: HashSet<u64> = digest
+            .retaining(&detector, &delivered)
+            .fingerprints(&detector)
+            .into_iter()
+            .collect();
+        let kgrams: HashSet<u64> = [&left, &right]
+            .iter()
+            .flat_map(|leaf| detector.kgram_hashes(leaf))
+            .collect();
+        let alone: HashSet<u64> = [&left, &right]
+            .iter()
+            .flat_map(|leaf| detector.fingerprints(leaf))
+            .collect();
+        for fp in original.into_iter().filter(|fp| kgrams.contains(fp)) {
+            assert!(
+                kept.contains(&fp),
+                "round {round}: a delivered k-gram's fingerprint was lost"
+            );
+            premise |= !alone.contains(&fp);
+        }
+    }
+    assert!(premise, "premise: a split moved some minimum");
+}
+
 fn observing(extra: impl FnOnce(&mut CollusionConfig)) -> (Firewall, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut collusion = CollusionConfig {
