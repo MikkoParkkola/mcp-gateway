@@ -213,7 +213,7 @@ their own doc comments:
   reads the client's era, so the field is dropped for a modern client *and* for
   a legacy one — stricter than the changelog asks, and not an era filter.
 - (a), legacy half —
-  `mik_7212_mrtr7_bridge_acs::ac_conformance_minor_11a_a_legacy_bridge_relay_retains_elicitation_id`.
+  `mik_7212_mrtr7_bridge_acs::removed_surface::ac_conformance_minor_11a_a_legacy_bridge_relay_retains_elicitation_id`.
   `InputBridge::prompt` clones `request["params"]` whole
   (`src/gateway/input_bridge.rs:473`), so a 2025-11-25 exchange is relayed
   unedited. This pins a library contract: `InputBridge` has no production
@@ -221,7 +221,7 @@ their own doc comments:
   already carries a real channel (`src/gateway/router/handlers.rs:1588`,
   `channel: state.proxy_manager.as_ref()`).
 - (b) —
-  `mik_7212_mrtr7_bridge_acs::ac_conformance_minor_11b_elicitation_complete_is_refused_unsent`.
+  `mik_7212_mrtr7_bridge_acs::removed_surface::ac_conformance_minor_11b_elicitation_complete_is_refused_unsent`.
   The removed notification is refused as `Refusal::UnrecognisedMethod` and no
   frame leaves, under the most permissive declaration there is.
 

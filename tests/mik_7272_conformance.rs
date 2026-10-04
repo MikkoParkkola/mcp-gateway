@@ -347,10 +347,10 @@ const MINOR: &[Row] = &[
             // (a), legacy half. The relay for a client that must be asked
             // directly carries the params whole, because 2025-11-25 did not
             // remove the field.
-            "mik_7212_mrtr7_bridge_acs::ac_conformance_minor_11a_a_legacy_bridge_relay_retains_elicitation_id",
+            "mik_7212_mrtr7_bridge_acs::removed_surface::ac_conformance_minor_11a_a_legacy_bridge_relay_retains_elicitation_id",
             // (b) The removed notification is refused before a frame leaves,
             // at the one site whose method a backend supplies.
-            "mik_7212_mrtr7_bridge_acs::ac_conformance_minor_11b_elicitation_complete_is_refused_unsent",
+            "mik_7212_mrtr7_bridge_acs::removed_surface::ac_conformance_minor_11b_elicitation_complete_is_refused_unsent",
         ],
     },
     Row {
