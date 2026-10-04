@@ -48,7 +48,9 @@ impl ProcessPolicy {
     }
 }
 
-/// Refuse unless this definition may run its process here.
+/// Refuse unless this definition may run its process here. Called before the
+/// response cache as well as before a run, so a cached answer never skips it
+/// (MIK-7814).
 pub(crate) fn admit(
     policy: &ProcessPolicy,
     capability: &CapabilityDefinition,

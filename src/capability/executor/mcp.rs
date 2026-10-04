@@ -740,3 +740,12 @@ mod tests;
 #[cfg(test)]
 #[path = "shipped_capability_tests.rs"]
 mod shipped_capability_tests;
+
+impl super::CapabilityExecutor {
+    /// Stop every MCP child of one capability, mid-call included (its
+    /// definition was replaced; MIK-7814).
+    pub(crate) fn stop_mcp(&self, capability: &str) {
+        self.mcp_children
+            .evict(Duration::MAX, &|name| name != capability);
+    }
+}

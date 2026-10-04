@@ -154,13 +154,6 @@ impl CapabilityExecutor {
             .store(multi_user, std::sync::atomic::Ordering::Release);
     }
 
-    /// Stop every MCP child of one capability, mid-call included (its
-    /// definition was replaced; MIK-7814).
-    pub(crate) fn stop_mcp(&self, capability: &str) {
-        self.mcp_children
-            .evict(std::time::Duration::MAX, &|name| name != capability);
-    }
-
     /// Stop the MCP children of every capability `loaded` rejects.
     pub(crate) fn stop_unloaded_mcp(&self, loaded: &dyn Fn(&str) -> bool) {
         self.mcp_children.evict(std::time::Duration::MAX, loaded);
@@ -350,8 +343,6 @@ impl CapabilityExecutor {
         // neither be served from cache nor reach the wire.
         let context = self.prepare_account_context(capability, context).await?;
 
-        // A process provider meets its gate before the cache too, so pin
-        // policy never depends on the cache key's shape (MIK-7814).
         if let Some(process) = capability.providers.process.get("primary") {
             process::admit(&self.process_policy, capability, process)?;
         }
