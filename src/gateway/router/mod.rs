@@ -73,6 +73,9 @@ mod callback_admin_denial_tests;
 mod collusion_direct_tests;
 #[cfg(test)]
 mod direct_audit_tests;
+// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.
+#[cfg(all(test, feature = "metrics"))]
+mod signing_nonce_order_tests;
 #[cfg(test)]
 mod direct_guards_fixture;
 #[cfg(test)]
