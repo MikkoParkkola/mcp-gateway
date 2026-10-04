@@ -134,9 +134,6 @@ pub struct Config {
     /// `RuntimeProvider` planning and isolation profiles.
     #[serde(default)]
     pub runtime: RuntimeConfig,
-    /// Plugin marketplace and local plugin directory.
-    #[serde(default)]
-    pub marketplace: MarketplaceConfig,
     /// Enterprise control-plane governance (identity-to-role mapping, MIK-6688).
     #[serde(default)]
     pub control_plane: crate::control_plane::ControlPlaneConfig,
@@ -751,7 +748,7 @@ fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static st
 
 pub use backend_config::{BackendConfig, OAuthConfig, TransportConfig};
 use backend_config::{default_token_refresh_buffer, default_true};
-pub use meta_mcp_config::{MarketplaceConfig, MetaMcpConfig, SurfacedToolConfig};
+pub use meta_mcp_config::{MetaMcpConfig, SurfacedToolConfig};
 pub use server_config::{CleartextHttp, IdempotencyKeyMode, ServerConfig};
 
 // ── humantime_serde ───────────────────────────────────────────────────────────

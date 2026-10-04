@@ -168,6 +168,7 @@ backend" and "fails a capability file" first.**
 | 141 | A successful `cli` or `mcp` capability result no longer carries a credential the gateway injected into the child (an env value, or the resolved `token_env`): every string value and key is rewritten to `[redacted]` and the document is otherwise intact; with the `firewall` feature the credential scanner runs on it too. Values the caller sent are left in the result, since a tool legitimately returns them (with the `firewall` feature the scanner can still replace one that looks like a credential). Without the `firewall` feature only the literal removal of injected values applies: a credential the child invents or reads from elsewhere is not recognised, in results or in error text. The removal is literal: a credential the child encodes (base64, URL escapes) or splits across separate values is not matched. Numbers are redacted only for an injected value of 4 or more digits, and a redacted key that collides with another is renamed `[redacted]#2`, `#3`, ... | A capability whose tool must return an injected value cannot: read it from the child's own source instead |
 | 142 | `mcp_gateway::gateway::destructive_confirmation::ConfirmationOutcome` gained the variant `Undelivered` and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles. `require_destructive_confirmation` now returns `Undelivered` when no session could carry the question; a timed-out or cancelled question stays `Unsupported` | Add an `Undelivered` arm handled like `Unsupported`, or end the `match` with a wildcard arm |
 | 143 | The `gateway_search_tools` output schema describes each `matches` row as `anyOf` a tool row (`server`, `tool`, `description`, `score`) or an event row (`kind: event`, `name`, `description`, `inputSchema`); it described tool rows only, so a strict client rejected an answer holding an event. `limit` now caps tool and event rows together: an answer could hold `limit` tools plus `limit` events | A client that reads the row schema at `items.properties` reads `items.anyOf[0].properties` for tool rows and `items.anyOf[1]` for event rows; one that sizes for `2 × limit` rows gets at most `limit` |
+| 144 | The `plugin` command is removed (`search`, `install`, `uninstall`, `list`), with `mcp_gateway::registry::marketplace` and `mcp_gateway::config::MarketplaceConfig`; a `marketplace:` block in the config loads and warns once | Delete the `marketplace:` block and `~/.mcp-gateway/plugins`; add tools as `backends:` entries or capability files (`mcp-gateway cap`) |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3805,6 +3806,26 @@ match.
 
 **Action:** a client that reads `items.properties` reads `items.anyOf[0].properties` for tool rows
 and `items.anyOf[1]` for event rows. Raise `limit` to see more event rows when tools fill it.
+
+## 144. The `plugin` command and the `marketplace` config block are removed
+
+**Startup:** no notice, a removed CLI surface (a leftover `marketplace` block logs one warning, not the upgrade notice)
+
+`mcp-gateway plugin search`, `install`, `uninstall` and `list` are gone. `install` downloaded a
+manifest and wrote it under `marketplace.plugin_dir`, but no gateway path ever loaded what it
+wrote: an installed plugin added no backend, tool or capability. The default marketplace,
+`https://plugins.mcpgateway.io`, does not resolve. The flags and variables that went with the
+command (`--marketplace-url`, `--plugin-dir`, `MCP_GATEWAY_MARKETPLACE_URL`,
+`MCP_GATEWAY_PLUGIN_DIR`) are gone with it.
+
+- **`marketplace` in the config file is a retired key: it loads, does nothing, and warns once**,
+  on start and on reload, with `` `marketplace` is ignored since 4.0: the `plugin` command was removed in 4.0, and nothing else read this block: no gateway path loaded the plugins it installed. Remove the marketplace block. ``
+- **Library break:** the `mcp_gateway::registry::marketplace` module and
+  `mcp_gateway::config::MarketplaceConfig` are removed, and `Config` has no `marketplace` field.
+
+**Action:** delete the `marketplace:` block and the `~/.mcp-gateway/plugins` directory (or your
+`plugin_dir`). Add tools as `backends:` entries or as capability files (`mcp-gateway cap`), which
+the gateway does load. Drop `plugin` calls from scripts.
 
 ## Upgrading from 3.5.x: a walkthrough
 

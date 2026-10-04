@@ -12,7 +12,7 @@ use std::{path::Path, process::ExitCode};
 
 use clap::Parser;
 use mcp_gateway::{
-    cli::{AuditCommand, Cli, Command, PluginCommand, SetupCommand, SkillsCommand},
+    cli::{AuditCommand, Cli, Command, SetupCommand, SkillsCommand},
     config::{Config, EnvOverlay},
     config_persistence::{load_existing_or_default, write_config},
     gateway::Gateway,
@@ -165,9 +165,6 @@ async fn run() -> ExitCode {
         }
         Some(Command::Skills(SkillsCommand::Remove { name, registry })) => {
             commands::run_skills_remove(&name, registry)
-        }
-        Some(Command::Plugin(plugin_cmd)) => {
-            run_plugin_command(plugin_cmd, config_path.as_deref()).await
         }
         Some(Command::Setup(SetupCommand::Wizard {
             yes,
@@ -510,46 +507,6 @@ fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -
                     ExitCode::SUCCESS
                 }
             }
-        }
-    }
-}
-
-/// Dispatch a `plugin` subcommand.
-///
-/// Loads config from `config_path` (needed for marketplace URL / plugin dir
-/// defaults) then delegates to the appropriate handler in `commands::plugin`.
-async fn run_plugin_command(cmd: PluginCommand, config_path: Option<&Path>) -> ExitCode {
-    let config = match Config::load(config_path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Warning: failed to load config ({e}); using defaults");
-            Config::default()
-        }
-    };
-
-    match cmd {
-        PluginCommand::Search {
-            query,
-            marketplace_url,
-        } => commands::run_plugin_search(&query, marketplace_url.as_deref(), &config).await,
-        PluginCommand::Install {
-            name,
-            marketplace_url,
-            plugin_dir,
-        } => {
-            commands::run_plugin_install(
-                &name,
-                marketplace_url.as_deref(),
-                plugin_dir.as_deref(),
-                &config,
-            )
-            .await
-        }
-        PluginCommand::Uninstall { name, plugin_dir } => {
-            commands::run_plugin_uninstall(&name, plugin_dir.as_deref(), &config).await
-        }
-        PluginCommand::List { plugin_dir } => {
-            commands::run_plugin_list(plugin_dir.as_deref(), &config)
         }
     }
 }

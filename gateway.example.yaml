@@ -165,9 +165,6 @@ key_server:
 agent_auth:
   enabled: false
   agents: []
-marketplace:
-  marketplace_url: https://plugins.mcpgateway.io
-  plugin_dir: ~/.mcp-gateway/plugins
 cost_governance:
   enabled: false
   currency: USD

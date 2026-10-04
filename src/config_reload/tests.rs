@@ -561,21 +561,6 @@ fn diff_detects_default_routing_profile_change() {
 }
 
 #[test]
-fn diff_detects_marketplace_change() {
-    // GIVEN: marketplace plugin_dir differs
-    let old = Config::default();
-    let mut new = Config::default();
-    new.marketplace.plugin_dir = "/tmp/plugins".to_string();
-    // WHEN
-    let patch = compute_diff(&old, &new);
-    // THEN
-    assert!(
-        patch.profiles_changed,
-        "changing marketplace config should set profiles_changed"
-    );
-}
-
-#[test]
 fn diff_same_routing_profiles_in_different_order_is_not_changed() {
     use crate::routing_profile::RoutingProfileConfig;
 

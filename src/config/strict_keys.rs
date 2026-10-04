@@ -50,6 +50,11 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
         "the server-wide request timeout was removed in 4.0; it was never enforced. \
          Calls are bounded by the per-backend `timeout`. Remove server.request_timeout",
     ),
+    (
+        &["marketplace"],
+        "the `plugin` command was removed in 4.0, and nothing else read this block: no \
+         gateway path loaded the plugins it installed. Remove the marketplace block",
+    ),
 ];
 
 /// A key the file carries that nothing reads and that still loads.

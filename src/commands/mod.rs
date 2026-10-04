@@ -23,7 +23,6 @@ mod kubernetes;
 // Only the config exporter consumes these client-path helpers.
 #[cfg_attr(not(feature = "config-export"), allow(dead_code))]
 pub mod paths;
-mod plugin;
 mod protocol_import;
 mod ranking;
 mod setup;
@@ -47,7 +46,6 @@ pub use doctor::{StdioProbe, run_doctor_command, run_doctor_shadow_command};
 pub use hash_key::run_hash_key_command;
 pub use identity::run_identity_command;
 pub use kubernetes::run_kubernetes_command;
-pub use plugin::{run_plugin_install, run_plugin_list, run_plugin_search, run_plugin_uninstall};
 pub use protocol_import::run_protocol_import_command;
 pub use ranking::run_ranking_command;
 pub use setup::run_setup_command;
