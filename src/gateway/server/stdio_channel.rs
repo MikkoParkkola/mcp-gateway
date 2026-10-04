@@ -366,4 +366,34 @@ mod tests {
         let channel = StdioClientChannel::new(tx, plain_reads());
         assert!(!channel.resolve("elicit-gone", json!({"result": {}})));
     }
+
+    /// MIK-7324.COV.3 (C6 stdio 6): any `method` member makes the frame a
+    /// request, whatever its type, so a null method with an id is no reply.
+    #[test]
+    fn a_frame_with_a_null_method_is_not_a_reply() {
+        let frame = json!({"jsonrpc": "2.0", "id": "elicit-1", "method": null});
+        assert_eq!(StdioClientChannel::reply_id(&frame), None, "{frame}");
+    }
+
+    /// MIK-7324.COV.3 (C6 stdio 8): a reply naming an id nobody waits on is
+    /// never handed to a different request that is waiting.
+    #[test]
+    fn a_reply_for_another_id_leaves_the_waiting_request_pending() {
+        let (tx, _rx) = mpsc::channel(1);
+        let channel = StdioClientChannel::new(tx, plain_reads());
+        let (waiter, mut answer) = oneshot::channel();
+        channel.pending.insert("elicit-1".to_string(), waiter);
+        assert!(
+            !channel.resolve("elicit-other", json!({"result": {}})),
+            "a reply for an unknown id resolved something"
+        );
+        assert!(
+            channel.pending.contains_key("elicit-1"),
+            "the waiting request lost its pending entry to another id's reply"
+        );
+        assert!(
+            answer.try_recv().is_err(),
+            "the waiting request received another id's reply"
+        );
+    }
 }
