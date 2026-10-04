@@ -1,0 +1,6 @@
+head_sha	a457e055b25a7eef3235908ca772154a46ccd725
+K1	linux	K1.patch	--lib backend::destination_tests::a_pairing_inside_the_start_window_stops_the_start_connecting
+K2	linux	K2.patch	--lib backend::destination_tests::a_start_refused_before_connecting_does_not_block_a_hardened_pairing
+K3	linux	K3.patch	--lib backend::destination_tests::a_start_refused_before_connecting_does_not_block_a_hardened_pairing
+K4	linux	K4.patch	--lib backend::destination_tests::a_start_refused_before_connecting_does_not_block_a_hardened_pairing
+K5	linux	K5.patch	--lib backend::destination_tests::a_start_refused_before_connecting_does_not_block_a_hardened_pairing

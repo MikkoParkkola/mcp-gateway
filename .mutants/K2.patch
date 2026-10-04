@@ -1,0 +1,15 @@
+diff --git a/src/backend/lifecycle.rs b/src/backend/lifecycle.rs
+index 2cd354ac2..fe4a5aa76 100644
+--- a/src/backend/lifecycle.rs
++++ b/src/backend/lifecycle.rs
+@@ -431,10 +431,6 @@ impl Backend {
+             } => {
+                 // A target the upgrade request cannot be built for is refused
+                 // before the mark: such a start never connects (MIK-7855).
+-                crate::transport::websocket::WebSocketTransport::upgrade_request(
+-                    ws_url,
+-                    &self.config.headers,
+-                )?;
+                 built_under = self.mark_connecting();
+                 let transport = self
+                     .start_websocket(ws_url, protocol_version.clone(), built_under)

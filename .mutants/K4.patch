@@ -1,0 +1,12 @@
+diff --git a/src/backend/lifecycle.rs b/src/backend/lifecycle.rs
+index 2cd354ac2..d256ec1d7 100644
+--- a/src/backend/lifecycle.rs
++++ b/src/backend/lifecycle.rs
+@@ -372,7 +372,6 @@ impl Backend {
+                 streamable_http,
+                 protocol_version,
+             } => {
+-                http_target(http_url)?;
+                 // One read, before anything is built: the OAuth client and the
+                 // transport are both built under it, and `begin_connecting`
+                 // refuses the start if a pairing stamped another policy since.

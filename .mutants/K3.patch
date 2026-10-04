@@ -1,0 +1,13 @@
+diff --git a/src/backend/lifecycle.rs b/src/backend/lifecycle.rs
+index 2cd354ac2..62d2b1872 100644
+--- a/src/backend/lifecycle.rs
++++ b/src/backend/lifecycle.rs
+@@ -376,7 +376,7 @@ impl Backend {
+                 // One read, before anything is built: the OAuth client and the
+                 // transport are both built under it, and `begin_connecting`
+                 // refuses the start if a pairing stamped another policy since.
+-                built_under = self.destination();
++                built_under = self.mark_connecting();
+                 #[cfg(test)]
+                 self.hold_in_mark_window().await;
+                 let oauth_client = self.create_oauth_client(http_url, built_under)?;
