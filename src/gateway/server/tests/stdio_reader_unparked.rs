@@ -228,10 +228,12 @@ fn a_refused_batch_is_answered_per_element() {
         1,
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {},
+        {"jsonrpc": "2.0", "id": {"not": "an id"}, "method": "ping"},
     ]))
-    .expect("three elements are answered");
+    .expect("four elements are answered");
     let items = refused.as_array().expect("an array");
-    assert_eq!(items.len(), 3, "{refused}");
+    assert_eq!(items.len(), 4, "{refused}");
+    assert_eq!(items[3], invalid, "an id no response can echo is invalid");
     assert_eq!(items[0]["id"], json!(1));
     assert_eq!(items[0]["error"]["code"], json!(-32000));
     assert_eq!(items[1], invalid);

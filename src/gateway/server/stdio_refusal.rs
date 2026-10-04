@@ -56,8 +56,14 @@ pub(super) fn stdio_busy_batch_response(batch: &serde_json::Value) -> Option<ser
             if !item.is_object() {
                 return Some(invalid());
             }
-            if let Some(busy) = stdio_busy_response(item) {
-                return Some(busy);
+            // An id a response can echo (JSON-RPC 2.0 §4) is refused busy; any
+            // other id makes the element an invalid request.
+            match item.get("id") {
+                Some(id) if id.is_string() || id.is_number() => {
+                    return stdio_busy_response(item);
+                }
+                Some(id) if !id.is_null() => return Some(invalid()),
+                _ => {}
             }
             // No id: a well-formed notification is not answered; anything
             // else is an invalid request, and the client is owed that.
