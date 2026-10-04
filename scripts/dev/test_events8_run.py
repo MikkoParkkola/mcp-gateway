@@ -9,6 +9,7 @@ by eye: a subscription with no filter, and an unsubscribe the gateway never
 applied to that subscription.
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -196,6 +197,22 @@ class UpCleanupTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         d = Path(tmp.name)
         (d / "state.json").symlink_to(marker)
+        (d / "keep.txt").write_text("not the script's")
+        done = subprocess.run(
+            [sys.executable, str(SCRIPT), "--dir", str(d), "up", "--gateway", str(d / "no-such-gateway")],
+            capture_output=True, text=True, timeout=60)
+        self.assertIn("not an events8 run directory", done.stderr)
+        self.assertTrue((d / "keep.txt").exists(), "a borrowed marker emptied the directory")
+
+    def test_a_hard_linked_state_json_does_not_lend_ownership(self):
+        owner = tempfile.TemporaryDirectory()
+        self.addCleanup(owner.cleanup)
+        marker = Path(owner.name) / "state.json"
+        marker.write_text(json.dumps({"owner": "events8_run"}))
+        tmp = tempfile.TemporaryDirectory(dir=owner.name)
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name)
+        os.link(marker, d / "state.json")
         (d / "keep.txt").write_text("not the script's")
         done = subprocess.run(
             [sys.executable, str(SCRIPT), "--dir", str(d), "up", "--gateway", str(d / "no-such-gateway")],
