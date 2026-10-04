@@ -347,8 +347,7 @@ async fn ac_confirm_1a_a_refusal_is_excluded_from_both_accounting_arms() {
     // this failure would be the first of two rather than the second.
     let mut unknown_again = modern_tools_list(1703);
     unknown_again["method"] = json!("row17/does-not-exist");
-    let (_, _, body) =
-        post_mcp_authed(Arc::clone(&state), unknown_again, Some("admin-key")).await;
+    let (_, _, body) = post_mcp_authed(Arc::clone(&state), unknown_again, Some("admin-key")).await;
     assert_eq!(
         body.pointer("/error/code").and_then(Value::as_i64),
         Some(-32601),

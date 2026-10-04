@@ -78,9 +78,7 @@ async fn state_with_exposure(
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         session_lifecycle: None,
         env: None,
-        meta_mcp: Arc::new(
-            MetaMcp::new(Arc::clone(&backends)).with_exposed_meta_tools(exposed),
-        ),
+        meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends)).with_exposed_meta_tools(exposed)),
         backends,
         meta_mcp_enabled: true,
         multiplexer,
@@ -222,8 +220,6 @@ fn modern_tools_call(id: i64, name: &str, arguments: Value) -> Value {
     request["params"]["_meta"][IDEMPOTENCY_KEY_META] = json!(format!("acs-{id}"));
     request
 }
-
-
 
 mod confirm;
 mod stateless_rows;
