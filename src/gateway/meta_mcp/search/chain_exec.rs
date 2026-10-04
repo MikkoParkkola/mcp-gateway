@@ -21,6 +21,7 @@ impl MetaMcp {
         caller: &super::super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         use super::super::chain_interim::{presented_resume, seal_chain_stop, step_retry_for};
+        use crate::gateway::meta_mcp::invoke::relay::plan_step;
 
         if chain.is_empty() {
             return Err(Error::json_rpc(-32602, "Chain must not be empty"));
@@ -87,13 +88,7 @@ impl MetaMcp {
                 &crate::protocol::mrtr::NO_RETRY
             });
 
-            match crate::gateway::meta_mcp::invoke::relay::plan_step(self.invoke_tool(
-                &invoke_args,
-                session_id,
-                &step_caller,
-            ))
-            .await
-            {
+            match plan_step(self.invoke_tool(&invoke_args, session_id, &step_caller)).await {
                 // A tool error in the success channel is still an error.
                 Ok(result) => chain_step_result(idx, &tool_ref, result),
                 // A refusal stays a refusal. Flattening it into -32603 told
