@@ -224,14 +224,29 @@ fn interpret(
     params: &Value,
 ) -> Result<Value> {
     if outcome.status.success() {
+        // The child may echo a credential it was given (MIK-7882): the answer
+        // loses the injected secrets like an error does, but is returned whole.
+        // Caller values stay: a tool legitimately returns what it was asked to
+        // store, send or look up.
         return match output {
-            CliOutput::Json => serde_json::from_slice(&outcome.stdout).map_err(|_| {
-                Error::Protocol(format!(
-                    "'{}' succeeded but its output is not JSON",
-                    invocation.command
-                ))
-            }),
-            CliOutput::Text => Ok(json!({ "text": String::from_utf8_lossy(&outcome.stdout) })),
+            CliOutput::Json => serde_json::from_slice::<Value>(&outcome.stdout)
+                .map(|mut value| {
+                    redact_value(&mut value, secrets);
+                    value
+                })
+                .map_err(|_| {
+                    Error::Protocol(format!(
+                        "'{}' succeeded but its output is not JSON",
+                        invocation.command
+                    ))
+                }),
+            CliOutput::Text => Ok(json!({
+                "text": redact_untruncated(
+                    &String::from_utf8_lossy(&outcome.stdout),
+                    secrets,
+                    &[],
+                )
+            })),
         };
     }
     if unauthorized(outcome) {
@@ -292,10 +307,9 @@ pub(super) fn caller_values(params: &Value) -> Vec<String> {
     out
 }
 
-/// Remove injected secrets (any length) and caller values (from 4 bytes)
-/// literally, then run the firewall's credential scanner, then truncate.
-pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> String {
-    let mut text = text.to_owned();
+/// Injected secrets (any length) and caller values (from 4 bytes), longest
+/// first so a value containing another is removed whole.
+fn needles<'a>(secrets: &'a [String], caller: &'a [String]) -> Vec<&'a str> {
     let mut needles: Vec<&str> = secrets
         .iter()
         .map(String::as_str)
@@ -307,19 +321,193 @@ pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> Strin
                 .filter(|s| s.len() >= MIN_REDACTED_CALLER_VALUE),
         )
         .collect();
-    // Longest first, so a value containing another is removed whole.
     needles.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    needles
+}
+
+/// Replace every occurrence of every needle with a marker. All matches are
+/// located in the ORIGINAL text and overlapping ones merge into one marker, so
+/// two credentials that overlap leave no fragment of either behind.
+///
+/// Memory is one flag per byte of `text`, whatever the number of matches (a
+/// one-character needle in a long text matches at every position); each needle
+/// costs one linear pass, however much its matches overlap.
+///
+/// A credential the scanner would find in the ORIGINAL text and that a
+/// literal overlaps is removed with it: removing the literal alone (an
+/// injected value equal to `Bearer`) would leave the rest of that credential
+/// where the scanner no longer recognises it.
+fn scrub(text: &str, needles: &[&str]) -> String {
+    let mut covered: Vec<bool> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
     for needle in needles {
-        text = text.replace(needle, "[redacted]");
+        if needle.is_empty() || seen.contains(needle) || !text.contains(needle) {
+            continue;
+        }
+        seen.push(needle);
+        if covered.is_empty() {
+            covered = vec![false; text.len()];
+        }
+        // Matches arrive in order of their end, so each marks only what the
+        // previous one did not and the marking is linear in the text.
+        let mut marked_to = 0;
+        match_starts(text.as_bytes(), needle.as_bytes(), |start| {
+            let end = start + needle.len();
+            covered[start.max(marked_to)..end].fill(true);
+            marked_to = end;
+        });
     }
-    // Without the `firewall` feature there is no credential scanner; the
-    // literal removal above (injected secrets, caller values) still applies.
+    if covered.is_empty() {
+        return text.to_owned();
+    }
+    #[cfg(feature = "firewall")]
+    for (start, end) in REDACTOR.credential_spans(text) {
+        if covered[start..end].contains(&true) {
+            covered[start..end].fill(true);
+        }
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < text.len() {
+        if covered[at] {
+            while at < text.len() && covered[at] {
+                at += 1;
+            }
+            out.push_str("[redacted]");
+        } else {
+            let start = at;
+            while at < text.len() && !covered[at] {
+                at += 1;
+            }
+            out.push_str(&text[start..at]);
+        }
+    }
+    out
+}
+
+/// Every start of `needle` in `text`, overlapping ones included, in
+/// O(text + needle) (Knuth-Morris-Pratt). A byte match of a UTF-8 needle in
+/// UTF-8 text starts and ends on character boundaries.
+fn match_starts(text: &[u8], needle: &[u8], mut each: impl FnMut(usize)) {
+    let mut fail = vec![0usize; needle.len()];
+    let mut k = 0;
+    for i in 1..needle.len() {
+        while k > 0 && needle[i] != needle[k] {
+            k = fail[k - 1];
+        }
+        if needle[i] == needle[k] {
+            k += 1;
+        }
+        fail[i] = k;
+    }
+    k = 0;
+    for (i, &byte) in text.iter().enumerate() {
+        while k > 0 && byte != needle[k] {
+            k = fail[k - 1];
+        }
+        if byte == needle[k] {
+            k += 1;
+        }
+        if k == needle.len() {
+            each(i + 1 - k);
+            k = fail[k - 1];
+        }
+    }
+}
+
+/// [`redact`] without the truncation: for a result the caller receives whole.
+/// Removes the literals first, then runs the firewall's credential scanner
+/// (absent without the `firewall` feature: the literal removal still applies).
+///
+/// The literals go first on purpose: a multi-line injected value such as a PEM
+/// key must be removed whole, before the scanner can cut a header out of it.
+/// A credential a literal overlaps is removed with it (see [`scrub`]).
+pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[String]) -> String {
+    let text = scrub(text, &needles(secrets, caller));
     #[cfg(feature = "firewall")]
     let text = {
         let mut value = Value::String(text);
         REDACTOR.scan_and_redact(&mut value);
         value.as_str().unwrap_or_default().to_owned()
     };
+    text
+}
+
+/// Redact a successful JSON result in place: every string value and object key,
+/// never the structure, so the document still parses and a redacted string
+/// stays a string. No truncation.
+pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
+    // The literals first, then the scanner (see `redact_untruncated`).
+    let needles = needles(secrets, &[]);
+    if !needles.is_empty() {
+        scrub_value(value, &needles);
+    }
+    #[cfg(feature = "firewall")]
+    REDACTOR.scan_and_redact(value);
+}
+
+fn scrub_value(value: &mut Value, needles: &[&str]) {
+    match value {
+        Value::String(s) => *s = scrub(s, needles),
+        // A credential that is all digits can come back as a JSON number. A
+        // short needle would hit every number, so only one a caller could not
+        // guess by chance (the same floor as caller values) is looked for.
+        // An integer past u64 parses as a float and prints in exponent form,
+        // so an all-digit needle is also compared by value.
+        Value::Number(n) => {
+            let digits = n.to_string();
+            let float = n.as_f64().filter(|_| n.is_f64());
+            let same_float = |needle: &str| {
+                float.is_some_and(|f| {
+                    needle.bytes().all(|b| b.is_ascii_digit())
+                        && needle
+                            .parse::<f64>()
+                            .is_ok_and(|p| p.to_bits() == f.to_bits())
+                })
+            };
+            if needles.iter().any(|needle| {
+                needle.len() >= MIN_REDACTED_CALLER_VALUE
+                    && (digits.contains(needle) || same_float(needle))
+            }) {
+                *value = Value::String("[redacted]".to_owned());
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|v| scrub_value(v, needles)),
+        Value::Object(map) => {
+            let old = std::mem::take(map);
+            let mut renamed = Vec::new();
+            // Keys that survive keep their names whole: a renamed key never
+            // takes one of them.
+            for (key, mut item) in old {
+                scrub_value(&mut item, needles);
+                let new = scrub(&key, needles);
+                if new == key {
+                    map.insert(key, item);
+                } else {
+                    renamed.push((new, item));
+                }
+            }
+            // Keys that collapse to the same marker all survive, `#2`, `#3`, ...
+            let mut next: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for (base, item) in renamed {
+                let mut key = base.clone();
+                while map.contains_key(&key) {
+                    let n = next.entry(base.clone()).or_insert(1);
+                    *n += 1;
+                    key = format!("{base}#{n}");
+                }
+                map.insert(key, item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Remove injected secrets (any length) and caller values (from 4 bytes)
+/// literally, then run the firewall's credential scanner, then truncate.
+pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> String {
+    let text = redact_untruncated(text, secrets, caller);
     let text = text.as_str();
     if text.len() <= EXCERPT_BYTES {
         return text.to_owned();

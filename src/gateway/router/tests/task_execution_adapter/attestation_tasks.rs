@@ -53,6 +53,7 @@ async fn surfaced_enforced(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile:
 
 fn token(ttl: chrono::TimeDelta) -> String {
     BnautAttestationSigner::new(KEY.as_bytes().to_vec(), KEY_ID)
+        .with_audience("test-gateway")
         .issue(
             &TokenRequest {
                 agent_identity: "alice".to_string(),

@@ -331,29 +331,10 @@ impl WebSocketTransport {
     /// bounded by the configured timeout. No log line or error carries more
     /// of the URL than its origin: it may hold userinfo or a query token.
     async fn do_connect(self: &Arc<Self>) -> Result<()> {
-        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-        use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
-
         let origin = sanitize_url_for_diagnostics(&self.url);
         debug!(url = %origin, "WebSocket connecting");
 
-        let mut request = self
-            .url
-            .as_str()
-            .into_client_request()
-            .map_err(|_| Error::Transport("WebSocket connect failed: invalid ws_url".into()))?;
-        for (name, value) in &self.headers {
-            let (Ok(name), Ok(value)) = (
-                HeaderName::from_bytes(name.as_bytes()),
-                HeaderValue::from_str(value),
-            ) else {
-                // The value is a credential; name the header only.
-                return Err(Error::Transport(format!(
-                    "WebSocket connect failed: header `{name}` is not a valid HTTP header"
-                )));
-            };
-            request.headers_mut().insert(name, value);
-        }
+        let request = Self::upgrade_request(&self.url, &self.headers)?;
 
         // The timeout bounds the whole connect: lookup, TCP, TLS and upgrade.
         let connecting = pinned::connect(request, self.destination, &SystemResolver);

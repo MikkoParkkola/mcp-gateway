@@ -686,3 +686,24 @@ delivery path is the staged-receipts path of 13.3/13.4).
   Mutants: skip the egress check, skip staging, skip the direct check and staging, key stdio as
   `"stdio"`.
 
+
+### 13.6 Receipts follow the delivered result (MIK-7887, 2026-10-03)
+
+- A final check that changes a single-target call's delivered result (a redaction) rebuilds that
+  call's receipt from what is delivered, keeping the sensitivity the delivery was judged to have:
+  text the caller still got keeps its receipt, removed text stops being tracked. A plan stages
+  several receipts that cannot be told apart by the changed text, so a change drops them all.
+- Reading a failed task hands the reader the backend's error, so the read renews a receipt for it,
+  classified like a pending prompt. A failure only the gateway wrote stores no backend output
+  (`output_free`) and renews nothing.
+- A stdio answer whose `result` is `null` delivers a result, as a typed response and the judge do.
+- Known limits, stated because Block mode can over-refuse as well as miss: (1) a multi-target
+  task's read stages nothing and a plan's receipts are dropped on a change, so the reader loses the
+  same-source excuse for those reads; (2) receipts are staged before late metadata normalisation
+  (the `cacheScope` clamp, the `executionOutcome` strip, the modern `serverInfo` replacement), so a
+  backend that fills those fields with long text can add or push out receipt text; (3) a bridged
+  prompt is recorded when it is handed to the client channel, before the reply, so a client that
+  never answers (the bridge drops the send at its timeout) was still shown it and no second caller
+  can relay it during the wait; the cost is that a send that finds no session leaves a receipt for
+  a prompt nobody saw, and the channel has no retraction, so this stays; (4) the fixed error the gateway
+  writes when recovery policy withholds backend content is receipted like any failed-task error.
