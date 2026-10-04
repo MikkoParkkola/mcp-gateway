@@ -9,14 +9,18 @@ usage: check_security_fragments.py [DIR]   (default: changelog.d)
 Each bullet ("- " at column 0, with its two-space continuation lines) of every
 `*.security.md` file must carry `Affects: <text>.` and `Operator action: <text>.`
 Each value runs to the next label and must be a non-empty sentence; an `Affects`
-value naming UNVERIFIED fails, as does a DIR that is not a directory. Exit 0 when every bullet passes, 1 otherwise,
-naming each failing file and bullet."""
+value naming UNVERIFIED fails, as does a DIR that is not a directory. A bullet
+labelled `Security:` in any other fragment fails too: the filename picks the
+release-notes subsection, so it would be filed under the wrong one (MIK-7865).
+Exit 0 when every bullet passes, 1 otherwise, naming each failing file and bullet."""
 import pathlib
 import re
 import sys
 
 LABEL = re.compile(r"\b(Affects|Operator action):")
 # Letters and digits only bound the marker, so `_UNVERIFIED_` emphasis still matches.
+# `Security:`, `**Security:**` or `**Security**:` opening a bullet.
+SECURITY_LABEL = re.compile(r"^- \**Security\**:")
 UNVERIFIED = re.compile(r"(?<![A-Za-z0-9])UNVERIFIED(?![A-Za-z0-9])", re.IGNORECASE)
 
 
@@ -60,6 +64,12 @@ def problems(directory):
             found.append(f"{path}: no bullet")
         for i, item in enumerate(items, 1):
             found += [f"{path} bullet {i}: {p}" for p in bullet_problems(item)]
+    for path in sorted(root.glob("*.md")):
+        if path.name.endswith(".security.md"):
+            continue
+        for i, item in enumerate(bullets(path.read_text(encoding="utf-8")), 1):
+            if SECURITY_LABEL.match(item):
+                found.append(f"{path} bullet {i}: a Security bullet; name the fragment .security.md")
     return found
 
 
