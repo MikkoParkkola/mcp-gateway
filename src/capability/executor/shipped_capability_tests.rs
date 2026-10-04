@@ -107,6 +107,20 @@ async fn open_file_succeeds_inside_the_projects_root() {
     assert_eq!(out["opened"], json!(file.display().to_string()));
 }
 
+/// The root reaches the server in the canonical form `file_path` is given
+/// in, so a symlinked `projects` setting still matches.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlinked_projects_root_reaches_the_server_canonical() {
+    let (dir, file) = project_with_design();
+    let links = tempfile::tempdir().unwrap();
+    let link = links.path().join("projects");
+    std::os::unix::fs::symlink(dir.path(), &link).unwrap();
+    let executor = executor_with_projects(&link);
+    let out = open(&executor, &openpencil(), "design.fig").await;
+    assert_eq!(out["opened"], json!(file.display().to_string()));
+}
+
 #[tokio::test]
 async fn a_changed_projects_root_restarts_the_server() {
     let (first, _) = project_with_design();

@@ -75,7 +75,9 @@ for line in sys.stdin:
                     {"name": "prog-x", "file_path": args.get("expect", ""), "analysis_complete": done,
                      "test_values": test_values()}]}})
         elif name == "open_file":
-            root = os.path.realpath(os.environ.get("OPENPENCIL_MCP_ROOT") or os.getcwd())
+            # The root as given, not resolved: a plain prefix check, so a root
+            # passed in another spelling than the path refuses it.
+            root = os.environ.get("OPENPENCIL_MCP_ROOT") or os.path.realpath(os.getcwd())
             path = os.path.realpath(args.get("path", ""))
             if os.path.commonpath([root, path]) != root:
                 result(req_id, {"isError": True, "content": [
