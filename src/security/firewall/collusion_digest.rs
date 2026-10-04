@@ -5,8 +5,10 @@
 //! run. A run never crosses a seam, which is a cap cut, a dropped middle leaf,
 //! or a leaf a later change removed, so no fingerprint joins text the source
 //! never produced contiguously. A plan step's receipt is then kept to what the
-//! plan's final answer delivered: leaves delivered verbatim stay whole, and any
-//! other leaf keeps only the fingerprints whose k-gram a delivered leaf holds.
+//! plan's final answer delivered: leaves delivered verbatim stay whole, any
+//! other leaf keeps only the fingerprints whose k-gram a delivered leaf holds,
+//! and the original runs' fingerprints stay where their k-gram is in a
+//! delivered leaf or across adjacent kept leaves.
 
 use std::cell::OnceCell;
 use std::collections::HashSet;
@@ -220,9 +222,8 @@ impl DeliveryDigest {
 }
 
 /// The string leaves of a plan's final answer, and every k-gram hash in them,
-/// taken leaf by leaf when first needed: a retained fingerprint is a k-gram
-/// the source produced that the caller was delivered, whichever window
-/// selected it on either side.
+/// taken leaf by leaf when first needed. With the kept runs' own k-grams they
+/// decide which fingerprints a receipt keeps, whichever window selected them.
 pub(crate) struct Delivered<'v> {
     leaves: HashSet<&'v str>,
     all: Vec<&'v str>,
