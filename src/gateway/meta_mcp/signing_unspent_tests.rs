@@ -280,3 +280,56 @@ async fn a_declined_or_accepted_question_keeps_the_nonce_spent() {
     assert!(!answered_with("decline").await, "decline");
     assert!(!answered_with("accept").await, "accept");
 }
+
+/// A question that was delivered and then went unanswered: `cancel` kills its
+/// channel, otherwise it times out. The operator may have seen it, so the
+/// refusal is not "nobody was asked" and the nonce stays spent; only proven
+/// non-delivery gives it back.
+async fn delivered_then_unanswered(cancel: bool) -> bool {
+    use crate::gateway::destructive_confirmation::ConfirmationPolicy;
+    let mux = std::sync::Arc::new(crate::gateway::NotificationMultiplexer::new(
+        std::sync::Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::StreamingConfig::default(),
+    ));
+    let mut stream = mux.seed_session("asked-session");
+    let proxy = crate::gateway::ProxyManager::new(std::sync::Arc::clone(&mux));
+    let meta = meta();
+    let operator = async {
+        let question = stream.recv().await.expect("the question is delivered");
+        if cancel {
+            let id = question.data["id"].as_str().expect("an elicitation id");
+            proxy.cancel_pending(id);
+        }
+    };
+    let (wire, ()) = tokio::join!(
+        kill_with_nonce(
+            &meta,
+            &proxy,
+            ConfirmationPolicy::for_modern(),
+            "asked-session"
+        ),
+        operator
+    );
+    assert!(
+        wire.get("error").is_some() || wire["result"]["isError"] == true,
+        "{wire}"
+    );
+    assert_ne!(wire["error"]["code"], -32603, "{wire}");
+    nonce_is_free(&meta)
+}
+
+#[tokio::test]
+async fn a_delivered_question_whose_channel_dies_keeps_the_nonce_spent() {
+    assert!(
+        !delivered_then_unanswered(true).await,
+        "a cancelled, delivered question gave the nonce back"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_delivered_question_left_unanswered_keeps_the_nonce_spent() {
+    assert!(
+        !delivered_then_unanswered(false).await,
+        "a timed-out, delivered question gave the nonce back"
+    );
+}
