@@ -312,9 +312,14 @@ async fn _410_and_413_are_not_retried() {
 }
 
 /// T32 (RELIABLE.1): a receiver that always answers 503 gets five attempts
-/// with one `webhook-id`, then one dead letter `exhausted`; a restart after
-/// attempt 2 resumes the same record instead of starting over. Real clock
-/// with `retry_base: 200ms`; F1 allows one duplicate per crash, so 5 or 6.
+/// with one `webhook-id`, then one dead letter `exhausted`, and a restart
+/// resumes the same record instead of starting over. The crash is placed, not
+/// raced: the receiver holds attempt 3 open and the gateway is killed while
+/// it is on the wire. An attempt is counted when it is claimed and a restart
+/// does not refund it (design F1 and the "at most 5 attempts" budget; pinned
+/// at the store by `store::pending::tests::crash`), so the resend after the
+/// crash is attempt 4 and the receiver sees exactly five POSTs. The real
+/// clock only paces the backoff; the count does not depend on it.
 #[tokio::test]
 async fn exhausted_retries_dead_letter_within_the_window() {
     let root = tempfile::tempdir().expect("root");
@@ -322,16 +327,22 @@ async fn exhausted_retries_dead_letter_within_the_window() {
     let mut gw = start(root.path(), &rx, fast_retry()).await;
     subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
     rx.event_default(EventReply::Status(503));
+    rx.script([
+        EventReply::Status(503),
+        EventReply::Status(503),
+        EventReply::Hold(DEADLINE, 503),
+    ]);
     fire(&gw, "d-32", "o/r").await;
-    events_at_least(&rx, 2).await;
+    // Attempt 3 has arrived and is being held: kill the gateway mid-POST.
+    events_at_least(&rx, 3).await;
     gw.restart().await;
     let dead = dead_with_reason(root.path(), "exhausted").await;
     assert_eq!(dead.len(), 1, "one dead letter for one occurrence");
     let posts = rx.events();
-    assert!(
-        (5..=6).contains(&posts.len()),
-        "five attempts (one crash duplicate allowed), got {}",
-        posts.len()
+    assert_eq!(
+        posts.len(),
+        5,
+        "five attempts: the one on the wire at the crash counts, the resend is the fourth"
     );
     assert_eq!(ids(&posts).len(), 1, "the restart kept the webhook-id");
     // The window bound itself is pinned where a clock can pass it:
