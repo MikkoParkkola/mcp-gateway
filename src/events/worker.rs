@@ -141,10 +141,12 @@ impl EventsHub {
         };
         let grant = (!record.owner_scoped).then_some(record.backend.as_str());
         if !services.admits_subscription(&sub, grant).await {
-            services
-                .audit_attempt(&ctx.attempt("access_revoked"))
+            if !self
+                .recorded_or_retry(services, &ctx, "access_revoked")
                 .await
-                .ok();
+            {
+                return;
+            }
             self.revoke(&sub).await;
             // Removed: the record went with it and this settles nothing. Not
             // removed (a store error, or a refresh re-bound the row): the
@@ -167,10 +169,12 @@ impl EventsHub {
             None => false,
         };
         if refused {
-            services
-                .audit_attempt(&ctx.attempt("access_revoked"))
+            if !self
+                .recorded_or_retry(services, &ctx, "access_revoked")
                 .await
-                .ok();
+            {
+                return;
+            }
             self.revoke(&sub).await;
             let retry = Settle::Retry {
                 next: Utc::now() + REFUSAL_RETRY,
@@ -186,7 +190,9 @@ impl EventsHub {
             return;
         }
         if self.overdue(&record, Utc::now()) {
-            services.audit_attempt(&ctx.attempt("exhausted")).await.ok();
+            if !self.recorded_or_retry(services, &ctx, "exhausted").await {
+                return;
+            }
             self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
                 .await;
             return;
@@ -203,6 +209,29 @@ impl EventsHub {
             return;
         };
         self.record_and_send(services, &ctx, &url, body).await;
+    }
+
+    /// Put an attempt that ends without a send (`status`) on record. When the
+    /// log refuses it the record goes back to retry with its subscription
+    /// intact, so the ending is recorded once the log recovers instead of
+    /// being lost to the removal or the burial that follows (MIK-7842).
+    /// `false` when the caller must stop.
+    async fn recorded_or_retry(
+        self: &Arc<Self>,
+        services: &Services,
+        ctx: &Ctx<'_>,
+        status: &'static str,
+    ) -> bool {
+        let Err(error) = services.audit_attempt(&ctx.attempt(status)).await else {
+            return true;
+        };
+        tracing::warn!(%error, status, subscription = %ctx.sub.id, "events: attempt record not written; retrying");
+        let retry = Settle::Retry {
+            next: Utc::now() + REFUSAL_RETRY,
+            status: "audit_unavailable",
+        };
+        self.settle(services, ctx.record, retry).await;
+        false
     }
 
     /// Put the attempt on record, then charge and send it. The record comes

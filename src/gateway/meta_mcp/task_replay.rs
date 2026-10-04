@@ -37,28 +37,8 @@ impl MetaMcp {
             .err();
         // COLLUDE.1 §13.3: a stored result or pending prompt delivered again
         // renews the reader's receipt; the delivery owner commits it.
-        if refused.is_none()
-            && self.relay_active()
-            && let [target] = stored.targets.as_slice()
-        {
-            let who = caller.relay_caller(session);
-            let to = (target.server.as_str(), target.tool.as_str());
-            match stored.task.status() {
-                TaskStatus::Completed => {
-                    if let Some(result) = stored.backend_result() {
-                        self.stage_relay_receipt(who, to, result);
-                    }
-                }
-                TaskStatus::InputRequired => {
-                    if let Some(requests) = stored.task.input_requests() {
-                        let prompt = serde_json::Value::Object(requests.clone());
-                        let key = caller.api_key_name;
-                        let recorded = self.recorded_prompt(to, key, "tasks/get", &prompt);
-                        self.stage_relay_receipt(who, to, &recorded);
-                    }
-                }
-                _ => {}
-            }
+        if refused.is_none() {
+            self.stage_stored_receipt(caller.relay_caller(session), caller.api_key_name, stored);
         }
         refused.map(|error| error_response_preserving_status(id.clone(), &error))
     }
@@ -109,5 +89,52 @@ impl MetaMcp {
             }
             Ok(())
         })
+    }
+}
+
+impl MetaMcp {
+    /// Stage the receipt a read of `stored` renews: its result, its pending
+    /// input requests, or (MIK-7887) the backend's own error of a failed
+    /// task. A multi-target task, one the gateway alone failed, and a working
+    /// or cancelled one stage nothing.
+    pub(crate) fn stage_stored_receipt(
+        &self,
+        who: super::invoke::relay::RelayKey<'_>,
+        api_key_name: Option<&str>,
+        stored: &CommittedTask,
+    ) {
+        let [target] = stored.targets.as_slice() else {
+            return;
+        };
+        if !self.relay_active() || !stored.serves_backend_output() {
+            return;
+        }
+        let to = (target.server.as_str(), target.tool.as_str());
+        match stored.task.status() {
+            TaskStatus::Completed => {
+                if let Some(result) = stored.backend_result() {
+                    self.stage_relay_receipt(who, to, result);
+                }
+            }
+            TaskStatus::InputRequired => {
+                if let Some(requests) = stored.task.input_requests() {
+                    let prompt = serde_json::Value::Object(requests.clone());
+                    let recorded = self.recorded_prompt(to, api_key_name, "tasks/get", &prompt);
+                    self.stage_relay_receipt(who, to, &recorded);
+                }
+            }
+            TaskStatus::Failed => {
+                // The backend's own error is what the reader is handed.
+                if let Some(error) = stored.task.error()
+                    && let Ok(error) = serde_json::to_value(error)
+                {
+                    // Classified like a pending prompt, so a sensitive error
+                    // is recorded as sensitive without a `sources` rule.
+                    let recorded = self.recorded_prompt(to, api_key_name, "tasks/get", &error);
+                    self.stage_relay_receipt(who, to, &recorded);
+                }
+            }
+            _ => {}
+        }
     }
 }

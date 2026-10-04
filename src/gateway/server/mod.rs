@@ -1578,7 +1578,8 @@ impl Gateway {
                 )?
                 .with_env(Arc::clone(&self.env))
                 .with_identity_grant_sink_opt(identity_grant_sink.clone())
-                .with_stop(reload_stop),
+                .with_stop(reload_stop)
+                .with_capabilities(meta_mcp.get_capabilities()),
             );
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
         }
@@ -1875,12 +1876,6 @@ impl Gateway {
             max_workers = self.config.tasks.max_workers,
             "Durable task store opened"
         );
-        // Task settlement is an event source once the task runtime exists.
-        if self.config.events.sources.task_settled
-            && let Some(hub) = meta_mcp.events()
-        {
-            hub.install_task_source(Arc::clone(&task_service), &task_executor);
-        }
         // The trusted upstream adapter, installed after the store recovered and
         // before the socket serves. It needs the started backend registry, which
         // is why it cannot be a constructor argument to `open`. With no

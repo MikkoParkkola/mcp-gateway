@@ -433,6 +433,15 @@ pub(crate) struct DeliveryDigest {
     sensitive: bool,
 }
 
+impl DeliveryDigest {
+    /// This digest, as sensitive as `earlier` was: a rebuild from a redacted
+    /// copy must not lose the verdict the original delivery carried.
+    pub(crate) fn keeping_sensitivity_of(mut self, earlier: &Self) -> Self {
+        self.sensitive |= earlier.sensitive;
+        self
+    }
+}
+
 fn relay_finding(description: String, matched: String) -> Finding {
     Finding {
         scan_type: ScanType::CollusionRelay,

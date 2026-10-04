@@ -166,6 +166,16 @@ impl Redactor {
         }
     }
 
+    /// The merged byte spans of `text` the credential patterns match: what
+    /// [`Self::scan_and_redact`] would replace in it.
+    pub(crate) fn credential_spans(&self, text: &str) -> Vec<(usize, usize)> {
+        let mut spans: Vec<(usize, usize)> = (self.set.matches(text).into_iter())
+            .flat_map(|idx| overlapping_spans(&self.regexes[idx], text))
+            .collect();
+        spans.sort_unstable();
+        merge_spans(spans)
+    }
+
     /// Record one finding per matched pattern and return `text` with every
     /// matched span replaced, or `None` when nothing matched. Surrounding text
     /// is preserved ("token: <secret> rest" -> "token: [REDACTED:credential] rest").
