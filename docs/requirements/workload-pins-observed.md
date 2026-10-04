@@ -39,6 +39,19 @@ A pin recorded against the pre-fix evaluator would pin a file that cannot grade.
 The two rendered-config rows in §11 are marked `(pinned at first rep)` and can only be
 filled by an actual run; they are absent here by construction.
 
+The contract digest above dates from 2026-09-13. The contract changed after that
+(`9ebc0e4c…e459` before the §7 amendment). The 2026-10-04 amendment, which sets §7 to the
+n = 18 rep schedule the runner executes and adds the reps and seed rows to §11, gives
+`f9be3cee0288da7ebc0d7d2014c6441bc728d3e8bf262451556b0115966de909`. Re-read the digest at
+freeze. A later edit changes it again.
+
+## Rep schedule
+
+| Pin | Value |
+|---|---|
+| measured reps per cell | 18 (`WORKLOAD_REPS=18`; `pins.json` `reps` = 1..18) |
+| cell order | seeded permutation of A–E per rep (`cell_order_seed` in `pins.json`) |
+
 ## Checkout SHAs
 
 | Cell | Ref | Commit |

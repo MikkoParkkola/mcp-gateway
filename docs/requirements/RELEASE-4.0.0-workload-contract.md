@@ -264,10 +264,26 @@ be mistaken for a measurement.
 ## 7. Rep schedule
 
 ```
-warm-up  (discarded):  A0 B0 C0
-measured:              A1 B1 C1  A2 B2 C2  A3 B3 C3
-then:                  D1 E1  D2 E2  D3 E3
+warm-up  (discarded):  A0 B0 C0 D0 E0
+measured:              rep n = 1..18, each a seeded permutation of A B C D E
 ```
+
+The graded run takes **n = 18 measured reps per cell** (`WORKLOAD_REPS=18`,
+with the runner's floor of 6). In each rep all five cells run once, in an order
+drawn from `WORKLOAD_SEED` and the rep number (`cell_order` in
+`run_workload.sh`). The seed is recorded in `pins.json` and the drawn order in
+`cell_order.jsonl`. D and E sit in the same loop as the gated cells, so every
+cell sees the same machine window.
+
+Amended 2026-10-04. This section used to schedule 3 measured reps of A, B
+and C, then a trailing D/E block. That matched neither the runner, which
+interleaves all five cells per rep, nor the runs that grade this row. Every
+graded run so far took n = 18: the FAIL at 14933f9a, and the VOID re-run at
+fe2ed154 (`RELEASE-4.0.0-scope-status.json`, NFR.WORKLOAD.1). That count was
+escalated from the n = 18 choice in
+`docs/internal/analysis/2026-09-22-nfr-perf-1-ramp-measurement.md` §1.5. The
+amendment is made before the graded run at the freeze SHA, so the number of
+reps is fixed in advance, not chosen after the data is seen.
 
 Interleaved because bench-host is shared and other sessions' jobs land on it. One
 gateway listening at a time. Before each rep, `GET /health` version must match
@@ -340,6 +356,8 @@ Filled before the first measured rep; empty pins void the run.
 | cell A checkout SHA | (pinned at freeze) |
 | cell B checkout SHA | (pinned at freeze) |
 | cell C/D/E checkout SHA | (pinned at freeze) |
+| measured reps per cell (`pins.json` `reps`) | 18 (`WORKLOAD_REPS=18`; `reps` must list 1..18) |
+| cell-order seed (`pins.json` `cell_order_seed`) | (pinned at freeze) |
 
 The runner writes the per-cell checkout SHAs, health versions and k6 digest
 into `pins.json` in the run directory, and the evaluator voids the run if any
