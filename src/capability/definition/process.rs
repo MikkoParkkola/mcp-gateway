@@ -200,6 +200,36 @@ pub struct McpConfig {
     /// Several tools, selected by one input property.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_selector: Option<ToolSelector>,
+    /// Server environment variables set to a `capabilities.files` root, for a
+    /// server that scopes its file access to one root: it then opens what a
+    /// `path_root` parameter was confined to (MIK-7823). An unset root, or a
+    /// name the gateway sets itself, sets nothing.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub root_env: BTreeMap<String, RootName>,
+}
+
+/// A `capabilities.files` root a definition may name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RootName {
+    /// `capabilities.files.uploads`
+    Uploads,
+    /// `capabilities.files.projects`
+    Projects,
+    /// `capabilities.files.downloads`
+    Downloads,
+}
+
+impl RootName {
+    /// The key under `capabilities.files`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Uploads => "uploads",
+            Self::Projects => "projects",
+            Self::Downloads => "downloads",
+        }
+    }
 }
 
 /// The only MCP capability transport.

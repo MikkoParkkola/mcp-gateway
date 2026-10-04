@@ -1,4 +1,4 @@
-sha256: 01d45cda43edf73d3943908a131efc8663f722b040c20df85c521d9e807b00cc
+sha256: f679f7f17100119dab2151e99f58e2f49c152e4189ce69b30e4e7de9525baa98
 fulcrum: "1.0"
 name: openpencil_design
 description: >
@@ -73,6 +73,8 @@ providers:
     config:
       command: openpencil-mcp
       transport: stdio
+      root_env:
+        OPENPENCIL_MCP_ROOT: projects
       tool_selector:
         param: operation
         tools:

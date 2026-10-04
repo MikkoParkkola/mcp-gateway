@@ -20,7 +20,7 @@ use serde_json::{Map, Value, json};
 
 use super::CapabilityExecutor;
 use super::cli_argv::render_json;
-use super::cli_run::{Workdir, child_env};
+use super::cli_run::{Workdir, child_env, is_reserved};
 use crate::backend::Backend;
 use crate::capability::definition::{McpConfig, ToolCall};
 use crate::capability::{CapabilityDefinition, CapabilityExecutionContext};
@@ -550,10 +550,14 @@ impl CapabilityExecutor {
             .filter_map(|name| lookup(name))
             .map(|v| v.to_string_lossy().into_owned())
             .collect();
+        // A root is no secret, so it stays out of `env_values` (which results
+        // are scrubbed of), but a changed one restarts the child.
+        let roots = bound_roots(config, &self.process_policy.files);
         let env_fp = {
             use std::hash::{Hash as _, Hasher as _};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             env_values.hash(&mut hasher);
+            roots.hash(&mut hasher);
             hasher.finish()
         };
         // One deadline for the whole call, writes included: a server that stops
@@ -566,7 +570,7 @@ impl CapabilityExecutor {
             &principal,
             (env_fp, deadline),
             |current| generation.is_none_or(|g| g == current),
-            || Self::start_mcp(capability, config, &lookup),
+            || Self::start_mcp(capability, config, &lookup, &roots),
         )?;
         let backend = lease.backend;
         let _busy = lease.busy;
@@ -655,6 +659,7 @@ impl CapabilityExecutor {
         capability: &CapabilityDefinition,
         config: &McpConfig,
         lookup: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+        roots: &[(String, String)],
     ) -> Result<(Arc<Backend>, Workdir)> {
         let workdir = Workdir::create()
             .map_err(|e| Error::Protocol(format!("no private work directory: {}", e.kind())))?;
@@ -680,6 +685,7 @@ impl CapabilityExecutor {
                     v.to_string_lossy().into_owned(),
                 )
             })
+            .chain(roots.iter().cloned())
             .collect();
         let backend_config = BackendConfig {
             transport: TransportConfig::Stdio {
@@ -704,6 +710,26 @@ impl CapabilityExecutor {
     }
 }
 
+/// `root_env` as the child sees it: each root canonical, the form `confine`
+/// gives a `path_root` parameter, so the server's own prefix check agrees
+/// with the gateway's. An unset or missing root, or a reserved name, is left
+/// out and the server keeps its private directory.
+fn bound_roots(config: &McpConfig, files: &crate::config::FileRoots) -> Vec<(String, String)> {
+    config
+        .root_env
+        .iter()
+        .filter(|(name, _)| !is_reserved(name))
+        .filter_map(|(name, root)| {
+            let dir = std::fs::canonicalize(files.get(root.as_str())?).ok()?;
+            Some((name.clone(), dir.display().to_string()))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[path = "mcp_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "shipped_capability_tests.rs"]
+mod shipped_capability_tests;
