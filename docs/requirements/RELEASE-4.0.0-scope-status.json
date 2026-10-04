@@ -354,6 +354,8 @@
       "evidence": [
         "src/gateway/search_disclosure.rs",
         "src/gateway/meta_mcp/search_disclosure_e2e.rs",
+        "src/gateway/meta_mcp/search_disclosure_e2e_discovery.rs",
+        "src/gateway/meta_mcp/search_disclosure_e2e_guide.rs",
         "tests/discovery_tests.rs",
         "tests/tool_list_tests.rs"
       ],
