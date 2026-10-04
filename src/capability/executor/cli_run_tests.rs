@@ -535,6 +535,14 @@ fn a_digit_credential_with_leading_zeros_is_redacted_as_a_number() {
     assert_eq!(value["m"], 1_771, "{value}");
     assert_eq!(value["z"], "[redacted]", "{value}");
 
+    // A positive float and exponent input are the same value; a neighbour is not.
+    let mut value: Value =
+        serde_json::from_str(r#"{"f": 12345.0, "e": 1.2345e4, "near": 12346}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["012345".to_owned()]);
+    assert_eq!(value["f"], "[redacted]", "{value}");
+    assert_eq!(value["e"], "[redacted]", "{value}");
+    assert_eq!(value["near"], 12_346, "{value}");
+
     // Below the floor, numbers are left alone even on an exact value.
     let mut value = json!({"n": 7});
     super::super::cli::redact_value(&mut value, &["007".to_owned()]);
