@@ -617,3 +617,29 @@ async fn an_mcp_definition_edited_between_calls_is_refused() {
         .expect_err("the edited definition must meet the gate, not the cache");
     assert!(err.to_string().contains("changed after its pin"), "{err}");
 }
+
+/// MIK-7814: two verified definitions of one name, both pinned, that differ
+/// only in their arguments. Admission passes both, so only the fingerprint in
+/// the cache key keeps the second from reading the first's answer.
+#[cfg(unix)]
+#[tokio::test]
+async fn two_pinned_definitions_of_one_name_never_share_an_answer() {
+    let first = pinned_from(&pin_probe_body("Pin probe.")).await;
+    let second = pinned_from(&pin_probe_body("Pin probe.").replace("echo, '1'", "echo, '2'")).await;
+    assert_ne!(first.providers.pinned, second.providers.pinned);
+    let executor = python_policy_executor();
+    let context = CapabilityExecutionContext::default();
+    let one = executor
+        .execute_with_context(&first, json!({}), context.clone())
+        .await
+        .expect("the first runs and is cached");
+    let two = executor
+        .execute_with_context(&second, json!({}), context)
+        .await
+        .expect("the second runs");
+    assert!(one.to_string().contains("\"1\""), "{one}");
+    assert!(
+        two.to_string().contains("\"2\""),
+        "the second read the first's answer: {two}"
+    );
+}

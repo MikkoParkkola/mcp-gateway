@@ -3812,8 +3812,12 @@ are read through `ProvidersConfig::process()` and `ProvidersConfig::integrity()`
 capability loader sets `Verified`. A definition deserialized or built any other way stays
 `Unpinned`, as before. The loader also records a fingerprint of the whole definition, and a
 process runs only while the definition still matches it: a verified definition cloned and then
-changed (its schema, arguments or any other field) is refused. The response cache keys on the
-same fingerprint, so a different definition under the same name never reads another's answers.
+changed (its schema, arguments or any other field) is refused. For a process provider the response
+cache keys on the same fingerprint, so a different definition under the same name never reads
+another's answers. Other providers keep the epoch key: on an executor with no shared policy epoch,
+or for a request that snapshotted the epoch before a replacement, a REST call can still return the
+answer the earlier definition cached, within its TTL. That answer is stale, but no process starts
+and no request goes out.
 The gateway's own response cache keys on the policy epoch a request snapshots when it starts:
 a request that began before a replacement can still be answered from the earlier, pinned
 definition's cache entry (it is ordered before the replacement), and one that begins after it
