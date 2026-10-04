@@ -9,6 +9,7 @@ by eye: a subscription with no filter, and an unsubscribe the gateway never
 applied to that subscription.
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -160,6 +161,78 @@ class ShimReplyTests(unittest.TestCase):
 
     def test_a_streamed_reply_is_read_from_its_last_data_line(self):
         self.assertIs(self.facts('event: message\ndata: {"result":{}}\n\n', stream=True)["reply_ok"], True)
+
+
+
+class UpCleanupTests(unittest.TestCase):
+    """MIK-7893.SHIM.3: `up` empties --dir only when its state.json names this
+    script as the owner. A missing gateway binary stops `up` right after the
+    cleanup decision, so nothing is started."""
+
+    def up(self, state):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name)
+        (d / "state.json").write_text(state)
+        (d / "keep.txt").write_text("not the script's")
+        done = subprocess.run(
+            [sys.executable, str(SCRIPT), "--dir", str(d), "up", "--gateway", str(d / "no-such-gateway")],
+            capture_output=True, text=True, timeout=60)
+        return d, done
+
+    def test_a_foreign_state_json_is_refused_and_nothing_is_removed(self):
+        for state in ("{}", json.dumps({"started": T0}), "not json", "[]"):
+            with self.subTest(state=state):
+                d, done = self.up(state)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("not an events8 run directory", done.stderr)
+                self.assertTrue((d / "keep.txt").exists(), "a directory the script does not own was emptied")
+
+    def test_a_symlinked_state_json_does_not_lend_ownership(self):
+        owner = tempfile.TemporaryDirectory()
+        self.addCleanup(owner.cleanup)
+        marker = Path(owner.name) / "state.json"
+        marker.write_text(json.dumps({"owner": "events8_run"}))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name)
+        (d / "state.json").symlink_to(marker)
+        (d / "keep.txt").write_text("not the script's")
+        done = subprocess.run(
+            [sys.executable, str(SCRIPT), "--dir", str(d), "up", "--gateway", str(d / "no-such-gateway")],
+            capture_output=True, text=True, timeout=60)
+        self.assertIn("not an events8 run directory", done.stderr)
+        self.assertTrue((d / "keep.txt").exists(), "a borrowed marker emptied the directory")
+
+    def test_a_hard_linked_state_json_does_not_lend_ownership(self):
+        owner = tempfile.TemporaryDirectory()
+        self.addCleanup(owner.cleanup)
+        marker = Path(owner.name) / "state.json"
+        marker.write_text(json.dumps({"owner": "events8_run"}))
+        tmp = tempfile.TemporaryDirectory(dir=owner.name)
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name)
+        os.link(marker, d / "state.json")
+        (d / "keep.txt").write_text("not the script's")
+        done = subprocess.run(
+            [sys.executable, str(SCRIPT), "--dir", str(d), "up", "--gateway", str(d / "no-such-gateway")],
+            capture_output=True, text=True, timeout=60)
+        self.assertIn("not an events8 run directory", done.stderr)
+        self.assertTrue((d / "keep.txt").exists(), "a borrowed marker emptied the directory")
+
+    def test_a_directory_the_script_owns_is_cleared(self):
+        d, done = self.up(json.dumps({"owner": "events8_run"}))
+        self.assertNotIn("not an events8 run directory", done.stderr)
+        self.assertFalse((d / "keep.txt").exists(), "the previous run's files were left")
+
+    def test_a_directory_left_by_an_earlier_up_is_cleared_again(self):
+        d, _ = self.up(json.dumps({"owner": "events8_run"}))
+        (d / "keep.txt").write_text("from the earlier run")
+        done = subprocess.run(
+            [sys.executable, str(SCRIPT), "--dir", str(d), "up", "--gateway", str(d / "no-such-gateway")],
+            capture_output=True, text=True, timeout=60)
+        self.assertNotIn("not an events8 run directory", done.stderr)
+        self.assertFalse((d / "keep.txt").exists(), "up did not recognise its own marker")
 
 
 if __name__ == "__main__":

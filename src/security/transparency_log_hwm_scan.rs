@@ -131,11 +131,12 @@ pub(super) fn contradicts(hw: Option<&HighWater>, counter: u64, hash: &str) -> b
     hw.is_some_and(|h| counter < h.counter || (counter == h.counter && hash != h.entry_hash))
 }
 
-/// [`contradicts`], and, when the tail is ahead of the mark, whether the
-/// record the mark names is still there as the mark recorded it (MIK-7884).
-/// A restart that repaired a torn suffix, or a mark that lags its record by a
-/// crash, leaves the tail ahead of a record that may have been replaced; the
-/// next append would carry the replacement forward unnoticed.
+/// [`contradicts`], and whether the record the mark names is still there as
+/// the mark recorded it, judged on its content (MIK-7884). A restart that
+/// repaired a torn suffix, or a mark that lags its record by a crash, leaves
+/// the tail ahead of a record that may have been replaced; a tail at the mark
+/// carries the mark's hash whatever its content now says. Either way the next
+/// append would carry the change forward unnoticed.
 pub(super) fn contradicted(
     path: &Path,
     sealed: &[Segment],
@@ -149,9 +150,6 @@ pub(super) fn contradicted(
     };
     if contradicts(hw, counter, hash) {
         return Ok(true);
-    }
-    if counter == h.counter {
-        return Ok(false);
     }
     // The mark's record is the newest one when the mark was written: in the
     // active file, or at the end of the sealed segment the mark names.
