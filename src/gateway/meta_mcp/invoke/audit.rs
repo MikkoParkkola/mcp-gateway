@@ -338,10 +338,10 @@ impl MetaMcp {
 
 /// A delivered result as a receipt reads it. A `gateway_invoke` answer wraps
 /// the backend value as one pretty-printed text block, whose escapes (`\n` as
-/// two characters) are not the text the caller reads; the decoded value is
-/// added beside the text as delivered, which stays (decoding drops numbers, and
-/// a native result's text may be JSON too). A result with `structuredContent`
-/// already carries the value and is read as delivered.
+/// two characters) are not the text the caller reads: it is read decoded, as
+/// the receipt was staged from the backend value. Only a block that is exactly
+/// that printing is decoded; any other text, JSON or not, is read as
+/// delivered (decoding would drop a number in it).
 #[cfg(feature = "firewall")]
 pub(super) fn delivered_value(delivered: &Value) -> std::borrow::Cow<'_, Value> {
     let one_block = delivered.get("structuredContent").is_none()
@@ -349,18 +349,14 @@ pub(super) fn delivered_value(delivered: &Value) -> std::borrow::Cow<'_, Value> 
             .get("content")
             .and_then(Value::as_array)
             .is_some_and(|content| content.len() == 1);
-    match (
-        one_block.then(|| invoke_value(delivered)).flatten(),
-        delivered,
-    ) {
-        (Some(decoded), Value::Object(map)) if decoded.is_object() => {
-            let mut both = map.clone();
-            // A short key: only the leaves under it are read.
-            both.insert("_decoded".to_owned(), decoded);
-            std::borrow::Cow::Owned(Value::Object(both))
-        }
-        _ => std::borrow::Cow::Borrowed(delivered),
-    }
+    let text = delivered.pointer("/content/0/text").and_then(Value::as_str);
+    let wrapped = (one_block.then(|| invoke_value(delivered)).flatten()).filter(|decoded| {
+        decoded.is_object() && text == serde_json::to_string_pretty(decoded).ok().as_deref()
+    });
+    wrapped.map_or(
+        std::borrow::Cow::Borrowed(delivered),
+        std::borrow::Cow::Owned,
+    )
 }
 
 /// The tool value a `gateway_invoke` result carries: its `structuredContent`,
