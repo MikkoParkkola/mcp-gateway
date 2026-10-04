@@ -187,6 +187,22 @@ class UpCleanupTests(unittest.TestCase):
                 self.assertIn("not an events8 run directory", done.stderr)
                 self.assertTrue((d / "keep.txt").exists(), "a directory the script does not own was emptied")
 
+    def test_a_symlinked_state_json_does_not_lend_ownership(self):
+        owner = tempfile.TemporaryDirectory()
+        self.addCleanup(owner.cleanup)
+        marker = Path(owner.name) / "state.json"
+        marker.write_text(json.dumps({"owner": "events8_run"}))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name)
+        (d / "state.json").symlink_to(marker)
+        (d / "keep.txt").write_text("not the script's")
+        done = subprocess.run(
+            [sys.executable, str(SCRIPT), "--dir", str(d), "up", "--gateway", str(d / "no-such-gateway")],
+            capture_output=True, text=True, timeout=60)
+        self.assertIn("not an events8 run directory", done.stderr)
+        self.assertTrue((d / "keep.txt").exists(), "a borrowed marker emptied the directory")
+
     def test_a_directory_the_script_owns_is_cleared(self):
         d, done = self.up(json.dumps({"owner": "events8_run"}))
         self.assertNotIn("not an events8 run directory", done.stderr)

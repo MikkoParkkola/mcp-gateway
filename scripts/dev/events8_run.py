@@ -50,9 +50,13 @@ def state_path(d):
 
 def owned(d):
     """True only when d/state.json is this script's: a generic state.json
-    written by anything else is not a licence to empty the directory."""
+    written by anything else is not a licence to empty the directory, and a
+    symlink cannot lend another directory's marker."""
+    marker = state_path(d)
+    if marker.is_symlink() or not marker.is_file():
+        return False
     try:
-        state = json.loads(state_path(d).read_text())
+        state = json.loads(marker.read_text())
     except (OSError, ValueError):
         return False
     return isinstance(state, dict) and state.get("owner") == OWNER
