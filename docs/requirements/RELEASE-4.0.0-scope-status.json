@@ -42,7 +42,7 @@
       "blocked_on": "none",
       "evidence": [
         "src/backend/metadata.rs",
-        "src/backend/tests.rs",
+        "src/backend/tests/per_identity_catalogue.rs",
         "src/backend/ops.rs",
         "src/backend/pool.rs",
         "src/identity_propagation/mod.rs",
