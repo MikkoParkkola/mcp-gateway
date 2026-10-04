@@ -157,3 +157,26 @@ fn the_listed_cloudflare_schemas_hide_the_combinators_and_the_description_names_
         &json!({ "zone_id": "z", "dns_record_id": "r" })
     ));
 }
+
+/// A required-only alternative declares no key, so the input root closes the
+/// schema itself: declaring alternatives must not admit an undeclared key.
+#[test]
+fn the_cloudflare_alternatives_still_refuse_an_undeclared_key() {
+    let purge = shipped("cloudflare_purge_cache");
+    let files = json!({ "zone_id": "z", "files": ["https://a/x"] });
+    assert!(valid(&purge, &files), "the files selector alone");
+    let smuggled = json!({ "zone_id": "z", "files": ["https://a/x"], "smuggled": 1 });
+    assert!(
+        !valid(&purge, &smuggled),
+        "purge admitted an undeclared key"
+    );
+
+    let dns = shipped("cloudflare_update_dns_record");
+    let comment = json!({ "zone_id": "z", "dns_record_id": "r", "comment": "c" });
+    assert!(valid(&dns, &comment), "a comment change alone");
+    let smuggled = json!({ "zone_id": "z", "dns_record_id": "r", "comment": "c", "smuggled": 1 });
+    assert!(
+        !valid(&dns, &smuggled),
+        "dns update admitted an undeclared key"
+    );
+}
