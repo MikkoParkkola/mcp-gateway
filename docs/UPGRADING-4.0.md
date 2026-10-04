@@ -2143,14 +2143,15 @@ In 4.0, both routes run one implementation of each control:
 - Response contract, inspection and context-integrity settings apply to direct results.
 - A result the response firewall blocks is refused with -32600 "Response blocked by security
   firewall", as on `gateway_invoke`; a retry with the same idempotency key replays that refusal.
-- With message signing on, `tools/call` on `POST /mcp/{name}` is refused with -32001
-  "message signing is enabled; use gateway_invoke".
+- With message signing on, outside `security.posture: hardened`, `tools/call` on
+  `POST /mcp/{name}` is refused with -32001 "message signing is enabled; use gateway_invoke".
+  Under `hardened` the direct route signs its results instead (item 112).
 - The kill switch and capability auto-disable are now checked at admission: task creation,
   admission plans and signing preparation refuse a killed backend or disabled capability up
   front (-32000) instead of at dispatch.
 
-**Action:** a client that called backends directly under message signing must move to
-`gateway_invoke`. Expect direct calls to be refused, accounted and gated exactly as
+**Action:** a client that called backends directly under message signing, outside the
+`hardened` posture, must move to `gateway_invoke`. Expect direct calls to be refused, accounted and gated exactly as
 `gateway_invoke` calls are.
 
 ## 70. Secrets stay out of the request URI and its trace
