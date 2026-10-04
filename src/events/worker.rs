@@ -158,13 +158,16 @@ impl EventsHub {
             return;
         }
         // The source's own verdict, every attempt (design §3.2 step 7): a
-        // resource that left the backend's catalogue is not delivered.
+        // resource that left the backend's catalogue is not delivered. A
+        // backend name no source offers any more (the backend left the config
+        // or a reload made it ineligible, MIK-7894) is refused too, so a
+        // record a failed withdrawal left behind is not sent.
         let refused = match self.source_offering(&sub.name) {
             Some(source) => source
                 .authorize(&sub.principal, &sub.name, &sub.arguments)
                 .await
                 .is_err_and(|e| e.code == -32012),
-            None => false,
+            None => sub.name.starts_with(super::backend_source::NAME_PREFIX),
         };
         if refused {
             services
