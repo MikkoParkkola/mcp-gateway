@@ -419,11 +419,7 @@ async fn a_failing_audit_log_cannot_withhold_the_confirmation_prompt() {
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
-            path: dir
-                .path()
-                .join("audit.jsonl")
-                .to_string_lossy()
-                .into_owned(),
+            path: dir.path().join("audit.jsonl").display().to_string(),
             key_id: "r2".to_string(),
             ..TransparencyLogConfig::default()
         }))
