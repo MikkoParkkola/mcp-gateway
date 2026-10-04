@@ -78,9 +78,12 @@ impl Transport for Peer {
     }
 }
 
-/// The recovery adapter: claims the fixture backend, answers every query with
-/// [`PROSE`], and counts the queries.
-struct Recovery(Arc<AtomicUsize>);
+/// What the recovery adapter's query answers.
+type Answering = Arc<dyn Fn() -> UpstreamAnswer + Send + Sync>;
+
+/// The recovery adapter: claims the fixture backend, answers every query from
+/// its closure, and counts the queries.
+struct Recovery(Arc<AtomicUsize>, Answering);
 
 #[async_trait::async_trait]
 impl UpstreamRecovery for Recovery {
@@ -90,14 +93,20 @@ impl UpstreamRecovery for Recovery {
 
     async fn query(&self, _handle: &UpstreamHandle, _deadline: Duration) -> UpstreamAnswer {
         self.0.fetch_add(1, Ordering::SeqCst);
-        UpstreamAnswer::Completed(json!({ "content": [{ "type": "text", "text": PROSE }] }))
+        (self.1)()
     }
 }
 
-/// M15: `key-a`'s upstream task completes with [`PROSE`], which `key-a` is
-/// owed through `tasks/get`; `key-b` sending it is refused under `block`.
-#[tokio::test]
-async fn upstream_task_result_is_a_relay_source() {
+/// The suite's state with the upstream fixture whose follow-up query answers
+/// `answer`, and `key-a`'s task started and queried at least once.
+async fn followed(answer: Value) -> (Arc<AppState>, tempfile::TempDir) {
+    let (state, store, _task) =
+        followed_with(Arc::new(move || UpstreamAnswer::Completed(answer.clone()))).await;
+    (state, store)
+}
+
+/// [`followed`], with the query answering whatever `answering` returns.
+async fn followed_with(answering: Answering) -> (Arc<AppState>, tempfile::TempDir, String) {
     let firewall = Arc::new(Firewall::from_config(
         FirewallConfig {
             collusion: CollusionConfig {
@@ -109,7 +118,7 @@ async fn upstream_task_result_is_a_relay_source() {
         },
         None,
     ));
-    let (state, _store) = super::super::meta_fixture::test_router_app_state_with_meta(
+    let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,
         |mut meta| {
@@ -133,14 +142,12 @@ async fn upstream_task_result_is_a_relay_source() {
     std::assert!(
         state
             .task_executor
-            .install_recovery(Arc::new(Recovery(Arc::clone(&queries))))
+            .install_recovery(Arc::new(Recovery(Arc::clone(&queries), answering)))
     );
-
     // `key-a` never reads the task: a `tasks/get` would renew the receipt and
-    // hide a missing settlement staging. It starts the task and waits for the
-    // worker to have asked the peer for the result.
+    // hide a missing settlement staging.
     let created = post(&state, "key-a", task_invoke(1, "relay-upstream", json!({}))).await;
-    let _ = task_id(&created);
+    let task = task_id(&created);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while queries.load(Ordering::SeqCst) == 0 {
         std::assert!(
@@ -149,17 +156,16 @@ async fn upstream_task_result_is_a_relay_source() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    (state, store, task)
+}
 
-    // The worker commits after the answer is stored: keep `key-b` sending.
+/// `key-b` sends [`PROSE`] until it is refused as a relay (the worker commits
+/// after the answer is stored).
+async fn refused_once_recorded(state: &Arc<AppState>) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let mut sends = 100;
     loop {
-        let answer = post(
-            &state,
-            "key-b",
-            sync_invoke(sends, json!({ "text": PROSE })),
-        )
-        .await;
+        let answer = post(state, "key-b", sync_invoke(sends, json!({ "text": PROSE }))).await;
         if answer["error"]["code"] == -32002 {
             return;
         }
@@ -170,4 +176,81 @@ async fn upstream_task_result_is_a_relay_source() {
         sends += 1;
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// M15: `key-a`'s upstream task completes with [`PROSE`], which `key-a` is
+/// owed through `tasks/get`; `key-b` sending it is refused under `block`.
+#[tokio::test]
+async fn upstream_task_result_is_a_relay_source() {
+    let (state, _store) = followed(json!({ "content": [{ "type": "text", "text": PROSE }] })).await;
+    refused_once_recorded(&state).await;
+}
+
+/// MIK-7887.RECEIPT.4: on the follow path too, the receipt describes the
+/// stored result. A backend `cacheScope` the serializer clamps is never
+/// delivered, so text stuffed there is not receipted.
+#[tokio::test]
+async fn a_followed_result_does_not_receipt_a_clamped_cache_scope() {
+    use std::fmt::Write as _;
+    let stuffing = (0..400).fold(String::new(), |mut text, n| {
+        let _ = write!(
+            text,
+            "The east inventory line {n} lists crate {} of pressed cider. ",
+            n * 7 + 3
+        );
+        text
+    });
+    let answer = json!({
+        "content": [{ "type": "text", "text": PROSE }],
+        "cacheScope": stuffing,
+    });
+    let (state, _store) = followed(answer).await;
+    refused_once_recorded(&state).await;
+    let piece: String = stuffing.chars().take(400).collect();
+    let answer = post(&state, "key-b", sync_invoke(900, json!({ "text": piece }))).await;
+    std::assert!(
+        answer.get("error").is_none(),
+        "undelivered cacheScope text was receipted: {answer}"
+    );
+}
+
+/// MIK-7887.RECEIPT.1: a followed job that failed with the peer's own error
+/// hands that error to the owner, so settlement receipts it. No `tasks/get`
+/// runs: the receipt is the settlement's.
+#[tokio::test]
+async fn a_followed_peer_failure_is_receipted_at_settlement() {
+    let (state, _store, _task) = followed_with(Arc::new(|| {
+        UpstreamAnswer::Failed(crate::protocol::JsonRpcError {
+            code: -32042,
+            message: PROSE.to_owned(),
+            data: None,
+        })
+    }))
+    .await;
+    refused_once_recorded(&state).await;
+}
+
+/// MIK-7887.RECEIPT.1: a cancelled job's error is the gateway's own sentence,
+/// so settlement receipts nothing and the working stub is dropped.
+#[tokio::test]
+async fn a_followed_cancellation_receipts_nothing() {
+    let (state, _store, task) = followed_with(Arc::new(|| {
+        UpstreamAnswer::Substituted(crate::protocol::JsonRpcError {
+            code: -32603,
+            message: PROSE.to_owned(),
+            data: None,
+        })
+    }))
+    .await;
+    // Settled first; a read of a gateway error renews nothing either.
+    let settled = poll_until_terminal(&state, "key-a", &task).await;
+    std::assert!(
+        status_of(&settled) == "failed",
+        "base: the job failed: {settled}"
+    );
+    let answer = post(&state, "key-b", sync_invoke(700, json!({ "text": PROSE }))).await;
+    std::assert!(
+        answer.get("error").is_none(),
+        "a gateway substitute was receipted: {answer}"
+    );
 }

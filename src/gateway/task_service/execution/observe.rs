@@ -273,8 +273,13 @@ pub(crate) enum UpstreamAnswer {
     /// The job finished and the peer handed back its tool result verbatim.
     /// Still faces the ordinary post-dispatch gates before it is committed.
     Completed(Value),
-    /// The job failed and the peer handed back a JSON-RPC error.
+    /// The job failed and the peer handed back a JSON-RPC error, its own
+    /// message included.
     Failed(JsonRpcError),
+    /// The job ended without a usable error from the peer (cancelled, or failed
+    /// with no message): the gateway's own words, carrying no peer bytes. Never
+    /// receipted as the peer's text (MIK-7887.RECEIPT.1).
+    Substituted(JsonRpcError),
     /// Pending, working, or waiting on an input round this gateway cannot
     /// continue. The record stays as it is.
     Live,

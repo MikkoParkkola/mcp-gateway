@@ -22,6 +22,7 @@ use tokio::sync::Mutex;
 use super::settlement::{backend_output, strip_http_status};
 use super::{CommitFailure, TaskExecutor, TransitionWrite, UpstreamAnswer, UpstreamHandle};
 use crate::gateway::meta_mcp::invoke::audit::{DispatchNotes, with_dispatch_scope};
+use crate::gateway::task_service::ErrorAuthor;
 use crate::gateway::task_service::record::UpstreamRecord;
 use crate::gateway::task_service::store::StoreError;
 use crate::protocol::JsonRpcError;
@@ -209,9 +210,9 @@ impl TaskExecutor {
     ) -> Result<RecoveredRead, RecoveryRefusal>
     where
         F: FnOnce(Value) -> Result<Value, JsonRpcError>,
-        E: FnOnce(JsonRpcError) -> JsonRpcError,
+        E: FnOnce(JsonRpcError) -> (JsonRpcError, ErrorAuthor),
         S: FnOnce(TaskTransition, DispatchNotes) -> R,
-        R: Future<Output = TaskTransition>,
+        R: Future<Output = (TaskTransition, bool)>,
     {
         if !authorized {
             return Err(RecoveryRefusal::Denied);
@@ -255,9 +256,9 @@ impl TaskExecutor {
     ) -> Result<RecoveredRead, RecoveryRefusal>
     where
         F: FnOnce(Value) -> Result<Value, JsonRpcError>,
-        E: FnOnce(JsonRpcError) -> JsonRpcError,
+        E: FnOnce(JsonRpcError) -> (JsonRpcError, ErrorAuthor),
         S: FnOnce(TaskTransition, DispatchNotes) -> R,
-        R: Future<Output = TaskTransition>,
+        R: Future<Output = (TaskTransition, bool)>,
     {
         // Re-read under the gate: a concurrent read that already settled this
         // row must not be queried a second time.
@@ -277,10 +278,13 @@ impl TaskExecutor {
                 // are retained; nothing is faked terminal or resubmitted.
                 UpstreamAnswer::Live | UpstreamAnswer::Unavailable => return None,
                 UpstreamAnswer::Completed(result) => match finish(backend_output(result)) {
-                    Ok(processed) => TaskTransition::Complete(processed),
+                    Ok(processed) => (TaskTransition::Complete(processed), ErrorAuthor::Gateway),
                     // The same configured output policy that guards a live
                     // dispatch refused this payload. Its refusal is the outcome.
-                    Err(error) => TaskTransition::Fail(strip_http_status(error)),
+                    Err(error) => (
+                        TaskTransition::Fail(strip_http_status(error)),
+                        ErrorAuthor::Gateway,
+                    ),
                 },
                 // A peer's failure is upstream content, not a gateway verdict:
                 // its message and nested data pass the reader's configured
@@ -288,12 +292,18 @@ impl TaskExecutor {
                 // reaches the durable record or the read that serves it. The
                 // code is preserved.
                 UpstreamAnswer::Failed(error) => {
-                    TaskTransition::Fail(finish_error(strip_http_status(error)))
+                    let (screened, author) = finish_error(strip_http_status(error));
+                    (TaskTransition::Fail(screened), author)
                 }
+                // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
+                UpstreamAnswer::Substituted(error) => (
+                    TaskTransition::Fail(strip_http_status(error)),
+                    ErrorAuthor::Gateway,
+                ),
             })
         })
         .await;
-        let Some(event) = event else {
+        let Some((event, screened)) = event else {
             return Ok(RecoveredRead::Retained);
         };
 
@@ -310,13 +320,17 @@ impl TaskExecutor {
         // is recorded before its result is stored. A writer that lands
         // meanwhile wins the revision below; the record then stands for a
         // recovery that did not land.
-        let event = settle(event, notes).await;
+        let (event, kept) = settle(event, notes).await;
+        // The screen's verdict, unless the audit replaced the outcome
+        // (MIK-7887.RECEIPT.1).
+        let author = super::settle_followed::committed_author(screened, kept);
         match self
             .commit_transition(TransitionWrite::Recover {
                 owner_digest,
                 id,
                 revision,
                 event,
+                author,
             })
             .await
         {

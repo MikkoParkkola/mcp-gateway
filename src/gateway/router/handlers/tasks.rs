@@ -367,7 +367,7 @@ async fn recover_from_upstream(
         let (meta_mcp, server, tool) = (Arc::clone(&state.meta_mcp), server.clone(), tool.clone());
         let (api_key_name, trace) = (api_key_name.clone(), trace.clone());
         move |error| {
-            meta_mcp.recover_task_error(&server, &tool, api_key_name.as_deref(), &trace, error)
+            meta_mcp.recover_task_error_with(&server, &tool, api_key_name.as_deref(), &trace, error)
         }
     };
     // MIN.1 gap 1: the settlement record, written before the commit and
@@ -381,7 +381,9 @@ async fn recover_from_upstream(
                 tool: &tool,
                 id: &task_id,
             };
-            meta_mcp.audit_settlement(task, event, &notes, &owner).await
+            meta_mcp
+                .audit_settlement_kept(task, event, &notes, &owner)
+                .await
         }
     };
     let _ = executor

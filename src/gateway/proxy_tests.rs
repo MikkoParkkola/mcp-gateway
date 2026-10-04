@@ -451,3 +451,60 @@ async fn undeliverable_elicitation_leaves_no_pending_entry() {
 // the size ceiling.
 #[path = "proxy_cancellation_tests.rs"]
 mod cancellation;
+
+// ── MIK-7887.RECEIPT.3: the bridged-request channel's commit point ──
+
+fn counting_commit() -> (
+    crate::gateway::input_bridge::DeliveryCommit,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&runs);
+    let commit = crate::gateway::input_bridge::DeliveryCommit::new(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    (commit, runs)
+}
+
+/// A request that reached the session's stream commits before the reply, and
+/// stays committed when the wait is abandoned.
+#[tokio::test]
+async fn a_bridged_request_commits_once_it_reaches_the_session_stream() {
+    use crate::gateway::input_bridge::ClientChannel as _;
+    use std::sync::atomic::Ordering;
+    let mux = make_multiplexer();
+    let (session, mut rx) = mux.get_or_create_session(Some("sess-c"));
+    let proxy = ProxyManager::new(Arc::clone(&mux));
+    let (commit, runs) = counting_commit();
+    let outcome = tokio::time::timeout(
+        Duration::from_millis(50),
+        proxy.send_request_committing(&session, "b-1", "elicitation/create", None, Some(commit)),
+    )
+    .await;
+    assert!(outcome.is_err(), "no reply came");
+    let sent = rx
+        .try_recv()
+        .expect("the request reached the session stream");
+    assert_eq!(sent.data["method"], "elicitation/create");
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+}
+
+/// An unknown session reached nobody: no commit.
+#[tokio::test]
+async fn a_bridged_request_to_no_session_commits_nothing() {
+    use crate::gateway::input_bridge::{ClientChannel as _, DeliveryError};
+    use std::sync::atomic::Ordering;
+    let proxy = ProxyManager::new(make_multiplexer());
+    let (commit, runs) = counting_commit();
+    let sent = proxy
+        .send_request_committing(
+            "no-such-session",
+            "b-2",
+            "elicitation/create",
+            None,
+            Some(commit),
+        )
+        .await;
+    assert!(matches!(sent, Err(DeliveryError::NoSession)), "{sent:?}");
+    assert_eq!(runs.load(Ordering::SeqCst), 0);
+}

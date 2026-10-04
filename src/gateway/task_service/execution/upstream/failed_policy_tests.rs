@@ -188,9 +188,9 @@ async fn recover_with(reply: Reply, meta: MetaMcp) -> (Value, tempfile::TempDir)
                         data: None,
                     })
             },
-            move |error| error_policy.recover_task_error(BACKEND, TOOL, None, "trace", error),
+            move |error| error_policy.recover_task_error_with(BACKEND, TOOL, None, "trace", error),
             // No transparency log here: the settlement record is a no-op.
-            |event, _notes| std::future::ready(event),
+            |event, _notes| std::future::ready((event, true)),
             Duration::from_secs(5),
         )
         .await;

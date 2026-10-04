@@ -1,0 +1,111 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-7887.RECEIPT.4 at the POST route: a modern answer from a surfaced tool
+//! is stamped with the gateway's own `serverInfo`, so backend text stuffed in
+//! that member never reaches the caller. The receipt the route commits is
+//! built from the answer it delivered, not from the backend's value.
+use super::super::*;
+use super::support::*;
+use pretty_assertions::assert_eq;
+
+use crate::config::SurfacedToolConfig;
+use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
+
+/// What the surfaced tool delivers, long enough for several fingerprints.
+const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
+    the grafting dates for each rootstock, the hours the drip lines ran during the dry weeks of \
+    August, and which crew pruned the older trees after the second frost. It closes with the \
+    count of crates sent to the cooperative press and a note about the broken ladder by the barn.";
+
+/// Backend text long enough to fill a receipt's cap by itself.
+fn stuffing() -> String {
+    use std::fmt::Write as _;
+    (0..400).fold(String::new(), |mut text, n| {
+        let _ = write!(
+            text,
+            "The harbour inventory line {n} lists crate {} of pressed cider. ",
+            n * 7 + 3
+        );
+        text
+    })
+}
+
+/// The suite's state with `mock` behind a surfaced `TOOL` and a `block` relay
+/// firewall over it.
+async fn surfaced_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            collusion: CollusionConfig {
+                action: CollusionAction::Block,
+                sources: vec![format!("{BACKEND}:{TOOL}")],
+                ..CollusionConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta(
+        &two_principal_auth(),
+        None,
+        |meta| {
+            let mut meta = meta.with_surfaced_tools(vec![SurfacedToolConfig {
+                server: BACKEND.to_string(),
+                tool: TOOL.to_string(),
+            }]);
+            meta.set_firewall(Some(firewall));
+            meta
+        },
+    )
+    .await;
+    register(&state, BACKEND, mock);
+    (state, store)
+}
+
+#[tokio::test]
+async fn a_modern_answer_is_receipted_as_delivered_not_as_the_backend_sent_it() {
+    let stuffing = stuffing();
+    let answer = json!({
+        "content": [{"type": "text", "text": PROSE}],
+        "isError": false,
+        "_meta": { crate::protocol::meta::KEY_SERVER_INFO: { "name": stuffing } },
+    });
+    let mock = MockBackend::answering(Answer::Sequence(vec![answer, text_ok()]));
+    let (state, _store) = surfaced_state(&mock).await;
+
+    let read = post(
+        &state,
+        "key-a",
+        modern(
+            1,
+            "tools/call",
+            json!({"name": TOOL, "arguments": {}}),
+            false,
+        ),
+    )
+    .await;
+    assert!(
+        read.get("error").is_none(),
+        "base: the read is delivered: {read}"
+    );
+    assert_ne!(
+        read["result"]["_meta"][crate::protocol::meta::KEY_SERVER_INFO]["name"],
+        json!(stuffing),
+        "base: the gateway stamps its own serverInfo over the backend's: {read}"
+    );
+
+    let relayed = post(&state, "key-b", sync_invoke(2, json!({"text": PROSE}))).await;
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "the delivered text lost its receipt: {relayed}"
+    );
+    let piece: String = stuffing.chars().take(400).collect();
+    let stuffed = post(&state, "key-b", sync_invoke(3, json!({"text": piece}))).await;
+    assert!(
+        stuffed.get("error").is_none(),
+        "undelivered serverInfo text was receipted: {stuffed}"
+    );
+}
+
+fn text_ok() -> Value {
+    json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
+}

@@ -342,6 +342,10 @@ We want your PR to merge fast. Here is what helps.
   by hand, fails the *Changelog fragment* check; a maintainer can apply the `no-changelog`
   label when no entry is warranted. Shipped files are `src/`, `crates/*/src/`, `Dockerfile*`,
   `.github/workflows/docker*.yml` (or `.yaml`), `capabilities/`, `server.json` and `npm/`.
+  Each bullet of a `security` fragment also needs a two-space-indented line naming who is
+  affected and what an operator must do, for example
+  `  Affects: 3.0.0 up to 3.5.1. Operator action: none.`; the same check runs
+  `scripts/release/check_security_fragments.py` over `changelog.d/` and fails without it.
 - [ ] **PR description** answers: what problem this solves, the shape of the fix, anything you are unsure about.
 - [ ] **Prefer a config struct** over 5+ function arguments. Keeps future extensions clean.
 - [ ] **Doc comments on user-facing config fields**. They surface in `cargo doc` and in downstream IDE tooltips.

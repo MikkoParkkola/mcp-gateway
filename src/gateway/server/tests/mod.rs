@@ -29,6 +29,8 @@ mod stdout_death_admission;
 
 #[cfg(feature = "firewall")]
 mod collusion_stdio;
+#[cfg(feature = "firewall")]
+mod collusion_stdio_delivered;
 mod r2_stdio_keys;
 mod stdio_cache_scope;
 mod stdio_listing_scope;
@@ -86,3 +88,6 @@ mod hardened_destination;
 
 // MIK-7685 (#2530): stdio EOF teardown is bounded.
 mod stdio_teardown_bound;
+
+// MIK-7684: the stdio reader never waits for stdout room.
+mod stdio_reader_unparked;

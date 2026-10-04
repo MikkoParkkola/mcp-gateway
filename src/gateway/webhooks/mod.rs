@@ -513,9 +513,17 @@ async fn webhook_handler(
     // backend must not receive it.
     let session_count = state.multiplexer.session_count();
     if state.definition.notify {
+        // The stream judge skips a `message` document's top-level `id` as
+        // JSON-RPC framing; here it is webhook content a mapping may have
+        // written, so it is judged with its member name (MIK-7822).
+        let with_id = notification
+            .data
+            .get("id")
+            .map(|id| serde_json::json!([&payload, { "id": id }]));
+        let raw = with_id.as_ref().unwrap_or(&payload);
         let reached = state
             .multiplexer
-            .broadcast_to_backend_raw(&notification, &state.backend, Some(&payload))
+            .broadcast_to_backend_raw(&notification, &state.backend, Some(raw))
             .await;
         state.stats.delivered.fetch_add(1, Ordering::Relaxed);
         debug!(
