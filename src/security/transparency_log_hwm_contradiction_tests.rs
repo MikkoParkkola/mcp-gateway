@@ -280,14 +280,15 @@ fn lagging_mark_restart_finds(
     signed: bool,
     edit: impl FnOnce(&mut Vec<serde_json::Value>),
 ) -> bool {
-    mark_restart_finds(signed, 3, edit)
+    mark_restart_finds(signed, Some(3), edit)
 }
 
-/// Restart a five-record log whose mark names record `at`, after `edit` has
-/// changed the active file, and report whether the restart recorded a finding.
+/// Restart a log of an opened record and five appends whose mark names
+/// record `at` (`None`: the newest), after `edit` has changed the active file,
+/// and report whether the restart recorded a finding.
 fn mark_restart_finds(
     signed: bool,
-    at: usize,
+    at: Option<usize>,
     edit: impl FnOnce(&mut Vec<serde_json::Value>),
 ) -> bool {
     use super::rotation_tests::SECRET;
@@ -299,6 +300,7 @@ fn mark_restart_finds(
     (0..5).for_each(|i| append(&l, i));
     drop(l);
     let mut records = lines(&path);
+    let at = at.unwrap_or(records.len() - 1);
     let mark = HighWater {
         counter: records[at]["counter"].as_u64().unwrap(),
         entry_hash: records[at]["entry_hash"].as_str().unwrap().into(),
@@ -355,16 +357,16 @@ fn an_oversized_line_beside_the_mark_is_a_finding() {
 fn a_tail_at_the_mark_is_judged_on_its_content() {
     for signed in [false, true] {
         assert!(
-            !mark_restart_finds(signed, 4, |_| {}),
+            !mark_restart_finds(signed, None, |_| {}),
             "control, signed {signed}"
         );
-        let found = mark_restart_finds(signed, 4, |records| {
-            records[4]["tampered"] = serde_json::Value::Bool(true);
+        let found = mark_restart_finds(signed, None, |records| {
+            records.last_mut().unwrap()["tampered"] = serde_json::Value::Bool(true);
         });
         assert!(found, "edited tail at the mark accepted, signed {signed}");
     }
-    let found = mark_restart_finds(true, 4, |records| {
-        records[4]["sig"] = serde_json::Value::String("0".repeat(64));
+    let found = mark_restart_finds(true, None, |records| {
+        records.last_mut().unwrap()["sig"] = serde_json::Value::String("0".repeat(64));
     });
     assert!(found, "a forged signature on the tail at the mark accepted");
 }
