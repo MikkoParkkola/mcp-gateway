@@ -318,6 +318,12 @@ fn a_record_at_the_mark_edited_under_its_stored_hash_is_a_finding() {
         });
         assert!(found, "edited record at the mark accepted, signed {signed}");
     }
+    // The hash leaves `sig` out, so on a signed log a replaced signature keeps
+    // the stored and recomputed hashes; only the signature check sees it.
+    let found = lagging_mark_restart_finds(true, |records| {
+        records[3]["sig"] = serde_json::Value::String("0".repeat(64));
+    });
+    assert!(found, "a forged signature at the mark accepted");
 }
 
 /// The record at the mark is looked up with the scan's line bound: a line
