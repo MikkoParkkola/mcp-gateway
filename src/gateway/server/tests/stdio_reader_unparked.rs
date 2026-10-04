@@ -126,7 +126,14 @@ async fn a_reading_client_gets_every_answer() {
     let mut served = serve(1 << 20).await;
     let mut lines = Vec::new();
     for k in 0..10 {
-        lines.push(batch(k));
+        lines.push(
+            json!([
+                {"jsonrpc": "2.0", "id": k, "method": "ping"},
+                {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                {"jsonrpc": "2.0", "id": 200 + k, "method": "ping"},
+            ])
+            .to_string(),
+        );
         lines.push("{not json".to_string());
         lines.push(json!({"jsonrpc": "2.0", "id": 100 + k, "method": "ping"}).to_string());
     }
@@ -143,16 +150,23 @@ async fn a_reading_client_gets_every_answer() {
         let frame: Value = serde_json::from_str(&line).expect("one JSON frame");
         match &frame {
             Value::Array(items) => {
-                batch_ids.extend(items.iter().map(|item| item["id"].clone()));
+                for item in items {
+                    assert!(item.get("result").is_some(), "a batch item failed: {item}");
+                    batch_ids.push(item["id"].clone());
+                }
             }
             _ if frame["error"]["code"] == json!(-32700) => parse_errors += 1,
-            _ if frame.get("method").is_none() => single_ids.push(frame["id"].clone()),
+            _ if frame.get("method").is_none() => {
+                assert!(frame.get("result").is_some(), "a ping failed: {frame}");
+                single_ids.push(frame["id"].clone());
+            }
             _ => {}
         }
     }
     batch_ids.sort_by_key(|id| id.as_u64());
     single_ids.sort_by_key(|id| id.as_u64());
-    assert_eq!(batch_ids, (0..10).map(|k| json!(k)).collect::<Vec<_>>());
+    let expected: Vec<Value> = (0..10).chain(200..210).map(|k| json!(k)).collect();
+    assert_eq!(batch_ids, expected);
     assert_eq!(single_ids, (100..110).map(|k| json!(k)).collect::<Vec<_>>());
     assert_eq!(parse_errors, 10);
     timeout(ARRIVAL, &mut served.task)
@@ -186,4 +200,35 @@ async fn an_initialize_on_a_full_stdout_ends_the_session() {
         .expect("the serve task does not panic")
         .expect("run_stdio_on returns Ok");
     drop((served.stdin, served.stdout));
+}
+
+/// The busy refusal of a batch keeps JSON-RPC 2.0 §6 shapes: one
+/// invalid-request object for `[]`, an invalid request per non-object
+/// element, a busy error per element with an id, nothing for notifications.
+#[test]
+fn a_refused_batch_is_answered_per_element() {
+    let refuse = super::super::stdio_busy_batch_response;
+    let invalid = json!({"jsonrpc": "2.0", "id": null,
+        "error": {"code": -32600, "message": "Invalid Request"}});
+    assert_eq!(refuse(&json!([])), Some(invalid.clone()));
+    let refused = refuse(&json!([
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        1,
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {},
+    ]))
+    .expect("three elements are answered");
+    let items = refused.as_array().expect("an array");
+    assert_eq!(items.len(), 3, "{refused}");
+    assert_eq!(items[0]["id"], json!(1));
+    assert_eq!(items[0]["error"]["code"], json!(-32000));
+    assert_eq!(items[1], invalid);
+    assert_eq!(
+        items[2], invalid,
+        "a malformed object is not a notification"
+    );
+    assert_eq!(
+        refuse(&json!([{"jsonrpc": "2.0", "method": "notifications/initialized"}])),
+        None
+    );
 }
