@@ -268,6 +268,27 @@ impl SigningInvocationContext {
         }
     }
 
+    /// [`Self::refuse_malformed_nonce`] where it must run before any gate:
+    /// only under [`SigningScope::EveryToolCall`] (MIK-7736). Under
+    /// `InvokeOnly` a `gateway_invoke` nonce is judged by
+    /// [`super::MetaMcp::prepare_signing_invocation`], after the invocation
+    /// policy, so a denied call gets its policy refusal and counts no nonce
+    /// rejection.
+    pub(crate) fn refuse_malformed_nonce_early(&self) -> crate::Result<()> {
+        if self.scope != SigningScope::EveryToolCall {
+            return Ok(());
+        }
+        self.refuse_malformed_nonce()
+    }
+
+    /// Whether the call presents a well-formed nonce: what the destructive
+    /// prediction needs, as a test that cannot fail. A malformed nonce is not
+    /// refused here, ahead of policy, and does not pay for the prediction
+    /// either; `prepare_signing_invocation` refuses it after the policy.
+    fn presents_valid_nonce(&self) -> bool {
+        matches!(self.nonce, CapturedNonce::Value(_))
+    }
+
     /// Refuse a malformed nonce before any gate can answer the call: the
     /// task-augmented gate answers before [`super::MetaMcp::prepare_signing_invocation`]
     /// would see it, and its answer must not be the finalizer's `-32603`.
@@ -373,7 +394,9 @@ impl super::MetaMcp {
     /// [`Self::prepare_signing_invocation`] for a `tools/call` naming
     /// `tool_name`. A call dispatch refuses before the tool acts is left
     /// unadmitted, so its nonce stays unspent and dispatch answers it as it
-    /// would unsigned (MIK-7698). A malformed nonce is still refused first.
+    /// would unsigned (MIK-7698). A malformed nonce is refused first only under
+    /// `EveryToolCall`; under `InvokeOnly` it is judged after the invocation
+    /// policy, in `prepare_signing_invocation` (MIK-7736).
     pub(crate) fn prepare_signing_for_call(
         &self,
         context: &mut SigningInvocationContext,
@@ -385,12 +408,13 @@ impl super::MetaMcp {
         if context.origin == Origin::Unsigned || !self.signing_enabled() {
             return Ok(());
         }
-        context.refuse_malformed_nonce()?;
+        context.refuse_malformed_nonce_early()?;
         // The destructive prediction builds its tool set on first use, so it
         // runs only when a nonce is presented: a missing one has nothing to
-        // leave unspent, and its refusal stays as cheap as it was.
+        // leave unspent, and its refusal stays as cheap as it was. A malformed
+        // one is judged after policy, in `prepare_signing_invocation` (MIK-7736).
         if self.refused_before_dispatch(tool_name, caller)
-            || (context.nonce_value()?.is_some()
+            || (context.presents_valid_nonce()
                 && super::confirmation::unconfirmable(tool_name, caller))
         {
             return Ok(());
