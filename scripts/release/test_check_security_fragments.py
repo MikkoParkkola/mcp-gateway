@@ -57,6 +57,44 @@ class CheckSecurityFragments(unittest.TestCase):
     def test_an_empty_value_fails(self):
         self.assertEqual(len(run({"1.security.md": "- X. Affects: . Operator action: .\n"})), 2)
 
+    def test_a_label_does_not_count_as_the_previous_value(self):
+        out = run({"1.security.md": "- X. Affects: Operator action: none.\n"})
+        self.assertEqual(len(out), 1)
+        self.assertIn("empty 'Affects'", out[0])
+
+    def test_a_whitespace_or_emphasis_only_value_fails(self):
+        self.assertEqual(len(run({"1.security.md": "- X. Affects: ** . Operator action: none.\n"})), 1)
+
+    def test_unverified_anywhere_in_any_affects_clause_fails(self):
+        for text in ("- X. Affects: **UNVERIFIED**. Operator action: none.\n",
+                     "- X. Affects: 3.x. Affects: still unverified. Operator action: none.\n"):
+            out = run({"1.security.md": text})
+            self.assertEqual(len(out), 1, text)
+            self.assertIn("UNVERIFIED", out[0])
+
+    def test_a_value_may_start_with_a_dot(self):
+        text = "- X. Affects: .NET clients on 3.x. Operator action: .env files need `a`.\n"
+        self.assertEqual(run({"1.security.md": text}), [])
+
+    def test_a_path_that_is_not_a_directory_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            missing = pathlib.Path(d) / "absent"
+            self.assertEqual(len(csf.problems(missing)), 1)
+            (pathlib.Path(d) / "file").write_text("x", encoding="utf-8")
+            self.assertEqual(len(csf.problems(pathlib.Path(d) / "file")), 1)
+
+    def test_an_empty_directory_passes_and_a_bulletless_file_fails(self):
+        self.assertEqual(run({}), [])
+        out = run({"1.security.md": "No bullet here.\n"})
+        self.assertEqual(len(out), 1)
+        self.assertIn("no bullet", out[0])
+
+    def test_main_exits_one_on_problems_and_zero_when_clean(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(csf.main(["x", d]), 0)
+            (pathlib.Path(d) / "1.security.md").write_text("- X.\n", encoding="utf-8")
+            self.assertEqual(csf.main(["x", d]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

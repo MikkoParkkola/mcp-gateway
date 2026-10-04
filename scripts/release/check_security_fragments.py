@@ -8,14 +8,29 @@ usage: check_security_fragments.py [DIR]   (default: changelog.d)
 
 Each bullet ("- " at column 0, with its two-space continuation lines) of every
 `*.security.md` file must carry `Affects: <text>.` and `Operator action: <text>.`
-An `Affects: UNVERIFIED` value fails. Exit 0 when every bullet passes, 1 otherwise,
+Each value runs to the next label and must be a non-empty sentence; an `Affects`
+value naming UNVERIFIED fails, as does a DIR that is not a directory. Exit 0 when every bullet passes, 1 otherwise,
 naming each failing file and bullet."""
 import pathlib
 import re
 import sys
 
-AFFECTS = re.compile(r"\bAffects: (?P<v>[^.\n][^\n]*?)\.(\s|$)")
-ACTION = re.compile(r"\bOperator action: [^.\n][^\n]*?\.(\s|$)")
+LABEL = re.compile(r"\b(Affects|Operator action):")
+SENTENCE = re.compile(r"(.+?)\.(\s|$)")
+UNVERIFIED = re.compile(r"\bUNVERIFIED\b", re.IGNORECASE)
+
+
+def clauses(item):
+    """(label, value) for every label; a value runs to the next label or the end."""
+    marks = list(LABEL.finditer(item))
+    ends = [m.start() for m in marks[1:]] + [len(item)]
+    return [(m.group(1), item[m.end():end].strip()) for m, end in zip(marks, ends)]
+
+
+def complete(value):
+    """A value is one non-empty sentence ending in a period."""
+    sentence = SENTENCE.match(value)
+    return bool(sentence) and bool(sentence.group(1).strip(" .*_`"))
 
 
 def bullets(text):
@@ -32,19 +47,30 @@ def bullets(text):
 
 
 def problems(directory):
+    root = pathlib.Path(directory)
+    if not root.is_dir():
+        return [f"{root}: not a directory"]
     found = []
-    for path in sorted(pathlib.Path(directory).glob("*.security.md")):
+    for path in sorted(root.glob("*.security.md")):
         items = bullets(path.read_text(encoding="utf-8"))
         if not items:
             found.append(f"{path}: no bullet")
         for i, item in enumerate(items, 1):
-            affects = AFFECTS.search(item)
-            if not affects:
-                found.append(f"{path} bullet {i}: no 'Affects: ...' clause")
-            elif affects.group("v").strip().upper().startswith("UNVERIFIED"):
-                found.append(f"{path} bullet {i}: 'Affects' is UNVERIFIED")
-            if not ACTION.search(item):
-                found.append(f"{path} bullet {i}: no 'Operator action: ...' clause")
+            found += [f"{path} bullet {i}: {p}" for p in bullet_problems(item)]
+    return found
+
+
+def bullet_problems(item):
+    found = []
+    pairs = clauses(item)
+    for label in ("Affects", "Operator action"):
+        values = [v for l, v in pairs if l == label]
+        if not values:
+            found.append(f"no '{label}: ...' clause")
+        elif not all(complete(v) for v in values):
+            found.append(f"an empty '{label}' value")
+    if any(UNVERIFIED.search(v) for l, v in pairs if l == "Affects"):
+        found.append("'Affects' is UNVERIFIED")
     return found
 
 
