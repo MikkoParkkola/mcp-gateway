@@ -12,7 +12,6 @@
 2097 src/capability/executor_tests.rs
 2049 tests/mik_7212_mrtr7_bridge_acs.rs
 2031 tests/webui_management_tests.rs
-1920 src/transport/http/mod.rs
 1888 src/backend/tests.rs
 1631 src/security/firewall/mod.rs
 1617 tests/mik_7272_sub2b_acs.rs
