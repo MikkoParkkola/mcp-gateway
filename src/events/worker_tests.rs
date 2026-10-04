@@ -531,3 +531,117 @@ async fn a_dead_letter_record_names_the_host_stamped_on_the_occurrence() {
 fn config_default() -> crate::config::EventsConfig {
     crate::config::EventsConfig::default()
 }
+
+/// A source whose verdict admits the first `admits` asks and refuses (-32012)
+/// every later one: a reload landing between two asks.
+struct Flipping {
+    admits: usize,
+    asked: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl crate::events::EventSource for Flipping {
+    fn kind(&self) -> crate::events::types::SourceKind {
+        crate::events::types::SourceKind::RestWatch
+    }
+    fn descriptors(&self) -> Vec<crate::events::types::EventDescriptor> {
+        vec![crate::events::types::EventDescriptor {
+            name: "probe.flip".into(),
+            description: "test source".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            payload_schema: serde_json::json!({"type": "object"}),
+            scope: crate::events::types::Visibility::Owner,
+            kind: crate::events::types::SourceKind::RestWatch,
+        }]
+    }
+    fn matches(
+        &self,
+        _principal: &str,
+        _arguments: &serde_json::Value,
+        _event: &crate::events::fanout::SourceEvent,
+    ) -> bool {
+        true
+    }
+    async fn authorize(
+        &self,
+        _p: &str,
+        _n: &str,
+        _a: &serde_json::Value,
+    ) -> Result<(), crate::events::types::RpcError> {
+        let n = self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if n < self.admits {
+            Ok(())
+        } else {
+            Err(crate::events::types::RpcError::forbidden())
+        }
+    }
+}
+
+/// MIK-7894: eligibility is read again after the waits for the record, as the
+/// signing row is. A source that turns its verdict to `-32012` after the first
+/// check (a reload during the `sending` record's write) gets no POST and no
+/// charge; the attempt on record ends `access_revoked`. The control: a source
+/// that keeps admitting is charged and reaches the callback.
+#[tokio::test]
+async fn eligibility_lost_after_the_sending_record_is_not_sent_or_charged() {
+    use std::sync::atomic::Ordering;
+    for (admits, sent) in [(usize::MAX, true), (1, false)] {
+        let dir = tempfile::tempdir().expect("dir");
+        let config = crate::config::EventsConfig {
+            callback_allow_private: vec!["127.0.0.0/8".into()],
+            cost_per_delivery_usd: 0.01,
+            ..crate::config::EventsConfig::default()
+        };
+        let hub = EventsHub::open(&config, dir.path()).expect("hub");
+        let source = Arc::new(Flipping {
+            admits,
+            asked: std::sync::atomic::AtomicUsize::new(0),
+        });
+        hub.register_source(Arc::clone(&source) as Arc<dyn crate::events::EventSource>);
+        #[allow(unused_mut, reason = "set only with cost-governance")]
+        let mut services = logged_services(dir.path());
+        #[cfg(feature = "cost-governance")]
+        let registry = {
+            use crate::cost_accounting::{
+                config::CostGovernanceConfig, enforcer::BudgetEnforcer, registry::CostRegistry,
+            };
+            let cfg = CostGovernanceConfig {
+                enabled: true,
+                ..Default::default()
+            };
+            let registry = Arc::new(CostRegistry::new(&cfg));
+            let enforcer = Arc::new(BudgetEnforcer::new(cfg, Arc::clone(&registry)));
+            services.budget = Some((enforcer, Arc::clone(&registry)));
+            registry
+        };
+        let (port, accepted) = counting_callback().await;
+        queued_as(&hub, port, "evt_flip", "probe.flip");
+        hub.attempt(&services, "evt_flip").await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        assert_eq!(
+            accepted.load(Ordering::SeqCst) >= 1,
+            sent,
+            "admits {admits}"
+        );
+        #[cfg(feature = "cost-governance")]
+        assert_eq!(
+            registry.snapshot().contains_key("events:probe.flip"),
+            sent,
+            "charged only when sent (admits {admits})"
+        );
+        if sent {
+            continue;
+        }
+        assert_eq!(source.asked.load(Ordering::SeqCst), 2, "asked again");
+        let log = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap_or_default();
+        assert!(log.contains("\"status\":\"sending\""), "{log}");
+        let ended = audit_actions(dir.path(), "events.delivery_outcome");
+        assert_eq!(ended.len(), 1, "{ended:?}");
+        assert_eq!(ended[0]["status"], "access_revoked");
+        assert!(
+            hub.store.subscriptions().is_empty(),
+            "the refused subscription is revoked"
+        );
+    }
+}
