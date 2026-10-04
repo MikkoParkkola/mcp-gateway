@@ -112,6 +112,24 @@ impl StdioReads {
         recorded(frame, self.log.as_ref()).await
     }
 
+    /// Judge one finalized answer without writing its `tenant_read` record:
+    /// the caller writes those fields inside the answer's delivery record
+    /// (MIK-7799, MIK-7920), as `POST /mcp` does.
+    pub(crate) fn judge(
+        &self,
+        response: crate::protocol::JsonRpcResponse,
+        request: Option<&Value>,
+        hidden: Option<&ReadAttribution>,
+    ) -> OutboundFrame {
+        super::answer(
+            self.guard.as_deref(),
+            Some(STDIO_KEY),
+            response,
+            request,
+            hidden,
+        )
+    }
+
     /// One frame for a batch whose items were each judged (and had their relay
     /// receipts recorded) right after their own dispatch.
     pub(crate) fn batch_of(items: Vec<OutboundFrame>) -> OutboundFrame {

@@ -185,6 +185,8 @@ impl super::MetaMcp {
     }
 
     /// Complete all output mutations before recording the attempted response.
+    /// Test-only since stdio records after its judge (MIK-7920).
+    #[cfg(test)]
     pub(crate) async fn finalize_response_for_delivery(
         &self,
         response: crate::protocol::JsonRpcResponse,
@@ -196,6 +198,8 @@ impl super::MetaMcp {
 
     /// [`Self::finalize_response_for_delivery`] for a caller that may already
     /// have run the response firewall on this exact artifact.
+    /// Test-only since stdio records after its judge (MIK-7920).
+    #[cfg(test)]
     pub(crate) async fn finalize_response_after_inspection(
         &self,
         response: crate::protocol::JsonRpcResponse,

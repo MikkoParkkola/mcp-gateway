@@ -210,6 +210,9 @@ fn judged_stdio(
     (Arc::new(meta), firewall, read)
 }
 
+/// The stdio session the operator reads in.
+const SESSION: &str = "stdio-7800";
+
 /// One operator `read` of `text`, dispatched as the serve loop does: the
 /// answer, what it read, its request's params and the receipts it staged.
 async fn staged_read(
@@ -218,7 +221,7 @@ async fn staged_read(
     cell: &parking_lot::Mutex<String>,
     text: String,
 ) -> (
-    Value,
+    crate::gateway::server::stdio_delivery::StdioAnswer,
     Option<crate::security::tenant_reads::ReadAttribution>,
     Option<Value>,
     crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
@@ -233,7 +236,7 @@ async fn staged_read(
         "arguments": {"server": "alpha", "tool": "read", "arguments": {}}});
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
     let client = StdioClient {
-        session_id: "stdio-7800",
+        session_id: SESSION,
         channel: &crate::gateway::input_bridge::NoClientChannel,
         handshake_capabilities: crate::protocol::meta::Declared::NONE,
         tasks: None,
@@ -284,9 +287,14 @@ async fn stdio_judged_out_read_records_no_receipt() {
     let (first, second) = (tenant_note("t1", PROSE), tenant_note("t2", OTHER));
     for (text, expect_delivered) in [(&first, true), (&second, false)] {
         let (value, hidden, params, staged) = staged_read(&meta, &reads, &cell, text.clone()).await;
-        let frame =
-            Gateway::judge_and_commit(&reads, (value, params.as_ref(), hidden.as_ref()), staged)
-                .await;
+        let frame = Gateway::judge_and_commit(
+            &meta,
+            &reads,
+            SESSION,
+            (value, params.as_ref(), hidden.as_ref()),
+            staged,
+        )
+        .await;
         assert_eq!(frame.delivers_result(), expect_delivered, "base: {text}");
         // The sink writes it: that is what commits the read history.
         frame.stdio_written();
@@ -411,7 +419,7 @@ async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
     );
 }
 
-/// A fail-closed log whose next `tenant_read` record fails.
+/// A fail-closed log whose next delivery record fails.
 fn failing_audit() -> (Arc<crate::security::TransparencyLogger>, tempfile::TempDir) {
     use crate::security::audit::AuditFailurePolicy;
     use crate::security::transparency_log::TransparencyLogConfig;
@@ -430,7 +438,9 @@ fn failing_audit() -> (Arc<crate::security::TransparencyLogger>, tempfile::TempD
         .expect("open log")
         .with_failure_policy(AuditFailurePolicy::FailClosed),
     );
-    log.fail_next_append_of_kind_for_test("tenant_read");
+    // The read verdict rides the delivery record (MIK-7799, MIK-7920): that
+    // is the record whose failure must withhold the answer.
+    log.fail_next_append_of_kind_for_test("response_delivery_attempt");
     (log, dir)
 }
 
@@ -444,19 +454,31 @@ async fn stdio_audit_withheld_read_records_no_receipt() {
     let reads = meta.stdio_reads();
     let note = tenant_note("t1", PROSE);
     let (value, hidden, params, staged) = staged_read(&meta, &reads, &cell, note.clone()).await;
-    let frame =
-        Gateway::judge_and_commit(&reads, (value, params.as_ref(), hidden.as_ref()), staged).await;
+    let frame = Gateway::judge_and_commit(
+        &meta,
+        &reads,
+        SESSION,
+        (value, params.as_ref(), hidden.as_ref()),
+        staged,
+    )
+    .await;
     assert!(
         !frame.delivers_result(),
-        "base: the failed tenant_read write replaces the answer"
+        "base: the failed delivery record replaces the answer"
     );
     assert!(
         !http_relay_refused(&firewall, &note),
         "an audit-withheld read must record no receipt"
     );
     let (value, hidden, params, staged) = staged_read(&meta, &reads, &cell, note.clone()).await;
-    let frame =
-        Gateway::judge_and_commit(&reads, (value, params.as_ref(), hidden.as_ref()), staged).await;
+    let frame = Gateway::judge_and_commit(
+        &meta,
+        &reads,
+        SESSION,
+        (value, params.as_ref(), hidden.as_ref()),
+        staged,
+    )
+    .await;
     assert!(
         frame.delivers_result(),
         "control: the audited read is delivered"

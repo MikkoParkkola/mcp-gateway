@@ -8,7 +8,9 @@ impl super::super::MetaMcp {
     /// Record the delivery attempt of the finalized `response`, with `read`
     /// (the answer's `tenant_read` fields) in the same record. With auth on, a
     /// response whose delivery cannot be audited is withheld: it is replaced
-    /// by the audit-unavailable refusal.
+    /// by the audit-unavailable refusal. Test-only since stdio records after
+    /// its judge (MIK-7920).
+    #[cfg(test)]
     pub(crate) async fn record_delivery(
         &self,
         response: crate::protocol::JsonRpcResponse,
