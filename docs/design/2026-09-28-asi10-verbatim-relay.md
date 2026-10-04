@@ -694,13 +694,14 @@ delivery path is the staged-receipts path of 13.3/13.4).
   text the caller still got keeps its receipt, removed text stops being tracked. A plan stages
   several receipts that cannot be told apart by the changed text, so a change drops them all.
 - Reading a failed task hands the reader the backend's error, so the read renews a receipt for it,
-  classified like a pending prompt. A failure only the gateway wrote stores no backend output
-  (`output_free`) and renews nothing.
+  classified like a pending prompt. Only an error the gateway established as the peer's (stored
+  author `Peer`: every screen and the audit passed it unchanged) is receipted, at settlement and on
+  a read; the gateway's own errors, substitutes, and errors on older rows whose author is unknown
+  renew nothing (MIK-7887.RECEIPT.1).
 - A stdio answer whose `result` is `null` delivers a result, as a typed response and the judge do.
 - Known limits, stated because Block mode can over-refuse as well as miss: (1) a multi-target
   task's read stages nothing and a plan's receipts are dropped on a change, so the reader loses the
-  same-source excuse for those reads; (2) the fixed error the gateway writes when recovery policy
-  withholds backend content is receipted like any failed-task error (MIK-7887.RECEIPT.1, open).
+  same-source excuse for those reads.
 
 ### 13.7 Receipts at the delivery point (MIK-7887.RECEIPT.3/.4, 2026-10-04)
 

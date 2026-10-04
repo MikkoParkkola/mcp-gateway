@@ -419,3 +419,17 @@ fn signing_v2_defensive_nonce_exact_byte_boundaries_verify() {
         .expect("exact boundary nonce must independently authenticate");
     }
 }
+
+/// MIK-7924: a backend's `"result": null`, parsed as a typed response, is a
+/// result the signer must cover; like any non-object result it is refused,
+/// never delivered unsigned.
+#[test]
+fn a_typed_null_result_is_refused_not_left_unsigned() {
+    let mut response: JsonRpcResponse =
+        serde_json::from_value(json!({"jsonrpc": "2.0", "id": 1, "result": null}))
+            .expect("a response");
+    let error = signer()
+        .sign_json_rpc_response_at(&mut response, Some("test-nonce"), TIMESTAMP)
+        .expect_err("a null result cannot carry a signature");
+    assert!(error.to_string().contains("object result"), "{error}");
+}
