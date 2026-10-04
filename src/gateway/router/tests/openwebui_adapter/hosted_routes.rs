@@ -270,6 +270,22 @@ async fn guard_hosted_host_is_scoped_to_the_accounts_prefix() {
     assert_eq!(status_for(&gw, foreign).await, StatusCode::FORBIDDEN);
 }
 
+/// C6 killer (`HTTP_ADMITSHOST`): under the prefix, a `Host` that names neither
+/// this gateway nor the hosted origin is refused. The rows above only send
+/// the hosted host, so they pass whether or not the host is compared.
+#[tokio::test(flavor = "multi_thread")]
+async fn guard_a_foreign_host_under_the_accounts_prefix_is_refused() {
+    let gw = gateway(Shape::Bridged).await;
+    let hosted = Request::builder()
+        .uri("/accounts/v1/nope")
+        .header("host", HOSTED_HOST);
+    assert_eq!(status_for(&gw, hosted).await, StatusCode::NOT_FOUND);
+    let foreign = Request::builder()
+        .uri("/accounts/v1/nope")
+        .header("host", "evil.test");
+    assert_eq!(status_for(&gw, foreign).await, StatusCode::FORBIDDEN);
+}
+
 /// T-GUARD2 (5a half): the exemption does not extend to `/complete`.
 #[tokio::test(flavor = "multi_thread")]
 async fn guard_cross_site_complete_is_refused() {
