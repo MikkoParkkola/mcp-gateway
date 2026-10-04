@@ -112,6 +112,22 @@ impl EventsHub {
             .collect()
     }
 
+    /// The JSON Schema of one [`Self::search`] row, as `gateway_search_tools`
+    /// publishes it beside the tool row (MIK-7819).
+    pub(crate) fn search_row_schema() -> Value {
+        json!({
+            "type": "object",
+            "description": "A subscribable event (events/subscribe), not a tool",
+            "properties": {
+                "kind":        { "const": "event" },
+                "name":        { "type": "string", "description": "Event name" },
+                "description": { "type": "string", "description": "Event description" },
+                "inputSchema": { "type": "object", "description": "Subscription filter schema" }
+            },
+            "required": ["kind", "name", "description"]
+        })
+    }
+
     /// The visible descriptor called `name`; invisible and missing are one
     /// answer, so the catalogue cannot be probed (design §7.4).
     ///
