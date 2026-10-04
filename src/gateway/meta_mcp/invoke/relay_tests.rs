@@ -734,3 +734,53 @@ fn a_wrapped_non_object_result_still_marks_a_relay() {
     );
     assert!(!verdict.allowed, "{verdict:?}");
 }
+
+/// A client channel that keeps the params it was handed.
+#[derive(Default)]
+struct Capturing(std::sync::Mutex<Option<Value>>);
+
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::ClientChannel for Capturing {
+    async fn send_request(
+        &self,
+        _session_id: &str,
+        _id: &str,
+        _method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, crate::gateway::input_bridge::DeliveryError> {
+        *self.0.lock().unwrap() = params;
+        Ok(json!({"action": "accept"}))
+    }
+}
+
+/// MIK-7910.BRIDGE.1: a bridged prompt is recorded as the client receives it.
+/// The reserved chain member is the gateway's own; a backend's copy of it is
+/// not delivered, so the record and the delivery agree.
+#[tokio::test]
+async fn a_bridged_prompt_is_recorded_as_it_is_delivered() {
+    use crate::gateway::input_bridge::ClientChannel as _;
+    use crate::security::signature_chain::CHAIN_META;
+    let (meta, _firewall) = relay_meta();
+    let inner = Capturing::default();
+    let channel = RecordingChannel {
+        inner: &inner,
+        meta: &meta,
+        who: RelayKey::new("alice", true),
+        target: ("alpha", "send"),
+        api_key_name: None,
+        trace_id: "t",
+    };
+    let prompt = json!({"message": PROSE,
+        "_meta": {CHAIN_META: {"link": "reserved-chain-text"}, "keep": 1}});
+    channel
+        .send_request("s", "1", "elicitation/create", Some(prompt.clone()))
+        .await
+        .unwrap();
+    let delivered = inner.0.lock().unwrap().clone().expect("delivered");
+    let mut recorded = meta.recorded_prompt(("alpha", "send"), None, "t", &prompt);
+    if let Some(members) = recorded.as_object_mut() {
+        members.remove("_context_integrity");
+    }
+    assert_eq!(delivered, recorded);
+    assert_eq!(delivered["_meta"]["keep"], 1, "{delivered}");
+}
