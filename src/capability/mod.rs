@@ -58,8 +58,9 @@ pub use definition::*;
 pub use discovery::{DiscoveryEngine, DiscoveryOptions, DiscoveryResult};
 pub use execution_context::CapabilityExecutionContext;
 pub(crate) use execution_context::{
-    validate_capability_account_binding, validate_capability_url_for_context,
-    validate_oauth_isolation, validate_personal_capability_identity,
+    require_tls_for_auth, require_tls_for_credentials, validate_capability_account_binding,
+    validate_capability_url_for_context, validate_oauth_isolation,
+    validate_personal_capability_identity,
 };
 pub use executor::CapabilityExecutor;
 pub use executor::graphql::GraphqlExecutor;

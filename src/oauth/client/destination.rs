@@ -32,6 +32,23 @@ pub(crate) fn http_client(destination: DestinationPolicy) -> Result<Client> {
             crate::security::ssrf::pinned_client_builder_for(policy)
         }
     };
+    finish(builder, destination)
+}
+
+/// The client a `Configured` OAuth client uses for `http://` on a loopback
+/// host (#3007's rule, per request: the authorization server is known only
+/// after discovery). Never proxied: an inherited `HTTP_PROXY` would carry the
+/// client secret or refresh token off the machine in cleartext.
+///
+/// # Errors
+///
+/// `Error::OAuth` if the client cannot be built.
+pub(super) fn loopback_client() -> Result<Client> {
+    finish(Client::builder().no_proxy(), DestinationPolicy::Configured)
+}
+
+/// `builder` with the OAuth timeout and the redirect policy for `destination`.
+fn finish(builder: reqwest::ClientBuilder, destination: DestinationPolicy) -> Result<Client> {
     builder
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::custom(move |attempt| match hop(
@@ -66,6 +83,11 @@ pub(super) fn hop(destination: DestinationPolicy, previous: usize, target: &url:
     if previous >= MAX_HOPS {
         return Hop::Stop;
     }
+    // Under every policy: a 307/308 re-POSTs the client secret or refresh
+    // token, so a hop is held to the rule its first request was.
+    if !crate::gateway::is_tls_or_loopback(target) {
+        return Hop::Refuse(cleartext_refusal("redirect target"));
+    }
     // The bare "SSRF blocked: ..." message, not the error's Display, which
     // adds a "Protocol error: " prefix the refusal would then carry twice.
     destination
@@ -96,13 +118,40 @@ impl OAuthClient {
         client
     }
 
-    /// Refuse `url` when the policy denies its literal host.
-    pub(super) fn check_destination(&self, url: &str) -> Result<()> {
+    /// The client for a request to `url`: under `Configured`, `http://` on a
+    /// loopback host goes through the unproxied [`loopback_client`]. The other
+    /// policies' pinned client ignores the environment's proxy already.
+    pub(super) fn client_for(&self, url: &str) -> Result<&Client> {
+        let loopback_cleartext = self.destination == DestinationPolicy::Configured
+            && url::Url::parse(url).is_ok_and(|u| {
+                u.scheme() == "http"
+                    && crate::gateway::is_loopback_host(u.host_str().unwrap_or_default())
+            });
+        if !loopback_cleartext {
+            return Ok(&self.http_client);
+        }
+        self.loopback_client.as_ref().ok_or_else(|| {
+            Error::OAuth("the unproxied loopback OAuth client is unavailable".into())
+        })
+    }
+
+    /// Refuse `url`, the authorization server's `what`, when it is cleartext
+    /// off this machine (under every policy: it carries the client secret, a
+    /// code or a refresh token, or decides where they go), or when the policy
+    /// denies its literal host.
+    ///
+    /// The refusal is the destination-policy one, so no fallback walks past it
+    /// (MIK-7701): not the resource-metadata fallback, not re-authorization,
+    /// not background renewal.
+    pub(super) fn check_destination(&self, url: &str, what: &str) -> Result<()> {
+        let parsed =
+            url::Url::parse(url).map_err(|e| Error::OAuth(format!("Invalid OAuth URL: {e}")))?;
+        if !crate::gateway::is_tls_or_loopback(&parsed) {
+            return Err(Error::Protocol(cleartext_refusal(what)));
+        }
         if self.destination == DestinationPolicy::Configured {
             return Ok(());
         }
-        let parsed =
-            url::Url::parse(url).map_err(|e| Error::OAuth(format!("Invalid OAuth URL: {e}")))?;
         self.destination.check_literal(&parsed)
     }
 
@@ -112,14 +161,28 @@ impl OAuthClient {
         &self,
         meta: &AuthorizationServerMetadata,
     ) -> Result<()> {
-        self.check_destination(&meta.token_endpoint)?;
+        self.check_destination(&meta.token_endpoint, "token_endpoint")?;
         match &meta.registration_endpoint {
-            Some(registration) => self.check_destination(registration),
+            Some(registration) => self.check_destination(registration, "registration_endpoint"),
             None => Ok(()),
         }
     }
 }
 
+/// The refusal for a cleartext OAuth URL off this machine. It names the
+/// endpoint, never the URL: the URL came from a document the backend served.
+fn cleartext_refusal(what: &str) -> String {
+    format!(
+        "{}: OAuth {what} is cleartext http:// to a host off this machine; the \
+         authorization server must use https:// (or http:// on a loopback host)",
+        crate::security::ssrf::SSRF_BLOCKED
+    )
+}
+
 #[cfg(test)]
 #[path = "destination_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cleartext_tests.rs"]
+mod cleartext_tests;

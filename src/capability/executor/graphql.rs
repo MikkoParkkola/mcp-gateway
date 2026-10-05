@@ -202,6 +202,7 @@ impl ProtocolExecutor for GraphqlExecutor<'_> {
             ));
         }
         validate_url_not_ssrf(&graphql_config.endpoint)?;
+        crate::capability::require_tls_for_auth(&graphql_config.endpoint, &ctx.capability.auth)?;
 
         // Build the { query, variables } body
         let body = Self::build_body(graphql_config, &params)?;

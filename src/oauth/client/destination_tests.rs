@@ -159,9 +159,13 @@ fn oauth_redirect_hop_policy() {
     assert_eq!(hop(DestinationPolicy::Configured, 9, &public), Hop::Follow);
     assert_eq!(hop(DestinationPolicy::Configured, 10, &public), Hop::Stop);
     assert_eq!(
-        hop(DestinationPolicy::Configured, 0, &private),
+        hop(
+            DestinationPolicy::Configured,
+            0,
+            &target("https://169.254.169.254/latest")
+        ),
         Hop::Follow,
-        "standard keeps today's redirects"
+        "standard keeps today's redirects (cleartext ones are refused: cleartext_tests)"
     );
 }
 

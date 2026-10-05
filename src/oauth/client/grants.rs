@@ -43,7 +43,7 @@ impl OAuthClient {
         let params = self.client_credentials_params(&client_id);
 
         let response = self
-            .http_client
+            .client_for(&auth_meta.token_endpoint)?
             .post(&auth_meta.token_endpoint)
             .form(&params)
             .send()
@@ -191,7 +191,7 @@ impl OAuthClient {
         let params = self.token_exchange_params(code, redirect_uri, &client_id, code_verifier);
 
         let response = self
-            .http_client
+            .client_for(&auth_meta.token_endpoint)?
             .post(&auth_meta.token_endpoint)
             .form(&params)
             .send()
@@ -254,7 +254,7 @@ impl OAuthClient {
         let params = self.refresh_params(refresh_token, &client_id);
 
         let response = self
-            .http_client
+            .client_for(&auth_meta.token_endpoint)?
             .post(&auth_meta.token_endpoint)
             .form(&params)
             .send()

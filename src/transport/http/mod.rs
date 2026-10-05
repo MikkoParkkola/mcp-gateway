@@ -89,12 +89,7 @@ fn same_origin(a: &Url, b: &Url) -> bool {
 /// sees a backend that silently never starts. Permanent gets one `warn!` and
 /// stops.
 fn require_secure_oauth_target(url: &Url) -> Result<()> {
-    let secure = match url.scheme() {
-        "https" => true,
-        "http" => crate::gateway::is_loopback_host(url.host_str().unwrap_or_default()),
-        _ => false,
-    };
-    if secure {
+    if crate::gateway::is_tls_or_loopback(url) {
         return Ok(());
     }
     Err(Error::TransportPermanent(format!(
