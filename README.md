@@ -79,7 +79,7 @@ Your agent will install the binary, run the setup wizard, import your existing M
 
 ## What's new in 4.0
 
-4.0 adds a trust layer on top of the same fixed-context gateway. It is in beta (`4.0.0-beta.2`): pin it with `cargo install mcp-gateway --version 4.0.0-beta.2`, and read [docs/UPGRADING-4.0.md](docs/UPGRADING-4.0.md) first, because a 3.x config that 4.0 no longer trusts refuses to start.
+4.0 adds a trust layer on top of the same fixed-context gateway. It is in beta (`4.0.0-beta.3`): pin it with `cargo install mcp-gateway --version 4.0.0-beta.3`, and read [docs/UPGRADING-4.0.md](docs/UPGRADING-4.0.md) first, because a 3.x config that 4.0 no longer trusts refuses to start.
 
 - **The newest MCP revision, with a built-in version bridge.** MCP 2026-07-28 is on by default beside 2025-11-25 and earlier, on the same endpoint, and clients and backends on different revisions make ordinary tool calls to each other. Move your clients to 2026-07-28 before every server does.
 - **Each caller sees and reaches only what it was granted.** Tool lists, search, server lists and the direct per-backend route show a caller only the backends and tools its key or identity may invoke.
