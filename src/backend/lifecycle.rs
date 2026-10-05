@@ -332,7 +332,10 @@ impl Backend {
         // would otherwise leave a child running for the length of a handshake.
         if self.replaced_transport_cleanups.lock().stopping {
             debug!(backend = %self.name, ?key, "Not starting: backend is stopped");
-            return Err(Error::BackendUnavailable(self.name.clone()));
+            // NotFound, not Unavailable: the stopped instance is retired and a
+            // retry re-resolves through the registry, so nothing was sent and
+            // the refusal is pre-dispatch (it frees an idempotency key).
+            return Err(Error::BackendNotFound(self.name.clone()));
         }
 
         info!(backend = %self.name, ?key, "Starting backend transport");
@@ -475,6 +478,10 @@ impl Backend {
                 "Closing a transport instead of publishing it"
             );
             let _ = transport.close().await;
+            // A shutdown that won the race retired this instance, as above.
+            if self.replaced_transport_cleanups.lock().stopping {
+                return Err(Error::BackendNotFound(self.name.clone()));
+            }
             return Err(Error::BackendUnavailable(self.name.clone()));
         }
         *entry.listen.write() = listen;

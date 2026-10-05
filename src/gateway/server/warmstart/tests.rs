@@ -76,15 +76,17 @@ fn resolve_warm_start_names_prefers_configured_list() {
 
 #[test]
 fn readiness_errors_are_retried() {
-    // All five can mean the sibling daemon has not finished booting. The two
+    // Each can mean the sibling daemon has not finished booting. The two
     // observed in production were Transport (hebb, netdata) and
-    // BackendTimeout (context7); BackendUnavailable comes from start_entry's
-    // shutdown-race path, which `chains::retry_step` would have treated as
-    // permanent -- the reason that helper was not reused.
+    // BackendTimeout (context7); BackendNotFound comes from start_entry's
+    // shutdown-race path (a stopped, replaced instance), which
+    // `chains::retry_step` would have treated as permanent -- the reason that
+    // helper was not reused.
     for e in [
         Error::Transport("refused".to_string()),
         Error::BackendTimeout("hebb".to_string()),
         Error::BackendUnavailable("hebb".to_string()),
+        Error::BackendNotFound("hebb".to_string()),
         // The shape hebb actually produced: the port was not yet bound.
         Error::Io(std::io::Error::new(
             std::io::ErrorKind::ConnectionRefused,
