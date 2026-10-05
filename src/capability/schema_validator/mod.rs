@@ -32,7 +32,11 @@ use crate::trust::closed_keys;
 
 mod alternatives;
 pub(crate) use alternatives::advertised_input_schema;
+mod output_root;
 use alternatives::alternatives_violations;
+pub(crate) use output_root::{
+    advertised_output_schema, published_output, rewrap_published_output, unwrap_published_output,
+};
 
 /// A single validation violation with a human-readable, LLM-actionable message.
 #[derive(Debug, Clone, PartialEq)]

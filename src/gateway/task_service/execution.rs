@@ -9,6 +9,7 @@ mod observe;
 #[cfg(debug_assertions)]
 pub(crate) mod pause_hook;
 mod recovery;
+mod settle_followed;
 mod settlement;
 mod upstream;
 mod worker;
@@ -34,7 +35,7 @@ pub(crate) use upstream::UpstreamCapture;
 pub(crate) use worker::CommitFailure;
 use worker::commit_and_run;
 
-use super::record::{CommittedTask, Target};
+use super::record::{CommittedTask, ErrorAuthor, Target};
 use super::service::{CreateOutcome, ServiceError, TaskService};
 use crate::gateway::subscription_registry::SubscriptionRegistry;
 use crate::protocol::tasks::{Task, TaskOptions, TaskStatus, TaskTransition};
@@ -117,6 +118,8 @@ pub(crate) enum TransitionWrite<'a> {
         /// A plan's dispatched calls, committed in the same write as its
         /// outcome. `None` for a call whose target was recorded at creation.
         targets: Option<Vec<Target>>,
+        /// Who wrote a `Fail` event's error (MIK-7887.RECEIPT.1).
+        author: ErrorAuthor,
     },
     Cancel {
         principal: &'a str,
@@ -131,6 +134,8 @@ pub(crate) enum TransitionWrite<'a> {
         id: &'a str,
         revision: u64,
         event: TaskTransition,
+        /// Who wrote a `Fail` event's error (MIK-7887.RECEIPT.1).
+        author: ErrorAuthor,
     },
 }
 
@@ -467,8 +472,9 @@ impl TaskExecutor {
                 revision,
                 event,
                 targets,
+                author,
             } => {
-                self.transition_write(principal, id, revision, (event, targets))
+                self.transition_write(principal, id, revision, (event, targets), author)
                     .await?
             }
             // Its own arm, never merged with `Settle`: the two carry the same
@@ -479,8 +485,9 @@ impl TaskExecutor {
                 id,
                 revision,
                 event,
+                author,
             } => {
-                self.transition_digest_write(owner_digest, id, revision, (event, None))
+                self.transition_digest_write(owner_digest, id, revision, (event, None), author)
                     .await?
             }
             TransitionWrite::Cancel {
@@ -488,8 +495,14 @@ impl TaskExecutor {
                 id,
                 revision,
             } => {
-                self.transition_write(principal, id, revision, (TaskTransition::Cancel, None))
-                    .await?
+                self.transition_write(
+                    principal,
+                    id,
+                    revision,
+                    (TaskTransition::Cancel, None),
+                    ErrorAuthor::Gateway,
+                )
+                .await?
             }
         };
         if changed {
@@ -509,12 +522,13 @@ impl TaskExecutor {
         id: &str,
         revision: u64,
         outcome: (TaskTransition, Option<Vec<Target>>),
+        author: ErrorAuthor,
     ) -> Result<(CommittedTask, bool, String), CommitFailure> {
         let owner = self
             .service
             .owner(principal)
             .map_err(CommitFailure::Service)?;
-        self.transition_digest_write(owner.as_digest(), id, revision, outcome)
+        self.transition_digest_write(owner.as_digest(), id, revision, outcome, author)
             .await
     }
 

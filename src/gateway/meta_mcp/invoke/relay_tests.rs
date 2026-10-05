@@ -401,8 +401,9 @@ async fn a_native_json_text_keeps_its_numbers_in_the_receipt() {
     );
 }
 
-/// MIK-7887: with several staged receipts (a plan) a change cannot be
-/// attributed to one of them, so they are dropped, as before.
+/// MIK-7887: several staged receipts that no plan step staged cannot be told
+/// apart by a change, so they are dropped, as before (a plan's are kept to
+/// its final answer: see `plan`).
 #[tokio::test]
 async fn a_redaction_over_several_receipts_drops_them() {
     let (meta, firewall) = relay_meta();
@@ -452,6 +453,7 @@ fn stored_task(
         }],
         targets_recorded: true,
         output_free: false,
+        error_author: None,
         owner_digest: String::new(),
     }
 }
@@ -464,13 +466,14 @@ async fn a_failed_task_error_is_receipted_by_its_classification() {
     // the classification of its text says so; PROSE is ordinary text, so the
     // control is a non-relay.
     let (meta, firewall) = classified_only_meta();
-    let stored = stored_task(|task| {
+    let mut stored = stored_task(|task| {
         task.fail(crate::protocol::JsonRpcError {
             code: -32042,
             message: PROSE.to_owned(),
             data: None,
         });
     });
+    stored.error_author = Some(crate::gateway::task_service::ErrorAuthor::Peer);
     let ((), staged) = meta
         .collecting_staged(async {
             meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
@@ -507,13 +510,19 @@ async fn reading_a_multi_target_task_stages_no_receipt() {
     }
 }
 
-/// MIK-7887 AC1: reading a failed task hands the reader the backend's own
-/// error, so the read renews a receipt for it, as a completed task's does. A
-/// failure only the gateway wrote (`output_free`) delivers nothing to receipt.
+/// MIK-7887.RECEIPT.1: reading a failed task renews a receipt only for an
+/// error the gateway established as the peer's. A gateway error, an error of
+/// unknown author (an older row) and an output-free row receipt nothing.
 #[tokio::test]
-async fn reading_a_failed_task_receipts_the_backend_error() {
+async fn reading_a_failed_task_receipts_only_the_peer_error() {
+    use crate::gateway::task_service::ErrorAuthor;
     use crate::protocol::JsonRpcError;
-    for (output_free, expect_receipt) in [(false, true), (true, false)] {
+    for (output_free, author, expect_receipt) in [
+        (false, Some(ErrorAuthor::Peer), true),
+        (false, Some(ErrorAuthor::Gateway), false),
+        (false, None, false),
+        (true, Some(ErrorAuthor::Peer), false),
+    ] {
         let (meta, firewall) = relay_meta();
         let mut stored = stored_task(|task| {
             task.fail(JsonRpcError {
@@ -523,6 +532,7 @@ async fn reading_a_failed_task_receipts_the_backend_error() {
             });
         });
         stored.output_free = output_free;
+        stored.error_author = author;
         let ((), staged) = meta
             .collecting_staged(async {
                 meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
@@ -532,7 +542,7 @@ async fn reading_a_failed_task_receipts_the_backend_error() {
         assert_eq!(
             relayed_by_bob(&firewall, PROSE),
             expect_receipt,
-            "output_free: {output_free}"
+            "output_free: {output_free}, author: {author:?}"
         );
     }
 }
@@ -595,45 +605,6 @@ impl crate::gateway::input_bridge::ClientChannel for Scripted {
             Self::Reply(reply) => reply.clone(),
             Self::Hang => std::future::pending().await,
         }
-    }
-}
-
-/// MIK-7887 AC3 (withdrawn as a code change, pinned as behaviour): a bridged
-/// prompt is receipted when it is handed to the client channel, before the
-/// reply, so a second caller cannot relay it during the wait and a client that
-/// never answers (the bridge drops the send at its timeout) was still shown
-/// it. The cost, stated in the design doc: a send that finds no session leaves
-/// a receipt for a prompt nobody saw.
-#[tokio::test]
-async fn a_bridged_prompt_is_receipted_at_hand_off() {
-    use crate::gateway::input_bridge::{ClientChannel as _, DeliveryError};
-    let cases = [
-        Scripted::Reply(Ok(json!({"action": "accept"}))),
-        Scripted::Reply(Err(DeliveryError::Declined {
-            action: "decline".into(),
-        })),
-        Scripted::Hang,
-    ];
-    for inner in cases {
-        let (meta, firewall) = relay_meta();
-        let channel = RecordingChannel {
-            inner: &inner,
-            meta: &meta,
-            who: RelayKey::new("alice", true),
-            target: ("alpha", "send"),
-            api_key_name: None,
-            trace_id: "t",
-        };
-        let send = channel.send_request(
-            "s",
-            "1",
-            "elicitation/create",
-            Some(json!({"message": PROSE})),
-        );
-        // Dropped at the bridge's timeout, or answered: recorded either way,
-        // and already recorded while the reply was pending.
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(50), send).await;
-        assert!(relayed_by_bob(&firewall, PROSE));
     }
 }
 
@@ -785,3 +756,9 @@ async fn a_bridged_prompt_is_recorded_as_it_is_delivered() {
     assert_eq!(delivered["_meta"]["keep"], 1, "{delivered}");
     assert_eq!(delivered["cacheScope"], "private", "{delivered}");
 }
+
+#[path = "relay_delivery_tests.rs"]
+mod delivery;
+
+#[path = "relay_plan_tests.rs"]
+mod plan;

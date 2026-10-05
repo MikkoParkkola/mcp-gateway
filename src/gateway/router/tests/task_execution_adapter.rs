@@ -56,6 +56,12 @@
 
 mod support;
 
+/// MIK-7887.RECEIPT.4: the POST route receipts the answer it delivered.
+#[cfg(feature = "firewall")]
+mod relay_delivered_route;
+/// MIK-7887.RECEIPT.2: a redacted plan answer keeps each step's delivered text.
+#[cfg(feature = "firewall")]
+mod relay_plan_route;
 /// COLLUDE.1 M9: a task's relay receipt is committed at settlement.
 #[cfg(feature = "firewall")]
 mod relay_settlement;

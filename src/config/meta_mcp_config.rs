@@ -1,32 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Marketplace, surfaced-tool and Meta-MCP configuration (split from `mod.rs`).
+//! Surfaced-tool and Meta-MCP configuration (split from `mod.rs`).
 
 use super::{
     Deserialize, Duration, Serialize, default_prompts_resources_fetch_timeout, humantime_serde,
 };
-
-// ── Marketplace / plugin config ───────────────────────────────────────────────
-
-/// Plugin marketplace and local plugin directory configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct MarketplaceConfig {
-    /// Base URL of the remote plugin marketplace API.
-    pub marketplace_url: String,
-    /// Local directory where plugins are installed.
-    /// Supports `~` expansion at load time.
-    pub plugin_dir: String,
-}
-
-impl Default for MarketplaceConfig {
-    fn default() -> Self {
-        Self {
-            marketplace_url: "https://plugins.mcpgateway.io".to_string(),
-            plugin_dir: "~/.mcp-gateway/plugins".to_string(),
-        }
-    }
-}
 
 // ── Meta-MCP ──────────────────────────────────────────────────────────────────
 

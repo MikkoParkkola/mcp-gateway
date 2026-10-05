@@ -46,8 +46,22 @@ impl OutboundFrame {
         }
     }
 
+    /// Commit `commit` once a sink writes this frame, not when it is queued
+    /// (MIK-7887.RECEIPT.3): a writer that dies first delivered nothing.
+    #[must_use]
+    pub(crate) fn committing_on_write(
+        mut self,
+        commit: Option<crate::gateway::input_bridge::DeliveryCommit>,
+    ) -> Self {
+        self.delivery = commit.map(|c| Arc::new(parking_lot::Mutex::new(Some(c))));
+        self
+    }
+
     /// `stdout` took this frame: commit it, and every item of a batch.
     pub(crate) fn stdio_written(&self) {
+        if let Some(commit) = self.delivery.as_ref().and_then(|slot| slot.lock().take()) {
+            commit.commit();
+        }
         self.written();
         if let Payload::Batch(items) = &self.payload {
             for item in items {
@@ -110,6 +124,24 @@ impl StdioReads {
             hidden,
         );
         recorded(frame, self.log.as_ref()).await
+    }
+
+    /// Judge one finalized answer without writing its `tenant_read` record:
+    /// the caller writes those fields inside the answer's delivery record
+    /// (MIK-7799, MIK-7920), as `POST /mcp` does.
+    pub(crate) fn judge(
+        &self,
+        response: crate::protocol::JsonRpcResponse,
+        request: Option<&Value>,
+        hidden: Option<&ReadAttribution>,
+    ) -> OutboundFrame {
+        super::answer(
+            self.guard.as_deref(),
+            Some(STDIO_KEY),
+            response,
+            request,
+            hidden,
+        )
     }
 
     /// One frame for a batch whose items were each judged (and had their relay

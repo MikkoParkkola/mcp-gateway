@@ -343,6 +343,10 @@ impl CapabilityExecutor {
         // neither be served from cache nor reach the wire.
         let context = self.prepare_account_context(capability, context).await?;
 
+        if let Some(process) = process::spawned_process(capability) {
+            process::admit(&self.process_policy, capability, process)?;
+        }
+
         // Check cache first. Loopback-relaxed fetches never enter the store.
         // The key uses the invoke-path snapshot on `context` (revision, profile,
         // epoch, already-resolved cache_binding), never a reload of the Arcs.
@@ -360,19 +364,18 @@ impl CapabilityExecutor {
 
         // A process-running provider (MIK-7782) has its own executor; every
         // other provider routes through the protocol executor trait.
-        let (response, protocol) =
-            if let Some(process) = capability.providers.process.get("primary") {
-                let response = self
-                    .execute_process(capability, process, &params, &context)
-                    .await?;
-                (response, provider.service.as_str())
-            } else {
-                let protocol_config = provider.protocol_config();
-                let response = self
-                    .dispatch_protocol(capability, provider, &protocol_config, &params, &context)
-                    .await?;
-                (response, protocol_config.protocol_name())
-            };
+        let (response, protocol) = if let Some(process) = process::spawned_process(capability) {
+            let response = self
+                .execute_process(capability, process, &params, &context)
+                .await?;
+            (response, provider.service.as_str())
+        } else {
+            let protocol_config = provider.protocol_config();
+            let response = self
+                .dispatch_protocol(capability, provider, &protocol_config, &params, &context)
+                .await?;
+            (response, protocol_config.protocol_name())
+        };
         let read = crate::security::tenant_reads::note_read(&response);
 
         // Apply response transform pipeline if configured
@@ -478,6 +481,7 @@ impl CapabilityExecutor {
         let params = effective_params.as_ref();
 
         let url = self.build_url(config, params)?;
+        super::require_tls_for_auth(&url, &capability.auth)?;
         validate_capability_url_for_context(&url, context)?;
         tracing::debug!(url = %url, method = %config.method, "Executing REST request");
 

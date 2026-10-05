@@ -93,8 +93,9 @@ impl Provider for McpProvider {
 
         let response = self.backend.request("tools/call", Some(params)).await?;
 
-        // Decode the JSON-RPC result into the shared provider content shape.
-        if let Some(result_val) = response.result {
+        // Decode the JSON-RPC result into the shared provider content shape. A
+        // `null` result has no content to decode and stays `Value::Null`.
+        if let Some(result_val) = response.result.filter(|value| !value.is_null()) {
             return flatten_tool_call_result(serde_json::from_value(result_val)?);
         }
 
@@ -240,5 +241,60 @@ mod tests {
             .await
             .expect_err("a withheld tool must be refused");
         assert!(err.to_string().contains("withheld"), "{err}");
+    }
+
+    /// MIK-7924: a backend's `"result": null` is a null result, as it was
+    /// before the typed response kept a present `null`; it is not a
+    /// `ToolsCallResult` to decode.
+    #[tokio::test]
+    async fn invoke_returns_null_for_a_null_result() {
+        use crate::backend::Backend;
+        use crate::config::{BackendConfig, TransportConfig};
+
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(|axum::Json(request): axum::Json<Value>| async move {
+                let result = match request["method"].as_str().unwrap_or_default() {
+                    "initialize" => serde_json::json!({
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": { "tools": {} },
+                        "serverInfo": { "name": "fixture", "version": "0" }
+                    }),
+                    "tools/call" => Value::Null,
+                    _ => serde_json::json!({}),
+                };
+                axum::Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": request.get("id").cloned().unwrap_or(Value::Null),
+                    "result": result
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("loopback port");
+        let address = listener.local_addr().expect("bound port");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let backend = Arc::new(Backend::new(
+            "null",
+            BackendConfig {
+                enabled: true,
+                transport: TransportConfig::Http {
+                    http_url: format!("http://{address}/"),
+                    streamable_http: true,
+                    protocol_version: None,
+                },
+                ..BackendConfig::default()
+            },
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ));
+        let value = McpProvider::new(backend)
+            .invoke("tool", serde_json::json!({}))
+            .await
+            .expect("a null result is a result");
+        assert_eq!(value, Value::Null);
     }
 }

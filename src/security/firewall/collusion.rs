@@ -219,11 +219,18 @@ impl CollusionDetector {
     ///
     /// Scratch memory is linear in `text`; callers bound it with the request
     /// and response size limits, not this function.
+    pub(crate) fn fingerprints(&self, text: &str) -> Vec<u64> {
+        winnow(&self.kgram_hashes(text))
+    }
+
+    /// Every `K`-char k-gram hash of `text`, normalised as
+    /// [`Self::fingerprints`] reads it, before winnowing: a fingerprint is
+    /// one of these.
     #[expect(
         clippy::unused_self,
         reason = "the key is per process; a method keeps callers from hashing with any other"
     )]
-    pub(crate) fn fingerprints(&self, text: &str) -> Vec<u64> {
+    pub(crate) fn kgram_hashes(&self, text: &str) -> Vec<u64> {
         let visible: String = text
             .chars()
             .filter(|&c| !crate::security::sanitize::is_unsafe_control(c))
@@ -239,10 +246,9 @@ impl CollusionDetector {
         if chars < K {
             return Vec::new();
         }
-        let hashes: Vec<u64> = (0..=chars - K)
+        (0..=chars - K)
             .map(|i| key().hash_one(&norm[bounds[i]..bounds[i + K]]))
-            .collect();
-        winnow(&hashes)
+            .collect()
     }
 
     /// Records a result delivered to `principal` from `source`.
@@ -274,7 +280,28 @@ impl CollusionDetector {
         if self.params.action == RelayAction::Off {
             return;
         }
-        let mut fps = self.fingerprints(text);
+        self.record_fingerprints_at(
+            source,
+            principal,
+            (sensitive, flows),
+            self.fingerprints(text),
+            now,
+        );
+    }
+
+    /// [`Self::record_delivery_flows_at`] for fingerprints already taken, in
+    /// the order they are kept when over [`MAX_SOURCE_FINGERPRINTS`].
+    pub(crate) fn record_fingerprints_at(
+        &self,
+        source: &str,
+        principal: &str,
+        (sensitive, flows): (bool, u64),
+        mut fps: Vec<u64>,
+        now: Instant,
+    ) {
+        if self.params.action == RelayAction::Off {
+            return;
+        }
         if fps.len() > MAX_SOURCE_FINGERPRINTS {
             self.source_truncated.fetch_add(
                 count(fps.len() - MAX_SOURCE_FINGERPRINTS),

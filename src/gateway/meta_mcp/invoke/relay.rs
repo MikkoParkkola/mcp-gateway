@@ -227,11 +227,25 @@ struct Receipt {
     tool: String,
     #[cfg(feature = "firewall")]
     digest: crate::security::firewall::DeliveryDigest,
+    /// Staged by a plan step (`gateway_run_playbook`, `gateway_execute`): the
+    /// plan's answer is not this step's text, so it is never rebuilt from it
+    /// (MIK-7887.RECEIPT.2).
+    in_plan: bool,
+    /// A plan receipt whose answer changed and has not yet been kept to the
+    /// final answer: never committed so (MIK-7887.RECEIPT.2).
+    pending_retain: bool,
 }
 
 tokio::task_local! {
     /// The receipts of the delivery this task owns (§13.3 "Recording").
     static RELAY_RECEIPTS: RefCell<Vec<Receipt>>;
+    /// Set while one step of a plan dispatches.
+    static PLAN_STEP: ();
+}
+
+/// Run one plan step's dispatch: the receipts it stages are a plan's.
+pub(crate) async fn plan_step<F: std::future::Future>(step: F) -> F::Output {
+    PLAN_STEP.scope((), step).await
 }
 
 /// Run `delivery` with a receipt collector: the HTTP and stdio dispatches
@@ -385,7 +399,7 @@ impl StagedReceipts {
     pub(crate) fn commit(self, delivered: bool) {
         #[cfg(feature = "firewall")]
         if delivered && let Some(fw) = self.fw.as_deref() {
-            for r in self.receipts {
+            for r in self.receipts.into_iter().filter(|r| !r.pending_retain) {
                 let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
                 fw.record_digest(caller, &r.server, &r.tool, &r.digest);
             }
@@ -563,48 +577,6 @@ impl MetaMcp {
         (pending && self.relay_active()).then(|| result.clone())
     }
 
-    /// A final check may have changed the delivered result (a redaction):
-    /// the staged receipts then describe text the caller never got.
-    ///
-    /// One staged receipt (a single-target call) is rebuilt from what is
-    /// delivered, so the text the caller still got keeps its receipt and the
-    /// removed text stops being tracked. Several (a plan) cannot be told apart
-    /// by the changed text and are dropped.
-    #[cfg_attr(
-        not(feature = "firewall"),
-        allow(clippy::unused_self, clippy::needless_pass_by_value)
-    )]
-    pub(crate) fn restage_if_changed(&self, snapshot: Option<Value>, result: Option<&Value>) {
-        if !snapshot.is_some_and(|before| Some(&before) != result) {
-            return;
-        }
-        let _ = RELAY_RECEIPTS.try_with(|receipts| {
-            let mut receipts = receipts.borrow_mut();
-            let staged = std::mem::take(&mut *receipts);
-            #[cfg(feature = "firewall")]
-            if let ([one], Some(delivered), Some(fw)) = (staged.as_slice(), result, &self.firewall)
-                && let Some(digest) = fw.delivery_digest(
-                    &one.server,
-                    &one.tool,
-                    &super::audit::delivered_value(delivered),
-                )
-            {
-                // A redaction can drop the classification marker with the
-                // text; what the call was judged sensitive for stays so.
-                let digest = digest.keeping_sensitivity_of(&one.digest);
-                receipts.push(Receipt {
-                    key: one.key.clone(),
-                    keyed: one.keyed,
-                    server: one.server.clone(),
-                    tool: one.tool.clone(),
-                    digest,
-                });
-            }
-            #[cfg(not(feature = "firewall"))]
-            drop(staged);
-        });
-    }
-
     /// A replayed single-target call (`gateway_invoke`, a surfaced tool) is
     /// delivered again: stage the delivered value under its own target, so
     /// the replay renews the caller's receipt. Multi-step calls renew nothing.
@@ -637,23 +609,6 @@ impl MetaMcp {
             let value = unwrapped.as_ref().unwrap_or(result);
             self.stage_relay_receipt(caller.relay_caller(session_id), target, value);
         }
-    }
-
-    /// Record `value` as delivered to `who` from `server:tool`, now.
-    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
-    pub(super) fn record_relay_delivery(
-        &self,
-        who: RelayKey<'_>,
-        (server, tool): (&str, &str),
-        value: &Value,
-    ) {
-        #[cfg(feature = "firewall")]
-        if let Some(fw) = self.firewall.as_ref() {
-            let caller = crate::security::firewall::RelayCaller::new(who.key, who.keyed);
-            fw.record_delivery(caller, server, tool, value);
-        }
-        #[cfg(not(feature = "firewall"))]
-        let _ = (who, server, tool, value);
     }
 }
 
@@ -689,7 +644,7 @@ impl MetaMcp {
     }
 }
 
-/// `value` as a receipt for `who` under `fw`; `None` with relay detection off
+/// `value` as a receipt for `who` under `fw`; `None` with relay detection off/// `value` as a receipt for `who` under `fw`; `None` with relay detection off
 /// or outside a collector.
 #[cfg(feature = "firewall")]
 fn receipt_with(
@@ -706,6 +661,8 @@ fn receipt_with(
         server: server.to_owned(),
         tool: tool.to_owned(),
         digest,
+        in_plan: PLAN_STEP.try_with(|()| ()).is_ok(),
+        pending_retain: false,
     })
 }
 
@@ -732,7 +689,7 @@ pub(crate) fn commit_with(fw: &crate::security::firewall::Firewall, delivered: b
     if !delivered {
         return;
     }
-    for r in receipts {
+    for r in receipts.into_iter().filter(|r| !r.pending_retain) {
         let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
         fw.record_digest(caller, &r.server, &r.tool, &r.digest);
     }
@@ -745,7 +702,8 @@ pub(crate) fn discard_staged() {
 }
 
 /// A bridged prompt is content delivered to the caller (§13.3): recorded
-/// when it is handed to the client, before the reply is awaited. The text
+/// once the channel confirms delivery (MIK-7887.RECEIPT.3), which is before
+/// the reply is awaited, so no second caller can relay it during the wait. The text
 /// recorded is the text sent; only the classification verdict comes from a
 /// copy, as a tool result's does.
 pub(super) struct RecordingChannel<'a> {
@@ -778,18 +736,29 @@ impl crate::gateway::input_bridge::ClientChannel for RecordingChannel<'_> {
             delivered_form(&mut prompt);
             prompt
         });
-        if let Some(prompt) = params.as_ref().filter(|_| self.meta.relay_active()) {
-            let recorded =
-                self.meta
-                    .recorded_prompt(self.target, self.api_key_name, self.trace_id, prompt);
-            self.meta
-                .record_relay_delivery(self.who, self.target, &recorded);
-        }
+        // MIK-7887.RECEIPT.3: the receipt commits where the channel confirms
+        // delivery, not here; no session or a send cancelled first leaves none.
+        let commit = params
+            .as_ref()
+            .filter(|_| self.meta.relay_active())
+            .and_then(|prompt| {
+                let recorded = self.meta.recorded_prompt(
+                    self.target,
+                    self.api_key_name,
+                    self.trace_id,
+                    prompt,
+                );
+                self.meta.delivery_commit(self.who, self.target, &recorded)
+            });
         self.inner
-            .send_request(session_id, id, method, params)
+            .send_request_committing(session_id, id, method, params, commit)
             .await
     }
 }
+
+#[path = "relay_delivered.rs"]
+mod delivered;
+pub(crate) use delivered::{AnswerShape, GatewayStamps};
 
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_tests.rs"]

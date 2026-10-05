@@ -89,13 +89,17 @@ def check(
             f"instead, or apply the '{SKIP_LABEL}' label"
         )
     # A fragment leaves only by being folded into CHANGELOG.md; deleting one
-    # any other way loses another PR's entry.
+    # any other way loses another PR's entry. A fragment re-added under the
+    # same number with another type is a retype (the diff runs without rename
+    # detection, so a rename arrives as a delete plus an add), not a loss.
+    retyped = {FRAGMENT.match(n)[1] for n in added if FRAGMENT.match(n)}
     deleted = [
         path
         for status, path in changes
         if status.startswith("D")
         and path.startswith(f"{FRAGMENT_DIR}/")
         and FRAGMENT.match(path.split("/", 1)[1])
+        and FRAGMENT.match(path.split("/", 1)[1])[1] not in retyped
     ]
     if deleted and not (edits_changelog and folds):
         errors.append(

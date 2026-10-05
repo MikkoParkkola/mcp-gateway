@@ -175,6 +175,57 @@ async fn output_past_the_cap_fails_the_call() {
     assert!(err.contains("byte limit"), "{err}");
 }
 
+/// Whether `pid` names a running process.
+#[cfg(unix)]
+fn alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// Whether `pid` names a running process.
+#[cfg(windows)]
+fn alive(pid: u32) -> bool {
+    let out = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .output()
+        .unwrap();
+    // A failed query is not evidence that the process is gone.
+    assert!(out.status.success(), "tasklist failed: {out:?}");
+    let pid = pid.to_string();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|row| row.split(',').nth(1).map(|f| f.trim_matches('"')) == Some(pid.as_str()))
+}
+
+/// Whether `pid` is gone within five seconds.
+async fn gone_within_five_seconds(pid: u32) -> bool {
+    for _ in 0..50 {
+        if !alive(pid) {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    false
+}
+
+/// The grandchild's pid, once `argv_echo.py grandchild` has written it.
+async fn grandchild_pid(pidfile: &Path) -> u32 {
+    for _ in 0..200 {
+        if let Some(pid) = std::fs::read_to_string(pidfile)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+        {
+            return pid;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("no grandchild pid in {}", pidfile.display());
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn a_timeout_kills_the_child_and_its_grandchild() {
@@ -183,24 +234,36 @@ async fn a_timeout_kills_the_child_and_its_grandchild() {
     let cap = capability("grandchild", &format!("'{}'", pidfile.display()), "", 5);
     let err = call(&cap, json!({})).await.unwrap_err().to_string();
     assert!(err.contains("did not finish"), "{err}");
-    let pid: i32 = std::fs::read_to_string(&pidfile)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    let mut alive = true;
-    for _ in 0..50 {
-        let status = std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .status()
-            .unwrap();
-        if !status.success() {
-            alive = false;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    assert!(!alive, "grandchild {pid} outlived the timeout");
+    let pid = grandchild_pid(&pidfile).await;
+    assert!(
+        gone_within_five_seconds(pid).await,
+        "grandchild {pid} outlived the timeout"
+    );
+}
+
+/// MIK-7815.FIX.2 and FIX.3: a call aborted while its child runs tears down
+/// the whole tree, the grandchild included: the process group on Unix, the
+/// Job on Windows.
+#[tokio::test]
+async fn an_aborted_call_kills_the_child_and_its_grandchild() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("grandchild.pid");
+    let cap = capability("grandchild", &format!("'{}'", pidfile.display()), "", 60);
+    let task = tokio::spawn(async move { call(&cap, json!({})).await });
+    let pid = grandchild_pid(&pidfile).await;
+    assert!(
+        alive(pid),
+        "premise: grandchild {pid} runs before the abort"
+    );
+    task.abort();
+    assert!(
+        task.await.unwrap_err().is_cancelled(),
+        "the call was aborted"
+    );
+    assert!(
+        gone_within_five_seconds(pid).await,
+        "grandchild {pid} outlived the aborted call"
+    );
 }
 
 #[test]
@@ -407,17 +470,6 @@ fn untruncated_redaction_keeps_the_whole_text() {
     assert_eq!(out.len(), 8000 + "[redacted]".len());
 }
 
-/// With the credential scanner built in, a success result is scanned too: a
-/// credential-shaped value the gateway did not inject is replaced.
-#[cfg(feature = "firewall")]
-#[test]
-fn success_redaction_runs_the_credential_scanner() {
-    let shaped = concat!("AK", "IAIOSFODNN7", "EXAMPLE");
-    let mut value = json!({ "note": format!("key {shaped} end") });
-    super::super::cli::redact_value(&mut value, &[]);
-    assert!(!value.to_string().contains(shaped), "{value}");
-}
-
 #[test]
 fn overlapping_credentials_leave_no_fragment_of_either() {
     let secrets = ["abcdef".to_owned(), "cdefgh".to_owned()];
@@ -494,4 +546,198 @@ fn a_digit_credential_past_u64_is_redacted_as_a_number() {
     let mut value: Value = serde_json::from_str(r#"{"n": 18446744073709551616}"#).unwrap();
     super::super::cli::redact_value(&mut value, &[secret]);
     assert_eq!(value["n"], "[redacted]", "{value}");
+}
+
+/// An all-digit credential with leading zeros loses them when the child prints
+/// it as a JSON number: it is matched by value, not by its text.
+#[test]
+fn a_digit_credential_with_leading_zeros_is_redacted_as_a_number() {
+    let mut value = json!({"pin": 12_345, "neg": -12_345, "other": 123_456});
+    super::super::cli::redact_value(&mut value, &["012345".to_owned()]);
+    assert_eq!(value["pin"], "[redacted]", "{value}");
+    assert_eq!(value["neg"], "[redacted]", "{value}");
+    assert_eq!(value["other"], 123_456, "a different value is untouched");
+
+    // Past u64 the number is a float; leading zeros still do not hide it.
+    let mut value: Value = serde_json::from_str(r#"{"n": 18446744073709551616}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["0018446744073709551616".to_owned()]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+
+    // A float carries its sign as well: -12345.0, a negative past i64 and
+    // -0.0 are the needle's value too.
+    let mut value: Value =
+        serde_json::from_str(r#"{"a": -12345.0, "b": -18446744073709551616, "z": -0.0}"#).unwrap();
+    super::super::cli::redact_value(
+        &mut value,
+        &[
+            "012345".to_owned(),
+            "0018446744073709551616".to_owned(),
+            "0000".to_owned(),
+        ],
+    );
+    assert_eq!(value["a"], "[redacted]", "{value}");
+    assert_eq!(value["b"], "[redacted]", "{value}");
+    assert_eq!(value["z"], "[redacted]", "{value}");
+
+    // The floor applies to the needle as given; once its zeros go, a short
+    // value matches only a number equal to it, never one that contains it.
+    let mut value = json!({"n": 7, "m": 1_771, "z": 0});
+    super::super::cli::redact_value(&mut value, &["0007".to_owned(), "0000".to_owned()]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+    assert_eq!(value["m"], 1_771, "{value}");
+    assert_eq!(value["z"], "[redacted]", "{value}");
+
+    // A positive float and exponent input are the same value; a neighbour is not.
+    let mut value: Value =
+        serde_json::from_str(r#"{"f": 12345.0, "e": 1.2345e4, "near": 12346}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["012345".to_owned()]);
+    assert_eq!(value["f"], "[redacted]", "{value}");
+    assert_eq!(value["e"], "[redacted]", "{value}");
+    assert_eq!(value["near"], 12_346, "{value}");
+
+    // Below the floor, numbers are left alone even on an exact value.
+    let mut value = json!({"n": 7});
+    super::super::cli::redact_value(&mut value, &["007".to_owned()]);
+    assert_eq!(value["n"], 7, "{value}");
+}
+
+/// A credential injected in number form other than plain digits, such as a
+/// leading "+" or an exponent, comes back as the same number printed
+/// differently. It is matched by value.
+#[test]
+fn a_plus_signed_credential_is_redacted_as_a_number() {
+    let mut value = json!({"pin": 12_345, "neg": -12_345, "other": 12_346});
+    super::super::cli::redact_value(&mut value, &["+12345".to_owned()]);
+    assert_eq!(value["pin"], "[redacted]", "{value}");
+    assert_eq!(value["neg"], "[redacted]", "{value}");
+    assert_eq!(value["other"], 12_346, "a different value is untouched");
+}
+
+#[test]
+fn an_exponent_form_credential_is_redacted_as_a_number() {
+    let mut value: Value =
+        serde_json::from_str(r#"{"a": 1.5e10, "b": 15000000000, "c": 1.5e11}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["1.5e10".to_owned()]);
+    assert_eq!(value["a"], "[redacted]", "{value}");
+    // Equal in value, so it is redacted too: over-redaction is accepted.
+    assert_eq!(value["b"], "[redacted]", "{value}");
+    assert_ne!(
+        value["c"], "[redacted]",
+        "a different value is untouched: {value}"
+    );
+}
+
+/// A "+" before leading zeros still names the all-digit credential.
+#[test]
+fn a_plus_signed_credential_with_leading_zeros_is_redacted_as_a_number() {
+    let mut value = json!({"pin": 12_345, "other": 12_346});
+    super::super::cli::redact_value(&mut value, &["+012345".to_owned()]);
+    assert_eq!(value["pin"], "[redacted]", "{value}");
+    assert_eq!(value["other"], 12_346, "a different value is untouched");
+}
+
+/// Integers past f64 precision are compared exactly, never through a float.
+#[test]
+fn a_large_integer_credential_redacts_only_its_own_value() {
+    let mut value: Value =
+        serde_json::from_str(r#"{"near": 9007199254740992, "same": 9007199254740993}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["+9007199254740993".to_owned()]);
+    assert_eq!(value["same"], "[redacted]", "{value}");
+    assert_ne!(
+        value["near"], "[redacted]",
+        "an adjacent integer is untouched: {value}"
+    );
+}
+
+/// "+1e5" is 4 characters as injected, so unlike "1e5" it is looked for.
+#[test]
+fn a_four_character_number_form_credential_is_redacted() {
+    let mut value: Value = serde_json::from_str(r#"{"n": 1e5}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["+1e5".to_owned()]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+}
+
+/// The covered grammar, by construction rather than by example: an injected
+/// credential in JSON number form with at most one leading sign, crossed
+/// with leading zeros, integer, decimal and exponent forms, and magnitudes
+/// below i64, past i64 and past u64. Each needle redacts its own value as
+/// the child prints it and never the adjacent value. Adjacent values past
+/// i64 and u64 sit one f64 step away, so they stay distinct after parsing.
+#[test]
+fn every_covered_number_form_redacts_only_its_own_value() {
+    // (form, magnitude) -> (needle body, own value, adjacent value)
+    let shapes = [
+        ("12345", "12345", "12346"),
+        (
+            "9223372036854775809",
+            "9223372036854775809",
+            "9223372036854775808",
+        ),
+        (
+            "18446744073709551616",
+            "18446744073709551616",
+            "18446744073709555712",
+        ),
+        ("12.5", "12.5", "12.25"),
+        (
+            "9223372036854775809.5",
+            "9223372036854775809.5",
+            "9223372036854777856.0",
+        ),
+        (
+            "18446744073709551616.5",
+            "18446744073709551616.5",
+            "18446744073709555712.0",
+        ),
+        ("1.5e4", "1.5e4", "1.6e4"),
+        ("9.3e18", "9.3e18", "9.4e18"),
+        ("1.9e19", "1.9e19", "2.0e19"),
+    ];
+    let mut failures = Vec::new();
+    for sign in ["", "+", "-"] {
+        for zeros in ["", "00"] {
+            for (body, own, adjacent) in shapes {
+                let needle = format!("{sign}{zeros}{body}");
+                let value_sign = if sign == "-" { "-" } else { "" };
+                let text =
+                    format!(r#"{{"own": {value_sign}{own}, "adjacent": {value_sign}{adjacent}}}"#);
+                let mut value: Value = serde_json::from_str(&text).unwrap();
+                super::super::cli::redact_value(&mut value, std::slice::from_ref(&needle));
+                if value["own"] != "[redacted]" || value["adjacent"] == "[redacted]" {
+                    failures.push(format!("{needle}: {value}"));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of 54 cases wrong:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// The 4-character floor applies to the needle as injected, number form
+/// included: "1e5" is 3 characters, so the number it names is left alone.
+#[test]
+fn a_number_form_credential_below_the_floor_is_not_looked_for() {
+    let mut value: Value = serde_json::from_str(r#"{"n": 1e5}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["1e5".to_owned()]);
+    assert_ne!(value["n"], "[redacted]", "{value}");
+}
+
+/// A digit credential past u64 is compared after the same float parse that
+/// read the result. `serde_json` without `float_roundtrip` truncates past u64
+/// and scales, so for this 25-digit value it lands one ULP from the correctly
+/// rounded `str::parse`: a needle parsed the other way would miss the number.
+/// The feature is on in every build today (jsonschema enables it), so this row
+/// guards the invariant rather than reproducing a live leak.
+#[test]
+fn a_long_digit_credential_is_compared_with_the_result_parser() {
+    let secret = "3057986828288072902227918";
+    let mut value: Value =
+        serde_json::from_str(&format!(r#"{{"n": {secret}, "neg": -{secret}}}"#)).unwrap();
+    super::super::cli::redact_value(&mut value, &[format!("00{secret}")]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+    assert_eq!(value["neg"], "[redacted]", "{value}");
 }

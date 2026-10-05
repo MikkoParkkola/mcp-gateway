@@ -361,8 +361,23 @@ impl CapabilityExecutor {
             .as_deref()
             .filter(|value| !value.is_empty())
             .unwrap_or("");
+        // A process provider keys on its whole definition and pin state, so
+        // another definition under the same name never reads its answers,
+        // epoch or not. Only where a pin is enforced at run time; other
+        // providers keep the epoch key (MIK-7814).
+        let definition = match super::process::spawned_process(capability) {
+            Some(_) => format!(
+                "{}{}",
+                match capability.providers.integrity {
+                    crate::capability::Integrity::Verified => "p:",
+                    crate::capability::Integrity::Unpinned => "u:",
+                },
+                capability.fingerprint()?
+            ),
+            None => String::new(),
+        };
         Some(format!(
-            "v=1|e={epoch}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}",
+            "v=2|e={epoch}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}",
             revision.len(),
             revision,
             profile.len(),
@@ -371,6 +386,8 @@ impl CapabilityExecutor {
             binding,
             capability.name.len(),
             capability.name,
+            definition.len(),
+            definition,
             principal.len(),
             principal,
             params_hash.len(),

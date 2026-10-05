@@ -18,7 +18,7 @@ Type "# The Problem: every MCP tool burns ~150 context tokens"
 Enter
 Sleep 1500ms
 
-Type "# A typical setup — 5 MCP servers, 100+ tools:"
+Type "# A typical setup - 5 MCP servers, 100+ tools:"
 Enter
 Sleep 1s
 
@@ -62,7 +62,7 @@ Sleep 200ms
 
 # ─── Scene 3: Works With ANY MCP Server ──────────────────────────────────
 
-Type "# Works with ANY MCP server — stdio, HTTP, or SSE"
+Type "# Works with ANY MCP server - stdio, HTTP, or SSE"
 Enter
 Sleep 2s
 
@@ -76,9 +76,9 @@ Sleep 5s
 
 Type ""
 Enter
-Type "# Unlimited backends. Circuit breakers isolate failures."
+Type "# Add backends as you need them. Circuit breakers isolate failures."
 Enter
-Type "# Change config? Gateway restarts in ~8ms. AI session stays alive."
+Type "# Capabilities and backends hot-reload. AI session stays alive."
 Enter
 Sleep 4s
 
@@ -91,7 +91,7 @@ Type "# REST APIs without an MCP server? Drop a YAML file:"
 Enter
 Sleep 2s
 
-Type@20ms "head -35 capabilities/examples/weather.yaml"
+Type@20ms "head -35 capabilities/examples/check_weather.yaml"
 Enter
 Sleep 7s
 
@@ -111,7 +111,7 @@ Sleep 4s
 
 Type ""
 Enter
-Type "# 25 zero-config (weather, Wikipedia, HN, GitHub, Reddit, SEC...)"
+Type "# Several need no credentials at all (weather, Hacker News, country info)"
 Enter
 Sleep 3s
 

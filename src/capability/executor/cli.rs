@@ -416,34 +416,26 @@ fn match_starts(text: &[u8], needle: &[u8], mut each: impl FnMut(usize)) {
 }
 
 /// [`redact`] without the truncation: for a result the caller receives whole.
-/// Removes the literals first, then runs the firewall's credential scanner
-/// (absent without the `firewall` feature: the literal removal still applies).
+/// Removes the literals only; a credential a literal overlaps goes with it
+/// (see [`scrub`]).
 ///
-/// The literals go first on purpose: a multi-line injected value such as a PEM
-/// key must be removed whole, before the scanner can cut a header out of it.
-/// A credential a literal overlaps is removed with it (see [`scrub`]).
+/// A credential-shaped value the gateway did not inject is left for the
+/// response firewall, which inspects every result and error the caller
+/// receives: replacing it here would hand the firewall only a marker, so its
+/// rules, its Block and its audit finding would never see the credential.
 pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[String]) -> String {
-    let text = scrub(text, &needles(secrets, caller));
-    #[cfg(feature = "firewall")]
-    let text = {
-        let mut value = Value::String(text);
-        REDACTOR.scan_and_redact(&mut value);
-        value.as_str().unwrap_or_default().to_owned()
-    };
-    text
+    scrub(text, &needles(secrets, caller))
 }
 
 /// Redact a successful JSON result in place: every string value and object key,
 /// never the structure, so the document still parses and a redacted string
-/// stays a string. No truncation.
+/// stays a string. No truncation. Injected literals only, as
+/// [`redact_untruncated`]: the credential scanner is the response firewall's.
 pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
-    // The literals first, then the scanner (see `redact_untruncated`).
     let needles = needles(secrets, &[]);
     if !needles.is_empty() {
         scrub_value(value, &needles);
     }
-    #[cfg(feature = "firewall")]
-    REDACTOR.scan_and_redact(value);
 }
 
 fn scrub_value(value: &mut Value, needles: &[&str]) {
@@ -452,22 +444,74 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
         // A credential that is all digits can come back as a JSON number. A
         // short needle would hit every number, so only one a caller could not
         // guess by chance (the same floor as caller values) is looked for.
-        // An integer past u64 parses as a float and prints in exponent form,
-        // so an all-digit needle is also compared by value.
+        // An all-digit needle is also compared by value: printed as a number,
+        // it loses its leading zeros ("012345" comes back as 12345), and past
+        // u64 it parses as a float and prints in exponent form. The floor is
+        // on the needle as injected, so "0007" redacts the number 7 but never
+        // the 7 inside 1771. The sign is ignored on both paths: a needle has
+        // none, so -12345, -12345.0 and -0.0 are the same value as one.
         Value::Number(n) => {
             let digits = n.to_string();
-            let float = n.as_f64().filter(|_| n.is_f64());
-            let same_float = |needle: &str| {
-                float.is_some_and(|f| {
-                    needle.bytes().all(|b| b.is_ascii_digit())
-                        && needle
-                            .parse::<f64>()
-                            .is_ok_and(|p| p.to_bits() == f.to_bits())
-                })
+            let float = n.as_f64().filter(|_| n.is_f64()).map(f64::abs);
+            let value_f64 = n.as_f64().map(f64::abs);
+            // An exact integer, when the result is one, so two integers past
+            // f64 precision are never judged equal.
+            let magnitude = |x: &serde_json::Number| {
+                x.as_u64()
+                    .map(u128::from)
+                    .or_else(|| x.as_i64().map(|v| u128::from(v.unsigned_abs())))
+            };
+            let value_int = magnitude(n);
+            let same_value = |needle: &str| {
+                // One leading sign is not part of the magnitude, and the
+                // result's sign is ignored too: "+012345" and "-012345" are
+                // the all-digit credential "012345" and take the exact path
+                // below, which also keeps integers past i64 exact. Covered:
+                // JSON number grammar with at most one leading sign, leading
+                // zeros allowed. Other notations ("0x1F", "12_345") are out of
+                // scope here (MIK-7954).
+                let needle = needle.strip_prefix(['+', '-']).unwrap_or(needle);
+                if needle.is_empty() || !needle.bytes().all(|b| b.is_ascii_digit()) {
+                    // A credential injected in another number form ("12.5",
+                    // "1.5e10") comes back printed differently, so it is
+                    // compared by value: exactly when both are integers, by
+                    // f64 bits otherwise. Any number equal in value to such a
+                    // needle is redacted, even one the child printed for
+                    // another reason: that over-redaction is accepted.
+                    // Leading zeros are not JSON, but a credential may carry
+                    // them ("0012.5"): they are dropped before parsing, keeping
+                    // one zero before a "." or an exponent.
+                    let trimmed = needle.trim_start_matches('0');
+                    let normalized: std::borrow::Cow<'_, str> =
+                        if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
+                            trimmed.into()
+                        } else {
+                            format!("0{trimmed}").into()
+                        };
+                    let Ok(parsed) = serde_json::from_str::<serde_json::Number>(&normalized) else {
+                        return false;
+                    };
+                    if let (Some(p), Some(v)) = (magnitude(&parsed), value_int) {
+                        return p == v;
+                    }
+                    return parsed
+                        .as_f64()
+                        .zip(value_f64)
+                        .is_some_and(|(p, v)| p.abs().to_bits() == v.to_bits());
+                }
+                let value = needle.trim_start_matches('0');
+                let value = if value.is_empty() { "0" } else { value };
+                // Parsed by serde_json, the parser that read the result, so
+                // both sides round the same way whatever its float features.
+                if let Some(f) = float {
+                    return serde_json::from_str::<f64>(value)
+                        .is_ok_and(|p| p.to_bits() == f.to_bits());
+                }
+                digits.trim_start_matches('-') == value
             };
             if needles.iter().any(|needle| {
                 needle.len() >= MIN_REDACTED_CALLER_VALUE
-                    && (digits.contains(needle) || same_float(needle))
+                    && (digits.contains(needle) || same_value(needle))
             }) {
                 *value = Value::String("[redacted]".to_owned());
             }
@@ -505,7 +549,10 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
 }
 
 /// Remove injected secrets (any length) and caller values (from 4 bytes)
-/// literally, then run the firewall's credential scanner, then truncate.
+/// literally, then keep the last [`EXCERPT_BYTES`]. A credential the cut would
+/// split is dropped whole: its tail alone is recognised by no scanner, so the
+/// firewall could neither find nor redact it. A credential wholly inside the
+/// excerpt stays for the firewall (see [`redact_untruncated`]).
 pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> String {
     let text = redact_untruncated(text, secrets, caller);
     let text = text.as_str();
@@ -513,6 +560,13 @@ pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> Strin
         return text.to_owned();
     }
     let mut cut = text.len() - EXCERPT_BYTES;
+    // Spans are merged, so at most one contains the cut.
+    #[cfg(feature = "firewall")]
+    if let Some(&(_, end)) =
+        (REDACTOR.credential_spans(text).iter()).find(|&&(start, end)| start < cut && cut < end)
+    {
+        cut = end;
+    }
     while !text.is_char_boundary(cut) {
         cut += 1;
     }
@@ -522,3 +576,7 @@ pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> Strin
 #[cfg(test)]
 #[path = "cli_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "cli_firewall_tests.rs"]
+mod firewall_tests;

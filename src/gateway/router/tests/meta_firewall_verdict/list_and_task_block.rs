@@ -451,3 +451,5 @@ async fn a_blocked_direct_tool_list_is_not_a_client_success() {
         "the refused listing must not have reset the failure count"
     );
 }
+
+mod direct_counted;

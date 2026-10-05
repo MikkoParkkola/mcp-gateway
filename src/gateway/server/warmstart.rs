@@ -108,7 +108,11 @@ fn is_readiness_error(error: &Error) -> bool {
         Error::Transport(_)
         | Error::TransportConnect(_)
         | Error::BackendTimeout(_)
-        | Error::BackendUnavailable(_) => true,
+        | Error::BackendUnavailable(_)
+        // A stopped instance answers NotFound (`start_entry`'s shutdown-race
+        // path); the next attempt re-resolves the name, reaching the instance
+        // a reload put in its place.
+        | Error::BackendNotFound(_) => true,
         Error::Io(e) => is_transient_io(e.kind()),
         // A response arrived, so the backend is up; only connect/timeout shapes
         // mean "not yet". A 4xx is the operator's configuration talking back.
@@ -458,8 +462,8 @@ pub(super) fn spawn_warm_start_task(
 ///
 /// The exit condition is **cache presence**, not process liveness, because that
 /// is what discovery reads: `backend_tools_for_discovery` returns a backend's
-/// tools only if the cache is non-empty, and a plain semantic query never fills
-/// an empty one.
+/// tools only if the cache is non-empty, and a plain semantic query fills an
+/// empty one only in the background, after it has answered.
 async fn warm_start_until_cached(
     backends: &Arc<BackendRegistry>,
     name: &str,

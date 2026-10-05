@@ -428,6 +428,38 @@ fn the_message_member_of_an_error_is_scanned() {
     assert_eq!(frame.verdict(), Some(ReadVerdict::Blocked));
 }
 
+/// MIK-7883.SCAN.2: `error.data` judged under a wrapper `arg_keys` entry. A
+/// configured key equal to the envelope member `data` matches the error's own
+/// `data`, whether it holds the tenant directly or wraps it, so a refusal that
+/// carries another tenant in its data is withheld like any other frame. The
+/// bare scalar is the load-bearing case: only the emitted-document scan sees
+/// it under the member name `data`. The owner's own tenant in the same place
+/// is admitted, so blocking every `error.data` cannot pass.
+#[test]
+fn the_data_member_of_an_error_is_scanned() {
+    let fw = firewall_with(CrossTenantReads::Block, &["customer_id", "data"]);
+    let _a = read_a(&fw);
+    let refusal = |data: &serde_json::Value| {
+        let refused = JsonRpcResponse::error_with_data(
+            Some(RequestId::Number(2)),
+            -32000,
+            "refused",
+            data.clone(),
+        );
+        delivered(&fw, Some(KEY), Payload::Response(refused), None, None)
+    };
+    for data in [json!(B), json!({ "data": B })] {
+        assert_eq!(
+            refusal(&data).verdict(),
+            Some(ReadVerdict::Blocked),
+            "{data}"
+        );
+    }
+    for data in [json!(A), json!({ "data": A })] {
+        assert_eq!(refusal(&data).verdict(), None, "the owner's own {data}");
+    }
+}
+
 /// MIK-7883.SCAN.2: the `method` of a notification.
 #[test]
 fn the_method_member_of_a_notification_is_scanned() {
@@ -512,4 +544,32 @@ fn every_payload_variant_has_a_scan_row() {
         Payload::Withheld => "nothing emitted",
     };
     assert_eq!(classify(&Payload::Withheld), "nothing emitted");
+}
+
+/// MIK-7924.NULLRES.4: a backend's `"result": null`, parsed as a typed
+/// response, is a delivered result to the frame and to the judge alike. The
+/// judge shows it by charging the call's A, so a later B is flagged; the
+/// control charges nothing, so the flag is not vacuous.
+#[test]
+fn a_typed_null_result_delivers_to_the_frame_and_the_judge() {
+    let control = firewall(CrossTenantReads::Observe);
+    assert!(!b_flagged(&control), "control: B alone is not flagged");
+
+    let fw = firewall(CrossTenantReads::Observe);
+    let typed: JsonRpcResponse =
+        serde_json::from_value(json!({"jsonrpc": "2.0", "id": 1, "result": null}))
+            .expect("a response");
+    let frame = delivered(
+        &fw,
+        Some(KEY),
+        Payload::Response(typed),
+        Some(&json!({ "customer_id": A })),
+        None,
+    );
+    // The A frame stays unwritten, so its reservation is live when B is judged.
+    assert!(b_flagged(&fw), "the judge charged the call's A");
+    assert!(
+        frame.delivers_result(),
+        "the frame delivers the null result"
+    );
 }

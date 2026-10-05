@@ -139,7 +139,7 @@ impl OAuthClient {
         let body = registration_body(&self.backend_name, redirect_uri);
 
         let response = self
-            .http_client
+            .client_for(endpoint)?
             .post(endpoint)
             .json(&body)
             .send()

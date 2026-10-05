@@ -45,7 +45,7 @@ Measured. Only three consumers read `live_config` at request time:
 
 Every other tracked section — `auth`, `mtls`, `key_server`, `agent_auth`,
 `security`, `webhooks`, `meta_mcp`, `capabilities`, `playbooks`,
-`routing_profiles`, `code_mode`, `marketplace` — is snapshotted at construction
+`routing_profiles`, `code_mode` — is snapshotted at construction
 and cannot change without a restart.
 
 **So `auth` is the rule, not the exception, and the fix is in the reporting.**

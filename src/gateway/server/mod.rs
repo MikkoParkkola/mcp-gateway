@@ -36,9 +36,12 @@ mod signing_allocation_tests;
 mod start_checks;
 mod stdio_catalogue;
 mod stdio_channel;
+mod stdio_delivery;
 mod stdio_dispatches;
 mod stdio_nonce;
 mod stdio_notify;
+mod stdio_refusal;
+use stdio_refusal::{admit_stdio_request, stdio_busy_batch_response, stdio_busy_response};
 mod stdio_shutdown;
 mod stdio_tasks;
 mod stdio_writer;
@@ -118,43 +121,6 @@ const MAX_CONCURRENT_STDIO_DISPATCHES: usize = 64;
 /// stdout queue: work admitted beyond what the writer can still hold has
 /// nowhere to put its answer, so the client is told to slow down instead.
 const MAX_INFLIGHT_STDIO_REQUESTS: usize = STDOUT_QUEUE_DEPTH;
-
-/// Take a slot for one accepted stdio request, or refuse.
-///
-/// Deliberately not `async`. The read loop is the only thing that can deliver
-/// a bridged reply, so a wait here is woken only by work that is itself
-/// waiting on this loop — the deadlock the concurrent-dispatch package exists
-/// to remove, relocated from the first request to the cap-plus-first. A
-/// synchronous signature makes "the reader never parks on admission" a
-/// property of the type rather than of review.
-fn admit_stdio_request(
-    inflight: &Arc<tokio::sync::Semaphore>,
-) -> Option<tokio::sync::OwnedSemaphorePermit> {
-    Arc::clone(inflight).try_acquire_owned().ok()
-}
-
-/// The refusal a saturated gateway owes the client, or `None` when the frame
-/// is a notification: no id means nothing to answer, and answering anyway is a
-/// protocol violation the client cannot correlate.
-fn stdio_busy_response(request: &serde_json::Value) -> Option<serde_json::Value> {
-    let id = request.get("id").filter(|id| !id.is_null())?.clone();
-    Some(serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": {
-            "code": -32000,
-            "message": "server busy: too many stdio requests in flight, retry this request"
-        }
-    }))
-}
-
-/// Queue one frame for the stdout writer, tolerating a closed writer.
-///
-/// A closed queue means stdout is gone, which the serve loop discovers on its
-/// own next read; there is nothing a producer can do about it here.
-async fn send_frame(writer: &tokio::sync::mpsc::Sender<OutboundFrame>, frame: serde_json::Value) {
-    drop(writer.send(OutboundFrame::gateway_stdio(frame)).await);
-}
 
 /// Bounded rather than unbounded: past it the `JoinSet` aborts what is left,
 /// which is exactly the pre-concurrency behaviour and no worse (design §6).
@@ -2489,15 +2455,21 @@ impl Gateway {
             let request: serde_json::Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(e) => {
-                    send_frame(
-                        &writer,
-                        serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "id": null,
-                            "error": {"code": -32700, "message": format!("Parse error: {e}")}
-                        }),
-                    )
-                    .await;
+                    // `try_send` (MIK-7684): the reader never waits for stdout
+                    // room, or a client that stops reading parks it before EOF.
+                    // A full queue drops the answer, as for the busy refusal;
+                    // it has no id, so the client could not match it anyway.
+                    let parse_error = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": null,
+                        "error": {"code": -32700, "message": format!("Parse error: {e}")}
+                    });
+                    if writer
+                        .try_send(OutboundFrame::gateway_stdio(parse_error))
+                        .is_err()
+                    {
+                        warn!("stdio: a parse error could not be queued, dropped");
+                    }
                     continue;
                 }
             };
@@ -2528,33 +2500,69 @@ impl Gateway {
                 continue;
             }
 
-            // Handle batch requests (array of JSON-RPC calls)
+            // A batch is spawned like a single request (MIK-7684): dispatched
+            // inline, it parked the reader on a full stdout. Its answer may now
+            // follow frames for later lines; singles are already unordered
+            // (design §7.4) and every answer carries its ids. It shares the
+            // in-flight cap and the running pool with singles, so two batches
+            // may run at once.
             if request.is_array() {
-                // Boxed: the dispatch future is tens of kilobytes and this one
-                // lives across the `select!` in the helper, so leaving it inline
-                // would put the whole thing on the reader loop's stack frame.
-                let (responses, _) = Self::dispatch_streaming_notifications(
-                    Box::pin(Self::dispatch_batch_read(
-                        &meta_mcp,
-                        &tool_policy,
-                        &mtls_policy,
-                        request,
-                        session_id,
-                        &protocol_telemetry_sink,
-                        &reads,
-                    )),
-                    &writer,
-                    &reads,
-                )
-                .await;
-                Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
-                if !responses.is_empty() {
-                    drop(
-                        writer
-                            .send(crate::gateway::outbound::StdioReads::batch_of(responses))
-                            .await,
-                    );
+                let Some(slot) = admit_stdio_request(&inflight) else {
+                    warn!("stdio: refusing a batch, too many requests already in flight");
+                    if let Some(refusal) = stdio_busy_batch_response(&request)
+                        && writer
+                            .try_send(OutboundFrame::gateway_stdio(refusal))
+                            .is_err()
+                    {
+                        warn!(
+                            "stdio: the batch refusal itself could not be queued, ids unanswered"
+                        );
+                    }
+                    continue;
+                };
+                if writer.is_closed() {
+                    stdout_died = true;
+                    break;
                 }
+                let meta_mcp = Arc::clone(&meta_mcp);
+                let tool_policy = Arc::clone(&tool_policy);
+                let mtls_policy = Arc::clone(&mtls_policy);
+                let telemetry = Arc::clone(&protocol_telemetry_sink);
+                let (writer, reads) = (writer.clone(), Arc::clone(&reads));
+                let admission = Arc::clone(&admission);
+                dispatches.spawn(None, async move {
+                    let _running = admission
+                        .acquire_owned()
+                        .await
+                        .expect("the admission semaphore is never closed");
+                    if writer.is_closed() {
+                        return;
+                    }
+                    // Boxed: the dispatch future is tens of kilobytes.
+                    let (responses, _) = Self::dispatch_streaming_notifications(
+                        Box::pin(Self::dispatch_batch_read(
+                            &meta_mcp,
+                            &tool_policy,
+                            &mtls_policy,
+                            request,
+                            session_id,
+                            &telemetry,
+                            &reads,
+                        )),
+                        &writer,
+                        &reads,
+                    )
+                    .await;
+                    Self::persist_stdio_protocol_telemetry(&telemetry);
+                    if !responses.is_empty() {
+                        drop(
+                            writer
+                                .send(crate::gateway::outbound::StdioReads::batch_of(responses))
+                                .await,
+                        );
+                    }
+                    drop(slot);
+                });
                 continue;
             }
 
@@ -2648,7 +2656,9 @@ impl Gateway {
                     let response = match response {
                         Some(value) => Some(
                             Self::judge_and_commit(
+                                &meta_mcp,
                                 &reads,
+                                session_id,
                                 (value, params.as_ref(), hidden.as_ref()),
                                 staged,
                             )
@@ -2696,8 +2706,18 @@ impl Gateway {
                     task.await;
                     drop(slot);
                 });
-            } else {
-                task.await;
+            } else if tokio::time::timeout(STDIO_DRAIN_TIMEOUT, task)
+                .await
+                .is_err()
+            {
+                // `initialize` stays inline for its ordering, but bounded
+                // (MIK-7684): an answer that cannot be queued in time means
+                // the client stopped reading. Serving on would answer later
+                // lines on a session whose handshake was never answered, so
+                // the session ends through the bounded shutdown below.
+                warn!("stdio: the initialize answer could not be queued in time; shutting down");
+                stdout_died = true;
+                break;
             }
         }
 
@@ -2830,23 +2850,6 @@ impl Gateway {
         }
     }
 
-    /// Judge one finalized stdio answer, then record the receipts its dispatch
-    /// staged, only when the frame as written delivers a result: a read the
-    /// judge withholds, or an audit failure replaces, leaves none.
-    async fn judge_and_commit(
-        reads: &crate::gateway::outbound::StdioReads,
-        (value, params, hidden): (
-            serde_json::Value,
-            Option<&serde_json::Value>,
-            Option<&crate::security::tenant_reads::ReadAttribution>,
-        ),
-        staged: crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
-    ) -> crate::gateway::outbound::OutboundFrame {
-        let frame = reads.answer(value, params, hidden).await;
-        staged.commit(frame.delivers_result());
-        frame
-    }
-
     /// [`Self::dispatch_single_staged`] recording the receipts straight away,
     /// for a caller that judges no frame (a test).
     #[cfg(test)]
@@ -2858,12 +2861,19 @@ impl Gateway {
         client: StdioClient<'_>,
         sink: &StdioTelemetry,
     ) -> Option<serde_json::Value> {
+        let session_id = client.session_id;
         let (answer, staged) =
             Self::dispatch_single_staged(meta_mcp, tool_policy, mtls_policy, request, client, sink)
                 .await;
-        // No frame is judged here: the receipts follow the answer as built.
-        staged.commit(answer.as_ref().is_some_and(|a| a.get("error").is_none()));
-        answer
+        // No frame is judged here: recorded and settled as built, and the
+        // receipts follow the frame as `judge_and_commit` has them follow it.
+        let Some(answer) = answer else {
+            staged.commit(false);
+            return None;
+        };
+        let frame = answer.delivered_unjudged(meta_mcp, session_id).await;
+        staged.commit(frame.delivers_result());
+        frame.stdio_value().map(std::borrow::Cow::into_owned)
     }
 
     /// [`Self::dispatch_relay_scoped`] inside one relay-receipt collector,
@@ -2882,7 +2892,7 @@ impl Gateway {
         client: StdioClient<'_>,
         sink: &StdioTelemetry,
     ) -> (
-        Option<serde_json::Value>,
+        Option<stdio_delivery::StdioAnswer>,
         crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
     ) {
         let dispatch =
@@ -2907,7 +2917,7 @@ impl Gateway {
         mut request: serde_json::Value,
         client: StdioClient<'_>,
         protocol_telemetry_sink: &StdioTelemetry,
-    ) -> Option<serde_json::Value> {
+    ) -> Option<stdio_delivery::StdioAnswer> {
         // Borrowed views throughout: a refused request is never copied.
         // Ownership is taken once, after admission, where it executes.
         use super::router::helpers::extract_tools_call_params_ref;
@@ -2917,7 +2927,7 @@ impl Gateway {
         let prepared = Self::prepare_signing(meta_mcp, &mut request);
         let (mut signing_context, chain_nonce) = match prepared {
             Ok(prepared) => prepared,
-            Err(response) => return Some(response),
+            Err(response) => return Some(stdio_delivery::StdioAnswer::Built(response)),
         };
 
         // Scoped so the guard is gone before the first await below: see
@@ -2930,7 +2940,7 @@ impl Gateway {
         };
         let (id, method, params, request_shape) = match parsed {
             Ok(parsed) => parsed,
-            Err(early) => return early,
+            Err(early) => return early.map(stdio_delivery::StdioAnswer::Built),
         };
 
         let (external_tool, response_targets) = {
@@ -3034,7 +3044,7 @@ impl Gateway {
         };
 
         let chain_source = response.chain_source;
-        let response = meta_mcp.finalize_response_for_delivery(
+        let response = meta_mcp.finalize_content(
             response,
             &super::meta_mcp::response_security::ResponseDeliveryContext {
                 method: &method,
@@ -3051,13 +3061,33 @@ impl Gateway {
                 chain_source,
                 chain_nonce: chain_nonce.as_deref(),
             },
-        ).await;
-        // COLLUDE.1: the receipts staged here are recorded by the caller once
-        // the answer has been judged (`judge_and_commit`).
-        if let Some(execution) = execution {
-            execution.complete_delivery(&response, signing_context.as_ref());
+            super::meta_mcp::response_security::DeliveryInspection::Required,
+        );
+        // MIK-7887.RECEIPT.4: the receipt describes the delivered answer. The
+        // stdio route stamps no `serverInfo` over a backend's. Rebuilt here,
+        // inside the relay-receipt scope; the judge can only replace the
+        // answer, and a replaced answer commits no receipt.
+        {
+            use super::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
+            let shape = if external_tool == "gateway_invoke" {
+                AnswerShape::InvokeWrapped
+            } else {
+                AnswerShape::Literal
+            };
+            meta_mcp.rebuild_receipt_from_final(
+                response.result.as_ref(),
+                GatewayStamps::Legacy,
+                shape,
+            );
         }
-        Some(response.to_value_lossy())
+        // MIK-7920: recorded after the judge, then settled, by the caller
+        // (`judge_and_commit`), as `POST /mcp` does.
+        Some(stdio_delivery::StdioAnswer::finalized(
+            response,
+            external_tool,
+            execution,
+            signing_context,
+        ))
     }
 
     /// Capture the signing envelope and the chain nonce ahead of parsing:

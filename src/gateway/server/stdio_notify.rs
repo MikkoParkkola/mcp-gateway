@@ -104,10 +104,10 @@ impl Gateway {
                     req,
                     super::StdioClient {
                         session_id,
-                        // A batch is dispatched sequentially inside the serve
-                        // loop's own task, so there is no reader to deliver a
-                        // reply: batch concurrency is out of scope for MIK-7387 by
-                        // design. Nothing to declare to either — a retained
+                        // A batch's items run one by one in the batch's own
+                        // task (MIK-7684), with no client channel: a batched
+                        // call cannot hold for input, so nothing would deliver
+                        // a reply. Nothing to declare to either — a retained
                         // handshake would widen a channel that cannot ask.
                         channel: &crate::gateway::input_bridge::NoClientChannel,
                         handshake_capabilities: crate::protocol::meta::Declared::NONE,
@@ -121,8 +121,14 @@ impl Gateway {
             .await;
             match resp {
                 Some(resp) => frames.push(
-                    Self::judge_and_commit(reads, (resp, params.as_ref(), read.as_ref()), staged)
-                        .await,
+                    Self::judge_and_commit(
+                        meta_mcp,
+                        reads,
+                        session_id,
+                        (resp, params.as_ref(), read.as_ref()),
+                        staged,
+                    )
+                    .await,
                 ),
                 None => staged.commit(false),
             }

@@ -1,52 +1,21 @@
 # Rust files over the 800-line ceiling, with the count when recorded.
 # The gate ratchets: a listed file may shrink, never grow, and nothing new
 # may cross. Delete a row once the file drops under the ceiling.
-# 50 files, 25166 lines of excess.
+# 17 files, 11178 lines of excess.
 5364 src/gateway/server/mod.rs
 2668 src/gateway/meta_mcp/mod.rs
 2176 src/gateway/router/handlers.rs
-2097 src/capability/executor_tests.rs
-2049 tests/mik_7212_mrtr7_bridge_acs.rs
-2031 tests/webui_management_tests.rs
-1888 src/backend/tests.rs
-1631 src/security/firewall/mod.rs
-1617 tests/mik_7272_sub2b_acs.rs
 1603 src/protocol_revision_telemetry.rs
-1464 src/capability/definition/tests.rs
-1460 src/idempotency.rs
-1412 src/gateway/meta_mcp/account_rest_tests.rs
-1398 tests/mik_7212_mrtr_component_acs.rs
-1329 tests/security_tests.rs
-1329 tests/openwebui_adapter_config.rs
-1285 src/gateway/meta_mcp/authz_tests.rs
 1180 src/gateway/meta_mcp/search_ranking_authz_tests.rs
 1174 tests/mik_7212_mrtr7_stdio_acs.rs
 1138 tests/mik_7214_header_9_acs.rs
-960 src/protocol/meta.rs
-1108 tests/mik_7215_acs.rs
-1087 src/control_plane/mod.rs
 1086 src/oauth/client/tests.rs
 1040 src/main_tests.rs
 1020 tests/nfr_obs_3_era_observability.rs
 1018 tests/mik_7272_sub4_adr012_acs.rs
-1006 src/protocol/messages.rs
 1004 src/ranking/tests.rs
-1002 src/runtime/provider.rs
-984 src/idempotency/admission.rs
-978 src/gateway/server/support.rs
-970 src/ranking/mod.rs
-964 src/gateway/meta_mcp_tool_defs.rs
-954 src/commands/protocol_import.rs
-944 src/discovery/shadow.rs
-944 src/commands/doctor.rs
-935 src/trust/mod.rs
 908 src/gateway/meta_mcp_helpers_tests.rs
-900 src/identity_grants.rs
 874 src/personal_accounts/provider/provider_tests.rs
-857 src/mtls/cert_manager.rs
-852 src/protocol/types.rs
 849 tests/mik_7214_acs.rs
 840 src/personal_accounts/worker_tests.rs
-838 src/tool_registry.rs
 836 src/gateway/meta_mcp_helpers_chain_tests.rs
-804 src/cli/subcommands.rs

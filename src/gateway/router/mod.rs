@@ -109,6 +109,8 @@ mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
+/// The meta route's post-judge delivery record, shared with stdio (MIK-7920).
+pub(in crate::gateway) use judged_answer::record_delivery as record_judged_delivery;
 #[cfg(test)]
 mod log_level_admin_tests;
 #[cfg(test)]
@@ -125,6 +127,9 @@ mod r2_input_keys_tests;
 mod replay_policy_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
+/// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.
+#[cfg(all(test, feature = "metrics"))]
+mod signing_nonce_order_tests;
 /// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
 #[cfg(test)]
 mod sso_admin_tests;
@@ -480,11 +485,9 @@ pub(crate) fn create_router_with_accounts(
                 .get(handlers::mcp_sse_handler)
                 .delete(handlers::mcp_delete_handler),
         )
+        // No sub-path alias: one with a wildcard tail never served, because
+        // `backend_handler` extracts the name alone and answered 500 (MIK-7650).
         .route("/mcp/{name}", post(backend_handlers::backend_handler))
-        .route(
-            "/mcp/{name}/{*path}",
-            post(backend_handlers::backend_handler),
-        )
         // Helpful error for deprecated SSE endpoint (common misconfiguration)
         .route(
             "/sse",

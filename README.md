@@ -15,25 +15,25 @@
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_MCP-0078d4?logo=visualstudiocode)](https://insiders.vscode.dev/redirect/mcp/install?name=mcp-gateway&config=%7B%22command%22%3A%22mcp-gateway%22%2C%22args%22%3A%5B%22serve%22%2C%22--stdio%22%5D%7D)
 [![Install in Cursor](https://img.shields.io/badge/Cursor-Install_MCP-black?logo=cursor)](cursor://anysphere.cursor-deeplink/mcp/install?name=mcp-gateway&config=%7B%22command%22%3A%22mcp-gateway%22%2C%22args%22%3A%5B%22serve%22%2C%22--stdio%22%5D%7D)
 
-**One gateway between your AI and every tool it needs, without flooding the context window.**
+**Unlimited MCP servers, tools and APIs. One fixed context cost.**
 
-MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect MCP servers and REST APIs behind it, and the agent sees a compact meta-surface of 9 to 17 tools instead of every backend definition. It discovers and calls backend tools on demand. A small live-agent benchmark found no completed-task token saving from that extra hop, so the value is catalog capacity plus policy and routing—not a blanket token claim. See [Benchmarks](docs/BENCHMARKS.md).
+Plug every tool you own into Claude, Cursor, Codex or any MCP client. MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect any number of MCP servers and REST APIs behind it, and the agent sees only a compact meta-surface of 11 tools by default instead of hundreds of tool definitions. It discovers and calls the right backend tool on demand, and never drowns in tool definitions. 130+ REST API capabilities ship built in, and one command imports the servers you already have. On a 100-tool stack that is about 1,100 tokens of tool definitions per request instead of about 15,000, as modeled in the README [benchmark](docs/BENCHMARKS.md), and the answer to "how many tools can I connect" becomes "unlimited."
 
 ![demo](demo.gif)
 
-Personal and noncommercial use is free, including running the full gateway. Running it commercially needs a [commercial license](#license).
+Personal and noncommercial use is free, including running the full gateway. Running it commercially needs a [commercial license](#license). From 4.0 the whole gateway is PolyForm Noncommercial; MIT grants on earlier 3.x releases are unchanged.
 
 ## The problem this removes
 
-Every MCP tool an AI client connects costs roughly 150 tokens of context overhead, loaded into every request whether the tool gets used or not. Connect 20 servers with 100 tools between them and you spend about 15,000 tokens before the conversation starts. Context limits then force a second cost: you have to decide up front which tools to connect and leave the rest out, so the agent makes worse decisions because it cannot reach data you chose not to load.
+Every MCP tool an AI client connects costs roughly 150 tokens of context overhead<sup>[1](#fn-per-tool)</sup>, loaded into every request whether the tool gets used or not. Connect 20 servers with 100 tools between them and you spend about 15,000 tokens before the conversation starts. Context limits then force a second cost: you have to decide up front which tools to connect and leave the rest out, so the agent makes worse decisions because it cannot reach data you chose not to load.
 
-MCP Gateway moves the full catalog out of the exposed tool list. The agent loads a small fixed set of meta-tools, searches with `gateway_search_tools`, and invokes a backend tool with `gateway_invoke`. This creates room for larger catalogs, but the extra search hop can cost more tokens and time on a completed task.
+MCP Gateway removes both costs. The agent loads a small fixed set of meta-tools, searches the full catalog with `gateway_search_tools`, and invokes any backend tool with `gateway_invoke` only when it needs it.
 
 ```mermaid
 flowchart LR
     AI["AI client<br/>(Claude, Cursor, ...)"]
     subgraph GW["MCP Gateway (single binary)"]
-        META["Compact meta-surface<br/>9-17 tools"]
+        META["Compact meta-surface<br/>11 tools"]
         DISC{"Discover on demand<br/>gateway_search_tools<br/>gateway_invoke"}
     end
     T1["MCP backend<br/>Tavily (stdio)"]
@@ -42,7 +42,7 @@ flowchart LR
     C2["REST capability<br/>Stripe"]
     Cn["130+ capabilities"]
 
-    AI -->|"9-17 tool defs"| META
+    AI -->|"11 tool defs"| META
     META --> DISC
     DISC --> T1
     DISC --> T2
@@ -51,20 +51,7 @@ flowchart LR
     DISC --> Cn
 ```
 
-## What's new in 4.0
-
-4.0.0 is the current release, on every channel: crates.io, npm, Homebrew, the `:latest` image and the MCP Registry. Several 4.0 changes make a 3.x config refuse to start instead of running on settings it no longer trusts, so read [docs/UPGRADING-4.0.md](docs/UPGRADING-4.0.md) first.
-
-- **The newest MCP revision, 2026-07-28, on by default.** MCP (Model Context Protocol) is how AI clients talk to tool servers. The gateway now serves 2026-07-28 alongside 2025-11-25 and earlier, on the same endpoint. A 2026 client skips the `initialize` handshake and states its revision on each `POST /mcp` request (the `MCP-Protocol-Version` header and `io.modelcontextprotocol/protocolVersion` in the request's `_meta`). It gets `server/discover`; mid-call questions returned as a result it answers by retrying the call (on HTTP this needs a verified caller identity; an anonymous caller is refused); a caller-scoped `subscriptions/listen` stream; the tasks extension for long-running calls it polls; and optional idempotency keys (`io.mcp-gateway/idempotency-key` in `_meta`) that stop a retried call from running twice. Older clients keep the handshake and see no change. `server.modern_protocol: false` turns it off. Limits:
-  - While it is on, the gateway refuses to start when `server.replicas` declares more than one replica (the Helm chart keeps it equal to `replicaCount`; replicas started any other way are not detected).
-  - A 2026 `tools/call` without a key is not protected against a double run unless you set `server.idempotency_key: required`, which covers `POST /mcp` and stdio but not the direct per-backend route `POST /mcp/{name}`.
-  Evidence: `src/config/mod.rs` (`server.modern_protocol`), `tests/mik_7214_acs.rs`, `tests/mik_7272_subscriptions_acs.rs`, `tests/f24_advertised_capabilities.rs`.
-- **Each caller sees and reaches only what it was granted.** Every discovery surface (tool lists, search, server lists, the direct per-backend route) shows a caller only the backends and tools it could invoke. A newly added backend is unreachable until a key is granted it, and a key with no `backends` reaches nothing. Cached results, idempotent results, backend change notifications and `subscriptions/listen` streams are kept per caller. Caller identity headers count only when they arrive from a source you configured: listed proxy addresses or Cloudflare Access. Evidence: `src/gateway/router/authorization.rs`, `tests/a0_per_caller_cache.rs`, `tests/mik_7272_subscriptions_acs.rs`.
-- **Admins from your identity provider.** A `control_plane.role_mapping` rule with `role: admin` makes a single sign-on (SSO) group or user a full gateway admin. The mapping is read on every request, so removing the rule revokes admin at once, and an admin rule that names only an email domain is refused. Identities from trusted-proxy or Cloudflare Access headers, and mTLS certificates, never confer admin. Key-server rules for OIDC (OpenID Connect, the sign-in protocol most identity providers speak) must name the issuer, and email and domain rules match only an email the provider has verified. Evidence: `src/control_plane/role_mapping.rs`, `src/gateway/router/sso_admin_tests.rs`, `src/key_server/identity_rules_tests.rs`.
-- **An audit log you cannot switch off while auth is on.** Each tool call records who made it (credential kind, key fingerprint, verified issuer and subject), its outcome and its error code. Refused calls are recorded too, and a failed write fails the call instead of letting it through unrecorded. Calls on the direct per-backend route `POST /mcp/{name}` write the same record on the release branch, landed after beta.2. Also landed after beta.2: admin actions (admin meta-tool calls and admin-panel changes, control-plane edits included) are recorded with who made them. An admin meta-tool call is refused when its record cannot be written; an admin-panel change is refused while the log is already failing, and if the write fails after the change ran, the change stands and its response is withheld with 503. Evidence: `tests/d1_audit_required.rs`, `src/gateway/meta_mcp/audit_record_tests.rs`, `src/gateway/router/audit_degraded_tests.rs`, `src/gateway/router/direct_audit_tests.rs`, `src/gateway/router/sso_admin_tests/admin_action.rs`.
-- **Keys and secrets handled as secrets.** API keys are stored as SHA-256 digests (`mcp-gateway hash-key` makes one) with an optional expiry that is enforced. A secret reference that resolves to nothing stops the load instead of sending an empty credential (except `server.metrics_token`, which logs a warning and leaves `/metrics` answering 401 until it is set and the gateway restarted, and a personal-account `client_secret_ref`, which is read only when a token is requested, so a missing one fails that account later rather than the start), and `/metrics` needs its own scrape token. Landed after beta.2: `file:/absolute/path` reads a secret from a file wherever `env:NAME` is accepted. Evidence: `src/config/features/api_key.rs`, `src/config/features/api_key_digest_tests.rs`, `tests/e4_hash_key_cli.rs`.
-- **A config that refuses to start instead of running unsafely.** An unknown config key, a config or env file other users can read (on Unix by file mode, on Windows by the file's access list), and plain HTTP on a network address with auth on each stop the start with an error that names the problem. `server.cleartext_http` declares that the traffic is protected some other way (TLS terminated upstream, host-local publish, or cluster-internal). Evidence: `tests/c1_unrecognised_config_keys.rs`, `src/config/secret_file.rs`, `src/config/secret_file_windows_tests.rs` (Windows), `src/gateway/server/cleartext_tests.rs`.
-- **A Helm chart that starts.** The Kubernetes chart now installs with its default values and serves once the `mcp-gateway-auth` Secret exists (without it the pod stops with CreateContainerConfigError), runs as the image's own non-root user, and defaults to one replica. Evidence: `deploy/helm/mcp-gateway/values.yaml`, `tests/fixtures/helm-golden/`, the `Helm chart lint + render` job in `.github/workflows/ci.yml`.
+<a id="fn-per-tool"></a><sub>1. Per-tool and per-meta-tool token figures are modeled from [`benchmarks/public_claims.json`](benchmarks/public_claims.json) (~150 and ~100), not measured; a client that loads definitions only when needed pays less. 11 is the default HTTP setup as an administrator sees it; an ordinary client sees fewer. What a whole task costs is in the [FAQ](#faq).</sub>
 
 ## Quick Start
 
@@ -78,7 +65,7 @@ mcp-gateway serve                            # 3. run
 mcp-gateway doctor                           # 4. verify everything is healthy
 ```
 
-That is it. Your AI clients now talk to the gateway, and the gateway routes to every backend you already had configured, at a flat `11 tools` instead of `~150` — 11 is the default HTTP configuration counted for an administrator; an ordinary client is shown five fewer, because it is only shown what it could invoke. Start with `gateway_search_tools` from your AI client to find any backend tool, then invoke it with `gateway_invoke`.
+That is it. Your AI clients now talk to the gateway, and the gateway routes to every backend you already had configured, at a flat `11 tools` instead of `~150` (4.0; 3.x shows about 15). Start with `gateway_search_tools` from your AI client to find any backend tool, then invoke it with `gateway_invoke`.
 
 > **Nothing to import yet?** `mcp-gateway init --with-examples` writes a working `gateway.yaml` with public capabilities so you can confirm the gateway is alive before adding your own servers.
 
@@ -87,6 +74,20 @@ That is it. Your AI clients now talk to the gateway, and the gateway routes to e
 > Read https://github.com/MikkoParkkola/mcp-gateway and install mcp-gateway to consolidate all my MCP servers behind one gateway
 
 Your agent will install the binary, run the setup wizard, import your existing MCP servers, and wire itself up. It is written for any agent with terminal access, such as Claude Code, Cursor, Windsurf or Codex; which clients have a recorded 4.0 run is in [Supported clients](docs/CLIENTS.md).
+
+## What's new in 4.0
+
+4.0 adds a trust layer on top of the same fixed-context gateway. 4.0.0 is the current release on every channel: crates.io, npm, Homebrew, the `:latest` image and the MCP Registry. Read [docs/UPGRADING-4.0.md](docs/UPGRADING-4.0.md) first, because a 3.x config that 4.0 no longer trusts refuses to start.
+
+- **The newest MCP revision, with a built-in version bridge.** MCP 2026-07-28 is on by default beside 2025-11-25 and earlier, on the same endpoint, and clients and backends on different revisions make ordinary tool calls to each other. Move your clients to 2026-07-28 before every server does.
+- **Each caller sees and reaches only what it was granted.** Tool lists, search, server lists and the direct per-backend route show a caller only the backends and tools its key or identity may invoke.
+- **Admins from your identity provider.** Map an SSO group or user to gateway admin; remove the rule and admin is gone on the next request.
+- **An audit log you cannot switch off.** With auth on, every tool call is recorded with who made it and how it ended, refused calls included.
+- **A config that fails closed.** Unknown keys, config files other users can read and plain HTTP with auth on a network address (unless you declare how it is protected) stop the start instead of running on settings the gateway does not trust.
+
+Full list, limits and evidence: [What's new in 4.0](docs/whats-new-4.0.md).
+
+## Install and set up
 
 ### Install
 
@@ -189,7 +190,7 @@ sequential-thinking, context7, time); every other server is off until you `add` 
 
 #### Option C: hand-write `gateway.yaml`
 
-For the full schema, see the annotated [examples/gateway-full.yaml](examples/gateway-full.yaml), which covers `env_files`, `server`, `auth`, `meta_mcp`, `streaming`, `failsafe`, `cache`, `capabilities`, and `backends`. The remaining top-level sections (`playbooks`, `security`, `webhooks`, `routing_profiles`, `code_mode`, `mtls`, `key_server`, `agent_auth`, `runtime`, `marketplace`, `control_plane`, `cost_governance`) have no prose reference yet; the `Config` struct in [src/config/mod.rs](src/config/mod.rs) is the authoritative list. Minimal example:
+For the full schema, see the annotated [examples/gateway-full.yaml](examples/gateway-full.yaml), which covers `env_files`, `server`, `auth`, `meta_mcp`, `streaming`, `failsafe`, `cache`, `capabilities`, and `backends`. The remaining top-level sections (`playbooks`, `security`, `webhooks`, `routing_profiles`, `code_mode`, `mtls`, `key_server`, `agent_auth`, `runtime`, `control_plane`, `cost_governance`) have no prose reference yet; the `Config` struct in [src/config/mod.rs](src/config/mod.rs) is the authoritative list. Minimal example:
 
 ```yaml
 server:
@@ -270,15 +271,22 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 
 ## Why use MCP Gateway?
 
-- **MCP compatibility layer.** Clients and servers on different MCP revisions work together through the gateway: it negotiates the revision with each side separately, from 2024-11-05 to 2026-07-28. See [MCP compatibility](#mcp-compatibility).
-- **Larger catalog, smaller exposed surface.** The agent loads a fixed meta-surface instead of every backend definition. In the checked-in live run, both paths completed every task, but the meta path used 1.2–16.1% more input tokens and added one turn. See [Benchmarks](docs/BENCHMARKS.md).
-- **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
+- **A fixed, small context cost.** In the README benchmark, 100 backend tools cost about 1,100 tokens of tool definitions instead of 15,000, because the agent sees 11 meta-tools instead of every definition. Numbers are reproducible; see [Benchmarks](docs/BENCHMARKS.md).
+- **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The gateway sets no limit on backends or tools; the agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
 - **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 130+ capabilities ship built in.
 - **Per-user identity to backends.** Multitenant backends can receive the verified end-user identity with no gateway-stored long-lived credential. See [Multitenant identity](#end-user-identity-v31).
-- **Secure by construction.** A tool-poisoning validator scans every backend tool description before it reaches the agent. SHA-256 capability pinning is optional: unpinned files load, pinned files fail closed on mismatch. OWASP Agentic AI Top 10 coverage is self-assessed in-tree, not a certification. The crate sets `#![deny(unsafe_code)]`, so any unsafe block needs an explicit `#[allow]` opt-in, with optional mTLS, message signing, and agent identity.
-- **Swap your MCP stack without losing your session.** Hot-reload backends and config in about 8ms while the AI stays connected. No restart, no lost context.
+- **Secure by construction.** A tool-poisoning validator scans every backend tool description before it reaches the agent, optional SHA-256 pinning with rug-pull detection protects each pinned capability, and controls are mapped to all ten OWASP Agentic AI Top 10 risks in a self-assessment that also lists the remaining gaps. The crate sets `#![deny(unsafe_code)]`, so any unsafe block needs an explicit `#[allow]` opt-in, with optional mTLS, message signing, and agent identity.
+- **Swap your MCP stack without losing your session.** Backends and capability YAMLs hot-reload while the AI stays connected. No restart, no lost context.
 - **Production resilience.** Circuit breakers, retries with backoff, rate limiting, and health checks keep one flaky server from taking down the whole toolchain.
 - **Dual protocol.** MCP plus an A2A (agent-to-agent) transport adapter, so the same gateway routes tool calls and cross-provider agent messages.
+
+### What MCP Gateway is, and what it is not
+
+MCP Gateway is a tool and capability **router**. It routes MCP tool, resource, and prompt traffic to backend MCP servers and to capability-backed REST APIs, and it can proxy MCP server-to-client requests like `sampling/createMessage`, `elicitation/create`, and `roots/list` back to the connected client over the existing session.
+
+It is not a chat-completions or embeddings proxy. When a backend asks for `sampling/createMessage`, the connected client performs the model call, not the gateway. The OpenAI-compatible prompt-cache helpers exist for one narrow reason: so `gateway_invoke` can preserve `prompt_cache_key` behavior for backends that call LLM APIs internally. That boundary is deliberate. The value here is routing hundreds of tools through a small surface, not sitting in the model path.
+
+Compared with a client that loads every tool definition into every request, the gateway trades a one-time discovery hop for a flat, small context cost. It aggregates many backends behind one namespaced surface with integrity checks, ranking, and per-user identity.
 
 ### MCP compatibility
 
@@ -287,15 +295,7 @@ The gateway speaks MCP 2026-07-28 (stateless, on by default) and 2025-11-25, 202
 - **Ordinary calls** work across legacy and 2026 clients and backends. An HTTP or stdio backend that rejects the gateway's proposed revision is retried at the highest revision both sides speak. A 2026-only backend that refuses the `initialize` handshake must be reached over HTTP.
 - **A 2026 backend's mid-call questions reach an older client.** The gateway relays them as the `elicitation/create`, `sampling/createMessage` or `roots/list` requests the client already understands, collects the answers, and retries the backend. A 2026 client gets the same questions as a continuation it answers by retrying (over HTTP it needs a verified caller identity).
 
-Limits: the reverse translation is not implemented, so an older backend that sends its own mid-call request is not relayed to any client. A legacy client is refused the 2026-only tasks methods (`-32601`) rather than given an emulation, and the bridge relays only those three request types and refuses the rest. The per-pairing matrix, with the test behind each row, is in [docs/PROTOCOL_COMPATIBILITY.md](docs/PROTOCOL_COMPATIBILITY.md).
-
-### What MCP Gateway is, and what it is not
-
-MCP Gateway is a tool and capability **router**. It routes MCP tool, resource, and prompt traffic to backend MCP servers and to capability-backed REST APIs, and it can proxy MCP server-to-client requests like `sampling/createMessage`, `elicitation/create`, and `roots/list` back to the connected client over the existing session.
-
-It is not a chat-completions or embeddings proxy. When a backend asks for `sampling/createMessage`, the connected client performs the model call, not the gateway. The OpenAI-compatible prompt-cache helpers exist for one narrow reason: so `gateway_invoke` can preserve `prompt_cache_key` behavior for backends that call LLM APIs internally. That boundary is deliberate. The value here is routing hundreds of tools through a small surface, not sitting in the model path.
-
-Compared with the default approach of loading every tool definition into every request, the gateway trades a one-time discovery hop for a flat, small context cost. Compared with generic transport bridges that expose one server at a time, it aggregates many backends behind one namespaced surface with integrity checks, ranking, and per-user identity.
+Limits: the reverse translation is not implemented, so an older backend that sends its own mid-call request is not relayed to any client. A legacy client is refused the 2026-only tasks methods (`-32601`) rather than given an emulation, and the bridge relays only those three request types and refuses the rest. The relay runs only on calls the gateway dispatches itself (`gateway_invoke` and the other meta-tool invoke paths), not on the direct `POST /mcp/{name}` route, and only for request types the client declared in `initialize`. The per-pairing matrix, with the test behind each row, is in [docs/PROTOCOL_COMPATIBILITY.md](docs/PROTOCOL_COMPATIBILITY.md).
 
 <a id="end-user-identity-v31"></a>
 
@@ -303,28 +303,51 @@ Compared with the default approach of loading every tool definition into every r
 
 A multitenant backend (email, memory, calendar) that runs its own OIDC normally sees only "the gateway," so it cannot enforce per-user access or produce a per-user audit trail. mcp-gateway propagates the verified end-user identity to the backend through one of three configured strategies. It can mint a short-lived gateway-signed assertion, forward the caller's own token, or run an RFC 8693 token exchange for OAuth-native backends. It keeps no long-lived credential for anyone. A backend marked `required` fails closed rather than serve a shared key when no verified identity is present, and per-user results stay isolated in the cache. See [ADR-007](docs/adr/ADR-007-identity-propagation.md), [ADR-008](docs/adr/ADR-008-multi-user-oauth-isolation.md), and [docs/UPGRADING-3.0.md](docs/UPGRADING-3.0.md). For the full propagation sequence, each strategy's wiring, the safety invariants, and the 2.x upgrade path, see [What is new in v3.1.0: end-user identity to backends](docs/whats-new-v3.1-identity.md).
 
-### Independent reviews
+### Where the numbers come from
 
-- [Five MCP hot-reload tools compared](https://ruachtov.ai/blog/five-tools-mcp-restart.html): Ruach Tov Collective's BPD-based comparison of mcp-gateway against four restart-focused alternatives, with a feature matrix and architectural analysis.
-- [mcp-gateway deep dive](https://ruachtov.ai/blog/mcp-gateway-deep-dive.html): a walkthrough of the capability system, SHA-256 integrity pinning, and the v2.5 to v2.9 development arc.
-
-Quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with a CI check that fails on drift. The public Trust Fabric plan is tracked in [docs/roadmap/mik-6550-trust-fabric-roadmap.md](docs/roadmap/mik-6550-trust-fabric-roadmap.md).
+Quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with a CI check that fails on drift. The public Trust Fabric plan is tracked in [docs/roadmap/trust-fabric.md](docs/roadmap/trust-fabric.md).
 
 ## Why the token math matters
 
-Every MCP tool you connect costs about 150 tokens of context overhead. Connect 20 servers with 100 tools and you have burned roughly 15,000 tokens before the first message, on definitions the AI probably will not use this turn. Worse, context limits force you to choose which tools to connect at all, so the agent makes weaker decisions because the right data is out of reach.
+In a client that loads every definition up front, every MCP tool you connect costs context in every request; this README models it at about 150 tokens per tool, an assumed figure rather than a measurement. Connect 20 servers with 100 tools and you have burned roughly 15,000 tokens before the first message, on definitions the AI probably will not use this turn. A client that loads only tool names until one is needed pays far less, so the comparison below is for eager clients. Worse, in an eager client context limits force you to choose which tools to connect at all, so the agent makes weaker decisions because the right data is out of reach.
 
 | | Without gateway | With gateway |
 |---|----------------|--------------|
-| **Tools in context** | Every definition, every request | 11 meta-tools in the README benchmark (~1,100 tokens) |
+| **Tools in context** | Every definition, every request (eager client) | 11 meta-tools in the README benchmark (~1,100 tokens) |
 | **Schema footprint** | ~15,000 modeled tokens (100 tools) | ~1,100 modeled tokens before discovery; not completed-task cost |
 | **Measured task cost** | Direct path was lower at every tested size | Meta path used 1.2–16.1% more input tokens and one extra turn |
-| **Practical tool limit** | 20 to 50 tools under context pressure | Unlimited, discovered on demand |
+| **Practical tool limit** | 20 to 50 tools under context pressure | None set by the gateway; tools are discovered on demand |
 | **Connect a new REST API** | Build an MCP server (days) | Drop a YAML file or import an OpenAPI spec (minutes) |
-| **Changing MCP config** | Restart the AI session, lose context | Restart gateway (~8ms), session stays alive |
+| **Changing MCP config** | Restart the AI session, lose context | Capability YAMLs and backends reload live; most other config fields need a gateway restart, which drops open sessions |
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
 The gateway exposes 9 tools minimum, 11 in the README benchmark scenario, counted for an administrator; a caller without admin standing is shown five fewer, six where the stats tool is exposed, because it is only shown what it could invoke. The base discovery quartet stays fixed. Everything else is listed only where it can answer: stats, cost reporting, playbooks and profile control appear once the configuration that backs them exists, and webhook status where a webhook registry is attached, which the stdio transport never has. A deployment that turns all of them on is served 17. It costs context exactly where it is useful.
+
+## Meta-tools
+
+These are the gateway's own tools, defined in `src/gateway/meta_mcp_tool_defs.rs`. Backend tools are not listed here; the agent finds them with `gateway_search_tools` and calls them with `gateway_invoke`. "Admin only" tools are hidden from, and refused to, a caller without admin standing.
+
+| Tool | What it does | Listed when |
+|---|---|---|
+| `gateway_list_servers` | Lists connected backends with status, tool count and circuit-breaker state | Always |
+| `gateway_list_tools` | Lists tools from one backend, or from all of them | Always |
+| `gateway_search_tools` | Searches every backend tool by keyword and returns ranked matches | Always |
+| `gateway_invoke` | Calls a backend tool through the gateway's auth, rate-limit, cache and failsafe layers | Always |
+| `gateway_kill_server` | Stops routing to a backend at once (operator kill switch) | Always; admin only |
+| `gateway_revive_server` | Restores routing to a stopped backend and resets its error budget | Always; admin only |
+| `gateway_list_disabled_capabilities` | Lists capabilities suspended for a high error rate, and for how long | Always |
+| `gateway_set_state` | Moves the session to a workflow state, which controls which state-scoped capabilities are listed | Always; needs a session, so a 2026-07-28 connection is refused |
+| `gateway_reload_capabilities` | Re-reads capability YAML files from disk without a restart | Always; admin only |
+| `gateway_reload_config` | Reloads the config file from disk without a restart | The gateway was started from a config file; admin only |
+| `gateway_webhook_status` | Lists webhook endpoints with received, delivered and failed counts | HTTP transport with `webhooks.enabled` (on by default); never over stdio; admin only |
+| `gateway_get_stats` | Reports usage statistics: invocations, cache hits, top tools | `meta_mcp.expose_stats_tool: true`; admin only |
+| `gateway_cost_report` | Reports session and API-key spend by backend and tool | `cost_governance.enabled: true` |
+| `gateway_run_playbook` | Runs a multi-step playbook as one call | `playbooks.enabled: true` and at least one playbook loaded |
+| `gateway_list_profiles` | Lists the configured routing profiles | At least one entry under `routing_profiles` |
+| `gateway_get_profile` | Shows the active routing profile | At least one entry under `routing_profiles` |
+| `gateway_set_profile` | Switches the session's routing profile, which narrows the tools and backends available | At least one entry under `routing_profiles`; needs a session, so a 2026-07-28 connection is refused |
+
+The first nine rows are the minimum. The default HTTP deployment, started from a config file, adds `gateway_reload_config` and `gateway_webhook_status`. `meta_mcp.exposed_meta_tools` narrows any of these to an allow-list, including the rows marked "Always". Code Mode, below, replaces the whole set with two tools.
 
 ### Code Mode: two tools instead of the meta-tool set
 
@@ -342,7 +365,7 @@ Connecting N MCP servers to an agent means accepting N attack surfaces. Tool poi
 
 mcp-gateway puts every backend tool description behind one audit surface and defends it structurally:
 
-- **Tool-poisoning validator (AX-010).** Every backend tool description is scanned before it reaches the agent's context window. HIGH patterns fail closed: `<IMPORTANT>` blocks, `~/.ssh`/`~/.aws`/`id_rsa`/`.env`/`/etc/passwd`, `sidenote` exfiltration language, `curl .* https?://`, and `base64` in an exfil context. MEDIUM patterns warn: 40+ consecutive spaces, zero-width or bidi-override Unicode, and oversized descriptions. Implementation: [`src/validator/rules/tool_poisoning.rs`](src/validator/rules/tool_poisoning.rs) (19 tests).
+- **Tool-poisoning validator.** Every backend tool description is scanned before it reaches the agent's context window. HIGH patterns fail closed: `<IMPORTANT>` blocks, `~/.ssh`/`~/.aws`/`id_rsa`/`.env`/`/etc/passwd`, `sidenote` exfiltration language, `curl .* https?://`, and `base64` in an exfil context. MEDIUM patterns warn: 40+ consecutive spaces, zero-width or bidi-override Unicode, and oversized descriptions. Implementation: [`src/validator/rules/tool_poisoning.rs`](src/validator/rules/tool_poisoning.rs) (19 tests).
 - **Optional SHA-256 capability hash-pinning.** `mcp-gateway cap pin <file>` writes a `sha256:` line over the file's canonical hash (`sed 's/\r$//' capability.yaml | grep -v '^sha256:' | sha256sum` reproduces it from any shell; CRLF line endings hash as LF). Unpinned files still load. A pinned file that no longer matches fails closed on load and on every watcher event.
 - **Rug-pull detection.** When a pinned capability's on-disk content changes after approval, the watcher unloads it and logs `RUG-PULL DETECTED`. The capability stays quarantined until an operator re-pins it. Implementation: [`src/capability/hash.rs`](src/capability/hash.rs) and `detect_rug_pulls` in [`src/capability/backend.rs`](src/capability/backend.rs).
 - **Centralized audit surface.** Capability YAMLs are plain text: diffable, greppable, and reviewable in a PR. The agent only ever sees the compact meta-surface, so there is no N-server tool-list pollution and no N-server attack surface.
@@ -437,40 +460,6 @@ Any MCP-compliant server works. All three transport types are supported:
 
 Remote MCP servers plug in by URL, with no extra code. See [examples/gateway-full.yaml](examples/gateway-full.yaml) for a commented GitMCP backend entry and [docs/REMOTE_BACKENDS.md](docs/REMOTE_BACKENDS.md) for a step-by-step walkthrough.
 
-## Public MCP Gateway Comparison
-
-This table compares public, user-facing behavior, not internal roadmap scoring. MCP Gateway entries are grounded in this repo's public docs: [quickstart](QUICKSTART.md), [deployment](docs/DEPLOYMENT.md), [OWASP controls](docs/OWASP_AGENTIC_AI_COMPLIANCE.md), [TrustCard/CBOM](docs/trustcard.md), [CatalogTrustLab](docs/catalog_trust_lab.md), [adaptive ranking](docs/adaptive_ranking.md), [identity grants](docs/identity_grants.md), [ADR-007 identity propagation](docs/adr/ADR-007-identity-propagation.md), [ADR-008 multi-user OAuth isolation](docs/adr/ADR-008-multi-user-oauth-isolation.md), and the [Trust Fabric roadmap](docs/roadmap/mik-6550-trust-fabric-roadmap.md). Competitor entries are grounded in public project docs: [Docker MCP Catalog and Toolkit](https://docs.docker.com/ai/mcp-catalog-and-toolkit/), [MCPJungle README](https://github.com/mcpjungle/MCPJungle), [mcpo README](https://github.com/open-webui/mcpo), and [Supergateway README](https://github.com/supercorp-ai/supergateway).
-
-| Axis | **MCP Gateway** | **[Docker MCP Gateway / Toolkit](https://docs.docker.com/ai/mcp-catalog-and-toolkit/)** | **[MCPJungle](https://github.com/mcpjungle/MCPJungle)** | **[mcpo](https://github.com/open-webui/mcpo) / [Supergateway](https://github.com/supercorp-ai/supergateway)** |
-|---|---|---|---|---|
-| Primary job | MCP and REST capability router with a compact meta-surface | Docker-managed catalog, profiles, containerized MCP servers, and gateway | Self-hosted gateway that runs many MCP servers behind one endpoint | Protocol bridges: MCP to OpenAPI for mcpo; stdio to SSE/WS for Supergateway |
-| Install | Standalone Rust binary via cargo, Homebrew, VS Code, Cursor, and local build | Docker Desktop / Docker CLI plugin flow | Self-hosted gateway install and server registration | Python/uvx/Docker for mcpo; npm/CLI bridge for Supergateway |
-| Configuration | Wizard, local starter profile, service templates, client export, doctor JSON, backup and rollback | Docker profiles and catalog selection | Centralized server and client configuration | Per-bridge command/config for each exposed server or transport |
-| Security | OWASP Agentic AI matrix, firewall, response inspection, hash-pinned capabilities, mTLS/signing options | Verified container images with versioning, provenance, and security updates in Docker catalog | Centralized access control and observability | Transport/API exposure layer; security depends on bridge auth and deployment boundary |
-| Identity and grants | Local identity-grant contract and CLI; multi-user OAuth isolation is credential-agnostic by default (ADR-008), and a backend configured `required` fails closed rather than serve a shared credential; per-user identity propagation to backends via signed assertion, caller-token passthrough, or RFC 8693 token exchange; the OIDC key server is disabled by default, delegated-bearer acceptance is a separate opt-in, and control-plane role mappings are issuer-scoped | Docker/team controls depend on Docker organization setup | Authenticated clients and server access control | Not a grant engine; delegates identity policy to the surrounding deployment |
-| Runtime isolation | RuntimeProvider policy planning plus Docker/Podman/Kubernetes deployment paths | Container-first isolation is the core runtime model | Runs and manages MCP servers behind the gateway | Bridges existing server processes/transports rather than isolating arbitrary tools |
-| Trust metadata | TrustCard/CBOM generation, validation, TrustLab evidence, provenance stubs | Catalog packages carry image provenance and security update flow | Gateway inventory and observability focus | Protocol metadata bridge; trust metadata is not the primary product surface |
-| Discovery | Meta-MCP listing/search, ShadowRadar unmanaged-server inventory, capability registry | Docker MCP Catalog of packaged servers | Centralized discovery across configured servers | Exposes one bridged server surface at a time unless composed externally |
-| Policy and governance | Policy, grants, audit events, read-only control-plane tab/API, enterprise evidence boundary | Docker org/catalog/profile policy model | Centralized access control for teams | No broad governance plane; use with another policy layer when needed |
-| Imports and bridges | Native MCP backends plus REST capability YAML and protocol-import planning | Docker-packaged MCP server catalog | MCP server aggregation | Strong bridge story for OpenAPI, SSE, WebSocket, and stdio compatibility |
-| Ranking and routing | Safety-aware ranking, explanations, cost/latency/trust/health signals | Catalog/profile selection, not an MCP tool ranker | Gateway-level routing to configured servers | Transport routing, not semantic tool ranking |
-| Deployment | Local, team gateway, Docker Compose, systemd, launchd, a security-hardened Helm chart (non-root, seccomp, read-only rootfs), and experimental (v1alpha1) Kubernetes CRDs | Docker Desktop, Docker CLI, Docker Hub/catalog workflow | Local or shared self-hosted gateway | Local or remote bridge process beside the target MCP server |
-| Licensing | PolyForm Noncommercial 1.0.0 throughout; commercial use requires a license | Docker product and repository licensing apply | See project repository license | See each bridge repository license |
-
-### vs Anthropic MCP tunnels
-
-On 2026-05-19 Anthropic shipped [Claude Managed Agents](https://claude.com/blog/claude-managed-agents-updates) with self-hosted sandboxes (public beta) and [MCP tunnels](https://platform.claude.com/docs/en/agents-and-tools/mcp-tunnels/overview) (research preview). An MCP tunnel lets a Claude agent reach a single MCP server inside a private network through one outbound connection from a lightweight gateway, with no inbound firewall rules, no public endpoint, and end-to-end encryption.
-
-mcp-gateway and Anthropic's MCP tunnel sit at different layers and compose. The tunnel is reachability plumbing for one private MCP server. mcp-gateway is the aggregation, routing, capability-namespacing, and observability layer across many MCP and REST backends. Deploy both and mcp-gateway becomes the private MCP server that the tunnel exposes: one tunnel, one outbound connection, every backend behind it.
-
-| Concern | Anthropic MCP tunnel | mcp-gateway | Boundary |
-|---|---|---|---|
-| **Backend topology** | Single MCP server per tunnel, exposed through one outbound connection ([overview](https://platform.claude.com/docs/en/agents-and-tools/mcp-tunnels/overview)) | N-backend aggregation: 130+ REST capabilities plus multiple MCP backends behind a compact 9-17 tool meta-surface (`src/gateway/`, `capabilities/*.yaml`) | Different primitive: 1-server reachability vs many-backend aggregation |
-| **Tool routing** | Opaque pass-through; the agent sees whatever tool list the tunneled server publishes | Capability namespacing plus dynamic `gateway_search_tools` / `gateway_invoke` discovery (`src/gateway/`); SHA-256 pinning per capability (`src/capability/hash.rs`) | Different layer: transport reachability vs tool-surface curation and integrity |
-| **Observability** | Per-tunnel session telemetry from Anthropic's side | Unified `trace_id` and cost accounting across every backend invocation (`src/cost_accounting/`, `src/gateway/`) | Scope distinction: per-tunnel session vs cross-backend trace correlation |
-
-They solve adjacent problems. A team that wants Claude Managed Agents to reach a private-network deployment of mcp-gateway uses the tunnel for reachability and mcp-gateway for fan-out, capability hygiene, OWASP Agentic AI controls, and unified cost and trace telemetry.
-
 ## API
 
 | Endpoint | Method | Description |
@@ -488,7 +477,7 @@ They solve adjacent problems. A team that wants Claude Managed Agents to reach a
 
 | Metric | Value | Notes |
 |--------|-------|-------|
-| **Startup time** | ~8ms | Measured with `hyperfine` ([benchmarks](docs/BENCHMARKS.md)) |
+| **Startup time** | ~8ms | Mean run time of `mcp-gateway --help` (`hyperfine`, 20 runs); not the time until the gateway serves requests ([benchmarks](docs/BENCHMARKS.md)) |
 | **Binary size** | ~12-13 MB | Release build with LTO, stripped |
 | **Hot-path microbenchmarks** | Included | Criterion suite covers registry, parsing, cache-key, firewall, and semantic-search hot paths |
 | **End-to-end latency** | Backend-dependent | Measure with your real MCP servers and REST APIs rather than relying on a synthetic single number |
@@ -534,6 +523,26 @@ Registry location: `~/.mcp-gateway/skills.json` (override with `MCP_GATEWAY_SKIL
 
 Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code/skills) and [agentskills.io](https://agentskills.io).
 
+## FAQ
+
+**What is MCP Gateway?**
+A self-hosted gateway that puts many MCP servers and REST APIs behind one MCP endpoint and shows the AI client a compact set of tools for finding and calling them.
+
+**Is it an MCP proxy or an MCP server aggregator?**
+Both. It proxies MCP traffic to backend servers and aggregates their tools behind one endpoint.
+
+**Which MCP protocol versions does it support?**
+2026-07-28, 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05. A client and a backend on different revisions can make ordinary tool calls through it; the limits of the bridge are in [MCP compatibility](#mcp-compatibility).
+
+**Does it save tokens?**
+It keeps backend tool definitions out of the client's tool list, so the context they take stays fixed. A small live-agent benchmark found no completed-task token saving, because of the extra search hop; see [Why the token math matters](#why-the-token-math-matters) and [Benchmarks](docs/BENCHMARKS.md).
+
+**Which clients work with it?**
+Claude Code has a recorded run against 4.0. The gateway speaks MCP over stdio and streamable HTTP, and `mcp-gateway setup export` writes config for seven named clients; which client versions have a recorded run is in [Supported clients](docs/CLIENTS.md).
+
+**Is it free?**
+Free for personal and noncommercial use under PolyForm Noncommercial 1.0.0. Commercial use needs a commercial license; see [License](#license).
+
 ## Documentation
 
 | Document | Contents |
@@ -554,8 +563,6 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Changelog](CHANGELOG.md) | Release history |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
 | [ShadowRadar](docs/SHADOW_SCAN.md) | Passive local discovery and static network-rule export |
-| [Enterprise agent governance comparison](docs/competitive/willow-enterprise-agent-governance.md) | Willow/Webrix feature bar and mcp-gateway's current gaps |
-| [vs Anthropic MCP tunnels](#vs-anthropic-mcp-tunnels) | Where mcp-gateway and Anthropic's MCP tunnel compose |
 
 ## Troubleshooting
 
@@ -626,7 +633,7 @@ mcp-gateway is part of a suite of MCP tools:
 
 | Tool | Description |
 |------|-------------|
-| **[mcp-gateway](https://github.com/MikkoParkkola/mcp-gateway)** | **Universal MCP gateway: a compact 9-17 tool surface replaces 100+ registrations** |
+| **[mcp-gateway](https://github.com/MikkoParkkola/mcp-gateway)** | **Unlimited MCP servers, tools and REST APIs behind one MCP endpoint at a fixed context cost, with on-demand tool discovery and MCP revision bridging** |
 | [trvl](https://github.com/MikkoParkkola/trvl) | AI travel agent, 36 MCP tools for flights, hotels, ground transport |
 | [nab](https://github.com/MikkoParkkola/nab) | Web content extraction: fetch any URL with cookies and anti-bot bypass |
 | [axterminator](https://github.com/MikkoParkkola/axterminator) | macOS GUI automation, 34 MCP tools via the Accessibility API |

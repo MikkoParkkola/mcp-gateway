@@ -95,7 +95,11 @@ pub(super) fn hwm_missing_in(
         match v.get("event").and_then(Value::as_str) {
             Some(EV_HWM_MISSING) => note(counter),
             Some(EV_TORN) if v.get(TORN_COMMITTED).and_then(Value::as_bool) == Some(true) => {
-                note(counter);
+                note(
+                    v.get(HWM_MISSING_AT)
+                        .and_then(Value::as_u64)
+                        .unwrap_or(counter),
+                );
             }
             Some(EV_OPENED) => {
                 if let Some(at) = v.get(HWM_MISSING_AT).and_then(Value::as_u64) {

@@ -322,106 +322,17 @@ fn parse_args(args: &[&str]) -> Result<Cli, clap::Error> {
     Cli::try_parse_from(full)
 }
 
+/// The `plugin` command is retired in 4.0: its marketplace host never
+/// resolved, and nothing read what `plugin install` wrote.
 #[test]
-fn cli_plugin_search_parses_query() {
-    let cli = parse_args(&["plugin", "search", "stripe"]).unwrap();
-    match cli.command {
-        Some(Command::Plugin(PluginCommand::Search {
-            query,
-            marketplace_url,
-        })) => {
-            assert_eq!(query, "stripe");
-            assert!(marketplace_url.is_none());
-        }
-        other => panic!("unexpected: {other:?}"),
-    }
-}
-
-#[test]
-fn cli_plugin_search_accepts_marketplace_url_flag() {
-    let cli = parse_args(&[
-        "plugin",
-        "search",
-        "foo",
-        "--marketplace-url",
-        "https://example.com",
-    ])
-    .unwrap();
-    match cli.command {
-        Some(Command::Plugin(PluginCommand::Search {
-            marketplace_url, ..
-        })) => {
-            assert_eq!(marketplace_url.as_deref(), Some("https://example.com"));
-        }
-        other => panic!("unexpected: {other:?}"),
-    }
-}
-
-#[test]
-fn cli_plugin_install_parses_name() {
-    let cli = parse_args(&["plugin", "install", "stripe-payments"]).unwrap();
-    match cli.command {
-        Some(Command::Plugin(PluginCommand::Install {
-            name,
-            marketplace_url,
-            plugin_dir,
-        })) => {
-            assert_eq!(name, "stripe-payments");
-            assert!(marketplace_url.is_none());
-            assert!(plugin_dir.is_none());
-        }
-        other => panic!("unexpected: {other:?}"),
-    }
-}
-
-#[test]
-fn cli_plugin_install_accepts_plugin_dir_flag() {
-    let cli = parse_args(&["plugin", "install", "foo", "--plugin-dir", "/tmp/plugins"]).unwrap();
-    match cli.command {
-        Some(Command::Plugin(PluginCommand::Install { plugin_dir, .. })) => {
-            assert_eq!(
-                plugin_dir.as_deref(),
-                Some(std::path::Path::new("/tmp/plugins"))
-            );
-        }
-        other => panic!("unexpected: {other:?}"),
-    }
-}
-
-#[test]
-fn cli_plugin_uninstall_parses_name() {
-    let cli = parse_args(&["plugin", "uninstall", "my-plugin"]).unwrap();
-    match cli.command {
-        Some(Command::Plugin(PluginCommand::Uninstall { name, plugin_dir })) => {
-            assert_eq!(name, "my-plugin");
-            assert!(plugin_dir.is_none());
-        }
-        other => panic!("unexpected: {other:?}"),
-    }
-}
-
-#[test]
-fn cli_plugin_list_parses_without_arguments() {
-    let cli = parse_args(&["plugin", "list"]).unwrap();
-    match cli.command {
-        Some(Command::Plugin(PluginCommand::List { plugin_dir })) => {
-            assert!(plugin_dir.is_none());
-        }
-        other => panic!("unexpected: {other:?}"),
-    }
-}
-
-#[test]
-fn cli_plugin_list_accepts_plugin_dir_flag() {
-    let cli = parse_args(&["plugin", "list", "--plugin-dir", "/my/plugins"]).unwrap();
-    match cli.command {
-        Some(Command::Plugin(PluginCommand::List { plugin_dir })) => {
-            assert_eq!(
-                plugin_dir.as_deref(),
-                Some(std::path::Path::new("/my/plugins"))
-            );
-        }
-        other => panic!("unexpected: {other:?}"),
+fn cli_plugin_command_is_gone() {
+    for args in [
+        &["plugin", "search", "stripe"][..],
+        &["plugin", "install", "stripe-payments"][..],
+        &["plugin", "uninstall", "stripe-payments"][..],
+        &["plugin", "list"][..],
+    ] {
+        assert!(parse_args(args).is_err(), "{args:?} still parses");
     }
 }
 
@@ -854,18 +765,6 @@ fn cli_kubernetes_apply_plan_parses_execute_gate() {
         }
         other => panic!("unexpected: {other:?}"),
     }
-}
-
-#[test]
-fn cli_plugin_search_requires_query_argument() {
-    let result = parse_args(&["plugin", "search"]);
-    assert!(result.is_err());
-}
-
-#[test]
-fn cli_plugin_install_requires_name_argument() {
-    let result = parse_args(&["plugin", "install"]);
-    assert!(result.is_err());
 }
 
 // MIK-6700 review #2: `audit verify` must FAIL CLOSED on a config load error,

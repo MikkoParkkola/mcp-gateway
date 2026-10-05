@@ -691,19 +691,43 @@ delivery path is the staged-receipts path of 13.3/13.4).
 
 - A final check that changes a single-target call's delivered result (a redaction) rebuilds that
   call's receipt from what is delivered, keeping the sensitivity the delivery was judged to have:
-  text the caller still got keeps its receipt, removed text stops being tracked. A plan stages
-  several receipts that cannot be told apart by the changed text, so a change drops them all.
+  text the caller still got keeps its receipt, removed text stops being tracked.
+- A plan (`gateway_run_playbook`, `gateway_execute`) stages one receipt per step. The plan's answer
+  is not any step's text, so a step receipt is never rebuilt from it. At the final answer each is
+  kept to what the answer still delivers: a step leaf delivered verbatim stays whole, and any
+  other leaf keeps only the fingerprints whose k-gram occurs in a delivered leaf. Text the engine
+  wrote is attributed to no backend, and a changed plan receipt that never reached the final answer
+  is not committed (MIK-7887.RECEIPT.2).
+- A receipt's text is fingerprinted in runs that never cross a seam: the cap's cut between head
+  and tail, a dropped middle leaf, or a leaf a change removed. No fingerprint joins text the source
+  never produced contiguously.
 - Reading a failed task hands the reader the backend's error, so the read renews a receipt for it,
-  classified like a pending prompt. A failure only the gateway wrote stores no backend output
-  (`output_free`) and renews nothing.
+  classified like a pending prompt. Only an error the gateway established as the peer's (stored
+  author `Peer`: every screen and the audit passed it unchanged) is receipted, at settlement and on
+  a read; the gateway's own errors, substitutes, and errors on older rows whose author is unknown
+  renew nothing (MIK-7887.RECEIPT.1).
 - A stdio answer whose `result` is `null` delivers a result, as a typed response and the judge do.
 - Known limits, stated because Block mode can over-refuse as well as miss: (1) a multi-target
-  task's read stages nothing and a plan's receipts are dropped on a change, so the reader loses the
-  same-source excuse for those reads; (2) receipts are staged before late metadata normalisation
-  (the `cacheScope` clamp, the `executionOutcome` strip, the modern `serverInfo` replacement), so a
-  backend that fills those fields with long text can add or push out receipt text; (3) a bridged
-  prompt is recorded when it is handed to the client channel, before the reply, so a client that
-  never answers (the bridge drops the send at its timeout) was still shown it and no second caller
-  can relay it during the wait; the cost is that a send that finds no session leaves a receipt for
-  a prompt nobody saw, and the channel has no retraction, so this stays; (4) the fixed error the gateway
-  writes when recovery policy withholds backend content is receipted like any failed-task error.
+  task's read stages nothing, so the reader loses the same-source excuse for it; (2) a plan answer
+  over 1 MiB of text drops its step receipts, as before, and the drop is counted; (3) a step whose
+  text is over the receipt cap keeps no receipt for its dropped middle leaves; (4) a k-gram a step
+  produced stays on its receipt when the caller got it through another step or engine text, even
+  if it was removed from that step (source-attribution coarseness).
+
+### 13.7 Receipts at the delivery point (MIK-7887.RECEIPT.3/.4, 2026-10-04)
+
+- A bridged prompt's receipt commits where the channel confirms delivery, not when it is handed
+  over. HTTP: once `send_to_session` has put it in the live session's stream (SSE has no write
+  acknowledgement, so that is the confirmation). Stdio: once the writer reports stdout took the
+  frame. A send that finds no session, or is cancelled before that point, leaves no receipt; one
+  cancelled after it keeps its receipt, and the receipt exists while the reply is awaited, so no
+  second caller can relay the prompt during the wait. A channel without its own commit point
+  commits after the call returns (never on `NoSession`), which under-receipts a cancelled send
+  rather than receipting one nobody saw.
+- A false receipt is not only an over-refusal risk: it grants its holder the same-source excuse,
+  so it can also let a relay through. That is why a receipt follows delivery, not hand-off.
+- A single-target answer's receipt is rebuilt from the answer as finally delivered, after the
+  scope clamp, the chain, the modern `serverInfo` stamp and any redaction, on the HTTP and stdio
+  routes. Members the gateway wrote on that route (its chain, the clamped `cacheScope`, a modern
+  answer's `serverInfo`) are left out, since they are not backend text; a legacy answer's backend
+  `serverInfo` reaches the caller and stays in. A `gateway_invoke` answer is read decoded.

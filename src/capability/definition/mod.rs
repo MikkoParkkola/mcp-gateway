@@ -557,6 +557,21 @@ fn collect_schema_tokens(schema: &serde_json::Value, push: &mut impl FnMut(&str)
 }
 
 impl CapabilityDefinition {
+    /// SHA-256 of the whole definition as JSON with every object's keys
+    /// sorted, providers with their typed process configs included and the
+    /// pin state itself excluded. Numbers keep their exact value (not JCS,
+    /// which rounds them through a double and makes 2^53 and 2^53 + 1 equal).
+    /// `None` only if the definition cannot be serialized, which never
+    /// matches a stored fingerprint (MIK-7814).
+    pub(crate) fn fingerprint(&self) -> Option<String> {
+        #[cfg(test)]
+        FINGERPRINTS.with(|count| count.set(count.get() + 1));
+        let value = sorted_keys(serde_json::to_value(self).ok()?);
+        Some(crate::hashing::sha256_hex(
+            &serde_json::to_vec(&value).ok()?,
+        ))
+    }
+
     /// Build the MCP tool description, appending keyword tags and schema field
     /// names when present.
     ///
@@ -612,11 +627,7 @@ impl CapabilityDefinition {
             input_schema: crate::capability::schema_validator::advertised_input_schema(
                 &self.schema.input,
             ),
-            output_schema: if self.schema.output.is_null() {
-                None
-            } else {
-                Some(self.schema.output.clone())
-            },
+            output_schema: crate::capability::advertised_output_schema(&self.schema.output),
             annotations: Some(self.tool_annotations()),
             role: None,
             projection: self.projection.clone(),
@@ -651,6 +662,7 @@ impl CapabilityDefinition {
 mod tests;
 
 #[cfg(test)]
+#[path = "cwe532_debug_redaction_tests.rs"]
 mod cwe532_debug_redaction;
 
 /// `true` when this capability hands a caller-chosen destination to a third
@@ -751,3 +763,31 @@ pub fn creates_caller_addressed_external_state(def: &CapabilityDefinition) -> bo
 
 #[cfg(test)]
 mod caller_addressed_state_tests;
+
+/// `value` with every object's keys in sorted order, whatever map type
+/// `serde_json` was built with.
+fn sorted_keys(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<_> = map.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, item)| (key, sorted_keys(item)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(sorted_keys).collect())
+        }
+        other => other,
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Fingerprints computed on this thread, so a test can show a path
+    /// never computes one.
+    pub(crate) static FINGERPRINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}

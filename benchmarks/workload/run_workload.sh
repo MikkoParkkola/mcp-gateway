@@ -51,6 +51,22 @@ case "$SEED" in
   ''|*[!0-9]*) echo "void: WORKLOAD_SEED must be a positive integer, got '$SEED'" >&2; exit 3 ;;
 esac
 
+# A graded run (WORKLOAD_GRADED=1) takes exactly the planned schedule: n = 18
+# measured reps, seed 20261007, and the counterbalanced design in schedule.py,
+# where every cell sits in every slot 3 or 4 times and the gated cells A, B and
+# C each average slot 3.00. Anything else is refused here, before any build, so
+# the freeze-time check is the runner's and not a reader's. Without the flag
+# the run is diagnostic: any n >= 6, any seed, and a fresh shuffle per rep.
+GRADED="${WORKLOAD_GRADED:-0}"
+case "$GRADED" in
+  0) ;;
+  1)
+    [[ "$REPS" == 18 ]] || { echo "void: a graded run takes WORKLOAD_REPS=18, got $REPS" >&2; exit 3; }
+    [[ "$SEED" == 20261007 ]] || { echo "void: a graded run takes WORKLOAD_SEED=20261007, got $SEED" >&2; exit 3; }
+    ;;
+  *) echo "void: WORKLOAD_GRADED must be 0 or 1, got '$GRADED'" >&2; exit 3 ;;
+esac
+
 REF_A="${REF_A:-v3.5.0}"
 REF_B="${REF_B:-v3.5.1}"
 REF_C="${REF_C:-HEAD}"
@@ -78,6 +94,10 @@ cell_port()   { case "$1" in A) echo 39420;; B) echo 39421;; C) echo 39422;; D) 
 # term that never varies. Shuffling slot and neighbour together is what makes
 # the per-rep pairing mean anything.
 cell_order() {
+  if [[ "$GRADED" == 1 ]]; then
+    python3 "$HERE/schedule.py" "$SEED" "$1"
+    return
+  fi
   python3 -c 'import random,sys
 cells = ["A","B","C","D","E"]
 random.Random(f"{sys.argv[1]}:{sys.argv[2]}").shuffle(cells)
@@ -339,13 +359,24 @@ abs_run_dir() { mkdir -p -- "$1" && (CDPATH= cd -- "$1" && pwd -P); }
 
 do_measure() {
   local run="$1"
+  # A graded run starts in an empty measurement directory: an interrupted
+  # earlier run's summaries would otherwise sit beside the new pins and be
+  # graded as if this run had measured them.
+  if [[ "$GRADED" == 1 ]] && compgen -G "$run/*.summary.json" > /dev/null; then
+    echo "void: a graded run needs a fresh run dir; $run already holds measurements" >&2
+    exit 3
+  fi
+  if [[ "$GRADED" == 1 ]] && [[ -e "$run/pins.json" || -e "$run/cell_order.jsonl" || -e "$run/verdict.json" ]]; then
+    echo "void: a graded run needs a fresh run dir; $run already holds pins, an order or a verdict" >&2
+    exit 3
+  fi
   render_configs "$run"
 
   python3 - "$run/pins.json" "$K6_IMAGE_DIGEST" \
     "$(cat "$ARMS_DIR/A/.checkout_sha")" "$(cat "$ARMS_DIR/B/.checkout_sha")" \
-    "$(cat "$ARMS_DIR/C/.checkout_sha")" "$REPS" "$(ncpu)" "$SEED" <<'PY'
+    "$(cat "$ARMS_DIR/C/.checkout_sha")" "$REPS" "$(ncpu)" "$SEED" "$GRADED" <<'PY'
 import json, subprocess, sys
-path, digest, a, b, c, reps, ncpu, seed = sys.argv[1:9]
+path, digest, a, b, c, reps, ncpu, seed, graded = sys.argv[1:10]
 def ver(ref):
     out = subprocess.run(["git","show",f"{ref}:Cargo.toml"],capture_output=True,text=True).stdout
     for line in out.splitlines():
@@ -365,7 +396,7 @@ for cell in ("C","D","E"):
 # chosen after the numbers were seen.
 json.dump({"k6_image_digest": digest, "reps": list(range(1, int(reps) + 1)),
            "ncpu": int(ncpu), "load_envelope": {"max_load1": float(ncpu)},
-           "cell_order_seed": seed, "cells": cells},
+           "cell_order_seed": seed, "graded": graded == "1", "cells": cells},
           open(path,"w"), indent=2)
 PY
 

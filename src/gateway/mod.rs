@@ -88,6 +88,18 @@ pub(crate) use server::{next_start_refusal, reload_posture_refusal};
 pub use streaming::{NotificationMultiplexer, TaggedNotification};
 pub use webhooks::WebhookRegistry;
 
+/// Where a credential may travel: `https://`, or `http://` to a loopback host,
+/// which never leaves the machine. Every cleartext-credential guard decides
+/// here, on [`is_loopback_host`], so no two of them can drift. A spelling the
+/// classifier does not know (`localhost.`, `[::ffff:127.0.0.1]`) is refused.
+pub(crate) fn is_tls_or_loopback(url: &url::Url) -> bool {
+    match url.scheme() {
+        "https" => true,
+        "http" => is_loopback_host(url.host_str().unwrap_or_default()),
+        _ => false,
+    }
+}
+
 /// Public test helpers for integration tests in `tests/`.
 ///
 /// Exposes internal types (`AppState`, `MetaMcp`, `create_router`) that are

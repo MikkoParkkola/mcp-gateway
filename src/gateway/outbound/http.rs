@@ -27,6 +27,16 @@ impl OutboundFrame {
     pub(crate) const fn is_answer(&self) -> bool {
         matches!(self.payload, Payload::Response(_) | Payload::Answer(_))
     }
+
+    /// The answer as it will be written, for a record that hashes it: the
+    /// direct route's rendered value, or a refusal that replaced it.
+    pub(crate) fn answer_document(&self) -> Option<serde_json::Result<serde_json::Value>> {
+        match &self.payload {
+            Payload::Answer(answer) => Some(Ok(answer.clone())),
+            Payload::Response(response) => Some(serde_json::to_value(response)),
+            _ => None,
+        }
+    }
 }
 
 /// The `tenant_read` record an answer still owes: written by [`emit_http`]

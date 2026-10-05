@@ -29,6 +29,7 @@
   "readme_token_savings": {
     "direct_tools": 100,
     "direct_tokens_per_tool": 150,
+    "direct_tokens_per_tool_basis": "Assumed, not measured. A third-party measurement of eleven MCP servers (okaneland.com/study/the-mcp-context-tax, Claude Code 2.1.204, 2026-08-09) sized tools/list schemas at about 87 to 1,150 tokens per tool, median about 231 (its per-server table divided by tool count; tokens estimated at four characters each).",
     "gateway_tools": 11,
     "gateway_tokens_per_tool": 100,
     "requests": 1000,

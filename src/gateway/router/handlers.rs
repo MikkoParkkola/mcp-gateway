@@ -541,7 +541,7 @@ async fn meta_mcp_dispatch(
         oauth_agent_identity.as_ref().map(|a| a.client_id.as_str()),
     );
 
-    // Per-connection Code Mode override (issue #146 / RFC-0132).
+    // Per-connection Code Mode override (issue #146).
     // Accepted value: ?codemode=search_and_execute
     // When the static config already enables Code Mode, this is a no-op.
     let code_mode_url_active: bool = query_str.is_some_and(|q| {
@@ -741,7 +741,7 @@ async fn meta_mcp_dispatch(
     }
     if let Some(error) = signing_context
         .as_ref()
-        .and_then(|context| context.refuse_malformed_nonce().err())
+        .and_then(|context| context.refuse_malformed_nonce_early().err())
     {
         return build_error_response(
             raw_id,
@@ -1967,6 +1967,23 @@ async fn meta_mcp_dispatch(
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");
+    // MIK-7887.RECEIPT.4: the receipt describes this, the delivered answer.
+    {
+        use crate::gateway::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
+        let stamps = if is_modern {
+            GatewayStamps::Modern
+        } else {
+            GatewayStamps::Legacy
+        };
+        let shape = if external_tool == "gateway_invoke" {
+            AnswerShape::InvokeWrapped
+        } else {
+            AnswerShape::Literal
+        };
+        state
+            .meta_mcp
+            .rebuild_receipt_from_final(response.result.as_ref(), stamps, shape);
+    }
     // COLLUDE.1: receipts ride on the response to `emit_http`, after the last replacer.
     state.meta_mcp.settle_relay_receipts(response);
 

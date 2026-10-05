@@ -5,7 +5,8 @@
 use serde_json::json;
 
 use super::{
-    AllowedFlow, CollusionAction, CollusionConfig, RECORD_CAP, RelayCaller, Walk, capped, text_of,
+    AllowedFlow, CollusionAction, CollusionConfig, DeliveryDigest, RECORD_CAP, RelayCaller,
+    delivery_leaves, egress_text,
 };
 use crate::config::Config;
 use crate::security::firewall::{
@@ -135,11 +136,11 @@ fn the_text_walker_reads_values_then_keys_and_skips_nothing() {
         "key four": 4,
         long_key.clone(): 5,
     });
-    let delivered = text_of(&value, Walk::Delivery);
+    let delivered = delivery_leaves(&value).join("\n");
     assert!(delivered.starts_with("one\ntwo\nthree\n"), "{delivered:?}");
     assert!(delivered.contains(&long_key), "{delivered:?}");
     assert!(!delivered.contains("key four"), "{delivered:?}");
-    let egress = text_of(&value, Walk::Egress);
+    let egress = egress_text(&value);
     assert!(
         !delivered.contains("five"),
         "the gateway's own slot: {delivered:?}"
@@ -157,14 +158,21 @@ fn the_text_walker_reads_values_then_keys_and_skips_nothing() {
 }
 
 /// B3: the adopted cap, pinned apart from the constant; at and below it the
-/// text is kept whole, above it exactly the first and last half, each cut on
-/// a char boundary, joined by one newline.
+/// leaves are kept whole, above it the first and last half, a leaf cut on a
+/// char boundary, with a seam between head and tail (MIK-7887.RECEIPT.2: no
+/// fingerprint joins them).
 #[test]
 fn an_over_cap_text_keeps_exact_head_and_tail_on_char_boundaries() {
     assert_eq!(RECORD_CAP, 6 * 1024, "the documented evasion bound");
     for len in [RECORD_CAP - 1, RECORD_CAP] {
         let text = "x".repeat(len);
-        assert_eq!(capped(text.clone()), (text, false), "{len}");
+        let (digest, cut) = DeliveryDigest::of_leaves(&[&text], false);
+        assert!(!cut, "{len}");
+        assert_eq!(
+            digest.segment_texts(),
+            vec![(text.as_str(), false)],
+            "{len}"
+        );
     }
     let half = RECORD_CAP / 2;
     let plain: String = (b'a'..=b'z')
@@ -172,11 +180,14 @@ fn an_over_cap_text_keeps_exact_head_and_tail_on_char_boundaries() {
         .take(RECORD_CAP + 1)
         .map(char::from)
         .collect();
-    let (kept, cut) = capped(plain.clone());
+    let (digest, cut) = DeliveryDigest::of_leaves(&[&plain], false);
     assert!(cut);
     assert_eq!(
-        kept,
-        format!("{}\n{}", &plain[..half], &plain[plain.len() - half..])
+        digest.segment_texts(),
+        vec![
+            (&plain[..half], false),
+            (&plain[plain.len() - half..], true)
+        ]
     );
 
     // A 4-byte char straddles both cut points: the head ends before it, the
@@ -187,12 +198,158 @@ fn an_over_cap_text_keeps_exact_head_and_tail_on_char_boundaries() {
         "\u{1D11E}".repeat(RECORD_CAP),
         "z"
     );
-    let (kept, cut) = capped(text.clone());
+    let (digest, cut) = DeliveryDigest::of_leaves(&[&text], false);
     assert!(cut);
-    let (head, tail) = kept.split_once('\n').expect("one separator");
-    assert_eq!(head, "a".repeat(half - 1));
+    let segments = digest.segment_texts();
+    let [(head, false), (tail, true)] = segments.as_slice() else {
+        panic!("head, seam, tail: {}", segments.len());
+    };
+    assert_eq!(*head, "a".repeat(half - 1));
     assert!(tail.len() < half && tail.len() > half - 4, "{}", tail.len());
     assert!(text.ends_with(tail));
+}
+
+/// MIK-7887.RECEIPT.2: a capped digest's fingerprints come from its head and
+/// its tail apart, so none spans the cut, where joined text would have one.
+#[test]
+fn a_capped_digest_has_no_fingerprint_across_its_cut() {
+    use std::collections::HashSet;
+
+    use super::super::collusion::{CollusionDetector, RelayParams};
+    let detector = CollusionDetector::new(RelayParams::default());
+    let text = (0..2000)
+        .map(|i| format!("w{i:05}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (digest, cut) = DeliveryDigest::of_leaves(&[&text], false);
+    assert!(cut);
+    let segments = digest.segment_texts();
+    let [(head, false), (tail, true)] = segments.as_slice() else {
+        panic!("head, seam, tail: {}", segments.len());
+    };
+    let apart: HashSet<u64> = detector
+        .fingerprints(head)
+        .into_iter()
+        .chain(detector.fingerprints(tail))
+        .collect();
+    let joined = detector.fingerprints(&format!("{head}\n{tail}"));
+    assert!(
+        joined.iter().any(|fp| !apart.contains(fp)),
+        "premise: joined, the cut carries fingerprints of its own"
+    );
+    assert!(
+        digest
+            .fingerprints(&detector)
+            .iter()
+            .all(|fp| apart.contains(fp))
+    );
+}
+
+/// MIK-7887.RECEIPT.2: retention keeps exactly the source fingerprints whose
+/// k-gram a delivered leaf holds, including one the delivered leaf's own
+/// winnowing did not select, and drops every other.
+#[test]
+fn retaining_keeps_a_delivered_kgram_whichever_window_selected_it() {
+    use std::collections::HashSet;
+
+    use super::super::collusion::{CollusionDetector, RelayParams};
+    use super::Delivered;
+    let detector = CollusionDetector::new(RelayParams::default());
+    let words = |tag: &str| {
+        (0..60)
+            .map(|i| format!("{tag}{i:04}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut premise = false;
+    for round in 0..20 {
+        let (kept_part, gone) = (words(&format!("k{round}x")), words(&format!("g{round}x")));
+        let source = format!("{kept_part} {gone}");
+        let (digest, _) = DeliveryDigest::of_leaves(&[&source], false);
+        let delivered = Delivered::of_leaves(vec![kept_part.as_str()]).expect("under the bound");
+        let kept: HashSet<u64> = digest
+            .retaining(&detector, &delivered)
+            .fingerprints(&detector)
+            .into_iter()
+            .collect();
+        let kgrams: HashSet<u64> = detector.kgram_hashes(&kept_part).into_iter().collect();
+        let minima: HashSet<u64> = detector.fingerprints(&kept_part).into_iter().collect();
+        for fp in detector.fingerprints(&source) {
+            assert_eq!(kept.contains(&fp), kgrams.contains(&fp), "round {round}");
+            premise |= kgrams.contains(&fp) && !minima.contains(&fp);
+        }
+    }
+    assert!(
+        premise,
+        "premise: some kept fingerprint was not a delivered window minimum"
+    );
+}
+
+/// Empty leaves past the cap add no segments: each walk stops once its half
+/// is spent, so a digest stays bounded whatever the leaf count.
+#[test]
+fn empty_leaves_past_the_cap_add_no_segments() {
+    // Each edge leaf spends its walk's half to zero; empties follow.
+    let edge = "x".repeat(RECORD_CAP / 2 - 1);
+    let big = "y".repeat(RECORD_CAP);
+    let mut leaves = vec![edge.as_str()];
+    leaves.extend(std::iter::repeat_n("", 32_768));
+    leaves.push(big.as_str());
+    leaves.extend(std::iter::repeat_n("", 32_768));
+    leaves.push(edge.as_str());
+    let (digest, cut) = DeliveryDigest::of_leaves(&leaves, false);
+    assert!(cut);
+    assert_eq!(digest.segment_texts().len(), 2, "the two edge leaves only");
+}
+
+/// MIK-7887.RECEIPT.2: removing a middle leaf splits its run, and the
+/// neighbours re-winnowed can select other minima. Every fingerprint of the
+/// original run whose k-gram is still delivered, inside one leaf or across
+/// adjacent kept short fields, is kept, and no other: none of the removed
+/// text, none across a seam.
+#[test]
+fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
+    use std::collections::HashSet;
+
+    use super::super::collusion::{CollusionDetector, RelayParams};
+    use super::Delivered;
+    let detector = CollusionDetector::new(RelayParams::default());
+    let fields = |tag: &str| (0..12).map(|i| format!("{tag} f{i}")).collect::<Vec<_>>();
+    let mut moved = false;
+    for round in 0..20 {
+        let (left, right) = (fields(&format!("l{round}")), fields(&format!("r{round}")));
+        let gone = format!("removed paragraph {round} ").repeat(8);
+        let mut leaves: Vec<&str> = left.iter().map(String::as_str).collect();
+        leaves.push(&gone);
+        leaves.extend(right.iter().map(String::as_str));
+        let (digest, _) = DeliveryDigest::of_leaves(&leaves, false);
+        let original = digest.fingerprints(&detector);
+        let mut shown: Vec<&str> = left.iter().map(String::as_str).collect();
+        shown.extend(right.iter().map(String::as_str));
+        let delivered = Delivered::of_leaves(shown).expect("bounded");
+        let kept: HashSet<u64> = digest
+            .retaining(&detector, &delivered)
+            .fingerprints(&detector)
+            .into_iter()
+            .collect();
+        let allowed: HashSet<u64> = [left.join("\n"), right.join("\n")]
+            .iter()
+            .flat_map(|run| detector.kgram_hashes(run))
+            .collect();
+        let alone: HashSet<u64> = [left.join("\n"), right.join("\n")]
+            .iter()
+            .flat_map(|run| detector.fingerprints(run))
+            .collect();
+        for fp in &original {
+            assert_eq!(kept.contains(fp), allowed.contains(fp), "round {round}");
+            moved |= allowed.contains(fp) && !alone.contains(fp);
+        }
+        assert!(
+            kept.iter().all(|fp| allowed.contains(fp)),
+            "round {round}: kept text never delivered"
+        );
+    }
+    assert!(moved, "premise: a split moved some minimum");
 }
 
 fn observing(extra: impl FnOnce(&mut CollusionConfig)) -> (Firewall, tempfile::TempDir) {

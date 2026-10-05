@@ -214,3 +214,53 @@ async fn a_gateway_refusal_with_code_32001_still_settles_denied() {
         .unwrap_or_else(|| panic!("a settlement record: {text}"));
     assert_eq!(record["outcome"], json!("denied"), "{record}");
 }
+
+/// MIK-7887.RECEIPT.1: the helper says whether it kept the proposed outcome.
+/// A written record keeps it; a failed write under `FailClosed` replaces it
+/// with the gateway's own refusal, which is never the peer's error.
+#[tokio::test]
+async fn a_fail_closed_replacement_is_reported_as_not_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: dir
+            .path()
+            .join("audit.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+        key_id: "min1".to_string(),
+        ..TransparencyLogConfig::default()
+    }))
+    .expect("open log")
+    .with_failure_policy(crate::security::audit::AuditFailurePolicy::FailClosed);
+    let log = Arc::new(log);
+    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.enable_transparency_log(Arc::clone(&log));
+    let task = SettledTask {
+        server: "srv",
+        tool: "read",
+        id: "task-1",
+    };
+    let peer = || {
+        TaskTransition::Fail(crate::protocol::JsonRpcError {
+            code: -32001,
+            message: "the peer's own refusal".to_string(),
+            data: None,
+        })
+    };
+    let notes = DispatchNotes::default();
+    let (_, kept) = meta
+        .audit_settlement_kept(task, peer(), &notes, "owner")
+        .await;
+    assert!(kept, "a written record keeps the proposed outcome");
+
+    log.set_append_failure_for_test(true);
+    let (committed, kept) = meta
+        .audit_settlement_kept(task, peer(), &notes, "owner")
+        .await;
+    assert!(!kept, "the replacement is the gateway's: {committed:?}");
+    assert!(
+        matches!(&committed, TaskTransition::Fail(error) if error.message != "the peer's own refusal"),
+        "{committed:?}"
+    );
+}

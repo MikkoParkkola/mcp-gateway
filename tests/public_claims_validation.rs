@@ -182,8 +182,6 @@ const PUBLIC_CLAIM_SURFACES: &[&str] = &[
     ".github/workflows/release.yml",
     "ARCHITECTURE.md",
     "codebase-map.md",
-    "docs/show-hn.md",
-    "docs/blog/sovereign-stack-2026-04.md",
     "docs/blog/security-aware-mcp-gateway.md",
     "docs/design/RFC-0081-intelligent-tool-surfacing.md",
     "CLAUDE.md",
@@ -481,11 +479,11 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
             .contains(&schema_only_figure),
         "README lede must not lead with the schema-only {schema_only_figure} figure"
     );
+    // The startup figure times `--help`, not a restart or a reload, so it must
+    // not be quoted as the cost of a config change.
     assert!(
-        readme.contains(&format!(
-            "Restart gateway (~{rounded_startup_ms}ms), session stays alive"
-        )),
-        "README should describe config-change restarts with the canonical startup benchmark"
+        !readme.contains(&format!("Restart gateway (~{rounded_startup_ms}ms)")),
+        "README must not present the `--help` startup benchmark as a restart time"
     );
     assert!(
         readme.contains(&format!("| **Startup time** | ~{rounded_startup_ms}ms |")),

@@ -68,6 +68,20 @@ impl SyncLease {
         response: &JsonRpcResponse,
         signing: Option<&super::signing::SigningInvocationContext>,
     ) {
+        let read = crate::security::tenant_reads::in_read_scope()
+            .then(|| crate::security::tenant_reads::noted().unwrap_or_default());
+        self.complete_delivery_read(response, signing, read);
+    }
+
+    /// [`Self::complete_delivery`] for a caller past its read scope: `read` is
+    /// what the scope noted (`None` when no scope was open). The stdio route
+    /// settles after its judge, outside the scope (MIK-7920).
+    pub(crate) fn complete_delivery_read(
+        self,
+        response: &JsonRpcResponse,
+        signing: Option<&super::signing::SigningInvocationContext>,
+        read: Option<crate::security::tenant_reads::ReadAttribution>,
+    ) {
         let (lease, dispatches) = self.state.into_inner();
         let audit = self.audit.into_inner();
         if dispatches == 0
@@ -102,8 +116,7 @@ impl SyncLease {
             response: secured,
             chain,
             audit,
-            read: crate::security::tenant_reads::in_read_scope()
-                .then(|| crate::security::tenant_reads::noted().unwrap_or_default()),
+            read,
         };
         lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null));
     }

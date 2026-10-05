@@ -57,8 +57,8 @@ const MAJOR: &[Row] = &[
         role: Role::Server,
         transport: Transport::Http,
         evidence: &[
-            "mik_7215_acs::http::ac_stateless_3_a_modern_response_carries_no_session_header",
-            "mik_7215_acs::http::ac_stateless_3_a_legacy_response_still_carries_the_session_header",
+            "mik_7215_acs::http::stateless_rows::ac_stateless_3_a_modern_response_carries_no_session_header",
+            "mik_7215_acs::http::stateless_rows::ac_stateless_3_a_legacy_response_still_carries_the_session_header",
             // The header is the weaker half. ORDER.2 also forbids the tool set
             // varying per connection, and a routing profile is exactly that
             // variance -- so the profile writers and readers are named here
@@ -80,8 +80,8 @@ const MAJOR: &[Row] = &[
         evidence: &[
             "mik_7215_acs::ac_stateless_1_a_request_carrying_its_own_version_is_modern",
             "mik_7215_acs::ac_stateless_1_each_request_carries_its_own_version",
-            "mik_7215_acs::http::ac_stateless_2_a_modern_result_identifies_the_server",
-            "mik_7215_acs::http::ac_stateless_8_one_endpoint_serves_both_eras",
+            "mik_7215_acs::http::stateless_rows::ac_stateless_2_a_modern_result_identifies_the_server",
+            "mik_7215_acs::http::stateless_rows::ac_stateless_8_one_endpoint_serves_both_eras",
         ],
     },
     Row {
@@ -115,8 +115,8 @@ const MAJOR: &[Row] = &[
         role: Role::Server,
         transport: Transport::Http,
         evidence: &[
-            "mik_7215_acs::http::ac_stateless_6_ping_is_refused_on_the_modern_path",
-            "mik_7215_acs::http::ac_stateless_6_ping_still_works_on_the_legacy_path",
+            "mik_7215_acs::http::stateless_rows::ac_stateless_6_ping_is_refused_on_the_modern_path",
+            "mik_7215_acs::http::stateless_rows::ac_stateless_6_ping_still_works_on_the_legacy_path",
             "mik_7215_acs::ac_stateless_7_a_log_notification_is_never_delivered_to_a_subscriber",
         ],
     },
@@ -347,10 +347,10 @@ const MINOR: &[Row] = &[
             // (a), legacy half. The relay for a client that must be asked
             // directly carries the params whole, because 2025-11-25 did not
             // remove the field.
-            "mik_7212_mrtr7_bridge_acs::ac_conformance_minor_11a_a_legacy_bridge_relay_retains_elicitation_id",
+            "mik_7212_mrtr7_bridge_acs::removed_surface::ac_conformance_minor_11a_a_legacy_bridge_relay_retains_elicitation_id",
             // (b) The removed notification is refused before a frame leaves,
             // at the one site whose method a backend supplies.
-            "mik_7212_mrtr7_bridge_acs::ac_conformance_minor_11b_elicitation_complete_is_refused_unsent",
+            "mik_7212_mrtr7_bridge_acs::removed_surface::ac_conformance_minor_11b_elicitation_complete_is_refused_unsent",
         ],
     },
     Row {
@@ -361,7 +361,7 @@ const MINOR: &[Row] = &[
         transport: Transport::Any,
         evidence: &[
             "mik_7213_acs::ac_error_1_the_renumbered_codes_are_at_their_new_numbers",
-            "mik_7215_acs::http::ac_stateless_4_an_unsupported_version_is_refused_with_its_own_error",
+            "mik_7215_acs::http::stateless_rows::ac_stateless_4_an_unsupported_version_is_refused_with_its_own_error",
         ],
     },
 ];

@@ -422,7 +422,7 @@ pub(super) fn cacheable_base_url(port: u16) -> String {
 }
 
 /// Finite-timeout client for the swapped-client caching fixtures, mirroring
-/// `capability::executor_tests::finite_http_client`: a bare client has no
+/// `capability::executor::tests::cache_partitioning::finite_http_client`: a bare client has no
 /// request timeout and a hung listener would stall the suite.
 fn finite_http_client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -680,3 +680,8 @@ pub(super) async fn meta_execute(meta: &MetaMcp, subject: Option<&str>) -> crate
 /// A11: the rejected-upstream-token cells, which drive this fixture.
 #[path = "upstream_401_tests.rs"]
 mod upstream_401;
+
+// Lives beside the REST fixture rather than in a REST test file: those files
+// are split by topic and this case spans custody, registry and cache together.
+#[path = "account_live_holder_tests.rs"]
+mod account_live_holder_tests;

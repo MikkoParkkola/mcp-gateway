@@ -23,6 +23,7 @@ use crate::security::audit::AuditFailurePolicy;
 use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
+mod delivery;
 mod meta_refusal;
 mod meta_replay;
 #[cfg(feature = "firewall")]
@@ -34,6 +35,8 @@ struct Scripted {
     calls: Arc<AtomicUsize>,
     error: Option<i32>,
     reply: Option<Value>,
+    /// Every notification is refused for want of a caller slot (a 429).
+    notify_refused: bool,
 }
 
 #[async_trait::async_trait]
@@ -62,6 +65,12 @@ impl Transport for Scripted {
         })
     }
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        if self.notify_refused {
+            return Err(crate::Error::IdentitySlotsExhausted {
+                backend: "alpha".to_string(),
+                limit: "backend",
+            });
+        }
         Ok(())
     }
     fn is_connected(&self) -> bool {
@@ -98,6 +107,8 @@ struct Setup {
     #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     tenant_limit: Option<usize>,
     meta_mode: MetaMode,
+    /// The backends refuse every notification (L1254).
+    notify_refused: bool,
 }
 
 /// One optional meta-layer switch a cell turns on (MIK-7116.MIN.1 cells).
@@ -147,6 +158,7 @@ async fn fixture(setup: Setup) -> Fixture {
             calls: Arc::clone(&calls),
             error: setup.backend_error,
             reply: setup.reply.clone(),
+            notify_refused: setup.notify_refused,
         }));
         assert!(state_mut.backends.register(backend), "fixture registration");
     }

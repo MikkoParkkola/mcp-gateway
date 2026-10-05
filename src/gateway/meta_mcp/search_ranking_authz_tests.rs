@@ -1107,3 +1107,6 @@ mod per_user;
 
 #[path = "search_ranking_authz_tests/backend_name.rs"]
 mod backend_name;
+
+#[path = "search_ranking_authz_tests/cold_backend.rs"]
+mod cold_backend;

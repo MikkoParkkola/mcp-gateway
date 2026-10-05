@@ -48,7 +48,16 @@ impl ProcessPolicy {
     }
 }
 
-/// Refuse unless this definition may run its process here.
+/// The local process this definition runs, if any: the one predicate that
+/// decides both the process gate and whether the response cache keys on the
+/// definition's fingerprint, so the two cannot drift apart (MIK-7814).
+pub(crate) fn spawned_process(capability: &CapabilityDefinition) -> Option<&ProcessConfig> {
+    capability.providers.process.get("primary")
+}
+
+/// Refuse unless this definition may run its process here. Called before the
+/// response cache as well as before a run, so a cached answer never skips it
+/// (MIK-7814).
 pub(crate) fn admit(
     policy: &ProcessPolicy,
     capability: &CapabilityDefinition,
@@ -64,6 +73,15 @@ pub(crate) fn admit(
     if capability.providers.integrity != Integrity::Verified {
         return Err(Error::Config(format!(
             "capability '{name}' must be pinned (mcp-gateway cap pin) to run a local process"
+        )));
+    }
+    // The pin covers the file as loaded; a definition changed since, or one
+    // carrying another definition's providers, is not that file (MIK-7814).
+    if capability.providers.pinned.is_none()
+        || capability.fingerprint() != capability.providers.pinned
+    {
+        return Err(Error::Config(format!(
+            "capability '{name}' changed after its pin was checked; reload it from its pinned file"
         )));
     }
     let command = process.command();

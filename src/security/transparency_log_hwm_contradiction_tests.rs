@@ -221,6 +221,28 @@ fn a_repair_record_on_a_restored_older_file_reuses_no_committed_counter() {
     );
 }
 
+/// Bot-review ledger L1359: that repair record sits above the mark, so a
+/// finding read at its own counter starts the loss there. The first counter
+/// actually dropped is the line after the restored tail, and the finding the
+/// restart carries forward must start at it.
+#[test]
+fn a_torn_repair_above_the_mark_records_the_first_dropped_counter() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
+    (0..3).for_each(|i| append(&l, i));
+    let older = std::fs::read(&path).unwrap();
+    let first_dropped = lines(&path).last().unwrap()["counter"].as_u64().unwrap() + 1;
+    (3..9).for_each(|i| append(&l, i));
+    drop(l);
+    let mut torn = older;
+    torn.extend_from_slice(b"{\"counter\":4,\"ev");
+    std::fs::write(&path, torn).unwrap();
+    drop(TransparencyLogger::open(never_rotates(&path)).unwrap());
+    let found = super::hwm_scan::hwm_missing_in(&path, &never_rotates(&path)).unwrap();
+    assert_eq!(found, Some(first_dropped), "{:?}", lines(&path));
+}
+
 /// MIK-7884: the predicate's truth table, so each comparison is pinned alone
 /// (the seal-finishing and after-seal recovery paths share it).
 #[test]
@@ -261,6 +283,116 @@ fn an_honest_restart_records_no_finding() {
         drop(l);
         assert!(marks(&path).is_empty(), "false finding (signed: {signed})");
         assert!(verify(&path, signed).ok, "signed: {signed}");
+    }
+}
+
+/// #2831 bot review: the active file rebuilt as sealed segment 0 followed by
+/// the genuine records of segment 1 ends on the mark's own record, so counter
+/// and hash agree with `.hwm`, yet it opens segment 0 while the mark names 1.
+/// The restart must record that, and the next rotation must not seal it over
+/// the genuine segment 0. Signed and unsigned: copied lines keep their sigs.
+#[test]
+fn a_tail_at_the_mark_restored_under_an_older_segment_is_a_finding() {
+    use super::segments::sealed_path;
+    for signed in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        rotate_n(&l, &path, 1);
+        (0..3).for_each(|i| append(&l, i));
+        drop(l);
+        let genuine_0 = std::fs::read(sealed_path(&path, 0)).unwrap();
+        let mut rebuilt = genuine_0.clone();
+        rebuilt.extend(std::fs::read(&path).unwrap());
+        std::fs::write(&path, rebuilt).unwrap();
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        assert!(!marks(&path).is_empty(), "no finding (signed: {signed})");
+        // Past a whole segment: rotate_n would count segments, and an
+        // overwrite leaves the count unchanged.
+        (0..50).for_each(|i| append(&l, i));
+        drop(l);
+        assert!(
+            sealed_path(&path, 1).exists(),
+            "no rotation happened, so nothing was tested (signed: {signed})"
+        );
+        assert_eq!(
+            std::fs::read(sealed_path(&path, 0)).unwrap(),
+            genuine_0,
+            "a rotation overwrote sealed segment 0 (signed: {signed})"
+        );
+        assert!(!marks(&path).is_empty(), "finding lost (signed: {signed})");
+    }
+}
+
+/// MIK-7949: an active file ending in a copied seal of an already sealed
+/// segment is not a crash to finish. Before the fix the restart renamed it
+/// over the genuine segment, here a one-line file replacing all of segment 1.
+#[test]
+fn a_copied_seal_of_a_sealed_segment_does_not_replace_it() {
+    use super::segments::sealed_path;
+    for signed in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        rotate_n(&l, &path, 2);
+        append(&l, 7);
+        drop(l);
+        let genuine_1 = std::fs::read(sealed_path(&path, 1)).unwrap();
+        let seal = lines(&sealed_path(&path, 1)).pop().unwrap();
+        assert_eq!(event(&seal), Some("audit_segment_sealed"));
+        std::fs::write(&path, format!("{seal}\n")).unwrap();
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        assert_eq!(
+            std::fs::read(sealed_path(&path, 1)).unwrap(),
+            genuine_1,
+            "the restart replaced sealed segment 1 (signed: {signed})"
+        );
+        assert!(!marks(&path).is_empty(), "no finding (signed: {signed})");
+        (0..50).for_each(|i| append(&l, i));
+        drop(l);
+        assert!(
+            sealed_path(&path, 2).exists(),
+            "no rotation (signed: {signed})"
+        );
+        assert_eq!(
+            std::fs::read(sealed_path(&path, 1)).unwrap(),
+            genuine_1,
+            "a rotation replaced sealed segment 1 (signed: {signed})"
+        );
+        assert!(!marks(&path).is_empty(), "finding lost (signed: {signed})");
+    }
+}
+
+/// MIK-7949 (review): a sealed segment renamed to the last number makes the
+/// next number wrap (debug panic, release 0) or saturate onto that name, so a
+/// seal would replace a segment. The restart must refuse instead, active file
+/// present or not, and leave every segment as it was.
+#[test]
+fn a_sealed_segment_at_the_last_number_is_refused_not_overwritten() {
+    use super::segments::sealed_path;
+    for keep_active in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+        rotate_n(&l, &path, 1);
+        append(&l, 7);
+        drop(l);
+        let last = sealed_path(&path, u64::MAX);
+        std::fs::rename(sealed_path(&path, 0), &last).unwrap();
+        let genuine = std::fs::read(&last).unwrap();
+        if !keep_active {
+            std::fs::remove_file(&path).unwrap();
+        }
+        let opened = std::panic::catch_unwind(|| TransparencyLogger::open(cfg(&path, 12, false)));
+        assert!(
+            matches!(&opened, Ok(Err(e)) if e.kind() == std::io::ErrorKind::InvalidData),
+            "restart did not refuse (active kept: {keep_active})"
+        );
+        assert_eq!(
+            std::fs::read(&last).unwrap(),
+            genuine,
+            "active kept: {keep_active}"
+        );
     }
 }
 

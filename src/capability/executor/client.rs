@@ -29,8 +29,12 @@ use crate::{Error, Result};
 pub(super) fn build(proxy: Option<&url::Url>) -> Client {
     let builder = match proxy {
         None => crate::security::ssrf::pinned_client_builder(),
+        // Loopback goes direct: cleartext to it is allowed only because it
+        // stays on the machine, and the proxy would carry it off (#3013).
         Some(url) => Client::builder().no_proxy().proxy(
-            reqwest::Proxy::all(url.as_str()).expect("capabilities.egress_proxy validated at load"),
+            reqwest::Proxy::all(url.as_str())
+                .expect("capabilities.egress_proxy validated at load")
+                .no_proxy(reqwest::NoProxy::from_string("localhost,127.0.0.0/8,::1")),
         ),
     };
     builder
@@ -44,6 +48,17 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
             }
             if let Err(e) = validate_url_not_ssrf(attempt.url().as_str()) {
                 return attempt.error(e.to_string());
+            }
+            // A 307/308 re-sends the body and every header but `Authorization`,
+            // so a request that started on TLS or loopback (where a credential
+            // may go) never continues in cleartext off this machine (#3013).
+            let started_secure = attempt
+                .previous()
+                .first()
+                .is_some_and(crate::gateway::is_tls_or_loopback);
+            if started_secure && !crate::gateway::is_tls_or_loopback(attempt.url()) {
+                return attempt
+                    .error("refusing a capability redirect to cleartext http:// off this machine");
             }
             attempt.follow()
         }))
