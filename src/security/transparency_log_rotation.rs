@@ -365,8 +365,7 @@ fn lost_from(carry: Option<u64>, below_mark: bool, tail: u64) -> Option<u64> {
     }
 }
 
-/// An active file whose last record is an ordinary record, and whether the
-/// segment the file opens is not where its tail can honestly sit (#2831).
+/// An active file whose last record is an ordinary record; `true` if misplaced.
 fn resume_active(
     path: &Path,
     counter: u64,
@@ -393,16 +392,10 @@ fn resume_active(
         // A pre-D6 segment 0 has no open record; its age counts from now.
         (next, now)
     };
-    // Segment numbers only grow, like counters. The active segment comes
-    // after every sealed one, and a tail at the mark's counter is the mark's
-    // record, so it sits in the segment the mark names. A file rebuilt from
-    // older segments can end on the genuine mark record and still open an
-    // older segment (#2831): that is a finding, and its seal must not take a
-    // sealed segment's name, which the rotation's rename would overwrite.
-    let misplaced = seq < next
-        || hw
-            .is_some_and(|h| seq < h.segment_seq || (counter == h.counter && seq != h.segment_seq));
-    let seq = hw.map_or(seq, |h| seq.max(h.segment_seq)).max(next);
+    // The active segment follows every seal and the mark's, and holds the mark's record if it
+    // ends on its counter. A rebuilt file breaks that (#2831): record it, never seal over one.
+    let resumed = hw.map_or(seq, |h| seq.max(h.segment_seq)).max(next);
+    let stray = resumed != seq || hw.is_some_and(|h| counter == h.counter && seq != h.segment_seq);
     // The log committed to how far it got: a truncated tail must not let new
     // records reuse the lost counters, so verify reports the gap (2.13).
     // Counters are global across segments, so the mark bounds them whatever
@@ -414,7 +407,7 @@ fn resume_active(
         .map_err(segments::ctx("open", path))?;
     let recovered = Recovered {
         seg: SegState {
-            seq,
+            seq: resumed,
             opened_at,
             id: (0, 0),
             has_records: first != read_last_nonempty_line(path)?.unwrap_or_default(),
@@ -425,7 +418,7 @@ fn resume_active(
         counter,
         last_entry_hash: hash,
     };
-    Ok((recovered, misplaced))
+    Ok((recovered, stray))
 }
 
 /// No active record: start the next segment chained from the newest seal,
