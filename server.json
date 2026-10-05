@@ -55,7 +55,7 @@
         },
         {
           "name": "GATEWAY_ATTESTATION_AUDIENCE",
-          "description": "This gateway's name in attestation tokens; a token minted for another audience is refused. Required by enforce (an unset or blank value fails startup); under observe every token is audited as an audience mismatch.",
+          "description": "This gateway's name in attestation tokens; a token minted for another audience is refused. Required by enforce (an unset or blank value fails startup). Under observe a token whose audience differs is audited as a mismatch; with no audience set, every token is.",
           "isRequired": false,
           "isSecret": false
         },
@@ -124,7 +124,7 @@
         },
         {
           "name": "GATEWAY_ATTESTATION_AUDIENCE",
-          "description": "This gateway's name in attestation tokens; a token minted for another audience is refused. Required by enforce (an unset or blank value fails startup); under observe every token is audited as an audience mismatch.",
+          "description": "This gateway's name in attestation tokens; a token minted for another audience is refused. Required by enforce (an unset or blank value fails startup). Under observe a token whose audience differs is audited as a mismatch; with no audience set, every token is.",
           "isRequired": false,
           "isSecret": false
         },
