@@ -37,7 +37,7 @@
         },
         {
           "name": "GATEWAY_ATTESTATION_MODE",
-          "description": "Attestation mode: off (default), observe (audits only) or enforce (refuses unattested calls on gateway_invoke, surfaced tools and every direct-route method; needs GATEWAY_ATTESTATION_SIGNING_KEY). Any other value fails startup.",
+          "description": "Attestation mode: off (default), observe (audits only) or enforce (refuses unattested calls on gateway_invoke, surfaced tools and every direct-route method; needs GATEWAY_ATTESTATION_SIGNING_KEY and GATEWAY_ATTESTATION_AUDIENCE). Any other value fails startup.",
           "isRequired": false,
           "isSecret": false
         },
@@ -50,6 +50,12 @@
         {
           "name": "GATEWAY_ATTESTATION_KEY_ID",
           "description": "Signing key id for sandbox attestation tokens (default: gateway).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "GATEWAY_ATTESTATION_AUDIENCE",
+          "description": "This gateway's name in attestation tokens; a token minted for another audience is refused. Required by enforce (an unset or blank value fails startup); under observe every token is audited as an audience mismatch.",
           "isRequired": false,
           "isSecret": false
         },
@@ -100,7 +106,7 @@
         },
         {
           "name": "GATEWAY_ATTESTATION_MODE",
-          "description": "Attestation mode: off (default), observe (audits only) or enforce (refuses unattested calls on gateway_invoke, surfaced tools and every direct-route method; needs GATEWAY_ATTESTATION_SIGNING_KEY). Any other value fails startup.",
+          "description": "Attestation mode: off (default), observe (audits only) or enforce (refuses unattested calls on gateway_invoke, surfaced tools and every direct-route method; needs GATEWAY_ATTESTATION_SIGNING_KEY and GATEWAY_ATTESTATION_AUDIENCE). Any other value fails startup.",
           "isRequired": false,
           "isSecret": false
         },
@@ -113,6 +119,12 @@
         {
           "name": "GATEWAY_ATTESTATION_KEY_ID",
           "description": "Signing key id for sandbox attestation tokens (default: gateway).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "GATEWAY_ATTESTATION_AUDIENCE",
+          "description": "This gateway's name in attestation tokens; a token minted for another audience is refused. Required by enforce (an unset or blank value fails startup); under observe every token is audited as an audience mismatch.",
           "isRequired": false,
           "isSecret": false
         },

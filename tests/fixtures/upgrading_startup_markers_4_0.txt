@@ -42,7 +42,7 @@
 43	prints a notice; refuses to start, only with auth on and no working audit log
 44	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for a secret written as `file:...` that names a missing, loose, oversized or empty file, other than `server.metrics_token`, which warns instead
 45	prints a notice
-46	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for `enforce` without a signing key
+46	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for `enforce` without a signing key or an audience
 47	prints a notice
 48	prints a notice
 49	prints a notice

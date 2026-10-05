@@ -68,7 +68,8 @@ then personal capabilities fail closed. `identity grants grant --agent` takes \
 `mtls:<id>` or `jwt:<id>`.",
     "Attestation is now off unless `GATEWAY_ATTESTATION_MODE` is set (set `observe` to keep the \
 audit lines). `enforce` now refuses unattested calls, playbooks and code mode, and needs a \
-signing key; enforce with no key, or any unrecognised value, now FAILS STARTUP.",
+signing key and `GATEWAY_ATTESTATION_AUDIENCE`; enforce without either, or any unrecognised \
+value, now FAILS STARTUP.",
     "A tool call carrying an argument key its schema does not declare, at any depth, is \
 refused with `isError: true`; relax it with `input_schema_enforcement: standard` or `off`.",
     super::backend_grant_notice::ITEM,
