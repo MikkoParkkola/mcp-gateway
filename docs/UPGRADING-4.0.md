@@ -177,11 +177,20 @@ backend" and "fails a capability file" first.**
 **Startup:** prints a notice
 
 Tokens stored by 3.x are **not migrated**. Nothing is lost and nothing is silently reused
-under a new key: each OAuth backend simply re-authenticates on its next use.
+under a new key: every OAuth backend re-authenticates once, on its next use.
 
 Expect one authorization prompt per OAuth backend, once. No config change is needed. If your
 deployment is unattended, trigger each backend deliberately rather than discovering the prompt
 on a user's first call.
+
+`mcp-gateway accounts migrate-credentials` applies only to personal-account
+credentials (those under an `accounts` descriptor). It needs an `accounts` block with a `personal_managed`
+descriptor and writes only the personal-account store, which an ordinary `backends.<name>.oauth`
+backend never reads, so it cannot keep that backend's credential. Every 3.x token belongs to an
+ordinary backend. To keep one, bind that backend to a personal account (an `accounts`
+descriptor in place of its `oauth` block) and run the command.
+
+Your 3.x token files are left untouched in `~/.mcp-gateway/oauth/` at mode 0600.
 
 ## 2. A malformed line in an `env_files` file now fails startup
 

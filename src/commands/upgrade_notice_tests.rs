@@ -96,6 +96,32 @@ fn notice_4_0_0_discloses_the_3_x_files_the_migration_and_its_one_way_door() {
     }
 }
 
+/// Item 1 says plainly that every OAuth backend re-authenticates once, and
+/// scopes `accounts migrate-credentials` to personal accounts: that command
+/// needs an `accounts` block with a `personal_managed` descriptor and writes
+/// only the personal-account store (`offline_migration.rs`), which an ordinary
+/// `backends.<name>.oauth` backend never reads, so it cannot keep that
+/// backend's credential, and every 3.x token is one.
+#[test]
+fn notice_item_1_scopes_the_migration_to_personal_accounts() {
+    let item_1 = NOTICE_4_0_0_ITEMS[0].to_ascii_lowercase();
+    for expected in [
+        "every oauth backend re-authenticates once",
+        "applies only to personal-account credentials",
+        "cannot keep the credential of an ordinary",
+        "to keep one, bind that backend to a personal account",
+    ] {
+        assert!(
+            item_1.contains(expected),
+            "item 1 lacks {expected:?}: {item_1}"
+        );
+    }
+    assert!(
+        !item_1.contains("to keep a credential instead"),
+        "item 1 still offers the account command as the way to keep any credential: {item_1}"
+    );
+}
+
 /// The command item 1 names must be one the binary actually accepts.
 ///
 /// A notice is shipped guidance. Naming a subcommand that does not parse
