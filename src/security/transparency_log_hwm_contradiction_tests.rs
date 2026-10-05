@@ -363,7 +363,7 @@ fn a_sealed_segment_at_the_last_number_is_refused_not_overwritten() {
         }
         let opened = std::panic::catch_unwind(|| TransparencyLogger::open(cfg(&path, 12, false)));
         assert!(
-            matches!(opened, Ok(Err(_))),
+            matches!(&opened, Ok(Err(e)) if e.kind() == std::io::ErrorKind::InvalidData),
             "restart did not refuse (active kept: {keep_active})"
         );
         assert_eq!(
