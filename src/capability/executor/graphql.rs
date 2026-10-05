@@ -508,3 +508,8 @@ mod tests {
         assert_eq!(result["login"], "test");
     }
 }
+
+// Every credential-bearing capability send, this one included (#3013).
+#[cfg(test)]
+#[path = "cleartext_tests.rs"]
+mod cleartext_tests;

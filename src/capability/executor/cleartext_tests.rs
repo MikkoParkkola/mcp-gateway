@@ -6,9 +6,9 @@
 
 use serde_json::json;
 
-use super::CapabilityExecutor;
 use crate::capability::{
-    CapabilityDefinition, CapabilityExecutionContext, parse_capability, validate_capability,
+    CapabilityDefinition, CapabilityExecutionContext, CapabilityExecutor, parse_capability,
+    validate_capability,
 };
 
 fn capability(url_line: &str, auth_required: bool) -> CapabilityDefinition {

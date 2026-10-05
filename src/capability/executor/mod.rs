@@ -798,6 +798,3 @@ mod gws_real_tests;
 #[cfg(test)]
 #[path = "../executor_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-mod cleartext_tests;
