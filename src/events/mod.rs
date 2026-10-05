@@ -30,6 +30,7 @@ mod records;
 mod reload;
 mod rpc;
 mod runtime;
+mod schedule_source;
 mod services;
 mod store;
 mod task_source;
