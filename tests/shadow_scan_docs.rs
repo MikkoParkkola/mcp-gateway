@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-5843: the shadow-scan docs and the shipped CLI must agree.
+//! The shadow-scan docs and the shipped CLI must agree.
 
 use std::io::Write;
 use std::process::{Command, Stdio};

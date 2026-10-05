@@ -31,7 +31,9 @@ It works as a Model Context Protocol proxy, an MCP server aggregator and an MCP 
 
 ## Quick Start
 
-**Four commands:**
+Until 4.0.0 is released, these commands install the current 3.x release; to try 4.0 now, see [What's new in 4.0](#whats-new-in-40).
+
+**Install, set up, run, check:**
 
 ```bash
 brew trust --tap MikkoParkkola/tap   # Homebrew 6.0+
@@ -254,7 +256,7 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 
 A client that loads every connected tool's full definition up front (an eager client) pays for each one in every request, whether the tool gets used or not. At the roughly 150 tokens per tool this README's model assumes (`benchmarks/public_claims.json`; an assumed figure, not a measurement), 20 servers with 100 tools between them cost about 15,000 tokens before the conversation starts. Some clients defer instead: they load only tool names and fetch a definition when the model asks for it, so their per-tool cost is much lower and this figure does not apply to them. For those clients, aggregation, routing and policy are the main reasons to use the gateway, not context savings. For eager clients, context limits then force a second cost: you have to decide up front which tools to connect and leave the rest out, so the agent makes worse decisions because it cannot reach data you chose not to load.
 
-MCP Gateway moves the full catalog out of the exposed tool list. The agent loads a small fixed set of meta-tools, searches with `gateway_search_tools`, and invokes a backend tool with `gateway_invoke`. This creates room for larger catalogs, but the extra search hop can cost more tokens and time on a completed task.
+MCP Gateway moves the full catalog out of the exposed tool list. The agent loads a small set of meta-tools (for an administrator, 9 at minimum and 11 in the default HTTP deployment, before any allow-list or surfaced tools), searches with `gateway_search_tools`, and invokes a backend tool with `gateway_invoke`. This creates room for larger catalogs, but the extra search hop can cost more tokens and time on a completed task.
 
 ```mermaid
 flowchart LR
@@ -287,7 +289,7 @@ The gateway speaks MCP 2026-07-28 (stateless, on by default) and 2025-11-25, 202
 - **Ordinary calls** work across legacy and 2026 clients and backends. An HTTP or stdio backend that rejects the gateway's proposed revision is retried at the highest revision both sides speak. A 2026-only backend that refuses the `initialize` handshake must be reached over HTTP.
 - **A 2026 backend's mid-call questions reach an older client.** The gateway relays them as the `elicitation/create`, `sampling/createMessage` or `roots/list` requests the client already understands, collects the answers, and retries the backend. A 2026 client gets the same questions as a continuation it answers by retrying (over HTTP it needs a verified caller identity).
 
-Limits: the reverse translation is not implemented, so an older backend that sends its own mid-call request is not relayed to any client. A legacy client is refused the 2026-only tasks methods (`-32601`) rather than given an emulation, and the bridge relays only those three request types and refuses the rest. The per-pairing matrix, with the test behind each row, is in [docs/PROTOCOL_COMPATIBILITY.md](docs/PROTOCOL_COMPATIBILITY.md).
+Limits: the reverse translation is not implemented, so an older backend that sends its own mid-call request is not relayed to any client. A legacy client is refused the 2026-only tasks methods (`-32601`) rather than given an emulation, and the bridge relays only those three request types and refuses the rest. The relay runs only on calls the gateway dispatches itself (`gateway_invoke` and the other meta-tool invoke paths), not on the direct `POST /mcp/{name}` route, and only for request types the client declared in `initialize`. The per-pairing matrix, with the test behind each row, is in [docs/PROTOCOL_COMPATIBILITY.md](docs/PROTOCOL_COMPATIBILITY.md).
 
 ### What MCP Gateway is, and what it is not
 
@@ -295,7 +297,7 @@ MCP Gateway is a tool and capability **router**. It routes MCP tool, resource, a
 
 It is not a chat-completions or embeddings proxy. When a backend asks for `sampling/createMessage`, the connected client performs the model call, not the gateway. The OpenAI-compatible prompt-cache helpers exist for one narrow reason: so `gateway_invoke` can preserve `prompt_cache_key` behavior for backends that call LLM APIs internally. That boundary is deliberate. The value here is routing hundreds of tools through a small surface, not sitting in the model path.
 
-Compared with a client that loads every tool definition into every request, the gateway trades a one-time discovery hop for a flat, small context cost. Compared with generic transport bridges that expose one server at a time, it aggregates many backends behind one namespaced surface with integrity checks, ranking, and per-user identity.
+Compared with a client that loads every tool definition into every request, the gateway trades a one-time discovery hop for a flat, small context cost. It aggregates many backends behind one namespaced surface with integrity checks, ranking, and per-user identity.
 
 <a id="end-user-identity-v31"></a>
 
