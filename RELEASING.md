@@ -249,6 +249,38 @@ provenance note can corroborate `v4.0.0`. Pass is exit 0.
 Record both results as evidence for the criteria ledger. The ledger owner grades them;
 this runbook does not edit the ledger.
 
+### 7. Public surfaces: read back what people and search engines see
+
+Every surface below should state the released version where it shows one, the same
+one-sentence summary as the top of `README.md`, and only numbers found in
+`benchmarks/public_claims.json` or the docs it cites. `README.md` and `llms.txt` must be
+final in the tagged commit: crates.io, npm and docs.rs keep the README they were published
+with. Surfaces fed from repository files (crates.io, npm, docs.rs, MCP Registry, Homebrew)
+change only through those files and the publish jobs above. The GitHub About description and
+homepage, the wiki, the profile README and the personal site are edited by hand after the
+tag, then read back here. Read each surface in full, not only the line that names the
+project.
+
+| Surface | Source of its text | Read back | Pass |
+|---|---|---|---|
+| README | `README.md` | open the repository page | summary sentence and install steps describe 4.0.0 |
+| `llms.txt` | `llms.txt` | `gh api repos/MikkoParkkola/mcp-gateway/contents/llms.txt --jq .content \| base64 -d` | summary matches the README; no savings percentage anywhere in the file |
+| GitHub About and topics | `gh repo edit`, after the tag | `gh repo view MikkoParkkola/mcp-gateway --json description,homepageUrl,repositoryTopics` | description states the released behaviour and matches the README summary; homepage is `https://github.com/MikkoParkkola/mcp-gateway/wiki`; topics unchanged from the set last approved for release |
+| crates.io | `Cargo.toml` `description`, `keywords` | `xh -b GET https://crates.io/api/v1/crates/mcp-gateway user-agent:mcp-gateway-release-check \| jq '.crate \| {max_stable_version, description, keywords}'` | `max_stable_version` is 4.0.0; description matches `Cargo.toml` |
+| crates.io and npm README | `README.md` at the tag | open `https://crates.io/crates/mcp-gateway/4.0.0` and `https://www.npmjs.com/package/@mikkoparkkola/mcp-gateway/v/4.0.0` | the rendered README is the 4.0.0 one |
+| docs.rs | the published crate | open `https://docs.rs/mcp-gateway/4.0.0` | the build succeeded and shows 4.0.0 |
+| npm | `npm/package.json` (version stamped at publish) | `npm view @mikkoparkkola/mcp-gateway@4.0.0 version description keywords` | 4.0.0; description matches `npm/package.json` |
+| MCP Registry | `server.json` | `xh -b GET 'https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.MikkoParkkola/mcp-gateway' \| jq '.servers[] \| select(._meta["io.modelcontextprotocol.registry/official"].isLatest) \| .server \| {version, description}'` | latest entry is 4.0.0; description matches `server.json` |
+| Homebrew | the formula written by `homebrew-update` | `gh api repos/MikkoParkkola/homebrew-tap/contents/Formula/mcp-gateway.rb --jq .content \| base64 -d \| head -6` | `version "4.0.0"`; `desc` matches `release.yml` |
+| Container image | `ci.yml` `docker-manifest` | step 6 | already covered there |
+| Glama listing | the repository | open `https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway` | shows the current description; no stale version text |
+| GitHub wiki | the `mcp-gateway.wiki` repository, edited after the tag | `git clone https://github.com/MikkoParkkola/mcp-gateway.wiki.git` and read `Home.md` | summary, facts and links match the README; every link resolves on `main` |
+| Profile README | `MikkoParkkola/MikkoParkkola` `README.md`, edited after the tag | `gh api repos/MikkoParkkola/MikkoParkkola/readme --jq .content \| base64 -d` | license `PolyForm-NC`; description matches the README; no savings percentage |
+| Personal site | `MikkoParkkola.github.io` `index.html`, edited after the tag | `xh -b GET https://mikkoparkkola.github.io/` | card text matches the README summary |
+
+A row that fails is fixed at its source and read back again. Record each read-back with
+its date as release evidence.
+
 ## Recovery from a partial publish
 
 ### Rules that apply to every target
