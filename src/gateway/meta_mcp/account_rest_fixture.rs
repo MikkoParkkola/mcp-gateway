@@ -642,3 +642,8 @@ pub(super) async fn meta_execute(meta: &MetaMcp, subject: Option<&str>) -> crate
     meta.code_mode_execute(&args, Some("rest-fixture-session"), &context)
         .await
 }
+
+// Lives beside the REST fixture rather than in `account_rest_tests.rs`, which is
+// already over the file-size ceiling and may not grow.
+#[path = "account_live_holder_tests.rs"]
+mod account_live_holder_tests;
