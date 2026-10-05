@@ -1,10 +1,12 @@
 # mcp-gateway
 
-> Universal MCP gateway. The README schema-only first-request model keeps 11 Meta-MCP tools in context (~1100 tokens, 93% savings); completed-task results also count discovery turns and responses.
+> MCP gateway and Model Context Protocol proxy: one endpoint for many MCP servers and REST APIs, a compact set of meta-tools for finding and calling them, and bridging between MCP revisions 2024-11-05 and 2026-07-28.
 
 MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface (9 tools minimum, 11 in the README benchmark scenario) and discovers the right backend tool on demand.
 
 ## Install
+
+Until 4.0.0 is released, Homebrew installs the current 3.x release; the 4.0 behaviour described here needs the 4.0.0 release or a pinned 4.0 pre-release.
 
 brew install MikkoParkkola/tap/mcp-gateway
 
@@ -52,15 +54,17 @@ These four discovery tools are always present. The minimum operational surface h
 
 ## Key Features
 
+- Schema-only first-request model: 11 Meta-MCP tools in context (~1100 tokens) instead of every backend definition; it leaves out the extra discovery turn
 - Live task result: the checked-in 16-run sample found no completed-task token saving; across the 50-, 100-, 200-, and 500-tool rows, the meta path used 1.2-16.1% more input tokens
 - REST API to MCP: drop a YAML capability file or import OpenAPI spec, no code needed
-- 100+ built-in capabilities: weather, Wikipedia, GitHub, stock quotes, package tracking
-- Hot reload: change config without losing AI session
+- 130+ built-in capabilities: weather, Wikipedia, GitHub, stock quotes, package tracking
+- Hot reload of capability files and backends without losing the AI session
 - Circuit breakers, retry, rate limiting, health checks
 - Web dashboard at /ui, operator dashboard at /dashboard
 - Security: bearer tokens, API keys, per-client tool scopes, credential redaction, prompt injection detection
 - Transports: stdio, Streamable HTTP, SSE, WebSocket
-- MCP version: 2025-11-25
+- MCP revisions: 2026-07-28 (stateless, on by default); 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05 through the initialize handshake. Ordinary tool calls work across revisions. A 2026 backend's mid-call questions (elicitation/create, sampling/createMessage, roots/list) reach older clients, not the reverse, only on gateway-dispatched invoke paths and only for request types the client declared; a 2026 client answers them by retrying, and over HTTP that needs a verified caller identity; a 2026-only backend must be reached over HTTP; older clients are refused the 2026-only tasks methods
+- License: PolyForm Noncommercial 1.0.0; commercial use needs a commercial license (COMMERCIAL.md)
 
 ## Backend Types
 
@@ -72,6 +76,5 @@ These four discovery tools are always present. The minimum operational surface h
 ## Detailed docs
 
 - Full README: https://github.com/MikkoParkkola/mcp-gateway/blob/main/README.md
-- Agent setup: https://github.com/MikkoParkkola/mcp-gateway/blob/main/AGENTS.md
 - Quick start: https://github.com/MikkoParkkola/mcp-gateway/blob/main/docs/QUICKSTART.md
 - Deployment: https://github.com/MikkoParkkola/mcp-gateway/blob/main/docs/DEPLOYMENT.md

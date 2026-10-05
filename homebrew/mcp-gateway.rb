@@ -1,5 +1,5 @@
 class McpGateway < Formula
-  desc "Universal MCP Gateway with a compact Meta-MCP surface"
+  desc "MCP gateway: MCP servers and REST APIs behind one endpoint, revision bridging"
   homepage "https://github.com/MikkoParkkola/mcp-gateway"
   version "2.0.1"
   # Mixed, per-file licensing (default PolyForm-Noncommercial-1.0.0 + a small MIT

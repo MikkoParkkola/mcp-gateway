@@ -4,13 +4,13 @@ version = "4.0.0-beta.2"
 edition = "2024"
 rust-version = "1.95"
 authors = ["Mikko Parkkola <mikko.parkkola@iki.fi>"]
-description = "Universal MCP Gateway - compact Meta-MCP surface over many backends, bridging MCP revisions"
+description = "MCP gateway and Model Context Protocol proxy: one endpoint for many MCP servers and REST APIs, with on-demand tool discovery and MCP revision bridging"
 license = "PolyForm-Noncommercial-1.0.0"
 homepage = "https://github.com/MikkoParkkola/mcp-gateway"
 repository = "https://github.com/MikkoParkkola/mcp-gateway"
 documentation = "https://docs.rs/mcp-gateway"
 readme = "README.md"
-keywords = ["mcp", "model-context", "gateway", "proxy", "ai"]
+keywords = ["mcp", "mcp-gateway", "model-context", "proxy", "ai-agents"]
 categories = ["command-line-utilities", "network-programming", "web-programming"]
 # Keep the published crate focused on build/runtime assets and the fixtures
 # needed by package verification tests.
@@ -81,7 +81,6 @@ include = [
     "Dockerfile",
     "docs/CLIENTS.md",
     "docs/DEPLOYMENT.md",
-    "docs/design/RFC-0132-cloudflare-enterprise-mcp-gap-analysis.md",
     "docs/identity_grants.md",
     "docs/MULTI_USER.md",
     "docs/release/4.0.0-beta.2-notes.md",

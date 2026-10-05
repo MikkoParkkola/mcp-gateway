@@ -76,9 +76,9 @@ Sleep 5s
 
 Type ""
 Enter
-Type "# Unlimited backends. Circuit breakers isolate failures."
+Type "# Add backends as you need them. Circuit breakers isolate failures."
 Enter
-Type "# Change config? Gateway restarts in ~8ms. AI session stays alive."
+Type "# Capabilities and backends hot-reload. AI session stays alive."
 Enter
 Sleep 4s
 
