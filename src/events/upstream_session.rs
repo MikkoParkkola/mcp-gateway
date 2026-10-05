@@ -282,9 +282,10 @@ enum Ev {
 /// An in-flight tools refill.
 type Refill = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
-/// End the session, first letting an in-flight refill finish and its tools
-/// change reach the hub, as when the refill ran inline and the end was only
-/// seen after it. A stop still ends at once.
+/// End the session, first letting an in-flight refill finish and any tools
+/// change it produced reach the hub, as when the refill ran inline and the
+/// end was only seen after it. A stop still ends at once. Unlike a loop
+/// iteration, nothing is maintained before this flush: the session is over.
 async fn finish_refill(
     state: &mut State<'_>,
     shared: &Shared,
@@ -302,6 +303,10 @@ async fn finish_refill(
             () = refill => {}
         }
         state.tools_pending = true;
+    }
+    // Also a refill that finished this iteration, its change not yet
+    // announced when the transport was found replaced.
+    if state.tools_pending {
         state.flush(hub);
     }
     state.ended(started)
