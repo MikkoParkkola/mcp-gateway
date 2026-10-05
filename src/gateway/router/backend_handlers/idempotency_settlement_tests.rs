@@ -163,3 +163,46 @@ async fn a_dropped_dispatch_keeps_the_key_settled() {
         other => panic!("the dropped dispatch freed its key: {other:?}"),
     }
 }
+
+/// A backend that a reload (or shutdown) stopped refuses before sending
+/// anything. That refusal frees the key: a retry under the same key reaches
+/// the backend that replaced it, instead of being answered with a settled
+/// failure for work that never ran.
+#[tokio::test]
+async fn a_stopped_backends_refusal_frees_the_key_for_a_retry() {
+    let config = crate::config::BackendConfig {
+        transport: crate::config::TransportConfig::Stdio {
+            command: "echo hi".to_string(),
+            cwd: None,
+            protocol_version: None,
+        },
+        ..crate::config::BackendConfig::default()
+    };
+    let backend = crate::backend::Backend::new(
+        "retired",
+        config,
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    );
+    backend.stop().await.expect("stop");
+    let error = backend
+        .request("tools/call", Some(json!({"name": "t", "arguments": {}})))
+        .await
+        .expect_err("a stopped backend refuses");
+    assert!(
+        error.is_pre_dispatch(),
+        "refused before dispatch: {error:?}"
+    );
+
+    let cache = Arc::new(IdempotencyCache::new());
+    let mut reservation = reserve(&cache);
+    let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
+    settle_direct_failure(Some(&mut reservation), &error, &response);
+    assert!(
+        matches!(
+            enforce(&cache, "key", "fingerprint"),
+            Ok(GuardOutcome::Proceed(_))
+        ),
+        "a stopped backend's refusal must not consume the key"
+    );
+}

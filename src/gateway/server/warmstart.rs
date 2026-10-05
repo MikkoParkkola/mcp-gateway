@@ -108,7 +108,11 @@ fn is_readiness_error(error: &Error) -> bool {
         Error::Transport(_)
         | Error::TransportConnect(_)
         | Error::BackendTimeout(_)
-        | Error::BackendUnavailable(_) => true,
+        | Error::BackendUnavailable(_)
+        // A stopped instance answers NotFound (`start_entry`'s shutdown-race
+        // path); the next attempt re-resolves the name, reaching the instance
+        // a reload put in its place.
+        | Error::BackendNotFound(_) => true,
         Error::Io(e) => is_transient_io(e.kind()),
         // A response arrived, so the backend is up; only connect/timeout shapes
         // mean "not yet". A 4xx is the operator's configuration talking back.
