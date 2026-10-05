@@ -24,6 +24,7 @@ use crate::gateway::outbound::{
 use crate::gateway::streaming::TaggedNotification;
 use crate::protocol::{JsonRpcNotification, JsonRpcResponse};
 use crate::security::TransparencyLogger;
+use crate::security::audit::AuditFailurePolicy;
 use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
 use crate::security::firewall::{Firewall, FirewallConfig};
 use crate::security::tenant_reads::{ReadHistory, ReadVerdict};
@@ -82,7 +83,9 @@ impl Stream {
             key_id: "corpus".to_string(),
             ..TransparencyLogConfig::default()
         }))
-        .expect("log");
+        .expect("log")
+        // A failed record then fails `written`, not the verdict read back.
+        .with_failure_policy(AuditFailurePolicy::FailClosed);
         let judge = SessionJudge::new(
             Some(Arc::clone(fw)),
             Arc::new(RejectionAudit::new(None, 1)),
@@ -111,9 +114,11 @@ impl Stream {
             event_id: None,
         };
         let hidden = row.get("raw").and_then(|raw| self.judge.raw(raw));
-        let Ok(mark) = self.judge.judge(Some(key), &note, hidden.as_ref()) else {
-            return true; // withheld
-        };
+        // Observe mode delivers a flagged item; a withheld one is a fault.
+        let mark = self
+            .judge
+            .judge(Some(key), &note, hidden.as_ref())
+            .expect("observe mode withholds nothing");
         let Some(mark) = mark else {
             return false;
         };
