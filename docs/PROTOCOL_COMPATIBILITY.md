@@ -121,8 +121,11 @@ speak fails with a protocol error that names that revision
   methods; long-running calls are not turned into tasks for it.
 - **Modern-only backends need HTTP.** stdio and WebSocket backends always
   start with `initialize`.
-- **Unknown client revisions** are answered with 2025-11-25 rather than
-  refused.
+- **Client revisions the gateway does not serve** are answered with
+  2025-11-25 only in the `initialize` handshake (`negotiate_version`,
+  `src/protocol/mod.rs`). An HTTP request whose `MCP-Protocol-Version`
+  header, or modern `_meta`, names such a revision is refused with 400
+  (`request_check_refusal`, `src/gateway/router/handlers/request_checks.rs`).
 
 See also: [spec-divergences](spec-divergences.md),
 [v4.0.0 supported matrix](release/v4.0.0-supported-matrix.md#protocol-revisions).
