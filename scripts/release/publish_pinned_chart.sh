@@ -3,17 +3,23 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #
 # Publish the Helm chart of TAG_COMMIT with image.digest set to the pushed
-# release image's digest, then verify it from the registry (MIK-6684).
+# release image's digest, cosign-sign the pushed chart by digest, then verify
+# both from the registry (MIK-6684, RFC-0133 HELM.6).
 # The committed chart keeps an empty digest: rule (a) allows no non-docs
 # commit after the freeze, so the digest goes into the packaged chart only.
 #
-# usage: TAG_COMMIT=<sha> publish_pinned_chart.sh <image-ref> <oci-repo>
+# usage: TAG_COMMIT=<sha> SIGNER_IDENTITY=<id> SIGNER_ISSUER=<url> \
+#          publish_pinned_chart.sh <image-ref> <oci-repo>
 #   e.g. publish_pinned_chart.sh ghcr.io/mikkoparkkola/mcp-gateway:4.0.0 oci://ghcr.io/mikkoparkkola/charts
+# SIGNER_IDENTITY and SIGNER_ISSUER are the exact certificate identity and OIDC
+# issuer the keyless signature must carry; verify pins both, never a regexp.
 set -euo pipefail
 
 image=${1:?image reference}
 repo=${2:?oci chart repository}
 : "${TAG_COMMIT:?set TAG_COMMIT to the tagged commit}"
+: "${SIGNER_IDENTITY:?set SIGNER_IDENTITY to the identity the chart is signed as}"
+: "${SIGNER_ISSUER:?set SIGNER_ISSUER to the OIDC issuer of that identity}"
 
 digest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest.Digest}}' | tr -d '"')
 if ! [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -32,7 +38,16 @@ staged=$(yq '.image.digest' "$chart/values.yaml")
 [[ $staged == "$digest" ]] || { echo "digest not staged: $staged" >&2; exit 1; }
 
 helm package "$chart" -d "$work/out"
-helm push "$work/out/mcp-gateway-$version.tgz" "$repo"
+push_out=$(helm push "$work/out/mcp-gateway-$version.tgz" "$repo" 2>&1)
+printf '%s\n' "$push_out"
+chart_digest=$(printf '%s\n' "$push_out" | grep -oE 'sha256:[0-9a-f]{64}' | head -1)
+[[ -n $chart_digest ]] || { echo "no chart digest in helm push output" >&2; exit 1; }
+# Sign the exact artifact pushed, by digest, never a tag that can move.
+chart_ref="${repo#oci://}/mcp-gateway@$chart_digest"
+cosign sign --yes "$chart_ref"
+cosign verify --certificate-identity "$SIGNER_IDENTITY" \
+  --certificate-oidc-issuer "$SIGNER_ISSUER" "$chart_ref" >/dev/null \
+  || { echo "chart signature on $chart_ref did not verify" >&2; exit 1; }
 
 # Verify from the registry, not from the local file.
 mkdir -p "$work/pulled"
@@ -43,4 +58,4 @@ published=$(tar -xOzf "$work/pulled/mcp-gateway-$version.tgz" mcp-gateway/values
 want="$(yq '.image.registry' "$chart/values.yaml")/$(yq '.image.repository' "$chart/values.yaml")@$digest"
 rendered=$(helm template probe "$work/pulled/mcp-gateway-$version.tgz" | yq 'select(.kind == "Deployment") | .spec.template.spec.containers[0].image')
 [[ $rendered == "$want" ]] || { echo "rendered image is $rendered, not $want" >&2; exit 1; }
-echo "chart $version pins $digest"
+echo "chart $version pins $digest, signed as $chart_ref"
