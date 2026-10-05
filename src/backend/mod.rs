@@ -36,6 +36,7 @@ pub(crate) mod listen;
 mod metadata;
 mod oauth_client;
 mod ops;
+mod package_cache;
 mod pool;
 mod probe;
 mod registry;

@@ -16,7 +16,7 @@ pub use self::command_split::{split_command, split_command_unix, split_command_w
 pub use self::http::HttpTransport;
 pub use self::stdio::{
     CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES, StdioTransport,
-    isolated_package_manager_env,
+    assigned_package_cache_dir, isolated_package_manager_env,
 };
 pub use self::websocket::McpFrame;
 
