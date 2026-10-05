@@ -46,12 +46,20 @@ n = 18 rep schedule the runner executes and adds the reps and seed rows to §11 
 `a09b26e0758508c483f81fb84536cdb88aae20bc0b19e2b83dd648ff8ddcf2ef`. Re-read the digest at
 freeze. A later edit changes it again.
 
+The 2026-10-05 amendment replaces the per-rep shuffle, which under seed `20261007`
+put the candidate C at mean slot 2.61 against 3.11 (A) and 3.06 (B), with the
+counterbalanced design in `schedule.py` (A, B and C each at mean slot 3.00). It
+also makes the harness enforce the graded schedule (`WORKLOAD_GRADED=1`,
+`eval_workload.py --graded`). The design was fixed before any graded run and
+without reference to any result. The contract digest above is the amended
+file's.
+
 ## Rep schedule
 
 | Pin | Value |
 |---|---|
 | measured reps per cell | 18 (`WORKLOAD_REPS=18`; `pins.json` `reps` = 1..18) |
-| cell order | seeded permutation of A–E per rep; seed `20261007` (`cell_order_seed` in `pins.json`) |
+| cell order | counterbalanced 18-row design (`schedule.py`), rows ordered by seed `20261007`; `"graded": true` in `pins.json`, run with `WORKLOAD_GRADED=1` |
 
 ## Checkout SHAs
 
