@@ -170,7 +170,7 @@ backend" and "fails a capability file" first.**
 | 143 | The `gateway_search_tools` output schema describes each `matches` row as `anyOf` a tool row (`server`, `tool`, `description`, `score`) or an event row (`kind: event`, `name`, `description`, `inputSchema`); it described tool rows only, so a strict client rejected an answer holding an event. `limit` now caps tool and event rows together: an answer could hold `limit` tools plus `limit` events | A client that reads the row schema at `items.properties` reads `items.anyOf[0].properties` for tool rows and `items.anyOf[1]` for event rows; one that sizes for `2 × limit` rows gets at most `limit` |
 | 144 | `ProvidersConfig::process` and `ProvidersConfig::integrity` are no longer public fields: a program built on the crate reads them through `process()` and `integrity()` and cannot set them, so only the loader marks a definition `Integrity::Verified`; `register_capability` replacing a definition drops its cached answers | An embedder that read the fields calls the getters; one that set `integrity` loads the definition through the capability loader instead; one that replaces `mcp` definitions keeps the runtime that started their children driven, or drops it |
 | 145 | The `plugin` command is removed (`search`, `install`, `uninstall`, `list`), with `mcp_gateway::registry::marketplace` and `mcp_gateway::config::MarketplaceConfig`; a `marketplace:` block in the config loads and warns once | Delete the `marketplace:` block and `~/.mcp-gateway/plugins`; add tools as `backends:` entries or capability files (`mcp-gateway cap`) |
-| 146 | An OAuth backend whose authorization server, token endpoint or registration endpoint is `http://` to a host off this machine fails at connect, and so does a redirect from one to such a URL; a capability that sends a credential (`auth.required`) and names an `http://` `base_url` or `endpoint` off this machine fails to load, and a templated one is refused at call time. `http://` to a loopback host is allowed, and is no longer proxied | Serve the authorization server and the capability's API over `https://`, or on a loopback host (`localhost`, `127.0.0.1`, `[::1]`). `allow_cleartext_credentials` does not cover either |
+| 146 | An OAuth backend whose authorization server, authorization endpoint, token endpoint or registration endpoint is `http://` to a host off this machine fails at connect, and so does a redirect from one to such a URL; a capability that sends a credential (`auth.required`) and names an `http://` `base_url` or `endpoint` off this machine fails to load, and a templated one is refused at call time. `http://` to a loopback host is allowed, and is no longer proxied | Serve the authorization server and the capability's API over `https://`, or on a loopback host (`localhost`, `127.0.0.1`, `[::1]`). `allow_cleartext_credentials` does not cover either |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3900,9 +3900,9 @@ path can replay them. 4.0 already refused an OAuth bearer to an `http://` backen
 machine (item 8 and the OAuth transport guard). The authorization server the backend points at
 was not held to the same rule, and neither was a capability's own API.
 
-- **OAuth authorization server:** the authorization server a backend advertises, and the token
-  and registration endpoints that server advertises, must be `https://`, or `http://` on a
-  loopback host. These URLs come from discovery documents, so the check runs when the backend
+- **OAuth authorization server:** the authorization server a backend advertises, and the
+  authorization, token and registration endpoints that server advertises, must be `https://`, or
+  `http://` on a loopback host. These URLs come from discovery documents, so the check runs when the backend
   connects, not at config load. A refused backend fails with one warning naming the endpoint
   (`OAuth token_endpoint is cleartext http:// to a host off this machine`), and the gateway starts
   without it. A redirect from any OAuth request to such a URL is refused the same way, under
@@ -3912,7 +3912,9 @@ was not held to the same rule, and neither was a capability's own API.
   to load, with a warning naming that field. A URL built from a caller's parameters is checked
   when it is called, before the credential is read. The REST, GraphQL and JSON-RPC paths and the
   capability OAuth refresh all apply it. A capability with no credential (`auth.required: false`)
-  is not affected.
+  is not affected, except that no capability request that started on `https://` or loopback
+  follows a redirect to `http://` off this machine. A loopback request no longer goes through
+  `capabilities.egress_proxy`.
 - **Loopback** is `localhost` (any case), `127.0.0.0/8` and `[::1]`, the same classifier as the
   backend guard. `localhost.` (trailing dot), `*.localhost`, `localhost.localdomain` and
   IPv4-mapped IPv6 (`[::ffff:127.0.0.1]`) are not loopback here: a name that has to go through a

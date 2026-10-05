@@ -19,8 +19,13 @@ use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::security::ssrf::{DestinationPolicy, is_ssrf_refusal};
 
 /// Serve both discovery documents on loopback, advertising `authorization_server`,
-/// `token` and `registration` (`{port}` is the mock's own port).
-async fn serve(authorization_server: &str, token: &str, registration: &str) -> u16 {
+/// `authorize`, `token` and `registration` (`{port}` is the mock's own port).
+async fn serve(
+    authorization_server: &str,
+    authorize: &str,
+    token: &str,
+    registration: &str,
+) -> u16 {
     use axum::{Router, routing::get};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -32,7 +37,7 @@ async fn serve(authorization_server: &str, token: &str, registration: &str) -> u
     });
     let server = json!({
         "issuer": fill(authorization_server),
-        "authorization_endpoint": format!("{origin}/authorize"),
+        "authorization_endpoint": fill(authorize),
         "token_endpoint": fill(token),
         "registration_endpoint": fill(registration),
     });
@@ -60,7 +65,22 @@ async fn initialize(
     token: &str,
     registration: &str,
 ) -> crate::Result<()> {
-    let port = serve(authorization_server, token, registration).await;
+    initialize_with(
+        authorization_server,
+        LOOPBACK_AUTHORIZE,
+        token,
+        registration,
+    )
+    .await
+}
+
+async fn initialize_with(
+    authorization_server: &str,
+    authorize: &str,
+    token: &str,
+    registration: &str,
+) -> crate::Result<()> {
+    let port = serve(authorization_server, authorize, token, registration).await;
     let dir = tempfile::tempdir().unwrap();
     let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
     // `Configured`, the production default: no literal check applies, so only
@@ -81,6 +101,7 @@ async fn initialize(
 }
 
 const LOOPBACK_AS: &str = "http://127.0.0.1:{port}";
+const LOOPBACK_AUTHORIZE: &str = "http://127.0.0.1:{port}/authorize";
 
 /// A refusal, as the policy refusal every OAuth fallback stops at (MIK-7701),
 /// naming the endpoint and never echoing the URL.
@@ -133,6 +154,20 @@ async fn cleartext_registration_endpoint_off_machine_is_refused() {
     )
     .await;
     assert_cleartext_refusal(result, "registration_endpoint");
+}
+
+/// The user signs in at the authorization endpoint, so their password would
+/// cross the wire there.
+#[tokio::test]
+async fn cleartext_authorization_endpoint_off_machine_is_refused() {
+    let result = initialize_with(
+        LOOPBACK_AS,
+        "http://off-machine.invalid/authorize",
+        "http://127.0.0.1:{port}/token",
+        "http://127.0.0.1:{port}/register",
+    )
+    .await;
+    assert_cleartext_refusal(result, "authorization_endpoint");
 }
 
 #[tokio::test]
@@ -220,6 +255,7 @@ async fn a_loopback_cleartext_authorization_server_is_never_proxied() {
         .unwrap();
     let port = serve(
         LOOPBACK_AS,
+        LOOPBACK_AUTHORIZE,
         "http://127.0.0.1:{port}/token",
         "http://127.0.0.1:{port}/register",
     )
@@ -242,4 +278,26 @@ async fn a_loopback_cleartext_authorization_server_is_never_proxied() {
         "a loopback fetch went to the proxy"
     );
     result.expect("the loopback authorization server is reached directly");
+}
+
+/// A redirect is sent by the client that sent the first request. The
+/// environment-proxied client cannot follow one to `http://` loopback: the
+/// proxy would carry it off the machine. Driven directly on that client, as
+/// the first hop would be from an `https://` endpoint.
+#[tokio::test]
+async fn the_proxied_client_refuses_a_hop_to_cleartext_loopback() {
+    use super::tests::{counting_listener, redirecting_listener};
+    let (target, seen) = counting_listener().await;
+    let first = redirecting_listener(format!("http://127.0.0.1:{target}/token")).await;
+    let error = super::http_client(DestinationPolicy::Configured)
+        .unwrap()
+        .post(format!("http://127.0.0.1:{first}/token"))
+        .send()
+        .await
+        .expect_err("the hop is refused");
+    assert!(
+        format!("{error:?}").contains("environment proxy"),
+        "{error:?}"
+    );
+    assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 0);
 }

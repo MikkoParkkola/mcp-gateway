@@ -26,13 +26,25 @@ const MAX_HOPS: usize = 10;
 ///
 /// `Error::OAuth` if the client cannot be built.
 pub(crate) fn http_client(destination: DestinationPolicy) -> Result<Client> {
-    let builder = match destination {
-        DestinationPolicy::Configured => Client::builder(),
-        policy @ (DestinationPolicy::Public | DestinationPolicy::Private) => {
-            crate::security::ssrf::pinned_client_builder_for(policy)
-        }
+    let (builder, route) = match destination {
+        DestinationPolicy::Configured => (Client::builder(), Route::EnvironmentProxy),
+        policy @ (DestinationPolicy::Public | DestinationPolicy::Private) => (
+            crate::security::ssrf::pinned_client_builder_for(policy),
+            Route::Direct,
+        ),
     };
-    finish(builder, destination)
+    finish(builder, destination, route)
+}
+
+/// Whether a client may send through the environment's proxy.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Route {
+    /// `HTTP(S)_PROXY` applies: a hop to `http://` loopback would be carried
+    /// to the proxy in cleartext, so it is refused ([`OAuthClient::client_for`]
+    /// sends a first request there through the direct client instead).
+    EnvironmentProxy,
+    /// No environment proxy: the pinned clients and [`loopback_client`].
+    Direct,
 }
 
 /// The client a `Configured` OAuth client uses for `http://` on a loopback
@@ -44,11 +56,20 @@ pub(crate) fn http_client(destination: DestinationPolicy) -> Result<Client> {
 ///
 /// `Error::OAuth` if the client cannot be built.
 pub(super) fn loopback_client() -> Result<Client> {
-    finish(Client::builder().no_proxy(), DestinationPolicy::Configured)
+    finish(
+        Client::builder().no_proxy(),
+        DestinationPolicy::Configured,
+        Route::Direct,
+    )
 }
 
-/// `builder` with the OAuth timeout and the redirect policy for `destination`.
-fn finish(builder: reqwest::ClientBuilder, destination: DestinationPolicy) -> Result<Client> {
+/// `builder` with the OAuth timeout and the redirect policy for `destination`
+/// and `route`.
+fn finish(
+    builder: reqwest::ClientBuilder,
+    destination: DestinationPolicy,
+    route: Route,
+) -> Result<Client> {
     builder
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::custom(move |attempt| match hop(
@@ -56,6 +77,15 @@ fn finish(builder: reqwest::ClientBuilder, destination: DestinationPolicy) -> Re
             attempt.previous().len(),
             attempt.url(),
         ) {
+            // `hop` let only loopback through as `http://`; through a proxy it
+            // would leave the machine after all.
+            Hop::Follow if route == Route::EnvironmentProxy && attempt.url().scheme() == "http" => {
+                attempt.error(crate::security::ssrf::SsrfDenied::new(format!(
+                    "{}: an OAuth redirect to http:// loopback would go through the \
+                     environment proxy, off this machine",
+                    crate::security::ssrf::SSRF_BLOCKED
+                )))
+            }
             // As reqwest's default policy: too many redirects is an error.
             Hop::Stop => attempt.error("too many redirects"),
             // Typed as the resolver's refusal, so every send site maps it to
@@ -121,7 +151,13 @@ impl OAuthClient {
     /// The client for a request to `url`: under `Configured`, `http://` on a
     /// loopback host goes through the unproxied [`loopback_client`]. The other
     /// policies' pinned client ignores the environment's proxy already.
+    ///
+    /// A backstop as well: a cleartext URL off this machine is refused here,
+    /// at send time, whatever checked it before.
     pub(super) fn client_for(&self, url: &str) -> Result<&Client> {
+        if !url::Url::parse(url).is_ok_and(|u| crate::gateway::is_tls_or_loopback(&u)) {
+            return Err(Error::Protocol(cleartext_refusal("endpoint")));
+        }
         let loopback_cleartext = self.destination == DestinationPolicy::Configured
             && url::Url::parse(url).is_ok_and(|u| {
                 u.scheme() == "http"
@@ -161,6 +197,9 @@ impl OAuthClient {
         &self,
         meta: &AuthorizationServerMetadata,
     ) -> Result<()> {
+        // The authorization endpoint is where the user signs in: their own
+        // password goes there, through the browser.
+        self.check_destination(&meta.authorization_endpoint, "authorization_endpoint")?;
         self.check_destination(&meta.token_endpoint, "token_endpoint")?;
         match &meta.registration_endpoint {
             Some(registration) => self.check_destination(registration, "registration_endpoint"),

@@ -128,3 +128,75 @@ async fn a_cleartext_token_endpoint_never_receives_the_refresh_token() {
         .to_string();
     assert!(error.contains("cleartext"), "{error}");
 }
+
+/// A loopback listener that counts connections and answers each `200 OK`.
+async fn answering_listener() -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = std::sync::Arc::clone(&seen);
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf).await;
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await;
+        }
+    });
+    (port, seen)
+}
+
+/// Loopback is the carve-out because it stays on the machine, so the
+/// operator's `capabilities.egress_proxy` never carries a loopback request.
+#[tokio::test]
+async fn a_loopback_capability_request_bypasses_the_egress_proxy() {
+    use std::sync::atomic::Ordering;
+    let (proxy, via_proxy) = answering_listener().await;
+    let (server, direct) = answering_listener().await;
+    let proxy_url = url::Url::parse(&format!("http://127.0.0.1:{proxy}")).unwrap();
+    super::super::client::build(Some(&proxy_url))
+        .get(format!("http://127.0.0.1:{server}/v1"))
+        .send()
+        .await
+        .expect("the loopback server answers");
+    assert_eq!(via_proxy.load(Ordering::SeqCst), 0, "the proxy carried it");
+    assert_eq!(direct.load(Ordering::SeqCst), 1);
+}
+
+/// A 307/308 re-sends the body and custom credential headers, so a request
+/// that started on loopback (or TLS) is not followed to cleartext off this
+/// machine. The target is a public literal, so no SSRF rule refuses it first.
+#[tokio::test]
+async fn a_redirect_from_loopback_to_cleartext_off_machine_is_refused() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf).await;
+            let _ = stream
+                .write_all(
+                    b"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://93.184.215.14/v1\r\n\
+                      Content-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+        }
+    });
+    let sent = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        super::super::client::build(None)
+            .get(format!("http://127.0.0.1:{port}/v1"))
+            .send(),
+    )
+    .await
+    .expect("refused before any connection off the machine");
+    let error = sent.expect_err("the cleartext hop is refused");
+    assert!(
+        format!("{error:?}").contains("capability redirect to cleartext"),
+        "{error:?}"
+    );
+}
