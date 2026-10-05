@@ -210,10 +210,12 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         match event {
             Ev::Current(Some(note)) => {
                 if state.note(note, false) {
-                    return state.ended(started);
+                    return finish_refill(&mut state, shared, backend, hub, refill, started).await;
                 }
             }
-            Ev::Current(None) => return state.ended(started),
+            Ev::Current(None) => {
+                return finish_refill(&mut state, shared, backend, hub, refill, started).await;
+            }
             Ev::Pending(Some(note)) => {
                 state.note(note, true);
             }
@@ -225,7 +227,12 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             }
             Ev::Wake | Ev::Tick => {}
         }
-        if refill.is_none() && state.tools_due.is_some_and(|due| Instant::now() >= due) {
+        // Not while a finished refill's change is still unannounced: invalidating
+        // now would have the hub announce it over an emptied cache.
+        if refill.is_none()
+            && !state.tools_pending
+            && state.tools_due.is_some_and(|due| Instant::now() >= due)
+        {
             // A notice arrived: drop the cached list and refill it before the
             // hub hears, so the subscriber's re-read is fresh and nothing sees
             // an emptied cache. At most once per tick however many notices
@@ -239,7 +246,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         }
         if !backend_still_current(backend, &target.handle) {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
-            return state.ended(started);
+            return finish_refill(&mut state, shared, backend, hub, refill, started).await;
         }
         let stopped = tokio::select! {
             () = shared.stop.cancelled() => true,
@@ -274,6 +281,31 @@ enum Ev {
 
 /// An in-flight tools refill.
 type Refill = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+/// End the session, first letting an in-flight refill finish and its tools
+/// change reach the hub, as when the refill ran inline and the end was only
+/// seen after it. A stop still ends at once.
+async fn finish_refill(
+    state: &mut State<'_>,
+    shared: &Shared,
+    backend: &Backend,
+    hub: &Weak<EventsHub>,
+    refill: Option<Refill>,
+    started: Instant,
+) -> Outcome {
+    if let Some(refill) = refill {
+        tokio::select! {
+            () = shared.stop.cancelled() => {
+                state.release(backend).await;
+                return Outcome::Stopped;
+            }
+            () = refill => {}
+        }
+        state.tools_pending = true;
+        state.flush(hub);
+    }
+    state.ended(started)
+}
 
 /// Resolves when the in-flight refill ends; never, when there is none.
 async fn refilled(refill: &mut Option<Refill>) {

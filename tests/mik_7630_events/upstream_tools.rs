@@ -65,7 +65,8 @@ async fn a_hanging_tools_refill_does_not_hold_other_notices() {
     )
     .await;
     let resources = event("resources_changed");
-    sub(&gw, ALICE, &event("tools_changed"), &receiver, json!({})).await;
+    let tools_name = event("tools_changed");
+    let tools = sub(&gw, ALICE, &tools_name, &receiver, json!({})).await;
     let res = sub(&gw, ALICE, &resources, &receiver, json!({})).await;
     eventually("the listen asks for tools and resources", || {
         peer.open_listens().iter().any(|f| {
@@ -75,6 +76,7 @@ async fn a_hanging_tools_refill_does_not_hold_other_notices() {
     })
     .await;
     let lists_before = peer.frames("tools/list").len();
+    let tools_before = delivered(&receiver, &tools, &tools_name).len();
     peer.hang_tools_list();
     peer.push(TOOLS_CHANGED, json!({}));
     eventually("the refill reached the backend", || {
@@ -91,4 +93,11 @@ async fn a_hanging_tools_refill_does_not_hold_other_notices() {
         prompt,
         "a resources notice waited behind the hanging tools refill"
     );
+    // REFILL.2: the tools change is still announced, once the refill ends
+    // (here by its 30 s bound, the peer holding the list for a minute).
+    let announced = wait_until(Duration::from_secs(45), || {
+        delivered(&receiver, &tools, &tools_name).len() > tools_before
+    })
+    .await;
+    assert!(announced, "the tools change was never announced");
 }
