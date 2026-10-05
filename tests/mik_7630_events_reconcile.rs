@@ -25,8 +25,15 @@ use gateway::{ALICE, Gateway};
 use receiver::{EventReply, Receiver, whsec};
 use serde_json::json;
 
+/// Stored subscriptions only: the store rewrites a record through a
+/// `.{name}.{n}.tmp` file and a rename, and a count taken mid-rewrite would
+/// see that temp file as a second subscription.
 fn subs_on_disk(root: &Path) -> usize {
-    std::fs::read_dir(root.join("events/subs")).map_or(0, |d| d.flatten().count())
+    std::fs::read_dir(root.join("events/subs")).map_or(0, |d| {
+        d.flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .count()
+    })
 }
 
 /// A subscription with one retry pending, the gateway stopped, then started
