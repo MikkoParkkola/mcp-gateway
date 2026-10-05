@@ -309,8 +309,9 @@ fe2ed154 (`RELEASE-4.0.0-scope-status.json`, NFR.WORKLOAD.1). All of these
 runs were diagnostic, not graded: they predate the freeze SHA and the graded
 mode below, so none of them grades the release. The 14933f9a FAIL stays the
 standing result in the scope-status note until a graded run replaces it.
-n = 18 was chosen after those diagnostic results were seen. It is fixed
-before the graded run at the freeze SHA, so no graded result can move it.
+n = 18 was chosen after the n = 3, 6 and 12 diagnostic results were seen.
+It is fixed before the graded run at the freeze SHA, so no graded result can
+move it.
 
 Enforced by the harness, not by a reader. With `WORKLOAD_GRADED=1` the runner
 refuses, before any build, a run that is not `WORKLOAD_REPS=18` and
