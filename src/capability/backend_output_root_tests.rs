@@ -40,13 +40,23 @@ fn an_array_output_root_is_advertised_and_published_under_items() {
         "items": { "type": "object", "properties": { "id": { "type": "string" } } }
     });
 
+    let mut advertised = cap.to_mcp_tool().output_schema.expect("advertised");
+    let id = advertised["properties"]["items"]
+        .as_object_mut()
+        .and_then(|inner| inner.remove("$id"))
+        .expect("the nested schema is its own resource");
+    assert!(
+        id.as_str()
+            .is_some_and(|id| id.starts_with("urn:mcp-gateway:declared-output:")),
+        "{id}"
+    );
     assert_eq!(
-        cap.to_mcp_tool().output_schema,
-        Some(json!({
+        advertised,
+        json!({
             "type": "object",
             "properties": { "items": declared },
             "required": ["items"]
-        }))
+        })
     );
 
     let payload = json!([{ "id": "a" }, { "id": "b" }]);
@@ -64,10 +74,7 @@ fn a_scalar_output_root_is_published_under_items() {
 
     let advertised = cap.to_mcp_tool().output_schema.expect("advertised");
     assert_eq!(advertised["type"], json!("object"));
-    assert_eq!(
-        advertised["properties"]["items"],
-        json!({ "type": "string" })
-    );
+    assert_eq!(advertised["properties"]["items"]["type"], json!("string"));
 
     let result = build_success_tool_result(&cap, json!("42 is the answer"));
     assert_eq!(
@@ -143,4 +150,47 @@ fn a_typeless_or_union_root_is_wrapped_unless_it_declares_properties() {
     );
     let result = build_success_tool_result(&cap, json!({ "id": "a" }));
     assert_eq!(result.structured_content, Some(json!({ "id": "a" })));
+}
+
+/// The nested schema's `$id` names its content, and a declared `$id` that
+/// names the enclosing document is replaced.
+#[test]
+fn a_wrapped_root_is_named_by_its_content() {
+    let id_of = |output: &str| {
+        capability_with_output(output)
+            .to_mcp_tool()
+            .output_schema
+            .expect("advertised")["properties"]["items"]["$id"]
+            .clone()
+    };
+    let strings = id_of("    type: array\n    items:\n      type: string");
+    let numbers = id_of("    type: array\n    items:\n      type: number");
+    assert_ne!(strings, numbers);
+    assert_eq!(
+        strings,
+        id_of("    type: array\n    items:\n      type: string")
+    );
+    assert_eq!(
+        id_of("    $id: https://schemas.invalid/kept\n    type: array"),
+        json!("https://schemas.invalid/kept")
+    );
+
+    for declared in ["''", "'#'"] {
+        let output = format!(
+            "    $id: {declared}\n    type: array\n    items:\n      $ref: '#/$defs/E'\n    $defs:\n      E:\n        type: string"
+        );
+        let advertised = capability_with_output(&output)
+            .to_mcp_tool()
+            .output_schema
+            .expect("advertised");
+        assert!(
+            advertised["properties"]["items"]["$id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("urn:mcp-gateway:declared-output:")),
+            "{output}"
+        );
+        let validator = jsonschema::validator_for(&advertised).expect("compiles");
+        assert!(validator.is_valid(&json!({ "items": ["ok"] })), "{output}");
+        assert!(!validator.is_valid(&json!({ "items": [1] })), "{output}");
+    }
 }

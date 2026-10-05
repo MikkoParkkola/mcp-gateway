@@ -3,6 +3,7 @@
 //! MIK-7959: a capability's declared output root as MCP lets a client see it.
 
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
 
 /// MCP (2025-11-25) restricts a tool's `outputSchema` root to `type: "object"`
 /// and `structuredContent` to a JSON object (MIK-7959). A declared root that is
@@ -11,8 +12,16 @@ use serde_json::Value;
 /// both; the text content keeps the declared shape.
 const WRAPPED_OUTPUT_KEY: &str = "items";
 
-/// The `$id` a wrapped declared schema is given when it has none.
-const DECLARED_OUTPUT_ID: &str = "urn:mcp-gateway:declared-output";
+/// The `$id` a wrapped declared schema is given when it has none: named by
+/// its content, so two tools' schemas held in one client registry never share
+/// an identifier unless they are the same schema.
+fn declared_output_id(schema: &Value) -> String {
+    let digest = Sha256::digest(serde_json::to_vec(schema).unwrap_or_default());
+    format!(
+        "urn:mcp-gateway:declared-output:{}",
+        hex::encode(&digest[..16])
+    )
+}
 
 /// Object-shaped: `type: "object"`, or no `type` but `properties`, which
 /// `validate_output` already refuses for anything but an object.
@@ -42,11 +51,16 @@ pub(crate) fn advertised_output_schema(schema: &Value) -> Option<Value> {
     // The declared schema moves to `/properties/items`. Given an `$id`, it is
     // its own schema resource there, so its `#` and `#/...` references keep
     // resolving inside it, nested resources and instance data untouched. One
-    // that already has an `$id` is a resource as declared.
+    // that already names itself is a resource as declared; `""` and `"#"`
+    // name the enclosing document, which is the wrapper now.
     if let Some(object) = shown.as_object_mut() {
-        object
-            .entry("$id")
-            .or_insert_with(|| Value::from(DECLARED_OUTPUT_ID));
+        let named = object
+            .get("$id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !matches!(id, "" | "#"));
+        if !named {
+            object.insert("$id".to_owned(), Value::from(declared_output_id(schema)));
+        }
     }
     let mut wrapper = serde_json::json!({
         "type": "object",
