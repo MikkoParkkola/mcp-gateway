@@ -1897,6 +1897,46 @@
         "tests/mik_7630_events_admin.rs"
       ],
       "note": "Graded 2026-10-03 at d04d83215 (PR #2709, I6). Red first: CI run 37085840320 on tests-only head 0fc33a601 failed 7 of the 8 admin rows at their own assertions (404 where 200 or 400 was expected, no event entry in the search answer); the eighth, T36, passes by design as the regression guard. Green: CI run 37083066425 at head 6155163bf (Tests, Clippy, Windows, macOS). Mutants m1-m22 all RED (run 37074740437 on 9650916ac; the merge after it changed no executable line of the replay or search code). Reviews: gpt and grok on the tests and on the final diff, last round both SHIP. T37 (tests/mik_7630_events_admin.rs:376): gateway_search_tools and gateway_search return an entry with kind event and the descriptor's inputSchema to alice, none to bob, none for an unmatched query, and total_available counts it. T36 (:354): the meta surface did not grow."
+    },
+    {
+      "id": "MIK-7630.W401.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-06 by the operator decision moving MIK-7720 (three event sources) and MIK-7811 back into 4.0.0; not built yet."
+    },
+    {
+      "id": "MIK-7630.W401.2",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-06 by the operator decision moving MIK-7720 (three event sources) and MIK-7811 back into 4.0.0; not built yet."
+    },
+    {
+      "id": "MIK-7630.W401.3",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-06 by the operator decision moving MIK-7720 (three event sources) and MIK-7811 back into 4.0.0; not built yet."
+    },
+    {
+      "id": "MIK-7630.W401.4",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-06 by the operator decision moving MIK-7720 (three event sources) and MIK-7811 back into 4.0.0; not built yet."
+    },
+    {
+      "id": "MIK-7630.W401.5",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-06 by the operator decision moving MIK-7720 (three event sources) and MIK-7811 back into 4.0.0; not built yet."
     }
   ],
   "decisions": [
