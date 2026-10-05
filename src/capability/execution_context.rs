@@ -219,6 +219,31 @@ pub(crate) fn validate_capability_url_for_context(
     }
 }
 
+/// Refuse a credential-bearing send to `url` when it is cleartext off this
+/// machine. Loopback is the classifier the backend guard uses
+/// ([`crate::gateway::is_tls_or_loopback`]). The refusal never echoes the URL:
+/// a caller may have filled part of it.
+pub(crate) fn require_tls_for_credentials(url: &str) -> Result<()> {
+    if url::Url::parse(url).is_ok_and(|u| crate::gateway::is_tls_or_loopback(&u)) {
+        return Ok(());
+    }
+    Err(Error::Config(
+        "refusing to send a capability credential in cleartext to a host off this machine; \
+         use https:// (http:// is allowed only on a loopback host)"
+            .to_string(),
+    ))
+}
+
+/// [`require_tls_for_credentials`] when `auth` injects a credential (as a
+/// header, an account header, or the `auth.param` query parameter).
+pub(crate) fn require_tls_for_auth(url: &str, auth: &super::AuthConfig) -> Result<()> {
+    if auth.required {
+        require_tls_for_credentials(url)
+    } else {
+        Ok(())
+    }
+}
+
 fn url_targets_loopback_ip(url: &str) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {
         return false;

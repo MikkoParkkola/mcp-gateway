@@ -133,10 +133,42 @@ pub fn validate_capability(capability: &CapabilityDefinition) -> Result<()> {
 
     // Validate auth config doesn't contain actual secrets
     validate_no_secrets(&capability.auth)?;
+    validate_credential_transport(capability)?;
 
     validate_webhook_events(capability)?;
     validate_mcp_operations(capability)?;
 
+    Ok(())
+}
+
+/// A capability that injects a credential may not name a cleartext URL off
+/// this machine: the backend guard's rule, on the same loopback classifier.
+/// A URL that does not parse yet (a `{placeholder}` base) is left to the
+/// send-time check, which sees the URL the caller filled.
+fn validate_credential_transport(capability: &CapabilityDefinition) -> Result<()> {
+    if !capability.auth.required {
+        return Ok(());
+    }
+    let providers = &capability.providers;
+    let named = providers.named.iter().map(|(name, p)| (name.clone(), p));
+    let fallback =
+        (providers.fallback.iter().enumerate()).map(|(i, p)| (format!("fallback[{i}]"), p));
+    for (name, provider) in named.chain(fallback) {
+        let config = &provider.config;
+        let (field, url) = if config.uses_endpoint() {
+            ("endpoint", &config.endpoint)
+        } else {
+            ("base_url", &config.base_url)
+        };
+        if url::Url::parse(url).is_ok_and(|u| !crate::gateway::is_tls_or_loopback(&u)) {
+            return Err(Error::Config(format!(
+                "Capability '{}': providers.{name}.config.{field} is cleartext http:// to a \
+                 host off this machine, and the capability sends a credential; use https:// \
+                 (http:// is allowed only on a loopback host)",
+                capability.name
+            )));
+        }
+    }
     Ok(())
 }
 

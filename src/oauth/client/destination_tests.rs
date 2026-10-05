@@ -159,14 +159,18 @@ fn oauth_redirect_hop_policy() {
     assert_eq!(hop(DestinationPolicy::Configured, 9, &public), Hop::Follow);
     assert_eq!(hop(DestinationPolicy::Configured, 10, &public), Hop::Stop);
     assert_eq!(
-        hop(DestinationPolicy::Configured, 0, &private),
+        hop(
+            DestinationPolicy::Configured,
+            0,
+            &target("https://169.254.169.254/latest")
+        ),
         Hop::Follow,
-        "standard keeps today's redirects"
+        "standard keeps today's redirects (cleartext ones are refused: cleartext_tests)"
     );
 }
 
 /// A loopback listener that counts connections and drops each at once.
-async fn counting_listener() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+pub(super) async fn counting_listener() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -208,7 +212,7 @@ async fn hardened_oauth_client_is_pinned() {
 }
 
 /// Answer every connection with a redirect to `location`.
-async fn redirecting_listener(location: String) -> u16 {
+pub(super) async fn redirecting_listener(location: String) -> u16 {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -231,14 +235,23 @@ async fn redirecting_listener(location: String) -> u16 {
 /// reach a loopback mock at all.
 #[tokio::test]
 async fn hardened_oauth_client_refuses_a_literal_redirect() {
-    for (destination, followed) in [
-        (DestinationPolicy::Public, false),
-        (DestinationPolicy::Configured, true),
+    // `Configured` sends `http://` loopback through its direct client (the
+    // proxied one refuses a loopback hop: cleartext_tests), which follows.
+    for (destination, client, followed) in [
+        (
+            DestinationPolicy::Public,
+            super::http_client(DestinationPolicy::Public).unwrap(),
+            false,
+        ),
+        (
+            DestinationPolicy::Configured,
+            super::loopback_client().unwrap(),
+            true,
+        ),
     ] {
         let (target, accepted) = counting_listener().await;
         let origin = redirecting_listener(format!("http://127.0.0.1:{target}/next")).await;
-        let result = super::http_client(destination)
-            .unwrap()
+        let result = client
             .get(format!("http://127.0.0.1:{origin}/start"))
             .send()
             .await;
