@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::{
-    AdmitOutcome, Arc, Duration, Error, IdempotencyCache, IdempotencyReservation, OwnerToken,
-    Result, Value,
+    AdmitOutcome, Arc, Duration, Error, IdempotencyCache, IdempotencyReservation, MAX_ENTRIES,
+    OwnerToken, Result, Value,
 };
 
 /// Outcome of the idempotency guard.
