@@ -463,17 +463,32 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
             };
             let value_int = magnitude(n);
             let same_value = |needle: &str| {
-                // One leading "+" is not part of the value: "+012345" is the
-                // all-digit credential "012345" and takes the path below.
-                let needle = needle.strip_prefix('+').unwrap_or(needle);
+                // One leading sign is not part of the magnitude, and the
+                // result's sign is ignored too: "+012345" and "-012345" are
+                // the all-digit credential "012345" and take the exact path
+                // below, which also keeps integers past i64 exact. Covered:
+                // JSON number grammar with at most one leading sign, leading
+                // zeros allowed. Other notations ("0x1F", "12_345") are out of
+                // scope here (MIK-7954).
+                let needle = needle.strip_prefix(['+', '-']).unwrap_or(needle);
                 if needle.is_empty() || !needle.bytes().all(|b| b.is_ascii_digit()) {
-                    // A credential injected in another number form ("-12345",
+                    // A credential injected in another number form ("12.5",
                     // "1.5e10") comes back printed differently, so it is
                     // compared by value: exactly when both are integers, by
                     // f64 bits otherwise. Any number equal in value to such a
                     // needle is redacted, even one the child printed for
                     // another reason: that over-redaction is accepted.
-                    let Ok(parsed) = serde_json::from_str::<serde_json::Number>(needle) else {
+                    // Leading zeros are not JSON, but a credential may carry
+                    // them ("0012.5"): they are dropped before parsing, keeping
+                    // one zero before a "." or an exponent.
+                    let trimmed = needle.trim_start_matches('0');
+                    let normalized: std::borrow::Cow<'_, str> =
+                        if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
+                            trimmed.into()
+                        } else {
+                            format!("0{trimmed}").into()
+                        };
+                    let Ok(parsed) = serde_json::from_str::<serde_json::Number>(&normalized) else {
                         return false;
                     };
                     if let (Some(p), Some(v)) = (magnitude(&parsed), value_int) {
