@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! An `http://` backend on a loopback host never goes through an
-//! environment proxy, whatever the posture (CodeQL #426/#427/#488/#489).
+//! environment proxy, whatever the posture (`CodeQL` #426/#427/#488/#489).
 //!
 //! Cleartext to loopback is allowed because it never leaves the machine;
 //! that includes an OAuth bearer (`require_secure_oauth_target`). An
@@ -114,16 +114,17 @@ fn a_loopback_http_backend_never_uses_the_environment_proxy() {
             let direct = count_connections(backend_listener);
 
             for host in ["127.0.0.1", "localhost"] {
+                let before = direct.load(Ordering::SeqCst);
                 let _ = start(&format!("http://{host}:{backend_port}/mcp")).await;
+                assert!(
+                    direct.load(Ordering::SeqCst) > before,
+                    "{host}: the loopback backend was reached directly"
+                );
             }
             assert_eq!(
                 proxied.load(Ordering::SeqCst),
                 0,
                 "a loopback backend's cleartext request went to the environment proxy"
-            );
-            assert!(
-                direct.load(Ordering::SeqCst) > 0,
-                "the loopback backend was reached directly"
             );
 
             // Control: a non-loopback backend still honours the proxy.
