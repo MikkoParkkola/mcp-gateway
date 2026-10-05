@@ -48,6 +48,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend now gets its own cache directory. An operator-set
   `npm_config_cache` is left alone.
 
+- **A backend whose package install is unusable now repairs itself.** A package
+  manager says so on stderr and the child exits before it can answer the
+  handshake, so the transport's own error carried only `Backend timeout` and
+  nothing could tell that death apart from a backend that is merely dead. Every
+  start of a backend now passes through the repair: an install that names a
+  missing module has its cache cleared and is retried once. Because the decision
+  sits on the start path rather than inside the transport, it also reaches the
+  starts warm-start and the health probe make. Telling the two deaths apart means
+  reading the child's stderr, so the tail is held in memory for that purpose and
+  never written to the log; a failed start reports which needle matched and how
+  the child exited, which classifies the death without putting an installer's
+  output — a failing install prints the token it tried — into the gateway's log.
+  A cache is cleared at most once per successful start, so a backend that cannot
+  install is not reinstalled on every restart, and a removal that fails re-arms
+  the repair rather than consuming it. Only a cache this gateway assigned is
+  touched: the path recorded when the child's environment was built, never one an
+  operator set, and a path ending in a separator or reaching a symlinked leaf is
+  refused rather than walked. A per-path lock spans the mark, the removal and the
+  retry, so two starts of one backend cannot delete the tree the other is
+  installing into. The delete runs on the blocking pool. A refusal that a fresh
+  install would meet identically (`EALLOWGIT`) is not treated as a damaged tree.
 - **`gateway_search_tools` finds a backend by its own name.** The match ran over
   each tool's name and description only, so a query naming the server returned
   nothing unless the caller happened to guess one of that server's tool names —
