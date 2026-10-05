@@ -77,6 +77,27 @@ async fn a_direct_refusal_writes_a_delivery_attempt() {
     assert_eq!(event["error_code"], body["error"]["code"], "{event}");
 }
 
+/// Bot-review ledger L1254: a notification refused with 429 and the body `{}`
+/// carries no JSON-RPC error code, so a record read from the body alone said
+/// `ok`. The HTTP status decides, as for the invocation record.
+#[tokio::test]
+async fn a_refused_direct_notification_is_not_recorded_as_ok() {
+    let fx = fixture(Setup {
+        notify_refused: true,
+        ..Setup::default()
+    })
+    .await;
+    let note =
+        json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 7}});
+    let (status, body) = post(&fx, "alpha", &note.to_string(), &Caller::Anonymous).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    let event = only_attempt(&fx);
+    assert_ne!(
+        event["outcome"], "ok",
+        "a refusal recorded as delivered: {event}"
+    );
+}
+
 /// Under `FailClosed` an answer whose delivery cannot be recorded is withheld,
 /// as on the meta route: the audit-unavailable refusal, with the request id.
 #[tokio::test]

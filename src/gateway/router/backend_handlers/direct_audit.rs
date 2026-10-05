@@ -222,9 +222,14 @@ async fn audited_call_judged(
     let recorded = match document {
         Some(document) => {
             let read = frame.take_record_fields();
+            // The HTTP status decides as for the invocation record: a 403 or
+            // 429 refusal carries the body `{}` and no error code (L1254).
+            let body = document.as_ref().unwrap_or(&Value::Null);
+            let outcome = direct_outcome(status, body);
             crate::gateway::meta_mcp::response_security::record_answer_delivery(
                 state.transparency_log.as_ref(),
                 document,
+                outcome,
                 &correlation,
                 read,
             )
