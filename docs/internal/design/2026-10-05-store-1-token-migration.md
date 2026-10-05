@@ -206,3 +206,53 @@ server extends an in-tree fixture rather than starting a new one.
   one-time re-authorization, never a carry across a real difference.
 - **Notice wording (kimi improvement).** The last sentence is split, the revocation caveat gets
   its own sentence, and the capitalised AND is dropped.
+
+## 13. Round 1 outcome: the automatic carry has no evidence to act on (gpt SWF, verified)
+gpt-20261005T003052Z-53104 found that genuine v3.5.1 output never records `token_endpoint`.
+Verified at tag v3.5.1:
+- `TokenInfo::from_response` sets `token_endpoint: None` (`src/oauth/storage.rs:101`).
+- Every backend OAuth save goes through it: authorize (`src/oauth/client/mod.rs:439`), refresh
+  (`:789`) and client credentials (`:841`).
+- Only a test fixture sets the field (`storage.rs:934`).
+
+So §3's rule (positive evidence by exact `token_endpoint` equality) refuses every real 3.x
+backend token. The automatic carry would ship and migrate nothing. gpt's CRITICAL F1 (an issuer
+that advertises the legacy endpoint once and then moves it) also shows that endpoint equality at
+one moment does not establish who issued the grant.
+
+A 3.x token file carries no issuer evidence at all. Any carry therefore needs the issuer
+asserted by someone outside the file, and only the operator can do that.
+
+### Recommended replacement (for the operator's ruling)
+An offline, operator-asserted command for plain backends (sink a), the sibling of
+`accounts migrate-credentials`:
+`mcp-gateway oauth migrate-legacy --config PATH --backend NAME --issuer URL`.
+- It reads the 3.x record and client file for `NAME` + `http_url` through the guarded reader, and
+  writes them create-new under `storage_key(NAME, URL)`, with the marker written first. 3.x files
+  are never written.
+- The runtime needs no change. `initialize` loads under the discovered issuer, so the copy is used
+  only if discovery returns exactly the asserted issuer. A wrong assertion is never used and costs
+  one re-authorization.
+- Refresh goes to the asserted issuer's discovered token endpoint, the same trust model as the
+  account command (the operator vouches for the issuer). Re-running is a no-op when an entry
+  exists (conflict rule §5).
+- Existing notice item 1 already offers a manual command, `accounts migrate-credentials`. That
+  command writes only the personal-accounts store, so it cannot keep a plain backend's
+  credential, and every 3.x token belongs to a plain backend (3.x had no accounts). The item is
+  misleading for the common case today, whatever the ruling. The new command gives it a true
+  referent: "To keep a credential instead, run `mcp-gateway oauth migrate-legacy ...` per backend
+  (`accounts migrate-credentials` for account-bound backends)". The default stays
+  re-authenticate once, so the published default does not change.
+- The round-1 findings that still apply carry over: the commit protocol (scratch file plus
+  atomic first-writer-wins publish, marker first), the 401-on-unexpired path, the client-id
+  conflict with an existing 4.0 registration, the rollback note on rotated refresh tokens, and a
+  mutant row that detects a writable open.
+- Estimate (steps): (1) RED rows against the CLI and the runtime load; (2) the command and the
+  publish protocol; (3) the CLI wiring; (4) notice item 1, UPGRADING and changelog; (5) Spark
+  suites and lint; (6) two-seat review; (7) mutants and CI.
+- src/ files: `src/cli/mod.rs`, `src/commands/` (new `oauth_migrate.rs`), `src/oauth/storage.rs`
+  (create-new publish), `src/oauth/legacy_carry.rs` (new), `src/commands/upgrade_notice_items.rs`,
+  plus tests. The `read_legacy_source` visibility decision (§10) still applies.
+
+The automatic design in §§2-12 is kept above as the record of what was considered and why it was
+rejected.
