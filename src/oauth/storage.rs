@@ -5,7 +5,7 @@
 //! Persists OAuth tokens to disk for reuse across gateway restarts.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -188,6 +188,44 @@ impl TokenStorage {
     pub(crate) fn token_path(&self, backend_name: &str, resource_url: &str) -> PathBuf {
         let key = Self::storage_key(backend_name, resource_url);
         self.base_dir.join(format!("{key}_tokens.json"))
+    }
+
+    /// Publish `token` only if no token is stored for this key yet: written to
+    /// a private scratch file, then linked into place, so a concurrent writer
+    /// or an existing entry is never overwritten. `Ok(false)` when an entry
+    /// already exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the token cannot be serialized or written, or the
+    /// link fails for a reason other than the target already existing.
+    pub(crate) fn publish_new(
+        &self,
+        backend_name: &str,
+        resource_url: &str,
+        token: &TokenInfo,
+    ) -> Result<bool> {
+        let path = self.token_path(backend_name, resource_url);
+        let content = serde_json::to_string_pretty(token)
+            .map_err(|e| Error::OAuth(format!("Failed to serialize tokens: {e}")))?;
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("tokens");
+        let tmp = self.create_secret_tmp(file_name)?;
+        let tmp = Self::write_secret_tmp(tmp, &content)?;
+        let result = match fs::hard_link(&tmp, &path) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(e) => Err(Error::OAuth(format!("Failed to publish tokens: {e}"))),
+        };
+        let _ = fs::remove_file(&tmp);
+        result
+    }
+
+    /// The directory this storage reads and writes.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.base_dir
     }
 
     /// Load tokens for a backend
