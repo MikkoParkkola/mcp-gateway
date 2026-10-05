@@ -68,3 +68,28 @@ fn an_undeclared_key_is_never_named_in_the_log() {
         &["undeclared key", "name: expected string, got missing"],
     );
 }
+
+/// MIK-7959: an array root published under `items` is validated in its
+/// declared shape, as the capability route runs it, and the text content is
+/// not rewritten into the wrapped shape.
+#[test]
+fn a_wrapped_output_root_is_validated_unwrapped_and_keeps_its_text() {
+    let declared = json!({ "type": "array", "items": { "type": "string" } });
+    let payload = json!(["a", "b"]);
+    let text = serde_json::to_string_pretty(&payload).unwrap();
+    let mut envelope = json!({
+        "content": [{ "type": "text", "text": text }],
+        "structuredContent": crate::capability::published_output(&declared, payload.clone()),
+        "isError": false,
+    });
+
+    assert!(crate::capability::unwrap_published_output(
+        &declared,
+        &mut envelope
+    ));
+    let mut validated = enforce_output_schema("caps", "listing", envelope, Some(&declared));
+    crate::capability::rewrap_published_output(&mut validated);
+
+    assert_eq!(validated["structuredContent"], json!({ "items": payload }));
+    assert_eq!(validated["content"][0]["text"], json!(text));
+}

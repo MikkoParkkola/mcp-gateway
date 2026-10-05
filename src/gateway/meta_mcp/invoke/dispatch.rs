@@ -263,6 +263,13 @@ impl MetaMcp {
             )
             .await?;
             let mut response = serde_json::to_value(result)?;
+            // The transform and the output schema below are written against
+            // the declared shape, so a root published under `items` (MIK-7959)
+            // is read without it and wrapped again once validated. Validating
+            // the published object instead would rewrite the text content into
+            // the wrapped shape.
+            let wrapped =
+                crate::capability::unwrap_published_output(&cap_def.schema.output, &mut response);
 
             // Apply per-capability response_transform when configured.
             //
@@ -301,7 +308,11 @@ impl MetaMcp {
             let output_schema =
                 (!cap_def.schema.output.is_null()).then(|| cap_def.schema.output.clone());
 
-            let validated = enforce_output_schema(server, tool, response, output_schema.as_ref());
+            let mut validated =
+                enforce_output_schema(server, tool, response, output_schema.as_ref());
+            if wrapped {
+                crate::capability::rewrap_published_output(&mut validated);
+            }
 
             // Canonical projection (MIK-3534), applied last — after
             // response_transform (so `_raw` cannot re-expose a redacted field)

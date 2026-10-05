@@ -755,7 +755,8 @@ fn build_success_tool_result(capability: &CapabilityDefinition, result: Value) -
             text,
             annotations: None,
         }],
-        structured_content: (!capability.schema.output.is_null()).then_some(result),
+        structured_content: (!capability.schema.output.is_null())
+            .then(|| super::published_output(&capability.schema.output, result)),
         is_error: false,
     }
 }
