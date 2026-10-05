@@ -323,6 +323,31 @@ def jsonable(value):
     return value
 
 
+def check_graded_schedule(run: Path, pins: dict, measured: list) -> None:
+    """A graded run is the planned schedule or it is VOID: n = 18, seed
+    20261007, and the counterbalanced orders of schedule.py, as recorded rep by
+    rep in cell_order.jsonl. A run that drew its own order cannot be graded,
+    however it lands."""
+    import schedule
+
+    if measured != list(range(1, schedule.GRADED_REPS + 1)):
+        raise Void(f"graded run: pins.reps {measured} must be 1..{schedule.GRADED_REPS}")
+    if pins.get("cell_order_seed") != str(schedule.GRADED_SEED):
+        raise Void(f"graded run: cell_order_seed {pins.get('cell_order_seed')!r} "
+                   f"must be {schedule.GRADED_SEED}")
+    path = run / "cell_order.jsonl"
+    try:
+        recorded = [json.loads(line)["order"] for line in path.read_text().splitlines() if line]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise Void(f"graded run: cell_order.jsonl unreadable: {error}") from error
+    planned = schedule.graded_orders(schedule.GRADED_SEED)
+    if recorded != planned:
+        raise Void("graded run: cell_order.jsonl is not the planned counterbalanced schedule")
+    problems = schedule.balance_problems(recorded)
+    if problems:
+        raise Void(f"graded run: schedule unbalanced: {'; '.join(problems)}")
+
+
 def evaluate(run: Path) -> int:
     pins = load(run / "pins.json")
 
@@ -352,6 +377,9 @@ def evaluate(run: Path) -> int:
         raise Void(f"pins.reps {measured} must all be positive integers")
     if len(set(measured)) != len(measured):
         raise Void(f"pins.reps {measured} repeats a rep id; reps must be distinct")
+
+    if pins.get("graded") is True:
+        check_graded_schedule(run, pins, measured)
 
     cells: dict[str, list[dict]] = {}
     for cell in LEGACY_CELLS + REPORT_ONLY_CELLS:
