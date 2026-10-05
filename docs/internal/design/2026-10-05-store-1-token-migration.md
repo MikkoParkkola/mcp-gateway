@@ -156,8 +156,10 @@ writable; skip the client-file carry; skip the marker check. Each must turn a ro
 ## 10. Files touched (planned)
 - `src/oauth/client/mod.rs`: the carry call in `initialize`, after the 4.0 load misses.
 - `src/oauth/legacy_carry.rs` (new): the guarded read, the issuer rule, the create-new copy and
-  the marker. It reuses `read_legacy_source`, if that is reachable from `oauth`; otherwise a
-  shared helper is moved, not copied.
+  the marker. It needs the guarded read in `read_legacy_source`, which is
+  `pub(in crate::personal_accounts)` (`src/personal_accounts/migration_source.rs:95`). Reusing it
+  from `oauth` widens its visibility to `pub(crate)` or moves it to a shared module. That
+  widening is an operator decision, recorded here as open. It is not copied.
 - `src/oauth/storage.rs`: a create-new save beside `save`.
 - `src/commands/upgrade_notice_items.rs`: item 1. Also `docs/UPGRADING-4.0.md` and
   `changelog.d/<pr>.changed.md`.
@@ -175,5 +177,6 @@ writable; skip the client-file carry; skip the marker check. Each must turn a ro
 5. Spark: lib and integration suites, clippy all-features and no-default-features.
 6. Two-seat code review and fixes.
 7. Mutant batch (5 rows) and CI.
-That is about 7 steps, with risk concentrated in step 1 (a mock AS that serves discovery and
-counts authorize requests). If no such fixture exists in-tree, step 1 doubles.
+That is about 7 steps, with risk concentrated in step 1. Existing OAuth client tests already serve
+discovery documents (`src/oauth/client/tests.rs`, `authorize_tests.rs`), so the mock authorization
+server extends an in-tree fixture rather than starting a new one.
