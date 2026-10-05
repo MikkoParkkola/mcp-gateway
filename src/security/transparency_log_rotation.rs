@@ -541,8 +541,8 @@ pub(super) fn open_after_seal(
 /// dropped length. A complete unparseable line is left for the caller to
 /// refuse, as before D6. Returns the counter the dropped line would have
 /// held, if a line was dropped. When `hw` already counts that line, it was a
-/// committed record: the repair record says so itself (`committed: true`), so
-/// a crash before the missing-mark marker cannot lose the finding (MIK-7712).
+/// committed record: the repair record says so with `committed` and the first
+/// dropped counter (L1359), so a crash before the marker loses neither (MIK-7712).
 fn repair_torn_tail(
     path: &Path,
     config: &TransparencyLogConfig,
@@ -596,10 +596,10 @@ fn repair_torn_tail(
             .append(true)
             .open(path)
             .map_err(segments::ctx("open", path))?;
-        let committed = hw.is_some_and(|h| h.counter > pred_counter);
         let mut extra = vec![("bytes", dropped.into())];
-        if committed {
+        if hw.is_some_and(|h| h.counter > pred_counter) {
             extra.push((TORN_COMMITTED, true.into()));
+            extra.push((HWM_MISSING_AT, (pred_counter + 1).into()));
         }
         let fields = housekeeping(EV_TORN, &extra);
         // Above the mark when it is further ahead than the one line dropped,
