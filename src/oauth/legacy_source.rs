@@ -35,7 +35,7 @@ use crate::oauth::TokenInfo;
 /// carries a token, a scope, or a fragment of file content. `Position` is the
 /// whole of what a parse failure reports (§10.2).
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-pub(in crate::personal_accounts) enum SourceRefusal {
+pub(crate) enum SourceRefusal {
     /// Declared, but the resolved file is not there.
     ///
     /// THE LOUD REFUSAL. A resolved filename that does not exist otherwise
@@ -92,9 +92,7 @@ pub(in crate::personal_accounts) enum SourceRefusal {
 /// The order is deliberate: existence before privacy before parsing, so the
 /// most actionable refusal wins and no content is read from a path that failed
 /// its trust check.
-pub(in crate::personal_accounts) fn read_legacy_source(
-    path: &Path,
-) -> Result<TokenInfo, SourceRefusal> {
+pub(crate) fn read_legacy_source(path: &Path) -> Result<TokenInfo, SourceRefusal> {
     let shown = path.display().to_string();
     // `symlink_metadata` does NOT follow the link, which is the whole point:
     // `metadata` would report the TARGET's type and mode and call a planted
@@ -198,5 +196,5 @@ fn not_private(path: String, detail: &str) -> SourceRefusal {
 }
 
 #[cfg(test)]
-#[path = "migration_source_tests.rs"]
-mod migration_source_tests;
+#[path = "legacy_source_tests.rs"]
+mod legacy_source_tests;

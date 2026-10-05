@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 
 use super::{MigrationOutcome, MigrationRefusal, MigrationRequest, migrate_backend};
 use crate::oauth::TokenStorage;
+use crate::oauth::legacy_source::SourceRefusal;
 use crate::personal_accounts::config::{AccountDescriptor, DescriptorMode};
 use crate::personal_accounts::identity::AccountDescriptor as KeyDescriptor;
 use crate::personal_accounts::identity::{Principal, account_key};
-use crate::personal_accounts::storage::migration_source::SourceRefusal;
 use crate::personal_accounts::{AccountLookup, PersonalAccountStore, StoreConfig};
 
 const BACKEND: &str = "workspace";

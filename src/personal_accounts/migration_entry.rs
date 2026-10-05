@@ -24,8 +24,8 @@ use super::super::{AccountKey, PersonalAccountStore};
 use super::migration::{RecordRefusal, grant_from_legacy};
 use super::migration_precondition::{PreconditionRefusal, check_issuer, recover_client_id};
 use super::migration_revision::descriptor_revision;
-use super::migration_source::{SourceRefusal, read_legacy_source};
 use crate::oauth::TokenStorage;
+use crate::oauth::legacy_source::{SourceRefusal, read_legacy_source};
 use crate::personal_accounts::config::AccountDescriptor;
 
 /// One backend the caller asked to migrate.

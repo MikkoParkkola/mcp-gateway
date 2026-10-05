@@ -13,7 +13,10 @@
 //! - Callback server for auth code reception
 
 mod callback;
+// The 3.x credential-file reader, shared by `accounts migrate-credentials` and
+// `oauth migrate-legacy`: crate-private, owned by neither caller.
 pub mod client;
+pub(crate) mod legacy_source;
 mod metadata;
 mod storage;
 mod token_file;

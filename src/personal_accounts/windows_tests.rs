@@ -392,7 +392,7 @@ fn legacy_token(row: &str) -> (tempfile::TempDir, PathBuf) {
     (root, path)
 }
 
-use crate::personal_accounts::storage::migration_source::{SourceRefusal, read_legacy_source};
+use crate::oauth::legacy_source::{SourceRefusal, read_legacy_source};
 
 // W-T10: an inherited-ACL 3.x token is refused, and the refusal names the
 // foreign SID it inherited.

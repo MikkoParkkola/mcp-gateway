@@ -145,7 +145,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "tokens read through token_file (R2) and written 0600 (W2); client_id is public",
     ),
     (
-        "src/personal_accounts/migration_source.rs",
+        "src/oauth/legacy_source.rs",
         "own stricter check: fstat, exactly 0600 (R5)",
     ),
     (

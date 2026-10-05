@@ -32,11 +32,6 @@ pub(super) mod commit;
 #[path = "migration.rs"]
 pub(super) mod migration;
 
-// The 3.x source reader: its own file because the trust-boundary checks and
-// the position-only parse are a separate concern from field construction.
-#[path = "migration_source.rs"]
-pub(super) mod migration_source;
-
 #[path = "migration_revision.rs"]
 pub(super) mod migration_revision;
 
