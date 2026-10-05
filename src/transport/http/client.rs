@@ -18,13 +18,20 @@ use crate::{Error, Result};
 /// Under [`DestinationPolicy::Public`] it starts from the pinned builder:
 /// each name is resolved once and checked, and `HTTP(S)_PROXY` from the
 /// environment is ignored, since a proxy would resolve the name instead.
+///
+/// An `http://` loopback origin is never proxied under any policy: cleartext
+/// (an OAuth bearer included) is allowed there only because it never leaves
+/// the machine, and an inherited `HTTP_PROXY` would carry it off.
 pub(super) fn build(
     base_origin: Url,
     timeout: Duration,
     destination: DestinationPolicy,
     redirects_followed: Arc<AtomicU64>,
 ) -> Result<Client> {
+    let loopback_cleartext = base_origin.scheme() == "http"
+        && crate::gateway::is_loopback_host(base_origin.host_str().unwrap_or_default());
     let builder = match destination {
+        DestinationPolicy::Configured if loopback_cleartext => Client::builder().no_proxy(),
         DestinationPolicy::Configured => Client::builder(),
         policy @ (DestinationPolicy::Public | DestinationPolicy::Private) => {
             crate::security::ssrf::pinned_client_builder_for(policy)
