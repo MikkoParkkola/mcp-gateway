@@ -157,9 +157,17 @@ five fields, no seconds.
 
 - the parent's per-principal subscription cap;
 - a minimum period of 5 minutes, refused with `-32602` and
-  `data.field = "arguments.cron"` when the expression can fire more often;
-- `events.schedule.max_timers` (default 1000, global) with a per-principal
-  sub-cap of 20.
+  `data.field = "arguments.cron"` when the expression can fire more often
+  (judged on the minute and hour fields as though every day matched);
+- `events.schedule.max_timers` (default 1000, global), enforced in
+  `on_first_subscriber`, with a per-principal sub-cap
+  (`max_timers_per_principal`, default 20) enforced in `authorize` by
+  counting the principal's distinct live timers in the store: lifecycle
+  hooks keyed per timer cannot count per principal (MIK-7744).
+
+**Timezone and daylight saving.** Fields are read on the zone's wall clock
+(`chrono-tz`). A local time the clock skips fires once, at the first minute
+after the jump; a repeated local time fires on its first occurrence only.
 
 **on_first_subscriber / on_last_subscriber.** Start or stop one timer per
 canonical `(cron, timezone, label)`. Timers share one minute-boundary ticker
