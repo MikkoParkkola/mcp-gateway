@@ -1162,17 +1162,11 @@
     },
     {
       "id": "GH1625.BOTREVIEW.1",
-      "status": "met",
-      "stage": "met",
+      "status": "pending",
+      "stage": "ungraded",
       "blocked_on": "none",
-      "evidence": [
-        "docs/internal/release/v4.0.0-botreview-ledger.md",
-        "docs/internal/release/v4.0.0-botreview-ledger.md:7",
-        "docs/internal/release/v4.0.0-botreview-ledger.md:1121",
-        "scripts/release/botreview_sweep.py",
-        "docs/requirements/RELEASE-4.0.0-scope-update.md:121"
-      ],
-      "note": "Met 2026-10-05, graded at 9ceb8cf1a (origin/docs/ranking-1-release-line) plus the ledger change that carries this grade. Ledger totals by class, recomputed from its 1,323 rows by script: FIXED 847, NOT-A-DEFECT 186, REAL-OPEN 269, TICKETED 12, DISPOSED 8, OBSOLETE 1. Every REAL-OPEN or TICKETED row (281) names a fix commit, a Linear ticket naming its release (v4.0.1 for open rows), or a decision row; a strict re-check found 0 rows without one and 0 whose only anchor is a GitHub issue. No won't-fix is bulk: each row links its own thread or review body; the texts shared by three or more rows cover 24 rows, all FIXED by the same commit or a no-findings overview, none REAL-OPEN. scripts/release/botreview_sweep.py at the tip exits 0 with 0 bot threads or review bodies missing from the ledger. #1625 is closed (2026-09-29T02:27:33Z, completed). Coverage window: PRs merged into the release line after #1625 closed, up to 9ceb8cf1a (537 PRs); every top-level bot thread on them is linked by its own ledger row (0 unlinked), the latest PR with a row is #2927, and the 50 PRs merged after it carry no bot comment or review. Gap, stated rather than implied away: the automated reviewers stopped for quota. The last Codex review comment on the line is 2026-10-04T18:12:13Z (#2927) and the last Copilot finding 2026-10-03T14:09:43Z (#2819; its later bodies, to 14:21:35Z, are notices that no review ran). PRs merged after those times have no automated review comments, and this criterion is graded on the findings that exist. Branch-only CodeQL alerts are not pull-request reviewer findings; they are graded separately as a release gate of their own, in a separate lane. Open on refs/heads/docs/ranking-1-release-line when graded: 4 (rust/cleartext-transmission, high; latest analysis at 0ec0630ac).\n\n--- prior note follows ---\nBUILD (process), 2026-09-29, per review: #1625 closed at 02:27 with its 70 threads handled, but the criterion runs to the release tip. Every automated reviewer finding on a pull request merged after that point, up to the frozen tip, needs a fix commit or an individual disposition verified at source, recorded before this row flips.\n\n--- prior note follows ---\nPending. Umbrella issue #1625 tracks the backlog of unread automated review findings; the builder brief now blocks merge on unread bot comments. Decision row 25 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+      "evidence": [],
+      "note": "BUILD (process), 2026-09-29, per review: #1625 closed at 02:27 with its 70 threads handled, but the criterion runs to the release tip. Every automated reviewer finding on a pull request merged after that point, up to the frozen tip, needs a fix commit or an individual disposition verified at source, recorded before this row flips.\n\n--- prior note follows ---\nPending. Umbrella issue #1625 tracks the backlog of unread automated review findings; the builder brief now blocks merge on unread bot comments. Decision row 25 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
     },
     {
       "id": "MIK-7407.RESPONSE.1",
