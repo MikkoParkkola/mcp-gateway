@@ -328,7 +328,15 @@ def check_graded_schedule(run: Path, pins: dict, measured: list) -> None:
     20261007, and the counterbalanced orders of schedule.py, as recorded rep by
     rep in cell_order.jsonl. A run that drew its own order cannot be graded,
     however it lands."""
-    import schedule
+    # Loaded by path: a same-named installed package must never stand in.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "workload_schedule", Path(__file__).with_name("schedule.py"))
+    if spec is None or spec.loader is None:
+        raise Void("graded run: schedule.py is missing beside the evaluator")
+    schedule = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(schedule)
 
     if measured != list(range(1, schedule.GRADED_REPS + 1)):
         raise Void(f"graded run: pins.reps {measured} must be 1..{schedule.GRADED_REPS}")
@@ -343,9 +351,6 @@ def check_graded_schedule(run: Path, pins: dict, measured: list) -> None:
     planned = schedule.graded_orders(schedule.GRADED_SEED)
     if recorded != planned:
         raise Void("graded run: cell_order.jsonl is not the planned counterbalanced schedule")
-    problems = schedule.balance_problems(recorded)
-    if problems:
-        raise Void(f"graded run: schedule unbalanced: {'; '.join(problems)}")
 
 
 def evaluate(run: Path) -> int:

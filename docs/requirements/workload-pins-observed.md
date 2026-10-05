@@ -23,10 +23,10 @@ and a tag-shaped digest each exit 3.
 
 | Artefact | sha256 |
 |---|---|
-| `docs/requirements/RELEASE-4.0.0-workload-contract.md` | `e0de1cd0496d5a24f04e18f1d12215e3276022ba7a42506d55c69244ec967642` |
+| `docs/requirements/RELEASE-4.0.0-workload-contract.md` | `fe55af26eb54cccf2f98469656e4a200f7550d3a674546d6486af51b19533a6f` |
 | `benchmarks/workload/run_workload.sh` | `a8a9258c49b7591897c5aa174fedfefbb668e3d6f3af674ac1856084655319e6` |
-| `benchmarks/workload/eval_workload.py` | `74b0b6767ce7886eb3345d4f04e415d9a9f79f4b5bc9e3fca96e24e40cd5f8f1` |
-| `benchmarks/workload/schedule.py` | `8863a054659915c806fc5bcfbacd195031db1e30373c25566876cd4012d6a298` |
+| `benchmarks/workload/eval_workload.py` | `7695d0d502232b5a9f10e85dc8067171562689686a364e34177207440fadfb9e` |
+| `benchmarks/workload/schedule.py` | `54c16ee32d1aab5ed6b134d1492e9efd26f34c75363579950a316f78006ce487` |
 | `benchmarks/workload/mcp_backend.py` | `41b26fca2c318de3d5927a532a3c76e1896f3c76d8f0fb4792e792af0211adf3` |
 | `benchmarks/workload/k6_workload.js` | `9d3844c3144345d7b59ec4a08ac8aa5c1b57868dd1f1696d00b7b19a736d39bc` |
 | `benchmarks/workload/gateway.workload.yaml` (template) | `811b7a63557fac6ba4cf5bb66517a02c6ea47e0a8317a18090d0286c56d45727` |

@@ -273,8 +273,9 @@ The graded run takes **n = 18 measured reps per cell** and is started with
 five cells run once. The orders are a **counterbalanced design**, not a shuffle
 per rep (`benchmarks/workload/schedule.py`):
 - 15 reps come from three Latin squares on A..E (steps 1, 2 and 3), so every
-  cell sits in every slot exactly 3 times, with different neighbours in each
-  square.
+  cell sits in every slot exactly 3 times. The design balances slots, not
+  predecessors: with five cells, steps 2 and 3 are the same neighbour pairs in
+  reverse, and each cell has one other cell that never immediately follows it.
 - 3 more reps (`ABCDE`, `CDBEA`, `DEABC`) give the gated cells A, B and C slots
   that sum to 9 each.
 - Over 18 reps each of A, B and C therefore averages **slot 3.00**, and every

@@ -7,9 +7,12 @@ A fresh shuffle per rep (the diagnostic default) does not balance slots in
 with, and any within-rep drift biased the comparison.
 
 The graded design instead:
-  * 15 rows from three Latin squares on A..E (steps 1, 2 and 3, so each cell
-    has different neighbours in each square): every cell sits in every slot
-    exactly 3 times;
+  * 15 rows from three Latin squares on A..E (steps 1, 2 and 3): every cell
+    sits in every slot exactly 3 times. With five cells only two cyclic
+    neighbour structures exist, and steps 2 and 3 are the same pairs in
+    reverse, so directed carryover is only partly balanced: each cell has one
+    other cell that never immediately follows it. The balance this design
+    guarantees is by slot, not by predecessor;
   * 3 rows chosen so the gated cells A, B and C each take slots summing to 9,
     which makes their mean slot exactly 3.0 over all 18 reps. D and E, which
     are report-only, absorb the remainder (2.89 and 3.11).

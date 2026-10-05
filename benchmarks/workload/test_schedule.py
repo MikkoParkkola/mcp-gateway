@@ -76,6 +76,17 @@ def main() -> int:
     # Balance holds whatever the seed: only the row order moves.
     check("balance does not depend on the seed",
           all(schedule.balance_problems(schedule.graded_orders(s)) == [] for s in range(1, 200)))
+    # A golden copy of the graded plan: an edit to schedule.py, or a change in
+    # how random shuffles, must move this list on purpose, never silently.
+    golden = ["ACEBD", "ADBEC", "BCDEA", "ABCDE", "BDACE", "DEABC", "BECAD", "CADBE",
+              "EBDAC", "DACEB", "DEABC", "ECADB", "EABCD", "CEBDA", "CDBEA", "ABCDE",
+              "CDEAB", "DBECA"]
+    check("the graded plan is the golden copy", ["".join(o) for o in planned] == golden)
+    # The stated carryover limit: slots are balanced, predecessors only partly.
+    follows = {(o[i], o[i + 1]) for o in planned for i in range(4)}
+    never = {a: [b for b in "ABCDE" if b != a and (a, b) not in follows] for a in "ABCDE"}
+    check("each cell has exactly the one successor it never meets",
+          never == {"A": ["E"], "B": ["A"], "C": ["B"], "D": ["C"], "E": ["D"]}, str(never))
     cli = subprocess.run([sys.executable, str(HERE / "schedule.py"), str(schedule.GRADED_SEED), "7"],
                          capture_output=True, text=True, check=True).stdout.split()
     check("the CLI prints the planned rep", cli == planned[6], f"{cli} vs {planned[6]}")
