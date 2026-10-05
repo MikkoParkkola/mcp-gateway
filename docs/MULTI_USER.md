@@ -9,8 +9,7 @@
 > key-server OIDC rules must name an issuer and match only verified emails. With
 > auth on, the tool-call audit log is required, and API keys are stored as
 > SHA-256 digests. Several of these refuse a 3.x config at startup; read
-> [UPGRADING-4.0.md](UPGRADING-4.0.md) before upgrading. Still open for 4.0.0:
-> [Known gaps](release/4.0.0-beta.2-notes.md#known-gaps).
+> [UPGRADING-4.0.md](UPGRADING-4.0.md) before upgrading.
 >
 > Evidence: `src/gateway/router/authorization.rs`, `tests/a0_per_caller_cache.rs`,
 > `src/control_plane/role_mapping.rs`, `src/gateway/router/sso_admin_tests.rs`,

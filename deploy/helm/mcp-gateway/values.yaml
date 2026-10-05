@@ -31,7 +31,7 @@ image:
   # When `digest` is set it takes precedence over `tag`. Empty here on purpose:
   # the chart published for a release carries that release's image digest
   # (MIK-6684; docs/release/v4.0.0-gate-day-procedure.md).
-  tag: "4.0.0-beta.2"
+  tag: "4.0.0"
   digest: ""
   pullPolicy: IfNotPresent
 
