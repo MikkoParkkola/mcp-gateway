@@ -657,33 +657,64 @@ fn a_four_character_number_form_credential_is_redacted() {
     assert_eq!(value["n"], "[redacted]", "{value}");
 }
 
-/// One table over both signs and the integer edges: each needle redacts its
-/// own value and never an adjacent one.
+/// The covered grammar, by construction rather than by example: an injected
+/// credential in JSON number form with at most one leading sign, crossed
+/// with leading zeros, integer, decimal and exponent forms, and magnitudes
+/// below i64, past i64 and past u64. Each needle redacts its own value as
+/// the child prints it and never the adjacent value. Adjacent values past
+/// i64 and u64 sit one f64 step away, so they stay distinct after parsing.
 #[test]
-fn signed_and_boundary_credentials_redact_only_their_own_value() {
-    let cases = [
-        ("-012345", "-12345", "-12346"),
-        ("+012345", "12345", "12346"),
+fn every_covered_number_form_redacts_only_its_own_value() {
+    // (form, magnitude) -> (needle body, own value, adjacent value)
+    let shapes = [
+        ("12345", "12345", "12346"),
         (
-            "-9223372036854775809",
+            "9223372036854775809",
             "9223372036854775809",
             "9223372036854775808",
         ),
         (
-            "+18446744073709551615",
-            "18446744073709551615",
-            "18446744073709551614",
+            "18446744073709551616",
+            "18446744073709551616",
+            "18446744073709555712",
         ),
-        ("-12.5", "12.5", "12.25"),
-        ("+1.5e10", "15000000000.0", "15000000001.0"),
+        ("12.5", "12.5", "12.25"),
+        (
+            "9223372036854775809.5",
+            "9223372036854775809.5",
+            "9223372036854777856.0",
+        ),
+        (
+            "18446744073709551616.5",
+            "18446744073709551616.5",
+            "18446744073709555712.0",
+        ),
+        ("1.5e4", "1.5e4", "1.6e4"),
+        ("9.3e18", "9.3e18", "9.4e18"),
+        ("1.9e19", "1.9e19", "2.0e19"),
     ];
-    for (needle, own, adjacent) in cases {
-        let mut value: Value =
-            serde_json::from_str(&format!(r#"{{"own": {own}, "adjacent": {adjacent}}}"#)).unwrap();
-        super::super::cli::redact_value(&mut value, &[needle.to_owned()]);
-        assert_eq!(value["own"], "[redacted]", "{needle}: {value}");
-        assert_ne!(value["adjacent"], "[redacted]", "{needle}: {value}");
+    let mut failures = Vec::new();
+    for sign in ["", "+", "-"] {
+        for zeros in ["", "00"] {
+            for (body, own, adjacent) in shapes {
+                let needle = format!("{sign}{zeros}{body}");
+                let value_sign = if sign == "-" { "-" } else { "" };
+                let text =
+                    format!(r#"{{"own": {value_sign}{own}, "adjacent": {value_sign}{adjacent}}}"#);
+                let mut value: Value = serde_json::from_str(&text).unwrap();
+                super::super::cli::redact_value(&mut value, std::slice::from_ref(&needle));
+                if value["own"] != "[redacted]" || value["adjacent"] == "[redacted]" {
+                    failures.push(format!("{needle}: {value}"));
+                }
+            }
+        }
     }
+    assert!(
+        failures.is_empty(),
+        "{} of 54 cases wrong:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 /// The 4-character floor applies to the needle as injected, number form
