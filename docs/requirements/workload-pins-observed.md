@@ -23,7 +23,7 @@ and a tag-shaped digest each exit 3.
 
 | Artefact | sha256 |
 |---|---|
-| `docs/requirements/RELEASE-4.0.0-workload-contract.md` | `857ce37ba4aa068f387e5fdc08357fbe8cfb8b9a4491712d8d2f0db7b389f08b` |
+| `docs/requirements/RELEASE-4.0.0-workload-contract.md` | `1126636a5d319bf4aad153dfa3714de831af1639705d0535478a34b899299884` |
 | `benchmarks/workload/run_workload.sh` | `6085b12db8034166792fe8c98c40a88f4dbca1a54742adbbdc29525f9f4fac1f` |
 | `benchmarks/workload/eval_workload.py` | `76110f17f7069db180e0ef9b4f479e7d8454bd96be9cc0cb824066a10caef339` |
 | `benchmarks/workload/schedule.py` | `54c16ee32d1aab5ed6b134d1492e9efd26f34c75363579950a316f78006ce487` |
