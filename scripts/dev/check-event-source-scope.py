@@ -5,9 +5,9 @@
 
 Each new source is one `EventSource` implementation and nothing else
 (docs/design/2026-10-01-mik-7630-event-sources-4.0.0.md section 1). A change
-counts as adding a source when a Rust file under `src/` ends it with more
-`impl ... EventSource for` blocks than it started with (a new file or an
-existing one; a split header or an aliased import counts). Such a change may
+counts as adding a source when a Rust file under `src/` ends it implementing
+`EventSource` for a type it did not before (a new file or an existing one; a split header, a comment inside it, an alias imported anywhere
+in the tree, or one impl swapped for another all count). Such a change may
 add files under `src/events/` and add bare module declarations in
 `src/events/mod.rs` for the modules it adds (the registry line). Any other
 edit under `src/events/` is a core change and fails. A source impl in test
@@ -36,19 +36,38 @@ def is_test_path(path):
     return path.startswith("tests/") or "/tests/" in path or name == "tests.rs" or name.endswith("_tests.rs")
 
 
+def strip_comments(text):
+    """Rust source without `//` and `/* */` comments (not nested; strings kept)."""
+    return re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", " ", text, flags=re.S))
+
+
+def aliases(texts):
+    """Names `EventSource` is imported as anywhere in `texts` (`use ... as X`)."""
+    found = set()
+    for text in texts:
+        found.update(re.findall(r"\bEventSource\s+as\s+(\w+)", strip_comments(text)))
+    return found
+
+
+def implemented(text, names=()):
+    """The types `text` implements EventSource (or an alias in `names`) for."""
+    code = strip_comments(text)
+    traits = "|".join(map(re.escape, ["EventSource", *names, *aliases([code])]))
+    header = r"\bimpl\b[^{};]*?\b(?:%s)\s+for\s+([^{]+?)\s*(?:where\b|\{)" % traits
+    return {" ".join(target.split()) for target in re.findall(header, code)}
+
+
 def impl_count(text):
-    """`impl ... EventSource for` blocks in `text`, header lines joined, aliases
-    (`use ...::EventSource as Alias;`) followed. Comments are dropped first."""
-    code = re.sub(r"//[^\n]*", "", text)
-    names = ["EventSource", *re.findall(r"\bEventSource\s+as\s+(\w+)", code)]
-    header = r"\bimpl\b[^{};]*?\b(?:%s)\s+for\b" % "|".join(map(re.escape, names))
-    return len(re.findall(header, code))
+    return len(implemented(text))
 
 
-def adds_source(files):
-    """Whether any non-test `(path, before, after)` gains an EventSource impl."""
+def adds_source(files, names=()):
+    """Whether a non-test `(path, before, after)` implements EventSource for a
+    type it did not before. Swapping one impl for another counts."""
     return any(
-        impl_count(after) > impl_count(before) for path, before, after in files if not is_test_path(path)
+        implemented(after, names) - implemented(before, names)
+        for path, before, after in files
+        if not is_test_path(path)
     )
 
 
@@ -103,6 +122,12 @@ def rust_files(span, base):
     return [(p, show(fork, p), show("HEAD", p)) for p in fields if p.endswith(".rs")]
 
 
+def tree_aliases():
+    """Aliases of EventSource declared anywhere under `src/` at HEAD."""
+    paths = git("ls-files", "-z", "--", "src/").split("\0")
+    return aliases(show("HEAD", p) for p in paths if p.endswith(".rs"))
+
+
 def git(*args):
     return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
 
@@ -117,7 +142,7 @@ def main(argv):
         changes.append((status[0], path))
     found = violations(
         changes,
-        adds_source(rust_files(span, base)),
+        adds_source(rust_files(span, base), tree_aliases()),
         diff_lines(span, REGISTRY, "+"),
         diff_lines(span, REGISTRY, "-"),
     )
