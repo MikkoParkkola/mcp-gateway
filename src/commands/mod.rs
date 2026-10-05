@@ -20,6 +20,7 @@ mod hash_key;
 mod identity;
 mod init_backends;
 mod kubernetes;
+mod oauth_migrate;
 // Only the config exporter consumes these client-path helpers.
 #[cfg_attr(not(feature = "config-export"), allow(dead_code))]
 pub mod paths;
@@ -46,6 +47,7 @@ pub use doctor::{StdioProbe, run_doctor_command, run_doctor_shadow_command};
 pub use hash_key::run_hash_key_command;
 pub use identity::run_identity_command;
 pub use kubernetes::run_kubernetes_command;
+pub use oauth_migrate::run_oauth_command;
 pub use protocol_import::run_protocol_import_command;
 pub use ranking::run_ranking_command;
 pub use setup::run_setup_command;

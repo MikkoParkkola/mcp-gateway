@@ -212,6 +212,42 @@ pub enum AccountsCommand {
     },
 }
 
+/// Offline OAuth credential administration for ordinary `backends.<name>.oauth`
+/// backends (account-bound backends use `accounts migrate-credentials`).
+#[derive(Subcommand, Debug)]
+pub enum OauthCommand {
+    /// Carry one backend's 3.x OAuth credential to its 4.0 per-issuer key.
+    ///
+    /// Offline and explicit. A 3.x credential file records no issuer, so you
+    /// assert it: the copy is used only when the backend's discovery returns
+    /// exactly that issuer, and then the 3.x refresh token goes to that
+    /// issuer. Discovery matching does NOT prove the grant came from it, so
+    /// assert only the server that really issued it. Stop the gateway first.
+    /// The 3.x files are only read, never modified, renamed or deleted.
+    #[command(
+        name = "migrate-legacy",
+        about = "Carry one 3.x OAuth credential to its 4.0 key on an asserted issuer (offline)"
+    )]
+    MigrateLegacy {
+        /// The backend registry name in the 4.0 config.
+        #[arg(long = "backend", value_name = "NAME")]
+        backend: String,
+        /// The authorization server that issued the 3.x credential, spelled
+        /// exactly as its discovery document spells `issuer`.
+        #[arg(long = "issuer", value_name = "URL")]
+        issuer: String,
+        /// The 3.x backend name, if the backend was renamed since.
+        #[arg(long = "legacy-backend-name", value_name = "NAME")]
+        legacy_backend_name: Option<String>,
+        /// The 3.x `http_url`, if it changed since.
+        #[arg(long = "legacy-resource-url", value_name = "URL")]
+        legacy_resource_url: Option<String>,
+        /// Print the plan and write nothing.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
+}
+
 /// Top-level subcommands
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -269,6 +305,10 @@ pub enum Command {
     /// Offline administration of the personal-account custody store.
     #[command(subcommand, about = "Personal account store administration (offline)")]
     Accounts(AccountsCommand),
+
+    /// Offline OAuth credential administration for ordinary backends.
+    #[command(subcommand, about = "OAuth credential administration (offline)")]
+    Oauth(OauthCommand),
 
     /// Print the `sha256:<hex>` digest of an API key read from stdin, for
     /// `auth.api_keys[].key_sha256`. Offline: reads no config, makes no call.
