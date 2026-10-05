@@ -12,7 +12,6 @@
 1174 tests/mik_7212_mrtr7_stdio_acs.rs
 1138 tests/mik_7214_header_9_acs.rs
 960 src/protocol/meta.rs
-1087 src/control_plane/mod.rs
 1086 src/oauth/client/tests.rs
 1040 src/main_tests.rs
 1020 tests/nfr_obs_3_era_observability.rs
@@ -21,7 +20,6 @@
 978 src/gateway/server/support.rs
 970 src/ranking/mod.rs
 964 src/gateway/meta_mcp_tool_defs.rs
-944 src/discovery/shadow.rs
 935 src/trust/mod.rs
 908 src/gateway/meta_mcp_helpers_tests.rs
 900 src/identity_grants.rs
