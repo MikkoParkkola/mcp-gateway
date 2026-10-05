@@ -30,7 +30,11 @@ impl ScheduleSource {
         }
     }
 
-    #[allow(dead_code, reason = "stub until the source lands")]
+    #[allow(
+        dead_code,
+        clippy::unused_self,
+        reason = "stub until the source lands"
+    )]
     pub(crate) fn tick_at(&self, _now: DateTime<Utc>) {}
 }
 

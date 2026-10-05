@@ -12,8 +12,8 @@ use super::super::fanout::SourceEvent;
 use super::super::{EventSource, EventsHub};
 use super::{NAME, ScheduleSource};
 
-fn hub(dir: &std::path::Path, config: crate::config::EventsConfig) -> Arc<EventsHub> {
-    EventsHub::open(&config, dir).expect("hub")
+fn hub(dir: &std::path::Path, config: &crate::config::EventsConfig) -> Arc<EventsHub> {
+    EventsHub::open(config, dir).expect("hub")
 }
 
 fn at(hour: u32, minute: u32, second: u32) -> DateTime<Utc> {
@@ -50,7 +50,7 @@ fn refused_field(result: Result<(), super::super::types::RpcError>) -> Value {
 #[tokio::test]
 async fn schedule_ticks_fire_once_per_cron_boundary() {
     let dir = tempfile::tempdir().expect("dir");
-    let hub = hub(dir.path(), crate::config::EventsConfig::default());
+    let hub = hub(dir.path(), &crate::config::EventsConfig::default());
     let mut events = drain(&hub);
     let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
     start(&source, &json!({"cron": "*/5 * * * *", "label": "standup"})).await;
@@ -88,7 +88,7 @@ async fn schedule_ticks_fire_once_per_cron_boundary() {
 #[tokio::test]
 async fn schedule_respects_the_five_minute_floor() {
     let dir = tempfile::tempdir().expect("dir");
-    let hub = hub(dir.path(), crate::config::EventsConfig::default());
+    let hub = hub(dir.path(), &crate::config::EventsConfig::default());
     let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
     for cron in [
         "* * * * *",
@@ -111,11 +111,83 @@ async fn schedule_respects_the_five_minute_floor() {
             .authorize(
                 "p",
                 NAME,
-                &json!({"cron": "0 9 * * *", "timezone": "Europe/Helsinki"}),
+                &json!({"cron": "0 9 * * *", "timezone": "Mars/Olympus_Mons"}),
             )
             .await,
     );
     assert_eq!(field, "arguments.timezone");
+    source
+        .authorize(
+            "p",
+            NAME,
+            &json!({"cron": "0 9 * * *", "timezone": "Europe/Helsinki"}),
+        )
+        .await
+        .expect("an IANA zone");
+}
+
+/// Tick every UTC minute from `from` for `minutes`; the UTC times that fired.
+async fn fired(arguments: &Value, from: DateTime<Utc>, minutes: i64) -> Vec<String> {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path(), &crate::config::EventsConfig::default());
+    let mut events = drain(&hub);
+    let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
+    start(&source, arguments).await;
+    for minute in 0..minutes {
+        source.tick_at(from + chrono::Duration::minutes(minute));
+    }
+    received(&mut events)
+        .iter()
+        .map(|e| e.data["scheduled_for"].as_str().expect("time").to_owned())
+        .collect()
+}
+
+fn utc(month: u32, day: u32, hour: u32, minute: u32) -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, month, day, hour, minute, 0)
+        .single()
+        .expect("time")
+}
+
+/// An expression reads the zone's wall clock: 09:00 in Helsinki in October
+/// (UTC+3) is 06:00 UTC.
+#[tokio::test]
+async fn a_timezone_moves_the_tick_to_local_time() {
+    let ticks = fired(
+        &json!({"cron": "0 9 * * *", "timezone": "Europe/Helsinki"}),
+        utc(10, 6, 5, 0),
+        4 * 60,
+    )
+    .await;
+    assert_eq!(ticks, ["2026-10-06T06:00:00Z"]);
+}
+
+/// Daylight saving: 03:30 does not exist in Helsinki on 29 March 2026 (the
+/// clock jumps 03:00 -> 04:00 at 01:00 UTC), so it fires once, at the jump;
+/// 03:30 happens twice on 25 October 2026 (04:00 -> 03:00 at 01:00 UTC), and
+/// fires only the first time.
+#[tokio::test]
+async fn a_skipped_or_repeated_hour_fires_exactly_once() {
+    let arguments = json!({"cron": "30 3 * * *", "timezone": "Europe/Helsinki"});
+    let spring = fired(&arguments, utc(3, 28, 23, 0), 4 * 60).await;
+    assert_eq!(
+        spring,
+        ["2026-03-29T01:00:00Z"],
+        "skipped 03:30 fires at 04:00 local"
+    );
+    let autumn = fired(&arguments, utc(10, 24, 23, 0), 4 * 60).await;
+    assert_eq!(autumn, ["2026-10-25T00:30:00Z"], "the first 03:30 only");
+    // Every 5 minutes through the skipped hour: one tick for the whole gap.
+    let every = json!({"cron": "*/5 * * * *", "timezone": "Europe/Helsinki"});
+    let gap = fired(&every, utc(3, 29, 0, 50), 20).await;
+    assert_eq!(
+        gap,
+        [
+            "2026-03-29T00:50:00Z",
+            "2026-03-29T00:55:00Z",
+            "2026-03-29T01:00:00Z",
+            "2026-03-29T01:05:00Z"
+        ]
+    );
 }
 
 /// U8: a restart inside the minute reads the persisted tick back and does
@@ -125,14 +197,14 @@ async fn a_restart_within_the_minute_does_not_double_fire() {
     let dir = tempfile::tempdir().expect("dir");
     let arguments = json!({"cron": "*/5 * * * *"});
     {
-        let hub = hub(dir.path(), crate::config::EventsConfig::default());
+        let hub = hub(dir.path(), &crate::config::EventsConfig::default());
         let mut events = drain(&hub);
         let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
         start(&source, &arguments).await;
         source.tick_at(at(10, 5, 1));
         assert_eq!(received(&mut events).len(), 1);
     }
-    let hub = hub(dir.path(), crate::config::EventsConfig::default());
+    let hub = hub(dir.path(), &crate::config::EventsConfig::default());
     let mut events = drain(&hub);
     let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
     start(&source, &arguments).await;
@@ -149,7 +221,7 @@ async fn a_restart_within_the_minute_does_not_double_fire() {
 #[tokio::test]
 async fn schedule_label_is_capped() {
     let dir = tempfile::tempdir().expect("dir");
-    let hub = hub(dir.path(), crate::config::EventsConfig::default());
+    let hub = hub(dir.path(), &crate::config::EventsConfig::default());
     let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
     let cron = "0 9 * * *";
     source
@@ -169,7 +241,7 @@ async fn schedule_label_is_capped() {
 #[tokio::test]
 async fn a_tick_matches_only_its_own_timer() {
     let dir = tempfile::tempdir().expect("dir");
-    let hub = hub(dir.path(), crate::config::EventsConfig::default());
+    let hub = hub(dir.path(), &crate::config::EventsConfig::default());
     let mut events = drain(&hub);
     let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
     let mine = json!({"cron": "0 9 * * *", "label": "a"});
@@ -193,7 +265,7 @@ async fn the_timer_caps_hold() {
     let mut config = crate::config::EventsConfig::default();
     config.schedule.max_timers = 2;
     config.schedule.max_timers_per_principal = 1;
-    let hub = hub(dir.path(), config);
+    let hub = hub(dir.path(), &config);
     let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
     let a = start(&source, &json!({"cron": "0 1 * * *"})).await;
     start(&source, &json!({"cron": "0 2 * * *"})).await;
@@ -247,7 +319,7 @@ async fn the_per_principal_timer_cap_counts_held_timers() {
     let dir = tempfile::tempdir().expect("dir");
     let mut config = crate::config::EventsConfig::default();
     config.schedule.max_timers_per_principal = 2;
-    let hub = hub(dir.path(), config);
+    let hub = hub(dir.path(), &config);
     let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
     let held = [json!({"cron": "0 1 * * *"}), json!({"cron": "0 2 * * *"})];
     for (n, arguments) in held.iter().enumerate() {
@@ -275,7 +347,7 @@ async fn the_per_principal_timer_cap_counts_held_timers() {
 async fn a_blocked_label_is_dead_lettered() {
     use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
     let dir = tempfile::tempdir().expect("dir");
-    let hub = hub(dir.path(), crate::config::EventsConfig::default());
+    let hub = hub(dir.path(), &crate::config::EventsConfig::default());
     let mut events = drain(&hub);
     let source = Arc::new(ScheduleSource::new(&hub, dir.path().join("schedule")));
     hub.register_source(Arc::clone(&source) as Arc<dyn EventSource>);
