@@ -123,6 +123,7 @@ impl MetaMcp {
             };
         }
 
+        Self::fill_empty_backend_tools_in_background(backend);
         None
     }
 
@@ -153,6 +154,26 @@ impl MetaMcp {
 
     fn refresh_stale_backend_tools_in_background(backend: &Arc<Backend>) {
         if !backend.has_cached_tools() {
+            let backend = Arc::clone(backend);
+            tokio::spawn(Self::refresh_stale_backend_tools(backend));
+        }
+    }
+
+    /// Fill a backend's EMPTY tool cache in the background.
+    ///
+    /// Distinct from [`Self::refresh_stale_backend_tools_in_background`], which
+    /// keeps an existing snapshot fresh: this one creates the first snapshot.
+    ///
+    /// Discovery reads the cache and nothing else, so a backend whose cache was
+    /// never filled is invisible to every search — permanently, because no query
+    /// fills an empty one. Warm-start prefetches, but only for the backends an
+    /// operator listed in `meta_mcp.warm_start`; a backend outside that list is
+    /// never cached and therefore never searchable, however useful it is. Fill it
+    /// here so it becomes discoverable without making this query pay the cold
+    /// start. The fetch is single-flight (`get_or_fetch_shared`), so the many
+    /// discovery calls arriving before it lands share one attempt.
+    fn fill_empty_backend_tools_in_background(backend: &Arc<Backend>) {
+        if backend.get_cached_tools_snapshot().is_empty() {
             let backend = Arc::clone(backend);
             tokio::spawn(Self::refresh_stale_backend_tools(backend));
         }

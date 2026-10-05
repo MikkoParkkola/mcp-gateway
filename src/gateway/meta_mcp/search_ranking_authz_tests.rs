@@ -1173,5 +1173,117 @@ async fn per_user_backend_tools_are_discoverable() {
     );
 }
 
+// ============================================================================
+// A backend outside `meta_mcp.warm_start` must still be discoverable
+//
+// Discovery reads the tool cache and nothing else, and only warm-start
+// prefetches it. A backend an operator did not list in `meta_mcp.warm_start`
+// therefore has a permanently empty cache, is skipped by every collector, and is
+// unsearchable however useful it is. On the live gateway that is 65 of 80
+// backends — `dbhub`'s 44 `execute_sql_*` tools among them, which is what
+// `gateway_search_tools("postgres")` is asserted against in the PR.
+//
+// Every other fixture in this file warms in arrange *precisely so it does not
+// depend on this behaviour*; the fixture below is deliberately cold, which is
+// the whole point of the test.
+// ============================================================================
+
+const COLD_BACKEND: &str = "coldstorage_hub";
+const COLD_QUERY: &str = "execute_sql_postgres";
+const COLD_TOOLS: &[(&str, &str)] = &[
+    (COLD_QUERY, "Run a read-only SELECT against a configured Postgres connection"),
+    ("note_read", "read a note"),
+];
+
+/// [`mcp_backend`] without the warming call: the cache starts empty.
+async fn mcp_backend_cold(name: &str, tools: &[(&str, &str)]) -> Arc<crate::backend::Backend> {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+
+    let backend = Arc::new(Backend::new(
+        name,
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let payload: Vec<Value> = tools
+        .iter()
+        .map(|(n, d)| json!({ "name": n, "description": d, "inputSchema": { "type": "object" } }))
+        .collect();
+    backend.set_transport_for_test(Arc::new(ToolsListTestTransport {
+        tools: json!(payload),
+    }));
+    backend
+}
+
+#[tokio::test]
+async fn a_cold_backend_becomes_discoverable_after_a_search_fills_it() {
+    let registry = registry_with_default(
+        "open",
+        RoutingProfileConfig {
+            description: "no backend or tool restrictions".to_string(),
+            ..Default::default()
+        },
+    );
+    let backends = Arc::new(BackendRegistry::new());
+    let backend = mcp_backend_cold(COLD_BACKEND, COLD_TOOLS).await;
+    assert!(
+        backends.register(Arc::clone(&backend)),
+        "fixture backend failed to register"
+    );
+    assert!(
+        backend.get_cached_tools_snapshot().is_empty(),
+        "fixture must start COLD - warming it here is what hides the bug"
+    );
+
+    let meta = MetaMcp::with_features(
+        Arc::clone(&backends),
+        None,
+        None,
+        Some(Arc::new(SearchRanker::new())),
+        Duration::from_secs(60),
+    )
+    .with_code_mode(false)
+    .with_profile_registry(registry);
+
+    // First query: the cache is empty, so nothing can be returned yet. This call
+    // is what asks for the cache to be filled.
+    let first = meta
+        .search_tools(&json!({ "query": COLD_QUERY }), None)
+        .await
+        .unwrap();
+    assert!(
+        tool_names(&first).is_empty(),
+        "a cold cache yields no match on the first query"
+    );
+
+    // The fill runs in the background, off this query's latency.
+    let filled = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if !backend.get_cached_tools_snapshot().is_empty() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        filled.is_ok(),
+        "search must fill a cold backend's tool cache in the background; \
+         without the fix nothing ever fills it and the backend stays unsearchable"
+    );
+
+    // Second query: the backend is now in the corpus.
+    let second = meta
+        .search_tools(&json!({ "query": COLD_QUERY }), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        tool_names(&second),
+        vec![COLD_QUERY.to_string()],
+        "a backend outside warm_start must be discoverable once its cache is filled"
+    );
+}
+
 #[path = "search_ranking_authz_tests/glob_ordering.rs"]
 mod glob_ordering;
