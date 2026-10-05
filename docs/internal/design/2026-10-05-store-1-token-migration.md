@@ -1,5 +1,7 @@
 # MIK-6744.STORE.1: carry 3.x OAuth tokens into 4.0 on first use (design, no code)
 
+> **Status: 4.0.1 candidate, superseded for 4.0.0 by #680's account-bound route** (`accounts migrate-credentials`, MIK-6744.STORE.1 met 2026-09-22). The operator-asserted CLI of §§13-16 was implemented on branch `feat/mik-6744-oauth-migrate-legacy` up to 88c6fa1e0 and parked there: no PR.
+
 Status: design for review, 2026-10-05. No code. The operator's ruling decides whether this lands
 before the 4.0.0 freeze or in 4.0.1.
 
