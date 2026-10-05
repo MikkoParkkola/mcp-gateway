@@ -454,17 +454,33 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
             let digits = n.to_string();
             let float = n.as_f64().filter(|_| n.is_f64()).map(f64::abs);
             let value_f64 = n.as_f64().map(f64::abs);
+            // An exact integer, when the result is one, so two integers past
+            // f64 precision are never judged equal.
+            let magnitude = |x: &serde_json::Number| {
+                x.as_u64()
+                    .map(u128::from)
+                    .or_else(|| x.as_i64().map(|v| u128::from(v.unsigned_abs())))
+            };
+            let value_int = magnitude(n);
             let same_value = |needle: &str| {
-                if !needle.bytes().all(|b| b.is_ascii_digit()) {
-                    // A credential injected in another number form ("+12345",
+                // One leading "+" is not part of the value: "+012345" is the
+                // all-digit credential "012345" and takes the path below.
+                let needle = needle.strip_prefix('+').unwrap_or(needle);
+                if needle.is_empty() || !needle.bytes().all(|b| b.is_ascii_digit()) {
+                    // A credential injected in another number form ("-12345",
                     // "1.5e10") comes back printed differently, so it is
-                    // compared by value. Any number equal in value to such a
+                    // compared by value: exactly when both are integers, by
+                    // f64 bits otherwise. Any number equal in value to such a
                     // needle is redacted, even one the child printed for
                     // another reason: that over-redaction is accepted.
-                    let text = needle.strip_prefix('+').unwrap_or(needle);
-                    return serde_json::from_str::<serde_json::Number>(text)
-                        .ok()
-                        .and_then(|parsed| parsed.as_f64())
+                    let Ok(parsed) = serde_json::from_str::<serde_json::Number>(needle) else {
+                        return false;
+                    };
+                    if let (Some(p), Some(v)) = (magnitude(&parsed), value_int) {
+                        return p == v;
+                    }
+                    return parsed
+                        .as_f64()
                         .zip(value_f64)
                         .is_some_and(|(p, v)| p.abs().to_bits() == v.to_bits());
                 }
