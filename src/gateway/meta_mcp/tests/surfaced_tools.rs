@@ -178,7 +178,7 @@ fn tools_list_includes_surfaced_tool_when_in_backend_cache() {
 
 // Minor 10 (c) — MIK-6865.SCHEMA.1: a declared `outputSchema` must be
 // byte-identical in the `tools/list` wire response to the one the capability
-// declared. Surfaced capability tools go through `CapabilityDefinition::
+// declared; a non-object one under the `items` wrapper MCP needs (MIK-7959). Surfaced capability tools go through `CapabilityDefinition::
 // to_mcp_tool` (src/capability/definition/mod.rs) and
 // `project_tool_descriptor_trust_card` (src/trust/descriptor.rs) on the way
 // to the wire; neither is supposed to touch the schema.
@@ -231,9 +231,19 @@ providers:
         .find(|t| t["name"] == json!("schema_wire_check"))
         .expect("surfaced capability tool must appear in tools/list");
 
+    // MIK-7959: MCP needs an object root, so a non-object declared schema is
+    // carried under `items` with an `$id` of its own; nothing else changes.
+    let mut wire_schema = wire_tool["outputSchema"].clone();
+    assert_eq!(wire_schema["type"], json!("object"));
+    assert_eq!(wire_schema["required"], json!(["items"]));
+    let carried = wire_schema["properties"]["items"]
+        .as_object_mut()
+        .expect("the declared schema is carried under items");
+    assert!(carried.remove("$id").is_some());
     assert_eq!(
-        wire_tool["outputSchema"], declared_output_schema,
-        "outputSchema on the wire must be byte-identical to the one the capability declared"
+        serde_json::Value::Object(carried.clone()),
+        declared_output_schema,
+        "the declared outputSchema must reach the wire byte-identical under items"
     );
 }
 

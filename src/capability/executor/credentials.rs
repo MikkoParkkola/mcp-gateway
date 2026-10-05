@@ -409,6 +409,7 @@ impl CapabilityExecutor {
         // The refresh token and client secret go only where the capability's
         // own request may go (#2113): the same destination check, before any
         // byte is sent. Redirect hops are checked by the executor's client.
+        super::super::require_tls_for_credentials(token_endpoint)?;
         super::super::validate_capability_url_for_context(token_endpoint, context)?;
         let mut params = HashMap::new();
         params.insert("grant_type", "refresh_token");

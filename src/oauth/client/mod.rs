@@ -115,6 +115,11 @@ pub struct OAuthClient {
     /// HTTP client for token requests
     http_client: Client,
 
+    /// Under `Configured`, the client for `http://` on a loopback host: never
+    /// proxied, since the carve-out holds only while the request stays on the
+    /// machine. `None` if it could not be built; such a fetch then fails.
+    loopback_client: Option<Client>,
+
     /// Backend name (for storage key)
     backend_name: String,
 
@@ -275,6 +280,7 @@ impl OAuthClient {
             .then_some(ClientIdSource::Configured);
         Self {
             http_client,
+            loopback_client: destination::loopback_client().ok(),
             backend_name,
             resource_url,
             oauth_base_url: None,
@@ -317,7 +323,7 @@ impl OAuthClient {
         let mut issuer_source = IssuerSource::Origin;
 
         // Try to discover protected resource metadata first
-        match ProtectedResourceMetadata::discover(&self.http_client, &base_url).await {
+        match ProtectedResourceMetadata::discover(self.client_for(&base_url)?, &base_url).await {
             Ok(meta) => {
                 debug!(resource = %meta.resource, "Found protected resource metadata");
 
@@ -348,11 +354,14 @@ impl OAuthClient {
 
         // Discover authorization server metadata
         let auth_base = self.oauth_base_url.as_ref().unwrap();
-        self.check_destination(auth_base)?;
+        self.check_destination(auth_base, "authorization server")?;
         let previous_issuer = self.auth_metadata.as_ref().map(|m| m.issuer.clone());
-        let discovered =
-            AuthorizationServerMetadata::discover(&self.http_client, auth_base, issuer_source)
-                .await?;
+        let discovered = AuthorizationServerMetadata::discover(
+            self.client_for(auth_base)?,
+            auth_base,
+            issuer_source,
+        )
+        .await?;
         // Checked before it is kept: a refused document never reaches a request.
         self.check_advertised_endpoints(&discovered)?;
         self.auth_metadata = Some(discovered);

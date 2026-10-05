@@ -170,6 +170,8 @@ backend" and "fails a capability file" first.**
 | 143 | The `gateway_search_tools` output schema describes each `matches` row as `anyOf` a tool row (`server`, `tool`, `description`, `score`) or an event row (`kind: event`, `name`, `description`, `inputSchema`); it described tool rows only, so a strict client rejected an answer holding an event. `limit` now caps tool and event rows together: an answer could hold `limit` tools plus `limit` events | A client that reads the row schema at `items.properties` reads `items.anyOf[0].properties` for tool rows and `items.anyOf[1]` for event rows; one that sizes for `2 × limit` rows gets at most `limit` |
 | 144 | `ProvidersConfig::process` and `ProvidersConfig::integrity` are no longer public fields: a program built on the crate reads them through `process()` and `integrity()` and cannot set them, so only the loader marks a definition `Integrity::Verified`; `register_capability` replacing a definition drops its cached answers | An embedder that read the fields calls the getters; one that set `integrity` loads the definition through the capability loader instead; one that replaces `mcp` definitions keeps the runtime that started their children driven, or drops it |
 | 145 | The `plugin` command is removed (`search`, `install`, `uninstall`, `list`), with `mcp_gateway::registry::marketplace` and `mcp_gateway::config::MarketplaceConfig`; a `marketplace:` block in the config loads and warns once | Delete the `marketplace:` block and `~/.mcp-gateway/plugins`; add tools as `backends:` entries or capability files (`mcp-gateway cap`) |
+| 146 | An OAuth backend whose authorization server, authorization endpoint, token endpoint or registration endpoint is `http://` to a host off this machine fails at connect, and so does a redirect from one to such a URL; a capability that sends a credential (`auth.required`) and names an `http://` `base_url` or `endpoint` off this machine fails to load, and a templated one is refused at call time. `http://` to a loopback host is allowed, and is no longer proxied | Serve the authorization server and the capability's API over `https://`, or on a loopback host (`localhost`, `127.0.0.1`, `[::1]`). `allow_cleartext_credentials` does not cover either |
+| 147 | A capability whose declared output root is not object-shaped (an array, a string, a type list) advertises `outputSchema` as an object and publishes `structuredContent` under `items` | Read `structuredContent.items` for the nine shipped capabilities listed below, and for your own; the text content is unchanged |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3889,6 +3891,72 @@ command (`--marketplace-url`, `--plugin-dir`, `MCP_GATEWAY_MARKETPLACE_URL`,
 **Action:** delete the `marketplace:` block and the `~/.mcp-gateway/plugins` directory (or your
 `plugin_dir`). Add tools as `backends:` entries or as capability files (`mcp-gateway cap`), which
 the gateway does load. Drop `plugin` calls from scripts.
+
+## 146. Cleartext OAuth authorization servers and credential-bearing capability URLs are refused
+
+**Startup:** no notice, decided per backend and per capability file; fails a backend, at connect, with one warning, and the gateway starts without it; fails a capability file, with one warning that names the field
+
+A client secret, an authorization code and a refresh token are bearer material: anyone on the
+path can replay them. 4.0 already refused an OAuth bearer to an `http://` backend off this
+machine (item 8 and the OAuth transport guard). The authorization server the backend points at
+was not held to the same rule, and neither was a capability's own API.
+
+- **OAuth authorization server:** the authorization server a backend advertises, and the
+  authorization, token and registration endpoints that server advertises, must be `https://`, or
+  `http://` on a loopback host. These URLs come from discovery documents, so the check runs when the backend
+  connects, not at config load. A refused backend fails with one warning naming the endpoint
+  (`OAuth token_endpoint is cleartext http:// to a host off this machine`), and the gateway starts
+  without it. A redirect from any OAuth request to such a URL is refused the same way, under
+  every destination policy.
+- **Capabilities:** a capability with `auth.required: true` whose
+  `providers.<name>.config.base_url` or `endpoint` is `http://` to a host off this machine fails
+  to load, with a warning naming that field. A URL built from a caller's parameters is checked
+  when it is called, before the credential is read. The REST, GraphQL and JSON-RPC paths and the
+  capability OAuth refresh all apply it. A capability with no credential (`auth.required: false`)
+  is not affected, except that no capability request that started on `https://` or loopback
+  follows a redirect to `http://` off this machine. A loopback request no longer goes through
+  `capabilities.egress_proxy`.
+- **Loopback** is `localhost` (any case), `127.0.0.0/8` and `[::1]`, the same classifier as the
+  backend guard. `localhost.` (trailing dot), `*.localhost`, `localhost.localdomain` and
+  IPv4-mapped IPv6 (`[::ffff:127.0.0.1]`) are not loopback here: a name that has to go through a
+  resolver is not known to stay on the machine. An `http://` loopback authorization server is
+  reached directly, never through `HTTP_PROXY` or `ALL_PROXY`.
+
+**Action:** if a backend's authorization server or a credential-bearing capability used plain
+`http://` off this machine, move it to `https://`, or run it on a loopback host. There is no
+override: `allow_cleartext_credentials` covers a backend's own static credentials only. If either
+ran over cleartext before, treat the client secrets, refresh tokens and API keys it sent as
+exposed and rotate them.
+
+## 147. Non-object capability output roots arrive under `items`
+
+**Startup:** no notice
+
+MCP 2025-11-25 restricts a tool's `outputSchema` root to `type: "object"` and
+types `structuredContent` as a JSON object; a client that checks this can refuse
+the tool, or the whole `tools/list`. A capability whose `schema.output` declares
+a root `type` other than `object` is now shown as
+
+```json
+{"type": "object", "properties": {"items": <declared schema>}, "required": ["items"]}
+```
+
+and its result is published as `{"items": <result>}` in `structuredContent`. The
+text content still carries the result in its declared shape, and output
+validation still checks it against the declared schema.
+
+The shipped capabilities this changes: `country_info`, `hackernews_ask`,
+`hackernews_show`, `hackernews_top`, `number_facts` (a string root),
+`public_holidays`, `sentry_list_issues`, `uuid_generate` and `wayback_cdx`. A
+capability file of your own changes the same way when its root is not
+object-shaped: an array or scalar `type`, a type list such as
+`["object", "null"]`, or no `type` and no `properties` (a root `anyOf`, say).
+The nested schema is given an `$id` of the form
+`urn:mcp-gateway:declared-output:<content hash>` when it has none (or has
+`""` or `"#"`), so its own `#/...` references still resolve inside it; a root
+`$schema` is repeated on the wrapper. A schema in the draft-04 dialect, which
+scopes references with `id` rather than `$id`, is not covered. A root with `properties` and no `type` is
+advertised with `type: "object"` added and is otherwise unchanged.
 
 ## Upgrading from 3.5.x: a walkthrough
 

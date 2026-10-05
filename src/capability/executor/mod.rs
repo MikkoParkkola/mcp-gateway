@@ -481,6 +481,7 @@ impl CapabilityExecutor {
         let params = effective_params.as_ref();
 
         let url = self.build_url(config, params)?;
+        super::require_tls_for_auth(&url, &capability.auth)?;
         validate_capability_url_for_context(&url, context)?;
         tracing::debug!(url = %url, method = %config.method, "Executing REST request");
 

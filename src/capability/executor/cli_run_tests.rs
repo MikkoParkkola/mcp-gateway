@@ -601,6 +601,131 @@ fn a_digit_credential_with_leading_zeros_is_redacted_as_a_number() {
     assert_eq!(value["n"], 7, "{value}");
 }
 
+/// A credential injected in number form other than plain digits, such as a
+/// leading "+" or an exponent, comes back as the same number printed
+/// differently. It is matched by value.
+#[test]
+fn a_plus_signed_credential_is_redacted_as_a_number() {
+    let mut value = json!({"pin": 12_345, "neg": -12_345, "other": 12_346});
+    super::super::cli::redact_value(&mut value, &["+12345".to_owned()]);
+    assert_eq!(value["pin"], "[redacted]", "{value}");
+    assert_eq!(value["neg"], "[redacted]", "{value}");
+    assert_eq!(value["other"], 12_346, "a different value is untouched");
+}
+
+#[test]
+fn an_exponent_form_credential_is_redacted_as_a_number() {
+    let mut value: Value =
+        serde_json::from_str(r#"{"a": 1.5e10, "b": 15000000000, "c": 1.5e11}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["1.5e10".to_owned()]);
+    assert_eq!(value["a"], "[redacted]", "{value}");
+    // Equal in value, so it is redacted too: over-redaction is accepted.
+    assert_eq!(value["b"], "[redacted]", "{value}");
+    assert_ne!(
+        value["c"], "[redacted]",
+        "a different value is untouched: {value}"
+    );
+}
+
+/// A "+" before leading zeros still names the all-digit credential.
+#[test]
+fn a_plus_signed_credential_with_leading_zeros_is_redacted_as_a_number() {
+    let mut value = json!({"pin": 12_345, "other": 12_346});
+    super::super::cli::redact_value(&mut value, &["+012345".to_owned()]);
+    assert_eq!(value["pin"], "[redacted]", "{value}");
+    assert_eq!(value["other"], 12_346, "a different value is untouched");
+}
+
+/// Integers past f64 precision are compared exactly, never through a float.
+#[test]
+fn a_large_integer_credential_redacts_only_its_own_value() {
+    let mut value: Value =
+        serde_json::from_str(r#"{"near": 9007199254740992, "same": 9007199254740993}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["+9007199254740993".to_owned()]);
+    assert_eq!(value["same"], "[redacted]", "{value}");
+    assert_ne!(
+        value["near"], "[redacted]",
+        "an adjacent integer is untouched: {value}"
+    );
+}
+
+/// "+1e5" is 4 characters as injected, so unlike "1e5" it is looked for.
+#[test]
+fn a_four_character_number_form_credential_is_redacted() {
+    let mut value: Value = serde_json::from_str(r#"{"n": 1e5}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["+1e5".to_owned()]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+}
+
+/// The covered grammar, by construction rather than by example: an injected
+/// credential in JSON number form with at most one leading sign, crossed
+/// with leading zeros, integer, decimal and exponent forms, and magnitudes
+/// below i64, past i64 and past u64. Each needle redacts its own value as
+/// the child prints it and never the adjacent value. Adjacent values past
+/// i64 and u64 sit one f64 step away, so they stay distinct after parsing.
+#[test]
+fn every_covered_number_form_redacts_only_its_own_value() {
+    // (form, magnitude) -> (needle body, own value, adjacent value)
+    let shapes = [
+        ("12345", "12345", "12346"),
+        (
+            "9223372036854775809",
+            "9223372036854775809",
+            "9223372036854775808",
+        ),
+        (
+            "18446744073709551616",
+            "18446744073709551616",
+            "18446744073709555712",
+        ),
+        ("12.5", "12.5", "12.25"),
+        (
+            "9223372036854775809.5",
+            "9223372036854775809.5",
+            "9223372036854777856.0",
+        ),
+        (
+            "18446744073709551616.5",
+            "18446744073709551616.5",
+            "18446744073709555712.0",
+        ),
+        ("1.5e4", "1.5e4", "1.6e4"),
+        ("9.3e18", "9.3e18", "9.4e18"),
+        ("1.9e19", "1.9e19", "2.0e19"),
+    ];
+    let mut failures = Vec::new();
+    for sign in ["", "+", "-"] {
+        for zeros in ["", "00"] {
+            for (body, own, adjacent) in shapes {
+                let needle = format!("{sign}{zeros}{body}");
+                let value_sign = if sign == "-" { "-" } else { "" };
+                let text =
+                    format!(r#"{{"own": {value_sign}{own}, "adjacent": {value_sign}{adjacent}}}"#);
+                let mut value: Value = serde_json::from_str(&text).unwrap();
+                super::super::cli::redact_value(&mut value, std::slice::from_ref(&needle));
+                if value["own"] != "[redacted]" || value["adjacent"] == "[redacted]" {
+                    failures.push(format!("{needle}: {value}"));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of 54 cases wrong:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// The 4-character floor applies to the needle as injected, number form
+/// included: "1e5" is 3 characters, so the number it names is left alone.
+#[test]
+fn a_number_form_credential_below_the_floor_is_not_looked_for() {
+    let mut value: Value = serde_json::from_str(r#"{"n": 1e5}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["1e5".to_owned()]);
+    assert_ne!(value["n"], "[redacted]", "{value}");
+}
+
 /// A digit credential past u64 is compared after the same float parse that
 /// read the result. `serde_json` without `float_roundtrip` truncates past u64
 /// and scales, so for this 25-digit value it lands one ULP from the correctly

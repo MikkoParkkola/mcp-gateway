@@ -219,18 +219,6 @@ impl Rule for MyCustomRule {
 }
 ```
 
-## ROI Metrics
-
-Based on the original issue (#36), expected annual value:
-
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| Tool design time | 2 hours | 30 min | 4× faster |
-| Agent success rate | 60% | 95% | 1.6× |
-| Token waste | 5K/call | 500/call | 10× reduction |
-| Debug time | 1 hour | 5 min | 12× faster |
-| **Annual Value** | - | **$180K** | Agent efficiency |
-
 ## Related Issues
 
 - #36 - MCP Server Design Validator (this implementation)

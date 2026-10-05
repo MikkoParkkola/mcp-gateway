@@ -145,18 +145,32 @@ async fn the_isolated_context_reaches_a_loopback_token_endpoint() {
 
 /// T4: a token endpoint named by hostname goes to `capabilities.egress_proxy`,
 /// which resolves the name: the documented route to an identity provider on a private network.
+/// It is `https://` (#3013), so the proxy sees one CONNECT and never the
+/// refresh token; the stand-in proxy then cannot speak TLS, so the grant fails.
+/// The `http://` spelling is refused before the proxy is reached.
 #[tokio::test]
 async fn a_hostname_token_endpoint_is_refreshed_through_the_configured_proxy() {
     let (proxy, seen) = recording_token_server().await;
     let (executor, _dir) = with_expired_token(through_proxy(&proxy), "t4");
-    let token = executor
+    let cleartext = executor
         .fetch_credential(
             &oauth_auth("t4", "http://idp.internal.invalid/token"),
             &CapabilityExecutionContext::default(),
         )
-        .await
-        .expect("the proxy answers the refresh");
-    assert_eq!(token, "REFRESHED_AT");
+        .await;
+    assert!(cleartext.is_err(), "a cleartext token endpoint is refused");
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        0,
+        "the proxy saw a cleartext refresh"
+    );
+    let tunnelled = executor
+        .fetch_credential(
+            &oauth_auth("t4", "https://idp.internal.invalid/token"),
+            &CapabilityExecutionContext::default(),
+        )
+        .await;
+    assert!(tunnelled.is_err(), "the stand-in proxy cannot complete TLS");
     assert_eq!(
         seen.load(Ordering::SeqCst),
         1,

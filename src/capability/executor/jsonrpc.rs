@@ -152,6 +152,7 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
             ));
         }
         validate_url_not_ssrf(&jsonrpc_config.endpoint)?;
+        crate::capability::require_tls_for_auth(&jsonrpc_config.endpoint, &ctx.capability.auth)?;
 
         // Build the JSON-RPC 2.0 request body
         let body = Self::build_request(jsonrpc_config, &params)?;

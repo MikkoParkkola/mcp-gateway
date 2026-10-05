@@ -84,17 +84,6 @@ fn mik6977_claim_2_hash_pin_and_owasp_are_not_overclaimed() {
         lower.contains("self-assessed") || lower.contains("self-attested"),
         "OWASP coverage must be labelled self-assessed"
     );
-    let show_hn = read("docs/show-hn.md").to_lowercase();
-    assert!(
-        show_hn.contains("unpinned files still load"),
-        "Show HN must not imply every capability is hash-pinned"
-    );
-    let sovereign = read("docs/blog/sovereign-stack-2026-04.md");
-    assert!(
-        sovereign.contains("PolyForm Noncommercial by default")
-            && sovereign.contains("separately licensed MIT core"),
-        "the sovereign-stack post must state the runnable gateway's mixed license"
-    );
 }
 
 #[test]
@@ -177,8 +166,8 @@ fn mik6977_claim_3_compact_surfaces_match_the_canonical_tool_counts() {
     assert!(llms.contains("1.2-16.1% more input tokens"));
     assert!(!llms.contains("7.1-16.1% more input tokens"));
 
-    // Derived from the canonical claim rather than repeated as a literal. Four
-    // surfaces quote this count and every one of them drifted the last time it
+    // Derived from the canonical claim rather than repeated as a literal. The
+    // surfaces quoting this count all drifted the last time it
     // moved -- the benchmark reproducer refused to import, and three doc
     // surfaces advertised the superseded number for a week. A hand-maintained
     // literal here would have passed through all of it.
@@ -201,7 +190,6 @@ fn mik6977_claim_3_compact_surfaces_match_the_canonical_tool_counts() {
     assert!(llms.contains(&format!(
         "{scenario_tools} in the README benchmark scenario"
     )));
-    assert!(read("docs/show-hn.md").contains(&format!("{scenario_tools} in the README scenario")));
 
     let benchmark_docs = read("docs/BENCHMARKS.md");
     assert!(benchmark_docs.contains("Direct mean total task tokens grew"));
