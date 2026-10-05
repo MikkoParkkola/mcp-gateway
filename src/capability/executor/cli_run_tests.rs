@@ -657,6 +657,35 @@ fn a_four_character_number_form_credential_is_redacted() {
     assert_eq!(value["n"], "[redacted]", "{value}");
 }
 
+/// One table over both signs and the integer edges: each needle redacts its
+/// own value and never an adjacent one.
+#[test]
+fn signed_and_boundary_credentials_redact_only_their_own_value() {
+    let cases = [
+        ("-012345", "-12345", "-12346"),
+        ("+012345", "12345", "12346"),
+        (
+            "-9223372036854775809",
+            "9223372036854775809",
+            "9223372036854775808",
+        ),
+        (
+            "+18446744073709551615",
+            "18446744073709551615",
+            "18446744073709551614",
+        ),
+        ("-12.5", "12.5", "12.25"),
+        ("+1.5e10", "15000000000.0", "15000000001.0"),
+    ];
+    for (needle, own, adjacent) in cases {
+        let mut value: Value =
+            serde_json::from_str(&format!(r#"{{"own": {own}, "adjacent": {adjacent}}}"#)).unwrap();
+        super::super::cli::redact_value(&mut value, &[needle.to_owned()]);
+        assert_eq!(value["own"], "[redacted]", "{needle}: {value}");
+        assert_ne!(value["adjacent"], "[redacted]", "{needle}: {value}");
+    }
+}
+
 /// The 4-character floor applies to the needle as injected, number form
 /// included: "1e5" is 3 characters, so the number it names is left alone.
 #[test]
