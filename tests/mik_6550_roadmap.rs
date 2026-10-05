@@ -46,27 +46,16 @@ fn mik_6550_public_boundary_has_no_blocked_terms() {
     }
 }
 
+/// Public text names features, not competitors: the comparison section is gone
+/// and the README links the public roadmap instead.
 #[test]
-fn mik_6550_public_competitor_comparison_is_present() {
-    for phrase in [
-        "Public MCP Gateway Comparison",
-        "This table compares public, user-facing behavior",
-        "docs/OWASP_AGENTIC_AI_COMPLIANCE.md",
-        "docs/trustcard.md",
-        "docs/adaptive_ranking.md",
-        "https://docs.docker.com/ai/mcp-catalog-and-toolkit/",
-        "https://github.com/mcpjungle/MCPJungle",
-        "https://github.com/open-webui/mcpo",
-        "https://github.com/supercorp-ai/supergateway",
-        "Docker MCP Gateway / Toolkit",
-        "MCPJungle",
-        "mcpo",
-        "Supergateway",
-        "docs/roadmap/trust-fabric.md",
-    ] {
-        assert!(
-            README.contains(phrase),
-            "README public comparison or roadmap link is missing: {phrase}",
-        );
-    }
+fn mik_6550_readme_links_the_roadmap_without_a_comparison_section() {
+    assert!(
+        README.contains("docs/roadmap/trust-fabric.md"),
+        "README must link the public roadmap",
+    );
+    assert!(
+        !README.contains("Public MCP Gateway Comparison"),
+        "README must not carry a competitor comparison section",
+    );
 }

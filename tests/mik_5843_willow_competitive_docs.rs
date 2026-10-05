@@ -186,12 +186,10 @@ fn mik_5843_page_is_linked_from_the_competitive_index() {
 }
 
 #[test]
-fn mik_5843_page_is_linked_from_the_project_readme() {
+fn mik_5843_shadow_docs_are_linked_from_the_project_readme() {
+    // The README names features, not competitors, so it links the shadow
+    // documentation and not the comparison page.
     let readme = std::fs::read_to_string("README.md").expect("read README.md");
-    assert!(
-        readme.contains("docs/competitive/willow-enterprise-agent-governance.md"),
-        "project README does not reference the Willow comparison"
-    );
     assert!(
         readme.contains("[ShadowRadar](docs/SHADOW_SCAN.md)"),
         "project README does not link the operator-facing shadow documentation"
