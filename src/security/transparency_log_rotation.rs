@@ -376,7 +376,7 @@ fn resume_active(
 ) -> io::Result<(Recovered, bool)> {
     let first = segments::read_first_line(path)?.unwrap_or_default();
     let (_, _, first_event, first_v) = record_head(&first)?;
-    let next = sealed.last().map_or(0, |s| s.seq + 1);
+    let next = sealed.last().map_or(0, |s| s.seq.saturating_add(1));
     let (seq, opened_at) = if first_event.as_deref() == Some(EV_OPENED) {
         (
             first_v
