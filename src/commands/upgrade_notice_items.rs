@@ -14,16 +14,17 @@
 /// Pinned as a slice so a test can assert the notice still carries every item:
 /// a release note that quietly loses one is worse than none, because the operator has read it.
 pub(super) const NOTICE_4_0_0_ITEMS: &[&str] = &[
-    "OAuth credentials are now stored per issuer, so 3.x tokens are no longer \
-read where they sit. By default each OAuth backend re-authenticates once, on \
-its next use: expect one authorization prompt per backend, and no config \
-change is needed. To keep a credential instead, run `mcp-gateway accounts \
-migrate-credentials --config PATH --descriptor-id ID --legacy-issuer URL` per backend, which \
-is offline and refuses rather than guessing. Either way your 3.x token files \
-are left untouched in `~/.mcp-gateway/oauth/` at mode 0600. Delete them once \
-every backend has re-authorized or migrated AND been used successfully: a \
-migrated credential is still the same grant, so the first refresh against a \
-provider that rotates refresh tokens retires the copy in the old file.",
+    "OAuth credentials are now stored per issuer, and 4.0.0 does not read 3.x \
+tokens: every OAuth backend re-authenticates once, on its next use. Expect one \
+authorization prompt per backend; no config change is needed. `mcp-gateway \
+accounts migrate-credentials --config PATH --descriptor-id ID --legacy-issuer URL` \
+applies only to a backend bound to a personal account (an `accounts` \
+descriptor): it cannot keep the credential of an ordinary \
+`backends.<name>.oauth` backend. Your 3.x token files are left untouched in \
+`~/.mcp-gateway/oauth/` at mode 0600. Delete them once every backend has \
+re-authenticated or been migrated, and been used successfully. A migrated \
+personal-account credential is still the same grant, so its first refresh \
+against a provider that rotates refresh tokens retires the copy in the old file.",
     "A malformed line in an `env_files` file now FAILS STARTUP instead of being \
 skipped silently. A typo that used to cost one missing variable now costs a \
 refused start, and says which line.",
