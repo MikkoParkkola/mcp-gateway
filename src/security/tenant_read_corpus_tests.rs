@@ -4,8 +4,9 @@
 //! over a labelled fixture corpus (design §5).
 //!
 //! Each corpus line is one outbound frame, run through the writer's own judge
-//! (`outbound::delivered` / `outbound::admit`) on a history whose clock the
-//! test advances to the line's `t_secs`, and committed as a sink would.
+//! (`outbound::delivered` / `outbound::admit`, or for a webhook event the
+//! session-stream judge, `SessionJudge`) on a history whose clock the test
+//! advances to the line's `t_secs`, and committed as a sink would.
 //! Labels come from the generating pattern
 //! (`tests/fixtures/gen_tenant_reads_corpus.py`), never from the guard. The
 //! unit is the principal-session: a session is flagged when any of its frames
@@ -17,11 +18,16 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::gateway::outbound::{Admission, Payload, admit, attribute, delivered};
+use crate::gateway::outbound::{
+    Admission, Payload, RejectionAudit, SessionJudge, admit, attribute, delivered,
+};
+use crate::gateway::streaming::TaggedNotification;
 use crate::protocol::{JsonRpcNotification, JsonRpcResponse};
+use crate::security::TransparencyLogger;
 use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
 use crate::security::firewall::{Firewall, FirewallConfig};
 use crate::security::tenant_reads::{ReadHistory, ReadVerdict};
+use crate::security::transparency_log::TransparencyLogConfig;
 
 const CORPUS: &str = include_str!("../../tests/fixtures/tenant-reads-corpus.jsonl");
 
@@ -60,10 +66,74 @@ fn firewall(window_secs: u64, reads: &Arc<ReadHistory>) -> Firewall {
     .with_reads(Arc::clone(reads))
 }
 
+/// The production session-stream judge over `fw`, recording to `log`: the
+/// stream records a written item's verdict there, so the test reads it back.
+struct Stream {
+    judge: SessionJudge,
+    log: std::path::PathBuf,
+}
+
+impl Stream {
+    fn new(fw: &Arc<Firewall>, dir: &std::path::Path) -> Self {
+        let log = dir.join("audit.jsonl");
+        let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: log.display().to_string(),
+            key_id: "corpus".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("log");
+        let judge = SessionJudge::new(
+            Some(Arc::clone(fw)),
+            Arc::new(RejectionAudit::new(None, 1)),
+            Some(Arc::new(logger)),
+        )
+        .expect("the guard judges");
+        Self { judge, log }
+    }
+
+    fn records(&self) -> Vec<Value> {
+        std::fs::read_to_string(&self.log)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("log line is JSON"))
+            .collect()
+    }
+
+    /// A webhook event as `broadcast_to_backend_raw` delivers it: a
+    /// non-message item judged for the session's caller with its raw body's
+    /// attribution, then written (recorded and committed) by the stream.
+    async fn flagged(&self, key: &str, row: &Value) -> bool {
+        let note = TaggedNotification {
+            source: "corpus".to_string(),
+            event_type: "webhook.corpus.row".to_string(),
+            data: row["frame"].clone(),
+            event_id: None,
+        };
+        let hidden = row.get("raw").and_then(|raw| self.judge.raw(raw));
+        let Ok(mark) = self.judge.judge(Some(key), &note, hidden.as_ref()) else {
+            return true; // withheld
+        };
+        let Some(mark) = mark else {
+            return false;
+        };
+        let before = self.records().len();
+        assert!(
+            mark.written(Some(&self.judge)).await,
+            "the stream writes it"
+        );
+        self.records()[before..].iter().any(|r| {
+            r["event"] == "tenant_read"
+                && matches!(r["cross_tenant_read"].as_str(), Some("flagged" | "blocked"))
+        })
+    }
+}
+
 /// Judge and commit one corpus frame; whether it was flagged.
-fn flagged(fw: &Firewall, key: &str, row: &Value) -> bool {
+async fn flagged(fw: &Firewall, stream: &Stream, key: &str, row: &Value) -> bool {
     let frame = row["frame"].clone();
     let verdict = match row["kind"].as_str().expect("kind") {
+        "event" => return stream.flagged(key, row).await,
         "response" => {
             let response: JsonRpcResponse = serde_json::from_value(frame).expect("response");
             let request = row.get("request");
@@ -78,7 +148,6 @@ fn flagged(fw: &Firewall, key: &str, row: &Value) -> bool {
                     serde_json::from_value::<JsonRpcNotification>(frame).expect("notification"),
                 ),
                 "request" => Payload::Request(frame),
-                "event" => Payload::Event(frame),
                 "callback" => Payload::Callback(frame),
                 other => panic!("unknown kind {other}"),
             };
@@ -108,8 +177,8 @@ fn units(rows: &[Value]) -> BTreeMap<String, Vec<&Value>> {
     by_unit
 }
 
-#[test]
-fn tenant_read_corpus_fp_measurement() {
+#[tokio::test]
+async fn tenant_read_corpus_fp_measurement() {
     let mut lines = CORPUS.lines();
     let header: Value = serde_json::from_str(lines.next().expect("header")).expect("header JSON");
     let window = header["window_secs"].as_u64().expect("window");
@@ -120,7 +189,10 @@ fn tenant_read_corpus_fp_measurement() {
         .collect();
 
     let reads = ReadHistory::shared();
-    let fw = firewall(window, &reads);
+    let fw = Arc::new(firewall(window, &reads));
+    let dir = tempfile::tempdir().expect("tempdir");
+    // One firewall, so the stream judge shares the frames' read history.
+    let stream = Stream::new(&fw, dir.path());
     let mut seen: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut hit: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (unit, frames) in units(&rows) {
@@ -133,7 +205,7 @@ fn tenant_read_corpus_fp_measurement() {
             seen.entry(pattern.clone())
                 .or_default()
                 .insert(unit.clone());
-            if flagged(&fw, row["caller_key"].as_str().expect("key"), row) {
+            if flagged(&fw, &stream, row["caller_key"].as_str().expect("key"), row).await {
                 hit.entry(pattern).or_default().insert(unit.clone());
             }
         }
@@ -143,6 +215,13 @@ fn tenant_read_corpus_fp_measurement() {
 
     let count = |p: &str| seen.get(p).map_or(0, BTreeSet::len);
     let flags = |p: &str| hit.get(p).map_or(0, BTreeSet::len);
+    // Every pattern the rows carry is declared, and every declared one
+    // occurs: an undeclared pattern would skip every gate below.
+    assert_eq!(
+        seen.keys().collect::<Vec<_>>(),
+        declared.keys().collect::<Vec<_>>(),
+        "the rows' patterns are the header's"
+    );
     for (pattern, n) in &declared {
         assert_eq!(count(pattern), *n, "{pattern}: the header's session count");
     }
@@ -155,7 +234,7 @@ fn tenant_read_corpus_fp_measurement() {
         );
     }
     // Gate 2: every cross-tenant session is flagged.
-    let cross: Vec<&str> = declared
+    let cross: Vec<&str> = seen
         .keys()
         .map(String::as_str)
         .filter(|p| !LEGITIMATE.contains(p) && !KNOWN_FALSE_POSITIVE.contains(p))
