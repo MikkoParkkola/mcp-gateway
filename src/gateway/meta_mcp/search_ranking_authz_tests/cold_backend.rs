@@ -86,7 +86,7 @@ async fn a_cold_backend_becomes_discoverable_after_a_search_fills_it() {
     // First query: the cache is empty, so nothing can be returned yet, and
     // this query does not wait for the fill. It is what asks for one.
     let first = meta
-        .search_tools(&json!({ "query": COLD_QUERY }), None)
+        .search_tools_anon(&json!({ "query": COLD_QUERY }), None)
         .await
         .unwrap();
     assert!(
@@ -107,7 +107,7 @@ async fn a_cold_backend_becomes_discoverable_after_a_search_fills_it() {
     );
 
     let second = meta
-        .search_tools(&json!({ "query": COLD_QUERY }), None)
+        .search_tools_anon(&json!({ "query": COLD_QUERY }), None)
         .await
         .unwrap();
     assert_eq!(
@@ -162,7 +162,7 @@ async fn a_dead_cold_backend_is_asked_once_across_a_burst_of_searches() {
 
     for _ in 0..5 {
         let response = meta
-            .search_tools(&json!({ "query": COLD_QUERY }), None)
+            .search_tools_anon(&json!({ "query": COLD_QUERY }), None)
             .await
             .unwrap();
         assert!(tool_names(&response).is_empty(), "nothing to serve");
