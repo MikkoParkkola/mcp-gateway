@@ -2070,7 +2070,7 @@
       "authority": "lead ruling under the operator's standing instruction to decide with gpt-review and grok-review (2026-10-03); not an operator approval receipt",
       "selection": "The per-user-credential exclusion of MIK-7630.SOURCE.1 applies on a multi-user gateway only. A backend reached with a per-user credential is refused with -32014 and reason per_user_credential when the gateway serves several callers, and admitted when it serves one. Identity-propagated backends stay excluded in both postures.",
       "rationale": "The exclusion exists so that a shared listener cannot fan one user's credentialed events out to other users. On a single-user gateway there is no other user, so the unconditional wording overstated the rule. It narrows decision mik_7630_events_source1_exclusions; it does not widen any refusal.",
-      "consequence": "SOURCE.1 is graded against the multi-user-only wording. The implementation already behaves this way (src/events/upstream.rs reason()), pinned both sides by the unit row account_bindings_are_judged_as_they_compile and the per-user OAuth rows in the same module.",
+      "consequence": "SOURCE.1 is graded against the multi-user-only wording. The implementation already behaves this way (src/events/upstream.rs reason()), pinned both sides by the unit row each_reason_is_found_and_the_eligible_pass (src/events/upstream.rs:189; multi-user refused, single-user admitted at :199-204) and the per-user OAuth rows in the same module.",
       "evidence": [
         "src/events/upstream.rs",
         "docs/release/v4.0.0-supported-matrix.md",
