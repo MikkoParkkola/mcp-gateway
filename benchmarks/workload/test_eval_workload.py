@@ -686,12 +686,14 @@ def test_runner_declares_the_sample_it_runs():
         ).stdout.strip()
         proc = subprocess.run(
             [sys.executable, "-c", writer.group(1), str(out), DIGEST, head, head, head,
-             "6", str(NCPU), str(SEED)],
+             "6", str(NCPU), str(SEED), "0"],
             capture_output=True, text=True, cwd=EVAL.parent.parent.parent,
         )
         assert proc.returncode == 0, f"runner pin writer failed: {proc.stderr}"
         pins = json.loads(out.read_text())
 
+    # A diagnostic run declares itself one, so the graded checks never apply.
+    assert pins.get("graded") is False, f"runner declared graded={pins.get('graded')!r}"
     assert pins["reps"] == [1, 2, 3, 4, 5, 6], (
         f"runner declared {pins.get('reps')!r}, not the six reps it ran"
     )

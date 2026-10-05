@@ -323,8 +323,44 @@ def jsonable(value):
     return value
 
 
-def evaluate(run: Path) -> int:
+def check_graded_schedule(run: Path, pins: dict, measured: list) -> None:
+    """A graded run is the planned schedule or it is VOID: n = 18, seed
+    20261007, and the counterbalanced orders of schedule.py, as recorded rep by
+    rep in cell_order.jsonl. A run that drew its own order cannot be graded,
+    however it lands."""
+    # Loaded by path: a same-named installed package must never stand in.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "workload_schedule", Path(__file__).with_name("schedule.py"))
+    if spec is None or spec.loader is None:
+        raise Void("graded run: schedule.py is missing beside the evaluator")
+    schedule = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(schedule)
+
+    if measured != list(range(1, schedule.GRADED_REPS + 1)):
+        raise Void(f"graded run: pins.reps {measured} must be 1..{schedule.GRADED_REPS}")
+    if pins.get("cell_order_seed") != str(schedule.GRADED_SEED):
+        raise Void(f"graded run: cell_order_seed {pins.get('cell_order_seed')!r} "
+                   f"must be {schedule.GRADED_SEED}")
+    path = run / "cell_order.jsonl"
+    try:
+        recorded = [json.loads(line) for line in path.read_text().splitlines() if line]
+    except (OSError, ValueError) as error:
+        raise Void(f"graded run: cell_order.jsonl unreadable: {error}") from error
+    planned = [{"rep": n, "order": order}
+               for n, order in enumerate(schedule.graded_orders(schedule.GRADED_SEED), 1)]
+    if recorded != planned:
+        raise Void("graded run: cell_order.jsonl is not the planned counterbalanced schedule")
+
+
+def evaluate(run: Path, require_graded: bool = False) -> int:
     pins = load(run / "pins.json")
+    graded = pins.get("graded") is True
+    # The release grade reads only a graded run. A diagnostic run still gets a
+    # verdict, labelled as one, so it can never pass for the graded result.
+    if require_graded and not graded:
+        raise Void("--graded: pins.json does not mark this run graded (WORKLOAD_GRADED=1)")
 
     for field, value in pins.items():
         if value in (None, "", {}):
@@ -352,6 +388,9 @@ def evaluate(run: Path) -> int:
         raise Void(f"pins.reps {measured} must all be positive integers")
     if len(set(measured)) != len(measured):
         raise Void(f"pins.reps {measured} repeats a rep id; reps must be distinct")
+
+    if graded:
+        check_graded_schedule(run, pins, measured)
 
     cells: dict[str, list[dict]] = {}
     for cell in LEGACY_CELLS + REPORT_ONLY_CELLS:
@@ -462,6 +501,7 @@ def evaluate(run: Path) -> int:
 
     report["unstable"] = unstable
     report["verdict"] = verdict
+    report["mode"] = "graded" if graded else "diagnostic"
     report["report_only"] = {
         cell: report["cells"][cell] for cell in REPORT_ONLY_CELLS
     }
@@ -469,7 +509,8 @@ def evaluate(run: Path) -> int:
     payload = json.dumps(jsonable(report), indent=2, sort_keys=True)
     (run / "verdict.json").write_text(payload)
     print(payload)
-    print(f"\nVERDICT: {verdict}  (exit {status})", file=sys.stderr)
+    mode = "" if graded else "  [DIAGNOSTIC run: not the release grade]"
+    print(f"\nVERDICT: {verdict}  (exit {status}){mode}", file=sys.stderr)
     if unstable:
         print(
             "INCONCLUSIVE: the median interval is too wide for the margin it "
@@ -483,11 +524,15 @@ def evaluate(run: Path) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run_dir", type=Path)
+    parser.add_argument(
+        "--graded", action="store_true",
+        help="release evaluation: VOID unless the run is the planned graded schedule")
     args = parser.parse_args()
     try:
-        return evaluate(args.run_dir)
+        return evaluate(args.run_dir, require_graded=args.graded)
     except Void as exc:
-        print(f"VERDICT: VOID  (exit {EXIT_VOID})\n  {exc}", file=sys.stderr)
+        mode = "" if args.graded else "  [evaluated without --graded: not the release grade]"
+        print(f"VERDICT: VOID  (exit {EXIT_VOID}){mode}\n  {exc}", file=sys.stderr)
         return EXIT_VOID
 
 

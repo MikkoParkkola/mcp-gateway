@@ -265,17 +265,38 @@ be mistaken for a measurement.
 
 ```
 warm-up  (discarded):  A0 B0 C0 D0 E0
-measured:              rep n = 1..18, each a seeded permutation of A B C D E
+measured:              rep n = 1..18, the counterbalanced schedule of schedule.py
 ```
 
-The graded run takes **n = 18 measured reps per cell** (`WORKLOAD_REPS=18`,
-with the runner's floor of 6). In each rep all five cells run once, in an order
-drawn from `WORKLOAD_SEED` and the rep number (`cell_order` in
-`run_workload.sh`). The graded run uses **`WORKLOAD_SEED=20261007`**, a fixed
-number ratified here, not derived from the freeze SHA or chosen on the day.
-The seed is recorded in `pins.json` and the drawn order in
-`cell_order.jsonl`. D and E sit in the same loop as the gated cells, so every
-cell sees the same machine window.
+The graded run takes **n = 18 measured reps per cell** and is started with
+**`WORKLOAD_GRADED=1 WORKLOAD_REPS=18 WORKLOAD_SEED=20261007`**. In each rep all
+five cells run once. The orders are a **counterbalanced design**, not a shuffle
+per rep (`benchmarks/workload/schedule.py`):
+- 15 reps come from three Latin squares on A..E (steps 1, 2 and 3), so every
+  cell sits in every slot exactly 3 times. The design balances slots, not
+  predecessors: with five cells, steps 2 and 3 are the same neighbour pairs in
+  reverse, and each cell has one other cell that never immediately follows it.
+- 3 more reps (`ABCDE`, `CDBEA`, `DEABC`) give the gated cells A, B and C slots
+  that sum to 9 each.
+- Over 18 reps each of A, B and C therefore averages **slot 3.00**, and every
+  cell sits in every slot 3 or 4 times. D and E are report-only and average
+  2.89 and 3.11.
+- The seed only shuffles which of the 18 rows runs when, which spreads them
+  over the run's time window. Shuffling whole rows leaves every slot count
+  unchanged, so the balance holds for any seed.
+The seed **20261007** is a fixed number ratified here, not derived from the
+freeze SHA or chosen on the day. It is recorded in `pins.json` (with
+`"graded": true`), and the order each rep ran is in `cell_order.jsonl`. D and E
+sit in the same loop as the gated cells, so every cell sees the same machine
+window.
+
+Amended 2026-10-05. The per-rep shuffle under seed 20261007 was unbalanced:
+the candidate C averaged slot 2.61 against 3.11 (A) and 3.06 (B), and A never
+ran in slot 2 while running 8 times in slot 4. Within-rep drift would then bias
+C's ratios. The design above replaces it. It is fixed before the graded run and
+was chosen for its balance alone, not by looking at any result. A run started
+without `WORKLOAD_GRADED=1` is diagnostic: any n >= 6, any seed, a fresh
+shuffle per rep.
 
 Amended 2026-10-04. This section used to schedule 3 measured reps of A, B
 and C, then a trailing D/E block. That matched neither the runner, which
@@ -288,10 +309,18 @@ follows the n = 18 choice in
 amendment is made before the graded run at the freeze SHA, so the number of
 reps is fixed in advance, not chosen after the data is seen.
 
-Freeze-time check, before the verdict is read: `pins.json` must have `reps`
-equal to 1..18 and `cell_order_seed` equal to `20261007`. The evaluator
-does not enforce either, so a run that silently took the runner's default of 6,
-or a generated seed, is caught here rather than graded.
+Enforced by the harness, not by a reader. With `WORKLOAD_GRADED=1` the runner
+refuses, before any build, a run that is not `WORKLOAD_REPS=18` and
+`WORKLOAD_SEED=20261007`. The evaluator voids a run whose `pins.json` says
+`"graded": true` unless `reps` is 1..18, `cell_order_seed` is `20261007`, and
+`cell_order.jsonl` is exactly the planned schedule (`check_graded_schedule` in
+`eval_workload.py`, which compares rep ids and orders together). A graded
+measure also refuses a run dir that already holds pins, an order or any
+summary (smoke into a separate dir). The release grade is read with
+**`eval_workload.py --graded <run>`**, which voids any run not marked graded.
+Without `--graded` a diagnostic run still gets a verdict, recorded as
+`"mode": "diagnostic"` in `verdict.json` and flagged on the verdict line, so it
+cannot pass for the release grade.
 
 Interleaved because bench-host is shared and other sessions' jobs land on it. One
 gateway listening at a time. Before each rep, `GET /health` version must match
@@ -366,6 +395,8 @@ Filled before the first measured rep; empty pins void the run.
 | cell C/D/E checkout SHA | (pinned at freeze) |
 | measured reps per cell (`pins.json` `reps`) | 18 (`WORKLOAD_REPS=18`; `reps` must list 1..18) |
 | cell-order seed (`pins.json` `cell_order_seed`) | `20261007` (`WORKLOAD_SEED=20261007`) |
+| graded marker (`pins.json` `graded`) | `true` (`WORKLOAD_GRADED=1`) |
+| `benchmarks/workload/schedule.py` | (pinned at freeze) |
 
 The runner writes the per-cell checkout SHAs, health versions and k6 digest
 into `pins.json` in the run directory, and the evaluator voids the run if any
