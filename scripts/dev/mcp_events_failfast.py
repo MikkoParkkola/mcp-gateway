@@ -138,7 +138,10 @@ def post_signed(url, key, msg_id, sub_id, body, allow_local):
         if sock is None:
             return None, "connection_refused"
         if u.scheme == "https":
-            sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+            ctx = ssl.create_default_context()
+            # The platform default floor varies (MINIMUM_SUPPORTED on some hosts).
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            sock = ctx.wrap_socket(sock, server_hostname=host)
         conn = http.client.HTTPConnection(host, port, timeout=10)
         conn.sock = sock  # pinned: http.client never resolves the name itself
         conn.request("POST", path, body=body, headers=headers)
