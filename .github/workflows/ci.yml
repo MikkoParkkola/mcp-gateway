@@ -1069,6 +1069,8 @@ jobs:
         run: python3 scripts/dev/test_check_orphan_test_modules.py
       - name: MCP events OAuth shim rows
         run: python3 scripts/dev/test_mcp_events_oauth_shim.py
+      - name: MCP events fail-fast harness rows
+        run: python3 scripts/dev/test_mcp_events_failfast.py
 
   control-drift-probes:
     name: Control-drift probes (NFR.SEC.7)
