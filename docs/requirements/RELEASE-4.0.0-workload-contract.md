@@ -302,12 +302,16 @@ Amended 2026-10-04. This section used to schedule 3 measured reps of A, B
 and C, then a trailing D/E block. That matched neither the runner, which
 interleaves all five cells per rep, nor the runs that grade this row.
 Evaluations at n = 3, 6 and 12 came out INCONCLUSIVE. The row was escalated
-to n = 18, which produced the standing FAIL at 14933f9a and the VOID re-run at
-fe2ed154 (`RELEASE-4.0.0-scope-status.json`, NFR.WORKLOAD.1). The count
-follows the n = 18 choice in
-`docs/internal/analysis/2026-09-22-nfr-perf-1-ramp-measurement.md` §1.5. The
-amendment is made before the graded run at the freeze SHA, so the number of
-reps is fixed in advance, not chosen after the data is seen.
+to n = 18, following the n = 18 choice in
+`docs/internal/analysis/2026-09-22-nfr-perf-1-ramp-measurement.md` §1.5.
+Runs at n = 18 then produced the FAIL at 14933f9a and the VOID re-run at
+fe2ed154 (`RELEASE-4.0.0-scope-status.json`, NFR.WORKLOAD.1). All of these
+runs were diagnostic, not graded: they predate the freeze SHA and the graded
+mode below, so none of them grades the release. The 14933f9a FAIL stays the
+standing result in the scope-status note until a graded run replaces it.
+n = 18 was chosen after the n = 3, 6 and 12 diagnostic results were seen.
+It is fixed before the graded run at the freeze SHA, so no graded result can
+move it.
 
 Enforced by the harness, not by a reader. With `WORKLOAD_GRADED=1` the runner
 refuses, before any build, a run that is not `WORKLOAD_REPS=18` and
