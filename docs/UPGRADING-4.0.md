@@ -3930,6 +3930,8 @@ exposed and rotate them.
 
 ## 147. Non-object capability output roots arrive under `items`
 
+**Startup:** no notice
+
 MCP 2025-11-25 restricts a tool's `outputSchema` root to `type: "object"` and
 types `structuredContent` as a JSON object; a client that checks this can refuse
 the tool, or the whole `tools/list`. A capability whose `schema.output` declares
