@@ -326,3 +326,6 @@ rejected.
 - **Guard row (kimi improvement):** an expired access token with no refresh token still
   authorizes immediately at startup after the refresh-first change.
 - Estimate unchanged: 8-11 steps, with the instance lock folded into the runtime step.
+
+## 16. Design approved (round 4)
+SHIP / SHIP on sections 13-15: gpt-20261005T005845Z-93648, kimi-20261005T005845Z-93649. Earlier rounds: kimi-20261005T003259Z-59423 (r1), gpt-20261005T003052Z-53104 (r1), gpt-20261005T004015Z-82127 and kimi-20261005T004015Z-82126 (r2), gpt-20261005T004908Z-52154 and kimi-20261005T004908Z-52155 (r3). Residual noted by kimi: the instance lock is invisible to a pre-4.0.1 gateway, which never takes it. It is resolved by the 4.0.1 deployment and stated in the command's help text.
