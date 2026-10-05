@@ -101,7 +101,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: gateway
-          image: "ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.2"
+          image: "ghcr.io/mikkoparkkola/mcp-gateway:4.0.0-beta.3"
           imagePullPolicy: IfNotPresent
           # No `serve`: --host/--port are top-level flags and the subcommand
           # takes only --stdio, so `serve --host` exits 2 before reading config.
