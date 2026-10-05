@@ -171,6 +171,7 @@ backend" and "fails a capability file" first.**
 | 144 | `ProvidersConfig::process` and `ProvidersConfig::integrity` are no longer public fields: a program built on the crate reads them through `process()` and `integrity()` and cannot set them, so only the loader marks a definition `Integrity::Verified`; `register_capability` replacing a definition drops its cached answers | An embedder that read the fields calls the getters; one that set `integrity` loads the definition through the capability loader instead; one that replaces `mcp` definitions keeps the runtime that started their children driven, or drops it |
 | 145 | The `plugin` command is removed (`search`, `install`, `uninstall`, `list`), with `mcp_gateway::registry::marketplace` and `mcp_gateway::config::MarketplaceConfig`; a `marketplace:` block in the config loads and warns once | Delete the `marketplace:` block and `~/.mcp-gateway/plugins`; add tools as `backends:` entries or capability files (`mcp-gateway cap`) |
 | 146 | An OAuth backend whose authorization server, authorization endpoint, token endpoint or registration endpoint is `http://` to a host off this machine fails at connect, and so does a redirect from one to such a URL; a capability that sends a credential (`auth.required`) and names an `http://` `base_url` or `endpoint` off this machine fails to load, and a templated one is refused at call time. `http://` to a loopback host is allowed, and is no longer proxied | Serve the authorization server and the capability's API over `https://`, or on a loopback host (`localhost`, `127.0.0.1`, `[::1]`). `allow_cleartext_credentials` does not cover either |
+| 147 | A capability whose declared output root is not object-shaped (an array, a string, a type list) advertises `outputSchema` as an object and publishes `structuredContent` under `items` | Read `structuredContent.items` for the nine shipped capabilities listed below, and for your own; the text content is unchanged |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3926,6 +3927,36 @@ was not held to the same rule, and neither was a capability's own API.
 override: `allow_cleartext_credentials` covers a backend's own static credentials only. If either
 ran over cleartext before, treat the client secrets, refresh tokens and API keys it sent as
 exposed and rotate them.
+
+## 147. Non-object capability output roots arrive under `items`
+
+**Startup:** no notice
+
+MCP 2025-11-25 restricts a tool's `outputSchema` root to `type: "object"` and
+types `structuredContent` as a JSON object; a client that checks this can refuse
+the tool, or the whole `tools/list`. A capability whose `schema.output` declares
+a root `type` other than `object` is now shown as
+
+```json
+{"type": "object", "properties": {"items": <declared schema>}, "required": ["items"]}
+```
+
+and its result is published as `{"items": <result>}` in `structuredContent`. The
+text content still carries the result in its declared shape, and output
+validation still checks it against the declared schema.
+
+The shipped capabilities this changes: `country_info`, `hackernews_ask`,
+`hackernews_show`, `hackernews_top`, `number_facts` (a string root),
+`public_holidays`, `sentry_list_issues`, `uuid_generate` and `wayback_cdx`. A
+capability file of your own changes the same way when its root is not
+object-shaped: an array or scalar `type`, a type list such as
+`["object", "null"]`, or no `type` and no `properties` (a root `anyOf`, say).
+The nested schema is given an `$id` of the form
+`urn:mcp-gateway:declared-output:<content hash>` when it has none (or has
+`""` or `"#"`), so its own `#/...` references still resolve inside it; a root
+`$schema` is repeated on the wrapper. A schema in the draft-04 dialect, which
+scopes references with `id` rather than `$id`, is not covered. A root with `properties` and no `type` is
+advertised with `type: "object"` added and is otherwise unchanged.
 
 ## Upgrading from 3.5.x: a walkthrough
 

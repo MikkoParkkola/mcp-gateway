@@ -627,11 +627,7 @@ impl CapabilityDefinition {
             input_schema: crate::capability::schema_validator::advertised_input_schema(
                 &self.schema.input,
             ),
-            output_schema: if self.schema.output.is_null() {
-                None
-            } else {
-                Some(self.schema.output.clone())
-            },
+            output_schema: crate::capability::advertised_output_schema(&self.schema.output),
             annotations: Some(self.tool_annotations()),
             role: None,
             projection: self.projection.clone(),
