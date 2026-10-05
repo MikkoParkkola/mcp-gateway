@@ -265,7 +265,7 @@ impl MetaMcp {
             let mut response = serde_json::to_value(result)?;
             // The transform and the output schema below are written against
             // the declared shape, so a root published under `items` (MIK-7959)
-            // is read without it and wrapped again once validated. Validating
+            // is read without it and wrapped again after projection. Validating
             // the published object instead would rewrite the text content into
             // the wrapped shape.
             let wrapped =
@@ -308,11 +308,7 @@ impl MetaMcp {
             let output_schema =
                 (!cap_def.schema.output.is_null()).then(|| cap_def.schema.output.clone());
 
-            let mut validated =
-                enforce_output_schema(server, tool, response, output_schema.as_ref());
-            if wrapped {
-                crate::capability::rewrap_published_output(&mut validated);
-            }
+            let validated = enforce_output_schema(server, tool, response, output_schema.as_ref());
 
             // Canonical projection (MIK-3534), applied last — after
             // response_transform (so `_raw` cannot re-expose a redacted field)
@@ -328,13 +324,17 @@ impl MetaMcp {
             // treatment arm of a sticky per-session A/B split.
             let decision = crate::projection::projection_decision(self.projection_mode, arm_key);
             let spec_present = cap_def.projection.is_some();
-            let final_result = if decision.project
+            let mut final_result = if decision.project
                 && let Some(spec) = cap_def.projection.as_ref()
             {
                 apply_capability_projection(validated, spec, want_full)
             } else {
                 validated
             };
+            // After projection, whose field paths name the declared shape.
+            if wrapped {
+                crate::capability::rewrap_published_output(&mut final_result);
+            }
 
             // A/B telemetry (MIK-5877, PROJ-ROLLOUT.3): one structured event per
             // eligible invocation so the experiment is measurable. No-op outside

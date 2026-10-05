@@ -87,3 +87,50 @@ fn an_object_output_root_is_advertised_and_published_as_declared() {
     let result = build_success_tool_result(&cap, json!({ "id": "a" }));
     assert_eq!(result.structured_content, Some(json!({ "id": "a" })));
 }
+
+#[test]
+fn a_wrapped_root_keeps_its_local_references_and_dialect() {
+    let cap = capability_with_output(
+        "    $schema: https://json-schema.org/draft/2020-12/schema\n    type: array\n    items:\n      $ref: '#/$defs/Entry'\n    $defs:\n      Entry:\n        type: object\n        properties:\n          next:\n            $ref: '#'\n          remote:\n            $ref: 'https://schemas.invalid/s.json#/x'",
+    );
+    let advertised = cap.to_mcp_tool().output_schema.expect("advertised");
+
+    assert_eq!(
+        advertised["$schema"],
+        json!("https://json-schema.org/draft/2020-12/schema")
+    );
+    let inner = &advertised["properties"]["items"];
+    assert!(inner.get("$schema").is_none());
+    assert_eq!(
+        inner["items"]["$ref"],
+        json!("#/properties/items/$defs/Entry")
+    );
+    let entry = &inner["$defs"]["Entry"]["properties"];
+    assert_eq!(entry["next"]["$ref"], json!("#/properties/items"));
+    assert_eq!(
+        entry["remote"]["$ref"],
+        json!("https://schemas.invalid/s.json#/x")
+    );
+}
+
+#[test]
+fn a_typeless_or_union_root_is_wrapped_unless_it_declares_properties() {
+    for output in [
+        "    anyOf:\n      - type: array\n      - type: string",
+        "    type: [object, \"null\"]",
+    ] {
+        let cap = capability_with_output(output);
+        let advertised = cap.to_mcp_tool().output_schema.expect("advertised");
+        assert_eq!(advertised["required"], json!(["items"]), "{output}");
+        let result = build_success_tool_result(&cap, json!(null));
+        assert_eq!(result.structured_content, Some(json!({ "items": null })));
+    }
+
+    let cap = capability_with_output("    properties:\n      id:\n        type: string");
+    assert_eq!(
+        cap.to_mcp_tool().output_schema,
+        Some(json!({ "type": "object", "properties": { "id": { "type": "string" } } }))
+    );
+    let result = build_success_tool_result(&cap, json!({ "id": "a" }));
+    assert_eq!(result.structured_content, Some(json!({ "id": "a" })));
+}

@@ -9,8 +9,9 @@ use std::path::Path;
 
 use mcp_gateway::capability::parse_capability;
 
-/// Capabilities whose declared root is not an object. Listed so the scan is
-/// shown to reach them: an empty walk would otherwise pass.
+/// Capabilities whose declared root is not an object, sorted. Pinned exactly
+/// so the scan is shown to reach them (an empty walk would otherwise pass) and
+/// so the lists in UPGRADING item 147 and the changelog stay true.
 const NON_OBJECT_ROOTS: &[&str] = &[
     "country_info",
     "hackernews_ask",
@@ -54,12 +55,11 @@ fn every_capability_advertises_an_object_output_schema_root() {
     }
 
     assert!(checked >= 100, "scanned only {checked} capability files");
-    for name in NON_OBJECT_ROOTS {
-        assert!(
-            non_object_declared.iter().any(|n| n == name),
-            "{name} was not reached with a non-object declared root"
-        );
-    }
+    non_object_declared.sort();
+    assert_eq!(
+        non_object_declared, NON_OBJECT_ROOTS,
+        "the non-object roots changed: update this list, UPGRADING item 147 and the changelog"
+    );
     assert!(
         offenders.is_empty(),
         "outputSchema root is not an object for: {offenders:?}"
