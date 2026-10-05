@@ -376,7 +376,7 @@ fn resume_active(
 ) -> io::Result<(Recovered, bool)> {
     let first = segments::read_first_line(path)?.unwrap_or_default();
     let (_, _, first_event, first_v) = record_head(&first)?;
-    let next = sealed.last().map_or(0, |s| s.seq.saturating_add(1));
+    let next = segments::next_seq(sealed)?;
     let (seq, opened_at) = if first_event.as_deref() == Some(EV_OPENED) {
         (
             first_v
@@ -511,7 +511,7 @@ pub(super) fn open_after_seal(
         ));
     };
     let counter = seal_counter.max(hw.map_or(0, |h| h.counter)) + 1;
-    let seq = newest.seq + 1;
+    let seq = segments::next_seq(sealed)?;
     let mut extra: Vec<(&str, Value)> = vec![
         ("segment_seq", seq.into()),
         ("prev_segment_seq", newest.seq.into()),

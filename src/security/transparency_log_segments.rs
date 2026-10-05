@@ -75,6 +75,28 @@ pub(crate) fn sibling(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// The number the next segment takes: one past the newest sealed one, or 0.
+/// A sealed segment at the last number is refused rather than wrapped or
+/// saturated onto, either of which would seal over a segment (MIK-7949).
+///
+/// # Errors
+///
+/// `InvalidData` when the newest sealed segment holds `u64::MAX`.
+pub(crate) fn next_seq(sealed: &[Segment]) -> io::Result<u64> {
+    sealed.last().map_or(Ok(0), |newest| {
+        newest.seq.checked_add(1).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "audit log: sealed segment {} is the last number, so no segment can follow it; \
+                     a renamed or planted segment file is for the operator to resolve",
+                    newest.seq
+                ),
+            )
+        })
+    })
+}
+
 /// Every sealed segment of the log at `path`, oldest first. Matches exactly
 /// `<file name>.` plus 20 ASCII digits, so `.lock`, `.hwm`, `.reserve` and
 /// operator copies (`.bak`, `.7`) are never read as segments. The one

@@ -341,6 +341,39 @@ fn a_copied_seal_of_a_sealed_segment_does_not_replace_it() {
     }
 }
 
+/// MIK-7949 (review): a sealed segment renamed to the last number makes the
+/// next number wrap (debug panic, release 0) or saturate onto that name, so a
+/// seal would replace a segment. The restart must refuse instead, active file
+/// present or not, and leave every segment as it was.
+#[test]
+fn a_sealed_segment_at_the_last_number_is_refused_not_overwritten() {
+    use super::segments::sealed_path;
+    for keep_active in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+        rotate_n(&l, &path, 1);
+        append(&l, 7);
+        drop(l);
+        let last = sealed_path(&path, u64::MAX);
+        std::fs::rename(sealed_path(&path, 0), &last).unwrap();
+        let genuine = std::fs::read(&last).unwrap();
+        if !keep_active {
+            std::fs::remove_file(&path).unwrap();
+        }
+        let opened = std::panic::catch_unwind(|| TransparencyLogger::open(cfg(&path, 12, false)));
+        assert!(
+            matches!(opened, Ok(Err(_))),
+            "restart did not refuse (active kept: {keep_active})"
+        );
+        assert_eq!(
+            std::fs::read(&last).unwrap(),
+            genuine,
+            "active kept: {keep_active}"
+        );
+    }
+}
+
 /// Write `records` back as the active file, one JSON line each, as found.
 fn write_lines(path: &std::path::Path, records: &[serde_json::Value]) {
     let mut text = String::new();
