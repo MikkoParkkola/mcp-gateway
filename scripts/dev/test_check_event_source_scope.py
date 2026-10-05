@@ -19,64 +19,60 @@ guard = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(guard)
 
 SOURCE = "src/events/schedule_source.rs"
-SOURCE_TEXT = "#[async_trait::async_trait]\nimpl EventSource for ScheduleSource {}\n"
+REGISTRY = "src/events/mod.rs"
 
 
 class EventSourceScope(unittest.TestCase):
-    def judge(self, changes, registry=(), text=None):
-        added = {SOURCE: SOURCE_TEXT} if text is None else text
-        return guard.violations(changes, added, list(registry))
-
     def test_a_source_with_its_registry_line_passes(self):
-        found = self.judge([("A", SOURCE), ("M", "src/events/mod.rs")], ["mod schedule_source;"])
+        found = guard.violations([("A", SOURCE), ("M", REGISTRY)], True, ["mod schedule_source;"])
         self.assertEqual(found, [])
 
     def test_a_source_that_edits_a_core_file_fails(self):
-        found = self.judge([("A", SOURCE), ("M", "src/events/fanout.rs")])
+        found = guard.violations([("A", SOURCE), ("M", "src/events/fanout.rs")], True, [])
         self.assertEqual(found, ["src/events/fanout.rs: M (core file)"])
 
     def test_a_source_that_deletes_a_core_file_fails(self):
-        found = self.judge([("A", SOURCE), ("D", "src/events/rate.rs")])
+        found = guard.violations([("A", SOURCE), ("D", "src/events/rate.rs")], True, [])
         self.assertEqual(found, ["src/events/rate.rs: D (core file)"])
 
     def test_code_in_the_registry_fails(self):
-        found = self.judge(
-            [("A", SOURCE), ("M", "src/events/mod.rs")],
-            ["mod schedule_source;", "    pub charge: bool,"],
+        found = guard.violations(
+            [("A", SOURCE), ("M", REGISTRY)], True, ["mod schedule_source;", "    pub charge: bool,"]
         )
-        self.assertEqual(found, ["src/events/mod.rs: not a module declaration: pub charge: bool,"])
+        self.assertEqual(found, [f"{REGISTRY}: not a module declaration: pub charge: bool,"])
 
     def test_an_inline_module_in_the_registry_fails(self):
-        found = self.judge([("A", SOURCE), ("M", "src/events/mod.rs")], ["mod x { fn a() {} }"])
+        found = guard.violations([("A", SOURCE), ("M", REGISTRY)], True, ["mod x { fn a() {} }"])
         self.assertEqual(len(found), 1)
 
     def test_a_restricted_public_declaration_passes(self):
-        found = self.judge([("A", SOURCE), ("M", "src/events/mod.rs")], ["pub(crate) mod schedule_source;"])
+        found = guard.violations([("A", SOURCE), ("M", REGISTRY)], True, ["pub(crate) mod schedule_source;"])
         self.assertEqual(found, [])
 
     def test_its_own_test_file_and_files_outside_events_pass(self):
-        found = self.judge(
-            [("A", SOURCE), ("A", "src/events/schedule_source_tests.rs"), ("M", "src/gateway/server/mod.rs")]
-        )
-        self.assertEqual(found, [])
+        changes = [("A", SOURCE), ("A", "src/events/schedule_source_tests.rs"), ("M", "src/gateway/server/mod.rs")]
+        self.assertEqual(guard.violations(changes, True, []), [])
 
     def test_a_change_adding_no_source_is_not_judged(self):
-        found = self.judge([("M", "src/events/fanout.rs")], text={})
-        self.assertIsNone(found)
+        self.assertIsNone(guard.violations([("M", "src/events/fanout.rs")], False, []))
 
-    def test_an_added_helper_without_an_impl_is_not_a_source(self):
-        found = self.judge(
-            [("A", "src/events/helper.rs"), ("M", "src/events/fanout.rs")],
-            text={"src/events/helper.rs": "fn helper() {}\n"},
-        )
-        self.assertIsNone(found)
+    def test_a_source_added_inside_an_existing_core_file_fails(self):
+        # No new file: the impl lands in a modified core file, which is itself the edit.
+        found = guard.violations([("M", "src/events/task_source.rs")], True, [])
+        self.assertEqual(found, ["src/events/task_source.rs: M (core file)"])
 
-    def test_a_qualified_impl_counts_as_a_source(self):
-        found = self.judge(
-            [("A", SOURCE), ("M", "src/events/worker.rs")],
-            text={SOURCE: "impl super::EventSource for X {}\n"},
-        )
-        self.assertEqual(found, ["src/events/worker.rs: M (core file)"])
+    def test_every_impl_spelling_counts_as_a_source(self):
+        for line in [
+            "impl EventSource for ScheduleSource {",
+            "impl super::EventSource for X {}",
+            "impl crate::events::EventSource for X {}",
+            "impl<T: Send> EventSource for Watch<T> {",
+        ]:
+            self.assertTrue(guard.SOURCE_IMPL.search(line), line)
+
+    def test_a_mention_is_not_a_source(self):
+        for line in ["// implements EventSource for timers", "use super::EventSource;", "fn f(s: &dyn EventSource) {}"]:
+            self.assertFalse(guard.SOURCE_IMPL.search(line), line)
 
 
 if __name__ == "__main__":

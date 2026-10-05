@@ -5,10 +5,11 @@
 
 Each new source is one `EventSource` implementation and nothing else
 (docs/design/2026-10-01-mik-7630-event-sources-4.0.0.md section 1). A change
-counts as adding a source when it adds a file under `src/events/` holding an
-`impl EventSource for`. Such a change may add files under `src/events/` and add
-or remove bare module declarations in `src/events/mod.rs` (the registry line).
-Any other edit under `src/events/` is a core change and fails. A change that
+counts as adding a source when any line it adds under `src/` holds an
+`impl EventSource for`, in a new file or an existing one. Such a change may
+add files under `src/events/` and add or remove bare module declarations in
+`src/events/mod.rs` (the registry line). Any other edit under `src/events/` is
+a core change and fails. A change that
 adds no source is not judged: core fixes land through their own review.
 
 Usage: check-event-source-scope.py [BASE]   (default: origin/docs/ranking-1-release-line)
@@ -22,25 +23,25 @@ import sys
 
 EVENTS = "src/events/"
 REGISTRY = "src/events/mod.rs"
-SOURCE_IMPL = re.compile(r"\bimpl\s+(?:super::)?EventSource\s+for\b")
+# Generic and path-qualified forms too: `impl<T> crate::events::EventSource for`.
+SOURCE_IMPL = re.compile(r"\bimpl\b[^{;]*\bEventSource\s+for\b")
 # The registry line: a bare module declaration, nothing else.
 DECLARATION = re.compile(r"^\s*(?:pub(?:\(crate\))?\s+)?mod\s+\w+\s*;\s*$")
 
 
-def violations(changes, added_text, registry_lines):
+def violations(changes, adds_source, registry_lines):
     """Core edits a source-adding change makes; `None` when it adds no source.
 
     `changes` is `(status, path)` pairs from `git diff --name-status`,
-    `added_text` maps each added path to its content, and `registry_lines`
-    holds the `+`/`-` lines of the registry's diff without their marker.
+    `adds_source` whether an added line under `src/` holds an `impl
+    EventSource for`, and `registry_lines` the `+`/`-` lines of the
+    registry's diff without their marker.
     """
-    events = [(s, p) for s, p in changes if p.startswith(EVENTS)]
-    added = {p for s, p in events if s == "A"}
-    if not any(SOURCE_IMPL.search(added_text.get(p, "")) for p in added):
+    if not adds_source:
         return None
     found = []
-    for status, path in events:
-        if status == "A":
+    for status, path in changes:
+        if not path.startswith(EVENTS) or status == "A":
             continue
         if path == REGISTRY and status == "M":
             stray = [l for l in registry_lines if l.strip() and not DECLARATION.match(l)]
@@ -48,6 +49,14 @@ def violations(changes, added_text, registry_lines):
             continue
         found.append(f"{path}: {status} (core file)")
     return found
+
+
+def changed_lines(span, path, marker):
+    return [
+        l[1:]
+        for l in git("diff", "--unified=0", "--no-renames", span, "--", path).splitlines()
+        if l[:1] in marker and not l.startswith(("+++", "---"))
+    ]
 
 
 def git(*args):
@@ -61,13 +70,9 @@ def main(argv):
     for line in git("diff", "--name-status", "--no-renames", span, "--", EVENTS).splitlines():
         status, path = line.split("\t", 1)
         changes.append((status[0], path))
-    added_text = {p: git("show", f"HEAD:{p}") for s, p in changes if s == "A"}
-    registry_lines = [
-        l[1:]
-        for l in git("diff", "--unified=0", span, "--", REGISTRY).splitlines()
-        if l[:1] in "+-" and not l.startswith(("+++", "---"))
-    ]
-    found = violations(changes, added_text, registry_lines)
+    adds_source = any(SOURCE_IMPL.search(l) for l in changed_lines(span, "src/", "+"))
+    registry_lines = changed_lines(span, REGISTRY, "+-")
+    found = violations(changes, adds_source, registry_lines)
     if found is None:
         print("event-source scope: this change adds no event source; not judged")
         return 0
