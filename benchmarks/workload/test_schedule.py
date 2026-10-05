@@ -103,7 +103,7 @@ def main() -> int:
         run = Path(tmp) / "planned"
         run.mkdir()
         rc = graded_run(run, planned)
-        check("a graded run on the plan is graded (not VOID)", rc != 3, f"rc={rc}")
+        check("a graded run on the plan grades PASS", rc == 0, f"rc={rc}")
     with tempfile.TemporaryDirectory() as tmp:
         run = Path(tmp) / "shuffled"
         run.mkdir()
@@ -139,16 +139,17 @@ def main() -> int:
         check("a diagnostic verdict says it is diagnostic",
               json.loads((run / "verdict.json").read_text()).get("mode") == "diagnostic"
               and "DIAGNOSTIC" in plain.stderr, plain.stderr[-200:])
-    with tempfile.TemporaryDirectory() as tmp:
-        run = Path(tmp) / "used"
-        run.mkdir()
-        (run / "A1.summary.json").write_text("{}")
-        full = {**os.environ, "K6_IMAGE_DIGEST": "sha256:" + "0" * 64, "WORKLOAD_GRADED": "1",
-                "WORKLOAD_REPS": "18", "WORKLOAD_SEED": "20261007"}
-        done = subprocess.run(["bash", str(HERE / "run_workload.sh"), "measure", str(run)], env=full,
-                              capture_output=True, text=True, timeout=60)
-        check("the runner refuses a graded measure into a used run dir",
-              done.returncode == 3 and "fresh run dir" in done.stderr, done.stderr[-200:])
+    for leftover in ("A1.summary.json", "pins.json", "cell_order.jsonl", "verdict.json"):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "used"
+            run.mkdir()
+            (run / leftover).write_text("{}")
+            full = {**os.environ, "K6_IMAGE_DIGEST": "sha256:" + "0" * 64, "WORKLOAD_GRADED": "1",
+                    "WORKLOAD_REPS": "18", "WORKLOAD_SEED": "20261007"}
+            done = subprocess.run(["bash", str(HERE / "run_workload.sh"), "measure", str(run)], env=full,
+                                  capture_output=True, text=True, timeout=60)
+            check(f"the runner refuses a graded measure into a dir holding {leftover}",
+                  done.returncode == 3 and "fresh run dir" in done.stderr, done.stderr[-200:])
 
     print(f"\n{len(FAILURES)} failure(s)")
     return 1 if FAILURES else 0
