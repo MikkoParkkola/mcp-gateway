@@ -470,17 +470,6 @@ fn untruncated_redaction_keeps_the_whole_text() {
     assert_eq!(out.len(), 8000 + "[redacted]".len());
 }
 
-/// With the credential scanner built in, a success result is scanned too: a
-/// credential-shaped value the gateway did not inject is replaced.
-#[cfg(feature = "firewall")]
-#[test]
-fn success_redaction_runs_the_credential_scanner() {
-    let shaped = concat!("AK", "IAIOSFODNN7", "EXAMPLE");
-    let mut value = json!({ "note": format!("key {shaped} end") });
-    super::super::cli::redact_value(&mut value, &[]);
-    assert!(!value.to_string().contains(shaped), "{value}");
-}
-
 #[test]
 fn overlapping_credentials_leave_no_fragment_of_either() {
     let secrets = ["abcdef".to_owned(), "cdefgh".to_owned()];

@@ -416,34 +416,26 @@ fn match_starts(text: &[u8], needle: &[u8], mut each: impl FnMut(usize)) {
 }
 
 /// [`redact`] without the truncation: for a result the caller receives whole.
-/// Removes the literals first, then runs the firewall's credential scanner
-/// (absent without the `firewall` feature: the literal removal still applies).
+/// Removes the literals only; a credential a literal overlaps goes with it
+/// (see [`scrub`]).
 ///
-/// The literals go first on purpose: a multi-line injected value such as a PEM
-/// key must be removed whole, before the scanner can cut a header out of it.
-/// A credential a literal overlaps is removed with it (see [`scrub`]).
+/// A credential-shaped value the gateway did not inject is left for the
+/// response firewall, which inspects every result and error the caller
+/// receives: replacing it here would hand the firewall only a marker, so its
+/// rules, its Block and its audit finding would never see the credential.
 pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[String]) -> String {
-    let text = scrub(text, &needles(secrets, caller));
-    #[cfg(feature = "firewall")]
-    let text = {
-        let mut value = Value::String(text);
-        REDACTOR.scan_and_redact(&mut value);
-        value.as_str().unwrap_or_default().to_owned()
-    };
-    text
+    scrub(text, &needles(secrets, caller))
 }
 
 /// Redact a successful JSON result in place: every string value and object key,
 /// never the structure, so the document still parses and a redacted string
-/// stays a string. No truncation.
+/// stays a string. No truncation. Injected literals only, as
+/// [`redact_untruncated`]: the credential scanner is the response firewall's.
 pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
-    // The literals first, then the scanner (see `redact_untruncated`).
     let needles = needles(secrets, &[]);
     if !needles.is_empty() {
         scrub_value(value, &needles);
     }
-    #[cfg(feature = "firewall")]
-    REDACTOR.scan_and_redact(value);
 }
 
 fn scrub_value(value: &mut Value, needles: &[&str]) {
@@ -515,7 +507,10 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
 }
 
 /// Remove injected secrets (any length) and caller values (from 4 bytes)
-/// literally, then run the firewall's credential scanner, then truncate.
+/// literally, then keep the last [`EXCERPT_BYTES`]. A credential the cut would
+/// split is dropped whole: its tail alone is recognised by no scanner, so the
+/// firewall could neither find nor redact it. A credential wholly inside the
+/// excerpt stays for the firewall (see [`redact_untruncated`]).
 pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> String {
     let text = redact_untruncated(text, secrets, caller);
     let text = text.as_str();
@@ -523,6 +518,13 @@ pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> Strin
         return text.to_owned();
     }
     let mut cut = text.len() - EXCERPT_BYTES;
+    // Spans are merged, so at most one contains the cut.
+    #[cfg(feature = "firewall")]
+    if let Some(&(_, end)) = (REDACTOR.credential_spans(text).iter())
+        .find(|&&(start, end)| start < cut && cut < end)
+    {
+        cut = end;
+    }
     while !text.is_char_boundary(cut) {
         cut += 1;
     }
@@ -532,3 +534,7 @@ pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> Strin
 #[cfg(test)]
 #[path = "cli_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "cli_firewall_tests.rs"]
+mod firewall_tests;
