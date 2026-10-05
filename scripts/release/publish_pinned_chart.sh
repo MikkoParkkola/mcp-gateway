@@ -8,11 +8,12 @@
 # The committed chart keeps an empty digest: rule (a) allows no non-docs
 # commit after the freeze, so the digest goes into the packaged chart only.
 #
-# usage: TAG_COMMIT=<sha> SIGNER_IDENTITY=<id> SIGNER_ISSUER=<url> \
+# usage: TAG_COMMIT=<sha> SIGNER_IDENTITY=<id> SIGNER_ISSUER=<url> CHART_NOTES=<file> \
 #          publish_pinned_chart.sh <image-ref> <oci-repo>
 #   e.g. publish_pinned_chart.sh ghcr.io/mikkoparkkola/mcp-gateway:4.0.0 oci://ghcr.io/mikkoparkkola/charts
 # SIGNER_IDENTITY and SIGNER_ISSUER are the exact certificate identity and OIDC
 # issuer the keyless signature must carry; verify pins both, never a regexp.
+# On success CHART_NOTES receives the release-notes block users verify against.
 set -euo pipefail
 
 image=${1:?image reference}
@@ -20,6 +21,7 @@ repo=${2:?oci chart repository}
 : "${TAG_COMMIT:?set TAG_COMMIT to the tagged commit}"
 : "${SIGNER_IDENTITY:?set SIGNER_IDENTITY to the identity the chart is signed as}"
 : "${SIGNER_ISSUER:?set SIGNER_ISSUER to the OIDC issuer of that identity}"
+: "${CHART_NOTES:?set CHART_NOTES to the file the release-notes block goes to}"
 
 digest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest.Digest}}' | tr -d '"')
 if ! [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -38,7 +40,8 @@ staged=$(yq '.image.digest' "$chart/values.yaml")
 [[ $staged == "$digest" ]] || { echo "digest not staged: $staged" >&2; exit 1; }
 
 helm package "$chart" -d "$work/out"
-push_out=$(helm push "$work/out/mcp-gateway-$version.tgz" "$repo" 2>&1)
+push_out=$(helm push "$work/out/mcp-gateway-$version.tgz" "$repo" 2>&1) \
+  || { printf '%s\n' "$push_out" >&2; exit 1; }
 printf '%s\n' "$push_out"
 chart_digest=$(printf '%s\n' "$push_out" | grep -oE 'sha256:[0-9a-f]{64}' | head -1)
 [[ -n $chart_digest ]] || { echo "no chart digest in helm push output" >&2; exit 1; }
@@ -51,7 +54,8 @@ cosign verify --certificate-identity "$SIGNER_IDENTITY" \
 
 # Verify from the registry, not from the local file.
 mkdir -p "$work/pulled"
-pull_out=$(helm pull "$repo/mcp-gateway" --version "$version" -d "$work/pulled" 2>&1)
+pull_out=$(helm pull "$repo/mcp-gateway" --version "$version" -d "$work/pulled" 2>&1) \
+  || { printf '%s\n' "$pull_out" >&2; exit 1; }
 printf '%s\n' "$pull_out"
 # The version tag can move between push and pull: check the signed artifact.
 pulled_digest=$(printf '%s\n' "$pull_out" | grep -oE 'sha256:[0-9a-f]{64}' | head -1)
@@ -63,4 +67,12 @@ published=$(tar -xOzf "$work/pulled/mcp-gateway-$version.tgz" mcp-gateway/values
 want="$(yq '.image.registry' "$chart/values.yaml")/$(yq '.image.repository' "$chart/values.yaml")@$digest"
 rendered=$(helm template probe "$work/pulled/mcp-gateway-$version.tgz" | yq 'select(.kind == "Deployment") | .spec.template.spec.containers[0].image')
 [[ $rendered == "$want" ]] || { echo "rendered image is $rendered, not $want" >&2; exit 1; }
+# Written last, from the values just verified, so only a passed publish has notes.
+# shellcheck disable=SC2016 # the backticks are Markdown code spans, not expansions
+{
+  printf '\n### Helm chart\n\nSigned chart `%s` (version %s, image `%s`).\n\n' "$chart_ref" "$version" "$digest"
+  printf 'Verify: `cosign verify --certificate-identity %q --certificate-oidc-issuer %q %s`\n\n' \
+    "$SIGNER_IDENTITY" "$SIGNER_ISSUER" "$chart_ref"
+  printf 'Pull: `helm pull %s/mcp-gateway --version %s` must print `Digest: %s`.\n' "$repo" "$version" "$chart_digest"
+} > "$CHART_NOTES"
 echo "chart $version pins $digest, signed as $chart_ref"
