@@ -302,3 +302,27 @@ rejected.
     - (1) whether the token directory has a lock the command can share (+1 if a lock must be added);
     - (2) whether the in-tree OAuth fixtures can serve a refresh at startup (+1);
     - (3) the shared `legacy_source` module move (+1 if its tests need re-homing).
+
+## 15. §14 amendments after round 3 (gpt-20261005T004908Z-52154 SWF, kimi SHIP)
+- **Quiescence, enforced (gpt F1, kimi F1).** A lock held only while writing does not prove the
+  gateway is stopped. New rule: every gateway process takes a SHARED advisory lock on
+  `~/.mcp-gateway/oauth/.instance.lock` (create if absent, 0600) at startup and holds it for its
+  lifetime. The command takes the same lock EXCLUSIVE, non-blocking, and refuses with "a gateway
+  is running against this token directory; stop it first" if it cannot. That is a runtime
+  change (§14 runtime list, item 3), with a row: a running test gateway makes the command
+  refuse, and the command succeeds once the gateway drops it.
+- **Missing 3.x client file (gpt improvement, kimi improvement).** If there is no 3.x
+  `{k}_client.json` and no static `client_id` is configured, the command warns, does not refuse:
+  the copied refresh token will likely fail against a fresh dynamic registration, and then costs
+  one re-authorization.
+- **Primitive named (gpt improvement).** Publication uses the existing scratch-file plus
+  `create_new_private` pattern of `save_client_id` (`src/oauth/storage.rs:338-360`): write a
+  private scratch file, then a create-new publish that fails if the target exists.
+- **4.0.0 notice vs 4.0.1 command (gpt improvement, kimi residual).** The 4.0.0 notice (fixed
+  in #2982) names no 4.0.1 command. The 4.0.1 changelog and UPGRADING add the command when it
+  ships.
+- **`--dry-run` (kimi improvement):** prints the target key, the client-id verdict and the
+  planned publishes, and writes nothing.
+- **Guard row (kimi improvement):** an expired access token with no refresh token still
+  authorizes immediately at startup after the refresh-first change.
+- Estimate unchanged: 8-11 steps, with the instance lock folded into the runtime step.
