@@ -118,10 +118,8 @@ impl Stream {
         let mark = self
             .judge
             .judge(Some(key), &note, hidden.as_ref())
-            .expect("observe mode withholds nothing");
-        let Some(mark) = mark else {
-            return false;
-        };
+            .expect("observe mode withholds nothing")
+            .expect("the guard judges every item");
         let before = self.records().len();
         assert!(
             mark.written(Some(&self.judge)).await,
