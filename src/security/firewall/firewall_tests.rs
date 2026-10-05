@@ -797,3 +797,33 @@ fn ac_control_2_a_budget_refusal_cannot_be_downgraded_by_a_rule() {
         "an allow rule must not reach a call that exceeded its budget"
     );
 }
+
+// Throwaway evidence only, never merged: serializes FirewallConfig through
+// its Default, an empty object, a partial object (field-level serde default
+// functions), and rules covering every action and scan type, so two revisions
+// can be compared byte for byte. Fails on purpose so the harness prints it.
+#[test]
+fn throwaway_dump_firewall_config_serde() {
+    let mut out = Vec::new();
+    out.push(serde_json::to_string_pretty(&FirewallConfig::default()).unwrap());
+    let empty: FirewallConfig = serde_json::from_str("{}").unwrap();
+    out.push(serde_json::to_string_pretty(&empty).unwrap());
+    let partial: FirewallConfig =
+        serde_json::from_value(json!({"enabled": true, "anomaly_block_threshold": 0.9})).unwrap();
+    out.push(serde_json::to_string_pretty(&partial).unwrap());
+    let sample: FirewallConfig = serde_json::from_value(json!({
+        "rules": [
+            {"match": "fs_*", "action": "block", "reason": "no fs", "scan": [
+                "credentials", "pii", "prompt_injection", "shell_injection", "path_traversal",
+                "sql_injection", "sequence_anomaly", "memory_poisoning", "cross_tenant_reach",
+                "budget_exceeded", "collusion_relay"
+            ]},
+            {"match": "*", "action": "warn"},
+            {"match": "x", "action": "allow"}
+        ]
+    }))
+    .unwrap();
+    out.push(serde_json::to_string_pretty(&sample).unwrap());
+    out.push(format!("{:?}", FirewallConfig::default()));
+    panic!("MCPGW_DUMP_BEGIN\n{}\nMCPGW_DUMP_END", out.join("\n"));
+}

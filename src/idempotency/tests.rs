@@ -592,3 +592,50 @@ async fn a_replay_restores_its_entrys_reading() {
         "an entry completed without a reading is unread"
     );
 }
+
+// Throwaway evidence only, never merged: drives the idempotency guard through
+// a fixed sequence and records only deterministic facts, so two revisions can
+// be compared byte for byte. Fails on purpose so the harness prints the dump.
+#[test]
+fn throwaway_dump_idempotency_guard_surface() {
+    fn label(o: &Result<GuardOutcome>) -> String {
+        match o {
+            Ok(GuardOutcome::Proceed(r)) => format!("Proceed(key={})", r.key()),
+            Ok(GuardOutcome::CachedResult(v)) => format!("CachedResult({v})"),
+            Ok(GuardOutcome::CachedError(v)) => format!("CachedError({v})"),
+            Err(e) => format!("Err({e})"),
+        }
+    }
+    let cache = Arc::new(IdempotencyCache::new());
+    let mut log = Vec::new();
+    let first = enforce(&cache, "k1", "fp1");
+    log.push(label(&first));
+    log.push(label(&enforce(&cache, "k1", "fp1")));
+    if let Ok(GuardOutcome::Proceed(mut r)) = first {
+        log.push(format!("complete={}", r.complete(&json!({"ok": 1}))));
+    }
+    log.push(label(&enforce(&cache, "k1", "fp1")));
+    log.push(label(&enforce(&cache, "k1", "fp2")));
+    let second = enforce(&cache, "k2", "fp1");
+    log.push(label(&second));
+    if let Ok(GuardOutcome::Proceed(mut r)) = second {
+        r.fail(&json!({"code": -32000, "message": "boom"}));
+    }
+    log.push(label(&enforce(&cache, "k2", "fp1")));
+    let third = enforce(&cache, "k3", "fp1");
+    log.push(label(&third));
+    if let Ok(GuardOutcome::Proceed(mut r)) = third {
+        r.release();
+    }
+    log.push(label(&enforce(&cache, "k3", "fp1")));
+    for e in [
+        json!({"code": -32000, "message": "boom"}),
+        json!({"message": "no code"}),
+        json!("bare"),
+        json!({(FIREWALL_REFUSAL_MARKER): true, "code": 1, "message": "refused"}),
+    ] {
+        log.push(format!("{:?}", cached_error_parts(&e)));
+    }
+    log.push(FIREWALL_REFUSAL_MARKER.to_string());
+    panic!("MCPGW_DUMP_BEGIN\n{}\nMCPGW_DUMP_END", log.join("\n"));
+}
