@@ -377,6 +377,7 @@ fn resume_active(
 ) -> io::Result<(Recovered, bool)> {
     let first = segments::read_first_line(path)?.unwrap_or_default();
     let (_, _, first_event, first_v) = record_head(&first)?;
+    let next = sealed.last().map_or(0, |s| s.seq + 1);
     let (seq, opened_at) = if first_event.as_deref() == Some(EV_OPENED) {
         (
             first_v
@@ -390,7 +391,7 @@ fn resume_active(
         )
     } else {
         // A pre-D6 segment 0 has no open record; its age counts from now.
-        (sealed.last().map_or(0, |s| s.seq + 1), now)
+        (next, now)
     };
     // Segment numbers only grow, like counters. The active segment comes
     // after every sealed one, and a tail at the mark's counter is the mark's
@@ -398,7 +399,6 @@ fn resume_active(
     // older segments can end on the genuine mark record and still open an
     // older segment (#2831): that is a finding, and its seal must not take a
     // sealed segment's name, which the rotation's rename would overwrite.
-    let next = sealed.last().map_or(0, |s| s.seq + 1);
     let misplaced = seq < next
         || hw
             .is_some_and(|h| seq < h.segment_seq || (counter == h.counter && seq != h.segment_seq));

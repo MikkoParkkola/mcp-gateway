@@ -289,6 +289,10 @@ fn a_tail_at_the_mark_restored_under_an_older_segment_is_a_finding() {
         // overwrite leaves the count unchanged.
         (0..50).for_each(|i| append(&l, i));
         drop(l);
+        assert!(
+            sealed_path(&path, 1).exists(),
+            "no rotation happened, so nothing was tested (signed: {signed})"
+        );
         assert_eq!(
             std::fs::read(sealed_path(&path, 0)).unwrap(),
             genuine_0,
