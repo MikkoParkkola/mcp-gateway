@@ -38,7 +38,6 @@ pub(crate) struct SourceEvent {
     /// Set by a source whose upstream work is per lifecycle key (a
     /// credentialed watch): the occurrence then reaches only subscriptions
     /// holding this key (design §4, MIK-7811).
-    #[allow(dead_code, reason = "MIK-7811: the fan-out filter lands next")]
     pub lifecycle_key: Option<String>,
 }
 
@@ -93,6 +92,12 @@ impl EventsHub {
             .subscriptions()
             .into_iter()
             .filter(|s| s.name == event.name && s.live(now))
+            // A keyed occurrence belongs to its key's holders alone (MIK-7811).
+            .filter(|s| {
+                event.lifecycle_key.as_deref().is_none_or(|key| {
+                    source.lifecycle_key(&s.principal, &s.name, &s.arguments) == key
+                })
+            })
             .filter(|s| source.matches(&s.principal, &s.arguments, event))
             .collect();
         for sub in matching {
