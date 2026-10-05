@@ -261,3 +261,44 @@ Ruling (2026-10-05): the automatic carry is dropped. The §13 CLI is the design,
 
 The automatic design in §§2-12 is kept above as the record of what was considered and why it was
 rejected.
+
+## 14. §13 amendments after round 2 (gpt-20261005T004015Z-82127 SWF, kimi SWF)
+- **What the assertion vouches for (gpt F1).** The operator asserts the grant's actual issuer.
+  When discovery matches the assertion, the copy becomes usable, but that match does not verify
+  the grant's provenance. If the assertion is wrong yet happens to match what discovery
+  returns, the 3.x refresh token goes to that issuer's token endpoint. The command's help text
+  and its output say this in one sentence. That is the same trust as
+  `accounts migrate-credentials --legacy-issuer`.
+- **Client identity (gpt F2, kimi F1).** The command refuses before writing anything when a 4.0
+  client registration already exists under the target key and its client id differs from the
+  3.x client id, or when the configured static `client_id` differs from it. Refused, so it can't
+  publish a token that cannot refresh. A matching 4.0 registration is kept as is.
+- **Publish protocol (gpt F3, kimi F1).** The gateway must not be running: the command takes the
+  same exclusive lock the token directory's writers take, or refuses with "stop the gateway
+  first". Concurrent runs serialise on that lock. Order: client file first, then token. Each is
+  written as a private scratch file and published by create-new rename. Outcomes:
+  - client published, token not (interrupted): a re-run publishes the token, because the client
+    file now matches;
+  - token already present: "nothing to do", nothing written;
+  - client file present and different: refused (see above).
+- **Marker removed (gpt improvement).** An explicit operator command re-run after a logout
+  re-creating the entry is intended, unlike the dropped automatic carry. There is no marker.
+- **Backend shape (kimi F2).** The command refuses an account-bound backend (one bound to an
+  `accounts` descriptor, via `account_bindings::compile`) and a backend with no `oauth` block,
+  naming `accounts migrate-credentials` for the former. It never writes a copy nothing reads.
+- **Runtime (gpt F4).** "No runtime change" was wrong on two counts. The runtime gains:
+  1. at startup, an expired copied access token with a refresh token tries a refresh before
+     `authorize()` (today `startup.rs:76-79` authorizes when `has_valid_token()` is false);
+  2. a 401 on a cached, unexpired token invalidates it before the next acquisition, so a rejected
+     copy costs one re-authorization, not repeated failures.
+  Both are small, but they are src changes in `src/transport/http/startup.rs` and
+  `src/oauth/client/mod.rs`, each with an integration row.
+- **Optional flags (kimi improvements):** `--legacy-backend-name` and `--legacy-resource-url` for a
+  backend renamed or re-URLed since 3.x. Optionally a live discovery check that warns, never
+  refuses, when the asserted issuer differs from what discovery returns now.
+- **Estimate (gpt improvement):** 8-11 steps.
+  - The base 7 from §13, plus 1 for the two runtime changes and their rows.
+  - Named uncertainties:
+    - (1) whether the token directory has a lock the command can share (+1 if a lock must be added);
+    - (2) whether the in-tree OAuth fixtures can serve a refresh at startup (+1);
+    - (3) the shared `legacy_source` module move (+1 if its tests need re-homing).
