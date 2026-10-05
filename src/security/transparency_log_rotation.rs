@@ -310,11 +310,11 @@ fn reopen_tail(
     match read_last_nonempty_line(path) {
         Ok(Some(line)) => {
             let (counter, hash, event, v) = record_head(&line)?;
-            if event.as_deref() == Some(EV_SEALED) {
-                // Crash after the seal, before the rename: finish it.
-                let seq = v.get("segment_seq").and_then(Value::as_u64).unwrap_or(0);
-                let sealed = segments::sealed_path(path, seq);
-                std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
+            let seal = event.as_deref() == Some(EV_SEALED);
+            let to = segments::sealed_path(path, v["segment_seq"].as_u64().unwrap_or(0));
+            // Finish a crash between seal and rename; a seal of a sealed one is a copy (MIK-7949).
+            if seal && !to.exists() {
+                std::fs::rename(path, &to).map_err(segments::ctx("rename", &to))?;
                 segments::sync_dir(path)?;
                 let sealed = segments::list_segments(path)?;
                 let behind = contradicted(path, &sealed, hw, counter, &hash, config)?;
@@ -323,7 +323,7 @@ fn reopen_tail(
                 Ok((state, behind))
             } else {
                 let (resumed, misplaced) = resume_active(path, counter, hash, sealed, hw, now)?;
-                let below_mark = misplaced
+                let below_mark = (seal || misplaced)
                     || contradicted(path, sealed, hw, counter, &resumed.last_entry_hash, config)?;
                 Ok((resumed, below_mark))
             }
@@ -376,7 +376,7 @@ fn resume_active(
 ) -> io::Result<(Recovered, bool)> {
     let first = segments::read_first_line(path)?.unwrap_or_default();
     let (_, _, first_event, first_v) = record_head(&first)?;
-    let next = sealed.last().map_or(0, |s| s.seq.saturating_add(1));
+    let next = segments::next_seq(sealed)?;
     let (seq, opened_at) = if first_event.as_deref() == Some(EV_OPENED) {
         (
             first_v
@@ -511,7 +511,7 @@ pub(super) fn open_after_seal(
         ));
     };
     let counter = seal_counter.max(hw.map_or(0, |h| h.counter)) + 1;
-    let seq = newest.seq + 1;
+    let seq = segments::next_seq(sealed)?;
     let mut extra: Vec<(&str, Value)> = vec![
         ("segment_seq", seq.into()),
         ("prev_segment_seq", newest.seq.into()),

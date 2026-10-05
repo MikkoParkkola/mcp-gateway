@@ -302,6 +302,78 @@ fn a_tail_at_the_mark_restored_under_an_older_segment_is_a_finding() {
     }
 }
 
+/// MIK-7949: an active file ending in a copied seal of an already sealed
+/// segment is not a crash to finish. Before the fix the restart renamed it
+/// over the genuine segment, here a one-line file replacing all of segment 1.
+#[test]
+fn a_copied_seal_of_a_sealed_segment_does_not_replace_it() {
+    use super::segments::sealed_path;
+    for signed in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        rotate_n(&l, &path, 2);
+        append(&l, 7);
+        drop(l);
+        let genuine_1 = std::fs::read(sealed_path(&path, 1)).unwrap();
+        let seal = lines(&sealed_path(&path, 1)).pop().unwrap();
+        assert_eq!(event(&seal), Some("audit_segment_sealed"));
+        std::fs::write(&path, format!("{seal}\n")).unwrap();
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        assert_eq!(
+            std::fs::read(sealed_path(&path, 1)).unwrap(),
+            genuine_1,
+            "the restart replaced sealed segment 1 (signed: {signed})"
+        );
+        assert!(!marks(&path).is_empty(), "no finding (signed: {signed})");
+        (0..50).for_each(|i| append(&l, i));
+        drop(l);
+        assert!(
+            sealed_path(&path, 2).exists(),
+            "no rotation (signed: {signed})"
+        );
+        assert_eq!(
+            std::fs::read(sealed_path(&path, 1)).unwrap(),
+            genuine_1,
+            "a rotation replaced sealed segment 1 (signed: {signed})"
+        );
+        assert!(!marks(&path).is_empty(), "finding lost (signed: {signed})");
+    }
+}
+
+/// MIK-7949 (review): a sealed segment renamed to the last number makes the
+/// next number wrap (debug panic, release 0) or saturate onto that name, so a
+/// seal would replace a segment. The restart must refuse instead, active file
+/// present or not, and leave every segment as it was.
+#[test]
+fn a_sealed_segment_at_the_last_number_is_refused_not_overwritten() {
+    use super::segments::sealed_path;
+    for keep_active in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+        rotate_n(&l, &path, 1);
+        append(&l, 7);
+        drop(l);
+        let last = sealed_path(&path, u64::MAX);
+        std::fs::rename(sealed_path(&path, 0), &last).unwrap();
+        let genuine = std::fs::read(&last).unwrap();
+        if !keep_active {
+            std::fs::remove_file(&path).unwrap();
+        }
+        let opened = std::panic::catch_unwind(|| TransparencyLogger::open(cfg(&path, 12, false)));
+        assert!(
+            matches!(&opened, Ok(Err(e)) if e.kind() == std::io::ErrorKind::InvalidData),
+            "restart did not refuse (active kept: {keep_active})"
+        );
+        assert_eq!(
+            std::fs::read(&last).unwrap(),
+            genuine,
+            "active kept: {keep_active}"
+        );
+    }
+}
+
 /// Write `records` back as the active file, one JSON line each, as found.
 fn write_lines(path: &std::path::Path, records: &[serde_json::Value]) {
     let mut text = String::new();
