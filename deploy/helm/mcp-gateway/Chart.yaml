@@ -1,6 +1,6 @@
 apiVersion: v2
 name: mcp-gateway
-description: Universal MCP Gateway — compact Meta-MCP tool router with security posture.
+description: "MCP gateway and Model Context Protocol proxy: one endpoint for many MCP servers and REST APIs, with on-demand tool discovery and MCP revision bridging"
 type: application
 # Chart version tracks the packaging; appVersion tracks the gateway release.
 version: 0.2.0

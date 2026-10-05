@@ -541,7 +541,7 @@ async fn meta_mcp_dispatch(
         oauth_agent_identity.as_ref().map(|a| a.client_id.as_str()),
     );
 
-    // Per-connection Code Mode override (issue #146 / RFC-0132).
+    // Per-connection Code Mode override (issue #146).
     // Accepted value: ?codemode=search_and_execute
     // When the static config already enables Code Mode, this is a no-op.
     let code_mode_url_active: bool = query_str.is_some_and(|q| {

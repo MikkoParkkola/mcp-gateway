@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn dlp_rules_has_ten_entries() {
-    assert_eq!(DLP_RULES.len(), 10, "RFC-0132 specifies 10 DLP patterns");
+    assert_eq!(DLP_RULES.len(), 10, "ten DLP patterns ship");
 }
 
 #[test]
@@ -40,7 +40,10 @@ fn render_grep_contains_header_disclaimer() {
         out.contains("OPERATOR NOTE"),
         "must include operator disclaimer"
     );
-    assert!(out.contains("RFC-0132"), "must cite RFC-0132");
+    assert!(
+        out.contains("docs/SHADOW_SCAN.md"),
+        "must cite the operator docs"
+    );
 }
 
 #[test]

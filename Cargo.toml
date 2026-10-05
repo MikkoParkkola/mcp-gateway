@@ -81,7 +81,6 @@ include = [
     "Dockerfile",
     "docs/CLIENTS.md",
     "docs/DEPLOYMENT.md",
-    "docs/design/RFC-0132-cloudflare-enterprise-mcp-gap-analysis.md",
     "docs/identity_grants.md",
     "docs/MULTI_USER.md",
     "docs/release/4.0.0-beta.2-notes.md",
