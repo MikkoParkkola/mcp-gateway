@@ -48,3 +48,56 @@ async fn t39m_a_legacy_stdio_tools_notice_becomes_an_event() {
     peer.push(TOOLS_CHANGED, json!({}));
     expect_events(&receiver, &id, &name, 1).await;
 }
+
+/// MIK-7937 REFILL.1: a tools notice starts a refill of the cached list. With
+/// the backend's `tools/list` hanging, another notice on the same session is
+/// still delivered promptly: the refill must not hold the session loop for
+/// its 30 s bound.
+#[tokio::test]
+async fn a_hanging_tools_refill_does_not_hold_other_notices() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = HttpPeer::start(Era::Modern).await;
+    let gw = start_listed(
+        dir.path(),
+        &receiver,
+        upstream_config(dir.path(), http_backend(&peer), &[]),
+    )
+    .await;
+    let resources = event("resources_changed");
+    let tools_name = event("tools_changed");
+    let tools = sub(&gw, ALICE, &tools_name, &receiver, json!({})).await;
+    let res = sub(&gw, ALICE, &resources, &receiver, json!({})).await;
+    eventually("the listen asks for tools and resources", || {
+        peer.open_listens().iter().any(|f| {
+            f["notifications"]["toolsListChanged"] == true
+                && f["notifications"]["resourcesListChanged"] == true
+        })
+    })
+    .await;
+    let lists_before = peer.frames("tools/list").len();
+    let tools_before = delivered(&receiver, &tools, &tools_name).len();
+    peer.hang_tools_list();
+    peer.push(TOOLS_CHANGED, json!({}));
+    eventually("the refill reached the backend", || {
+        peer.frames("tools/list").len() > lists_before
+    })
+    .await;
+
+    peer.push("notifications/resources/list_changed", json!({}));
+    let prompt = wait_until(Duration::from_secs(10), || {
+        !delivered(&receiver, &res, &resources).is_empty()
+    })
+    .await;
+    assert!(
+        prompt,
+        "a resources notice waited behind the hanging tools refill"
+    );
+    // REFILL.2: the tools change is still announced, once the refill ends
+    // (here by its 30 s bound, the peer holding the list for a minute).
+    let announced = wait_until(Duration::from_secs(45), || {
+        delivered(&receiver, &tools, &tools_name).len() > tools_before
+    })
+    .await;
+    assert!(announced, "the tools change was never announced");
+}
