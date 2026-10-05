@@ -94,6 +94,9 @@ impl HttpPeer {
                     if frame["method"] == "tools/list"
                         && state.hang_tools.load(std::sync::atomic::Ordering::SeqCst)
                     {
+                        // Logged on arrival, so a test sees the request it is
+                        // holding; the answer, a minute later, is logged too.
+                        log(&state, Seen::Frame(frame.clone()));
                         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                     }
                     answer(&state, frame)
