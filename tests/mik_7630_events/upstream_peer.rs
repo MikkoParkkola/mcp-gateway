@@ -55,6 +55,8 @@ struct State {
     seen: Arc<Mutex<Vec<Seen>>>,
     streams: Arc<Mutex<Vec<Stream>>>,
     subscribed: Arc<Mutex<Vec<String>>>,
+    /// While set, `tools/list` answers only after a minute (MIK-7937).
+    hang_tools: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Runs `f` when dropped: how the peer learns a client let go of a body.
@@ -80,6 +82,7 @@ impl HttpPeer {
             seen: Arc::default(),
             streams: Arc::default(),
             subscribed: Arc::default(),
+            hang_tools: Arc::default(),
         };
         let post_state = state.clone();
         let get_state = state.clone();
@@ -87,7 +90,14 @@ impl HttpPeer {
             "/",
             axum::routing::post(move |axum::Json(frame): axum::Json<Value>| {
                 let state = post_state.clone();
-                async move { answer(&state, frame) }
+                async move {
+                    if frame["method"] == "tools/list"
+                        && state.hang_tools.load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    }
+                    answer(&state, frame)
+                }
             })
             .get(move |headers: HeaderMap| {
                 let state = get_state.clone();
@@ -131,6 +141,13 @@ impl HttpPeer {
     /// Legacy GET streams the client still holds open.
     pub fn open_gets(&self) -> usize {
         self.live().iter().filter(|(id, _)| id.is_none()).count()
+    }
+
+    /// From now on, answer `tools/list` only after a minute.
+    pub fn hang_tools_list(&self) {
+        self.state
+            .hang_tools
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// URIs the client is subscribed to (legacy).
