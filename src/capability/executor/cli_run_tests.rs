@@ -627,6 +627,36 @@ fn an_exponent_form_credential_is_redacted_as_a_number() {
     );
 }
 
+/// A "+" before leading zeros still names the all-digit credential.
+#[test]
+fn a_plus_signed_credential_with_leading_zeros_is_redacted_as_a_number() {
+    let mut value = json!({"pin": 12_345, "other": 12_346});
+    super::super::cli::redact_value(&mut value, &["+012345".to_owned()]);
+    assert_eq!(value["pin"], "[redacted]", "{value}");
+    assert_eq!(value["other"], 12_346, "a different value is untouched");
+}
+
+/// Integers past f64 precision are compared exactly, never through a float.
+#[test]
+fn a_large_integer_credential_redacts_only_its_own_value() {
+    let mut value: Value =
+        serde_json::from_str(r#"{"near": 9007199254740992, "same": 9007199254740993}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["+9007199254740993".to_owned()]);
+    assert_eq!(value["same"], "[redacted]", "{value}");
+    assert_ne!(
+        value["near"], "[redacted]",
+        "an adjacent integer is untouched: {value}"
+    );
+}
+
+/// "+1e5" is 4 characters as injected, so unlike "1e5" it is looked for.
+#[test]
+fn a_four_character_number_form_credential_is_redacted() {
+    let mut value: Value = serde_json::from_str(r#"{"n": 1e5}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["+1e5".to_owned()]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+}
+
 /// The 4-character floor applies to the needle as injected, number form
 /// included: "1e5" is 3 characters, so the number it names is left alone.
 #[test]
