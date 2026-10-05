@@ -264,6 +264,40 @@ fn an_honest_restart_records_no_finding() {
     }
 }
 
+/// #2831 bot review: the active file rebuilt as sealed segment 0 followed by
+/// the genuine records of segment 1 ends on the mark's own record, so counter
+/// and hash agree with `.hwm`, yet it opens segment 0 while the mark names 1.
+/// The restart must record that, and the next rotation must not seal it over
+/// the genuine segment 0. Signed and unsigned: copied lines keep their sigs.
+#[test]
+fn a_tail_at_the_mark_restored_under_an_older_segment_is_a_finding() {
+    use super::segments::sealed_path;
+    for signed in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        rotate_n(&l, &path, 1);
+        (0..3).for_each(|i| append(&l, i));
+        drop(l);
+        let genuine_0 = std::fs::read(sealed_path(&path, 0)).unwrap();
+        let mut rebuilt = genuine_0.clone();
+        rebuilt.extend(std::fs::read(&path).unwrap());
+        std::fs::write(&path, rebuilt).unwrap();
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        assert!(!marks(&path).is_empty(), "no finding (signed: {signed})");
+        // Past a whole segment: rotate_n would count segments, and an
+        // overwrite leaves the count unchanged.
+        (0..50).for_each(|i| append(&l, i));
+        drop(l);
+        assert_eq!(
+            std::fs::read(sealed_path(&path, 0)).unwrap(),
+            genuine_0,
+            "a rotation overwrote sealed segment 0 (signed: {signed})"
+        );
+        assert!(!marks(&path).is_empty(), "finding lost (signed: {signed})");
+    }
+}
+
 /// Write `records` back as the active file, one JSON line each, as found.
 fn write_lines(path: &std::path::Path, records: &[serde_json::Value]) {
     let mut text = String::new();

@@ -322,9 +322,9 @@ fn reopen_tail(
                 let state = open_after_seal(path, config, &sealed, hw, now, carry)?;
                 Ok((state, behind))
             } else {
-                let resumed = resume_active(path, counter, hash, sealed, hw, now)?;
-                let below_mark =
-                    contradicted(path, sealed, hw, counter, &resumed.last_entry_hash, config)?;
+                let (resumed, misplaced) = resume_active(path, counter, hash, sealed, hw, now)?;
+                let below_mark = misplaced
+                    || contradicted(path, sealed, hw, counter, &resumed.last_entry_hash, config)?;
                 Ok((resumed, below_mark))
             }
         }
@@ -365,7 +365,8 @@ fn lost_from(carry: Option<u64>, below_mark: bool, tail: u64) -> Option<u64> {
     }
 }
 
-/// An active file whose last record is an ordinary record.
+/// An active file whose last record is an ordinary record, and whether the
+/// segment the file opens is not where its tail can honestly sit (#2831).
 fn resume_active(
     path: &Path,
     counter: u64,
@@ -373,7 +374,7 @@ fn resume_active(
     sealed: &[Segment],
     hw: Option<&HighWater>,
     now: u64,
-) -> io::Result<Recovered> {
+) -> io::Result<(Recovered, bool)> {
     let first = segments::read_first_line(path)?.unwrap_or_default();
     let (_, _, first_event, first_v) = record_head(&first)?;
     let (seq, opened_at) = if first_event.as_deref() == Some(EV_OPENED) {
@@ -391,6 +392,17 @@ fn resume_active(
         // A pre-D6 segment 0 has no open record; its age counts from now.
         (sealed.last().map_or(0, |s| s.seq + 1), now)
     };
+    // Segment numbers only grow, like counters. The active segment comes
+    // after every sealed one, and a tail at the mark's counter is the mark's
+    // record, so it sits in the segment the mark names. A file rebuilt from
+    // older segments can end on the genuine mark record and still open an
+    // older segment (#2831): that is a finding, and its seal must not take a
+    // sealed segment's name, which the rotation's rename would overwrite.
+    let next = sealed.last().map_or(0, |s| s.seq + 1);
+    let misplaced = seq < next
+        || hw
+            .is_some_and(|h| seq < h.segment_seq || (counter == h.counter && seq != h.segment_seq));
+    let seq = hw.map_or(seq, |h| seq.max(h.segment_seq)).max(next);
     // The log committed to how far it got: a truncated tail must not let new
     // records reuse the lost counters, so verify reports the gap (2.13).
     // Counters are global across segments, so the mark bounds them whatever
@@ -400,7 +412,7 @@ fn resume_active(
         .append(true)
         .open(path)
         .map_err(segments::ctx("open", path))?;
-    Ok(Recovered {
+    let recovered = Recovered {
         seg: SegState {
             seq,
             opened_at,
@@ -412,7 +424,8 @@ fn resume_active(
         file,
         counter,
         last_entry_hash: hash,
-    })
+    };
+    Ok((recovered, misplaced))
 }
 
 /// No active record: start the next segment chained from the newest seal,
