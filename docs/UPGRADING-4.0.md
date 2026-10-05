@@ -184,9 +184,10 @@ deployment is unattended, trigger each backend deliberately rather than discover
 on a user's first call.
 
 `mcp-gateway accounts migrate-credentials` applies only to a backend bound to a personal
-account (an `accounts` descriptor). It writes the personal-account store and refuses a backend
-with no such binding, so it cannot keep the credential of an ordinary `backends.<name>.oauth`
-backend. Every 3.x token belongs to an ordinary backend.
+account (an `accounts` descriptor). It needs an `accounts` block with a `personal_managed`
+descriptor and writes only the personal-account store, which an ordinary `backends.<name>.oauth`
+backend never reads, so it cannot keep that backend's credential. Every 3.x token belongs to an
+ordinary backend; keeping one means binding that backend to a personal account first.
 
 Your 3.x token files are left untouched in `~/.mcp-gateway/oauth/` at mode 0600.
 
