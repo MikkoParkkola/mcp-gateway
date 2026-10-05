@@ -7,11 +7,13 @@ Each new source is one `EventSource` implementation and nothing else
 (docs/design/2026-10-01-mik-7630-event-sources-4.0.0.md section 1). A change
 counts as adding a source when any line it adds under `src/` holds an
 `impl EventSource for`, in a new file or an existing one. Such a change may
-add files under `src/events/` and add or remove bare module declarations in
+add files under `src/events/` and add bare module declarations in
 `src/events/mod.rs` for the modules it adds (the registry line). Any other
-edit under `src/events/` is a core change and fails. Test code and comments
-that mention a source do not count as adding one. A change that
-adds no source is not judged: core fixes land through their own review.
+edit under `src/events/` is a core change and fails. A source impl in test
+code (`*_tests.rs`, `tests/`) or a comment does not count as adding one.
+Detection is line-based: an impl split across lines or made by a macro is not
+seen. A change that adds no source is not judged: core fixes land through
+their own review.
 
 Usage: check-event-source-scope.py [BASE]   (default: origin/docs/ranking-1-release-line)
 """
