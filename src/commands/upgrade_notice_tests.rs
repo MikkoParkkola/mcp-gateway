@@ -106,7 +106,7 @@ fn notice_item_1_scopes_the_migration_to_personal_accounts() {
     let item_1 = NOTICE_4_0_0_ITEMS[0].to_ascii_lowercase();
     for expected in [
         "every oauth backend re-authenticates once",
-        "only to a backend bound to a personal account",
+        "applies only to personal-account credentials",
         "cannot keep the credential of an ordinary",
     ] {
         assert!(

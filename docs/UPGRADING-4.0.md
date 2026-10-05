@@ -183,8 +183,8 @@ Expect one authorization prompt per OAuth backend, once. No config change is nee
 deployment is unattended, trigger each backend deliberately rather than discovering the prompt
 on a user's first call.
 
-`mcp-gateway accounts migrate-credentials` applies only to a backend bound to a personal
-account (an `accounts` descriptor). It needs an `accounts` block with a `personal_managed`
+`mcp-gateway accounts migrate-credentials` applies only to personal-account
+credentials (an `accounts` descriptor). It needs an `accounts` block with a `personal_managed`
 descriptor and writes only the personal-account store, which an ordinary `backends.<name>.oauth`
 backend never reads, so it cannot keep that backend's credential. Every 3.x token belongs to an
 ordinary backend; keeping one means binding that backend to a personal account first.
