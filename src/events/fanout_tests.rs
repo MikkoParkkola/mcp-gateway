@@ -23,6 +23,7 @@ fn body_carries_only_protocol_fields_and_data() {
         upstream_id: "x".into(),
         occurred_at: Utc::now(),
         data: json!({"event_type": "t", "fields": {}}),
+        lifecycle_key: None,
     };
     let receipt = json!({"receipt": {"subject_kind": "event"}});
     let body: Value =
@@ -302,4 +303,112 @@ fn a_failed_reconcile_attempt_logs_a_warning_and_the_next_one_finishes() {
         "a failed attempt is logged: {records:?}"
     );
     assert!(hub.store.subscriptions().is_empty(), "then withdrawn");
+}
+
+use super::super::EventSource as _;
+
+/// A source whose upstream work runs under each principal's own credential:
+/// its lifecycle key includes the principal (design §4).
+struct PerPrincipal;
+
+#[async_trait::async_trait]
+impl super::super::EventSource for PerPrincipal {
+    fn kind(&self) -> SourceKind {
+        SourceKind::RestWatch
+    }
+    fn descriptors(&self) -> Vec<super::super::types::EventDescriptor> {
+        vec![super::super::types::EventDescriptor {
+            name: "watch.cap.changed".into(),
+            description: "test".into(),
+            input_schema: json!({"type": "object"}),
+            payload_schema: json!({"type": "object"}),
+            scope: Visibility::Owner,
+            kind: SourceKind::RestWatch,
+        }]
+    }
+    fn matches(&self, _principal: &str, _arguments: &Value, _event: &SourceEvent) -> bool {
+        true
+    }
+    fn lifecycle_key(&self, principal: &str, name: &str, arguments: &Value) -> String {
+        json!([principal, name, arguments]).to_string()
+    }
+}
+
+/// MIK-7811: two principals hold the same arguments under distinct lifecycle
+/// keys; an occurrence carrying one key reaches only the subscription holding
+/// it, even though the source's `matches` accepts both. An occurrence with no
+/// key still reaches both.
+#[tokio::test]
+async fn an_occurrence_with_a_lifecycle_key_reaches_only_its_holders() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.register_source(Arc::new(PerPrincipal));
+    let name = "watch.cap.changed";
+    let arguments = json!({"arguments": {"q": "x"}});
+    for principal in ["alice", "bob"] {
+        let mut row = subscription(name);
+        row.id = format!("sub_{principal}");
+        row.principal = principal.into();
+        row.arguments = arguments.clone();
+        row.credential_kind = Some(crate::security::audit::CredentialKind::None);
+        hub.store
+            .admit(
+                row,
+                true,
+                super::super::store::Caps {
+                    per_principal: 10,
+                    global: 10,
+                },
+                chrono::Duration::zero(),
+                Utc::now(),
+                super::super::tail_policy(&config),
+            )
+            .expect("io")
+            .expect("admitted");
+    }
+    let services = super::super::Services {
+        live: Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        audit: None,
+        provenance: None,
+        #[cfg(feature = "cost-governance")]
+        budget: None,
+        credentials: super::super::LiveCredentials::default(),
+    };
+    let event = |upstream_id: &str, lifecycle_key: Option<String>| SourceEvent {
+        kind: SourceKind::RestWatch,
+        name: name.into(),
+        backend: "cap".into(),
+        scope: Visibility::Owner,
+        owner: None,
+        upstream_id: upstream_id.into(),
+        occurred_at: Utc::now(),
+        data: json!({}),
+        lifecycle_key,
+    };
+    let alices = PerPrincipal.lifecycle_key("alice", name, &arguments);
+    hub.fan_out(&services, &event("t1", Some(alices))).await;
+    let outbox = |dir: &std::path::Path| -> Vec<String> {
+        std::fs::read_dir(dir.join("outbox"))
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| std::fs::read_to_string(e.path()).expect("read"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let records = outbox(dir.path());
+    assert_eq!(records.len(), 1, "alice's key reaches one subscription");
+    assert!(records[0].contains("sub_alice"), "{}", records[0]);
+    hub.fan_out(&services, &event("t2", None)).await;
+    assert_eq!(
+        outbox(dir.path()).len(),
+        3,
+        "a keyless occurrence reaches both"
+    );
 }

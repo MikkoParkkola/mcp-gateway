@@ -35,6 +35,11 @@ pub(crate) struct SourceEvent {
     pub upstream_id: String,
     pub occurred_at: DateTime<Utc>,
     pub data: Value,
+    /// Set by a source whose upstream work is per lifecycle key (a
+    /// credentialed watch): the occurrence then reaches only subscriptions
+    /// holding this key (design §4, MIK-7811).
+    #[allow(dead_code, reason = "MIK-7811: the fan-out filter lands next")]
+    pub lifecycle_key: Option<String>,
 }
 
 /// `evt_` + 32 hex of SHA-256 over kind, upstream id and subscription id:
