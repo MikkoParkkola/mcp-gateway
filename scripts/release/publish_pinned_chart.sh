@@ -51,7 +51,12 @@ cosign verify --certificate-identity "$SIGNER_IDENTITY" \
 
 # Verify from the registry, not from the local file.
 mkdir -p "$work/pulled"
-helm pull "$repo/mcp-gateway" --version "$version" -d "$work/pulled"
+pull_out=$(helm pull "$repo/mcp-gateway" --version "$version" -d "$work/pulled" 2>&1)
+printf '%s\n' "$pull_out"
+# The version tag can move between push and pull: check the signed artifact.
+pulled_digest=$(printf '%s\n' "$pull_out" | grep -oE 'sha256:[0-9a-f]{64}' | head -1)
+[[ $pulled_digest == "$chart_digest" ]] \
+  || { echo "pulled chart is '$pulled_digest', not the signed $chart_digest" >&2; exit 1; }
 published=$(tar -xOzf "$work/pulled/mcp-gateway-$version.tgz" mcp-gateway/values.yaml | yq '.image.digest')
 [[ $published == "$digest" ]] || { echo "published chart pins $published, not $digest" >&2; exit 1; }
 # And the Deployment it renders runs that exact image.
