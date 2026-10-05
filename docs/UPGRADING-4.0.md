@@ -3949,8 +3949,9 @@ The shipped capabilities this changes: `country_info`, `hackernews_ask`,
 capability file of your own changes the same way when its root is not
 object-shaped: an array or scalar `type`, a type list such as
 `["object", "null"]`, or no `type` and no `properties` (a root `anyOf`, say).
-A document-local `$ref` in it is rebased under `#/properties/items`, and a root
-`$schema` moves to the wrapper. A root with `properties` and no `type` is
+The nested schema is given `$id: urn:mcp-gateway:declared-output` when it
+has none, so its own `#/...` references still resolve inside it; a root
+`$schema` is repeated on the wrapper. A root with `properties` and no `type` is
 advertised with `type: "object"` added and is otherwise unchanged.
 
 ## Upgrading from 3.5.x: a walkthrough

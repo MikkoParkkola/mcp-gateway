@@ -11,6 +11,9 @@ use serde_json::Value;
 /// both; the text content keeps the declared shape.
 const WRAPPED_OUTPUT_KEY: &str = "items";
 
+/// The `$id` a wrapped declared schema is given when it has none.
+const DECLARED_OUTPUT_ID: &str = "urn:mcp-gateway:declared-output";
+
 /// Object-shaped: `type: "object"`, or no `type` but `properties`, which
 /// `validate_output` already refuses for anything but an object.
 fn output_root_is_wrapped(schema: &Value) -> bool {
@@ -36,40 +39,25 @@ pub(crate) fn advertised_output_schema(schema: &Value) -> Option<Value> {
         }
         return Some(shown);
     }
-    // The declared schema moves to `/properties/items`, so a document-local
-    // `$ref` is rebased to keep its target; `$schema` belongs to the root.
-    rebase_local_refs(&mut shown);
-    let dialect = shown.as_object_mut().and_then(|o| o.remove("$schema"));
+    // The declared schema moves to `/properties/items`. Given an `$id`, it is
+    // its own schema resource there, so its `#` and `#/...` references keep
+    // resolving inside it, nested resources and instance data untouched. One
+    // that already has an `$id` is a resource as declared.
+    if let Some(object) = shown.as_object_mut() {
+        object
+            .entry("$id")
+            .or_insert_with(|| Value::from(DECLARED_OUTPUT_ID));
+    }
     let mut wrapper = serde_json::json!({
         "type": "object",
         "properties": { WRAPPED_OUTPUT_KEY: shown },
         "required": [WRAPPED_OUTPUT_KEY],
     });
-    if let (Some(dialect), Some(object)) = (dialect, wrapper.as_object_mut()) {
-        object.insert("$schema".to_owned(), dialect);
+    // The wrapper is read in the declared dialect too.
+    if let (Some(dialect), Some(object)) = (schema.get("$schema"), wrapper.as_object_mut()) {
+        object.insert("$schema".to_owned(), dialect.clone());
     }
     Some(wrapper)
-}
-
-/// `#` and `#/...` references, as seen from the wrapper root. A `#name`
-/// anchor and an external reference resolve the same from either place.
-fn rebase_local_refs(schema: &mut Value) {
-    match schema {
-        Value::Object(object) => {
-            for (key, value) in object {
-                if key == "$ref"
-                    && let Some(target) = value.as_str().and_then(|r| r.strip_prefix('#'))
-                    && (target.is_empty() || target.starts_with('/'))
-                {
-                    *value = Value::from(format!("#/properties/{WRAPPED_OUTPUT_KEY}{target}"));
-                } else {
-                    rebase_local_refs(value);
-                }
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(rebase_local_refs),
-        _ => {}
-    }
 }
 
 /// The `structuredContent` published for a result of the declared schema.

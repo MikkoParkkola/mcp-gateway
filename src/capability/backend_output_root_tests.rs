@@ -88,29 +88,39 @@ fn an_object_output_root_is_advertised_and_published_as_declared() {
     assert_eq!(result.structured_content, Some(json!({ "id": "a" })));
 }
 
+/// The advertised schema accepts and refuses what the declared one does,
+/// judged by a JSON Schema validator rather than by its text.
 #[test]
-fn a_wrapped_root_keeps_its_local_references_and_dialect() {
-    let cap = capability_with_output(
-        "    $schema: https://json-schema.org/draft/2020-12/schema\n    type: array\n    items:\n      $ref: '#/$defs/Entry'\n    $defs:\n      Entry:\n        type: object\n        properties:\n          next:\n            $ref: '#'\n          remote:\n            $ref: 'https://schemas.invalid/s.json#/x'",
-    );
-    let advertised = cap.to_mcp_tool().output_schema.expect("advertised");
+fn a_wrapped_root_resolves_its_references_as_declared() {
+    let cases = [
+        // A root pointer, a root recursion, and a declared root `$id`.
+        "    type: array\n    items:\n      $ref: '#/$defs/E'\n    $defs:\n      E:\n        type: string",
+        "    type: array\n    items:\n      anyOf:\n        - type: string\n        - $ref: '#'",
+        "    $id: https://schemas.invalid/root\n    type: array\n    items:\n      $ref: '#/$defs/E'\n    $defs:\n      E:\n        type: string",
+        // A nested resource, and a `$ref` that is instance data.
+        "    type: array\n    items:\n      $id: https://schemas.invalid/entry\n      $ref: '#/$defs/E'\n      $defs:\n        E:\n          type: string",
+        "    type: array\n    items:\n      anyOf:\n        - type: string\n        - const:\n            $ref: '#/target'",
+        // Another dialect, read in that dialect.
+        "    $schema: http://json-schema.org/draft-07/schema#\n    type: array\n    items:\n      $ref: '#/definitions/E'\n    definitions:\n      E:\n        type: string",
+    ];
+    for output in cases {
+        let cap = capability_with_output(output);
+        let advertised = cap.to_mcp_tool().output_schema.expect("advertised");
+        assert_eq!(
+            advertised["$schema"], cap.schema.output["$schema"],
+            "{output}"
+        );
+        let validator = jsonschema::validator_for(&advertised)
+            .unwrap_or_else(|e| panic!("{output}: advertised schema does not compile: {e}"));
+        assert!(validator.is_valid(&json!({ "items": ["ok"] })), "{output}");
+        assert!(!validator.is_valid(&json!({ "items": [1] })), "{output}");
+        assert!(!validator.is_valid(&json!({ "items": "ok" })), "{output}");
+    }
 
-    assert_eq!(
-        advertised["$schema"],
-        json!("https://json-schema.org/draft/2020-12/schema")
-    );
-    let inner = &advertised["properties"]["items"];
-    assert!(inner.get("$schema").is_none());
-    assert_eq!(
-        inner["items"]["$ref"],
-        json!("#/properties/items/$defs/Entry")
-    );
-    let entry = &inner["$defs"]["Entry"]["properties"];
-    assert_eq!(entry["next"]["$ref"], json!("#/properties/items"));
-    assert_eq!(
-        entry["remote"]["$ref"],
-        json!("https://schemas.invalid/s.json#/x")
-    );
+    let cap = capability_with_output(cases[4]);
+    let advertised = cap.to_mcp_tool().output_schema.expect("advertised");
+    let validator = jsonschema::validator_for(&advertised).expect("compiles");
+    assert!(validator.is_valid(&json!({ "items": [{ "$ref": "#/target" }] })));
 }
 
 #[test]
