@@ -78,27 +78,41 @@ class EventSourceScope(unittest.TestCase):
         self.assertEqual(found, ["src/events/task_source.rs: M (core file)"])
 
     def test_a_source_impl_anywhere_outside_tests_counts(self):
-        self.assertTrue(guard.adds_source([("src/events/fanout.rs", "impl EventSource for Sneak {}")]))
-        self.assertTrue(guard.adds_source([("src/gateway/x.rs", "impl EventSource for Elsewhere {}")]))
+        impl = "impl EventSource for Sneak {}\n"
+        self.assertTrue(guard.adds_source([("src/events/fanout.rs", "fn f() {}\n", "fn f() {}\n" + impl)]))
+        self.assertTrue(guard.adds_source([("src/gateway/x.rs", "", impl)]))
+
+    def test_a_moved_impl_is_not_a_new_source(self):
+        impl = "impl EventSource for X {}\n"
+        self.assertFalse(guard.adds_source([("src/events/a.rs", impl, "// moved\n" + impl)]))
 
     def test_a_test_mock_or_a_comment_is_not_a_source(self):
         # A core fix whose test mocks a source must not be judged as adding one.
-        self.assertFalse(guard.adds_source([("src/events/sources_tests.rs", "impl EventSource for Mock {}")]))
-        self.assertFalse(guard.adds_source([("tests/mik_7630_events_sources.rs", "impl EventSource for M {}")]))
-        self.assertFalse(guard.adds_source([("src/events/fanout.rs", "// impl EventSource for X")]))
+        mock = "impl EventSource for Mock {}\n"
+        self.assertFalse(guard.adds_source([("src/events/sources_tests.rs", "", mock)]))
+        self.assertFalse(guard.adds_source([("tests/mik_7630_events_sources.rs", "", mock)]))
+        self.assertFalse(guard.adds_source([("src/events/fanout.rs", "", "// impl EventSource for X {}\n")]))
 
     def test_every_impl_spelling_counts_as_a_source(self):
-        for line in [
+        for text in [
             "impl EventSource for ScheduleSource {",
             "impl super::EventSource for X {}",
             "impl crate::events::EventSource for X {}",
             "impl<T: Send> EventSource for Watch<T> {",
+            "impl\n    EventSource\n    for X {}",
+            "impl<T>\n    super::EventSource for W<T>\nwhere\n    T: Send,\n{}",
+            "use super::EventSource as Src;\nimpl Src for X {}",
         ]:
-            self.assertTrue(guard.SOURCE_IMPL.search(line), line)
+            self.assertEqual(guard.impl_count(text), 1, text)
 
     def test_a_mention_is_not_a_source(self):
-        for line in ["// implements EventSource for timers", "use super::EventSource;", "fn f(s: &dyn EventSource) {}"]:
-            self.assertFalse(guard.SOURCE_IMPL.search(line), line)
+        for text in [
+            "// implements EventSource for timers",
+            "use super::EventSource;",
+            "fn f(s: &dyn EventSource) {}",
+            "impl Other for X { fn f(s: &dyn EventSource) {} }",
+        ]:
+            self.assertEqual(guard.impl_count(text), 0, text)
 
     def test_the_cli_fails_a_real_commit_that_edits_the_core(self):
         # The plumbing too: base...HEAD span, name-status and line parsing, exit code.
