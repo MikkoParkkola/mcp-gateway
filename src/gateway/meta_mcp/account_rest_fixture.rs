@@ -680,3 +680,8 @@ pub(super) async fn meta_execute(meta: &MetaMcp, subject: Option<&str>) -> crate
 /// A11: the rejected-upstream-token cells, which drive this fixture.
 #[path = "upstream_401_tests.rs"]
 mod upstream_401;
+
+// Lives beside the REST fixture rather than in a REST test file: those files
+// are split by topic and this case spans custody, registry and cache together.
+#[path = "account_live_holder_tests.rs"]
+mod account_live_holder_tests;
