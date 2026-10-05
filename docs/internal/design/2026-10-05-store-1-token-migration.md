@@ -180,3 +180,29 @@ writable; skip the client-file carry; skip the marker check. Each must turn a ro
 That is about 7 steps, with risk concentrated in step 1. Existing OAuth client tests already serve
 discovery documents (`src/oauth/client/tests.rs`, `authorize_tests.rs`), so the mock authorization
 server extends an in-tree fixture rather than starting a new one.
+
+## 12. Amendments after design review round 1 (kimi SWF; gpt pending at writing)
+- **Sink (b) exclusion guard (kimi F1).** The carry runs only in an `OAuthClient` built from a
+  backend's own `backends.X.oauth` block. It is skipped, before any 3.x path is opened, when the
+  backend is bound to an `accounts.descriptors` entry (the same `account_bindings::compile`
+  predicate `resolve_legacy_backend_name` uses). Row 10: a backend that has both an `oauth` block
+  and an account binding, with a matching 3.x file, does not carry; the 3.x file is made
+  unreadable to prove it is not opened, and the binding is the only difference from row 1.
+- **Marker before entry (kimi F2).** The carry creates the marker first (create-new), then the
+  entry (create-new). A crash in between leaves a marker with no entry: no carry next time, and
+  one re-authorization (fail-safe). The reverse order could resurrect a later logout. Row 11 kills
+  the process between the two writes (a test hook) and asserts no carry on the next start.
+- **Row 5 rebuilt (kimi F3).** The 3.x file is readable, private and carries the matching
+  endpoint. A 4.0 entry holds a different token. Oracles: the 4.0 entry's bytes are unchanged, and
+  the backend request carries the 4.0 token, not the 3.x one. The "carry over an existing entry"
+  mutant now turns it RED.
+- **Observability (kimi improvement).** A successful carry logs once at `info` with the backend
+  name and issuer (no token material), so operators can tell when every backend has carried over
+  before deleting 3.x files.
+- **Deterministic race (kimi improvement).** Row 7 uses a barrier hook so both clients reach
+  create-new together.
+- **Normalisation rows (kimi improvement).** Normalisation applies to both sides. Unit rows pin the
+  safe negatives (trailing slash, percent-encoding case, explicit default port): each is a
+  one-time re-authorization, never a carry across a real difference.
+- **Notice wording (kimi improvement).** The last sentence is split, the revocation caveat gets
+  its own sentence, and the capitalised AND is dropped.
