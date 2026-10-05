@@ -2052,7 +2052,7 @@
       "consequence": "21 pending MIK-7630 criteria join the 4.0.0 tag gate. The 4.0.1 sources carry no 4.0.0 criterion.",
       "evidence": [
         "docs/design/2026-10-01-mik-7630-mcp-events.md",
-        "docs/design/2026-10-01-mik-7630-event-sources-4.0.1.md",
+        "docs/design/2026-10-01-mik-7630-event-sources-4.0.0.md",
         "docs/requirements/RELEASE-4.0.0-operator-decisions.md"
       ]
     },
