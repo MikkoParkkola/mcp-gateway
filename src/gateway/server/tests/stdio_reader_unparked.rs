@@ -34,6 +34,20 @@ struct Served {
 /// large, so the test's own writes never wait on a parked reader; stdout holds
 /// `output_capacity` bytes.
 async fn start(output_capacity: usize) -> Served {
+    let (gateway, dir) = gateway().await;
+    let (stdin, input) = tokio::io::duplex(8 << 20);
+    let (output, reader) = tokio::io::duplex(output_capacity);
+    let task = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
+    Served {
+        stdin,
+        stdout: BufReader::new(reader).lines(),
+        task,
+        _dir: dir,
+    }
+}
+
+/// A gateway with no backends, and the directory its config and data live in.
+async fn gateway() -> (Gateway, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
     let yaml = format!(
@@ -47,15 +61,7 @@ async fn start(output_capacity: usize) -> Served {
         .await
         .expect("gateway boots")
         .with_data_dir(dir.path().to_path_buf());
-    let (stdin, input) = tokio::io::duplex(8 << 20);
-    let (output, reader) = tokio::io::duplex(output_capacity);
-    let task = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
-    Served {
-        stdin,
-        stdout: BufReader::new(reader).lines(),
-        task,
-        _dir: dir,
-    }
+    (gateway, dir)
 }
 
 /// [`start`], with the handshake done and its answer read.
@@ -182,20 +188,30 @@ async fn a_reading_client_gets_every_answer() {
 }
 
 /// T4. An `initialize` that cannot be queued ends the session instead of
-/// parking the reader: the queue is filled before the handshake, and with
-/// stdin still open and stdout unread the serve loop returns within the
-/// initialize bound, the drain and the teardown.
+/// parking the reader: with stdin still open and stdout unread, the serve loop
+/// returns within the initialize bound, the drain and the teardown.
+///
+/// The fill is observed, not timed. The writer is first seen stalled on
+/// stdout, holding the one frame it took; from then on no slot frees, and a
+/// dropped parse error is the queue reporting itself full.
 #[tokio::test]
 async fn an_initialize_on_a_full_stdout_ends_the_session() {
-    let mut served = start(64).await;
-    let flood = vec!["{not json"; FLOOD].join("\n");
-    send(&mut served.stdin, &flood).await;
-    // The writer takes one frame and blocks on the unread pipe only once the
-    // reader yields; refill the slot it freed, so the queue is full when the
-    // handshake arrives.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    send(&mut served.stdin, &["{not json"; 10].join("\n")).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    let (stalled, mut writer_stalled) = Stalled::new(64);
+    let (_logs, mut dropped) =
+        crate::test_log_capture::live_count("a parse error could not be queued");
+    let (mut stdin, input) = tokio::io::duplex(8 << 20);
+    let (gateway, _dir) = gateway().await;
+    let mut task = tokio::spawn(async move { gateway.run_stdio_on(input, stalled, None).await });
+    send(&mut stdin, "{not json").await;
+    timeout(ARRIVAL, writer_stalled.wait_for(|stalled| *stalled))
+        .await
+        .expect("the writer takes the first parse error and stalls on stdout")
+        .expect("the sink is alive");
+    send(&mut stdin, &vec!["{not json"; FLOOD].join("\n")).await;
+    timeout(ARRIVAL, dropped.wait_for(|n| *n > 0))
+        .await
+        .expect("a parse error is dropped: the queue is full")
+        .expect("the log counter is alive");
     let initialize = json!({
         "jsonrpc": "2.0", "id": "init-late", "method": "initialize",
         "params": {
@@ -204,14 +220,61 @@ async fn an_initialize_on_a_full_stdout_ends_the_session() {
             "clientInfo": {"name": "mik7684", "version": "0"},
         },
     });
-    send(&mut served.stdin, &initialize.to_string()).await;
-    let bound = super::super::STDIO_DRAIN_TIMEOUT * 2 + Duration::from_secs(25);
-    timeout(bound, &mut served.task)
+    send(&mut stdin, &initialize.to_string()).await;
+    let bound = super::super::STDIO_DRAIN_TIMEOUT * 2
+        + super::super::stdio_shutdown::STDIO_TEARDOWN_TIMEOUT
+        + Duration::from_secs(15);
+    timeout(bound, &mut task)
         .await
         .unwrap_or_else(|_| panic!("run_stdio_on must return within {bound:?}, stdin open"))
         .expect("the serve task does not panic")
         .expect("run_stdio_on returns Ok");
-    drop((served.stdin, served.stdout));
+    drop(stdin);
+}
+
+/// A stdout that takes `room` bytes and then never again, reporting the
+/// first write it refuses.
+struct Stalled {
+    room: usize,
+    stalled: tokio::sync::watch::Sender<bool>,
+}
+
+impl Stalled {
+    fn new(room: usize) -> (Self, tokio::sync::watch::Receiver<bool>) {
+        let (stalled, seen) = tokio::sync::watch::channel(false);
+        (Self { room, stalled }, seen)
+    }
+}
+
+impl tokio::io::AsyncWrite for Stalled {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        bytes: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        if self.room == 0 {
+            // No waker is kept: this stdout never drains.
+            self.stalled.send_replace(true);
+            return std::task::Poll::Pending;
+        }
+        let taken = bytes.len().min(self.room);
+        self.room -= taken;
+        std::task::Poll::Ready(Ok(taken))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
 }
 
 /// The busy refusal of a batch keeps JSON-RPC 2.0 §6 shapes: one

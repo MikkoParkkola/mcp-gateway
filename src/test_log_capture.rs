@@ -29,14 +29,7 @@ impl std::io::Write for Sink {
 /// callsite's cached interest open, so no record is filtered out before the
 /// scoped subscriber sees it.
 pub(crate) fn records(run: impl FnOnce()) -> Vec<serde_json::Value> {
-    use tracing_subscriber::prelude::*;
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
+    keep_interest_open();
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()
@@ -53,6 +46,55 @@ pub(crate) fn records(run: impl FnOnce()) -> Vec<serde_json::Value> {
         .lines()
         .map(|line| serde_json::from_str(line).expect("one JSON object per line"))
         .collect()
+}
+
+/// The process-wide TRACE registry, installed once: a scoped subscriber
+/// only sees an event whose callsite interest is not already cached as off.
+fn keep_interest_open() {
+    use tracing_subscriber::prelude::*;
+    static INTEREST: std::sync::Once = std::sync::Once::new();
+    INTEREST.call_once(|| {
+        let _ = tracing::subscriber::set_global_default(
+            tracing_subscriber::Registry::default()
+                .with(tracing::level_filters::LevelFilter::TRACE),
+        );
+    });
+}
+
+/// A live count, on this thread, of log records containing `text`, for a
+/// test that must wait for a record rather than read the log afterwards.
+/// Counting stops when the guard drops.
+pub(crate) fn live_count(
+    text: &'static str,
+) -> (
+    tracing::subscriber::DefaultGuard,
+    tokio::sync::watch::Receiver<usize>,
+) {
+    keep_interest_open();
+    let (count, seen) = tokio::sync::watch::channel(0);
+    let count = Arc::new(count);
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || Counter(Arc::clone(&count), text))
+        .finish();
+    (tracing::subscriber::set_default(subscriber), seen)
+}
+
+struct Counter(Arc<tokio::sync::watch::Sender<usize>>, &'static str);
+
+impl std::io::Write for Counter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if String::from_utf8_lossy(bytes).contains(self.1) {
+            self.0.send_modify(|n| *n += 1);
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// How many of `records` are at `level` with a message containing `text`.
