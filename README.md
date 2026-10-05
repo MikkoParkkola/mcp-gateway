@@ -15,9 +15,9 @@
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_MCP-0078d4?logo=visualstudiocode)](https://insiders.vscode.dev/redirect/mcp/install?name=mcp-gateway&config=%7B%22command%22%3A%22mcp-gateway%22%2C%22args%22%3A%5B%22serve%22%2C%22--stdio%22%5D%7D)
 [![Install in Cursor](https://img.shields.io/badge/Cursor-Install_MCP-black?logo=cursor)](cursor://anysphere.cursor-deeplink/mcp/install?name=mcp-gateway&config=%7B%22command%22%3A%22mcp-gateway%22%2C%22args%22%3A%5B%22serve%22%2C%22--stdio%22%5D%7D)
 
-**Connect unlimited MCP servers, tools and APIs to your AI at a fixed context cost.**
+**Unlimited MCP servers, tools and APIs. One fixed context cost.**
 
-MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect any number of MCP servers and REST APIs behind it, and the agent sees only a compact meta-surface of 11 tools by default instead of hundreds of tool definitions. It discovers and calls the right backend tool on demand. On a 100-tool stack that is about 1,100 tokens of tool definitions per request instead of about 15,000, as modeled in the README [benchmark](docs/BENCHMARKS.md), and the answer to "how many tools can I connect" becomes "unlimited."
+Plug every tool you own into Claude, Cursor, Codex or any MCP client. MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect any number of MCP servers and REST APIs behind it, and the agent sees only a compact meta-surface of 11 tools by default instead of hundreds of tool definitions. It discovers and calls the right backend tool on demand, and never drowns in tool definitions. 130+ REST API capabilities ship built in, and one command imports the servers you already have. On a 100-tool stack that is about 1,100 tokens of tool definitions per request instead of about 15,000, as modeled in the README [benchmark](docs/BENCHMARKS.md), and the answer to "how many tools can I connect" becomes "unlimited."
 
 ![demo](demo.gif)
 
