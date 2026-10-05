@@ -182,8 +182,6 @@ const PUBLIC_CLAIM_SURFACES: &[&str] = &[
     ".github/workflows/release.yml",
     "ARCHITECTURE.md",
     "codebase-map.md",
-    "docs/show-hn.md",
-    "docs/blog/sovereign-stack-2026-04.md",
     "docs/blog/security-aware-mcp-gateway.md",
     "docs/design/RFC-0081-intelligent-tool-surfacing.md",
     "CLAUDE.md",

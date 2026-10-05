@@ -122,7 +122,6 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 - **Capability backends**: 110+ REST capabilities + MCP backends routed via the same surface
 - **Security**: unsafe denied (`#![deny(unsafe_code)]`); dependency-status badge; scoped OWASP Agentic AI self-assessment at `docs/OWASP_AGENTIC_AI_COMPLIANCE.md`
 - **Benchmarks**: machine-readable claims in `benchmarks/public_claims.json` with CI drift check
-- **Independent reviews**: Ruach Tov Collective's five-tool comparison + mcp-gateway deep dive (linked in README)
 
 ## Plan Forward (near-term, technical)
 

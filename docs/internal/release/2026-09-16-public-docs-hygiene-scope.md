@@ -67,7 +67,8 @@ published design record.
 - Seven tracked docs name a competitor. Two are the allowlisted public
   competitive docs the gate already exempts. The other five —
   `docs/SHADOW_SCAN.md`, `docs/design/RFC-0070-universal-config-export.md`,
-  `docs/design/RFC-0132-cloudflare-enterprise-mcp-gap-analysis.md`,
+  `docs/design/RFC-0132-cloudflare-enterprise-mcp-gap-analysis.md` (since
+  removed by #2995),
   `docs/design/RFC-0072-semantic-tool-search.md` and the evaluation above —
   have never been read against the competitive-candour rule.
 
