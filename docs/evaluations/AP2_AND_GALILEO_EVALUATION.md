@@ -158,26 +158,6 @@ backends:
 
 **Integration effort**: L (Large) -- 4-6 weeks for full bidirectional A2A support (client + server). M (Medium) if limited to A2A-as-backend-only (3 weeks).
 
-#### 1.8.3 Botnaut -- Enterprise Payment Rails
-
-**Fit: PARTIAL**
-
-A2A provides the agent-to-agent communication substrate but does not define payment-specific primitives. For enterprise payment rails:
-- A2A's **task lifecycle** maps well to payment authorization flows (submitted -> working -> input-required [for 2FA/approval] -> completed)
-- A2A's **opaque execution** model is appropriate for financial agents that must not expose internal logic
-- A2A's **multi-tenant** support (`tenant` field on all operations) aligns with enterprise multi-tenancy
-- A2A's **security model** (OAuth2, API keys, JWT) is enterprise-grade
-
-However:
-- No built-in payment primitives (amounts, currencies, settlement, reconciliation)
-- No financial compliance framework (PCI-DSS, KYC/AML)
-- Payment-specific semantics would need to be encoded as A2A Extensions or structured JSON Parts
-- Botnaut would need to define its own payment protocol on top of A2A transport
-
-**Recommendation**: EVALUATE FURTHER -- A2A is a viable transport layer for Botnaut's agent-to-agent payment negotiations, but the payment protocol itself must be custom-built. Consider A2A for the inter-agent communication channel while building domain-specific payment primitives in the message/artifact layer.
-
-**Integration effort**: L (Large) -- A2A transport + custom payment protocol on top
-
 ---
 
 ## Part 2: Galileo AI
@@ -315,7 +295,6 @@ The only scenario where Galileo-as-backend makes sense is if the gateway wanted 
 |------------|---------|---------|--------|-----------|
 | **A2A** | mcp-gateway | **ADOPT** | L (4-6w) | Multi-protocol gateway differentiator; stable spec under Linux Foundation |
 | **A2A** | trvl | **EVALUATE FURTHER** | M (2-3w) | Expose trvl as A2A agent first; consume external agents later |
-| **A2A** | Botnaut | **EVALUATE FURTHER** | L | Good transport, but payment primitives must be custom-built on top |
 | **Galileo** | mcp-gateway (telemetry) | **EVALUATE FURTHER** | S-M (1-3w) | Start with OTLP span export; expand if hallucination detection needed |
 | **Galileo** | mcp-gateway (backend) | **SKIP** | N/A | Galileo is a sink, not a source |
 
@@ -324,4 +303,4 @@ The only scenario where Galileo-as-backend makes sense is if the gateway wanted 
 1. **First**: A2A backend support in mcp-gateway (enables the gateway to proxy A2A agents, highest differentiation value)
 2. **Second**: A2A server mode for trvl (makes trvl accessible from any A2A client, not just MCP)
 3. **Third**: Galileo OTLP export from mcp-gateway (improves observability with minimal effort)
-4. **Deferred**: A2A for Botnaut, Galileo guardrails (need more concrete requirements)
+4. **Deferred**: Galileo guardrails (need more concrete requirements)
