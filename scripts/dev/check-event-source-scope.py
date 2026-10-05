@@ -62,13 +62,13 @@ def impl_count(text):
 
 
 def adds_source(files, names=()):
-    """Whether a non-test `(path, before, after)` implements EventSource for a
-    type it did not before. Swapping one impl for another counts."""
-    return any(
-        implemented(after, names) - implemented(before, names)
-        for path, before, after in files
-        if not is_test_path(path)
-    )
+    """Whether the non-test `(path, before, after)` files together implement
+    EventSource for a type they did not before. Swapping one impl for another
+    counts; moving one between files does not."""
+    kept = [f for f in files if not is_test_path(f[0])]
+    before = set().union(*(implemented(b, names) for _, b, _ in kept))
+    after = set().union(*(implemented(a, names) for _, _, a in kept))
+    return bool(after - before)
 
 
 def violations(changes, source_added, registry_added, registry_removed):
