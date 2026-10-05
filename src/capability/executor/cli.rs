@@ -520,8 +520,8 @@ pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> Strin
     let mut cut = text.len() - EXCERPT_BYTES;
     // Spans are merged, so at most one contains the cut.
     #[cfg(feature = "firewall")]
-    if let Some(&(_, end)) = (REDACTOR.credential_spans(text).iter())
-        .find(|&&(start, end)| start < cut && cut < end)
+    if let Some(&(_, end)) =
+        (REDACTOR.credential_spans(text).iter()).find(|&&(start, end)| start < cut && cut < end)
     {
         cut = end;
     }

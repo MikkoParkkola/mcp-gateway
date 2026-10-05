@@ -124,7 +124,10 @@ fn assert_blocked_and_audited(output: CliOutput, outcome: &CliOutcome) {
         .filter(|e| e["event"] == "response")
         .flat_map(|e| e["findings"].as_array().cloned().unwrap_or_default())
         .any(|f| f["scan_type"] == "credentials");
-    assert!(audited, "no credential finding in the audit log: {entries:?}");
+    assert!(
+        audited,
+        "no credential finding in the audit log: {entries:?}"
+    );
     assert!(!after.to_string().contains(KEY), "{after}");
 }
 
