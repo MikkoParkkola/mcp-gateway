@@ -359,6 +359,17 @@ abs_run_dir() { mkdir -p -- "$1" && (CDPATH= cd -- "$1" && pwd -P); }
 
 do_measure() {
   local run="$1"
+  # A graded run starts in an empty measurement directory: an interrupted
+  # earlier run's summaries would otherwise sit beside the new pins and be
+  # graded as if this run had measured them.
+  if [[ "$GRADED" == 1 ]] && compgen -G "$run/*.summary.json" > /dev/null; then
+    echo "void: a graded run needs a fresh run dir; $run already holds measurements" >&2
+    exit 3
+  fi
+  if [[ "$GRADED" == 1 ]] && [[ -e "$run/pins.json" || -e "$run/cell_order.jsonl" ]]; then
+    echo "void: a graded run needs a fresh run dir; $run already holds pins or an order" >&2
+    exit 3
+  fi
   render_configs "$run"
 
   python3 - "$run/pins.json" "$K6_IMAGE_DIGEST" \

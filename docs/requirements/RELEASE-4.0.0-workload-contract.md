@@ -314,9 +314,13 @@ refuses, before any build, a run that is not `WORKLOAD_REPS=18` and
 `WORKLOAD_SEED=20261007`. The evaluator voids a run whose `pins.json` says
 `"graded": true` unless `reps` is 1..18, `cell_order_seed` is `20261007`, and
 `cell_order.jsonl` is exactly the planned schedule (`check_graded_schedule` in
-`eval_workload.py`). Freeze-time check, before the verdict is read:
-`pins.json` must carry `"graded": true`. A run without it is diagnostic and
-does not grade this row.
+`eval_workload.py`, which compares rep ids and orders together). A graded
+measure also refuses a run dir that already holds pins, an order or any
+summary (smoke into a separate dir). The release grade is read with
+**`eval_workload.py --graded <run>`**, which voids any run not marked graded.
+Without `--graded` a diagnostic run still gets a verdict, recorded as
+`"mode": "diagnostic"` in `verdict.json` and flagged on the verdict line, so it
+cannot pass for the release grade.
 
 Interleaved because bench-host is shared and other sessions' jobs land on it. One
 gateway listening at a time. Before each rep, `GET /health` version must match

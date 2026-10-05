@@ -58,7 +58,7 @@ def runner_refusal(env: dict) -> str:
     full = {**os.environ, "K6_IMAGE_DIGEST": "sha256:" + "0" * 64, **env}
     done = subprocess.run(["bash", str(HERE / "run_workload.sh")], env=full,
                           capture_output=True, text=True, timeout=60)
-    return done.stderr
+    return done.stderr if done.returncode == 3 else f"exit {done.returncode}: {done.stderr}"
 
 
 def main() -> int:
@@ -119,6 +119,36 @@ def main() -> int:
         graded_run(run, planned)
         (run / "cell_order.jsonl").unlink()
         check("a graded run with no recorded order is VOID", tev.run_eval(run) == 3)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp) / "renumbered"
+        run.mkdir()
+        graded_run(run, planned)
+        lines = [json.dumps({"rep": 19 - n, "order": o}) for n, o in enumerate(planned, 1)]
+        (run / "cell_order.jsonl").write_text("\n".join(lines) + "\n")
+        check("a graded run whose rep ids do not match the plan is VOID", tev.run_eval(run) == 3)
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp) / "diagnostic"
+        run.mkdir()
+        tev.build(run, {c: (10.0, 20.0) for c in "ABCDE"}, reps=18)
+        graded_eval = subprocess.run([sys.executable, str(HERE / "eval_workload.py"), "--graded", str(run)],
+                                     capture_output=True, text=True)
+        check("--graded voids a diagnostic run", graded_eval.returncode == 3, graded_eval.stderr[-200:])
+        plain = subprocess.run([sys.executable, str(HERE / "eval_workload.py"), str(run)],
+                               capture_output=True, text=True)
+        check("a diagnostic verdict says it is diagnostic",
+              json.loads((run / "verdict.json").read_text()).get("mode") == "diagnostic"
+              and "DIAGNOSTIC" in plain.stderr, plain.stderr[-200:])
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp) / "used"
+        run.mkdir()
+        (run / "A1.summary.json").write_text("{}")
+        full = {**os.environ, "K6_IMAGE_DIGEST": "sha256:" + "0" * 64, "WORKLOAD_GRADED": "1",
+                "WORKLOAD_REPS": "18", "WORKLOAD_SEED": "20261007"}
+        done = subprocess.run(["bash", str(HERE / "run_workload.sh"), "measure", str(run)], env=full,
+                              capture_output=True, text=True, timeout=60)
+        check("the runner refuses a graded measure into a used run dir",
+              done.returncode == 3 and "fresh run dir" in done.stderr, done.stderr[-200:])
 
     print(f"\n{len(FAILURES)} failure(s)")
     return 1 if FAILURES else 0
