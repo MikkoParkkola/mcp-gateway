@@ -43,7 +43,7 @@ if [ "$mode" = build ]; then
 else
   # The first two skips are ci.yml `test`'s: each has a dedicated job that
   # provisions what it needs. The wiring test holds those lists equal.
-  # mik_5843_: reads repo-only competitive notes; not shipped in the crate.
+  # mik_5843_: reads repo-only docs (RFC-0132, SHADOW_SCAN.md); not shipped in the crate.
   cargo test --all-features --locked --no-fail-fast -- \
     --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result \
     --skip mik_7479_full_burst \

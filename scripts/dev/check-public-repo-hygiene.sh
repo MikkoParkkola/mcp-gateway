@@ -16,11 +16,6 @@ private_dirs=(
   "docs/positioning"
 )
 
-public_competitive_docs=(
-  "docs/competitive/README.md"
-  "docs/competitive/willow-enterprise-agent-governance.md"
-)
-
 ignore_samples=(
   "docs/strategy/example.md"
   "docs/competitive/example.md"
@@ -216,21 +211,7 @@ if git ls-files --error-unmatch docs/internal >/dev/null 2>&1 || [[ -d docs/inte
   fi
 fi
 
-is_public_competitive_doc() {
-  local file="$1"
-  local public_file
-  for public_file in "${public_competitive_docs[@]}"; do
-    [[ "$file" == "$public_file" ]] && return 0
-  done
-  return 1
-}
-
-tracked_private="$(
-  while IFS= read -r file; do
-    [[ -n "$file" ]] || continue
-    is_public_competitive_doc "$file" || printf '%s\n' "$file"
-  done < <(git ls-files "${private_dirs[@]}" || true)
-)"
+tracked_private="$(git ls-files "${private_dirs[@]}" || true)"
 if [[ -n "$tracked_private" ]]; then
   report_failure "tracked files remain under private strategy paths; move them to ignored local storage or remove them from the public index"
   printf '%s\n' "$tracked_private" >&2

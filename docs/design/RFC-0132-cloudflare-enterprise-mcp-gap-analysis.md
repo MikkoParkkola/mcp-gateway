@@ -113,8 +113,7 @@ larger scope and should be a separate major RFC if demanded. Current chain execu
 
 ## Component 2: Shadow MCP Detection
 
-Public comparison of this bounded shadow-AI / unmanaged MCP candidate against
-an enterprise governance product: [Willow / Webrix](../competitive/willow-enterprise-agent-governance.md) (MIK-5843). Local inventory remains `mcp-gateway cap discover --shadow`; mcp-gateway is not a network proxy.
+This is a bounded shadow-AI / unmanaged MCP candidate. Local inventory remains `mcp-gateway cap discover --shadow`; mcp-gateway is not a network proxy.
 
 ### Current state (mcp-gateway)
 

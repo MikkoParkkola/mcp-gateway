@@ -84,23 +84,24 @@ git -C "$repo" add .gitignore scripts/dev/check-public-repo-hygiene.sh
 git -C "$repo" add -f docs/competitive/scan.md
 assert_fail_contains "$repo" "tracked files remain under private strategy paths"
 
-repo="$(make_repo named-public-comparison)"
+# No comparison page is public any more, even one un-ignored by name.
+repo="$(make_repo named-comparison-is-refused)"
 cat >>"$repo/.gitignore" <<'EOF'
 !docs/competitive/
 docs/competitive/*
 !docs/competitive/README.md
-!docs/competitive/willow-enterprise-agent-governance.md
+!docs/competitive/example-comparison.md
 EOF
 mkdir -p "$repo/docs/competitive"
 cat >"$repo/docs/competitive/README.md" <<'EOF'
 # Public comparisons
 EOF
-cat >"$repo/docs/competitive/willow-enterprise-agent-governance.md" <<'EOF'
-# Willow feature comparison for users
+cat >"$repo/docs/competitive/example-comparison.md" <<'EOF'
+# Feature comparison for users
 EOF
 git -C "$repo" add .gitignore scripts/dev/check-public-repo-hygiene.sh
-git -C "$repo" add docs/competitive/README.md docs/competitive/willow-enterprise-agent-governance.md
-assert_pass "$repo"
+git -C "$repo" add docs/competitive/README.md docs/competitive/example-comparison.md
+assert_fail_contains "$repo" "tracked files remain under private strategy paths"
 
 blocked_markers=(
   "Status: DRAFT. Not ready to publish"
