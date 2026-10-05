@@ -82,6 +82,14 @@ class EventSourceScope(unittest.TestCase):
         self.assertTrue(guard.adds_source([("src/events/fanout.rs", "fn f() {}\n", "fn f() {}\n" + impl)]))
         self.assertTrue(guard.adds_source([("src/gateway/x.rs", "", impl)]))
 
+    def test_swapping_one_impl_for_another_is_a_new_source(self):
+        before, after = "impl EventSource for Old {}\n", "impl EventSource for New {}\n"
+        self.assertTrue(guard.adds_source([("src/events/a.rs", before, after)]))
+
+    def test_an_alias_declared_in_another_file_is_followed(self):
+        self.assertTrue(guard.adds_source([("src/events/a.rs", "", "impl Src for X {}\n")], {"Src"}))
+        self.assertEqual(guard.aliases(["pub(crate) use super::EventSource as Src;"]), {"Src"})
+
     def test_a_moved_impl_is_not_a_new_source(self):
         impl = "impl EventSource for X {}\n"
         self.assertFalse(guard.adds_source([("src/events/a.rs", impl, "// moved\n" + impl)]))
@@ -102,6 +110,8 @@ class EventSourceScope(unittest.TestCase):
             "impl\n    EventSource\n    for X {}",
             "impl<T>\n    super::EventSource for W<T>\nwhere\n    T: Send,\n{}",
             "use super::EventSource as Src;\nimpl Src for X {}",
+            "impl EventSource /* producer */ for X {}",
+            "impl /* a\nb */ EventSource for X {}",
         ]:
             self.assertEqual(guard.impl_count(text), 1, text)
 
@@ -111,6 +121,7 @@ class EventSourceScope(unittest.TestCase):
             "use super::EventSource;",
             "fn f(s: &dyn EventSource) {}",
             "impl Other for X { fn f(s: &dyn EventSource) {} }",
+            "/* impl EventSource for X {} */",
         ]:
             self.assertEqual(guard.impl_count(text), 0, text)
 

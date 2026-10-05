@@ -48,6 +48,8 @@ KEPT = {
     "package-tests", "public-claims", "release-script-tests",
     "release-criteria", "capability-pins", "secrets-scan", "secret-leak-lint",
     "file-size-ceiling", "control-drift-probes", "registry-packages",
+    # A few seconds of Python; a docs-only change is simply not judged.
+    "event-source-scope",
     # Release signing's own unit tests; docker-build waits for them.
     "release-signing-checks",
 }
