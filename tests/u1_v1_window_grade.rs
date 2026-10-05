@@ -228,8 +228,8 @@ fn assert_one_process(log: &str, pid: u32, from: u64, to: u64) {
         first - from
     );
     assert!(
-        stamps.iter().any(|t| (to..=to + MAX_GAP).contains(t)),
-        "no PID check within {MAX_GAP} s after the final scrape; take one right after it"
+        stamps.iter().any(|t| *t > to && *t <= to + MAX_GAP),
+        "no PID check later than the final scrape second and within {MAX_GAP} s of it; take one right after it"
     );
 }
 
@@ -394,17 +394,19 @@ fn the_pid_watch_must_show_one_unbroken_process() {
     log.extend(
         ["18:50", "18:55", "19:00"].map(|at| format!("2026-10-02T{at}:00+0200 pid=7 lstart=t\n")),
     );
-    let (from, to) = (u64::try_from(t0).unwrap(), u64::try_from(t0).unwrap() + 600);
+    // Scrape at 18:58; the 19:00 check comes after it.
+    let (from, to) = (u64::try_from(t0).unwrap(), u64::try_from(t0).unwrap() + 480);
     assert_one_process(&log, 7, from, to);
+    // A check in the scrape's own second may precede the scrape: not enough.
+    assert!(std::panic::catch_unwind(|| assert_one_process(&log, 7, from, to + 120)).is_err());
     let other = format!("{log}2026-10-02T19:00:00+0200 pid=8 lstart=u\n");
     assert!(std::panic::catch_unwind(|| assert_one_process(&other, 7, from, to)).is_err());
     let restarted = format!("{log}2026-10-02T19:00:00+0200 pid=7 lstart=u\n");
     assert!(std::panic::catch_unwind(|| assert_one_process(&restarted, 7, from, to)).is_err());
     assert!(std::panic::catch_unwind(|| assert_one_process(&log, 7, from, to + 3600)).is_err());
-    // A scrape at 18:58 with no check after it could hide a late restart.
-    assert!(std::panic::catch_unwind(|| assert_one_process(&log, 7, from, to - 120)).is_ok());
+    // With no check after the 18:58 scrape a late restart could hide.
     let early = log.replace("2026-10-02T19:00:00+0200 pid=7 lstart=t\n", "");
-    assert!(std::panic::catch_unwind(|| assert_one_process(&early, 7, from, to - 120)).is_err());
+    assert!(std::panic::catch_unwind(|| assert_one_process(&early, 7, from, to)).is_err());
 }
 
 /// A scrape short of the registered series set is refused even when both
