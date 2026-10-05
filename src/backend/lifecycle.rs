@@ -20,7 +20,10 @@ use super::{Backend, RestartOutcome};
 use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::runtime::{RuntimeLaunchCommand, RuntimeLaunchMode, RuntimePlan, RuntimeProviderKind};
-use crate::transport::{HttpTransport, StdioTransport, Transport, isolated_package_manager_env};
+use crate::transport::{
+    HttpTransport, StdioTransport, Transport, assigned_package_cache_dir,
+    isolated_package_manager_env,
+};
 use crate::{Error, Result};
 
 /// Consecutive unserved probe answers the gateway tolerates before it treats
@@ -379,14 +382,21 @@ impl Backend {
                 protocol_version,
             } => {
                 let launch = self.resolve_stdio_runtime_launch(command)?;
-                let transport = StdioTransport::new(
+                // Read before the environment is built: this is what says the
+                // cache is the gateway's to clear. A backend whose `env:`
+                // already names one gets `None`, and the repair leaves that
+                // path alone.
+                let assigned_cache =
+                    assigned_package_cache_dir(&self.name, &launch.command, &launch.env);
+                let transport = StdioTransport::new_with_assigned_cache(
                     &launch.command,
                     isolated_package_manager_env(&self.name, &launch.command, launch.env),
                     cwd.clone(),
                     self.config.timeout,
                     protocol_version.clone(),
+                    assigned_cache,
                 );
-                transport.start().await?;
+                super::package_cache::start_with_repair(&transport).await?;
                 transport
             }
             TransportConfig::Http {
