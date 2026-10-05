@@ -191,6 +191,10 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
     state.sync_legacy(backend).await;
     let mut tick = tokio::time::interval(TICK);
     let mut wake = shared.wake.subscribe();
+    // The tools refill a notice starts. Polled as one arm of the loop's select,
+    // never awaited inline, so a hanging `tools/list` (bounded by OPEN_LIMIT)
+    // does not stop the session draining its other notices (MIK-7937).
+    let mut refill: Option<Refill> = None;
     loop {
         let event = tokio::select! {
             () = shared.stop.cancelled() => {
@@ -199,6 +203,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             }
             note = recv(&mut state.current) => Ev::Current(note),
             note = recv_pending(&mut state.pending) => Ev::Pending(note),
+            () = refilled(&mut refill) => Ev::Refilled,
             _ = wake.changed() => Ev::Wake,
             _ = tick.tick() => Ev::Tick,
         };
@@ -213,23 +218,24 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
                 state.note(note, true);
             }
             Ev::Pending(None) => state.pending = None,
+            Ev::Refilled => {
+                // The refill ended (filled or timed out): the hub may hear now.
+                refill = None;
+                state.tools_pending = true;
+            }
             Ev::Wake | Ev::Tick => {}
         }
-        if state.tools_due.is_some_and(|due| Instant::now() >= due) {
+        if refill.is_none() && state.tools_due.is_some_and(|due| Instant::now() >= due) {
             // A notice arrived: drop the cached list and refill it before the
             // hub hears, so the subscriber's re-read is fresh and nothing sees
-            // an emptied cache. At most once per tick however many notices came.
+            // an emptied cache. At most once per tick however many notices
+            // came; a notice during a refill waits for the next one.
             state.tools_due = None;
             backend.invalidate_tools();
-            let refill = tokio::time::timeout(OPEN_LIMIT, backend.get_tools());
-            tokio::select! {
-                () = shared.stop.cancelled() => {
-                    state.release(backend).await;
-                    return Outcome::Stopped;
-                }
-                _ = refill => {}
-            }
-            state.tools_pending = true;
+            let backend = Arc::clone(backend);
+            refill = Some(Box::pin(async move {
+                let _ = tokio::time::timeout(OPEN_LIMIT, backend.get_tools()).await;
+            }));
         }
         if !backend_still_current(backend, &target.handle) {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
@@ -261,8 +267,20 @@ fn backend_still_current(backend: &Backend, handle: &Weak<dyn UpstreamListen>) -
 enum Ev {
     Current(Option<UpstreamNote>),
     Pending(Option<UpstreamNote>),
+    Refilled,
     Wake,
     Tick,
+}
+
+/// An in-flight tools refill.
+type Refill = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+/// Resolves when the in-flight refill ends; never, when there is none.
+async fn refilled(refill: &mut Option<Refill>) {
+    match refill {
+        Some(future) => future.await,
+        None => std::future::pending().await,
+    }
 }
 
 async fn recv(current: &mut Option<(FrameStream, Requested)>) -> Option<UpstreamNote> {
