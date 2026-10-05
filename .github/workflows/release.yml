@@ -594,7 +594,7 @@ jobs:
 
           cat > homebrew-tap/Formula/mcp-gateway.rb <<EOF
           class McpGateway < Formula
-            desc "MCP gateway: MCP servers and REST APIs behind one endpoint, revision bridging"
+            desc "MCP gateway: unlimited MCP servers, tools and APIs at a fixed context cost"
             homepage "https://github.com/MikkoParkkola/mcp-gateway"
             # Required because the artifact basename ends in the architecture (arm64/x86_64),
             # which a clean Homebrew install can otherwise mis-detect as the version.

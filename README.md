@@ -15,19 +15,66 @@
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_MCP-0078d4?logo=visualstudiocode)](https://insiders.vscode.dev/redirect/mcp/install?name=mcp-gateway&config=%7B%22command%22%3A%22mcp-gateway%22%2C%22args%22%3A%5B%22serve%22%2C%22--stdio%22%5D%7D)
 [![Install in Cursor](https://img.shields.io/badge/Cursor-Install_MCP-black?logo=cursor)](cursor://anysphere.cursor-deeplink/mcp/install?name=mcp-gateway&config=%7B%22command%22%3A%22mcp-gateway%22%2C%22args%22%3A%5B%22serve%22%2C%22--stdio%22%5D%7D)
 
-**MCP Gateway is a single-binary MCP gateway that puts an AI client's MCP servers and REST APIs behind one endpoint with a compact discovery surface, and lets clients and servers on different MCP protocol revisions make ordinary tool calls to each other.**
+**Connect unlimited MCP servers, tools and REST APIs to your AI client at a fixed context cost. The client sees a small fixed set of meta-tools (11 by default) instead of every backend's tool definitions, and finds the rest on demand.**
 
-It works as a Model Context Protocol proxy, an MCP server aggregator and an MCP protocol version bridge. It is self-hosted and written in Rust. Personal and noncommercial use is free, including running the full gateway; running it commercially needs a [commercial license](#license).
+MCP Gateway is a single-binary MCP gateway: a Model Context Protocol proxy and MCP server aggregator that puts all of those backends behind one endpoint, and an MCP protocol version bridge that lets clients and servers on different MCP protocol revisions make ordinary tool calls to each other. It is self-hosted and written in Rust. Personal and noncommercial use is free, including running the full gateway; running it commercially needs a [commercial license](#license).
 
 ![demo](demo.gif)
 
 ## Key benefits
 
+- **Unlimited MCP servers, tools and APIs at a fixed context cost.** The gateway sets no limit on how many backends or tools you connect, and the client's tool list does not grow as you add them. The client sees a small set of meta-tools (11 at most in the default HTTP configuration; an ordinary client sees fewer), finds backend tools on demand with `gateway_search_tools`, and calls them with `gateway_invoke`. A client that loads every definition up front would carry about 15,000 tokens of definitions for 100 tools in every request (modeled at ~150 tokens per tool); through the gateway it carries 11 definitions, about 1,100 tokens, however many backends sit behind it. That is the tool-definition cost, not the cost of a whole task: a small live-agent benchmark found no completed-task token saving from the extra search step. See [Benchmarks](docs/BENCHMARKS.md).
 - **One endpoint for every tool.** MCP servers (stdio, HTTP, SSE, WebSocket) and REST APIs sit behind one gateway, so each AI client is configured once.
-- **A compact discovery surface.** The client sees a small set of meta-tools instead of every backend definition, finds backend tools on demand with `gateway_search_tools`, and calls them with `gateway_invoke`. The catalog is not bounded by the context window. Whether a completed task uses fewer tokens depends on the client: a small live-agent benchmark found no completed-task token saving from the extra search step. See [Benchmarks](docs/BENCHMARKS.md).
 - **MCP protocol version bridge.** For ordinary tool calls, clients and backends on revisions 2024-11-05 through 2026-07-28 work together; the gateway negotiates the revision with each side separately, so you can move clients to 2026-07-28 before every server does. See [MCP compatibility](#mcp-compatibility) for what is translated and what is not.
 - **Each caller sees and reaches only what it was granted.** The verified caller identity can be passed to backends through one of three configured strategies, and with auth on every tool call is written to an audit log that cannot be switched off. See [What's new in 4.0](#whats-new-in-40).
 - **Fails closed on unsafe configuration.** Unknown config keys, config files other users can read, and plain HTTP with auth on a network address (unless `server.cleartext_http` declares how the traffic is protected) stop the start instead of running on settings the gateway does not trust.
+
+## The problem this removes
+
+A client that loads every connected tool's full definition up front (an eager client) pays for each one in every request, whether the tool gets used or not. At the roughly 150 tokens per tool this README's model assumes (`benchmarks/public_claims.json`; an assumed figure, not a measurement), 20 servers with 100 tools between them cost about 15,000 tokens before the conversation starts. Some clients defer instead: they load only tool names and fetch a definition when the model asks for it, so their per-tool cost is much lower and this figure does not apply to them. For those clients, aggregation, routing and policy are the main reasons to use the gateway, not context savings. For eager clients, context limits then force a second cost: you have to decide up front which tools to connect and leave the rest out, so the agent makes worse decisions because it cannot reach data you chose not to load.
+
+MCP Gateway moves the full catalog out of the exposed tool list. The agent loads a small set of meta-tools (for an administrator, 9 at minimum and 11 in the default HTTP deployment, before any allow-list or surfaced tools), searches with `gateway_search_tools`, and invokes a backend tool with `gateway_invoke`. This creates room for larger catalogs, but the extra search hop can cost more tokens and time on a completed task.
+
+```mermaid
+flowchart LR
+    AI["AI client<br/>(Claude, Cursor, ...)"]
+    subgraph GW["MCP Gateway (single binary)"]
+        META["Compact meta-surface<br/>9-17 tools"]
+        DISC{"Discover on demand<br/>gateway_search_tools<br/>gateway_invoke"}
+    end
+    T1["MCP backend<br/>Tavily (stdio)"]
+    T2["MCP backend<br/>Context7 (http)"]
+    C1["REST capability<br/>GitHub"]
+    C2["REST capability<br/>Stripe"]
+    Cn["130+ capabilities"]
+
+    AI -->|"9-17 tool defs"| META
+    META --> DISC
+    DISC --> T1
+    DISC --> T2
+    DISC --> C1
+    DISC --> C2
+    DISC --> Cn
+```
+
+## How it works
+
+### MCP compatibility
+
+The gateway speaks MCP 2026-07-28 (stateless, on by default) and 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05 (through the `initialize` handshake). It negotiates the revision with the client and with each backend on its own, so a client and a backend on different revisions still work together:
+
+- **Ordinary calls** work across legacy and 2026 clients and backends. An HTTP or stdio backend that rejects the gateway's proposed revision is retried at the highest revision both sides speak. A 2026-only backend that refuses the `initialize` handshake must be reached over HTTP.
+- **A 2026 backend's mid-call questions reach an older client.** The gateway relays them as the `elicitation/create`, `sampling/createMessage` or `roots/list` requests the client already understands, collects the answers, and retries the backend. A 2026 client gets the same questions as a continuation it answers by retrying (over HTTP it needs a verified caller identity).
+
+Limits: the reverse translation is not implemented, so an older backend that sends its own mid-call request is not relayed to any client. A legacy client is refused the 2026-only tasks methods (`-32601`) rather than given an emulation, and the bridge relays only those three request types and refuses the rest. The relay runs only on calls the gateway dispatches itself (`gateway_invoke` and the other meta-tool invoke paths), not on the direct `POST /mcp/{name}` route, and only for request types the client declared in `initialize`. The per-pairing matrix, with the test behind each row, is in [docs/PROTOCOL_COMPATIBILITY.md](docs/PROTOCOL_COMPATIBILITY.md).
+
+### What MCP Gateway is, and what it is not
+
+MCP Gateway is a tool and capability **router**. It routes MCP tool, resource, and prompt traffic to backend MCP servers and to capability-backed REST APIs, and it can proxy MCP server-to-client requests like `sampling/createMessage`, `elicitation/create`, and `roots/list` back to the connected client over the existing session.
+
+It is not a chat-completions or embeddings proxy. When a backend asks for `sampling/createMessage`, the connected client performs the model call, not the gateway. The OpenAI-compatible prompt-cache helpers exist for one narrow reason: so `gateway_invoke` can preserve `prompt_cache_key` behavior for backends that call LLM APIs internally. That boundary is deliberate. The value here is routing hundreds of tools through a small surface, not sitting in the model path.
+
+Compared with a client that loads every tool definition into every request, the gateway trades a one-time discovery hop for a flat, small context cost. It aggregates many backends behind one namespaced surface with integrity checks, ranking, and per-user identity.
 
 ## Quick Start
 
@@ -252,53 +299,6 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 
 </details>
 
-## The problem this removes
-
-A client that loads every connected tool's full definition up front (an eager client) pays for each one in every request, whether the tool gets used or not. At the roughly 150 tokens per tool this README's model assumes (`benchmarks/public_claims.json`; an assumed figure, not a measurement), 20 servers with 100 tools between them cost about 15,000 tokens before the conversation starts. Some clients defer instead: they load only tool names and fetch a definition when the model asks for it, so their per-tool cost is much lower and this figure does not apply to them. For those clients, aggregation, routing and policy are the main reasons to use the gateway, not context savings. For eager clients, context limits then force a second cost: you have to decide up front which tools to connect and leave the rest out, so the agent makes worse decisions because it cannot reach data you chose not to load.
-
-MCP Gateway moves the full catalog out of the exposed tool list. The agent loads a small set of meta-tools (for an administrator, 9 at minimum and 11 in the default HTTP deployment, before any allow-list or surfaced tools), searches with `gateway_search_tools`, and invokes a backend tool with `gateway_invoke`. This creates room for larger catalogs, but the extra search hop can cost more tokens and time on a completed task.
-
-```mermaid
-flowchart LR
-    AI["AI client<br/>(Claude, Cursor, ...)"]
-    subgraph GW["MCP Gateway (single binary)"]
-        META["Compact meta-surface<br/>9-17 tools"]
-        DISC{"Discover on demand<br/>gateway_search_tools<br/>gateway_invoke"}
-    end
-    T1["MCP backend<br/>Tavily (stdio)"]
-    T2["MCP backend<br/>Context7 (http)"]
-    C1["REST capability<br/>GitHub"]
-    C2["REST capability<br/>Stripe"]
-    Cn["130+ capabilities"]
-
-    AI -->|"9-17 tool defs"| META
-    META --> DISC
-    DISC --> T1
-    DISC --> T2
-    DISC --> C1
-    DISC --> C2
-    DISC --> Cn
-```
-
-## How it works
-
-### MCP compatibility
-
-The gateway speaks MCP 2026-07-28 (stateless, on by default) and 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05 (through the `initialize` handshake). It negotiates the revision with the client and with each backend on its own, so a client and a backend on different revisions still work together:
-
-- **Ordinary calls** work across legacy and 2026 clients and backends. An HTTP or stdio backend that rejects the gateway's proposed revision is retried at the highest revision both sides speak. A 2026-only backend that refuses the `initialize` handshake must be reached over HTTP.
-- **A 2026 backend's mid-call questions reach an older client.** The gateway relays them as the `elicitation/create`, `sampling/createMessage` or `roots/list` requests the client already understands, collects the answers, and retries the backend. A 2026 client gets the same questions as a continuation it answers by retrying (over HTTP it needs a verified caller identity).
-
-Limits: the reverse translation is not implemented, so an older backend that sends its own mid-call request is not relayed to any client. A legacy client is refused the 2026-only tasks methods (`-32601`) rather than given an emulation, and the bridge relays only those three request types and refuses the rest. The relay runs only on calls the gateway dispatches itself (`gateway_invoke` and the other meta-tool invoke paths), not on the direct `POST /mcp/{name}` route, and only for request types the client declared in `initialize`. The per-pairing matrix, with the test behind each row, is in [docs/PROTOCOL_COMPATIBILITY.md](docs/PROTOCOL_COMPATIBILITY.md).
-
-### What MCP Gateway is, and what it is not
-
-MCP Gateway is a tool and capability **router**. It routes MCP tool, resource, and prompt traffic to backend MCP servers and to capability-backed REST APIs, and it can proxy MCP server-to-client requests like `sampling/createMessage`, `elicitation/create`, and `roots/list` back to the connected client over the existing session.
-
-It is not a chat-completions or embeddings proxy. When a backend asks for `sampling/createMessage`, the connected client performs the model call, not the gateway. The OpenAI-compatible prompt-cache helpers exist for one narrow reason: so `gateway_invoke` can preserve `prompt_cache_key` behavior for backends that call LLM APIs internally. That boundary is deliberate. The value here is routing hundreds of tools through a small surface, not sitting in the model path.
-
-Compared with a client that loads every tool definition into every request, the gateway trades a one-time discovery hop for a flat, small context cost. It aggregates many backends behind one namespaced surface with integrity checks, ranking, and per-user identity.
-
 <a id="end-user-identity-v31"></a>
 
 ## Multitenant identity
@@ -318,7 +318,7 @@ In a client that loads every definition up front, every MCP tool you connect cos
 | **Tools in context** | Every definition, every request (eager client) | 11 meta-tools in the README benchmark (~1,100 tokens) |
 | **Schema footprint** | ~15,000 modeled tokens (100 tools) | ~1,100 modeled tokens before discovery; not completed-task cost |
 | **Measured task cost** | Direct path was lower at every tested size | Meta path used 1.2–16.1% more input tokens and one extra turn |
-| **Practical tool limit** | 20 to 50 tools under context pressure | Not bounded by the context window; discovered on demand |
+| **Practical tool limit** | 20 to 50 tools under context pressure | None set by the gateway; tools are discovered on demand |
 | **Connect a new REST API** | Build an MCP server (days) | Drop a YAML file or import an OpenAPI spec (minutes) |
 | **Changing MCP config** | Restart the AI session, lose context | Capability YAMLs and backends reload live; most other config fields need a gateway restart, which drops open sessions |
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
@@ -635,7 +635,7 @@ mcp-gateway is part of a suite of MCP tools:
 
 | Tool | Description |
 |------|-------------|
-| **[mcp-gateway](https://github.com/MikkoParkkola/mcp-gateway)** | **One MCP endpoint for many MCP servers and REST APIs, with on-demand tool discovery and MCP revision bridging** |
+| **[mcp-gateway](https://github.com/MikkoParkkola/mcp-gateway)** | **Unlimited MCP servers, tools and REST APIs behind one MCP endpoint at a fixed context cost, with on-demand tool discovery and MCP revision bridging** |
 | [trvl](https://github.com/MikkoParkkola/trvl) | AI travel agent, 36 MCP tools for flights, hotels, ground transport |
 | [nab](https://github.com/MikkoParkkola/nab) | Web content extraction: fetch any URL with cookies and anti-bot bypass |
 | [axterminator](https://github.com/MikkoParkkola/axterminator) | macOS GUI automation, 34 MCP tools via the Accessibility API |

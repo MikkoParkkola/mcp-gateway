@@ -1,6 +1,6 @@
 # mcp-gateway
 
-> MCP gateway and Model Context Protocol proxy: one endpoint for many MCP servers and REST APIs, a compact set of meta-tools for finding and calling them, and bridging between MCP revisions 2024-11-05 and 2026-07-28.
+> MCP gateway and Model Context Protocol proxy: connect unlimited MCP servers, tools and REST APIs to your AI client at a fixed context cost. The client sees a small fixed set of meta-tools for finding and calling them, not every backend's definitions; one endpoint for all of them, and bridging between MCP revisions 2024-11-05 and 2026-07-28.
 
 MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface (9 tools minimum, 11 in the README benchmark scenario) and discovers the right backend tool on demand.
 

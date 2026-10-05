@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.MikkoParkkola/mcp-gateway",
   "title": "MCP Gateway",
-  "description": "MCP gateway: MCP servers and REST APIs behind one endpoint, on-demand discovery, revision bridging",
+  "description": "MCP gateway: unlimited MCP servers, tools and REST APIs behind one endpoint at a fixed context cost",
   "repository": {
     "url": "https://github.com/MikkoParkkola/mcp-gateway",
     "source": "github",
