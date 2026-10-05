@@ -72,10 +72,12 @@ impl HttpTransport {
                 let mut oauth = oauth_arc_for_task.lock().await;
                 oauth.initialize().await?;
 
-                // If we don't have a valid token, trigger authorization flow
+                // No valid token: refresh one first when a refresh token is held
+                // (a migrated or merely expired credential), and authorize only
+                // when that fails (MIK-6744.STORE.1).
                 if !oauth.has_valid_token() {
-                    info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&base_url_for_task), "OAuth required - initiating authorization flow");
-                    oauth.authorize().await?;
+                    info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&base_url_for_task), "OAuth token missing or expired - refreshing or authorizing");
+                    oauth.get_token().await?;
                 }
 
                 Ok::<String, crate::Error>(oauth.backend_name().to_string())

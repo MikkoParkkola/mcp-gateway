@@ -647,6 +647,9 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     // up, and the await below must not begin until custody is READY. Attaching
     // the environment afterwards would validate against an empty one and would
     // reach serving with no custody at all.
+    // Held for the server's whole run: `oauth migrate-legacy` refuses while any
+    // gateway holds it, so it never writes under a running gateway.
+    let _oauth_instance = mcp_gateway::oauth::legacy_migrate::hold_default_instance_lock();
     let gateway = match Gateway::new_evaluated(config, env, config_path).await {
         Ok(g) => discovered_config::watch(g, discovered),
         Err(e) => {
@@ -713,6 +716,9 @@ async fn run_server(cli: Cli) -> ExitCode {
     let config_path = cli.config.as_deref().map(std::path::Path::to_path_buf);
     // See `run_stdio_server`: the constructor owns validation-against-overlay
     // and the custody bring-up, and both must complete before `run` serves.
+    // Held for the server's whole run: `oauth migrate-legacy` refuses while any
+    // gateway holds it, so it never writes under a running gateway.
+    let _oauth_instance = mcp_gateway::oauth::legacy_migrate::hold_default_instance_lock();
     let gateway = match Gateway::new_evaluated(config, env, config_path).await {
         Ok(g) => discovered_config::watch(g, discovered),
         Err(e) => {

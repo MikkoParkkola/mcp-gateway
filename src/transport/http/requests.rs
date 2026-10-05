@@ -287,6 +287,14 @@ impl HttpTransport {
 
         let status = response.status();
         if !status.is_success() {
+            // A rejected bearer must not be presented again: forgetting it makes
+            // the next request refresh or re-authorize instead of repeating the
+            // same 401 until the token's expiry (MIK-6744.STORE.1).
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                && let Some(oauth) = &self.oauth_client
+            {
+                oauth.lock().await.forget_current_token();
+            }
             // A11-b/g: a deterministic refusal is typed by its STATUS alone.
             let typed = response.error_for_status_ref().err();
             let body = response.text().await.unwrap_or_default();

@@ -477,6 +477,19 @@ impl OAuthClient {
         Ok(token)
     }
 
+    /// Forget the access token in memory after the resource server rejected it,
+    /// so the next [`Self::get_token`] refreshes or re-authorizes. The stored
+    /// refresh token is kept: [`Self::get_token`] reads it from the token this
+    /// clears, so it is carried over first.
+    pub(crate) fn forget_current_token(&self) {
+        let mut current = self.current_token.write();
+        if let Some(token) = current.as_mut() {
+            // Expired now: the cached access token is never served again, and
+            // the refresh token beside it is still tried.
+            token.expires_at = Some(0);
+        }
+    }
+
     /// Return the backend name (used by the background refresh task for logging).
     #[must_use]
     pub fn backend_name(&self) -> &str {

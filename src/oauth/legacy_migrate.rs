@@ -231,6 +231,23 @@ pub(crate) fn hold_instance_lock(storage: &TokenStorage) -> std::io::Result<std:
     Ok(file)
 }
 
+/// [`hold_instance_lock`] on the default token directory, for a gateway at
+/// startup. `None`, with a warning, when it cannot be taken: a gateway still
+/// serves, and `oauth migrate-legacy` then cannot see it.
+#[must_use]
+pub fn hold_default_instance_lock() -> Option<std::fs::File> {
+    let held = TokenStorage::default_location()
+        .map_err(|error| std::io::Error::other(error.to_string()))
+        .and_then(|storage| hold_instance_lock(&storage));
+    match held {
+        Ok(file) => Some(file),
+        Err(error) => {
+            tracing::warn!(%error, "could not take the OAuth token directory's instance lock");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "legacy_migrate_tests.rs"]
 mod legacy_migrate_tests;

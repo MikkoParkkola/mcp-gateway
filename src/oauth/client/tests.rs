@@ -1084,3 +1084,40 @@ async fn resource_metadata_naming_no_authorization_server_falls_back_to_the_orig
         .await
         .expect("a document naming no authorization server falls back to the origin");
 }
+
+/// MIK-6744.STORE.1: after the resource server rejects the bearer (401), the
+/// cached access token is never served again, and the refresh token beside it
+/// stays for `get_token` to try. A token with no expiry is covered too.
+#[test]
+fn a_rejected_token_is_forgotten_and_its_refresh_token_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let client = OAuthClient::new(
+        Client::new(),
+        "backend".to_string(),
+        "http://localhost".to_string(),
+        vec![],
+        storage,
+        OAuthClientConfig::default(),
+    );
+    let token = TokenInfo::from_response(
+        "tok".to_string(),
+        None,
+        Some("refresh".to_string()),
+        None,
+        None,
+    );
+    *client.current_token.write() = Some(token);
+    assert!(
+        client.has_valid_token(),
+        "premise: a token with no expiry is valid"
+    );
+    client.forget_current_token();
+    assert!(!client.has_valid_token());
+    let kept = client
+        .current_token
+        .read()
+        .as_ref()
+        .and_then(|t| t.refresh_token.clone());
+    assert_eq!(kept.as_deref(), Some("refresh"));
+}
