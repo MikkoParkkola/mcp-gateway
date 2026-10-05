@@ -235,14 +235,23 @@ pub(super) async fn redirecting_listener(location: String) -> u16 {
 /// reach a loopback mock at all.
 #[tokio::test]
 async fn hardened_oauth_client_refuses_a_literal_redirect() {
-    for (destination, followed) in [
-        (DestinationPolicy::Public, false),
-        (DestinationPolicy::Configured, true),
+    // `Configured` sends `http://` loopback through its direct client (the
+    // proxied one refuses a loopback hop: cleartext_tests), which follows.
+    for (destination, client, followed) in [
+        (
+            DestinationPolicy::Public,
+            super::http_client(DestinationPolicy::Public).unwrap(),
+            false,
+        ),
+        (
+            DestinationPolicy::Configured,
+            super::loopback_client().unwrap(),
+            true,
+        ),
     ] {
         let (target, accepted) = counting_listener().await;
         let origin = redirecting_listener(format!("http://127.0.0.1:{target}/next")).await;
-        let result = super::http_client(destination)
-            .unwrap()
+        let result = client
             .get(format!("http://127.0.0.1:{origin}/start"))
             .send()
             .await;

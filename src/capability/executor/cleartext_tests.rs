@@ -200,3 +200,51 @@ async fn a_redirect_from_loopback_to_cleartext_off_machine_is_refused() {
         "{error:?}"
     );
 }
+
+/// GraphQL and JSON-RPC inject the same credential, so they refuse the same
+/// URL, before the credential is read. A public literal passes the SSRF check,
+/// so only the cleartext rule can refuse it.
+#[tokio::test]
+async fn graphql_and_jsonrpc_refuse_a_cleartext_endpoint_at_send_time() {
+    use super::super::rest::{ExecutionContext, ProtocolExecutor};
+    let executor = CapabilityExecutor::new();
+    for service in ["graphql", "jsonrpc"] {
+        let cap = parse_capability(&format!(
+            "
+name: cleartext_{service}
+description: probe
+providers:
+  primary:
+    service: {service}
+    config:
+      endpoint: http://93.184.215.14/rpc
+      method: probe
+      body: \"{{ probe }}\"
+auth:
+  required: true
+  type: bearer
+  key: env:MCP_GW_CLEARTEXT_PROBE
+"
+        ))
+        .expect("parses");
+        let config = cap.providers.named["primary"].protocol_config();
+        let ctx = ExecutionContext {
+            capability: &cap,
+            timeout_secs: 10,
+            context: CapabilityExecutionContext::default(),
+        };
+        let result = if service == "graphql" {
+            let graphql = super::GraphqlExecutor {
+                executor: &executor,
+            };
+            graphql.execute(&config, json!({}), &ctx).await
+        } else {
+            let jsonrpc = super::super::jsonrpc::JsonRpcExecutor {
+                executor: &executor,
+            };
+            jsonrpc.execute(&config, json!({}), &ctx).await
+        };
+        let error = result.expect_err(service).to_string();
+        assert!(error.contains("cleartext"), "{service}: {error}");
+    }
+}
