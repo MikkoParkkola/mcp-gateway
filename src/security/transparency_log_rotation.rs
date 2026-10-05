@@ -310,11 +310,11 @@ fn reopen_tail(
     match read_last_nonempty_line(path) {
         Ok(Some(line)) => {
             let (counter, hash, event, v) = record_head(&line)?;
-            if event.as_deref() == Some(EV_SEALED) {
-                // Crash after the seal, before the rename: finish it.
-                let seq = v.get("segment_seq").and_then(Value::as_u64).unwrap_or(0);
-                let sealed = segments::sealed_path(path, seq);
-                std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
+            let seal = event.as_deref() == Some(EV_SEALED);
+            let to = segments::sealed_path(path, v["segment_seq"].as_u64().unwrap_or(0));
+            // Finish a crash between seal and rename; a seal of a sealed one is a copy (MIK-7949).
+            if seal && !to.exists() {
+                std::fs::rename(path, &to).map_err(segments::ctx("rename", &to))?;
                 segments::sync_dir(path)?;
                 let sealed = segments::list_segments(path)?;
                 let behind = contradicted(path, &sealed, hw, counter, &hash, config)?;
@@ -323,7 +323,7 @@ fn reopen_tail(
                 Ok((state, behind))
             } else {
                 let (resumed, misplaced) = resume_active(path, counter, hash, sealed, hw, now)?;
-                let below_mark = misplaced
+                let below_mark = (seal || misplaced)
                     || contradicted(path, sealed, hw, counter, &resumed.last_entry_hash, config)?;
                 Ok((resumed, below_mark))
             }

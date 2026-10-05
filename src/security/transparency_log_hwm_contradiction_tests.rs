@@ -302,6 +302,45 @@ fn a_tail_at_the_mark_restored_under_an_older_segment_is_a_finding() {
     }
 }
 
+/// MIK-7949: an active file ending in a copied seal of an already sealed
+/// segment is not a crash to finish. Before the fix the restart renamed it
+/// over the genuine segment, here a one-line file replacing all of segment 1.
+#[test]
+fn a_copied_seal_of_a_sealed_segment_does_not_replace_it() {
+    use super::segments::sealed_path;
+    for signed in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        rotate_n(&l, &path, 2);
+        append(&l, 7);
+        drop(l);
+        let genuine_1 = std::fs::read(sealed_path(&path, 1)).unwrap();
+        let seal = lines(&sealed_path(&path, 1)).pop().unwrap();
+        assert_eq!(event(&seal), Some("audit_segment_sealed"));
+        std::fs::write(&path, format!("{seal}\n")).unwrap();
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        assert_eq!(
+            std::fs::read(sealed_path(&path, 1)).unwrap(),
+            genuine_1,
+            "the restart replaced sealed segment 1 (signed: {signed})"
+        );
+        assert!(!marks(&path).is_empty(), "no finding (signed: {signed})");
+        (0..50).for_each(|i| append(&l, i));
+        drop(l);
+        assert!(
+            sealed_path(&path, 2).exists(),
+            "no rotation (signed: {signed})"
+        );
+        assert_eq!(
+            std::fs::read(sealed_path(&path, 1)).unwrap(),
+            genuine_1,
+            "a rotation replaced sealed segment 1 (signed: {signed})"
+        );
+        assert!(!marks(&path).is_empty(), "finding lost (signed: {signed})");
+    }
+}
+
 /// Write `records` back as the active file, one JSON line each, as found.
 fn write_lines(path: &std::path::Path, records: &[serde_json::Value]) {
     let mut text = String::new();
