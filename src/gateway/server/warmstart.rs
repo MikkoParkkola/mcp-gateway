@@ -462,8 +462,8 @@ pub(super) fn spawn_warm_start_task(
 ///
 /// The exit condition is **cache presence**, not process liveness, because that
 /// is what discovery reads: `backend_tools_for_discovery` returns a backend's
-/// tools only if the cache is non-empty, and a plain semantic query never fills
-/// an empty one.
+/// tools only if the cache is non-empty, and a plain semantic query fills an
+/// empty one only in the background, after it has answered.
 async fn warm_start_until_cached(
     backends: &Arc<BackendRegistry>,
     name: &str,

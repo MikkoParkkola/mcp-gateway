@@ -178,10 +178,13 @@ impl MetaMcp {
         headers: &[(String, String)],
     ) -> Option<Arc<Vec<Tool>>> {
         let tools = backend.get_cached_tools_snapshot_for(binding);
-        // A populated shared slot whose every tool is withheld reads empty here;
-        // it must still refresh on TTL, or a description fixed upstream stays
-        // hidden from search forever (#1441).
-        if tools.is_empty() && binding.is_none() && backend.cached_tools_known() {
+        // An empty shared slot is filled behind this read, never by it: one
+        // never populated (outside `meta_mcp.warm_start`, or warm-start gave
+        // up) is otherwise skipped by every search forever (#3036), and one
+        // whose every tool is withheld must still refresh on TTL (#1441).
+        // Single-flight and the fill cooldown keep a dead backend to one
+        // `tools/list` per cooldown, however many searches arrive.
+        if tools.is_empty() && binding.is_none() {
             Self::refresh_stale_backend_tools_in_background(backend);
         }
         if !tools.is_empty() {
