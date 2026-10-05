@@ -111,7 +111,7 @@ Sleep 4s
 
 Type ""
 Enter
-Type "# 25 zero-config (weather, Wikipedia, HN, GitHub, Reddit, SEC...)"
+Type "# Several need no credentials at all (weather, Hacker News, country info)"
 Enter
 Sleep 3s
 
