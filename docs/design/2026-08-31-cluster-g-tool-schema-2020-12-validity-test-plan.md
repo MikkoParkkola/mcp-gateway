@@ -388,6 +388,12 @@ schema published from the load path.
 Assertion: every `$ref` in a published schema resolves to a target that exists in the
 same document. Failure names the schema, the field and the dangling pointer.
 
+Since #3027 (MIK-7959, merge `7ec84b55f`), a capability's non-object output root is
+published under `outputSchema.properties.items` as an embedded resource with its own
+`$id`, so its `#/...` references resolve against that resource rather than the document
+root, and the `ac_schema_10c` byte-identity pin
+(`src/gateway/meta_mcp/tests/surfaced_tools.rs`) compares the declared schema there.
+
 Red on HEAD: yes, in the sense that no such check exists. Whether it finds an offender
 today is a fact about the catalogue, not about the row; if it finds none, it stands as
 a regression guard and carries a falsifier — hand-edit one `$ref` to a name that does
