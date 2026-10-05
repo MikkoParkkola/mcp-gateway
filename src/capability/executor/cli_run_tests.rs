@@ -601,6 +601,41 @@ fn a_digit_credential_with_leading_zeros_is_redacted_as_a_number() {
     assert_eq!(value["n"], 7, "{value}");
 }
 
+/// A credential injected in number form other than plain digits, such as a
+/// leading "+" or an exponent, comes back as the same number printed
+/// differently. It is matched by value.
+#[test]
+fn a_plus_signed_credential_is_redacted_as_a_number() {
+    let mut value = json!({"pin": 12_345, "neg": -12_345, "other": 12_346});
+    super::super::cli::redact_value(&mut value, &["+12345".to_owned()]);
+    assert_eq!(value["pin"], "[redacted]", "{value}");
+    assert_eq!(value["neg"], "[redacted]", "{value}");
+    assert_eq!(value["other"], 12_346, "a different value is untouched");
+}
+
+#[test]
+fn an_exponent_form_credential_is_redacted_as_a_number() {
+    let mut value: Value =
+        serde_json::from_str(r#"{"a": 1.5e10, "b": 15000000000, "c": 1.5e11}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["1.5e10".to_owned()]);
+    assert_eq!(value["a"], "[redacted]", "{value}");
+    // Equal in value, so it is redacted too: over-redaction is accepted.
+    assert_eq!(value["b"], "[redacted]", "{value}");
+    assert_ne!(
+        value["c"], "[redacted]",
+        "a different value is untouched: {value}"
+    );
+}
+
+/// The 4-character floor applies to the needle as injected, number form
+/// included: "1e5" is 3 characters, so the number it names is left alone.
+#[test]
+fn a_number_form_credential_below_the_floor_is_not_looked_for() {
+    let mut value: Value = serde_json::from_str(r#"{"n": 1e5}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["1e5".to_owned()]);
+    assert_ne!(value["n"], "[redacted]", "{value}");
+}
+
 /// A digit credential past u64 is compared after the same float parse that
 /// read the result. `serde_json` without `float_roundtrip` truncates past u64
 /// and scales, so for this 25-digit value it lands one ULP from the correctly
