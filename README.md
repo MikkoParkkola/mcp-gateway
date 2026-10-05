@@ -305,9 +305,7 @@ Compared with a client that loads every tool definition into every request, the 
 
 A multitenant backend (email, memory, calendar) that runs its own OIDC normally sees only "the gateway," so it cannot enforce per-user access or produce a per-user audit trail. mcp-gateway propagates the verified end-user identity to the backend through one of three configured strategies. It can mint a short-lived gateway-signed assertion, forward the caller's own token, or run an RFC 8693 token exchange for OAuth-native backends. It keeps no long-lived credential for anyone. A backend marked `required` fails closed rather than serve a shared key when no verified identity is present, and per-user results stay isolated in the cache. See [ADR-007](docs/adr/ADR-007-identity-propagation.md), [ADR-008](docs/adr/ADR-008-multi-user-oauth-isolation.md), and [docs/UPGRADING-3.0.md](docs/UPGRADING-3.0.md). For the full propagation sequence, each strategy's wiring, the safety invariants, and the 2.x upgrade path, see [What is new in v3.1.0: end-user identity to backends](docs/whats-new-v3.1-identity.md).
 
-### Independent reviews
-
-- [mcp-gateway deep dive](https://ruachtov.ai/blog/mcp-gateway-deep-dive.html): a walkthrough of the capability system, SHA-256 integrity pinning, and the v2.5 to v2.9 development arc.
+### Where the numbers come from
 
 Quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with a CI check that fails on drift. The public Trust Fabric plan is tracked in [docs/roadmap/trust-fabric.md](docs/roadmap/trust-fabric.md).
 
