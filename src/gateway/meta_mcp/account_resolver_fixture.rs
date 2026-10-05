@@ -303,7 +303,7 @@ pub(super) async fn revoke_and_reconnect(
     next
 }
 
-fn store_config(root: &std::path::Path) -> StoreConfig {
+pub(super) fn store_config(root: &std::path::Path) -> StoreConfig {
     let root = root.canonicalize().expect("fixture root exists");
     StoreConfig {
         instance_id: "gateway-consumer-tests".into(),
