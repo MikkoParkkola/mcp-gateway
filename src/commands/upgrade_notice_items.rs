@@ -20,7 +20,9 @@ authorization prompt per backend; no config change is needed. `mcp-gateway \
 accounts migrate-credentials --config PATH --descriptor-id ID --legacy-issuer URL` \
 applies only to personal-account credentials (those under an \
 `accounts` descriptor): it cannot keep the credential of an ordinary \
-`backends.<name>.oauth` backend. Your 3.x token files are left untouched in \
+`backends.<name>.oauth` backend. To keep one, bind that backend to a personal \
+account (an `accounts` descriptor in place of its `oauth` block) and run the \
+command. Your 3.x token files are left untouched in \
 `~/.mcp-gateway/oauth/` at mode 0600. Delete them once every backend has \
 re-authenticated or been migrated, and been used successfully. A migrated \
 personal-account credential is still the same grant, so its first refresh \

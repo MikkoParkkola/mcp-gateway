@@ -109,6 +109,7 @@ fn notice_item_1_scopes_the_migration_to_personal_accounts() {
         "every oauth backend re-authenticates once",
         "applies only to personal-account credentials",
         "cannot keep the credential of an ordinary",
+        "to keep one, bind that backend to a personal account",
     ] {
         assert!(
             item_1.contains(expected),

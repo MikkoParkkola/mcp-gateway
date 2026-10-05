@@ -187,8 +187,8 @@ on a user's first call.
 credentials (those under an `accounts` descriptor). It needs an `accounts` block with a `personal_managed`
 descriptor and writes only the personal-account store, which an ordinary `backends.<name>.oauth`
 backend never reads, so it cannot keep that backend's credential. Every 3.x token belongs to an
-ordinary backend; keeping one means first moving that backend under a personal-account
-descriptor.
+ordinary backend. To keep one, bind that backend to a personal account (an `accounts`
+descriptor in place of its `oauth` block) and run the command.
 
 Your 3.x token files are left untouched in `~/.mcp-gateway/oauth/` at mode 0600.
 
