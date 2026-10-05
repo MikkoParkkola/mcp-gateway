@@ -661,3 +661,26 @@ fn every_builder_contributes_to_the_governed_set() {
         );
     }
 }
+
+// Throwaway evidence only, never merged: dumps the full meta-tool surface
+// (every gate on, plus Code Mode) so two revisions can be compared byte for
+// byte. It fails on purpose, because the test harness prints captured output
+// only for a failing test.
+#[test]
+fn throwaway_dump_meta_tool_surface() {
+    let mut tools = build_meta_tools(
+        MetaToolGates {
+            stats: true,
+            reload: true,
+            cost_report: true,
+            webhook_status: true,
+            playbooks: true,
+            profiles: true,
+        },
+        ToolTotal::Exact(42),
+        7,
+    );
+    tools.extend(build_code_mode_tools());
+    let dump = serde_json::to_string_pretty(&tools).expect("serialize meta tools");
+    panic!("MCPGW_META_DUMP_BEGIN\n{dump}\nMCPGW_META_DUMP_END");
+}
