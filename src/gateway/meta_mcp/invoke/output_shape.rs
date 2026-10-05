@@ -56,10 +56,55 @@ pub(in crate::gateway::meta_mcp) fn enforce_output_schema(
         tracing::warn!(
             server,
             tool,
-            mismatch = %validation.format_output_error(schema),
+            mismatch = %mismatch_shape(
+                validation.violations.iter().map(|v| v.param.as_str()),
+                &validation_target,
+                schema,
+            ),
             "tool output did not match its declared output schema; passing through (advisory)"
         );
         apply_validated_output(&result, validation_target)
+    }
+}
+
+/// Each violation as its path and the expected and actual JSON type, never a
+/// value: this log is written before the response firewall inspects the
+/// result, and a value or an undeclared key can be a credential the backend
+/// returned. A key the schema does not declare is backend text, so it is
+/// named only as "undeclared key".
+fn mismatch_shape<'a>(
+    params: impl Iterator<Item = &'a str>,
+    target: &Value,
+    schema: &Value,
+) -> String {
+    let declared = schema.get("properties").and_then(Value::as_object);
+    params
+        .map(|param| match declared.and_then(|props| props.get(param)) {
+            Some(prop) => {
+                let expected = match prop.get("type") {
+                    Some(Value::String(ty)) => ty.clone(),
+                    Some(other) => other.to_string(),
+                    None => "any".to_owned(),
+                };
+                let actual = target.get(param).map_or("missing", json_type);
+                format!("{param}: expected {expected}, got {actual}")
+            }
+            None if param.is_empty() => format!("$: got {}", json_type(target)),
+            None => "undeclared key".to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn json_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(n) if n.is_f64() => "number",
+        Value::Number(_) => "integer",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
@@ -118,3 +163,7 @@ pub(super) fn apply_validated_output(result: &Value, validated: Value) -> Value 
     }
     Value::Object(obj)
 }
+
+#[cfg(test)]
+#[path = "output_shape_tests.rs"]
+mod tests;
