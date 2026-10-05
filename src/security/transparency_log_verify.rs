@@ -437,7 +437,7 @@ impl<'a> Stream<'a> {
                     Some(EV_TORN)
                         if entry.get(TORN_COMMITTED).and_then(Value::as_bool) == Some(true) =>
                     {
-                        self.note_hwm_missing(counter);
+                        self.note_hwm_missing(field_u64(&entry, HWM_MISSING_AT).unwrap_or(counter));
                     }
                     Some(EV_OPENED) => {
                         if let Some(at) = field_u64(&entry, HWM_MISSING_AT) {

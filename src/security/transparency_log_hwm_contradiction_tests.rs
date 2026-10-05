@@ -221,6 +221,28 @@ fn a_repair_record_on_a_restored_older_file_reuses_no_committed_counter() {
     );
 }
 
+/// Bot-review ledger L1359: that repair record sits above the mark, so a
+/// finding read at its own counter starts the loss there. The first counter
+/// actually dropped is the line after the restored tail, and the finding the
+/// restart carries forward must start at it.
+#[test]
+fn a_torn_repair_above_the_mark_records_the_first_dropped_counter() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
+    (0..3).for_each(|i| append(&l, i));
+    let older = std::fs::read(&path).unwrap();
+    let first_dropped = lines(&path).last().unwrap()["counter"].as_u64().unwrap() + 1;
+    (3..9).for_each(|i| append(&l, i));
+    drop(l);
+    let mut torn = older;
+    torn.extend_from_slice(b"{\"counter\":4,\"ev");
+    std::fs::write(&path, torn).unwrap();
+    drop(TransparencyLogger::open(never_rotates(&path)).unwrap());
+    let found = super::hwm_scan::hwm_missing_in(&path, &never_rotates(&path)).unwrap();
+    assert_eq!(found, Some(first_dropped), "{:?}", lines(&path));
+}
+
 /// MIK-7884: the predicate's truth table, so each comparison is pinned alone
 /// (the seal-finishing and after-seal recovery paths share it).
 #[test]
