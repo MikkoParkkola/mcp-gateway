@@ -86,6 +86,10 @@ class EventSourceScope(unittest.TestCase):
         before, after = "impl EventSource for Old {}\n", "impl EventSource for New {}\n"
         self.assertTrue(guard.adds_source([("src/events/a.rs", before, after)]))
 
+    def test_moving_an_impl_between_files_is_not_a_new_source(self):
+        impl = "impl EventSource for X {}\n"
+        self.assertFalse(guard.adds_source([("src/events/a.rs", impl, ""), ("src/events/b.rs", "", impl)]))
+
     def test_an_alias_declared_in_another_file_is_followed(self):
         self.assertTrue(guard.adds_source([("src/events/a.rs", "", "impl Src for X {}\n")], {"Src"}))
         self.assertEqual(guard.aliases(["pub(crate) use super::EventSource as Src;"]), {"Src"})
