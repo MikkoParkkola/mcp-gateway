@@ -1410,7 +1410,7 @@ the comparison never matched. `/health` went to 503 only when the health tracker
 
 ## 46. Attestation `enforce` enforces on every route
 
-**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for `enforce` without a signing key
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only for `enforce` without a signing key or an audience
 
 In 3.x `enforce` ran as observe (item 30). In 4.0.0 `GATEWAY_ATTESTATION_MODE=enforce` refuses,
 with JSON-RPC -32002, every call whose token is missing, forged, expired or not scoped to the
