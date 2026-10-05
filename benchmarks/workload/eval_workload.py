@@ -531,7 +531,8 @@ def main() -> int:
     try:
         return evaluate(args.run_dir, require_graded=args.graded)
     except Void as exc:
-        print(f"VERDICT: VOID  (exit {EXIT_VOID})\n  {exc}", file=sys.stderr)
+        mode = "" if args.graded else "  [evaluated without --graded: not the release grade]"
+        print(f"VERDICT: VOID  (exit {EXIT_VOID}){mode}\n  {exc}", file=sys.stderr)
         return EXIT_VOID
 
 

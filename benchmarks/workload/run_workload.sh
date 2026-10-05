@@ -366,8 +366,8 @@ do_measure() {
     echo "void: a graded run needs a fresh run dir; $run already holds measurements" >&2
     exit 3
   fi
-  if [[ "$GRADED" == 1 ]] && [[ -e "$run/pins.json" || -e "$run/cell_order.jsonl" ]]; then
-    echo "void: a graded run needs a fresh run dir; $run already holds pins or an order" >&2
+  if [[ "$GRADED" == 1 ]] && [[ -e "$run/pins.json" || -e "$run/cell_order.jsonl" || -e "$run/verdict.json" ]]; then
+    echo "void: a graded run needs a fresh run dir; $run already holds pins, an order or a verdict" >&2
     exit 3
   fi
   render_configs "$run"
