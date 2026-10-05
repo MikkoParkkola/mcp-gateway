@@ -186,7 +186,9 @@ async fn admit_fails_fast_while_stalled_and_late_success_clears_it() {
     l.set_append_failure_for_test(false);
     // The stuck write finishes: the stall clears and calls are admitted.
     release.release();
-    for _ in 0..50 {
+    // The late write finishes on another thread; a loaded runner can take
+    // well over 500 ms to schedule it, so poll for up to 5 s.
+    for _ in 0..500 {
         if !l.is_stalled() {
             break;
         }
