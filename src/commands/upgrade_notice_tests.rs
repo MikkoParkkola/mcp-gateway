@@ -98,9 +98,10 @@ fn notice_4_0_0_discloses_the_3_x_files_the_migration_and_its_one_way_door() {
 
 /// Item 1 says plainly that every OAuth backend re-authenticates once, and
 /// scopes `accounts migrate-credentials` to personal accounts: that command
-/// writes only the personal-account store (it refuses without an `accounts`
-/// descriptor bound to the backend, `offline_migration.rs`), so it cannot keep
-/// an ordinary `backends.<name>.oauth` credential, which is every 3.x token.
+/// needs an `accounts` block with a `personal_managed` descriptor and writes
+/// only the personal-account store (`offline_migration.rs`), which an ordinary
+/// `backends.<name>.oauth` backend never reads, so it cannot keep that
+/// backend's credential, and every 3.x token is one.
 #[test]
 fn notice_item_1_scopes_the_migration_to_personal_accounts() {
     let item_1 = NOTICE_4_0_0_ITEMS[0].to_ascii_lowercase();
