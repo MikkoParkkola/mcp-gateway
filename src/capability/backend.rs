@@ -790,3 +790,7 @@ mod tests;
 #[cfg(test)]
 #[path = "backend_pin_tests.rs"]
 mod pin_tests;
+
+#[cfg(test)]
+#[path = "backend_output_root_tests.rs"]
+mod output_root_tests;
