@@ -252,7 +252,12 @@ An offline, operator-asserted command for plain backends (sink a), the sibling o
   suites and lint; (6) two-seat review; (7) mutants and CI.
 - src/ files: `src/cli/mod.rs`, `src/commands/` (new `oauth_migrate.rs`), `src/oauth/storage.rs`
   (create-new publish), `src/oauth/legacy_carry.rs` (new), `src/commands/upgrade_notice_items.rs`,
-  plus tests. The `read_legacy_source` visibility decision (§10) still applies.
+  plus tests. Ruling (2026-10-05): `read_legacy_source` moves to a shared crate-private module
+  (for example `src/oauth/legacy_source.rs`) used by both `personal_accounts` and the new command.
+  Its visibility inside `personal_accounts` is not widened.
+
+Ruling (2026-10-05): the automatic carry is dropped. The §13 CLI is the design, and it ships in
+4.0.1. 4.0.0 ships the corrected notice only.
 
 The automatic design in §§2-12 is kept above as the record of what was considered and why it was
 rejected.
