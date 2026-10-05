@@ -74,5 +74,7 @@ rendered=$(helm template probe "$work/pulled/mcp-gateway-$version.tgz" | yq 'sel
   printf 'Verify: `cosign verify --certificate-identity %q --certificate-oidc-issuer %q %s`\n\n' \
     "$SIGNER_IDENTITY" "$SIGNER_ISSUER" "$chart_ref"
   printf 'Pull: `helm pull %s/mcp-gateway --version %s` must print `Digest: %s`.\n' "$repo" "$version" "$chart_digest"
+  # Accepted for 4.0.0; MIK-7952 moves chart signing into a workflow.
+  printf '\nThe chart is signed with the maintainer'"'"'s identity above; the image is signed by the CI workflow (`ci.yml` at the release tag).\n'
 } > "$CHART_NOTES"
 echo "chart $version pins $digest, signed as $chart_ref"
