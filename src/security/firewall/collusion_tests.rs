@@ -626,3 +626,88 @@ fn earlier_sensitive_copy_survives_a_later_one_recorded_first() {
     d.record_delivery_at(T, A, true, &s, earlier);
     assert!(d.check_egress_at(B, U, &s, now).is_some());
 }
+
+/// MIK-7881.RELAY.1: B's copies from T are one from before the window and one
+/// stamped after the egress, recorded latest first. Neither is held in the
+/// window at the egress instant, so neither excuses it.
+#[test]
+fn stale_copy_and_future_redelivery_do_not_excuse() {
+    let d = detector();
+    let stale = Instant::now();
+    let now = stale + RelayParams::default().window + Duration::from_secs(1);
+    let s = secret();
+    d.record_delivery_at(T, B, false, &s, now + Duration::from_millis(1));
+    d.record_delivery_at(T, B, false, &s, stale);
+    d.record_delivery_at(T, A, true, &s, now);
+    assert!(
+        d.check_egress_at(B, U, &s, now).is_some(),
+        "a stale copy and a later one do not make a copy held in the window"
+    );
+    // Control: a copy inside the window, before the egress, still excuses.
+    d.record_delivery_at(T, B, false, &s, now);
+    assert!(d.check_egress_at(B, U, &s, now).is_none());
+}
+
+/// MIK-7881.RELAY.1: thinning B's copies never drops the one held at the
+/// egress. Copies at 0, 4, 8 and 12 minutes: at 11 minutes only the 8-minute
+/// copy is in the window and before the egress, so it must survive.
+#[test]
+fn thinned_copies_keep_the_one_held_at_the_egress() {
+    let d = detector();
+    let start = Instant::now();
+    let min = Duration::from_secs(60);
+    let s = secret();
+    for m in [0, 4, 8, 12] {
+        d.record_delivery_at(T, B, false, &s, start + min * m);
+    }
+    let now = start + min * 11;
+    d.record_delivery_at(T, A, true, &s, now);
+    assert!(d.check_egress_at(B, U, &s, now).is_none());
+}
+
+/// MIK-7881.RELAY.1: past the copy cap the oldest copy goes, not the newest.
+/// Copies at 0, 6, 12 and 18 minutes: at 23 minutes only the 18-minute copy
+/// is in the window.
+#[test]
+fn the_copy_cap_drops_the_oldest() {
+    let d = detector();
+    let start = Instant::now();
+    let min = Duration::from_secs(60);
+    let s = secret();
+    for m in [0, 6, 12, 18] {
+        d.record_delivery_at(T, B, false, &s, start + min * m);
+    }
+    let now = start + min * 23;
+    d.record_delivery_at(T, A, true, &s, now);
+    assert!(d.check_egress_at(B, U, &s, now).is_none());
+}
+
+/// MIK-7881.RELAY.1: A's sensitive copies from T are one from before the
+/// window and one stamped after the egress. Neither is held at the egress
+/// instant, so neither is a witness.
+#[test]
+fn stale_and_future_sensitive_copies_are_no_witness() {
+    let d = detector();
+    let stale = Instant::now();
+    let now = stale + RelayParams::default().window + Duration::from_secs(1);
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, now + Duration::from_millis(1));
+    d.record_delivery_at(T, A, true, &s, stale);
+    assert!(d.check_egress_at(B, U, &s, now).is_none());
+    // Control: a sensitive copy inside the window, before the egress, is one.
+    d.record_delivery_at(T, A, true, &s, now);
+    assert!(d.check_egress_at(B, U, &s, now).is_some());
+}
+
+/// MIK-7881.RELAY.1: a pair that first got a plain copy and later a
+/// sensitive one is a witness: the later sensitivity is kept.
+#[test]
+fn a_sensitive_copy_after_a_plain_one_is_a_witness() {
+    let d = detector();
+    let start = Instant::now();
+    let s = secret();
+    d.record_delivery_at(T, A, false, &s, start);
+    d.record_delivery_at(T, A, true, &s, start + Duration::from_secs(1));
+    let now = start + Duration::from_secs(2);
+    assert!(d.check_egress_at(B, U, &s, now).is_some());
+}
