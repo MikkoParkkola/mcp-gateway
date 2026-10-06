@@ -4044,8 +4044,9 @@ with the same principal, such as one key listed twice under two names, were one 
 3.5.0 and 3.5.1 each could attach to the other's sessions, and in the 4.0.0 pre-releases each
 could also read and cancel the other's tasks. Config load, reload and startup now refuse such
 a configuration, naming the two credentials and never a secret or digest. The check covers
-the bearer token and API keys configured together; OIDC callers carry their own identity and
-are not checked, nor is a principal that a removed credential once held. The principal
+the bearer token and API keys configured together. Identities issued at runtime, such as
+key-server tokens minted for an OIDC sign-in, are not checked, nor is a principal that a
+removed credential once held. The principal
 encoding is unchanged, so existing sessions, grants and tasks stay readable. Remove the
 duplicate entry, or replace one of the two credentials.
 

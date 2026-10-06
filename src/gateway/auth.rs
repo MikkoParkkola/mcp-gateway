@@ -80,9 +80,9 @@ pub(crate) fn principal_of_digest(digest: &[u8; 32]) -> String {
 /// MIK-7973: refuse a configuration where two credentials resolve to one
 /// principal, since each would then own the other's sessions, grants and tasks.
 ///
-/// Covers the bearer and API keys configured together. OIDC callers carry
-/// their own identity and are not checked here, nor is a principal that a
-/// removed credential once held.
+/// Covers the bearer and API keys configured together. Identities issued at
+/// runtime, such as key-server tokens minted for an OIDC sign-in, are not
+/// checked here, nor is a principal that a removed credential once held.
 ///
 /// The error names the two credentials, never a secret, digest or principal.
 pub(crate) fn refuse_shared_principals<'a>(
