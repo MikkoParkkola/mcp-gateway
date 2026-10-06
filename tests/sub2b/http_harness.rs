@@ -50,7 +50,10 @@ impl HttpSession {
             .port();
         write_http_config(home, backend_url, port);
 
-        let mut command = gateway_bin::command(home, gateway_bin::Inherit::Environment);
+        let mut command = Command::from(gateway_bin::command(
+            home,
+            gateway_bin::Inherit::Environment,
+        ));
         command.arg("serve").current_dir(home);
         let child = command
             .stdin(Stdio::null())
