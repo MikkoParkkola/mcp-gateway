@@ -13,8 +13,6 @@
 //! deliveries are not charged, so exhausting a budget never charges the event
 //! that reports it.
 
-#![allow(dead_code, reason = "red: the standing checks use these next")]
-
 use std::sync::{Arc, Weak};
 
 use chrono::Utc;
@@ -147,18 +145,34 @@ impl EventSource for OperationalSource {
     /// Admins hold any of the four; an API-key holder holds the budget
     /// events. Read live at subscribe, at every fan-out and before every
     /// delivery, so a refusal (`-32012`) ends the subscription.
-    // Red: the standing checks and the charge exemption follow.
     async fn authorize(
         &self,
-        _principal: &str,
-        _name: &str,
+        principal: &str,
+        name: &str,
         _arguments: &Value,
     ) -> Result<(), RpcError> {
-        Ok(())
+        match self.standing(principal) {
+            Some(s) if s.admin || (name.starts_with(BUDGET_PREFIX) && s.key.is_some()) => Ok(()),
+            _ => Err(RpcError::forbidden()),
+        }
     }
 
-    fn matches(&self, _principal: &str, _arguments: &Value, _event: &SourceEvent) -> bool {
-        true
+    /// A budget event reaches a non-admin only for its own key's budget.
+    fn matches(&self, principal: &str, _arguments: &Value, event: &SourceEvent) -> bool {
+        if !event.name.starts_with(BUDGET_PREFIX) {
+            return true;
+        }
+        let Some(standing) = self.standing(principal) else {
+            return false;
+        };
+        let own = event.data["scope"]
+            .as_str()
+            .and_then(|scope| scope.strip_prefix("key:"));
+        standing.admin || (standing.key.is_some() && standing.key.as_deref() == own)
+    }
+
+    fn charges(&self, name: &str) -> bool {
+        !name.starts_with(BUDGET_PREFIX)
     }
 }
 

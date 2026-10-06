@@ -46,7 +46,8 @@ impl<A> Observer<A> {
 
     /// Tell the observer, if any. Call it with no lock held.
     pub(crate) fn call(&self, change: A) {
-        // Red: the producers' changes do not reach the observer yet.
-        let _ = change;
+        if let Some(observer) = self.0.get() {
+            observer(change);
+        }
     }
 }
