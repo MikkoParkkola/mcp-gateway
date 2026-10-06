@@ -328,6 +328,26 @@ async fn a_new_start_clears_the_previous_tail() {
     );
 }
 
+/// STDERR.3: a key block longer than the tail loses its BEGIN line to
+/// eviction, and its body lines stay masked anyway.
+#[tokio::test]
+async fn a_block_longer_than_the_tail_stays_masked() {
+    let t = transport(
+        "echo \"-----BEGIN EXAMPLE BLOCK-----\" >&2; \
+         for i in $(seq 25); do echo \"MIIEvQIBADANBg/kqhkiG9w0BAQEFAASCBKcwggSjAgEA/AoIB$i\" >&2; done; \
+         echo \"AQIDBAUGBwgJCgsMDQ4PEBE=\" >&2; echo \"-----END EXAMPLE BLOCK-----\" >&2; exit 3",
+        &[],
+    );
+    let _ = start_err(&t).await;
+    let shown = t.last_failure_stderr();
+    assert_eq!(shown.len(), 20, "{shown:?}");
+    assert_eq!(
+        shown.last().map(String::as_str),
+        Some("-----END EXAMPLE BLOCK-----")
+    );
+    assert!(shown[..19].iter().all(|l| l == "[masked]"), "{shown:?}");
+}
+
 /// STDERR.3: a start that cannot spawn shows no older exit's tail.
 #[tokio::test]
 async fn a_spawn_failure_clears_the_previous_tail() {

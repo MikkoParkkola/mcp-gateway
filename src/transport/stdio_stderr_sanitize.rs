@@ -93,6 +93,11 @@ fn mask_spans(text: &str, spans: &[(usize, usize)]) -> String {
     out
 }
 
+/// Red stub: keeps every line.
+pub(super) fn captured_line(_in_block: &mut bool, line: &[u8]) -> Vec<u8> {
+    line.to_vec()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,36 +222,36 @@ mod tests {
         for path in [
             "/usr/lib/node/modules/server/filesystem/dist/index",
             "/usr/lib/python3/dist/packages/mcp/server/filesystem.py",
+            "/usr/lib/python3/dist/packages/mcp/server/filesystem",
         ] {
             assert_eq!(one(path), path, "a path stays readable");
         }
     }
 
     #[test]
-    fn a_block_body_without_base64_cues_is_masked() {
-        let body = "MIIEvQIBADANBg/kqhkiG9w0BAQEFAASCBKcwggSjAgEA/AoIBAQC7k9x2Q";
-        let out = shown(&[
-            b"-----BEGIN EXAMPLE BLOCK-----",
-            body.as_bytes(),
-            b"-----END EXAMPLE BLOCK-----",
-            b"after the block",
-        ]);
-        assert_eq!(
-            out,
-            [
-                "-----BEGIN EXAMPLE BLOCK-----",
-                MASK,
-                "-----END EXAMPLE BLOCK-----",
-                "after the block"
-            ]
-        );
-        // The capture dropped the BEGIN line: body lines still go.
-        let evicted = shown(&[
-            body.as_bytes(),
-            body.as_bytes(),
-            b"-----END EXAMPLE BLOCK-----",
-        ]);
-        assert_eq!(evicted, [MASK, MASK, "-----END EXAMPLE BLOCK-----"]);
+    fn the_capture_masks_a_block_body_whatever_its_shape() {
+        let lines: [&[u8]; 6] = [
+            b"-----BEGIN EXAMPLE BLOCK-----\n",
+            b"MIIEvQIBADANBg/kqhkiG9w0BAQEFAASCBKcwggSjAgEA/AoIBAQC7k9x2Q\n",
+            b"AQIDBAUGBwgJCgsMDQ4PEBE=\n",
+            b"-----END EXAMPLE BLOCK-----\n",
+            b"after the block\n",
+            b"one line -----BEGIN X----- abc -----END X----- done\n",
+        ];
+        let mut open = false;
+        let kept: Vec<Vec<u8>> = lines
+            .iter()
+            .map(|line| captured_line(&mut open, line))
+            .collect();
+        assert_eq!(kept[0], lines[0]);
+        assert_eq!(kept[1], MASK.as_bytes(), "a cue-less body line");
+        assert_eq!(kept[2], MASK.as_bytes(), "a short final body line");
+        assert_eq!(kept[3..], lines[3..], "the block closed at END");
+        assert!(!open, "a block opened and closed on one line stays closed");
+        // A block never closed masks to the end.
+        let mut open = false;
+        let _ = captured_line(&mut open, b"-----BEGIN EXAMPLE BLOCK-----");
+        assert_eq!(captured_line(&mut open, b"plain text"), MASK.as_bytes());
     }
 
     #[test]
