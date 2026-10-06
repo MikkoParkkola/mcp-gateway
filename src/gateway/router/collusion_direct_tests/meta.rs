@@ -671,16 +671,18 @@ fn signing(meta: &mut MetaMcp) {
     meta.enable_message_signing(signer, Duration::from_secs(300), false);
 }
 
-/// MIK-7991 (notice): a keyed read the response firewall refuses settles its
-/// key with the gateway's withheld notice. Replaying it serves that notice,
-/// the gateway's own text, so it puts nothing in the replay's receipt.
+/// MIK-7991 (notice): a keyed read that anomaly screening refuses after
+/// dispatch settles its key with the gateway's withheld notice (the
+/// reservation's drop value; a firewall refusal stores its own marked error
+/// instead). Replaying it serves that notice, the gateway's own text, so it
+/// puts nothing in the replay's receipt.
 #[tokio::test]
 async fn meta_replayed_gateway_notice_is_not_receipted() {
-    let setup = Setup {
-        rules: "[{match: read, action: block}]",
-        ..Setup::default()
-    };
-    let fx = meta_fixture_with(setup, None, signing).await;
+    let fx = meta_fixture_with(Setup::default(), None, |meta| {
+        signing(meta);
+        meta.enable_response_inspection_action_mode();
+    })
+    .await;
     fx.answer_read(Read::Injected);
     let read = invoke("read", &json!({}));
     let key = keyed("key-7991-notice");
