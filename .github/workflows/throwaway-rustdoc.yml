@@ -1,0 +1,33 @@
+name: Throwaway rustdoc links
+
+# Throwaway proof for MIK-7847.REFS.1 (never merged): build the docs and list
+# every unresolved intra-doc link. Fails if the public docs have any.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rustdoc:
+    name: Rustdoc unresolved links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Public docs
+        run: |
+          set -o pipefail
+          cargo doc --no-deps 2>&1 | tee public.log
+          echo "public unresolved: $(grep -c 'unresolved link' public.log || true)"
+          grep -A3 'unresolved link' public.log || true
+      - name: Private docs (report only)
+        run: |
+          set -o pipefail
+          cargo doc --no-deps --document-private-items 2>&1 | tee private.log
+          echo "private unresolved: $(grep -c 'unresolved link' private.log || true)"
+          grep -A3 'unresolved link' private.log || true
+      - name: Fail on a public unresolved link
+        run: test "$(grep -c 'unresolved link' public.log || true)" = 0
