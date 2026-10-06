@@ -116,6 +116,13 @@ pub(super) fn parse(
             },
         );
         server.headers = string_map(source, name, config, "headers");
+        if let Some(headers) = config.get("headers").and_then(Value::as_object) {
+            server.unresolved_header_names = headers
+                .keys()
+                .filter(|key| server.headers.keys().all(|kept| kept != key.as_str()))
+                .cloned()
+                .collect();
+        }
         return Some(server);
     }
 
