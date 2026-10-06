@@ -19,9 +19,38 @@ mod helper;
 use serde_json::{Value, json};
 
 use helper::{
-    BACKEND, Fixture, Gateway, HANDLE, MARKER, Upstream, durable_record, modern, serve_peer,
-    status_of, task_id_of, task_invoke, tasks_get, write_config,
+    BACKEND, Fixture, Gateway, HANDLE, MARKER, OBSERVE_BOUND, Peer, Upstream, durable_record,
+    modern, serve_peer, status_of, task_id_of, task_invoke, tasks_get, write_config,
 };
+
+/// Read the task as its owner until the peer has seen `at_least` queries.
+///
+/// A read queries only once the adapter has claimed the backend, and a failed
+/// discovery is not memoized, so a read can be served from the store without
+/// a query while a backend comes up. The worker's follow ends at its first
+/// `Unavailable` answer, by design (reads take over). Waiting on either alone
+/// can miss the query after one transient failure (MIK-7674); each read here is
+/// the trigger, and the bound is only a hang guard.
+async fn until_queried(
+    gateway: &Gateway,
+    client: &reqwest::Client,
+    peer: &Peer,
+    task_id: &str,
+    at_least: usize,
+) {
+    let deadline = std::time::Instant::now() + OBSERVE_BOUND;
+    let mut reads: i64 = 0;
+    while peer.queries() < at_least {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "an authorized read of a still-live job issues its bounded query: the \
+             peer saw {} tasks/get after {reads} reads in {OBSERVE_BOUND:?}",
+            peer.queries()
+        );
+        gateway.post(client, &tasks_get(900 + reads, task_id)).await;
+        reads += 1;
+    }
+}
 
 fn temp_root(name: &str) -> tempfile::TempDir {
     tempfile::Builder::new()
@@ -68,7 +97,7 @@ async fn a_captured_handle_is_recorded_at_version_three_with_its_descriptor() {
         .expect("bounded fixture HTTP client");
     let (mut gateway, task_id) =
         start_live_task(root.path(), &config, "gateway.log", &client).await;
-    peer.peer.wait_for_queries(1).await;
+    until_queried(&gateway, &client, &peer.peer, &task_id, 1).await;
     gateway.kill().await;
 
     let record = durable_record(root.path(), &task_id);
@@ -135,14 +164,17 @@ async fn the_original_operation_is_submitted_once_and_never_resubmitted() {
         .build()
         .expect("bounded fixture HTTP client");
     let (mut gateway, task_id) = start_live_task(root.path(), &config, "first.log", &client).await;
-    peer.peer.wait_for_queries(1).await;
+    until_queried(&gateway, &client, &peer.peer, &task_id, 1).await;
     gateway.kill().await;
 
     let mut restarted = Gateway::start(root.path(), &config, "second.log");
     restarted.wait_until_ready(&client).await;
     let before = peer.peer.queries();
-    for id in 10..13 {
-        restarted.post(&client, &tasks_get(id, &task_id)).await;
+    until_queried(&restarted, &client, &peer.peer, &task_id, before + 1).await;
+    for id in 0..2 {
+        restarted
+            .post(&client, &tasks_get(100 + id, &task_id))
+            .await;
     }
     restarted.terminate().await;
 
@@ -186,7 +218,7 @@ async fn a_durable_handle_survives_reopen_and_only_its_owner_reads_it() {
         .build()
         .expect("bounded fixture HTTP client");
     let (mut gateway, task_id) = start_live_task(root.path(), &config, "first.log", &client).await;
-    peer.peer.wait_for_queries(1).await;
+    until_queried(&gateway, &client, &peer.peer, &task_id, 1).await;
     gateway.kill().await;
 
     let mut restarted = Gateway::start(root.path(), &config, "second.log");
@@ -243,7 +275,7 @@ async fn unavailable_then_live_then_complete_reuses_the_one_handle() {
         .build()
         .expect("bounded fixture HTTP client");
     let (mut gateway, task_id) = start_live_task(root.path(), &config, "first.log", &client).await;
-    peer.peer.wait_for_queries(1).await;
+    until_queried(&gateway, &client, &peer.peer, &task_id, 1).await;
     gateway.kill().await;
 
     let mut restarted = Gateway::start(root.path(), &config, "second.log");
@@ -317,7 +349,7 @@ async fn the_configured_output_policy_applies_to_a_recovered_result() {
         .build()
         .expect("bounded fixture HTTP client");
     let (mut gateway, task_id) = start_live_task(root.path(), &config, "first.log", &client).await;
-    peer.peer.wait_for_queries(1).await;
+    until_queried(&gateway, &client, &peer.peer, &task_id, 1).await;
     gateway.kill().await;
 
     let mut restarted = Gateway::start(root.path(), &config, "second.log");
@@ -410,7 +442,7 @@ async fn an_adapter_untrusted_at_restart_causes_zero_queries() {
         .build()
         .expect("bounded fixture HTTP client");
     let (mut gateway, task_id) = start_live_task(root.path(), &trusted, "first.log", &client).await;
-    peer.peer.wait_for_queries(1).await;
+    until_queried(&gateway, &client, &peer.peer, &task_id, 1).await;
     gateway.kill().await;
 
     // Trust withdrawn. The durable handle is untouched; the vocabulary is gone.

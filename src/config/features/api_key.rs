@@ -240,6 +240,27 @@ impl AuthConfig {
         self.dashboard_session.validate()
     }
 
+    /// MIK-7973 at load and reload: no two credentials may share a principal.
+    ///
+    /// An `auto` bearer does not exist until startup and is checked there
+    /// (`ResolvedAuthConfig::try_from_config`). A reference that does not
+    /// resolve is left to the checks that report it.
+    pub(crate) fn validate_distinct_principals(&self, overlay: &EnvOverlay) -> Result<()> {
+        let bearer = match self.bearer_token.as_deref() {
+            None | Some("auto") => None,
+            Some(_) => self.resolve_bearer_token(overlay).ok().flatten(),
+        };
+        let digests: Vec<_> = self
+            .api_keys
+            .iter()
+            .filter_map(|key| Some((key.name.as_str(), key.resolve_digest(overlay).ok()?)))
+            .collect();
+        crate::gateway::auth::refuse_shared_principals(
+            bearer.as_deref(),
+            digests.iter().map(|(name, digest)| (*name, digest)),
+        )
+    }
+
     /// One WARN per key that has already expired. Load does not fail on it:
     /// one lapsed key must not keep the gateway from starting.
     pub(crate) fn warn_expired_keys(&self, now: DateTime<Utc>) {
