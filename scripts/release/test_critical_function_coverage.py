@@ -11,6 +11,7 @@ import contextlib
 import importlib.util
 import io
 import pathlib
+import re
 import tempfile
 import unittest
 
@@ -440,6 +441,47 @@ class HeadLineCalls(unittest.TestCase):
         shadowed = self.graded_with("macro_rules /* c */ ! format { ($($t:tt)*) => { tracing::debug!($($t)*) } }\n", '    let s = format!("{}", clean(x));\n')
         self.assertEqual(len(shadowed[9]), 1)
 
+    def test_a_macro_split_across_lines_is_unverifiable(self):
+        # MIK-7864: with the name and the delimiter on different lines, a scan
+        # of one line at a time sees no call on either.
+        for body in [
+            "    hidden\n        !(clean(x));\n",
+            "    hidden!\n        (clean(x));\n",
+            "    debug\n        !(url = %clean(x));\n",
+        ]:
+            with self.subTest(body=body):
+                result = self.grade(body, {2: 1, 3: 1})
+                self.assertEqual(result[4], [2, 3])
+                self.assertEqual(
+                    result[9], ["src/lib.rs:2 (head count 1)", "src/lib.rs:3 (head count 1)"]
+                )
+        # Control: a known-safe macro split the same way is graded by its counts.
+        safe = self.grade('    let s = format\n        !("{}", x);\n', {2: 1, 3: 1})
+        self.assertEqual((safe[0], safe[9]), ("ok", []))
+
+    def test_a_qualified_macro_is_not_a_safe_built_in_by_its_name(self):
+        # MIK-7864: `other::format!` is some crate's macro, not `format!`.
+        for line in [
+            '    let s = other::format!("{}", clean(x));\n',
+            '    let s = ::other::format!("{}", clean(x));\n',
+            '    let v = my_crate::json!({ "a": clean(x) });\n',
+            # After a single colon, as in a compact struct or map literal.
+            '    let v = json!({"field":other::format!("{}", clean(x))});\n',
+            '    let v = json!({"field":hidden!(clean(x))});\n',
+        ]:
+            with self.subTest(line=line):
+                self.assertEqual(self.graded_with("", line)[4], [2])
+        # Control: the standard crates' paths, and serde_json's json!, stay safe.
+        for line in [
+            '    let s = std::format!("{}", clean(x));\n',
+            '    let s = ::core::format_args!("{}", clean(x));\n',
+            '    let v = serde_json::json!({ "a": clean(x) });\n',
+            '    telemetry_metrics::counter!("hits", "k" => clean(x)).increment(1);\n',
+        ]:
+            with self.subTest(line=line):
+                result = self.graded_with("", line)
+                self.assertEqual((result[0], result[9]), ("ok", []))
+
     def graded_with(self, header, body):
         source = header + "fn logs(x: u8) -> bool {\n" + body + "    x > 0\n}\n"
         first = header.count("\n") + 1
@@ -554,6 +596,54 @@ class PlainFieldWhitelist(unittest.TestCase):
                 self.assertFalse(cfc.is_plain_field(shape))
 
 
+class RealTracingFixture(unittest.TestCase):
+    """MIK-7731: the attribution rules against a real llvm-cov report, not
+    synthetic DA records. scripts/release/fixtures/tracing_attribution holds a
+    crate with the gateway's tracing version and `log` feature, its lcov from
+    `cargo llvm-cov` and the toolchain that produced it (toolchain.txt)."""
+
+    ROOT = HERE / "fixtures" / "tracing_attribution"
+
+    def grade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inventory = pathlib.Path(tmp) / "inv.tsv"
+            inventory.write_text(HEADER + "".join(
+                f"src/lib.rs\t{name}\t1\tcritical\td\t{name}\tr\n"
+                for name in ("plain_fields", "head_call", "unreached")))
+            results = cfc.grade(self.ROOT, inventory, [self.ROOT / "fixture.lcov"])
+        return {r[1]["fn"]: r for r in results}
+
+    def test_a_head_line_count_does_not_show_its_call_ran(self):
+        # The report itself: the head line of `head_call` was reached, and
+        # `label`, the call on that line, never ran (no subscriber, so tracing
+        # never evaluated the field). The rule that grades such a line as
+        # missed is what keeps that call from counting as covered.
+        hits = cfc.read_lcov([self.ROOT / "fixture.lcov"], self.ROOT)["src/lib.rs"]
+        self.assertEqual(hits[25], 1, "the head line was reached")
+        self.assertEqual([hits[n] for n in (7, 8, 9)], [0, 0, 0], "label never ran")
+        result = self.grade()["head_call"]
+        self.assertEqual(result[0], "BELOW")
+        self.assertEqual(result[4], [25])
+        self.assertEqual(result[9], ["src/lib.rs:25 (head count 1)"])
+
+    def test_a_reached_plain_field_macro_is_fully_covered(self):
+        # This toolchain emits no record at all for the plain-field argument
+        # lines (17, 18), so the plain-field rule has nothing to exclude: it is
+        # inert here, and it can only ever drop a zero-count plain field of a
+        # reached macro, never pass an unrun line.
+        hits = cfc.read_lcov([self.ROOT / "fixture.lcov"], self.ROOT)["src/lib.rs"]
+        self.assertNotIn(17, hits)
+        self.assertNotIn(18, hits)
+        result = self.grade()["plain_fields"]
+        self.assertEqual((result[0], result[4], result[8]), ("ok", [], []))
+
+    def test_an_unreached_macro_is_still_missed(self):
+        result = self.grade()["unreached"]
+        self.assertEqual(result[0], "BELOW")
+        self.assertIn(33, result[4], "the unreached macro's head is missed")
+        self.assertEqual(result[5], 0)
+
+
 class InventoryResolves(unittest.TestCase):
     """Every row of the real inventory names a function that exists.
 
@@ -572,6 +662,15 @@ class InventoryResolves(unittest.TestCase):
             if cfc.fn_line(lines, row["fn"], int(row["occurrence"])) is None:
                 unresolved.append(f"{row['path']}:{row['fn']}#{row['occurrence']}")
         self.assertEqual(unresolved, [], "move these rows to the file that now defines them")
+
+    def test_the_documented_critical_count_matches_the_inventory(self):
+        root = HERE.parent.parent
+        rows = cfc.read_inventory(root / "docs/release/v4.0.0-critical-functions.tsv")
+        critical = sum(row["tier"] == "critical" for row in rows)
+        doc = (root / "docs/release/v4.0.0-critical-path-coverage.md").read_text()
+        stated = re.search(r"(\d+) rows are\s+Critical", doc)
+        self.assertIsNotNone(stated, "the doc no longer states the Critical count")
+        self.assertEqual(int(stated.group(1)), critical, "update the count in the doc")
 
 
 if __name__ == "__main__":

@@ -539,6 +539,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      # Each skip names the job that runs the test in full, and its ticket:
+      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
+      #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
+      #   release.yml `verify` needs it green on the released revision.
       # The external journey is executed by the mandatory SDK job below.
       # Not a flake skip (MIK-7534): it needs Python and Redis, which only
       # that job provisions, and the gate below `needs` that job.
@@ -589,6 +593,10 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           save-if: false
+      # Each skip names the job that runs the test in full, and its ticket:
+      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
+      #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
+      #   release.yml `verify` needs it green on the released revision.
       - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
   # Same run on the self-hosted arm64 runner. Mutation evidence asks whether a
@@ -634,6 +642,10 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           save-if: false
+      # Each skip names the job that runs the test in full, and its ticket:
+      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
+      #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
+      #   release.yml `verify` needs it green on the released revision.
       - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
   # CAT.1 (MIK-7782): the real `gws` binary, pinned, accepts the argv every
@@ -927,7 +939,7 @@ jobs:
         run: python3 scripts/release/test_check_tag_manifest.py
       - name: Test the burndown summary drift check
         run: python3 scripts/release/test_check_burndown_summary.py
-      - name: Burndown summary matches both ledger checks (MIK-7730)
+      - name: Burndown summary and publish gate match the ledger checks (MIK-7730, MIK-7932)
         run: python3 scripts/release/check_burndown_summary.py
       - name: Test the NFR.DEMO.1 recording gate
         run: python3 scripts/release/test_check_nfr_demo_1_recordings.py

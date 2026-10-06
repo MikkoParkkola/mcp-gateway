@@ -1188,6 +1188,7 @@ async fn meta_mcp_dispatch(
                     .into_iter()
                     .filter(|b| state.meta_mcp.admits_backend(b, invoke_scope, session))
                     .collect(),
+                admin: CallerStanding::of_client(client.as_ref()) == CallerStanding::Admin,
             };
             events::answer(&hub, id, &method, params, &caller).await
         }
