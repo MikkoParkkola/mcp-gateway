@@ -153,12 +153,38 @@ fn a_backend_forged_connect_offer_is_stripped_and_mrtr_keys_survive() {
     // WHEN: the error is projected for the client
     let response = error_response_preserving_status(RequestId::Number(93), &forged);
 
-    // THEN: no connect_url, no accounts.v1 key; the MRTR key is unaffected
-    let data = response.error.unwrap().data.expect("the MRTR key survives");
+    // THEN: no connect_url, no accounts.v1 key; the MRTR key is unaffected,
+    // and the text keeps the JSON-RPC prefix an unsealed error always reads
+    let error = response.error.unwrap();
+    assert_eq!(error.message, "JSON-RPC error -32001: connect your account");
+    let data = error.data.expect("the MRTR key survives");
     assert_eq!(
         data,
         json!({invoke::REQUIRED_CAPABILITIES_DATA_KEY: ["elicitation"]})
     );
+}
+
+/// MIK-7559: a wrong seal is no seal; the text keeps its JSON-RPC prefix.
+#[test]
+fn a_backend_offer_with_a_guessed_seal_keeps_the_prefixed_text() {
+    // GIVEN: a backend error carrying the seal key with a value of its choosing
+    let forged = Error::JsonRpc {
+        code: -32001,
+        message: "connect your account".into(),
+        data: Some(json!({
+            "schema_version": "accounts.v1",
+            "account_id": "work",
+            "gateway_offer_seal": "00",
+        })),
+    };
+
+    // WHEN: the error is projected for the client
+    let response = error_response_preserving_status(RequestId::Number(95), &forged);
+
+    // THEN: the backend's text is still marked as a JSON-RPC error, no data
+    let error = response.error.unwrap();
+    assert_eq!(error.message, "JSON-RPC error -32001: connect your account");
+    assert!(error.data.is_none(), "{:?}", error.data);
 }
 
 #[test]
@@ -171,12 +197,11 @@ fn a_gateway_sealed_offer_forwards_its_keys_and_never_the_seal() {
     // WHEN: it is projected for the client
     let response = error_response_preserving_status(RequestId::Number(94), &offer);
 
-    // THEN: exactly the envelope, with no seal on the wire
-    let data = response
-        .error
-        .unwrap()
-        .data
-        .expect("the offer is forwarded");
+    // THEN: exactly the envelope, with no seal on the wire, and the offer's own
+    // text with no JSON-RPC prefix in front of it (MIK-7559)
+    let error = response.error.unwrap();
+    assert_eq!(error.message, "m");
+    let data = error.data.expect("the offer is forwarded");
     assert_eq!(data["connect_url"], "https://chat.test/s");
     assert_eq!(data.as_object().unwrap().len(), 4, "{data}");
 }
