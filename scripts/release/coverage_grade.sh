@@ -28,9 +28,19 @@ SELF_RUN=37423361628
 SELF_REV=409e95619a608d638735a3dc0ca44942e922cf08
 SELF_ROW=$'BELOW\t 91.67%\t55/60\tsrc/gateway/task_service/execution/upstream.rs:query_and_commit#1'
 
+# The probe workflow a graded run must have executed, byte for byte: this
+# checkout's coverage-probe.yml, or for the self-check the definition that
+# baseline run used (it predates this script).
+PROBE_PATH=.github/workflows/coverage-probe.yml
+PROBE_BLOB="$(git hash-object "$HERE/coverage-probe.yml")"
+
 self_check=""
 case "${1:-}" in
-  --self-check) self_check=1; run=$SELF_RUN; rev=$SELF_REV ;;
+  --self-check)
+    self_check=1; run=$SELF_RUN; rev=$SELF_REV
+    PROBE_PATH=.github/workflows/coverage-cov3.yml
+    PROBE_BLOB=8367614b5373f66b4f5142c15fe0afdb36c6b249
+    ;;
   --run) run="${2:?--run <id> <rev>}"; rev="$(git rev-parse "${3:?--run <id> <rev>}^{commit}")" ;;
   "" | -*) echo "usage: $0 <rev> [tag] | --run <id> <rev> | --self-check" >&2; exit 2 ;;
   *)
@@ -40,8 +50,7 @@ case "${1:-}" in
     index="$(mktemp)"; trap 'rm -f "$index"' EXIT
     GIT_INDEX_FILE="$index" git read-tree "$rev"
     blob="$(git hash-object -w "$HERE/coverage-probe.yml")"
-    GIT_INDEX_FILE="$index" git update-index --add \
-      --cacheinfo "100644,$blob,.github/workflows/coverage-probe.yml"
+    GIT_INDEX_FILE="$index" git update-index --add --cacheinfo "100644,$blob,$PROBE_PATH"
     tree="$(GIT_INDEX_FILE="$index" git write-tree)"
     probe="$(git commit-tree "$tree" -p "$rev" -m "ci(throwaway): coverage grade of ${rev:0:9}")"
     branch="throwaway/coverage-grade-$tag"
@@ -50,7 +59,8 @@ case "${1:-}" in
     run=""
     for _ in $(seq 60); do
       run="$(gh run list -R "$REPO" --branch "$branch" --workflow "Coverage probe" -L 20 \
-        --json databaseId,headSha -q ".[] | select(.headSha == \"$probe\") | .databaseId" | head -n 1)"
+        --json databaseId,headSha \
+        -q "[.[] | select(.headSha == \"$probe\") | .databaseId][0] // empty")"
       [[ -n "$run" ]] && break
       sleep 10
     done
@@ -59,19 +69,20 @@ case "${1:-}" in
     ;;
 esac
 
-# The run must be a coverage probe OF <rev>: its commit's parent is <rev> and it
-# changes nothing but a workflow file, so its artifacts measure <rev>'s code.
-[[ "$(gh run view "$run" -R "$REPO" --json workflowName -q .workflowName)" == "Coverage probe" ]] \
-  || { echo "run $run is not a Coverage probe run" >&2; exit 4; }
+# The run must be the pinned probe OF <rev>: it executed $PROBE_PATH, its commit's
+# parent is <rev>, and that commit adds exactly $PROBE_PATH with the pinned
+# content. A different workflow could check out other code; this one checks out
+# its own commit, so its artifacts measure <rev>.
+refuse() { echo "run $run: $*" >&2; exit 4; }
+[[ "$(gh api "repos/$REPO/actions/runs/$run" -q .path)" == "$PROBE_PATH" ]] \
+  || refuse "did not execute $PROBE_PATH"
 head_sha="$(gh run view "$run" -R "$REPO" --json headSha -q .headSha)"
 git cat-file -e "$head_sha^{commit}" 2>/dev/null || git fetch -q origin "$head_sha"
-[[ "$(git rev-parse "$head_sha^")" == "$rev" ]] \
-  || { echo "run $run probed $head_sha, whose parent is not $rev" >&2; exit 4; }
-changed="$(git diff --name-only "$rev" "$head_sha")"
-while IFS= read -r path; do
-  [[ -z "$path" || "$path" == .github/workflows/* ]] && continue
-  echo "run $run probed $head_sha, which also changes $path" >&2; exit 4
-done <<< "$changed"
+[[ "$(git rev-parse "$head_sha^")" == "$rev" ]] || refuse "probed $head_sha, whose parent is not $rev"
+[[ "$(git diff --name-only "$rev" "$head_sha")" == "$PROBE_PATH" ]] \
+  || refuse "probed $head_sha, which changes more than $PROBE_PATH"
+[[ "$(git rev-parse "$head_sha:$PROBE_PATH")" == "$PROBE_BLOB" ]] \
+  || refuse "probed $head_sha with a $PROBE_PATH that is not the pinned probe"
 
 until [[ "$(gh run view "$run" -R "$REPO" --json status -q .status)" == completed ]]; do sleep 120; done
 conclusion="$(gh run view "$run" -R "$REPO" --json conclusion -q .conclusion)"
