@@ -330,7 +330,8 @@ pub(crate) fn load_records<T: for<'de> Deserialize<'de>>(dir: &Path) -> Vec<(Pat
                 .filter(|v| {
                     v.get("v")
                         .and_then(Value::as_u64)
-                        .is_some_and(|v| v <= u64::from(MAX_LOADABLE_VERSION))
+                        // No build wrote a version 0.
+                        .is_some_and(|v| (1..=u64::from(MAX_LOADABLE_VERSION)).contains(&v))
                 })
                 .and_then(|v| serde_json::from_value::<T>(v).ok());
         if let Some(record) = parsed {

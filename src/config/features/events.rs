@@ -216,6 +216,8 @@ impl EventsConfig {
                 self.max_subscriptions_per_principal,
             ),
             ("queue_depth", self.queue_depth),
+            ("seen_max_per_route", self.seen_max_per_route),
+            ("dead_letter_max_records", self.dead_letter_max_records),
             ("max_in_flight", self.max_in_flight),
             ("max_outbox", self.max_outbox),
             (
@@ -235,6 +237,9 @@ impl EventsConfig {
         ];
         if let Some((name, _)) = caps.iter().find(|(_, v)| *v == 0) {
             return fail(&format!("{name} must be nonzero"));
+        }
+        if self.dead_letter_max_bytes == 0 {
+            return fail("dead_letter_max_bytes must be nonzero");
         }
         let timings = [
             ("retry_base", self.retry_base),

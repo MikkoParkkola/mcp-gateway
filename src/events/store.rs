@@ -36,6 +36,26 @@ pub(crate) struct Caps {
     pub global: usize,
 }
 
+/// How long a subscription is granted for. It becomes a time only at the
+/// commit instant, after the challenge and every wait before the store lock,
+/// so a slow commit cannot eat a short TTL: `ttl` from then, never past
+/// `until` (a bounded credential's own expiry). Neither means no expiry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Grant {
+    pub ttl: Option<chrono::Duration>,
+    pub until: Option<DateTime<Utc>>,
+}
+
+impl Grant {
+    /// The expiry of a grant committed at `at`.
+    pub(crate) fn expires_at(self, at: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        match (self.ttl.map(|ttl| at + ttl), self.until) {
+            (Some(granted), Some(until)) => Some(granted.min(until)),
+            (granted, until) => granted.or(until),
+        }
+    }
+}
+
 /// How an admitted subscription met the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Admission {
@@ -258,18 +278,25 @@ impl Store {
     /// both rotate from the same old row. A refresh of a live key is never
     /// capped. `verified_now` stamps a fresh opt-in. The verification is
     /// written before the subscription, so a failed commit never leaves a
-    /// subscription without a durable opt-in.
-    pub(crate) fn admit(
+    /// subscription without a durable opt-in. The sweep, the tail cap, the
+    /// opt-in read and the expiry all use one instant, taken under the lock:
+    /// the later of `now` and the clock, since the commit can wait on a
+    /// challenge, the lifecycle lock and a blocking thread.
+    pub(crate) fn admit_granted(
         &self,
         mut sub: Subscription,
+        grant: Grant,
         verified_now: bool,
-        caps: Caps,
-        grace: chrono::Duration,
+        (caps, grace, tail): (Caps, chrono::Duration, TailPolicy),
         now: DateTime<Utc>,
-        tail: TailPolicy,
     ) -> std::io::Result<Result<Admission, CapHit>> {
         let mut state = self.state.lock();
-        self.sweep(&mut state, now)?;
+        let at = Utc::now().max(now);
+        self.sweep(&mut state, at)?;
+        // A tail over the cap in force is gone before it can vouch.
+        self.trim_tails(&mut state, at, tail)?;
+        sub.granted_at = at;
+        sub.expires_at = grant.expires_at(at);
         // Read under the lock with the commit, so racing identical subscribes
         // cannot both read as the first.
         let refreshed = state.subs.contains_key(&sub.id);
@@ -279,7 +306,7 @@ impl Store {
                 sub.previous_until = old.previous_until;
             } else {
                 sub.previous_secret = Some(old.secret.clone());
-                sub.previous_until = Some(now + grace);
+                sub.previous_until = Some(at + grace);
             }
             sub.failed_since = old.failed_since;
             sub.last_delivery_at = old.last_delivery_at;
@@ -297,10 +324,7 @@ impl Store {
                 return Ok(Err(CapHit::Global(caps.global)));
             }
         }
-        // Judged on the clock at commit, not at request start: a tail can
-        // run out while the commit waits for a blocking thread.
-        let at_commit = Utc::now().max(now);
-        if !verified_now && !state.verified_usable(&sub.principal, &sub.url, at_commit, tail) {
+        if !verified_now && !state.verified_usable(&sub.principal, &sub.url, at, tail) {
             return Ok(Err(CapHit::Unverified));
         }
         let key = verified_file(&sub.principal, &sub.url);
@@ -313,7 +337,7 @@ impl Store {
                 v: 1,
                 principal: sub.principal.clone(),
                 url: sub.url.clone(),
-                verified_at: now,
+                verified_at: at,
                 last_subscription_ended_at: None,
             },
         };
@@ -351,12 +375,30 @@ impl Store {
         // failed, and that failure is then reported.
         state.subs.insert(sub.id.clone(), sub);
         placed.durable()?;
-        self.trim_tails(&mut state, now, tail)?;
+        self.trim_tails(&mut state, at, tail)?;
         Ok(Ok(if refreshed {
             Admission::Refreshed
         } else {
             Admission::Inserted
         }))
+    }
+
+    /// [`Self::admit_granted`] with the expiry the row already carries.
+    #[cfg(test)]
+    pub(crate) fn admit(
+        &self,
+        sub: Subscription,
+        verified_now: bool,
+        caps: Caps,
+        grace: chrono::Duration,
+        now: DateTime<Utc>,
+        tail: TailPolicy,
+    ) -> std::io::Result<Result<Admission, CapHit>> {
+        let grant = Grant {
+            ttl: None,
+            until: sub.expires_at,
+        };
+        self.admit_granted(sub, grant, verified_now, (caps, grace, tail), now)
     }
 
     /// Whether a new key for `principal` would pass the caps now. Advisory:

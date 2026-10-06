@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::EventsHub;
 use super::governance::{Attribution, Lifecycle};
 use super::records::{Credential, Subscription};
-use super::store::{CapHit, Caps};
+use super::store::{CapHit, Caps, Grant};
 use super::types::{EventDescriptor, RpcError, Visibility};
 
 /// Who is calling, as the transport resolved it. Owned, so it can be held
@@ -294,12 +294,9 @@ fn callback_url(raw: Option<&Value>) -> Result<url::Url, RpcError> {
         .ok_or_else(|| RpcError::invalid("delivery.url"))
 }
 
-/// The granted expiry for a `ttlMs` (design §6.3, TTL).
-fn granted_expiry(
-    hub: &EventsHub,
-    params: &Value,
-    now: DateTime<Utc>,
-) -> Result<Option<DateTime<Utc>>, RpcError> {
+/// The granted length for a `ttlMs` (design §6.3, TTL); `None` is no
+/// expiry. It becomes a time only at the commit ([`Grant`]).
+fn granted_ttl(hub: &EventsHub, params: &Value) -> Result<Option<chrono::Duration>, RpcError> {
     let config = &hub.config;
     let ttl = match params.get("ttlMs") {
         None => config.default_ttl,
@@ -310,28 +307,25 @@ fn granted_expiry(
             std::time::Duration::from_millis(ms).clamp(config.min_ttl, config.max_ttl)
         }
     };
-    let ttl = chrono::Duration::from_std(ttl).map_err(|_| RpcError::invalid("ttlMs"))?;
-    Ok(Some(now + ttl))
+    chrono::Duration::from_std(ttl)
+        .map(Some)
+        .map_err(|_| RpcError::invalid("ttlMs"))
 }
 
 /// A subscription made with a credential other than an API key ends no later
 /// than the credential (design F9): `ttlMs: null` is refused for it, and the
 /// grant is cut at the credential's own expiry when it has one.
-fn bounded_by(
+fn credential_ceiling(
     credential: &Credential,
     params: &Value,
-    granted: Option<DateTime<Utc>>,
 ) -> Result<Option<DateTime<Utc>>, RpcError> {
     if !credential.bounded() {
-        return Ok(granted);
+        return Ok(None);
     }
     if params.get("ttlMs").is_some_and(Value::is_null) {
         return Err(RpcError::invalid("ttlMs"));
     }
-    Ok(match (granted, credential.expires_at) {
-        (Some(granted), Some(ends)) => Some(granted.min(ends)),
-        (granted, ends) => granted.or(ends),
-    })
+    Ok(credential.expires_at)
 }
 
 fn to_wire_time(at: Option<DateTime<Utc>>) -> Value {
@@ -388,9 +382,12 @@ impl EventsHub {
             .unwrap_or_default();
         let key = super::client::decode_whsec(secret)
             .ok_or_else(|| RpcError::invalid("delivery.secret"))?;
+        // Checked before any challenge; fixed to a time only at the commit.
+        let grant = Grant {
+            ttl: granted_ttl(self, &params)?,
+            until: credential_ceiling(&caller.credential, &params)?,
+        };
         let now = Utc::now();
-        let expires_at = granted_expiry(self, &params, now)?;
-        let expires_at = bounded_by(&caller.credential, &params, expires_at)?;
         let id = subscription_id(&principal, url.as_str(), &descriptor.name, &arguments);
         let caps = Caps {
             per_principal: self.config.max_subscriptions_per_principal,
@@ -425,8 +422,9 @@ impl EventsHub {
             // inside the store's commit, never from this earlier read.
             previous_secret: None,
             previous_until: None,
+            // Provisional: the store's commit sets both.
             granted_at: now,
-            expires_at,
+            expires_at: grant.expires_at(now),
             active: true,
             failed_since: None,
             last_delivery_at: None,
@@ -441,7 +439,7 @@ impl EventsHub {
                     .await?;
             }
             let outcome = self
-                .commit_started(&record, !verified, (caps, grace, tail), now)
+                .commit_started(&record, grant, !verified, (caps, grace, tail), now)
                 .await;
             match outcome? {
                 Ok(admission) => {
@@ -451,6 +449,7 @@ impl EventsHub {
                     self.runtime.wake.notify_one();
                     let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())
                         && self.store.has_due(&id, Utc::now());
+                    let expires_at = self.store.get(&id).and_then(|s| s.expires_at);
                     return Ok(subscribe_answer(
                         &id,
                         expires_at,
@@ -472,8 +471,9 @@ impl EventsHub {
     async fn commit_started(
         self: &Arc<Self>,
         record: &Subscription,
+        grant: Grant,
         fresh: bool,
-        (caps, grace, tail): (Caps, chrono::Duration, super::store::TailPolicy),
+        policy: (Caps, chrono::Duration, super::store::TailPolicy),
         now: DateTime<Utc>,
     ) -> Result<Result<super::store::Admission, CapHit>, RpcError> {
         let attempt = record.clone();
@@ -487,7 +487,7 @@ impl EventsHub {
             )
             .await?;
         let outcome = blocking(self, move |store| {
-            store.admit(attempt, fresh, caps, grace, now, tail)
+            store.admit_granted(attempt, grant, fresh, policy, now)
         })
         .await;
         if !matches!(outcome, Ok(Ok(_)))

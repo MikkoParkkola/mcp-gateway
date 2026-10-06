@@ -402,3 +402,26 @@ fn tails_of_rows_that_expire_before_the_commit_are_capped_first() {
         "both rows expired before the commit; the older tail is over the cap"
     );
 }
+
+/// MIK-7854.EVENTS.1: the grant becomes a time at the commit instant, not at
+/// the request: a request stamped 2 h ago still commits a 1 h grant that is
+/// live now, standing in for any wait before the store lock.
+#[test]
+fn the_grant_is_fixed_at_the_commit_instant() {
+    let dir = tempfile::tempdir().expect("dir");
+    let asked = Utc::now() - chrono::Duration::hours(2);
+    let store = Store::open(dir.path(), asked, TAIL).expect("open");
+    let s = sub("p", "https://h/a", asked);
+    let grant = Grant {
+        ttl: Some(chrono::Duration::hours(1)),
+        until: None,
+    };
+    store
+        .admit_granted(s.clone(), grant, true, (CAPS, grace(), TAIL), asked)
+        .expect("io")
+        .expect("admitted");
+    let row = store.get(&s.id).expect("row");
+    let expires = row.expires_at.expect("an expiry");
+    assert!(expires > Utc::now(), "live after the commit: {expires}");
+    assert_eq!(expires - row.granted_at, chrono::Duration::hours(1));
+}
