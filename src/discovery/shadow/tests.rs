@@ -406,3 +406,43 @@ fn executable_name_keeps_raw_process_text_literal() {
         Some("it's-srv")
     );
 }
+
+/// MIK-7716: a remote server whose client config sends an auth header is not
+/// reported or quarantined as unauthenticated. The header is judged by key
+/// name only; its value never reaches the report.
+#[test]
+fn an_auth_header_key_is_not_reported_as_unauthenticated() {
+    for key in ["Authorization", "proxy-authorization"] {
+        let mut server = http_server(
+            "remote-authed",
+            "Remote server with a credential",
+            "https://mcp.remote.internal/mcp",
+            DiscoverySource::McpConfig,
+            None,
+            None,
+        );
+        server.headers = [(key.to_string(), "Bearer SENTINEL_7716".to_string())]
+            .into_iter()
+            .collect();
+        let report = report(&[server], &[]);
+        let asset = &report.assets[0];
+
+        assert_ne!(
+            asset.auth_exposure,
+            ShadowAuthExposure::NetworkHttpNoAuthMetadata,
+            "{key}"
+        );
+        assert_ne!(
+            asset.remediation.action,
+            ShadowRemediationAction::Quarantine,
+            "{key}"
+        );
+        assert_eq!(report.summary.network_exposed_total, 0, "{key}");
+        let serialized = serde_json::to_string(&report).unwrap();
+        assert!(!serialized.contains("SENTINEL_7716"), "{serialized}");
+        assert!(
+            !serialized.contains("unauthenticated_http_endpoint"),
+            "{serialized}"
+        );
+    }
+}
