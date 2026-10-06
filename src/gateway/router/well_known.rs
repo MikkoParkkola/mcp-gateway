@@ -282,8 +282,8 @@ fn is_publishable_issuer(issuer: &str) -> bool {
     let Ok(parsed) = url::Url::parse(issuer) else {
         return false;
     };
+    // An http(s) URL always has a host, or it does not parse.
     matches!(parsed.scheme(), "https" | "http")
-        && parsed.host_str().is_some()
         && parsed.username().is_empty()
         && parsed.password().is_none()
         && parsed.query().is_none()
@@ -569,6 +569,10 @@ mod tests {
             &[
                 "https://@idp.corp.internal",
                 "https://:@idp.corp.internal/tenant",
+                // No `//`: the parser still reads userinfo here.
+                "https:user@idp.corp.internal",
+                "https::pw@idp.corp.internal",
+                "ftp://idp.corp.internal",
                 "https://idp.corp.internal/t@nant",
             ],
         );
