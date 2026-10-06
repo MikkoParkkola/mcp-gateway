@@ -431,3 +431,94 @@ async fn meta_read_record_failure_leaves_no_receipt() {
     let relay = format!("{text} ");
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
 }
+
+/// MIK-7991 (replay): an idempotent replay of a failed read serves the
+/// recovery hint the gateway wrote on the first call, unchanged; the
+/// replay's receipt keeps the backend's failure text and leaves the hint out.
+#[tokio::test]
+async fn meta_replay_leaves_the_gateway_hint_out_of_the_receipt() {
+    use crate::gateway::meta_mcp::invoke::receipt_test_support::{backend_failure, own_hint_text};
+    let fx = meta_fixture(Setup::default(), None).await;
+    let failed = backend_failure(PROSE);
+    fx.answer_read(Read::Failed(failed.clone()));
+    let read = invoke("read", &json!({}));
+    let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &keyed("key-7991")).await;
+    let own = own_hint_text(&envelope(&first)["result"], &failed);
+    let reads = fx.reads();
+    let (_, replay) = post(&fx, Some("a"), "gateway_invoke", &read, &keyed("key-7991")).await;
+    assert_eq!(
+        fx.reads(),
+        reads,
+        "base: the re-issue must be a replay: {replay}"
+    );
+    assert_eq!(
+        own_hint_text(&envelope(&replay)["result"], &failed),
+        own,
+        "the replay serves the hint it stored: {replay}"
+    );
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), &own).await, 1);
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &failed).await, 1);
+}
+
+/// A cost category long enough that the gateway's suggestion naming it is
+/// text a receipt holding it would be caught on (79 chars and more).
+#[cfg(feature = "cost-governance")]
+const CATEGORY: &str =
+    "cellar inventory of pressed cider barrels sorted by vintage, cask size and orchard row";
+
+/// `read` costs 1.0 and `send`, in the same [`CATEGORY`], 0.1: every answer
+/// to `read` gets the gateway's `_cost_suggestion` naming the category.
+#[cfg(feature = "cost-governance")]
+fn suggest_send(fx: &mut Fixture) {
+    use crate::cost_accounting::config::CostGovernanceConfig;
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    cfg.tool_costs.insert("read".to_string(), 1.0);
+    cfg.tool_costs.insert("send".to_string(), 0.1);
+    cfg.alternatives = Some(
+        [(
+            CATEGORY.to_string(),
+            vec!["read".to_string(), "send".to_string()],
+        )]
+        .into_iter()
+        .collect(),
+    );
+    let registry = Arc::new(crate::cost_accounting::registry::CostRegistry::new(&cfg));
+    let enforcer = Arc::new(crate::cost_accounting::enforcer::BudgetEnforcer::new(
+        cfg,
+        Arc::clone(&registry),
+    ));
+    let state = Arc::get_mut(&mut fx.state).expect("state is unique");
+    let meta = Arc::get_mut(&mut state.meta_mcp).expect("meta is unique");
+    meta.budget_enforcer = Some(enforcer);
+    meta.cost_registry = Some(registry);
+}
+
+/// MIK-7991.CACHE.1: a response-cache hit serves the cost suggestion the
+/// gateway wrote on the first call; the hit's receipt leaves it out and
+/// keeps the backend's text.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn meta_cache_hit_leaves_the_cost_suggestion_out_of_the_receipt() {
+    let cache = Some(Arc::new(crate::cache::ResponseCache::new()));
+    let mut fx = meta_fixture(Setup::default(), cache).await;
+    suggest_send(&mut fx);
+    let read = invoke("read", &json!({}));
+    let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &json!({})).await;
+    assert!(
+        first.contains(CATEGORY),
+        "base: the gateway suggested a cheaper tool: {first}"
+    );
+    let reads = fx.reads();
+    let (_, hit) = post(&fx, Some("a"), "gateway_invoke", &read, &json!({})).await;
+    assert_eq!(fx.reads(), reads, "base: the re-read must be a cache hit");
+    assert!(
+        hit.contains(CATEGORY),
+        "the hit serves the suggestion: {hit}"
+    );
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 1);
+    let relay = format!("{PROSE} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
+}
