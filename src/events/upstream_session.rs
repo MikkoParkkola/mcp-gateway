@@ -49,6 +49,10 @@ const SNAPSHOT_RETRY: Duration = Duration::from_secs(5);
 const STABLE: Duration = Duration::from_secs(60);
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
 const BACKOFF_CAP: Duration = Duration::from_secs(300);
+/// A tools refill that did not fill is retried once after this: the backend's
+/// list-fill cooldown (`LIST_FILL_COOLDOWN`), which fails every fill inside it
+/// without reaching the backend (MIK-8007).
+const REFILL_RETRY: Duration = Duration::from_secs(10);
 
 enum Outcome {
     Stopped,
@@ -213,7 +217,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             }
             note = recv(&mut state.current) => Ev::Current(note),
             note = recv_pending(&mut state.pending) => Ev::Pending(note),
-            () = refilled(&mut refill) => Ev::Refilled,
+            filled = refilled(&mut refill) => Ev::Refilled(filled),
             _ = wake.changed() => Ev::Wake,
             _ = tick.tick() => Ev::Tick,
         };
@@ -230,10 +234,10 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
                 state.note(note, true);
             }
             Ev::Pending(None) => state.pending = None,
-            Ev::Refilled => {
+            Ev::Refilled(filled) => {
                 // The refill ended (filled or timed out): the hub may hear now.
                 refill = None;
-                state.tools_pending = true;
+                state.refill_ended(filled);
             }
             Ev::Wake | Ev::Tick => {}
         }
@@ -248,7 +252,6 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             // an emptied cache. At most once per tick however many notices
             // came; a notice during a refill waits for the next one.
             state.tools_due = None;
-            shared.tools_owed.store(false, Ordering::SeqCst);
             backend.invalidate_tools();
             refill = Some(start_refill(backend, &shared.name));
         }
@@ -283,6 +286,7 @@ fn start_refill(backend: &Arc<Backend>, name: &str) -> Refill {
         if !filled {
             warn!(backend = %name, "upstream listener: tools refill did not complete; announcing the change anyway");
         }
+        filled
     })
 }
 
@@ -300,13 +304,13 @@ fn backend_still_current(backend: &Backend, handle: &Weak<dyn UpstreamListen>) -
 enum Ev {
     Current(Option<UpstreamNote>),
     Pending(Option<UpstreamNote>),
-    Refilled,
+    Refilled(bool),
     Wake,
     Tick,
 }
 
-/// An in-flight tools refill.
-type Refill = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+/// An in-flight tools refill; `true` when it filled the list.
+type Refill = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
 
 /// End the session, first letting an in-flight refill finish and any tools
 /// change it produced reach the hub, as when the refill ran inline and the
@@ -326,9 +330,8 @@ async fn finish_refill(
                 state.release(backend).await;
                 return Outcome::Stopped;
             }
-            () = refill => {}
+            filled = refill => state.refill_ended(filled),
         }
-        state.tools_pending = true;
     }
     // Also a refill that finished this iteration, its change not yet
     // announced when the transport was found replaced.
@@ -339,7 +342,7 @@ async fn finish_refill(
 }
 
 /// Resolves when the in-flight refill ends; never, when there is none.
-async fn refilled(refill: &mut Option<Refill>) {
+async fn refilled(refill: &mut Option<Refill>) -> bool {
     match refill {
         Some(future) => future.await,
         None => std::future::pending().await,
@@ -401,6 +404,8 @@ struct State<'a> {
     tools_pending: bool,
     /// The earliest the next tools handoff may run (one per tick).
     tools_due: Option<Instant>,
+    /// The pending refill is the one retry of a refill that did not fill.
+    tools_retrying: bool,
     snapshot_due: Instant,
     /// A catalogue read is not retried before this.
     snapshot_retry_at: Instant,
@@ -425,6 +430,7 @@ impl<'a> State<'a> {
             tools_pending: false,
             // A notice an earlier session ended owing (MIK-8007).
             tools_due: shared.tools_owed.load(Ordering::SeqCst).then_some(now),
+            tools_retrying: false,
             // Due at once: a session that starts with no URI watched reads
             // the catalogue as soon as one is, even when the shared snapshot
             // is known from an earlier session.
@@ -432,6 +438,22 @@ impl<'a> State<'a> {
             snapshot_retry_at: now,
             retry_open_at: now,
         }
+    }
+
+    /// A refill ended: the hub may hear now. One that did not fill (inside
+    /// the backend's list-fill cooldown it never reaches the backend) is
+    /// retried once after it, so the notice is served (MIK-8007). The notice
+    /// stays owed across a session end until a refill fills or its retry ends.
+    fn refill_ended(&mut self, filled: bool) {
+        self.tools_pending = true;
+        self.tools_retrying = !filled && !self.tools_retrying;
+        if self.tools_retrying {
+            let retry = Instant::now() + REFILL_RETRY;
+            self.tools_due = Some(self.tools_due.map_or(retry, |due| due.max(retry)));
+        }
+        self.shared
+            .tools_owed
+            .store(self.tools_due.is_some(), Ordering::SeqCst);
     }
 
     fn ended(&self, started: Instant) -> Outcome {
