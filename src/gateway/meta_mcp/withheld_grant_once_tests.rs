@@ -31,7 +31,10 @@ async fn a_reload_after_the_refusal_does_not_change_the_recorded_decision() {
     // once. Only the owner can be granted (a non-owner is refused before any
     // grant is read), so only the owner's call can flip on a reload.
     let store = std::sync::Arc::clone(&meta.identity_grants);
+    let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = std::rc::Rc::clone(&fired);
     after_grant_evaluation::set(move || {
+        flag.set(true);
         *store.write() = grants(vec![grant("g-alice", ALICE, ALICE)]);
     });
     let who = api_key("alice");
@@ -41,6 +44,10 @@ async fn a_reload_after_the_refusal_does_not_change_the_recorded_decision() {
     })
     .await;
     written.expect("the slot's records are written");
+    assert!(
+        fired.get(),
+        "the reload must land after the first evaluation"
+    );
     let refusal = refusal.expect("alice held no grant when the call was judged");
     assert!(refusal.to_string().contains("Unknown tool"), "{refusal}");
 
@@ -88,6 +95,8 @@ async fn a_refusal_before_the_grant_rule_still_records_the_decision() {
     assert!(refusal.to_string().contains("Unknown tool"), "{refusal}");
     let recorded = decisions(&dir);
     assert_eq!(recorded.len(), 1, "{recorded:#?}");
+    // The grant allowed it; the authorizer refused. The record is the grant's.
+    assert_eq!(recorded[0]["outcome"], json!("ok"), "{recorded:#?}");
 }
 
 /// A refusing decision that cannot be noted (no slot to hold it) answers
