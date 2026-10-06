@@ -175,6 +175,18 @@ fn a_tenant_committed_and_pending_counts_once() {
     );
 }
 
+/// `n` live principals, each holding tenant "a" under a held ticket, so none
+/// is idle to evict.
+fn fill_live(history: &Arc<ReadHistory>, n: usize) -> Vec<Reservation> {
+    (0..n)
+        .map(|i| {
+            history
+                .reserve(&format!("live-{i}"), &tenant("a"), WINDOW, false)
+                .expect("room below the cap")
+        })
+        .collect()
+}
+
 /// MIK-7975 CAP.1: the principal map never holds more than `MAX_PRINCIPALS`
 /// under concurrent first frames for distinct keys. One below the cap, with
 /// every principal live so nothing is idle to evict, 64 threads released
@@ -184,13 +196,7 @@ fn concurrent_new_principals_never_pass_the_cap() {
     const RACERS: usize = 64;
     for round in 0..4 {
         let history = ReadHistory::shared();
-        let held: Vec<Reservation> = (0..MAX_PRINCIPALS - 1)
-            .map(|i| {
-                history
-                    .reserve(&format!("live-{i}"), &tenant("a"), WINDOW, false)
-                    .expect("room below the cap")
-            })
-            .collect();
+        let held = fill_live(&history, MAX_PRINCIPALS - 1);
         let start = Arc::new(std::sync::Barrier::new(RACERS));
         let racers: Vec<_> = (0..RACERS)
             .map(|n| {
@@ -214,4 +220,19 @@ fn concurrent_new_principals_never_pass_the_cap() {
         );
         drop((held, admitted));
     }
+}
+
+/// MIK-7975 CAP.1: a key another first frame admitted meanwhile is found, not
+/// counted again, when the map is full: the cap applies only to a new key.
+#[test]
+fn a_key_admitted_meanwhile_is_found_at_a_full_cap() {
+    let history = ReadHistory::shared();
+    let mut held = fill_live(&history, MAX_PRINCIPALS - 1);
+    held.push(reserve(&history, &tenant("a")));
+    let found = history
+        .admit(KEY, history.now(), WINDOW)
+        .map(|principal| principal.holds("a"));
+    assert_eq!(found, Some(true), "KEY is present and live");
+    assert_eq!(history.principals.len(), MAX_PRINCIPALS);
+    drop(held);
 }
