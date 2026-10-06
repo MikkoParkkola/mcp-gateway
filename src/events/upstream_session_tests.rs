@@ -514,6 +514,34 @@ fn a_failed_refill_is_retried_once_after_the_cooldown() {
     );
 }
 
+/// MIK-8007: a silent retry keeps the tool list a reader filled after the
+/// failed refill; only a refill serving a notice drops it.
+#[tokio::test]
+async fn a_silent_retry_keeps_a_readers_fill() {
+    let dir = tempfile::tempdir().expect("dir");
+    let reload = Reload::new(dir.path());
+    reload.to(true).await;
+    let backend = reload.registry.get("b").expect("b registered");
+    let shared = shared();
+    let mut state = State::new(&shared, Era::Modern);
+    for (unannounced, kept) in [(false, true), (true, false)] {
+        backend.fill_tools_for_test().await;
+        assert!(backend.has_cached_tools(), "the reader's fill is cached");
+        *shared.tools.lock() = ToolsDebt {
+            due: Some(Instant::now()),
+            retrying: true,
+            unannounced,
+        };
+        // Left unpolled: only the start's own effect on the cache is seen.
+        assert!(start_due_refill(&mut state, &backend).is_some(), "due");
+        assert_eq!(
+            backend.has_cached_tools(),
+            kept,
+            "cache kept with unannounced = {unannounced}"
+        );
+    }
+}
+
 /// MIK-8007: a backend gone from the config owes no tools notice; one added
 /// again later starts afresh.
 #[tokio::test]

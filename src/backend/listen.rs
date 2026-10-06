@@ -112,6 +112,17 @@ impl Backend {
         entry.resend_permitted.write().clear();
     }
 
+    /// Test-only: fill the shared slot's tool list, as a reader's read does.
+    #[cfg(test)]
+    pub(crate) async fn fill_tools_for_test(&self) {
+        let ttl = std::time::Duration::from_secs(300);
+        self.shared_entry()
+            .tools_cache
+            .get_or_fetch_shared(ttl, || async { Ok(Vec::new()) })
+            .await
+            .expect("fill");
+    }
+
     /// `resources/subscribe` or `resources/unsubscribe` for `uri` on the
     /// legacy channel. `Ok(false)` when the peer answers method-not-found:
     /// that backend's resource interest is unsupported (§3).

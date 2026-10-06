@@ -255,18 +255,8 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         }
         // Not while a finished refill's change is still unannounced: invalidating
         // now would have the hub announce it over an emptied cache.
-        if refill.is_none() && !state.tools_pending && state.take_due_refill() {
-            // A notice arrived: drop the cached list and refill it before the
-            // hub hears, so the subscriber's re-read is fresh and nothing sees
-            // an emptied cache. At most once per tick however many notices
-            // came; a notice during a refill waits for the next one. A silent
-            // retry keeps the cache: the failed refill already emptied it, so
-            // what is there now was read after the notice, and invalidating
-            // again could void a reader's fill into a new cooldown (MIK-8007).
-            if state.refill_announces {
-                backend.invalidate_tools();
-            }
-            refill = Some(start_refill(backend, &shared.name));
+        if refill.is_none() && !state.tools_pending {
+            refill = start_due_refill(&mut state, backend);
         }
         if !backend_still_current(backend, &target.handle) {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
@@ -282,6 +272,23 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         }
         state.flush(hub);
     }
+}
+
+/// The refill a due notice starts, unpolled. A notice arrived: drop the cached
+/// list and refill it before the hub hears, so the subscriber's re-read is
+/// fresh and nothing sees an emptied cache. At most once per tick however many
+/// notices came; a notice during a refill waits for the next one. A silent
+/// retry keeps the cache: the failed refill already emptied it, so what is
+/// there now was read after the notice, and invalidating again could void a
+/// reader's fill into a new cooldown (MIK-8007).
+fn start_due_refill(state: &mut State<'_>, backend: &Arc<Backend>) -> Option<Refill> {
+    if !state.take_due_refill() {
+        return None;
+    }
+    if state.refill_announces {
+        backend.invalidate_tools();
+    }
+    Some(start_refill(backend, &state.shared.name))
 }
 
 /// The tools refill a notice starts. The shared fetch, so a reader of the list
