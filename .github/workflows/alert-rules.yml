@@ -1,0 +1,48 @@
+name: Alert rules
+
+# Runs the promtool cases in deploy/prometheus/ against the shipped alert
+# rules. Its own workflow, not a ci.yml job: a `throwaway/` PR must run this
+# (it is how a rule regression is shown red), while ci.yml runs nothing but
+# `Tests (throwaway)` on one (scripts/ci/test_throwaway_routing.py).
+on:
+  pull_request:
+  push:
+    branches: [main, docs/ranking-1-release-line]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  promtool:
+    name: Alert rules (promtool)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Pinned by version and by the tarball's SHA-256 from that release's
+      # sha256sums.txt. Bumping the version means replacing the digest in the
+      # same commit; a mismatch stops here, before promtool runs.
+      - name: Install promtool
+        env:
+          VERSION: 3.5.0
+          SHA256: e811827af26d822afb09a4f28314f61b618b12cff5369835a67f674d8b46f39a
+        run: |
+          set -euo pipefail
+          ASSET="prometheus-${VERSION}.linux-amd64.tar.gz"
+          curl -fsSL -o "${ASSET}" \
+            "https://github.com/prometheus/prometheus/releases/download/v${VERSION}/${ASSET}"
+          printf '%s  %s\n' "${SHA256}" "${ASSET}" | sha256sum --check --strict -
+          tar xzf "${ASSET}" --strip-components=1 "prometheus-${VERSION}.linux-amd64/promtool"
+          ./promtool --version
+      - name: Check and test the rules
+        working-directory: deploy/prometheus
+        run: |
+          set -euo pipefail
+          ../../promtool check rules mcp-gateway-alerts.yml
+          ../../promtool test rules mcp-gateway-alerts-test.yml

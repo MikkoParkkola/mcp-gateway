@@ -62,6 +62,11 @@ pub struct FirewallConfig {
     /// compatibility. Set to a value in `(anomaly_threshold, 1.0]` to enable
     /// prospective blocking — e.g. `0.9`.
     ///
+    /// Keyless legacy callers (authentication off, or on with the path public)
+    /// that resume no established session share one history, so the threshold
+    /// applies to them collectively: interleaved calls from several such
+    /// clients are scored as one caller's sequence (MIK-7971).
+    ///
     /// ```yaml
     /// security:
     ///   firewall:
