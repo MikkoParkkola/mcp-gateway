@@ -90,11 +90,16 @@ fn status_body_reports_superseded_as_expired() {
 /// removed, so an oversized or unlisted request reaches the store.
 #[test]
 fn a_create_body_is_capped_and_its_return_path_matched_exactly() {
-    let yaml = "accounts:\n  schema_version: accounts.v1\n  deployment: single_process\n  \
-                instance_id: unit\n  store_dir: /unused/store\n  authority_dir: /unused/authority\n  \
-                current_key_id: primary\n  keys:\n    primary: env:UNUSED\n  hosted:\n    \
-                public_origin: https://chat.fixture.test\n    return_paths: [\"/\"]\n";
-    let config: crate::config::Config = serde_yaml::from_str(yaml).expect("config");
+    // Both long paths are allow-listed, so only the length cap can refuse one.
+    let at_cap = format!("/{}", "p".repeat(255));
+    let over_cap = format!("/{}", "p".repeat(256));
+    let yaml = format!(
+        "accounts:\n  schema_version: accounts.v1\n  deployment: single_process\n  \
+         instance_id: unit\n  store_dir: /unused/store\n  authority_dir: /unused/authority\n  \
+         current_key_id: primary\n  keys:\n    primary: env:UNUSED\n  hosted:\n    \
+         public_origin: https://chat.fixture.test\n    return_paths: [\"/\", \"{at_cap}\", \"{over_cap}\"]\n"
+    );
+    let config: crate::config::Config = serde_yaml::from_str(&yaml).expect("config");
     let body = |value: serde_json::Value| axum::body::Bytes::from(value.to_string());
     let ok = serde_json::json!({"account_id": "work", "return_path": "/"});
     assert!(admissible(&config, &body(ok.clone())).is_some(), "control");
@@ -110,10 +115,14 @@ fn a_create_body_is_capped_and_its_return_path_matched_exactly() {
         admissible(&config, &body(long_id)).is_none(),
         "account id cap"
     );
-    let long_path =
-        serde_json::json!({"account_id": "work", "return_path": format!("/{}", "p".repeat(256))});
+    let at_cap = serde_json::json!({"account_id": "work", "return_path": at_cap});
     assert!(
-        admissible(&config, &body(long_path)).is_none(),
+        admissible(&config, &body(at_cap)).is_some(),
+        "return path at the cap"
+    );
+    let over_cap = serde_json::json!({"account_id": "work", "return_path": over_cap});
+    assert!(
+        admissible(&config, &body(over_cap)).is_none(),
         "return path cap"
     );
     let unlisted = serde_json::json!({"account_id": "work", "return_path": "/other"});
