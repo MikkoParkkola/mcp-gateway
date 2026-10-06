@@ -4,6 +4,11 @@
 //! idempotency key, so a same-key retry is not executed a second time. A call
 //! cancelled before anything reached the backend still releases the key.
 //!
+//! MIK-7979 / MIK-7900: a call whose request left the gateway and got no
+//! answer (a transport failure, a timeout, a backend stopped by reload while
+//! the call was in flight) settles the same way, while the backend's own error
+//! answer is replayed as that answer and a pre-send refusal frees the key.
+//!
 //! Every case runs the real `invoke_tool` path with idempotency on. The
 //! caller "disconnects" by dropping the call's future once the scripted
 //! backend reports that the dispatch under test has arrived.
@@ -33,6 +38,13 @@ enum Step {
     Answer(Value),
     /// Signal arrival, then never answer.
     Park,
+    /// Counted as reached, then fail with this error.
+    Fail(fn() -> crate::Error),
+    /// The backend's own JSON-RPC error answer.
+    Refuse(i32, &'static str),
+    /// Signal arrival, then fail as a closed stdio response channel does once
+    /// the transport is closed under the call.
+    ParkUntilClosed,
 }
 
 /// A backend whose `tools/call` answers follow a script (the last step
@@ -41,6 +53,7 @@ struct Scripted {
     steps: Mutex<Vec<Step>>,
     calls: AtomicUsize,
     parked: Arc<Notify>,
+    closed: Notify,
 }
 
 #[async_trait::async_trait]
@@ -69,6 +82,19 @@ impl crate::transport::Transport for Scripted {
                 self.parked.notify_one();
                 std::future::pending().await
             }
+            Step::Fail(error) => Err(error()),
+            Step::Refuse(code, message) => Ok(JsonRpcResponse::error(
+                Some(RequestId::Number(1)),
+                code,
+                message,
+            )),
+            Step::ParkUntilClosed => {
+                self.parked.notify_one();
+                self.closed.notified().await;
+                Err(crate::Error::Transport(
+                    "Response channel closed".to_string(),
+                ))
+            }
         }
     }
 
@@ -81,6 +107,7 @@ impl crate::transport::Transport for Scripted {
     }
 
     async fn close(&self) -> crate::Result<()> {
+        self.closed.notify_one();
         Ok(())
     }
 }
@@ -128,6 +155,7 @@ fn gateway(steps: Vec<Step>) -> (MetaMcp, Arc<Scripted>) {
         steps: Mutex::new(steps),
         calls: AtomicUsize::new(0),
         parked: Arc::new(Notify::new()),
+        closed: Notify::new(),
     });
     let backend = Arc::new(Backend::new(
         "svc",
@@ -266,4 +294,127 @@ async fn a_call_cancelled_while_asking_the_client_releases_its_key() {
         2,
         "a key released before any re-dispatch lets the retry run"
     );
+}
+
+/// Run a keyed call that fails once with `first`, then retry it.
+async fn retried_after(first: Step) -> (crate::Result<Value>, crate::Result<Value>, usize) {
+    let (meta, wire) = gateway(vec![first, Step::Answer(done())]);
+    let client = answering();
+    let first = call(&meta, &client).await;
+    let retry = call(&meta, &client).await;
+    (first, retry, wire.calls.load(Ordering::SeqCst))
+}
+
+/// MIK-7979.SETTLE.1: the request left and the transport failed with no
+/// answer. The retry is told the outcome is unknown and is not run again.
+#[tokio::test]
+async fn a_transport_failure_after_send_is_not_executed_again() {
+    let (first, retry, calls) = retried_after(Step::Fail(|| {
+        crate::Error::Transport("connection reset".into())
+    }))
+    .await;
+    assert!(
+        format!("{first:?}").contains("connection reset"),
+        "{first:?}"
+    );
+    assert_eq!(
+        calls, 1,
+        "the same-key retry reached the backend again: {retry:?}"
+    );
+    assert!(format!("{retry:?}").contains(UNCERTAIN), "{retry:?}");
+}
+
+/// MIK-7979.SETTLE.1: a timeout waiting for the answer is a lost round too.
+#[tokio::test]
+async fn a_timeout_after_send_is_not_executed_again() {
+    let (_, retry, calls) = retried_after(Step::Fail(|| {
+        crate::Error::BackendTimeout("timed out".into())
+    }))
+    .await;
+    assert_eq!(
+        calls, 1,
+        "the same-key retry reached the backend again: {retry:?}"
+    );
+    assert!(format!("{retry:?}").contains(UNCERTAIN), "{retry:?}");
+}
+
+/// MIK-7979.SETTLE.2: the backend answered with its own error. A retry is
+/// served that answer, not the uncertain notice, and is not run again.
+#[tokio::test]
+async fn a_backend_error_answer_is_replayed_as_that_answer() {
+    let (_, retry, calls) = retried_after(Step::Refuse(-32050, "quota spent upstream")).await;
+    assert_eq!(
+        calls, 1,
+        "the same-key retry reached the backend again: {retry:?}"
+    );
+    let served = format!("{retry:?}");
+    assert!(served.contains("quota spent upstream"), "{served}");
+    assert!(!served.contains(UNCERTAIN), "{served}");
+}
+
+/// MIK-7979.SETTLE.3: `BackendUnavailable` is only raised before the request
+/// is sent, so it frees the key and the retry runs.
+#[tokio::test]
+async fn a_backend_unavailable_refusal_frees_the_key() {
+    let (_, retry, calls) = retried_after(Step::Fail(|| {
+        crate::Error::BackendUnavailable("svc".into())
+    }))
+    .await;
+    assert_eq!(calls, 2, "the retry must run: {retry:?}");
+    assert!(format!("{retry:?}").contains("done"), "{retry:?}");
+}
+
+/// MIK-7900: a reload stops the backend while its call is in flight. The
+/// transport closes under the call, and the retry is told the outcome is
+/// unknown rather than replayed a failure or run again.
+#[tokio::test]
+async fn a_backend_stopped_mid_call_is_not_executed_again() {
+    let (meta, wire) = gateway(vec![Step::ParkUntilClosed, Step::Answer(done())]);
+    let client = answering();
+    let backend = meta.backends.get("svc").expect("svc is registered");
+    let (first, ()) = tokio::join!(call(&meta, &client), async {
+        wire.parked.notified().await;
+        backend.stop().await.expect("stop never fails");
+    });
+    assert!(
+        format!("{first:?}").contains("Response channel closed"),
+        "{first:?}"
+    );
+
+    let retry = call(&meta, &client).await;
+    assert_eq!(
+        wire.calls.load(Ordering::SeqCst),
+        1,
+        "the same-key retry reached the backend again: {retry:?}"
+    );
+    assert!(format!("{retry:?}").contains(UNCERTAIN), "{retry:?}");
+}
+
+/// A lost round that finds its reservation already settled by another path
+/// leaves that path's answer in place: it neither reports settling the key nor
+/// replaces the stored error with the uncertainty notice.
+#[test]
+fn a_lost_round_leaves_an_already_settled_key_alone() {
+    let cache = Arc::new(IdempotencyCache::new());
+    let crate::idempotency::GuardOutcome::Proceed(mut reservation) =
+        crate::idempotency::enforce(&cache, KEY, "fp").expect("a fresh key is admitted")
+    else {
+        panic!("a fresh key must proceed");
+    };
+    let first = json!({ "code": -32000, "message": "first answer" });
+    reservation.fail(&first);
+
+    let settled = super::settle_lost_round(
+        &crate::Error::Transport("reset".to_string()),
+        Some(&mut reservation),
+        super::LostRoundRoute::Meta,
+    );
+
+    assert!(!settled, "an already settled key was settled again");
+    match crate::idempotency::enforce(&cache, KEY, "fp").expect("the key is stored") {
+        crate::idempotency::GuardOutcome::CachedError(stored) => {
+            assert_eq!(stored, first, "the first answer was overwritten");
+        }
+        other => panic!("the stored answer changed: {other:?}"),
+    }
 }
