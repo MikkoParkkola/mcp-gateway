@@ -263,8 +263,11 @@ pub enum Error {
     },
 
     /// A caller that never begins or waits on an interactive login (the
-    /// health probe) could not use the backend without one (MIK-7982).
-    #[error("backend '{backend}' is waiting on an interactive login")]
+    /// health probe) found a start in flight, which may be a login, and did
+    /// not wait on it (MIK-7982).
+    #[error(
+        "backend '{backend}' is starting (possibly waiting on an interactive login); not waited on"
+    )]
     AuthorizationRequired {
         /// The backend that needs the login.
         backend: String,

@@ -62,6 +62,19 @@ impl Backend {
             return Ok(());
         }
 
+        // MIK-7982 C2: a probe never waits on a start in flight. Such a start
+        // may be an interactive login holding the start lock for minutes, and
+        // a probe that queued behind it would then force a restart that ends
+        // the login. Contention answers at once with the neutral
+        // `AuthorizationRequired`, which the health loop skips as a tick.
+        let starting = self.shared_transport().is_none_or(|t| !t.is_connected())
+            && self.shared_entry().start_lock.try_lock().is_err();
+        if starting {
+            return Err(Error::AuthorizationRequired {
+                backend: self.name.clone(),
+            });
+        }
+
         // `ensure_started` now respawns reliably because `is_connected()` does a
         // real liveness check (Fix C).
         if let Err(e) = self.ensure_started().await {
