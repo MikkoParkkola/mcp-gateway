@@ -507,12 +507,14 @@ impl Run {
     ) -> Step {
         // The classification is re-read every poll (MIK-7216.IDEM.1): a
         // capability removed or reclassified takes its subscriptions with it.
-        let Some(target) = self
-            .host
-            .targets()
-            .into_iter()
-            .find(|t| t.read_only && event_name(&t.capability) == self.name)
-        else {
+        // A changed credential class is a reclassification too: a shared
+        // poller must never call under one sharer's credential.
+        let Some(target) = self.host.targets().into_iter().find(|t| {
+            t.read_only
+                && event_name(&t.capability) == self.name
+                && t.credential != CredentialUse::Account
+                && (t.credential == CredentialUse::Free) == (self.charge == Charge::Global)
+        }) else {
             let (gone, owner) = (vec![self.name.clone()], Arc::clone(hub));
             let _ = tokio::task::spawn_blocking(move || owner.withdraw(&gone)).await;
             hub.reconcile_stops_in_background();
