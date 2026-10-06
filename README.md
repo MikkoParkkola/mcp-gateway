@@ -69,7 +69,7 @@ mcp-gateway doctor                           # 4. verify everything is healthy
 
 That is it. Your AI clients now talk to the gateway, and the gateway routes to every backend you already had configured, at a flat `11 tools` instead of `~150` (4.0; 3.x shows about 15). Start with `gateway_search_tools` from your AI client to find any backend tool, then invoke it with `gateway_invoke`.
 
-> **Nothing to import yet?** `mcp-gateway init --with-examples` writes a working `gateway.yaml` with public capabilities so you can confirm the gateway is alive before adding your own servers.
+> **Nothing to import yet?** `mcp-gateway init` writes a working `gateway.yaml` with public capabilities so you can confirm the gateway is alive before adding your own servers.
 
 **Or tell your AI assistant** (recommended):
 

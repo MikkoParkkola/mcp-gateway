@@ -643,9 +643,8 @@ jobs:
 
             def caveats
               <<~CAVEATS
-                Licensing: mcp-gateway uses mixed, per-file licensing; the runnable
-                gateway is PolyForm Noncommercial 1.0.0. Commercial use requires a
-                license. See https://github.com/MikkoParkkola/mcp-gateway/blob/main/COMMERCIAL.md
+                Licensing: mcp-gateway is licensed under PolyForm Noncommercial 1.0.0.
+                Commercial use requires a license. See https://github.com/MikkoParkkola/mcp-gateway/blob/main/COMMERCIAL.md
               CAVEATS
             end
 
