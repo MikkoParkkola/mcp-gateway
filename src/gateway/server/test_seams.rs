@@ -24,7 +24,8 @@ impl TestSeams {
     /// Send the port `listener` holds to the test that asked for it.
     pub(super) fn report_bound_port(&mut self, listener: &tokio::net::TcpListener) {
         if let (Some(sender), Ok(bound)) = (self.bound_port.take(), listener.local_addr()) {
-            drop(sender.send(bound.port()));
+            // A test that stopped waiting has dropped its receiver; nothing to do.
+            sender.send(bound.port()).ok();
         }
     }
 }

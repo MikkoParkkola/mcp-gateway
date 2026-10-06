@@ -113,7 +113,8 @@ where
     K: AsRef<std::ffi::OsStr>,
 {
     vars.into_iter().inspect(|(name, _)| {
-        let name = name.as_ref().to_string_lossy().to_ascii_uppercase();
+        let name: &std::ffi::OsStr = name.as_ref();
+        let name = name.to_string_lossy().to_ascii_uppercase();
         assert!(
             !ISOLATION.contains(&name.as_str()),
             "{name} would undo the gateway's isolated home"
