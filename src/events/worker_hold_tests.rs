@@ -16,6 +16,8 @@ fn open_hub(dir: &std::path::Path, max_attempts: u32) -> Arc<EventsHub> {
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         retry_max_attempts: max_attempts,
+        // Priced, so a charge would show in the budget's registry.
+        cost_per_delivery_usd: 0.01,
         ..crate::config::EventsConfig::default()
     };
     EventsHub::open(&config, dir).expect("hub")
