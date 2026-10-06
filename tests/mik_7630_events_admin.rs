@@ -8,8 +8,7 @@
 //! admin answer (404 where 200 is expected). Linux-only for `SSL_CERT_FILE`.
 #![cfg(all(unix, not(target_vendor = "apple")))]
 
-#[path = "common/gateway_bin.rs"]
-mod gateway_bin;
+use gateway::gateway_bin;
 
 #[path = "mik_7630_events/delivery.rs"]
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]

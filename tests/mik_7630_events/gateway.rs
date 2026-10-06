@@ -3,7 +3,7 @@
 //! The shipped binary under an events config, restartable on one store.
 
 #[path = "../common/gateway_bin.rs"]
-mod gateway_bin;
+pub(crate) mod gateway_bin;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
