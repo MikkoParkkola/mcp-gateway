@@ -275,9 +275,6 @@ impl SigningInvocationContext {
     /// policy, so a denied call gets its policy refusal and counts no nonce
     /// rejection.
     pub(crate) fn refuse_malformed_nonce_early(&self) -> crate::Result<()> {
-        if self.scope != SigningScope::EveryToolCall {
-            return Ok(());
-        }
         self.refuse_malformed_nonce()
     }
 
