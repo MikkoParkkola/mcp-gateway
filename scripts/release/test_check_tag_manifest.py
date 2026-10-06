@@ -1563,6 +1563,29 @@ class WorkflowWiring(unittest.TestCase):
                         f"{shell(command)}",
                     )
 
+    def test_the_chart_is_published_and_signed_by_this_workflow(self):
+        # MIK-7952: the chart is signed by ci.yml at the tag, the image's own
+        # signer, after the manifest job has signed and named the image, and a
+        # verify under any other identity is refused for its identity.
+        body = jobs("ci.yml").get("helm-chart-publish", "")
+        self.assertTrue(body, "ci.yml has no helm-chart-publish job")
+        self.assertIn("docker-manifest", needs_of(body) or "", "the chart must wait for the signed image")
+        gate = job_if("ci.yml", "helm-chart-publish")
+        self.assertIn("startsWith(github.ref, 'refs/tags/v')", gate)
+        self.assertIn("needs.docker-manifest.result == 'success'", gate, "a tag run publishes only over a signed image")
+        self.assertRegex(body, r"(?m)^\s+id-token:\s*write\b")
+        self.assertIn("IDENTITY: https://github.com/${{ github.workflow_ref }}", body)
+        self.assertIn("SIGNER_ISSUER: https://token.actions.githubusercontent.com", body)
+        ran = "\n".join(c for b in steps("ci.yml", "helm-chart-publish") for c in joined(b))
+        self.assertRegex(ran, r'SIGNER_IDENTITY="\$IDENTITY"[^\n]*\n?[^\n]*scripts/release/publish_pinned_chart\.sh "\$image" "\$repo"')
+        self.assertIn('repo=oci://ghcr.io/mikkoparkkola/charts\n', ran + "\n")
+        self.assertRegex(ran, r'(?m)^\s*if cosign verify --certificate-identity "\$wrong"', "no wrong-identity verify")
+        self.assertRegex(
+            ran,
+            r"(?m)^\s*grep -q 'none of the expected identities matched' \"\$RUNNER_TEMP/wrong-identity\.err\" \|\| \{",
+            "a wrong-identity refusal must be for its identity",
+        )
+
     def test_the_documented_recipe_serves_a_call_before_the_handoff(self):
         # MIK-7484: smoke-image.sh proves the image starts; only
         # scripts/dev/docker-smoke.sh runs the documented recipe (127.0.0.1
@@ -2609,8 +2632,8 @@ class WorkflowWiring(unittest.TestCase):
         release = jobs("release.yml")["release"]
         self.assertRegex(release, r"IDENTITY: https://github\.com/\$\{\{ github\.workflow_ref \}\}")
         # W5: OIDC is granted where it is used and nowhere else. The image
-        # and registry jobs held it before release signing; the two new
-        # holders are the release job and its rehearsal.
+        # and registry jobs held it before release signing; the release job
+        # and its rehearsal followed, then the chart publisher (MIK-7952).
         oidc = sorted(
             f"{wf}:{job}" for wf in ("release.yml", "ci.yml", "docker.yml")
             for job, body in jobs(wf).items() if re.search(r"(?m)^\s+id-token:\s*write\b", body)
@@ -2620,6 +2643,7 @@ class WorkflowWiring(unittest.TestCase):
             sorted([
                 "release.yml:release", "release.yml:npm-publish",
                 "ci.yml:binary-signing-rehearsal", "ci.yml:docker-manifest", "ci.yml:publish-mcp-registry",
+                "ci.yml:helm-chart-publish",
             ]),
             "W5: id-token: write outside its allow-list",
         )

@@ -31,15 +31,34 @@ fi
 
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
-git archive "$TAG_COMMIT" deploy/helm/mcp-gateway | tar -x -C "$work"
-chart="$work/deploy/helm/mcp-gateway"
+# Helm archives file times, so a rerun would publish a new digest under the same
+# version. Every staged file gets TAG_COMMIT's commit time, and the chart is
+# packaged twice from two extractions: the archives must be identical (MIK-7952).
+epoch=$(git show -s --format=%ct "$TAG_COMMIT")
+stage() {
+  git archive "$TAG_COMMIT" deploy/helm/mcp-gateway | tar -x -C "$1"
+  DIGEST="$digest" yq -i '.image.digest = strenv(DIGEST)' "$1/deploy/helm/mcp-gateway/values.yaml"
+  python3 - "$epoch" "$1/deploy" <<'PY'
+import os, sys
+when = int(sys.argv[1])
+for root, dirs, files in os.walk(sys.argv[2]):
+    for name in [*dirs, *files]:
+        os.utime(os.path.join(root, name), (when, when), follow_symlinks=False)
+    os.utime(root, (when, when))
+PY
+}
+mkdir -p "$work/a" "$work/b"
+stage "$work/a"
+stage "$work/b"
+chart="$work/a/deploy/helm/mcp-gateway"
 version=$(yq '.version' "$chart/Chart.yaml") # the chart's own version, not the app's
-
-DIGEST="$digest" yq -i '.image.digest = strenv(DIGEST)' "$chart/values.yaml"
 staged=$(yq '.image.digest' "$chart/values.yaml")
 [[ $staged == "$digest" ]] || { echo "digest not staged: $staged" >&2; exit 1; }
 
 helm package "$chart" -d "$work/out"
+helm package "$work/b/deploy/helm/mcp-gateway" -d "$work/again" >/dev/null
+cmp -s "$work/out/mcp-gateway-$version.tgz" "$work/again/mcp-gateway-$version.tgz" \
+  || { echo "the chart archive is not reproducible; a rerun would publish a new digest" >&2; exit 1; }
 push_out=$(helm push "$work/out/mcp-gateway-$version.tgz" "$repo" 2>&1) \
   || { printf '%s\n' "$push_out" >&2; exit 1; }
 printf '%s\n' "$push_out"
@@ -74,7 +93,6 @@ rendered=$(helm template probe "$work/pulled/mcp-gateway-$version.tgz" | yq 'sel
   printf 'Verify: `cosign verify --certificate-identity %q --certificate-oidc-issuer %q %s`\n\n' \
     "$SIGNER_IDENTITY" "$SIGNER_ISSUER" "$chart_ref"
   printf 'Pull: `helm pull %s/mcp-gateway --version %s` must print `Digest: %s`.\n' "$repo" "$version" "$chart_digest"
-  # Accepted for 4.0.0; MIK-7952 moves chart signing into a workflow.
-  printf '\nThe chart is signed with the maintainer'"'"'s identity above; the image is signed by the CI workflow (`ci.yml` at the release tag).\n'
+  printf '\nThe chart is signed by the release workflow identity above, the identity that signs the image.\n'
 } > "$CHART_NOTES"
 echo "chart $version pins $digest, signed as $chart_ref"
