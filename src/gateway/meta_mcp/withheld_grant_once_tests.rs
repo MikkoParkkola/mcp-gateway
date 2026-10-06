@@ -13,6 +13,8 @@ use super::super::grant_decision_audit_tests::{api_key, context, gateway};
 use super::after_grant_evaluation;
 use crate::security::audit::AuditFailurePolicy;
 
+const ALICE: (&str, &str) = ("api_key", "alice");
+
 #[tokio::test]
 async fn a_reload_after_the_refusal_does_not_change_the_recorded_decision() {
     let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
@@ -22,23 +24,21 @@ async fn a_reload_after_the_refusal_does_not_change_the_recorded_decision() {
         Some(&dir),
         AuditFailurePolicy::FailClosed,
     );
-    // Bob holds no grant when the call is judged; one is published at once.
+    // The owner holds no grant when the call is judged; one is published at
+    // once. Only the owner can be granted (a non-owner is refused before any
+    // grant is read), so only the owner's call can flip on a reload.
     let store = std::sync::Arc::clone(&meta.identity_grants);
     after_grant_evaluation::set(move || {
-        *store.write() = grants(vec![grant(
-            "g-bob",
-            ("api_key", "bob"),
-            ("api_key", "alice"),
-        )]);
+        *store.write() = grants(vec![grant("g-alice", ALICE, ALICE)]);
     });
-    let who = api_key("bob");
+    let who = api_key("alice");
     let caller = context(&who);
     let (refusal, written) = with_grant_slot(meta.transparency_logger.as_ref(), async {
         meta.withheld_surfaced(CAPS, PERSONAL, &caller, None)
     })
     .await;
     written.expect("the slot's records are written");
-    let refusal = refusal.expect("bob held no grant when the call was judged");
+    let refusal = refusal.expect("alice held no grant when the call was judged");
     assert!(refusal.to_string().contains("Unknown tool"), "{refusal}");
 
     let recorded = decisions(&dir);
