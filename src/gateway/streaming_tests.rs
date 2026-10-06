@@ -589,3 +589,35 @@ async fn a_withheld_bridged_request_ends_its_wait_at_once() {
         "the bridged wait was not ended at once: {answer:?}"
     );
 }
+
+/// MIK-7975 WAIT.1: the watch fails a request only when every copy the send
+/// reached was withheld, whatever order the send and the reports arrive in.
+#[tokio::test]
+async fn a_request_fails_only_when_every_copy_is_withheld() {
+    let failed = |watch: &DeliveryWatch| futures::FutureExt::now_or_never(watch.failed()).is_some();
+    let one_written = DeliveryWatch::default();
+    one_written.sent(2);
+    one_written.report(false);
+    one_written.report(true);
+    assert!(!failed(&one_written), "a copy was written");
+
+    let all_withheld = DeliveryWatch::default();
+    all_withheld.sent(2);
+    all_withheld.report(false);
+    assert!(!failed(&all_withheld), "one copy is still outstanding");
+    all_withheld.report(false);
+    assert!(failed(&all_withheld), "every copy was withheld");
+
+    let reported_first = DeliveryWatch::default();
+    reported_first.report(false);
+    reported_first.report(false);
+    assert!(
+        !failed(&reported_first),
+        "the send has not counted its copies"
+    );
+    reported_first.sent(2);
+    assert!(
+        failed(&reported_first),
+        "both copies were withheld before the count"
+    );
+}
