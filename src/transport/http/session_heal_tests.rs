@@ -118,3 +118,16 @@ async fn a_sessionless_404_runs_no_handshake() {
     assert!(matches!(opened, Err(404)));
     assert_eq!(initializes(&seen), 0);
 }
+
+/// A modern listen carries no session id, so its 404 says nothing about the
+/// shared session: the bucket's session is kept and nothing is handshaken.
+#[tokio::test]
+async fn a_modern_listen_404_leaves_the_shared_session_alone() {
+    let (url, seen) = peer().await;
+    let t = transport(&url);
+    t.sessions.write().insert(String::new(), "s1".to_owned());
+    let opened = t.open_listen(Requested::default()).await.expect("sent");
+    assert!(matches!(opened, Err(404)));
+    assert_eq!(initializes(&seen), 0);
+    assert_eq!(session(&t).as_deref(), Some("s1"));
+}

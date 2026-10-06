@@ -108,8 +108,24 @@ impl Transport for HttpTransport {
             // Heal the session on BOTH branches: it really is dead, and leaving
             // the stale bucket in place poisons every later call through this
             // identity — including the ones that ARE allowed to be resent.
-            self.sessions.write().remove(bucket);
-            if self.initialize().await.is_err() {
+            let healed = if identity_key.is_none() {
+                // The shared bucket heals through the one recovery path the
+                // stream opens use, so the two never undo each other.
+                let current = self.sessions.read().get(bucket).cloned();
+                match current {
+                    Some(current) => {
+                        let _ = self.session_expired(&current).await;
+                    }
+                    None => {
+                        let _ = self.reinit_if_needed().await;
+                    }
+                }
+                self.sessions.read().contains_key(bucket)
+            } else {
+                self.sessions.write().remove(bucket);
+                self.initialize().await.is_ok()
+            };
+            if !healed {
                 // The caller asked about their request, not about our
                 // handshake; surfacing the re-initialization's error instead
                 // would hide what actually failed.
