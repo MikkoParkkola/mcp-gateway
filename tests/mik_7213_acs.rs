@@ -412,6 +412,16 @@ mod http {
         let borrowed: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let (_, body) = post(request, &borrowed).await;
         assert!(body["result"].is_object(), "tools/call must answer: {body}");
+        // A tool error is a result object too; only a successful call probes
+        // what the shaper does to an ordinary answer.
+        assert_ne!(
+            body["result"]["isError"], true,
+            "the call must succeed: {body}"
+        );
+        assert!(
+            body["result"]["content"].is_array(),
+            "a successful call carries content: {body}"
+        );
         for key in ["ttlMs", "cacheScope"] {
             assert!(
                 body["result"].get(key).is_none(),

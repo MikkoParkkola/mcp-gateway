@@ -113,7 +113,8 @@ mod source_checks {
     }
 
     /// Test 7 (b). A drift check, and labelled as one: `"cacheScope"` is
-    /// written only by `shape_modern_response` and the clamp.
+    /// written only by `cacheable::write_cache_hints` (which the modern shaper
+    /// and discovery both call) and the clamp.
     #[test]
     fn only_the_shaper_and_the_clamp_name_the_key() {
         let mut files = Vec::new();
