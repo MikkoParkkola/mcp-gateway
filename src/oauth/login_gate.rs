@@ -152,6 +152,11 @@ impl LoginGate {
         Arc::clone(&self.state.lock().cohort)
     }
 
+    /// Whether any login is in flight.
+    pub(crate) fn in_flight(&self) -> bool {
+        self.state.lock().attempt.is_some()
+    }
+
     /// Whether a login of `cohort` is still in flight.
     pub(crate) fn pending_in(&self, cohort: &Arc<Cohort>) -> bool {
         self.state

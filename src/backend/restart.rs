@@ -11,8 +11,8 @@ use tracing::{debug, warn};
 use super::pool::PoolKey;
 use super::{Backend, RestartOutcome};
 
-use crate::Result;
 use crate::transport::Transport;
+use crate::{Error, Result};
 
 impl Backend {
     /// Tear down the current transport (killing any child process) and start a
@@ -55,10 +55,23 @@ impl Backend {
         // up to the whole authorization window, and its callback listener
         // holds the port this restart's own login binds: end that login
         // first. Starts queued behind it share its Cancelled end (MIK-7982).
+        // A non-interactive restart (the health probe's rebuild) neither ends
+        // a login nor queues behind a start in flight: it does nothing.
+        let interactive = crate::oauth::login_gate::interactive();
+        let required = || Error::AuthorizationRequired {
+            backend: self.name.clone(),
+        };
+        if !interactive && self.login_gate.in_flight() {
+            return Err(required());
+        }
         self.login_gate.cancel_and_join().await;
 
         let entry = self.shared_entry();
-        let _guard = entry.start_lock.lock().await;
+        let _guard = if interactive {
+            entry.start_lock.lock().await
+        } else {
+            entry.start_lock.try_lock().map_err(|_| required())?
+        };
 
         // Re-checked after the await. The lock above normally prevents shutdown
         // from interleaving at all, but it is not the only line of defence:

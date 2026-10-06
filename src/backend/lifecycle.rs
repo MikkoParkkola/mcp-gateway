@@ -165,7 +165,19 @@ impl Backend {
                 }
             }
 
-            let _start_guard = entry.start_lock.lock().await;
+            // MIK-7982 C2: a non-interactive caller (the health probe) never
+            // queues behind a start in flight, which may be a login holding
+            // this lock for minutes; it answers at once instead.
+            let _start_guard = if crate::oauth::login_gate::interactive() {
+                entry.start_lock.lock().await
+            } else {
+                entry
+                    .start_lock
+                    .try_lock()
+                    .map_err(|_| Error::AuthorizationRequired {
+                        backend: self.name.clone(),
+                    })?
+            };
 
             {
                 let transport = entry.transport.read();

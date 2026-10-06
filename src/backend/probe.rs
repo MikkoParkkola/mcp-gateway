@@ -62,26 +62,15 @@ impl Backend {
             return Ok(());
         }
 
-        // MIK-7982 C2: a probe never waits on a start in flight. Such a start
-        // may be an interactive login holding the start lock for minutes, and
-        // a probe that queued behind it would then force a restart that ends
-        // the login. Contention answers at once with the neutral
-        // `AuthorizationRequired`, which the health loop skips as a tick.
-        let starting = self.shared_transport().is_none_or(|t| !t.is_connected())
-            && self.shared_entry().start_lock.try_lock().is_err();
-        if starting {
-            return Err(Error::AuthorizationRequired {
-                backend: self.name.clone(),
-            });
-        }
-
         // `ensure_started` now respawns reliably because `is_connected()` does a
-        // real liveness check (Fix C). A probe never begins a login, and a
-        // start it could not make for want of one is no fault to rebuild.
+        // real liveness check (Fix C). Run non-interactive (MIK-7982 C2): the
+        // probe never begins a login and never queues behind a start in flight,
+        // which may be one; either answers `AuthorizationRequired` at once,
+        // which is no fault to rebuild and which the health loop skips.
         let started = crate::oauth::login_gate::non_interactive(self.ensure_started()).await;
         if let Err(e) = started {
             if !e.is_authorization_wait() {
-                let _ = self.force_restart().await;
+                self.rebuild_from_probe().await;
             }
             return Err(e);
         }
@@ -116,7 +105,7 @@ impl Backend {
                     "Health probe timed out; rebuilding transport"
                 );
                 self.unserved_consecutive.store(0, Ordering::SeqCst);
-                let _ = self.force_restart().await;
+                self.rebuild_from_probe().await;
                 return Err(Error::BackendTimeout(self.name.clone()));
             }
         };
@@ -142,7 +131,7 @@ impl Backend {
             Err(e) => {
                 warn!(backend = %self.name, error = %e, "Health probe failed; rebuilding transport");
                 self.unserved_consecutive.store(0, Ordering::SeqCst);
-                let _ = self.force_restart().await;
+                self.rebuild_from_probe().await;
                 Err(e)
             }
         }
@@ -233,11 +222,17 @@ impl Backend {
         // afterwards, spending the tolerance once and never again.
         self.unserved_consecutive.store(0, Ordering::SeqCst);
         self.trip_circuit_breaker("health probe unserved");
-        let _ = self.force_restart().await;
+        self.rebuild_from_probe().await;
         Err(Error::JsonRpc {
             code,
             message: format!("health probe to {method} was not served"),
             data: None,
         })
+    }
+
+    /// The probe's rebuild: a forced restart run non-interactive, so it
+    /// neither ends a login in flight nor opens one (MIK-7982).
+    async fn rebuild_from_probe(&self) {
+        let _ = crate::oauth::login_gate::non_interactive(self.force_restart()).await;
     }
 }
