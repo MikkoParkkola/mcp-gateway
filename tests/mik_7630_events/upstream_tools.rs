@@ -140,10 +140,13 @@ async fn a_refill_in_flight_is_kept_and_announced_when_the_session_ends() {
     .await;
     assert!(!restarted, "a notice restarted the refill in flight");
 
-    // The session ends while the refill hangs; the change is announced once
-    // the refill ends (its 30 s bound, the peer holding the list a minute).
+    // The session ends while the refill hangs (the pause lets it see the
+    // stream close first, or the loop would announce as usual); the change
+    // is announced once the refill ends, here when the peer answers.
     peer.drop_streams();
-    let announced = wait_until(Duration::from_secs(45), || {
+    tokio::time::sleep(QUIET).await;
+    peer.release_tools_list();
+    let announced = wait_until(Duration::from_secs(10), || {
         delivered(&receiver, &tools, &name).len() > tools_before
     })
     .await;
