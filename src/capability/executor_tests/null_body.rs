@@ -6,35 +6,39 @@
 use super::*;
 use std::sync::Mutex;
 
-type Seen = Arc<Mutex<Option<(String, serde_json::Value)>>>;
+type Seen = Arc<Mutex<Option<(String, String)>>>;
 
-/// A loopback server that records the path and JSON body of one POST.
+/// A loopback server that records the path and raw body of one POST.
 async fn recording_server() -> (u16, Seen) {
     let seen: Seen = Arc::default();
     let record = Arc::clone(&seen);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let app = Router::new().fallback(
-            move |uri: axum::http::Uri, Json(body): Json<serde_json::Value>| {
-                let record = Arc::clone(&record);
-                async move {
-                    *record.lock().unwrap() = Some((uri.path().to_owned(), body));
-                    Json(serde_json::json!({ "ok": true }))
-                }
-            },
-        );
+        let app = Router::new().fallback(move |uri: axum::http::Uri, body: String| {
+            let record = Arc::clone(&record);
+            async move {
+                *record.lock().unwrap() = Some((uri.path().to_owned(), body));
+                Json(serde_json::json!({ "ok": true }))
+            }
+        });
         axum::serve(listener, app).await.unwrap();
     });
     (port, seen)
 }
 
-/// Validate as a gateway call does, then execute.
+/// Validate as a gateway call does, then execute; the path and JSON body.
 async fn call(
     yaml: &str,
     arguments: serde_json::Value,
     seen: &Seen,
 ) -> (String, serde_json::Value) {
+    let (path, body) = call_raw(yaml, arguments, seen).await;
+    (path, serde_json::from_str(&body).expect("a JSON body"))
+}
+
+/// [`call`], with the body as sent.
+async fn call_raw(yaml: &str, arguments: serde_json::Value, seen: &Seen) -> (String, String) {
     let capability = crate::capability::parse_capability(yaml).unwrap();
     let validation = crate::capability::validate_arguments(&arguments, &capability.schema.input);
     assert!(validation.is_valid(), "{:?}", validation.violations);
@@ -156,4 +160,78 @@ providers:
     );
     let (_, body) = call(&yaml, serde_json::json!({}), &seen).await;
     assert_eq!(body, serde_json::json!({ "k": "v" }));
+}
+
+/// Each admitted null fills only its own placeholder: a null the schema
+/// does not admit stays out beside it, and a nullable property the caller
+/// gave a value keeps that value.
+#[tokio::test]
+async fn an_admitted_null_fills_only_its_own_placeholder() {
+    let (port, seen) = recording_server().await;
+    let yaml = format!(
+        r#"
+name: null_body_probe
+description: probe
+schema:
+  input:
+    type: object
+    properties:
+      a:
+        type: [string, "null"]
+      b:
+        type: string
+      c:
+        type: [string, "null"]
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: http://127.0.0.1:{port}
+      path: /items
+      method: POST
+      body:
+        a: "{{a}}"
+        b: "{{b}}"
+        c: "{{c}}"
+"#
+    );
+    let (_, body) = call(
+        &yaml,
+        serde_json::json!({ "a": null, "b": null, "c": "x" }),
+        &seen,
+    )
+    .await;
+    assert_eq!(body, serde_json::json!({ "a": null, "c": "x" }));
+}
+
+/// A plain-text body cannot carry a JSON null: an admitted null there is
+/// not given, and its field is left out of the text.
+#[tokio::test]
+async fn a_plain_text_body_leaves_an_admitted_null_out() {
+    let (port, seen) = recording_server().await;
+    let yaml = format!(
+        r#"
+name: null_body_probe
+description: probe
+schema:
+  input:
+    type: object
+    properties:
+      id:
+        type: [string, "null"]
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: http://127.0.0.1:{port}
+      path: /notes
+      method: POST
+      body_content_type: text/plain
+      body:
+        id: "{{id}}"
+        k: v
+"#
+    );
+    let (_, body) = call_raw(&yaml, serde_json::json!({ "id": null }), &seen).await;
+    assert_eq!(body, r#"{"k":"v"}"#);
 }
