@@ -73,3 +73,32 @@ fn add_keeps_the_comments_init_wrote() {
         );
     }
 }
+
+/// `remove` alone, on a hand-written config: the row that bites the old
+/// re-serialising `remove` without depending on `add`.
+#[test]
+fn remove_keeps_hand_written_comments() {
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("gateway.yaml");
+    let yaml = "# operator notes: keep this file under review\n\
+                server:\n  port: 39400  # fixed for the firewall rule\n\
+                \n# backends we run\nbackends:\n  # the one that stays\n  keep:\n    command: \"echo keep\"\n  \
+                drop:\n    command: \"echo drop\"\n";
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, yaml).expect("write");
+
+    gateway(home.path(), &["remove", "drop"]);
+
+    let after = std::fs::read_to_string(&path).expect("gateway.yaml");
+    for comment in comments(yaml) {
+        assert!(
+            after.contains(comment),
+            "`remove` dropped {comment:?}:\n{after}"
+        );
+    }
+    assert!(
+        after.contains("# fixed for the firewall rule"),
+        "trailing comment lost:\n{after}"
+    );
+    let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
+    assert!(config.backends.contains_key("keep") && !config.backends.contains_key("drop"));
+}
