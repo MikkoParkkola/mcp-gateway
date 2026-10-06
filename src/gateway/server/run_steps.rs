@@ -150,6 +150,7 @@ impl Gateway {
                 });
             }
 
+            cap_backend.spawn_listing_watch(Arc::clone(&self.backends), shutdown_tx.subscribe());
             // Start file watcher for hot-reload
             match CapabilityWatcher::start(
                 Arc::clone(&cap_backend),
