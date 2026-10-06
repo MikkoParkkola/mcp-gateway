@@ -731,6 +731,10 @@ prometheus-operator ServiceMonitor that sends it through `bearerTokenSecret`.
 - `mcp_jsonrpc_requests_total` -- JSON-RPC requests by method
 - `mcp_backend_idle_stop_close_failures` -- per backend, counts backends stopped
   for idleness that did not shut down cleanly (see below)
+- `mcp_backend_pool_slots` -- per backend, live pool slots: the shared slot plus one per
+  caller of a backend with `identity_propagation`. At most 65 (see below)
+- `mcp_backend_identity_slots_refused_total` -- per backend and `limit` (`backend` or
+  `principal`), callers refused a new slot (see below)
 - `mcp_message_signing_nonce_entries` -- live signing nonces held for replay
   protection, as one aggregate number with no labels (see below)
 - `mcp_message_signing_nonce_rejections_total` -- refused nonce admissions,
@@ -748,7 +752,10 @@ memory pressure on the host, days later.
 ```yaml
 # prometheus rules
 - alert: McpBackendIdleStopCloseFailures
-  expr: increase(mcp_backend_idle_stop_close_failures[15m]) > 0
+  expr: |
+    increase(mcp_backend_idle_stop_close_failures[15m]) > 0
+    or (mcp_backend_idle_stop_close_failures
+        unless mcp_backend_idle_stop_close_failures offset 15m) > 0
   labels: { severity: warning }
   annotations:
     summary: "Backend {{ $labels.backend }} did not stop cleanly when idle"
@@ -758,8 +765,11 @@ Every occurrence is worth knowing about, because each one may be a process that
 outlives the gateway's tracking and never comes back on its own. So the
 threshold is zero rather than a rate, and there is no `for` clause: the
 expression stays true for the whole 15-minute window after a single increment,
-which means `for` would delay the notification without ever suppressing an
-isolated failure. Warning rather than page — the damage is one leaked process,
+so `for` would delay the notification without ever suppressing an isolated
+failure. That includes the first failure. The counter is created there, already
+at 1, and `increase` alone reads 0 for a series with no earlier sample, so the
+`unless ... offset` branch fires for a series new in the window. Warning rather
+than page — the damage is one leaked process,
 not an outage.
 
 When it fires: check for an orphaned child process of the gateway
@@ -767,6 +777,43 @@ When it fires: check for an orphaned child process of the gateway
 Then look at that backend's shutdown path — a server ignoring SIGTERM is the
 usual cause. Setting a longer `stop_when_idle_for` does not help; removing the
 setting for that backend stops the leak at the cost of keeping it resident.
+
+#### Alerting on caller slots
+
+A backend with `identity_propagation` gives each caller its own connection, a pool
+slot. It admits at most 64 caller slots, and one caller at most 8; past either
+limit a new caller is refused, never served on the shared connection. Both limits
+are fixed in 4.0. `mcp_backend_pool_slots` counts the shared slot as well, so it
+peaks at 65. Idle slots are reclaimed after 5 minutes, and the gauge drops with them.
+
+```yaml
+# prometheus rules
+- alert: McpBackendCallerSlotsNearCap
+  expr: mcp_backend_pool_slots >= 53
+  for: 10m
+  labels: { severity: warning }
+  annotations:
+    summary: "Backend {{ $labels.backend }} holds {{ $value }} of its 65 pool slots"
+- alert: McpBackendCallerSlotsRefused
+  # The series appears at its first refusal, already at 1, so `increase` alone
+  # would read 0 for it; the `unless ... offset` branch catches a series new in
+  # the window, and `> 0` keeps a series that exists at 0 quiet.
+  expr: |
+    increase(mcp_backend_identity_slots_refused_total[15m]) > 0
+    or (mcp_backend_identity_slots_refused_total
+        unless mcp_backend_identity_slots_refused_total offset 15m) > 0
+  labels: { severity: warning }
+  annotations:
+    summary: "Backend {{ $labels.backend }} refused callers at its {{ $labels.limit }} slot limit"
+```
+
+53 is a recommended starting point, not a fixed rule; tune it to your traffic. It is
+the shared slot plus 52 caller slots, about 80% of the caller ceiling, held for
+10 minutes: longer than the 5-minute reclaim, so a burst that drains on its own does
+not fire. A refusal fires at once, because each one is a caller that got no
+service. With `limit="principal"` and auth off, every caller shares one budget
+of 8; turning auth on gives each user their own (`docs/UPGRADING-4.0.md`). With
+`limit="backend"`, the backend has more distinct callers than 4.0 admits.
 
 #### Signing nonce telemetry and capacity alerting
 
@@ -826,6 +873,9 @@ with their expectations in
   expr: >-
     sum(increase(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}[5m]))
     > 0
+    or sum(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}
+    unless mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"} offset 5m)
+    > 0
   labels: { severity: warning, category: security }
   annotations:
     summary: "Signing nonce admissions are being refused for capacity"
@@ -837,7 +887,9 @@ capacity refusal is the store declining to take on more while keeping every
 entry it already holds, so replay protection is preserved rather than given up;
 what it signals is that legitimate traffic is now being turned away, which is
 worth knowing at once. That rule therefore has no `for` clause and fires as soon
-as the increase is visible. The `sum` collapses
+as the increase is visible, including the first refusal of a reason: that series
+is created at 1, so the `unless ... offset` branch catches what `increase` alone
+reads as 0. The `sum` collapses
 both capacity reasons into a single series, so one condition pages once instead of
 once per reason and the alert carries no `reason` label of its own; increments are
 non-negative, so the sum is positive exactly when at least one capacity reason
