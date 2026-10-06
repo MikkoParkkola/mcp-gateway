@@ -251,6 +251,8 @@ enum Caller {
     Key,
     /// Anonymous, carrying an `mcp-session-id` header.
     Session,
+    /// Anonymous, declaring the modern era by header: no session at all.
+    Modern,
 }
 
 async fn post(fx: &Fixture, backend: &str, body: &str, caller: &Caller) -> (StatusCode, Value) {
@@ -267,6 +269,12 @@ async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (Statu
     }
     if matches!(caller, Caller::Session) {
         builder = builder.header("mcp-session-id", "sess-d2");
+    }
+    if matches!(caller, Caller::Modern) {
+        builder = builder.header(
+            "mcp-protocol-version",
+            crate::protocol::meta::MODERN_VERSIONS[0],
+        );
     }
     let mut request = builder
         .body(axum::body::Body::from(body.to_string()))
