@@ -29,10 +29,8 @@ pub(super) fn install(
     if !config.events.enabled {
         return Ok(());
     }
-    let hub = crate::events::EventsHub::open(
-        &config.events,
-        &expand_home_path(&config.events.store_dir),
-    )?;
+    let store_dir = expand_home_path(&config.events.store_dir);
+    let hub = crate::events::EventsHub::open(&config.events, &store_dir)?;
     if config.webhooks.enabled {
         hub.set_webhook_registry(Arc::clone(webhooks));
         webhooks.write().set_events(Arc::clone(&hub));
@@ -68,6 +66,9 @@ pub(super) fn install(
         }
         #[cfg(not(feature = "cost-governance"))]
         let _ = source;
+    }
+    if config.events.sources.schedule {
+        hub.install_schedule_source(&store_dir);
     }
     hub.start(meta_mcp.events_services(Arc::clone(live_config), credentials));
     meta_mcp.set_events(hub);

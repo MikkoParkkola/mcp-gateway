@@ -28,9 +28,10 @@ pub(super) fn alternatives_violations(
         if !alternatives.iter().all(alternative_is_supported) {
             continue;
         }
+        let properties = schema.get("properties").and_then(Value::as_object);
         let satisfied = alternatives
             .iter()
-            .filter(|alternative| alternative_holds(alternative, arguments))
+            .filter(|alternative| alternative_holds(alternative, properties, arguments))
             .count();
         if satisfied >= 1 && (!exactly_one || satisfied == 1) {
             continue;
@@ -101,9 +102,18 @@ pub(crate) fn advertised_input_schema(schema: &Value) -> Value {
 }
 
 /// An alternative holds when every `required` parameter is present and not
-/// null, and every `const`-pinned parameter that is present has that value.
-fn alternative_holds(alternative: &Value, arguments: &serde_json::Map<String, Value>) -> bool {
-    let present = |name: &str| arguments.get(name).is_some_and(|value| !value.is_null());
+/// null (or null its `type` admits, MIK-7943), and every `const`-pinned
+/// parameter that is present has that value.
+fn alternative_holds(
+    alternative: &Value,
+    properties: Option<&serde_json::Map<String, Value>>,
+    arguments: &serde_json::Map<String, Value>,
+) -> bool {
+    let present = |name: &str| {
+        arguments.get(name).is_some_and(|value| {
+            !value.is_null() || super::admits_null(properties.and_then(|p| p.get(name)))
+        })
+    };
     let required_ok = alternative
         .get("required")
         .and_then(Value::as_array)

@@ -19,6 +19,78 @@ fn subscription_id_is_canonical_over_arguments() {
     }
 }
 
+/// MIK-7977 ID.1: integers past 2^53 are kept exactly, so arguments that
+/// differ only there are two subscriptions.
+#[test]
+fn subscription_ids_keep_integers_past_2_pow_53() {
+    let id = |n: Value| subscription_id("p", "https://h/x", "e", &json!({ "n": n }));
+    assert_ne!(
+        id(json!(9_007_199_254_740_993_u64)),
+        id(json!(9_007_199_254_740_992_u64))
+    );
+    assert_ne!(
+        id(json!(-9_007_199_254_740_993_i64)),
+        id(json!(-9_007_199_254_740_992_i64))
+    );
+    assert_ne!(id(json!(u64::MAX)), id(json!(u64::MAX - 1)));
+}
+
+/// MIK-7977 ID.2: every id not touched by ID.1 is the one stored rows carry,
+/// pinned here byte for byte (key order by UTF-16 units, escapes, floats,
+/// exact integers at 2^53).
+#[test]
+fn subscription_ids_are_unchanged_below_2_pow_53() {
+    for (arguments, want) in [
+        (
+            json!({"a": 1, "b": 1}),
+            "sub_f1fac152263239e50e95e2db1d99474c",
+        ),
+        (
+            json!({"\u{ff61}": 1, "\u{1f600}": 2, "x": [1.5, -0.25, null, true, "t\n\u{1f}\"\\"]}),
+            "sub_82554c7b22ceab775cd8437e8449e28b",
+        ),
+        (
+            json!({"big": 9_007_199_254_740_992_u64, "neg": -9_007_199_254_740_992_i64}),
+            "sub_02d4bde3cd94901799fad5b83e10b043",
+        ),
+    ] {
+        assert_eq!(
+            subscription_id("p", "https://h/x", "e", &arguments),
+            want,
+            "{arguments}"
+        );
+    }
+}
+
+/// A source with every default: its lifecycle key is the core's.
+struct Plain;
+
+#[async_trait::async_trait]
+impl crate::events::EventSource for Plain {
+    fn kind(&self) -> crate::events::types::SourceKind {
+        crate::events::types::SourceKind::RestWatch
+    }
+    fn descriptors(&self) -> Vec<crate::events::types::EventDescriptor> {
+        Vec::new()
+    }
+    fn matches(&self, _: &str, _: &Value, _: &crate::events::fanout::SourceEvent) -> bool {
+        true
+    }
+}
+
+/// MIK-7977 ID.3: the default lifecycle key is identity-bearing too (two
+/// keys, two upstream starts), so it keeps integers past 2^53 the same way.
+#[test]
+fn default_lifecycle_keys_keep_integers_past_2_pow_53() {
+    use crate::events::EventSource as _;
+    let key = |n: u64| Plain.lifecycle_key("p", "e", &json!({ "n": n }));
+    assert_ne!(key(9_007_199_254_740_993), key(9_007_199_254_740_992));
+    assert_eq!(
+        Plain.lifecycle_key("p", "e", &json!({"b": 1, "a": 1.0})),
+        r#"["e",{"a":1,"b":1}]"#
+    );
+}
+
 #[test]
 fn callback_urls_must_be_absolute_https_with_a_host() {
     for bad in ["http://h/x", "ftp://h/x", "https://", "nope"] {
@@ -143,4 +215,28 @@ fn operator_types_are_seen_by_admins_only() {
         !caller(false).sees(&hub, &descriptor),
         "a non-admin does not"
     );
+}
+
+/// MIK-7977 ID.2: within 2^53 the canonical form is the library's JCS, byte
+/// for byte, for scalars, nesting, escapes and the integer boundaries.
+#[test]
+fn canonical_is_the_libraries_jcs_within_2_pow_53() {
+    for value in [
+        json!(0),
+        json!(-0.0),
+        json!(-1),
+        json!(1.0),
+        json!(1e21),
+        json!(9_007_199_254_740_992_u64),
+        json!(-9_007_199_254_740_992_i64),
+        json!([[], {}, [null, false, 0.1, -2.5e-7, "\u{7f}\u{2028}é😀"]]),
+        json!({"z": {"b": [1, {"\u{e000}": 2, "\u{10000}": 3}], "a": 1.5}, "": null}),
+    ] {
+        assert_eq!(
+            String::from_utf8(canonical(&value)).expect("utf-8"),
+            String::from_utf8(serde_json_canonicalizer::to_vec(&value).expect("jcs"))
+                .expect("utf-8"),
+            "{value}"
+        );
+    }
 }
