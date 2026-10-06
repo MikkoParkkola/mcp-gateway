@@ -401,13 +401,23 @@ mod http {
     #[tokio::test]
     async fn ac_cache_1_a_non_cacheable_result_carries_no_cache_fields() {
         // The fields belong to five results and discovery. Putting them on
-        // everything would tell a client it may cache any answer.
-        let (_, body) = post_modern("ping", 4).await;
-        assert!(body["result"].is_object(), "ping must answer: {body}");
-        assert!(
-            body["result"].get("ttlMs").is_none(),
-            "a non-cacheable result must not carry a cache hint: {body}"
-        );
+        // everything would tell a client it may cache a tool call. (`ping`, the
+        // obvious probe, was removed in this revision and answers -32601.)
+        let name = "gateway_list_servers";
+        let mut request = modern("tools/call", 4);
+        request["params"]["name"] = json!(name);
+        request["params"]["arguments"] = json!({});
+        let mut owned = modern_headers("tools/call");
+        owned.push(("mcp-name", name.to_string()));
+        let borrowed: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let (_, body) = post(request, &borrowed).await;
+        assert!(body["result"].is_object(), "tools/call must answer: {body}");
+        for key in ["ttlMs", "cacheScope"] {
+            assert!(
+                body["result"].get(key).is_none(),
+                "a tool call must not carry the cache hint {key}: {body}"
+            );
+        }
     }
 
     #[tokio::test]

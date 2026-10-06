@@ -77,6 +77,21 @@ pub fn assessed_methods() -> &'static [(&'static str, CacheScope)] {
 /// authority on change, and this only stops a client re-listing on every turn.
 pub const LIST_TTL_MS: u64 = 60_000;
 
+/// Write the `CacheableResult` pair onto a result: `ttlMs` as given and
+/// `cacheScope` from `method`'s assessed scope. The one place the pair is
+/// written, so the modern shaper and discovery cannot drift apart on it.
+pub(crate) fn write_cache_hints(
+    result: &mut serde_json::Map<String, Value>,
+    method: &str,
+    ttl_ms: u64,
+) {
+    result.insert("ttlMs".to_string(), serde_json::json!(ttl_ms));
+    result.insert(
+        "cacheScope".to_string(),
+        Value::String(scope_for_method(method).as_str().to_string()),
+    );
+}
+
 /// What `method`'s result may claim on the wire.
 ///
 /// An unlisted method is private. That is the direction the burden runs in

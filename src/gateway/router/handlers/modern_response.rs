@@ -77,18 +77,10 @@ pub(crate) fn shape_modern_response(
                 .get("ttlMs")
                 .and_then(serde_json::Value::as_u64)
                 .map_or(LIST_TTL_MS, |hint| hint.min(LIST_TTL_MS));
-            object.insert("ttlMs".to_string(), serde_json::json!(ttl));
-            // Per method, from the table that records which ones were
+            // Scope per method, from the table that records which ones were
             // assessed. Answering with one method's decision for all five
             // would make `resources/read` inherit `tools/list`'s reasoning.
-            object.insert(
-                "cacheScope".to_string(),
-                serde_json::Value::String(
-                    crate::protocol::cacheable::scope_for_method(method)
-                        .as_str()
-                        .to_string(),
-                ),
-            );
+            crate::protocol::cacheable::write_cache_hints(object, method, ttl);
         }
         let meta = object
             .entry("_meta")

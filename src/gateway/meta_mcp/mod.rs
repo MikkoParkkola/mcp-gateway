@@ -1628,16 +1628,22 @@ impl MetaMcp {
         );
 
         let capabilities = self.capabilities_with_events(capabilities);
-        serde_json::json!({
+        let mut document = serde_json::json!({
             "resultType": "complete",
-            "ttlMs": crate::protocol::cacheable::LIST_TTL_MS,
-            "cacheScope": crate::protocol::cacheable::scope_for_method("server/discover").as_str(),
             "supportedVersions": versions,
             "capabilities": capabilities,
             "_meta": {
                 "io.modelcontextprotocol/serverInfo": handshake.server_info,
             },
-        })
+        });
+        if let Some(object) = document.as_object_mut() {
+            crate::protocol::cacheable::write_cache_hints(
+                object,
+                "server/discover",
+                crate::protocol::cacheable::LIST_TTL_MS,
+            );
+        }
+        document
     }
 
     /// Handle `initialize` with version negotiation and optional profile binding.
