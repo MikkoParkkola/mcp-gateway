@@ -240,6 +240,13 @@ mod tests {
                 "after the block"
             ]
         );
+        // The capture dropped the BEGIN line: body lines still go.
+        let evicted = shown(&[
+            body.as_bytes(),
+            body.as_bytes(),
+            b"-----END EXAMPLE BLOCK-----",
+        ]);
+        assert_eq!(evicted, [MASK, MASK, "-----END EXAMPLE BLOCK-----"]);
     }
 
     #[test]
