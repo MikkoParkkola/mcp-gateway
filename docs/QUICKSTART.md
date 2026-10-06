@@ -22,7 +22,7 @@ The wizard scans Claude Desktop, Claude Code, Cursor, Windsurf, Zed, Continue.de
 
 ### Prerequisites
 
-- **Rust toolchain** (1.88+): [rustup.rs](https://rustup.rs), or use Homebrew
+- **Rust toolchain** (1.95+): [rustup.rs](https://rustup.rs), or use Homebrew
 
 ### 1. Install
 
@@ -164,7 +164,7 @@ metadata:
 ## 4. Start the Gateway
 
 ```bash
-mcp-gateway --config gateway.yaml
+mcp-gateway serve
 ```
 
 You should see:
@@ -240,7 +240,7 @@ Or manually — add to your client config:
 }
 ```
 
-Restart your client. The gateway's compact Meta-MCP surface (12-15 tools) replaces every backend tool definition.
+Restart your client. The gateway's compact Meta-MCP surface (11 tools for an administrator on the default HTTP setup, 9 to 17 depending on configuration; a caller without admin standing sees fewer) replaces every backend tool definition.
 
 See [examples/claude-desktop.json](../examples/claude-desktop.json) for a full example config.
 

@@ -69,7 +69,7 @@ mcp-gateway doctor                           # 4. verify everything is healthy
 
 That is it. Your AI clients now talk to the gateway, and the gateway routes to every backend you already had configured, at a flat `11 tools` instead of `~150` (4.0; 3.x shows about 15). Start with `gateway_search_tools` from your AI client to find any backend tool, then invoke it with `gateway_invoke`.
 
-> **Nothing to import yet?** `mcp-gateway init --with-examples` writes a working `gateway.yaml` with public capabilities so you can confirm the gateway is alive before adding your own servers.
+> **Nothing to import yet?** `mcp-gateway init` writes a working `gateway.yaml` with public capabilities so you can confirm the gateway is alive before adding your own servers.
 
 **Or tell your AI assistant** (recommended):
 
@@ -558,11 +558,13 @@ Free for personal and noncommercial use under PolyForm Noncommercial 1.0.0. Comm
 | [Multi-User Setup](docs/MULTI_USER.md) | Key server, policy scopes, per-backend identity propagation |
 | [OpenAPI Import](docs/OPENAPI_IMPORT.md) | Generate capabilities from OpenAPI specs |
 | [Webhooks](docs/WEBHOOKS.md) | Event integration setup |
+| [Long-running calls](docs/TASKS.md) | Tasks, progress and cancellation |
 | [Community Registry](docs/COMMUNITY_REGISTRY.md) | Share and install capabilities |
 | [Benchmarks](docs/BENCHMARKS.md) | Performance measurements |
 | [MCP compatibility](docs/PROTOCOL_COMPATIBILITY.md) | Client and backend revision pairings: what works, what is translated, what is refused |
 | [Windows limits](CONTRIBUTING.md#windows-test-coverage) | Unix-only behaviors and what the Windows CI job runs |
 | [Changelog](CHANGELOG.md) | Release history |
+| [Security posture](docs/SECURITY_POSTURE.md) | What is on by default, what to turn on, and known limits |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
 | [ShadowRadar](docs/SHADOW_SCAN.md) | Passive local discovery and static network-rule export |
 
