@@ -83,7 +83,9 @@ impl SessionLifecycle {
     /// Register a named cleanup callback.
     ///
     /// The callback receives the session ID string when a session disconnects.
-    /// Name is used for debug logging only.
+    /// Name is used for debug logging only. A callback must not call back into
+    /// this registry: [`Self::reap`] runs it under the deadline lock, so a
+    /// `track`, `untrack` or `tracked_count` from inside it deadlocks.
     pub fn register(
         &self,
         name: impl Into<String>,
@@ -139,13 +141,9 @@ impl SessionLifecycle {
     /// removed the key. Removing it a second time cannot remove the entry
     /// reaping took — that one is gone — so the only thing a second removal can
     /// delete is a deadline some other caller re-registered in between, taking
-    /// a live caller's state with it.
-    ///
-    /// **Residual, stated rather than implied**: a key re-tracked between
-    /// reaping's removal and this call still has its handlers fired, because
-    /// nothing holds the two together. Closing that needs the ownership model
-    /// this module does not yet have — it is not reached from production at all
-    /// (MIK-7291), and the fix belongs with the decision to wire it.
+    /// a live caller's state with it. [`Self::reap`] calls this while still
+    /// holding the lock that removed the key, so a re-track cannot land
+    /// between the removal and the handlers (MIK-7746).
     fn fire_cleanup(&self, session_id: &str) {
         let cbs = self.callbacks.read();
         if cbs.is_empty() {
@@ -202,25 +200,27 @@ impl SessionLifecycle {
         for id in due {
             self.fire_ended(&id);
         }
-        let expired: Vec<String> = {
-            let mut tracked = self.tracked.write();
-            let expired: Vec<String> = tracked
-                .iter()
-                .filter(|(_, expires_at)| now > **expires_at)
-                .map(|(key, _)| key.clone())
-                .collect();
-            for key in &expired {
-                tracked.remove(key);
-            }
-            expired
-        };
-        let reclaimed = expired.len();
-        for key in expired {
-            // Already removed above. `on_disconnect` would remove it again, and
-            // a second removal can only take an entry someone re-registered.
-            self.fire_cleanup(&key);
+        // The handlers run under the same write lock that removed the keys
+        // (MIK-7746). A caller renewing in between would otherwise have the
+        // state it writes after renewing wiped by its old deadline's handlers;
+        // every `track` site renews before it writes, so holding the lock
+        // orders that write after the cleanup. Lock order: `tracked`, then
+        // `callbacks`; no handler reaches back into this registry.
+        // ponytail: `track` waits out one sweep's handlers (in-memory removes);
+        // a per-key generation check is the upgrade if handlers grow slow.
+        let mut tracked = self.tracked.write();
+        let expired: Vec<String> = tracked
+            .iter()
+            .filter(|(_, expires_at)| now > **expires_at)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &expired {
+            tracked.remove(key);
+            // Removed here, not by `on_disconnect`: a second removal could
+            // only take an entry someone re-registered.
+            self.fire_cleanup(key);
         }
-        reclaimed
+        expired.len()
     }
 
     /// How many keys are awaiting reclamation.
