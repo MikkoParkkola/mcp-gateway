@@ -1,4 +1,4 @@
-sha256: 1468f5be8548d021eba16bf3bd99349b4fe78a2264d4f7f2a809606a6087998b
+sha256: c63ea5e1d89bbf26b0676c882202a273501ce9ea626cb14bc60f0061d8997f77
 fulcrum: "1.0"
 name: sentry_get_issue
 description: |
@@ -22,6 +22,11 @@ schema:
       - issue_id
   output:
     type: object
+    properties:
+      id:
+        type: string
+      title:
+        type: string
 
 providers:
   primary:
