@@ -537,6 +537,7 @@ fn config_default() -> crate::config::EventsConfig {
 struct Flipping {
     admits: usize,
     asked: std::sync::atomic::AtomicUsize,
+    charges: bool,
 }
 
 #[async_trait::async_trait]
@@ -561,6 +562,9 @@ impl crate::events::EventSource for Flipping {
         _event: &crate::events::fanout::SourceEvent,
     ) -> bool {
         true
+    }
+    fn charges(&self, _name: &str) -> bool {
+        self.charges
     }
     async fn authorize(
         &self,
@@ -596,6 +600,7 @@ async fn eligibility_lost_after_the_sending_record_is_not_sent_or_charged() {
         let source = Arc::new(Flipping {
             admits,
             asked: std::sync::atomic::AtomicUsize::new(0),
+            charges: true,
         });
         hub.register_source(Arc::clone(&source) as Arc<dyn crate::events::EventSource>);
         #[allow(unused_mut, reason = "set only with cost-governance")]
@@ -644,4 +649,48 @@ async fn eligibility_lost_after_the_sending_record_is_not_sent_or_charged() {
             "the refused subscription is revoked"
         );
     }
+}
+
+/// U6: a delivery of a type its source does not charge (a budget event) is
+/// sent without touching any budget, so an exhausted budget still hears that
+/// it is exhausted.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn an_uncharged_event_type_is_sent_without_a_charge() {
+    use std::sync::atomic::Ordering;
+
+    use crate::cost_accounting::{
+        config::CostGovernanceConfig, enforcer::BudgetEnforcer, registry::CostRegistry,
+    };
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        cost_per_delivery_usd: 0.01,
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.register_source(Arc::new(Flipping {
+        admits: usize::MAX,
+        asked: std::sync::atomic::AtomicUsize::new(0),
+        charges: false,
+    }) as Arc<dyn crate::events::EventSource>);
+    let mut services = logged_services(dir.path());
+    let cfg = CostGovernanceConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    let registry = Arc::new(CostRegistry::new(&cfg));
+    services.budget = Some((
+        Arc::new(BudgetEnforcer::new(cfg, Arc::clone(&registry))),
+        Arc::clone(&registry),
+    ));
+    let (port, accepted) = counting_callback().await;
+    queued_as(&hub, port, "evt_free", "probe.flip");
+    hub.attempt(&services, "evt_free").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(accepted.load(Ordering::SeqCst) >= 1, "sent");
+    assert!(
+        !registry.snapshot().contains_key("events:probe.flip"),
+        "no budget is charged"
+    );
 }
