@@ -46,8 +46,10 @@ ignores `task`. The gateway refuses to create a task when:
 
 | Condition | Answer |
 |---|---|
+| The tasks extension is not declared | An error whose `data.requiredCapabilities` names the extension |
+| Auth is on and the caller presented no credential, for example on a public `/mcp` | `-32602` "no such task", the same answer as for a task that does not exist |
+| Auth is on and the credential does not establish a verified identity | `-32600` "task creation requires a verified caller identity" |
 | No idempotency key | `-32602` "task creation requires an idempotency key" |
-| Auth is on and the caller has no verified identity | `-32600` "task creation requires a verified caller identity" |
 | The call needs a confirmation and the client did not declare `elicitation` | `-32021` |
 
 ## Follow a task
@@ -69,8 +71,11 @@ question is refused.
 
 ## Who can see a task
 
-- A task is visible only to the caller that created it. Any other caller gets the same answer
-  as for a task that does not exist.
+- With auth on, a task is visible only to the caller that created it. Any other caller gets the
+  same answer as for a task that does not exist. A caller without a credential cannot create,
+  read or cancel tasks at all.
+- With auth off, every caller is the same caller. Anyone who can reach the gateway and knows a
+  task id can read or cancel that task.
 - The result is checked against current policy each time it is read. If a grant was revoked, a
   backend was killed or a tool was withheld after the task finished, the read returns the
   policy error and no result.
