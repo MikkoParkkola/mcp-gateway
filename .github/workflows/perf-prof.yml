@@ -1,0 +1,135 @@
+name: Perf profile per call
+
+# Throwaway branch only (never merged). Where the 4.0 per-call CPU over
+# v3.5.1 sits, on the grading host type: B = v3.5.1, C = the release head
+# the rehearsal graded, T = the B14 head. Each arm gets a clean rep (CPU per
+# call, no profiler attached) and a profiled rep (perf, dwarf unwind) under
+# the same driver, fixture, config and rate as the CPU-per-call runs.
+# Symbols are kept by env override only; codegen is the release profile's.
+on:
+  push:
+    branches: ["throwaway/perf-prof-*"]
+
+permissions:
+  contents: read
+
+env:
+  REF_B: v3.5.1
+  REF_C: 1f13e90f84384f6cae71b5336d06b3c019e98bf5
+  REF_T: e3797636b268f808275428ae8c887d51fcc31772
+  FEATURES: a2a,webui,config-export,cost-governance,firewall,discovery,semantic-search,tool-profiles,metrics
+  CARGO_PROFILE_RELEASE_STRIP: none
+  CARGO_PROFILE_RELEASE_DEBUG: "1"
+  WARMUP: "2000"
+  CALLS: "40000"
+  # Under the workload config's 500/s rate limit, so no call is refused.
+  RATE: "400"
+  PROFILE_SECONDS: "80"
+  PORT: "39420"
+
+jobs:
+  profile:
+    name: Profile per call
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    steps:
+      - name: Reserve the port and enable perf
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo sysctl -w net.ipv4.ip_local_reserved_ports="$PORT"
+          sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq "linux-tools-$(uname -r)" linux-tools-common \
+            || sudo apt-get install -y -qq linux-tools-generic linux-tools-common
+          perf_bin="$(command -v perf || true)"
+          if [[ -z "$perf_bin" ]] || ! "$perf_bin" --version; then
+            perf_bin="$(compgen -G '/usr/lib/linux-tools/*/perf' | head -1)"
+            "$perf_bin" --version
+          fi
+          echo "PERF=$perf_bin" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/out"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.98.0
+      - name: Build arms
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arm in "B:$REF_B" "C:$REF_C" "T:$REF_T"; do
+            name="${arm%%:*}"; ref="${arm#*:}"; dir="$RUNNER_TEMP/arms/$name"
+            git worktree add --detach "$dir" "$ref^{commit}" > /dev/null
+            ( cd "$dir" && cargo build --release --locked --features "$FEATURES" )
+            echo "$name $(git -C "$dir" rev-parse HEAD)" | tee -a "$RUNNER_TEMP/out/arms.txt"
+          done
+          { echo "nproc $(nproc)"; uname -m; uname -r; echo "loadavg $(cat /proc/loadavg)"; } > "$RUNNER_TEMP/out/host.txt"
+      - name: Profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/out"; config="$RUNNER_TEMP/gateway.workload.yaml"
+          fixture="$PWD/benchmarks/workload/mcp_backend.py"
+          # shellcheck disable=SC2016 # the placeholder is literal, as the harness renders it
+          python3 -c 'import sys; t=open(sys.argv[1]).read(); assert "${WORKLOAD_FIXTURE}" in t; open(sys.argv[2],"w").write(t.replace("${WORKLOAD_FIXTURE}", sys.argv[3]))' \
+            benchmarks/workload/gateway.workload.yaml "$config" "$fixture"
+          # 4.0 refuses a config other users can read (UPGRADING-4.0 §35).
+          chmod 600 "$config"
+          for _ in $(seq 120); do awk '{exit !($1 < 1.0)}' /proc/loadavg && break; sleep 5; done
+          echo "idle_load1 $(cut -d' ' -f1 /proc/loadavg)" >> "$out/host.txt"
+          port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; }
+          start() { # start <arm> <tag>: gateway on $PORT, healthy, pid in $pid
+            held="$(ss -Htan "( sport = :$PORT )")"
+            [[ -z "$held" ]] || { echo "$held"; echo "VOID: port held before $2"; exit 3; }
+            home="$RUNNER_TEMP/home-$2"; mkdir -p "$home"
+            HOME="$home" RUST_LOG=error WORKLOAD_FIXTURE="$fixture" \
+              "$RUNNER_TEMP/arms/$1/target/release/mcp-gateway" --config "$config" --port "$PORT" \
+              > "$out/$2.stdout" 2> "$out/$2.stderr" &
+            pid=$!
+            for _ in $(seq 150); do
+              curl -fsS "http://127.0.0.1:$PORT/health" > /dev/null 2>&1 && break
+              kill -0 "$pid" 2>/dev/null || { echo "VOID: $2 exited during startup"; exit 3; }
+              sleep 0.2
+            done
+            curl -fsS "http://127.0.0.1:$PORT/health" > /dev/null || { echo "VOID: $2 never healthy"; exit 3; }
+          }
+          stop() { kill "$pid" || true; wait "$pid" 2>/dev/null || true; for _ in $(seq 100); do port_open || break; sleep 0.2; done; }
+          # Arm order rotates, so no arm always runs first or last.
+          n=0
+          for order in "B C T" "C T B" "T B C"; do
+            n=$(( n + 1 ))
+            for arm in $order; do
+              start "$arm" "clean-$arm-$n"
+              python3 benchmarks/workload/cpu_per_call.py measure "$PORT" "$pid" "$WARMUP" "$CALLS" "$RATE" "$out/clean-$arm-$n.json"
+              stop
+            done
+          done
+          for arm in B C T; do
+            start "$arm" "prof-$arm"
+            python3 benchmarks/workload/cpu_per_call.py measure "$PORT" "$pid" "$WARMUP" "$CALLS" "$RATE" "$out/prof-$arm.json" &
+            driver=$!
+            # Past the warm-up (WARMUP / RATE seconds), inside the measured calls.
+            sleep $(( WARMUP / RATE + 3 ))
+            "$PERF" record -F 1999 --call-graph dwarf,16384 -p "$pid" -o "$RUNNER_TEMP/$arm.data" -- sleep "$PROFILE_SECONDS" 2> "$out/prof-$arm.record.err"
+            wait "$driver"
+            stop
+            "$PERF" report -i "$RUNNER_TEMP/$arm.data" --children --sort symbol -g none --percent-limit 0.1 --stdio \
+              > "$out/prof-$arm.children.txt" 2> "$out/prof-$arm.report.err"
+            "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-children --sort symbol -g none --percent-limit 0.1 --stdio \
+              > "$out/prof-$arm.self.txt" 2>> "$out/prof-$arm.report.err"
+            rm -f "$RUNNER_TEMP/$arm.data"
+          done
+      - name: Socket table on failure
+        if: failure()
+        shell: bash
+        run: ss -tanp > "$RUNNER_TEMP/out/ss-on-failure.txt" 2>&1 || true
+      - name: Upload the run
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-prof-${{ github.run_id }}
+          path: ${{ runner.temp }}/out/
+          retention-days: 30
