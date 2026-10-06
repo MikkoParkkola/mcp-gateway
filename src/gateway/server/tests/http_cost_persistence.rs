@@ -22,13 +22,6 @@ use crate::cost_accounting::persistence::{self as cost_persistence, PersistedCos
 use crate::gateway::Gateway;
 use crate::gateway::server::persistence::{COST_SAVE_INTERVAL, boot_cost_governance};
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .and_then(|l| l.local_addr())
-        .map(|a| a.port())
-        .expect("a free loopback port")
-}
-
 async fn answers_livez(port: u16) -> bool {
     let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else {
         return false;
@@ -62,9 +55,8 @@ async fn http_saves_spend_periodically_while_serving() {
     let dir = tempfile::tempdir().expect("tempdir");
     let costs = dir.path().join("costs.json");
     seed(&costs);
-    let port = free_port();
     let yaml = format!(
-        "server:\n  host: 127.0.0.1\n  port: {port}\nauth:\n  enabled: false\n\
+        "server:\n  host: 127.0.0.1\n  port: 0\nauth:\n  enabled: false\n\
          cost_governance:\n  enabled: true\n  budgets:\n    daily: 10.0\n\
          tasks:\n  store_dir: {}\n",
         dir.path().join("tasks").display()
@@ -72,11 +64,16 @@ async fn http_saves_spend_periodically_while_serving() {
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     let config = Config::load(Some(&path)).expect("config loads");
-    let gateway = Gateway::new(config.clone())
+    let mut gateway = Gateway::new(config.clone())
         .await
         .expect("gateway boots")
         .with_data_dir(dir.path().to_path_buf());
+    let bound = gateway.bound_port_for_test();
     let server = tokio::spawn(async move { drop(Box::pin(gateway.run()).await) });
+    let port = tokio::time::timeout(Duration::from_secs(60), bound)
+        .await
+        .expect("the HTTP gateway bound a port")
+        .expect("the gateway reports the port it bound");
 
     // Real time until the server answers: boot timers run as in production.
     let listening = tokio::time::timeout(Duration::from_secs(60), async {
