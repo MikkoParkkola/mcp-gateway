@@ -7,8 +7,8 @@
 //!
 //! The race is forced without a new seam: the backend's request semaphore
 //! sits between the capture and the claim. Holding every permit parks the
-//! request there; nothing before it awaits, so on a current-thread runtime
-//! one yield is enough to reach it.
+//! request there, and the test waits until the request's captured clone of
+//! the entry shows in its strong count before it evicts (MIK-7664).
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -30,6 +30,7 @@ async fn a_start_failure_after_the_eviction_race_lands_on_the_live_slot() {
 
     let all = u32::try_from(backend.semaphore.available_permits()).expect("permit count");
     let permits = backend.semaphore.acquire_many(all).await.expect("permits");
+    let unclaimed = Arc::strong_count(&stale);
     let request = {
         let backend = Arc::clone(&backend);
         tokio::spawn(async move {
@@ -38,7 +39,19 @@ async fn a_start_failure_after_the_eviction_race_lands_on_the_live_slot() {
                 .await
         })
     };
-    tokio::task::yield_now().await;
+    // The race needs the request to hold the stale entry before the eviction:
+    // its captured clone raises the count by one. Bounded by yields, not time,
+    // so a slow host cannot fail it and a request that never captures does.
+    let mut yields = 0;
+    while Arc::strong_count(&stale) == unclaimed {
+        assert!(
+            yields < 1_000,
+            "the request never captured the stale entry, so the race was not set up"
+        );
+        tokio::task::yield_now().await;
+        yields += 1;
+    }
+    assert_eq!(Arc::strong_count(&stale), unclaimed + 1);
 
     assert_eq!(
         backend.evict_idle_per_user_entries(Duration::from_secs(1)),
