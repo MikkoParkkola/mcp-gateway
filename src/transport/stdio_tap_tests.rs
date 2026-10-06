@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use serde_json::json;
 
 use super::StdioTransport;
-use crate::transport::upstream_tap::{Requested, UpstreamNote};
+use crate::transport::upstream_tap::{Requested, UpstreamNote, Watched};
 
 fn transport() -> std::sync::Arc<StdioTransport> {
     StdioTransport::new(
@@ -49,7 +49,7 @@ fn a_tagged_notification_reaches_the_listen() {
 #[test]
 fn progress_is_not_taken_by_an_open_legacy_tap() {
     let t = transport();
-    let mut legacy = t.taps.unsolicited();
+    let mut legacy = t.taps.unsolicited(Watched::default());
     let line = json!({"jsonrpc": "2.0", "method": "notifications/progress",
         "params": {"progressToken": "p", "progress": 1}});
     t.handle_response(&line.to_string()).unwrap();
