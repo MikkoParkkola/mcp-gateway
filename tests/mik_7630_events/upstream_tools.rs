@@ -222,11 +222,23 @@ async fn a_notice_during_a_refill_is_served_by_the_next_one() {
     expect_events(&receiver, &tools, &name, 1).await;
 }
 
-/// MIK-8007 red (throwaway): the refill row, 20 rounds, reporting the first miss.
-#[tokio::test]
+/// MIK-8007 red (throwaway): the refill row, 20 concurrent rounds (the CI
+/// misses came under load), reporting the first miss in full.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn refill_race_probe() {
-    let mut misses = Vec::new();
-    for round in 0..20 {
+    let rounds = futures::future::join_all((0..20).map(refill_round)).await;
+    let misses: Vec<String> = rounds.into_iter().flatten().collect();
+    assert!(
+        misses.is_empty(),
+        "{} misses\n{}",
+        misses.len(),
+        misses.join("\n")
+    );
+}
+
+/// One round of the refill row: `None` when the second notice was served.
+async fn refill_round(round: usize) -> Option<String> {
+    {
         let dir = tempfile::tempdir().expect("tempdir");
         let receiver = Receiver::start(dir.path()).await;
         let peer = HttpPeer::start(Era::Modern).await;
@@ -257,20 +269,12 @@ async fn refill_race_probe() {
         let ok = wait_until(DEADLINE, || tools_lists(&peer) > before + 1).await;
         let events = delivered(&receiver, &tools, &name).len();
         eprintln!("round {round}: ok={ok} before={before} at_quiet={at_quiet} events={events}");
-        if !ok && misses.is_empty() {
-            misses.push(format!(
+        (!ok).then(|| {
+            format!(
                 "round {round}\nPEER {:#?}\nGATEWAY\n{}",
                 peer.seen(),
                 gw.stall_report()
-            ));
-        } else if !ok {
-            misses.push(format!("round {round}"));
-        }
+            )
+        })
     }
-    assert!(
-        misses.is_empty(),
-        "{} misses\n{}",
-        misses.len(),
-        misses.join("\n")
-    );
 }
