@@ -557,12 +557,21 @@ impl super::MetaMcp {
         shape: super::ResultShape,
         confirmed_in_band: bool,
     ) -> JsonRpcResponse {
-        let (logger, id) = (self.transparency_logger.as_ref(), target.id.clone());
+        let Some(logger) = self.transparency_logger.as_ref() else {
+            // No log, no slot: nothing is recorded, so the dispatch is awaited
+            // as is rather than boxed twice for a slot that would return early.
+            return self
+                .dispatch_below_gate_shaped_in_slot(target, shape, confirmed_in_band)
+                .await;
+        };
+        let id = target.id.clone();
         #[cfg(test)]
         note_boxed();
         let answer: Pin<Box<dyn Future<Output = JsonRpcResponse> + Send + '_>> =
             Box::pin(self.dispatch_below_gate_shaped_in_slot(target, shape, confirmed_in_band));
-        slot_rpc(logger, id, async { (answer.await, ()) }).await.0
+        slot_rpc(Some(logger), id, async { (answer.await, ()) })
+            .await
+            .0
     }
 }
 
