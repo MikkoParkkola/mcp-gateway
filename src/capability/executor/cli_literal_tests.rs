@@ -183,6 +183,9 @@ fn a_number_holding_the_secret_digits_is_left_whole() {
 fn a_numeric_secret_inside_a_string_is_still_redacted() {
     let mut value = json!({"s": "id-912345-x", "k": "pin=1234"});
     redact_value(&mut value, &["1234".to_owned()]);
-    let text = value.to_string();
-    assert!(!text.contains("1234"), "{text}");
+    assert_eq!(
+        value,
+        json!({"s": "id-9[redacted]5-x", "k": "pin=[redacted]"}),
+        "the secret goes, the text around it stays"
+    );
 }
