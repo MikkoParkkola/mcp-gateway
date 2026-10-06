@@ -2256,8 +2256,8 @@ impl MetaMcp {
     /// §4 — "result verbatim **including `isError: true`**"). The meta-tool
     /// wrapper below buries exactly that: it pretty-prints the result into a
     /// single text block, drops `structuredContent` for every tool without an
-    /// output schema, and states `isError: false` over whatever the backend
-    /// reported. It also hides an interim round — `resultType:
+    /// output schema, and reads `isError` only from the payload's top level. It
+    /// also hides an interim round — `resultType:
     /// "input_required"` inside a JSON string is not a claim the settlement
     /// classifier can read, so a question would be committed as an answer.
     ///
