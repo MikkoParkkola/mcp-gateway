@@ -698,3 +698,16 @@ fn stale_and_future_sensitive_copies_are_no_witness() {
     d.record_delivery_at(T, A, true, &s, now);
     assert!(d.check_egress_at(B, U, &s, now).is_some());
 }
+
+/// MIK-7881.RELAY.1: a pair that first got a plain copy and later a
+/// sensitive one is a witness: the later sensitivity is kept.
+#[test]
+fn a_sensitive_copy_after_a_plain_one_is_a_witness() {
+    let d = detector();
+    let start = Instant::now();
+    let s = secret();
+    d.record_delivery_at(T, A, false, &s, start);
+    d.record_delivery_at(T, A, true, &s, start + Duration::from_secs(1));
+    let now = start + Duration::from_secs(2);
+    assert!(d.check_egress_at(B, U, &s, now).is_some());
+}
