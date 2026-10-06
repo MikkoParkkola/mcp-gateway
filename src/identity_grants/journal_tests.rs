@@ -101,6 +101,40 @@ fn journal_and_lock_sit_beside_the_grant_file() {
     );
 }
 
+/// MIK-7715: the gateway configured with a symlink to the grant file and the
+/// CLI editing the real path share one journal and one lock, so the CLI's
+/// change reaches the gateway as an `add`, not as an out-of-band edit.
+// Unix-only: plants a file symlink, which Windows gates behind a privilege.
+#[cfg(unix)]
+#[tokio::test]
+async fn two_spellings_of_one_grant_file_share_journal_and_lock() {
+    use crate::config_reload::grant_audit::JournalRead;
+    let dir = tempfile::tempdir().unwrap();
+    let real_dir = dir.path().join("data");
+    let link_dir = dir.path().join("etc");
+    std::fs::create_dir_all(&real_dir).unwrap();
+    std::fs::create_dir_all(&link_dir).unwrap();
+    let real = real_dir.join("grants.yaml");
+    let link = link_dir.join("grants.yaml");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    change(&real, upsert(row("g1", "r"), false)).await.unwrap();
+
+    assert_eq!(lock_path(&link), lock_path(&real), "one lock for both");
+    let read = super::journal::read_locked(&link, std::time::Duration::from_secs(5))
+        .await
+        .expect("lock taken");
+    let JournalRead::Bytes(bytes) = read.journal else {
+        panic!("gateway saw no journal through the symlink");
+    };
+    let verbs: Vec<_> = parse_journal(&bytes)
+        .entries
+        .into_iter()
+        .map(|e| (e.verb, e.grant_id))
+        .collect();
+    assert_eq!(verbs, vec![(JournalVerb::Add, "g1".to_string())]);
+}
+
 /// T1c: pinned bytes. A new serialised field on `IdentityGrant` changes every
 /// digest, and every grant would then read as edited out-of-band; it must be
 /// skipped when default.
