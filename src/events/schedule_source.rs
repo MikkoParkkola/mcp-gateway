@@ -482,8 +482,8 @@ impl EventsHub {
                     return;
                 };
                 // Off the runtime: a minute with many due timers syncs a file each.
-                let ticked = tokio::task::spawn_blocking(move || source.tick_at(Utc::now())).await;
-                if let Err(error) = ticked {
+                let joined = tokio::task::spawn_blocking(move || source.tick_at(Utc::now())).await;
+                if let Err(error) = joined {
                     tracing::warn!(%error, "events: schedule tick task failed");
                 }
             }
