@@ -351,9 +351,7 @@ impl Backend {
         // Clearing here rather than in `ensure_entry_started` is deliberate:
         // `force_restart` calls this directly, and clearing only in the former
         // left a restarted backend flagged dormant while actually running.
-        entry
-            .stopped_when_idle
-            .store(false, std::sync::atomic::Ordering::SeqCst);
+        entry.stopped_when_idle.store(false, Ordering::SeqCst);
 
         let listen: Option<super::listen::ListenHandle>;
         let transport: Arc<dyn Transport> = match &self.config.transport {
