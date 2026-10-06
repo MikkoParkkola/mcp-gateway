@@ -60,7 +60,9 @@ async fn a_codemode_task_keeps_code_mode_hints() {
 
 /// MIK-7974: a refusal the backend never saw is not stored under the call's
 /// key, so once the breaker closes the same key reaches the backend instead
-/// of replaying the refusal and the hint it was given.
+/// of replaying the refusal and the hint it was given. One unkeyed call first
+/// caches the tool list: on a cold list the breaker refuses the list fetch
+/// before the dispatch is marked, and the refusal under test is never reached.
 #[tokio::test]
 async fn a_keyed_breaker_refusal_is_not_replayed() {
     let (state, _store) = fixture_state(&admin_auth()).await;
@@ -70,6 +72,8 @@ async fn a_keyed_breaker_refusal_is_not_replayed() {
         .backends
         .get(BACKEND)
         .expect("the backend is registered");
+    post(&state, "key-admin", sync_invoke(1, json!({}))).await;
+    assert_eq!(mock.calls(), 1, "the warm-up call reached the backend");
     backend.trip_circuit_breaker("mik-7974");
     let call = keyed(sync_invoke(1, json!({})), "mik-7974-sync");
     let refused = post(&state, "key-admin", call.clone()).await;
@@ -82,7 +86,7 @@ async fn a_keyed_breaker_refusal_is_not_replayed() {
     let answered = post(&state, "key-admin", call).await;
     assert_eq!(
         mock.calls(),
-        1,
+        2,
         "the retry replayed the refusal: {answered}"
     );
 }
