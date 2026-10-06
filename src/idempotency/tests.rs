@@ -573,7 +573,10 @@ async fn a_replay_restores_its_entrys_reading() {
     let GuardOutcome::Proceed(mut reservation) = enforce(&cache, "k", "fp").unwrap() else {
         panic!("a fresh key proceeds");
     };
-    assert!(reservation.complete_read(&json!({"ok": true}), Some(reading.clone())));
+    assert!(reservation.complete_read(
+        &json!({"ok": true}),
+        (Some(reading.clone()), Default::default())
+    ));
     let (replay, restored) =
         with_read_scope(Arc::clone(&fw), async { enforce(&cache, "k", "fp") }).await;
     assert!(matches!(replay, Ok(GuardOutcome::CachedResult(_))));

@@ -53,10 +53,13 @@ pub fn enforce(
             409,
             format!("Duplicate request in progress for key: {key}"),
         )),
-        AdmitOutcome::Completed(value, read) => {
+        AdmitOutcome::Completed(value, read, writes) => {
             // MIN.2 row 14: a replay restores the reading stored with this
             // very result into the caller's read scope (a no-op outside one).
             crate::security::tenant_reads::note_restored(read.as_ref());
+            // MIK-7991: and the gateway's write record, so what the original
+            // call wrote stays out of this replay's receipt.
+            crate::gateway::gateway_writes::restore(&writes);
             Ok(GuardOutcome::CachedResult(value))
         }
         AdmitOutcome::Failed(error) => Ok(GuardOutcome::CachedError(error)),
