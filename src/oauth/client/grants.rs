@@ -385,6 +385,12 @@ impl OAuthClient {
         crate::oauth::login_gate::Provenance::mark_waited();
         match gate.begin() {
             Begin::Lead(lead) => {
+                // A login that ended while this client was being built may
+                // already have stored a token: use it, open no second login.
+                if let Some(access) = self.adopt_stored_login() {
+                    lead.end(None);
+                    return Ok(access);
+                }
                 let result = self.authorize_until(lead.cancel_token()).await;
                 lead.end(result.as_ref().err());
                 result
@@ -393,17 +399,24 @@ impl OAuthClient {
                 if let Some(outcome) = attempt.finished().await {
                     return Err(outcome.to_error(self.backend_name()));
                 }
-                let token = self
-                    .storage
-                    .load(&self.credential_key()?, &self.resource_url)
-                    .ok_or_else(|| {
-                        Error::OAuth("the shared login completed but stored no token".to_string())
-                    })?;
-                let access = token.access_token.clone();
-                *self.current_token.write() = Some(token);
-                Ok(access)
+                self.adopt_stored_login().ok_or_else(|| {
+                    Error::OAuth("the shared login completed but stored no token".to_string())
+                })
             }
         }
+    }
+
+    /// Take up a live token another client of this backend stored, with the
+    /// client id it registered (a refresh needs both). `None` if there is none.
+    fn adopt_stored_login(&self) -> Option<String> {
+        let token = self
+            .storage
+            .load(&self.credential_key().ok()?, &self.resource_url)
+            .filter(|token| !token.is_expired())?;
+        self.restore_persisted_client_id();
+        let access = token.access_token.clone();
+        *self.current_token.write() = Some(token);
+        Some(access)
     }
 
     /// [`Self::authorize`], ended early by `cancel` (a restart or shutdown of
