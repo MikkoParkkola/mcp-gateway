@@ -37,13 +37,25 @@ struct Timer {
     label: String,
 }
 
-/// Canonical arguments: `(key, timer)`, or the refusal naming the offending
-/// field. The key is the JCS of `[cron, timezone, label]` with whitespace in
-/// `cron` collapsed, the zone's canonical IANA name and the defaults filled in.
-fn canonical(arguments: &Value) -> Result<(String, Timer), RpcError> {
-    let cron_text = arguments
+/// The longest cron expression accepted, in bytes.
+const MAX_CRON: usize = 128;
+
+/// A subscription's arguments, canonical but unvalidated: the timer key and
+/// its parts. Cheap: matching, keying and cap counting read only this. The
+/// key is the JCS of `[cron, timezone, label]` with whitespace in `cron`
+/// collapsed, the zone's canonical IANA name and the defaults filled in.
+struct Parts {
+    key: String,
+    cron: String,
+    zone: Tz,
+    label: String,
+}
+
+fn parts(arguments: &Value) -> Result<Parts, RpcError> {
+    let cron = arguments
         .get("cron")
         .and_then(Value::as_str)
+        .filter(|text| text.len() <= MAX_CRON)
         .ok_or_else(|| RpcError::invalid("arguments.cron"))?
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -60,17 +72,40 @@ fn canonical(arguments: &Value) -> Result<(String, Timer), RpcError> {
         Some(Value::String(label)) if label.chars().count() <= MAX_LABEL => label.clone(),
         Some(_) => return Err(RpcError::invalid("arguments.label")),
     };
-    let cron =
-        CronExpression::parse(&cron_text).map_err(|_| RpcError::invalid("arguments.cron"))?;
-    if fires_too_often(&cron_text) {
-        return Err(RpcError::invalid("arguments.cron"));
-    }
     let key = String::from_utf8(
-        serde_json_canonicalizer::to_vec(&json!([cron_text, zone.name(), label]))
-            .unwrap_or_default(),
+        serde_json_canonicalizer::to_vec(&json!([cron, zone.name(), label])).unwrap_or_default(),
     )
     .unwrap_or_default();
-    Ok((key, Timer { cron, zone, label }))
+    Ok(Parts {
+        key,
+        cron,
+        zone,
+        label,
+    })
+}
+
+/// Validated arguments: `(key, timer)`, or the refusal naming the offending
+/// field. Parses the expression and runs the floor scan, so only subscribe
+/// and timer start call it.
+fn canonical(arguments: &Value) -> Result<(String, Timer), RpcError> {
+    let Parts {
+        key,
+        cron,
+        zone,
+        label,
+    } = parts(arguments)?;
+    let parsed = CronExpression::parse(&cron).map_err(|_| RpcError::invalid("arguments.cron"))?;
+    if fires_too_often(&cron) {
+        return Err(RpcError::invalid("arguments.cron"));
+    }
+    Ok((
+        key,
+        Timer {
+            cron: parsed,
+            zone,
+            label,
+        },
+    ))
 }
 
 /// Whether two ticks of `cron` can fall less than [`FLOOR_MINUTES`] apart.
@@ -79,8 +114,11 @@ fn canonical(arguments: &Value) -> Result<(String, Timer), RpcError> {
 /// worst an expression whose day fields would have kept two ticks apart
 /// across midnight.
 fn fires_too_often(cron: &str) -> bool {
-    let fields: Vec<&str> = cron.split_whitespace().collect();
-    let Ok(daily) = CronExpression::parse(&format!("{} {} * * *", fields[0], fields[1])) else {
+    let mut fields = cron.split_whitespace();
+    let (Some(minute), Some(hour)) = (fields.next(), fields.next()) else {
+        return true;
+    };
+    let Ok(daily) = CronExpression::parse(&format!("{minute} {hour} * * *")) else {
         return true;
     };
     let start = Utc
@@ -192,7 +230,13 @@ impl ScheduleSource {
         let mut guard = self.last.lock();
         let last = guard.get_or_insert_with(|| Self::load(&self.dir));
         for (key, label) in firing {
-            if last.get(&key).is_some_and(|at| *at >= minute) {
+            // The floor holds in UTC too: a daylight-saving jump can bring a
+            // collapsed tick within minutes of a regular one, and the later
+            // is dropped. It also stops a second tick in the same minute.
+            if last
+                .get(&key)
+                .is_some_and(|at| minute - *at < Duration::minutes(FLOOR_MINUTES))
+            {
                 continue;
             }
             last.insert(key.clone(), minute);
@@ -231,7 +275,7 @@ impl ScheduleSource {
             .subscriptions()
             .into_iter()
             .filter(|s| s.name == NAME && s.principal == principal && s.live(now))
-            .filter_map(|s| canonical(&s.arguments).ok().map(|(key, ..)| key))
+            .filter_map(|s| parts(&s.arguments).ok().map(|p| p.key))
             .collect()
     }
 }
@@ -278,17 +322,29 @@ impl EventSource for ScheduleSource {
     }
 
     /// Any authenticated principal, within the cron floor, the label cap and
-    /// the per-principal timer cap (counted on distinct timers, so a timer
-    /// the principal already holds never counts against itself).
+    /// the timer caps, counted on distinct timers. A timer the principal
+    /// already holds (every fan-out) was validated when it was taken and never
+    /// counts against itself; any other is fully validated and refused at
+    /// either cap, the same whether or not another principal holds it, so a
+    /// refusal reveals nothing of other principals' schedules.
     async fn authorize(
         &self,
         principal: &str,
         _name: &str,
         arguments: &Value,
     ) -> Result<(), RpcError> {
-        let (key, ..) = canonical(arguments)?;
+        let Parts { key, .. } = parts(arguments)?;
         let mut held = self.held_by(principal);
-        held.remove(&key);
+        if held.remove(&key) {
+            return Ok(());
+        }
+        canonical(arguments)?;
+        if self.timers.lock().len() >= self.max_timers {
+            return Err(RpcError::exhausted(
+                "schedule_timers",
+                Some(self.max_timers),
+            ));
+        }
         if held.len() >= self.max_per_principal {
             return Err(RpcError::exhausted(
                 "schedule_timers_per_principal",
@@ -299,7 +355,7 @@ impl EventSource for ScheduleSource {
     }
 
     fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
-        let Ok((key, ..)) = canonical(arguments) else {
+        let Ok(Parts { key, .. }) = parts(arguments) else {
             return false;
         };
         event
@@ -310,25 +366,35 @@ impl EventSource for ScheduleSource {
 
     /// The timer key, so spellings of one timer share it.
     fn lifecycle_key(&self, _principal: &str, name: &str, arguments: &Value) -> String {
-        canonical(arguments).map_or_else(
+        parts(arguments).map_or_else(
             |_| {
                 String::from_utf8(
                     serde_json_canonicalizer::to_vec(&json!([name, arguments])).unwrap_or_default(),
                 )
                 .unwrap_or_default()
             },
-            |(key, ..)| key,
+            |p| p.key,
         )
     }
 
     async fn on_first_subscriber(
         &self,
         key: &str,
-        _principal: &str,
+        principal: &str,
         _name: &str,
         arguments: &Value,
     ) -> Result<(), RpcError> {
         let (_, timer) = canonical(arguments)?;
+        // Again under the lifecycle lock, against committed rows: two
+        // concurrent subscribes for new timers cannot both pass the cap.
+        let mut held = self.held_by(principal);
+        held.remove(key);
+        if held.len() >= self.max_per_principal {
+            return Err(RpcError::exhausted(
+                "schedule_timers_per_principal",
+                Some(self.max_per_principal),
+            ));
+        }
         let mut timers = self.timers.lock();
         if !timers.contains_key(key) && timers.len() >= self.max_timers {
             return Err(RpcError::exhausted(
@@ -340,8 +406,16 @@ impl EventSource for ScheduleSource {
         Ok(())
     }
 
+    /// The timer stops and its last-tick state goes with it, so timer churn
+    /// leaves nothing behind.
     async fn on_last_subscriber(&self, key: &str) {
         self.timers.lock().remove(key);
+        if let Some(last) = self.last.lock().as_mut() {
+            last.remove(key);
+        }
+        if let Err(error) = super::records::remove_record(&self.dir, &fired_file(key)) {
+            tracing::warn!(%error, "events: schedule tick state not removed");
+        }
     }
 }
 

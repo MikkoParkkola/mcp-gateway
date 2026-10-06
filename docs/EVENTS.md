@@ -59,7 +59,9 @@ Rules:
 - **Daylight saving.** A local time the clock skips (spring forward) fires
   once, at the first minute after the jump; several skipped matches, such as
   `*/5` through the skipped hour, fire as that one tick. A local time the
-  clock repeats (fall back) fires only the first time.
+  clock repeats (fall back) fires only the first time. Either way no two ticks
+  of one schedule are ever less than 5 minutes apart in real time: a tick
+  that would come sooner is dropped.
 - **Label**: up to 64 characters, returned in every tick so a subscriber with
   several schedules can tell them apart. It is your own text and is scanned
   by the response firewall like any payload; a blocked label is

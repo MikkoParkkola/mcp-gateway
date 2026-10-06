@@ -389,3 +389,73 @@ async fn a_blocked_label_is_dead_lettered() {
     assert_eq!(dead.len(), 1, "{dead:?}");
     assert!(dead[0].contains("firewall_blocked"), "{}", dead[0]);
 }
+
+/// A daylight-saving collapse never brings two ticks within the floor: the
+/// skipped hour's tick at the jump and the next regular one are 5 minutes
+/// apart or the later is dropped.
+#[tokio::test]
+async fn a_daylight_saving_collapse_keeps_the_floor() {
+    let arguments = json!({
+        "cron": "1,6,11,16,21,26,31,36,41,46,51,56 * * * *",
+        "timezone": "Europe/Helsinki",
+    });
+    let ticks = fired(&arguments, utc(3, 29, 0, 40), 40).await;
+    let times: Vec<DateTime<Utc>> = ticks
+        .iter()
+        .map(|t| {
+            DateTime::parse_from_rfc3339(t)
+                .expect("time")
+                .with_timezone(&Utc)
+        })
+        .collect();
+    assert!(times.len() >= 2, "{ticks:?}");
+    for pair in times.windows(2) {
+        assert!(
+            pair[1] - pair[0] >= chrono::Duration::minutes(5),
+            "{ticks:?}"
+        );
+    }
+}
+
+/// At the global cap a principal is refused a timer it does not hold, the
+/// same whether another principal holds that timer or nobody does.
+#[tokio::test]
+async fn the_global_cap_refuses_alike_whoever_holds_the_timer() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut config = crate::config::EventsConfig::default();
+    config.schedule.max_timers = 1;
+    let hub = hub(dir.path(), &config);
+    let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
+    let held_by_q = json!({"cron": "0 1 * * *"});
+    admit(&hub, "sub_q", "q", &held_by_q);
+    start(&source, &held_by_q).await;
+    let joining = source
+        .authorize("p", NAME, &held_by_q)
+        .await
+        .expect_err("q's timer");
+    let fresh = source
+        .authorize("p", NAME, &json!({"cron": "0 2 * * *"}))
+        .await
+        .expect_err("a new timer");
+    assert_eq!(joining, fresh, "one answer: nothing about q leaks");
+    source
+        .authorize("q", NAME, &held_by_q)
+        .await
+        .expect("q keeps its own");
+}
+
+/// Stopping a timer removes its last-tick state.
+#[tokio::test]
+async fn a_stopped_timer_leaves_no_state() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path(), &crate::config::EventsConfig::default());
+    let mut events = drain(&hub);
+    let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
+    let key = start(&source, &json!({"cron": "*/5 * * * *"})).await;
+    source.tick_at(at(10, 5, 0));
+    assert_eq!(received(&mut events).len(), 1);
+    let files = || std::fs::read_dir(dir.path().join("schedule")).map_or(0, Iterator::count);
+    assert_eq!(files(), 1);
+    source.on_last_subscriber(&key).await;
+    assert_eq!(files(), 0);
+}

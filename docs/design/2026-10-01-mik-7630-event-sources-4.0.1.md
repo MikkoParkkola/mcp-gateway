@@ -167,7 +167,9 @@ five fields, no seconds.
 
 **Timezone and daylight saving.** Fields are read on the zone's wall clock
 (`chrono-tz`). A local time the clock skips fires once, at the first minute
-after the jump; a repeated local time fires on its first occurrence only.
+after the jump; a repeated local time fires on its first occurrence only. A
+tick less than 5 real minutes after the timer's previous one is dropped, so
+neither rule breaks the floor.
 
 **on_first_subscriber / on_last_subscriber.** Start or stop one timer per
 canonical `(cron, timezone, label)`. Timers share one minute-boundary ticker
