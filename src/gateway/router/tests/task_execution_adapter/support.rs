@@ -317,6 +317,25 @@ pub(super) async fn post(state: &Arc<AppState>, principal: &str, body: Value) ->
     post_full(state, principal, body).await.1
 }
 
+/// POST as `principal` to `uri` (for a query such as `?codemode=`), returning the body.
+pub(super) async fn post_at(
+    state: &Arc<AppState>,
+    principal: &str,
+    uri: &str,
+    body: Value,
+) -> Value {
+    let mut request = http_request(Some(principal), &body);
+    *request.uri_mut() = uri.parse().expect("a fixture uri parses");
+    let response = create_router(Arc::clone(state))
+        .oneshot(request)
+        .await
+        .expect("the router must answer");
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("the body must read");
+    serde_json::from_slice(&bytes).expect("the body is JSON")
+}
+
 /// POST as `principal` with one extra request header, returning the body.
 pub(super) async fn post_with_header(
     state: &Arc<AppState>,
