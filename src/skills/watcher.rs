@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-//! Hot-reload skill regeneration watcher.
+//! Hot-reload skill regeneration watcher. See [`NoSuchWatcher`].
 //!
 //! Watches capability YAML directories and regenerates only the affected skill
 //! bundle when a file changes, without triggering a full backend reload.
