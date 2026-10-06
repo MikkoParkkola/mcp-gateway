@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Adding one backend to gateway.yaml as a text edit, so the file's comments
+//! Adding or removing one backend in gateway.yaml as a text edit, so the file's comments
 //! survive. A re-serialised `Config` drops every comment, including the
 //! security warning `init` writes next to `bearer_token`.
 
@@ -8,27 +8,21 @@ use serde_yaml::{Mapping, Value};
 
 use crate::config::Config;
 
-/// The text at `original` with `config.backends[name]` appended to its
-/// top-level `backends:` mapping, or `None` when the edit cannot be proven
-/// right. Proven means: `config` is `before` plus exactly that backend, and
-/// the edited text parses to the original document plus exactly that entry.
-/// `None` sends the caller to the full re-serialisation.
-pub(super) fn with_backend_added(
+/// The text at `original` with the one backend edit that turns `before` into
+/// `config`: `name` added to the top-level `backends:` mapping, or removed
+/// from it. `None` when the edit cannot be proven right, which sends the
+/// caller to the full re-serialisation. Proven means: `config` differs from
+/// `before` only by `name`, and the edited text parses to the original
+/// document with exactly that entry added or removed.
+pub(super) fn with_backend_edited(
     original: &str,
     before: &Config,
     config: &Config,
     name: &str,
 ) -> Option<String> {
-    let backend = config.backends.get(name)?;
-    if before.backends.contains_key(name) || !only_adds(before, config, name) {
+    if !only_differs_by(before, config, name) {
         return None;
     }
-    let entry_value = serde_yaml::to_value(backend).ok()?;
-    let mut entry = Mapping::new();
-    entry.insert(name.into(), entry_value.clone());
-    let block = serde_yaml::to_string(&entry).ok()?;
-    let edited = splice(original, &block)?;
-
     let mut want: Value = serde_yaml::from_str(original).ok()?;
     let root = want.as_mapping_mut()?;
     let key = Value::from("backends");
@@ -39,15 +33,27 @@ pub(super) fn with_backend_added(
         Some(Value::Mapping(_)) => {}
         Some(_) => return None,
     }
-    root.get_mut(&key)?
-        .as_mapping_mut()?
-        .insert(name.into(), entry_value);
+    let backends = root.get_mut(&key)?.as_mapping_mut()?;
+    let edited = match (before.backends.get(name), config.backends.get(name)) {
+        (None, Some(backend)) => {
+            let entry_value = serde_yaml::to_value(backend).ok()?;
+            let mut entry = Mapping::new();
+            entry.insert(name.into(), entry_value.clone());
+            backends.insert(name.into(), entry_value);
+            splice(original, &serde_yaml::to_string(&entry).ok()?)?
+        }
+        (Some(_), None) => {
+            backends.remove(name)?;
+            remove_entry(original, name)?
+        }
+        _ => return None,
+    };
     let got: Value = serde_yaml::from_str(&edited).ok()?;
     (got == want).then_some(edited)
 }
 
 /// Whether `config` differs from `before` only by the backend `name`.
-fn only_adds(before: &Config, config: &Config, name: &str) -> bool {
+fn only_differs_by(before: &Config, config: &Config, name: &str) -> bool {
     let added = |c: &Config| -> Option<serde_json::Value> {
         let mut value = serde_json::to_value(c).ok()?;
         if let Some(backends) = value.get_mut("backends").and_then(|b| b.as_object_mut()) {
@@ -110,9 +116,62 @@ fn splice(original: &str, block: &str) -> Option<String> {
     Some(out.join("\n") + "\n")
 }
 
+/// Remove the entry `name` from the top-level block-style `backends:`
+/// mapping of `original`, with every line it spans. Blank lines and comments
+/// that lead the next entry stay. An emptied mapping becomes `backends: {}`.
+fn remove_entry(original: &str, name: &str) -> Option<String> {
+    let lines: Vec<&str> = original.lines().collect();
+    let indented = |line: &str| line.starts_with([' ', '\t']);
+    let content = |line: &str| {
+        let t = line.trim_start();
+        !t.is_empty() && !t.starts_with('#')
+    };
+    let header = lines.iter().position(|l| l.starts_with("backends:"))?;
+    let end = lines[header + 1..]
+        .iter()
+        .position(|l| !l.is_empty() && !indented(l) && !l.starts_with('#'))
+        .map_or(lines.len(), |i| header + 1 + i);
+    let child = lines[header + 1..end].iter().find(|l| content(l))?;
+    let depth = child.len() - child.trim_start().len();
+    let key_of = |line: &str| {
+        let rest = line.get(depth..)?;
+        if rest.starts_with([' ', '\t']) {
+            return None;
+        }
+        let key = rest.split_once(':')?.0.trim();
+        Some(key.trim_matches(|c| c == '"' || c == '\''))
+    };
+    let start = (header + 1..end).find(|&i| key_of(lines[i]) == Some(name))?;
+    // The entry runs to the next line at the child depth or shallower.
+    let next = (start + 1..end)
+        .find(|&i| content(lines[i]) && lines[i].len() - lines[i].trim_start().len() <= depth)
+        .unwrap_or(end);
+    // Give back the blank and comment lines that lead whatever follows.
+    let mut stop = next;
+    while stop > start + 1 && !content(lines[stop - 1]) {
+        stop -= 1;
+    }
+
+    let mut out: Vec<String> = lines[..start].iter().map(ToString::to_string).collect();
+    out.extend(lines[stop..].iter().map(ToString::to_string));
+    let emptied = !lines[header + 1..end]
+        .iter()
+        .enumerate()
+        .any(|(k, l)| !(start..stop).contains(&(header + 1 + k)) && content(l));
+    if emptied {
+        let after_key = lines[header]["backends:".len()..].trim_start();
+        out[header] = if after_key.starts_with('#') {
+            format!("backends: {{}} {after_key}")
+        } else {
+            "backends: {}".to_owned()
+        };
+    }
+    Some(out.join("\n") + "\n")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::splice;
+    use super::{remove_entry, splice};
 
     const BLOCK: &str = "new:\n  command: echo\n";
 
@@ -146,5 +205,27 @@ mod tests {
             "backends: # none yet\n  new:\n    command: echo\nauth: {}\n"
         );
         assert_eq!(splice("backends: {a: {command: x}}\n", BLOCK), None);
+    }
+
+    #[test]
+    fn removes_one_entry_and_keeps_the_rest() {
+        let original = "backends:\n  # a's note\n  a:\n    command: x\n\n  # leads b\n  b:\n    command: y\n# leads auth\nauth: {}\n";
+        assert_eq!(
+            remove_entry(original, "a").expect("a"),
+            "backends:\n  # a's note\n\n  # leads b\n  b:\n    command: y\n# leads auth\nauth: {}\n"
+        );
+        assert_eq!(
+            remove_entry(original, "b").expect("b"),
+            "backends:\n  # a's note\n  a:\n    command: x\n\n  # leads b\n# leads auth\nauth: {}\n"
+        );
+        assert_eq!(remove_entry(original, "missing"), None);
+    }
+
+    #[test]
+    fn removing_the_last_entry_leaves_an_empty_mapping() {
+        assert_eq!(
+            remove_entry("backends:  # mine\n  a:\n    command: x\n", "a").expect("a"),
+            "backends: {} # mine\n"
+        );
     }
 }

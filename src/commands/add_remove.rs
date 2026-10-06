@@ -13,7 +13,7 @@ use std::process::ExitCode;
 
 use mcp_gateway::{
     config::TransportConfig,
-    config_persistence::{load_existing_or_default, write_config_adding_backend},
+    config_persistence::{load_existing_or_default, write_config_keeping_comments},
     gateway::ui::backend_ops::{
         self, BackendUpdate, add_backend, get_backend, list_backends, parse_env_vars,
         remove_backend, resolve_backend, update_backend, write_config,
@@ -90,7 +90,7 @@ pub async fn run_add_command(
     };
 
     // ── Write config ───────────────────────────────────────────────────────
-    if let Err(e) = write_config_adding_backend(config, &before, &gateway_config, name) {
+    if let Err(e) = write_config_keeping_comments(config, &before, &gateway_config, name) {
         eprintln!("Error: Failed to write {}: {e}", config.display());
         return ExitCode::FAILURE;
     }
@@ -127,13 +127,14 @@ pub async fn run_add_command(
 /// Run `mcp-gateway remove`.
 pub fn run_remove_command(name: &str, config: &Path) -> ExitCode {
     let mut gateway_config = backend_ops::load_config_or_default(config);
+    let before = gateway_config.clone();
 
     if let Err(msg) = remove_backend(&mut gateway_config, name) {
         eprintln!("Error: {msg} (in {})", config.display());
         return ExitCode::FAILURE;
     }
 
-    if let Err(e) = write_config(config, &gateway_config) {
+    if let Err(e) = write_config_keeping_comments(config, &before, &gateway_config, name) {
         eprintln!("Error: Failed to write {}: {e}", config.display());
         return ExitCode::FAILURE;
     }

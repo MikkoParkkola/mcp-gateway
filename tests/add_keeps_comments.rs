@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `mcp-gateway add` keeps the comments in gateway.yaml, through the shipped
+//! `mcp-gateway add` and `remove` keep the comments in gateway.yaml, through the shipped
 //! binary.
 //!
-//! `add` re-serialised the whole config, which dropped every comment,
+//! Both re-serialised the whole config, which dropped every comment,
 //! including the security warning `init` writes next to `bearer_token`.
 
 use std::path::Path;
@@ -56,6 +56,20 @@ fn add_keeps_the_comments_init_wrote() {
         assert!(
             config.backends.contains_key("remote") && config.backends.contains_key("local"),
             "{init_args:?}: both backends must be added:\n{after}"
+        );
+
+        gateway(home.path(), &["remove", "remote"]);
+        let removed = std::fs::read_to_string(&path).expect("gateway.yaml");
+        for comment in comments(&before) {
+            assert!(
+                removed.contains(comment),
+                "{init_args:?}: `remove` dropped {comment:?}:\n{removed}"
+            );
+        }
+        let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
+        assert!(
+            !config.backends.contains_key("remote") && config.backends.contains_key("local"),
+            "{init_args:?}: `remove` must take out only its backend:\n{removed}"
         );
     }
 }

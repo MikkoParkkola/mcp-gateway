@@ -83,15 +83,19 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
 #[path = "config_persistence_splice.rs"]
 mod splice;
 
-/// [`write_config`] for `config`, which is `before` (the file at `path`) plus
-/// the one backend `name`, keeping the file's comments: the backend's block is
-/// added to the file's text, not the whole config re-serialised. When that
-/// edit cannot be proven to load as `config`, this is [`write_config`].
+/// [`write_config`] for `config`, which is `before` (the file at `path`) with
+/// the one backend `name` added or removed, keeping the file's comments: that
+/// entry is edited in the file's text rather than the whole config
+/// re-serialised. When the edit cannot be proven to load as `config`, this
+/// is [`write_config`].
+///
+/// Public only because the `add` and `remove` commands live in the binary
+/// crate.
 ///
 /// # Errors
 ///
 /// Returns `Err` on validation, serialisation, or I/O failure.
-pub fn write_config_adding_backend(
+pub fn write_config_keeping_comments(
     path: &Path,
     before: &Config,
     config: &Config,
@@ -99,7 +103,7 @@ pub fn write_config_adding_backend(
 ) -> Result<(), String> {
     let edited = std::fs::read_to_string(path)
         .ok()
-        .and_then(|original| splice::with_backend_added(&original, before, config, name));
+        .and_then(|original| splice::with_backend_edited(&original, before, config, name));
     let Some(edited) = edited else {
         return write_config(path, config);
     };
