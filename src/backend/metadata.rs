@@ -333,7 +333,6 @@ impl Backend {
                             .ensure_entry_started(&key)
                             .await
                             .map_err(|e| super::lifecycle::pre_send_start_error(&self.name, e))?;
-                        crate::oauth::login_gate::Provenance::mark_dispatched();
                         let (merged, truncated) = drain_list_pages(
                             transport.as_ref(),
                             &self.name,

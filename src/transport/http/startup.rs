@@ -68,6 +68,8 @@ impl HttpTransport {
             // is gone — so a follow-up call finds a valid token and skips re-authorization.
             let oauth_arc_for_task = Arc::clone(oauth_arc);
             let base_url_for_task = self.base_url.clone();
+            // Read here: the spawned task does not inherit the caller's scope.
+            let interactive = crate::oauth::login_gate::interactive();
             let oauth_task = tokio::spawn(async move {
                 let mut oauth = oauth_arc_for_task.lock().await;
                 oauth.initialize().await?;
@@ -75,7 +77,7 @@ impl HttpTransport {
                 // If we don't have a valid token, trigger authorization flow
                 if !oauth.has_valid_token() {
                     info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&base_url_for_task), "OAuth required - initiating authorization flow");
-                    oauth.authorize_shared().await?;
+                    oauth.authorize_shared(interactive).await?;
                 }
 
                 Ok::<String, crate::Error>(oauth.backend_name().to_string())

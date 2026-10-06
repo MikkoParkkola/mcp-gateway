@@ -80,11 +80,6 @@ pub(crate) struct Attempt {
 }
 
 impl Attempt {
-    /// The token that ends this login early.
-    pub(crate) fn cancel_token(&self) -> &CancellationToken {
-        &self.cancel
-    }
-
     /// Wait until this login has ended: `None` on a token, else its outcome.
     pub(crate) async fn finished(&self) -> Option<LoginOutcome> {
         let mut rx = self.finished.subscribe();
@@ -96,11 +91,42 @@ impl Attempt {
 
 /// What [`LoginGate::begin`] hands a caller about to authorize.
 pub(crate) enum Begin {
-    /// No login in flight: this caller runs it, and must call
-    /// [`LoginGate::end`] with how it ended.
-    Lead(Arc<Attempt>),
+    /// No login in flight: this caller runs it.
+    Lead(Lead),
     /// A login is in flight: wait on it.
     Join(Arc<Attempt>),
+}
+
+/// The caller leading a login, which ends it with [`Lead::end`]. Dropped
+/// before that (a request-time caller whose deadline passed mid-wait), the
+/// login is abandoned: joiners get `Cancelled`, the cohort keeps no outcome,
+/// and the next caller begins afresh rather than joining a login nobody runs.
+pub(crate) struct Lead {
+    gate: Arc<LoginGate>,
+    attempt: Arc<Attempt>,
+    ended: bool,
+}
+
+impl Lead {
+    /// The token that ends this login early.
+    pub(crate) fn cancel_token(&self) -> &CancellationToken {
+        &self.attempt.cancel
+    }
+
+    /// Record how this login ended: `None` on a token.
+    pub(crate) fn end(mut self, error: Option<&Error>) {
+        self.ended = true;
+        self.gate.end(&self.attempt, error);
+    }
+}
+
+impl Drop for Lead {
+    fn drop(&mut self) {
+        if !self.ended {
+            self.gate
+                .release(&self.attempt, None, Some(LoginOutcome::Cancelled));
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -131,7 +157,7 @@ impl LoginGate {
     }
 
     /// Lead a new login, or join the one in flight.
-    pub(crate) fn begin(&self) -> Begin {
+    pub(crate) fn begin(self: &Arc<Self>) -> Begin {
         let mut state = self.state.lock();
         if let Some(attempt) = &state.attempt {
             return Begin::Join(Arc::clone(attempt));
@@ -142,17 +168,32 @@ impl LoginGate {
             finished: watch::Sender::new(None),
         });
         state.attempt = Some(Arc::clone(&attempt));
-        Begin::Lead(attempt)
+        Begin::Lead(Lead {
+            gate: Arc::clone(self),
+            attempt,
+            ended: false,
+        })
     }
 
     /// Record how the led login `attempt` ended (`None` on a token). An
     /// unfinished, cancelled or failed login is set on its cohort, and a fresh
     /// cohort swapped in so the next caller begins afresh.
-    pub(crate) fn end(&self, attempt: &Arc<Attempt>, error: Option<&Error>) {
+    fn end(&self, attempt: &Arc<Attempt>, error: Option<&Error>) {
         let outcome = error.map(LoginOutcome::of);
+        self.release(attempt, outcome.as_ref(), outcome.clone());
+    }
+
+    /// Clear `attempt`, set `on_cohort` on its cohort (swapping in a fresh
+    /// one), and tell its joiners `to_joiners`.
+    fn release(
+        &self,
+        attempt: &Arc<Attempt>,
+        on_cohort: Option<&LoginOutcome>,
+        to_joiners: Option<LoginOutcome>,
+    ) {
         {
             let mut state = self.state.lock();
-            if let Some(outcome) = &outcome {
+            if let Some(outcome) = on_cohort {
                 let _ = attempt.cohort.outcome.set(outcome.clone());
                 if Arc::ptr_eq(&state.cohort, &attempt.cohort) {
                     state.cohort = Arc::new(Cohort::default());
@@ -166,7 +207,7 @@ impl LoginGate {
                 state.attempt = None;
             }
         }
-        attempt.finished.send_replace(Some(outcome));
+        attempt.finished.send_replace(Some(to_joiners));
     }
 
     /// End the login in flight, if any, and wait until it has closed its
@@ -182,6 +223,19 @@ impl LoginGate {
 
 tokio::task_local! {
     static PROVENANCE: Arc<Provenance>;
+    static NON_INTERACTIVE: ();
+}
+
+/// Run `work` as a caller that never begins or waits on a login (the health
+/// probe, MIK-7982 C2): where it would, it gets `AuthorizationRequired`.
+pub(crate) async fn non_interactive<F: std::future::Future>(work: F) -> F::Output {
+    NON_INTERACTIVE.scope((), work).await
+}
+
+/// Whether the current task may begin or wait on a login. Read before any
+/// `tokio::spawn`: a spawned task does not inherit the scope.
+pub(crate) fn interactive() -> bool {
+    NON_INTERACTIVE.try_with(|()| ()).is_err()
 }
 
 /// Whose deadline it is (MIK-7982 C3): the cohort a bounded caller captured
@@ -242,20 +296,17 @@ mod tests {
 
     #[test]
     fn an_unfinished_login_ends_its_cohort_and_the_next_caller_begins_afresh() {
-        let gate = LoginGate::default();
+        let gate = Arc::new(LoginGate::default());
         let queued = gate.cohort();
-        let Begin::Lead(attempt) = gate.begin() else {
+        let Begin::Lead(lead) = gate.begin() else {
             panic!("no login in flight, so the first caller leads");
         };
         assert!(gate.pending_in(&queued));
         assert!(matches!(gate.begin(), Begin::Join(_)));
 
-        gate.end(
-            &attempt,
-            Some(&Error::AuthorizationCancelled {
-                backend: "b".into(),
-            }),
-        );
+        lead.end(Some(&Error::AuthorizationCancelled {
+            backend: "b".into(),
+        }));
 
         assert_eq!(queued.outcome(), Some(&LoginOutcome::Cancelled));
         assert!(!gate.pending_in(&queued));
@@ -265,14 +316,38 @@ mod tests {
 
     #[test]
     fn a_login_that_got_a_token_sets_no_outcome() {
-        let gate = LoginGate::default();
+        let gate = Arc::new(LoginGate::default());
         let cohort = gate.cohort();
-        let Begin::Lead(attempt) = gate.begin() else {
+        let Begin::Lead(lead) = gate.begin() else {
             panic!("leads");
         };
-        gate.end(&attempt, None);
+        lead.end(None);
         assert!(cohort.outcome().is_none());
         assert!(Arc::ptr_eq(&cohort, &gate.cohort()), "the cohort stays");
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_lead_frees_the_gate_and_cancels_its_joiners() {
+        let gate = Arc::new(LoginGate::default());
+        let cohort = gate.cohort();
+        let Begin::Lead(lead) = gate.begin() else {
+            panic!("leads");
+        };
+        let Begin::Join(joined) = gate.begin() else {
+            panic!("joins the lead's login");
+        };
+
+        drop(lead);
+
+        assert_eq!(joined.finished().await, Some(LoginOutcome::Cancelled));
+        assert!(
+            cohort.outcome().is_none(),
+            "an abandoned login sets no outcome"
+        );
+        assert!(
+            matches!(gate.begin(), Begin::Lead(_)),
+            "the next caller leads"
+        );
     }
 
     #[test]

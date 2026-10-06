@@ -76,9 +76,13 @@ impl Backend {
         }
 
         // `ensure_started` now respawns reliably because `is_connected()` does a
-        // real liveness check (Fix C).
-        if let Err(e) = self.ensure_started().await {
-            let _ = self.force_restart().await;
+        // real liveness check (Fix C). A probe never begins a login, and a
+        // start it could not make for want of one is no fault to rebuild.
+        let started = crate::oauth::login_gate::non_interactive(self.ensure_started()).await;
+        if let Err(e) = started {
+            if !e.is_authorization_wait() {
+                let _ = self.force_restart().await;
+            }
             return Err(e);
         }
 
@@ -101,7 +105,8 @@ impl Backend {
         // question it is right to refuse.
         let method = self.liveness_method().await;
 
-        let answer = match tokio::time::timeout(timeout, transport.request(method, None)).await {
+        let request = crate::oauth::login_gate::non_interactive(transport.request(method, None));
+        let answer = match tokio::time::timeout(timeout, request).await {
             Ok(answer) => answer,
             Err(_elapsed) => {
                 warn!(
@@ -132,6 +137,8 @@ impl Backend {
                 }
                 Ok(())
             }
+            // The token step wanted a login: skip the tick, keep the login.
+            Err(e) if e.is_authorization_wait() => Err(e),
             Err(e) => {
                 warn!(backend = %self.name, error = %e, "Health probe failed; rebuilding transport");
                 self.unserved_consecutive.store(0, Ordering::SeqCst);

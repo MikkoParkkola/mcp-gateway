@@ -362,21 +362,28 @@ impl OAuthClient {
     /// Authorize through the backend's login gate (MIK-7982): lead a login if
     /// none is in flight, or wait on the one that is and share its end. The
     /// leader records the end on the gate itself, so a caller that gave up
-    /// loses nothing: this runs inside the start's detached OAuth task.
+    /// loses nothing: this runs inside the start's detached OAuth task. A
+    /// caller that is not `interactive` never begins or joins one.
     ///
     /// # Errors
     ///
     /// As [`Self::authorize_until`]; a joiner gets the led login's typed
-    /// outcome, or an OAuth error if the led login stored no token.
-    pub(crate) async fn authorize_shared(&self) -> Result<String> {
+    /// outcome, or an OAuth error if the led login stored no token;
+    /// [`Error::AuthorizationRequired`] when not `interactive`.
+    pub(crate) async fn authorize_shared(&self, interactive: bool) -> Result<String> {
         use crate::oauth::login_gate::Begin;
+        if !interactive {
+            return Err(Error::AuthorizationRequired {
+                backend: self.backend_name().to_string(),
+            });
+        }
         let Some(gate) = &self.login_gate else {
             return self.authorize().await;
         };
         match gate.begin() {
-            Begin::Lead(attempt) => {
-                let result = self.authorize_until(attempt.cancel_token()).await;
-                gate.end(&attempt, result.as_ref().err());
+            Begin::Lead(lead) => {
+                let result = self.authorize_until(lead.cancel_token()).await;
+                lead.end(result.as_ref().err());
                 result
             }
             Begin::Join(attempt) => {
