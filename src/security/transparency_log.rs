@@ -96,14 +96,18 @@ pub(crate) mod rotation_fault {
 pub(crate) mod segments;
 #[path = "transparency_log_verify.rs"]
 mod verify;
+// MIK-7713: verify against an off-host copy of `.hwm`.
+#[path = "transparency_log_anchor.rs"]
+mod anchor;
 // MIK-7116.MIN.1: invocation records carrying tenant attribution.
 #[path = "transparency_log_attributed.rs"]
 mod attributed;
+pub use anchor::verify_audit_log;
 #[cfg(test)]
 pub(crate) use verify::verify_segments;
 pub use verify::{
-    VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries, verify_audit_log,
-    verify_log, verify_log_signed,
+    VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries, verify_log,
+    verify_log_signed,
 };
 
 use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};

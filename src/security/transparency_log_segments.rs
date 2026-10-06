@@ -265,10 +265,16 @@ pub(crate) fn write_hwm(path: &Path, bytes: &[u8], sync: bool) -> io::Result<()>
 #[must_use]
 pub fn read_hwm(path: &Path, secret: &[u8], key_id: &str) -> Option<HighWater> {
     let raw = std::fs::read(sibling(path, "hwm")).ok()?;
+    parse_hwm(&raw, secret, key_id).map(|(hw, _)| hw)
+}
+
+/// Parse one `.hwm` image, and whether it carries a MAC. `None` when torn,
+/// unparseable, or (with a secret) failing its MAC.
+pub(crate) fn parse_hwm(raw: &[u8], secret: &[u8], key_id: &str) -> Option<(HighWater, bool)> {
     if raw.len() != HWM_LEN {
         return None;
     }
-    let text = std::str::from_utf8(&raw).ok()?;
+    let text = std::str::from_utf8(raw).ok()?;
     let mut parts = text.trim_end().split('\t');
     let hw = HighWater {
         counter: parts.next()?.parse().ok()?,
@@ -283,7 +289,7 @@ pub fn read_hwm(path: &Path, secret: &[u8], key_id: &str) -> Option<HighWater> {
             return None;
         }
     }
-    Some(hw)
+    Some((hw, !mac.is_empty()))
 }
 
 fn subtle_eq(a: &[u8], b: &[u8]) -> bool {
