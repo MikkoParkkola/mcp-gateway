@@ -101,3 +101,51 @@ async fn a_hanging_tools_refill_does_not_hold_other_notices() {
     .await;
     assert!(announced, "the tools change was never announced");
 }
+
+/// MIK-7937: a refill in flight is not restarted by the next tools notice
+/// (that notice waits for the refill to end), and a session that ends during
+/// the refill still waits for it and announces the change before it closes.
+#[tokio::test]
+async fn a_refill_in_flight_is_kept_and_announced_when_the_session_ends() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = HttpPeer::start(Era::Modern).await;
+    let gw = start_listed(
+        dir.path(),
+        &receiver,
+        upstream_config(dir.path(), http_backend(&peer), &[]),
+    )
+    .await;
+    let name = event("tools_changed");
+    let tools = sub(&gw, ALICE, &name, &receiver, json!({})).await;
+    eventually("the listen asks for tools", || {
+        peer.open_listens()
+            .iter()
+            .any(|f| f["notifications"]["toolsListChanged"] == true)
+    })
+    .await;
+    let lists_before = peer.frames("tools/list").len();
+    let tools_before = delivered(&receiver, &tools, &name).len();
+    peer.hang_tools_list();
+    peer.push(TOOLS_CHANGED, json!({}));
+    eventually("the refill reached the backend", || {
+        peer.frames("tools/list").len() > lists_before
+    })
+    .await;
+
+    peer.push(TOOLS_CHANGED, json!({}));
+    let restarted = wait_until(Duration::from_secs(3), || {
+        peer.frames("tools/list").len() > lists_before + 1
+    })
+    .await;
+    assert!(!restarted, "a notice restarted the refill in flight");
+
+    // The session ends while the refill hangs; the change is announced once
+    // the refill ends (its 30 s bound, the peer holding the list a minute).
+    peer.drop_streams();
+    let announced = wait_until(Duration::from_secs(45), || {
+        delivered(&receiver, &tools, &name).len() > tools_before
+    })
+    .await;
+    assert!(announced, "a session end dropped the refill's tools change");
+}
