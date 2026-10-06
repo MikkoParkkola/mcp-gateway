@@ -129,4 +129,14 @@ fn every_callback_entry_point_refuses_an_oversized_secret_before_the_store() {
         refused(store.consume_callback(1_000, &limits, &over_str, None)),
         capped
     );
+    // MIK-7843: a short state with an oversized binding is capped on the
+    // faulted table too, so the binding's cap also runs before the read.
+    assert_eq!(
+        refused(store.admit_callback(1_000, &limits, absent, Some(over_str.as_str()))),
+        capped
+    );
+    assert_eq!(
+        refused(store.consume_callback(1_000, &limits, absent, Some(over_str.as_str()))),
+        capped
+    );
 }
