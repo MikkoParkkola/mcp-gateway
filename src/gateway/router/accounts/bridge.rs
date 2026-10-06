@@ -142,7 +142,7 @@ fn sole_cookie<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
             let Some((key, value)) = pair.trim().split_once('=') else {
                 continue;
             };
-            if key == name && found.replace(value).is_some() {
+            if key == name && !value.is_empty() && found.replace(value).is_some() {
                 return None;
             }
         }
