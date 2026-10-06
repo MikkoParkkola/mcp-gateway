@@ -79,4 +79,35 @@ mod tests {
         assert!(weak.upgrade().is_none(), "state dropped after shutdown");
         drop(tx);
     }
+
+    // MIK-7659: the same, through `spawn_drain` with a real `AppState`, so the
+    // wiring (the shutdown receiver passed on, the state captured only by the
+    // task) is what is tested.
+    #[tokio::test]
+    async fn spawn_drain_releases_the_app_state_on_shutdown_while_a_sender_lives() {
+        let (state, _store) = crate::gateway::router::tests::direct_route_state_with_identity(
+            crate::config::AgentIdentityConfig::default(),
+        )
+        .await;
+        assert_eq!(
+            Arc::strong_count(&state),
+            1,
+            "premise: the drain is the only holder of the state"
+        );
+        let weak = Arc::downgrade(&state);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (sd_tx, sd_rx) = tokio::sync::broadcast::channel(1);
+        spawn_drain(state, rx, sd_rx);
+        tx.send("demo".into()).unwrap();
+        sd_tx.send(()).unwrap();
+        let released = async {
+            while weak.upgrade().is_some() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), released)
+            .await
+            .expect("the drain released its AppState on shutdown");
+        drop(tx);
+    }
 }

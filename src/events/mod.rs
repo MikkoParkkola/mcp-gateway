@@ -24,6 +24,7 @@ mod fanout;
 mod governance;
 mod lifecycle;
 mod limiter;
+mod operational_source;
 mod outbox;
 mod rate;
 mod records;
@@ -39,6 +40,7 @@ mod upstream;
 mod upstream_listener;
 mod upstream_need;
 mod upstream_session;
+pub(crate) mod watch_source;
 mod webhook_source;
 mod worker;
 
