@@ -10,6 +10,8 @@
 //! is this same binary over stdio (which the destination policy does not
 //! cover), running `standard` and forwarding to the counting HTTP fixture.
 
+use signing_gateway::gateway_bin;
+
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;
 
@@ -53,7 +55,7 @@ fn inner_config(directory: &std::path::Path, backend_url: &str) -> std::path::Pa
 fn outer_config(inner: &std::path::Path, inner_home: &std::path::Path) -> Value {
     let command = format!(
         "\"{}\" --config \"{}\" serve --stdio",
-        env!("CARGO_BIN_EXE_mcp-gateway"),
+        gateway_bin::path(),
         inner.display()
     );
     json!({

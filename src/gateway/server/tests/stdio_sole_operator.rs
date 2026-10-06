@@ -447,10 +447,6 @@ async fn e2e_post(
 #[tokio::test]
 async fn http_run_path_refuses_a_multi_key_caller_the_managed_account() {
     let fixture = E2eFixture::new();
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .and_then(|listener| listener.local_addr())
-        .map(|address| address.port())
-        .expect("a free loopback port");
     let auth = format!(
         "auth:\n  enabled: true\n  single_user: true\n  api_keys:\n    \
          - name: keyA\n      key_sha256: \"{}\"\n      backends: [\"*\"]\n    \
@@ -461,8 +457,14 @@ async fn http_run_path_refuses_a_multi_key_caller_the_managed_account() {
         // Auth on requires a working audit log (UPGRADING-4.0 item 43).
         fixture.root.join("audit.jsonl").display(),
     );
-    let gateway = e2e_gateway(&fixture, port, &auth).await;
+    // Port 0: the gateway reports the port it bound (MIK-7984).
+    let mut gateway = e2e_gateway(&fixture, 0, &auth).await;
+    let bound = gateway.bound_port_for_test();
     let server = tokio::spawn(async move { Box::pin(gateway.run()).await });
+    let port = tokio::time::timeout(E2E_ARRIVAL, bound)
+        .await
+        .expect("the HTTP gateway bound a port")
+        .expect("the gateway reports the port it bound");
     let client = reqwest::Client::new();
     // Polled: the listener binds and the capability scan runs after spawn, so
     // an early call can miss the tool. Stops on EITHER refusal.

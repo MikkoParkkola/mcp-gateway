@@ -108,12 +108,30 @@ fn metadata_is_accepted_only_when_every_configured_endpoint_matches_exactly() {
     }
 }
 
-/// Mutant: a literal is accepted as a secret reference, or an unreadable file
-/// reference resolves to a value.
+/// Mutant: a literal is accepted as a secret reference, an unreadable file
+/// reference resolves to a value, or an `env:` reference stops reading the
+/// gateway's env files.
 #[test]
-fn a_secret_reference_resolves_from_a_file_and_nothing_else_does() {
-    let secrets = EnvSecrets::new(Arc::new(crate::config::LiveEnv::default()));
+fn a_secret_reference_resolves_from_an_env_file_or_a_file_and_a_literal_does_not() {
     let dir = tempfile::tempdir().unwrap();
+    let env_file = dir.path().join(".env");
+    crate::gateway::test_helpers::write_owner_only(
+        &env_file,
+        "MIK7843_ACCOUNT_SECRET=env-fixture-secret\n",
+    )
+    .unwrap();
+    let overlay = Arc::new(crate::config::EnvOverlay::from_paths(&[env_file]));
+    let secrets = EnvSecrets::new(Arc::new(crate::config::LiveEnv::new(
+        overlay,
+        crate::config::ResolvedEnvFiles::default(),
+    )));
+    assert_eq!(
+        secrets.resolve("env:MIK7843_ACCOUNT_SECRET").as_deref(),
+        Some("env-fixture-secret"),
+        "an env: reference assigned by an env file"
+    );
+    assert_eq!(secrets.resolve("env:MIK7843_ACCOUNT_SECRET_UNSET"), None);
+
     let path = dir.path().join("client-secret");
     crate::gateway::test_helpers::write_owner_only(&path, "fixture-secret").unwrap();
 

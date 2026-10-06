@@ -98,10 +98,13 @@ mod account_mint;
 use super::support::{augment_with_predictions, augment_with_trace, idempotency_key_for};
 pub(crate) use side_effect_markers::{LostRoundRoute, settle_lost_round};
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
+pub(crate) mod gateway_writes;
 mod output_shape;
 mod provenance_stamp;
 pub(crate) mod relay;
 pub(super) use output_shape::enforce_output_schema;
+#[cfg(all(test, feature = "firewall"))]
+pub(crate) mod receipt_test_support;
 
 mod admin;
 mod bridge_dispatch;
@@ -401,6 +404,7 @@ impl MetaMcp {
             session_id,
             api_key_name,
             trace_id,
+            caller_key: None,
         })?;
         #[cfg(feature = "cost-governance")]
         let cost_warnings = std::mem::take(&mut admission.warnings);
@@ -621,6 +625,7 @@ impl MetaMcp {
             session_id,
             api_key_name,
             trace_id,
+            caller_key: None,
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
         result = gated;
@@ -736,6 +741,9 @@ mod captured_invoke_tests;
 
 #[cfg(test)]
 mod cancel_settles_tests;
+
+#[cfg(test)]
+mod caller_cost_tests;
 
 #[cfg(test)]
 mod f13_hint_scope_tests;

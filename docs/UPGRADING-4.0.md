@@ -253,10 +253,12 @@ The gateway's own per-backend limiter (`failsafe.rate_limit`) is covered by item
 There is nothing to change. Expect fewer spurious breaker openings, and note that a genuinely
 broken backend that happens to answer 429 will now stay in rotation longer.
 
-One boundary is worth knowing: a capacity failure worded as a throttle — for example
-`request throttled: upstream out of capacity` — is still treated as rate limiting and
-therefore still exempt. Narrowing that needs a rate-limit co-signal; it is 4.0.0 work tracked
-in #1613, and this paragraph changes when it lands.
+A throttle phrase alone is not a rate limit. An error worded only as a throttle — for example
+`request throttled: upstream out of capacity` — counts toward the error budgets and the circuit
+breaker, and gets the generic recovery hint instead of `RATE_LIMITED`. A tool result with
+`isError: true` worded that way counts as an answered call, like any other tool error. A real
+throttle carries a `429` or a rate-limit phrase (`too many requests`, `rate limit`,
+`RESOURCE_EXHAUSTED`).
 
 ## 5. One license across the repository
 
@@ -3314,8 +3316,9 @@ Everything here applies only under `security.posture: hardened`; `standard` is u
   retry-field checks on `/mcp/{backend}`. It runs before tool policy and dispatch, so a call
   the policy would refuse gets `-32602` for a malformed nonce instead of the policy refusal, and
   is counted as an invalid-nonce rejection. Under `standard` with `message_signing` enabled,
-  where only a `gateway_invoke` on `/mcp` is signed, its nonce is judged after the invocation
-  policy instead: a denied call gets the policy refusal and counts no nonce rejection. Answers
+  where only a `gateway_invoke` is signed, its nonce is judged after the invocation policy
+  instead, on `/mcp` and over `serve --stdio` alike: a denied call gets the policy refusal and
+  counts no nonce rejection. Answers
   given before the nonce is
   admitted are delivered unsigned and leave the nonce unspent: a task-augmented destructive
   call's confirmation challenge or refusal, and on `/mcp/{backend}` a tool-policy or
@@ -4035,7 +4038,9 @@ under its own credential.
 If such clients are now refused, give them a credential (turn authentication on, or have them
 present a key on a public path), have them reuse their session, raise
 `anomaly_block_threshold`, or remove it to log without blocking. The 4.0 tenant guard
-(`tenant_guard`) and call budget (`budget`) count these clients the same way.
+(`tenant_guard`) and call budget (`budget`) count these clients the same way. With
+authentication off, budgets are best-effort; turn authentication on for per-caller
+enforcement.
 
 ## 152. A stepped weekday field in a cron expression matches only its own days
 

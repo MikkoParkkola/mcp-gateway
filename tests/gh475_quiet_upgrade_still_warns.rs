@@ -12,7 +12,8 @@
 //! lived in the wiring between the flag and the migration loop, and only an
 //! end-to-end run observes both streams the way an operator does.
 
-use std::process::Command;
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
 
 /// Runs `mcp-gateway upgrade` over a data directory that is mid-upgrade from a
 /// 2.x install with authentication switched off, and returns `(stdout, stderr)`.
@@ -25,7 +26,7 @@ fn upgrade_from_2_x(extra_args: &[&str]) -> (String, String) {
     )
     .expect("config");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let out = gateway_bin::command(dir.path(), gateway_bin::Inherit::Environment)
         .arg("upgrade")
         .args(extra_args)
         .arg("--data-dir")
@@ -109,7 +110,7 @@ fn a_3_x_upgrade_notifies_once_and_never_edits_the_config() {
     mcp_gateway::gateway::test_helpers::write_owner_only(&yaml, original).expect("config");
 
     let run = || {
-        let out = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        let out = gateway_bin::command(dir.path(), gateway_bin::Inherit::Environment)
             .arg("upgrade")
             .arg("--data-dir")
             .arg(dir.path())

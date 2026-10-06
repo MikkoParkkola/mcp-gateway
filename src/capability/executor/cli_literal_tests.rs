@@ -157,3 +157,35 @@ fn integer_valued_number_forms_match_integers_exactly() {
         failures.join("\n")
     );
 }
+
+/// MIK-7954.FIX.1: a numeric secret is matched as a whole number only.
+#[test]
+fn a_numeric_secret_is_redacted_where_the_result_equals_it() {
+    let mut value = json!({"n": 123_456, "neg": -123_456, "list": [123_456]});
+    redact_value(&mut value, &["123456".to_owned()]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+    assert_eq!(value["neg"], "[redacted]", "{value}");
+    assert_eq!(value["list"][0], "[redacted]", "{value}");
+}
+
+#[test]
+fn a_number_holding_the_secret_digits_is_left_whole() {
+    let mut value = json!({"a": 912_345, "b": 12_340, "c": -91_234, "d": 1_234.5});
+    redact_value(&mut value, &["1234".to_owned()]);
+    assert_eq!(
+        value,
+        json!({"a": 912_345, "b": 12_340, "c": -91_234, "d": 1_234.5}),
+        "only a number equal to the secret is redacted"
+    );
+}
+
+#[test]
+fn a_numeric_secret_inside_a_string_is_still_redacted() {
+    let mut value = json!({"s": "id-912345-x", "k": "pin=1234"});
+    redact_value(&mut value, &["1234".to_owned()]);
+    assert_eq!(
+        value,
+        json!({"s": "id-9[redacted]5-x", "k": "pin=[redacted]"}),
+        "the secret goes, the text around it stays"
+    );
+}

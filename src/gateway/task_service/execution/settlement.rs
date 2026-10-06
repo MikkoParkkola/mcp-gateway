@@ -29,7 +29,7 @@ pub(super) fn classify_dispatch(response: JsonRpcResponse) -> DispatchSettlement
         return InputRequired::from_result(&result)
             .map_or_else(|| DispatchSettlement::Abandoned, DispatchSettlement::Input);
     }
-    DispatchSettlement::Complete(as_result_object(backend_output(result)))
+    DispatchSettlement::Complete(stored_result(result))
 }
 
 pub(super) fn interrupted_before_dispatch() -> Value {
@@ -66,6 +66,13 @@ pub(super) fn backend_output(mut result: Value) -> Value {
         meta.remove(super::super::record::EXECUTION_OUTCOME_KEY);
     }
     result
+}
+
+/// A backend's result as a task stores it: the gateway's marker removed, a
+/// non-object wrapped as one text block. The settled receipt is taken from
+/// this same value, so it holds the text a read delivers (MIK-7939).
+pub(super) fn stored_result(result: Value) -> Value {
+    as_result_object(backend_output(result))
 }
 
 fn as_result_object(result: Value) -> Value {
