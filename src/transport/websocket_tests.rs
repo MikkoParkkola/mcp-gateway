@@ -322,6 +322,18 @@ async fn dispatch_silently_ignores_unknown_response_id() {
     WebSocketTransport::dispatch_inbound(&t.inner, text).unwrap();
 }
 
+/// MIK-7899 CLASS.1: a `-32601` answer to a WebSocket listen says the peer
+/// has no listen; it is not the listen's graceful end.
+#[tokio::test]
+async fn dispatch_reads_a_method_not_found_listen_answer_as_unsupported() {
+    use crate::transport::upstream_tap::{Requested, UpstreamNote};
+    let t = test_transport("ws://localhost:9999");
+    let mut rx = t.inner.taps.listen(&json!(42), Requested::default());
+    let text = r#"{"jsonrpc":"2.0","id":42,"error":{"code":-32601,"message":"Method not found"}}"#;
+    WebSocketTransport::dispatch_inbound(&t.inner, text).unwrap();
+    assert_eq!(rx.try_recv(), Ok(UpstreamNote::Unsupported));
+}
+
 // =========================================================================
 // close / connected flag
 // =========================================================================
