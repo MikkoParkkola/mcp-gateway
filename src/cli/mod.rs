@@ -34,6 +34,7 @@ pub mod identity;
 pub mod invoke;
 pub mod output;
 pub mod skills;
+pub(crate) mod stdout;
 pub mod subcommands;
 
 use std::path::PathBuf;

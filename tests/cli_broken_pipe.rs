@@ -46,3 +46,34 @@ fn a_closed_stdout_is_a_clean_exit() {
         assert!(status.success(), "{args:?} exited {status}:\n{stderr}");
     }
 }
+
+/// The shape the bug was found in: `| head -1`, a reader that takes one line
+/// and leaves while the command is still writing.
+#[test]
+fn a_reader_that_takes_one_line_and_leaves_is_a_clean_exit() {
+    use std::io::BufRead;
+    let home = tempfile::tempdir().expect("home");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        .args(["list", "--available"])
+        .current_dir(home.path())
+        .env("HOME", home.path())
+        .env("MCP_GATEWAY_TEST_HOME_DIR", home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mcp-gateway");
+    let mut first = String::new();
+    std::io::BufReader::new(child.stdout.take().expect("stdout"))
+        .read_line(&mut first)
+        .expect("read the first line");
+    assert!(!first.is_empty(), "the command printed nothing");
+    let output = child.wait_with_output().expect("wait for mcp-gateway");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("panicked"), "panicked:\n{stderr}");
+    assert!(
+        output.status.success(),
+        "exited {}:\n{stderr}",
+        output.status
+    );
+}
