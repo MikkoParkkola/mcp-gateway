@@ -192,6 +192,84 @@ async fn the_resolved_credential_reaches_token_env_and_not_an_error() {
     assert!(!err.contains(token), "token leaked into the error: {err}");
 }
 
+/// An executor whose env overlay holds `body` (one `NAME=value` per line).
+fn executor_with_env(body: &str) -> (tempfile::TempDir, CapabilityExecutor) {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join(".env");
+    crate::gateway::test_helpers::write_owner_only(&file, body).unwrap();
+    let overlay = std::sync::Arc::new(crate::config::EnvOverlay::from_paths(&[file]));
+    let env = std::sync::Arc::new(crate::config::LiveEnv::new(
+        overlay,
+        crate::config::ResolvedEnvFiles::default(),
+    ));
+    (dir, CapabilityExecutor::new().with_env(env))
+}
+
+/// MIK-7953: a reserved name in `env` (HOME) never reaches the child, so its
+/// value is no secret of the call and stays in the result; a declared name the
+/// child does receive is still scrubbed.
+#[tokio::test]
+async fn a_reserved_env_name_is_not_scrubbed_from_the_result() {
+    let home = "/home-7953-operator";
+    let secret = "tok-7953-declared";
+    let (_dir, executor) =
+        executor_with_env(&format!("HOME={home}\nCAP_EXEC_TEST_TOKEN={secret}\n"));
+    let cap = probe(
+        &format!("echo, '{home}'"),
+        "      x:\n        type: string",
+        "",
+        "      env: [HOME, CAP_EXEC_TEST_TOKEN]\n",
+    );
+    let Some(ProcessConfig::Cli(config)) = cap.providers.process.get("primary") else {
+        panic!("not a cli provider");
+    };
+    let ok = executor
+        .execute_cli(
+            &cap,
+            config,
+            &json!({}),
+            &CapabilityExecutionContext::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok["argv"][0], home, "{ok}");
+    assert_eq!(
+        ok["test_values"]["CAP_EXEC_TEST_TOKEN"], "[redacted]",
+        "{ok}"
+    );
+    assert!(!ok.to_string().contains(secret), "{ok}");
+}
+
+/// MIK-7953's safety claim: a reserved name declared in `env` never delivers
+/// the operator's value to the child; the child sees the value the gateway
+/// sets. Unscrubbing HOME from results rests on this.
+#[tokio::test]
+async fn a_reserved_env_name_never_delivers_the_operator_value() {
+    let home = "/home-7953-operator";
+    let (_dir, executor) = executor_with_env(&format!("HOME={home}\n"));
+    let cap = probe(
+        "echo",
+        "      x:\n        type: string",
+        "",
+        "      env: [HOME]\n",
+    );
+    let Some(ProcessConfig::Cli(config)) = cap.providers.process.get("primary") else {
+        panic!("not a cli provider");
+    };
+    let ok = executor
+        .execute_cli(
+            &cap,
+            config,
+            &json!({}),
+            &CapabilityExecutionContext::default(),
+        )
+        .await
+        .unwrap();
+    let seen = ok["home"].as_str().expect("the probe reports HOME");
+    assert!(!seen.is_empty(), "{ok}");
+    assert_ne!(seen, home, "the child got the operator's HOME: {ok}");
+}
+
 /// MIK-7955.FIX.1: no secret survives in the output, whether it is part of
 /// the marker or formed where the marker meets the text around it.
 #[test]

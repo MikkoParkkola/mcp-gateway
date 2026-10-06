@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use super::CapabilityExecutor;
 use super::cli_argv::{CliInvocation, build_cli_invocation};
-use super::cli_run::{CliOutcome, Workdir, child_env, resolve_command, run};
+use super::cli_run::{CliOutcome, Workdir, child_env, is_reserved, resolve_command, run};
 use crate::capability::definition::{CliConfig, CliOutput, MAX_OUTPUT_BYTES_CEILING};
 use crate::capability::{CapabilityDefinition, CapabilityExecutionContext};
 #[cfg(feature = "firewall")]
@@ -81,9 +81,12 @@ impl CapabilityExecutor {
             &lookup,
             token.as_ref().map(|(name, value)| (*name, value.as_str())),
         );
+        // The gateway sets a reserved name for the child itself (`child_env`),
+        // never from this list, so its value is no injected secret.
         let secrets: Vec<String> = config
             .env
             .iter()
+            .filter(|name| !is_reserved(name))
             .filter_map(|name| lookup(name))
             .map(|v| v.to_string_lossy().into_owned())
             .chain(token.map(|(_, value)| value))
