@@ -30,7 +30,7 @@ env:
   # only, every arm built by alloc_count_patch.py (allocations per call; its
   # CPU figures are on the System allocator and not comparable). TARGET empty
   # builds the host default (glibc); a triple builds that target.
-  MODE: profile
+  MODE: count
   TARGET: ""
 
 jobs:
