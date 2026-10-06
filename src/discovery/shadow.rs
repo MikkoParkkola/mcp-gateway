@@ -190,6 +190,9 @@ pub enum ShadowAuthExposure {
     LocalHttpNoAuthMetadata,
     /// Non-loopback HTTP endpoint with no auth metadata visible in passive scan.
     NetworkHttpNoAuthMetadata,
+    /// HTTP endpoint whose client config sends an auth header, judged by key
+    /// name only. A passive scan cannot verify the server enforces it.
+    HttpAuthHeader,
     /// Transport cannot be classified.
     Unknown,
 }
@@ -523,6 +526,26 @@ impl ShadowTransport {
 }
 
 impl ShadowAuthExposure {
+    /// The transport's exposure, unless an HTTP server is sent an auth header,
+    /// including one whose value only the client resolves. Only header names
+    /// are read: values are secrets (MIK-7716).
+    fn from_server(server: &DiscoveredServer) -> Self {
+        let exposure = Self::from_transport(&server.transport);
+        let http = matches!(
+            exposure,
+            Self::LocalHttpNoAuthMetadata | Self::NetworkHttpNoAuthMetadata
+        );
+        let mut names = server
+            .headers
+            .keys()
+            .chain(server.unresolved_header_names.iter().map(String::as_str));
+        if http && names.any(is_auth_header) {
+            Self::HttpAuthHeader
+        } else {
+            exposure
+        }
+    }
+
     fn from_transport(transport: &TransportConfig) -> Self {
         match transport {
             TransportConfig::Stdio { .. } => Self::StdioProcess,
@@ -634,3 +657,10 @@ impl ShadowControlPlaneAsset {
 
 #[cfg(test)]
 mod tests;
+
+/// Header names that carry a client credential, compared case-insensitively.
+fn is_auth_header(name: &str) -> bool {
+    ["authorization", "proxy-authorization", "x-api-key"]
+        .iter()
+        .any(|known| name.eq_ignore_ascii_case(known))
+}
