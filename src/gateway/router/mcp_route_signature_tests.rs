@@ -234,6 +234,8 @@ fn only_a_declared_outbound_reply_passes() {
         ),
         ("async fn h(s: State) -> OutboundReplyRaw", false),
         ("async fn h(f: fn() -> OutboundReply) -> Response", false),
+        // The last arrow, not the first: a parameter's arrow comes earlier.
+        ("async fn h(f: fn() -> Response) -> OutboundReply", true),
         ("async fn h(s: State)", false),
     ] {
         let passes = matches!(
