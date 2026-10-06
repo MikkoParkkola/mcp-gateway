@@ -121,6 +121,11 @@ pub(crate) async fn start_reporting(
     transport: &Arc<StdioTransport>,
 ) -> (crate::Result<()>, Repair) {
     // Held from the first spawn to the end of any retry: see `repair_lock`.
+    // The cache is per backend (its name is hashed into the path), so only
+    // other starts of this same backend wait. The wait is bounded: each
+    // `initialize` request is capped by the backend's request timeout T, so a
+    // failed attempt, the removal and a failed retry hold it for about
+    // 4T + 4s + the time to delete the tree.
     let lock = transport.assigned_package_cache_dir().map(repair_lock);
     let _starting = match &lock {
         Some(lock) => Some(lock.lock().await),
