@@ -141,29 +141,38 @@ pub fn validate_capability(capability: &CapabilityDefinition) -> Result<()> {
     Ok(())
 }
 
-/// A capability that injects a credential may not name a cleartext URL off
-/// this machine: the backend guard's rule, on the same loopback classifier.
-/// A URL that does not parse yet (a `{placeholder}` base) is left to the
-/// send-time check, which sees the URL the caller filled.
+/// A capability that injects a credential, or whose header, query or body
+/// template fills in a gateway secret (MIK-7958), may not name a cleartext
+/// URL off this machine: the backend guard's rule, on the same loopback
+/// classifier. A URL that does not parse yet (a `{placeholder}` base) is left
+/// to the send-time check, which sees the URL the caller filled.
 fn validate_credential_transport(capability: &CapabilityDefinition) -> Result<()> {
-    if !capability.auth.required {
-        return Ok(());
-    }
     let providers = &capability.providers;
     let named = providers.named.iter().map(|(name, p)| (name.clone(), p));
     let fallback =
         (providers.fallback.iter().enumerate()).map(|(i, p)| (format!("fallback[{i}]"), p));
     for (name, provider) in named.chain(fallback) {
         let config = &provider.config;
+        let secret_field = super::secret_templates(config)
+            .into_iter()
+            .find(|(_, template)| crate::secrets::names_secret(template))
+            .map(|(field, _)| field);
+        if !capability.auth.required && secret_field.is_none() {
+            continue;
+        }
         let (field, url) = if config.uses_endpoint() {
             ("endpoint", &config.endpoint)
         } else {
             ("base_url", &config.base_url)
         };
         if url::Url::parse(url).is_ok_and(|u| !crate::gateway::is_tls_or_loopback(&u)) {
+            let sends = secret_field.map_or_else(
+                || "the capability sends a credential".to_string(),
+                |secret| format!("providers.{name}.config.{secret} fills in a secret"),
+            );
             return Err(Error::Config(format!(
                 "Capability '{}': providers.{name}.config.{field} is cleartext http:// to a \
-                 host off this machine, and the capability sends a credential; use https:// \
+                 host off this machine, and {sends}; use https:// \
                  (http:// is allowed only on a loopback host)",
                 capability.name
             )));

@@ -105,7 +105,7 @@ fn chained_gateway(
     let backend = crate::config::BackendConfig {
         transport: crate::config::TransportConfig::Http {
             http_url: "http://127.0.0.1:9/mcp".to_owned(),
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         signature_chain: mode,

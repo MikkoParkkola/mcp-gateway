@@ -731,3 +731,67 @@ async fn a_call_that_read_the_pre_edit_definition_is_refused_after_reload() {
     let fresh = ctx_with_generation(executor.mcp_generation("mcp_probe"));
     call(&executor, &fresh_def, say, &fresh).await.unwrap();
 }
+
+/// MIK-7925: a reload that edits an mcp capability stops its children at once,
+/// without another call, as `register_capability` does; a reload that leaves
+/// it unchanged keeps them.
+#[tokio::test]
+async fn reload_stops_an_edited_capabilitys_children_and_keeps_an_unchanged_ones() {
+    use crate::capability::CapabilityBackend;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let file = dir.path().join("probe.yaml");
+    std::fs::write(&file, capability_yaml()).unwrap();
+    let executor = std::sync::Arc::new(CapabilityExecutor::new());
+    let backend = CapabilityBackend::new("t", std::sync::Arc::clone(&executor));
+    backend
+        .load_from_directory(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+    let def = backend.get("mcp_probe").unwrap();
+    let ctx = ctx_with_generation(executor.mcp_generation("mcp_probe"));
+    let out = call(
+        &executor,
+        &def,
+        json!({"operation": "say", "text": "x"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    let pid = out["pid"].as_i64().expect("echo reports its pid");
+
+    backend.reload().await.unwrap();
+    assert_eq!(
+        executor.mcp_children.len(),
+        1,
+        "an unchanged reload keeps it"
+    );
+
+    std::fs::write(
+        &file,
+        capability_yaml().replace("MCP probe.", "MCP probe, edited."),
+    )
+    .unwrap();
+    backend.reload().await.unwrap();
+    assert_eq!(executor.mcp_children.len(), 0, "the edit stops it at once");
+
+    #[cfg(unix)]
+    {
+        let pid = pid.to_string();
+        let mut alive = true;
+        for _ in 0..50 {
+            let status = std::process::Command::new("kill")
+                .args(["-0", &pid])
+                .status()
+                .unwrap();
+            if !status.success() {
+                alive = false;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(!alive, "superseded child {pid} still running after 5 s");
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
+}

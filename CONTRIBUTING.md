@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-- **Rust 1.88+** (edition 2024): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- **Rust 1.95+** (edition 2024): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 - **Node.js** (only for testing stdio backends that use `npx`)
 
 ### Build and Test

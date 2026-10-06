@@ -114,7 +114,7 @@ async fn stdio(signing: Signing) -> Stdio {
         BackendConfig {
             transport: TransportConfig::Http {
                 http_url: url,
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             enabled: true,

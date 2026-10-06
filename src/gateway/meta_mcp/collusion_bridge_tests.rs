@@ -76,7 +76,7 @@ fn meta_asking(
     let config = BackendConfig {
         transport: TransportConfig::Http {
             http_url: "https://asks.internal/mcp".to_string(),
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,

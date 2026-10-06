@@ -375,7 +375,7 @@ fn register_http_backend_with_url(
         BackendConfig {
             transport: TransportConfig::Http {
                 http_url,
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             enabled: true,

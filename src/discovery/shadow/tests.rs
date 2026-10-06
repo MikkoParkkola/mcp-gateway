@@ -49,7 +49,7 @@ fn http_server(
         source,
         TransportConfig::Http {
             http_url: url.to_string(),
-            streamable_http: false,
+            streamable_http: Some(false),
             protocol_version: None,
         },
         ServerMetadata {
@@ -374,7 +374,7 @@ fn a_bracketed_ipv6_loopback_literal_is_loopback() {
 fn a_dns_name_beginning_127_is_reported_network_exposed() {
     let transport = TransportConfig::Http {
         http_url: "http://127.attacker.example.com/mcp".to_string(),
-        streamable_http: false,
+        streamable_http: Some(false),
         protocol_version: None,
     };
 
@@ -404,5 +404,143 @@ fn executable_name_keeps_raw_process_text_literal() {
     assert_eq!(
         executable_name("/usr/bin/it's-srv --port 1").as_deref(),
         Some("it's-srv")
+    );
+}
+
+/// MIK-7716: a remote server whose client config sends an auth header is not
+/// reported or quarantined as unauthenticated. The header is judged by key
+/// name only; its value never reaches the report.
+#[test]
+fn an_auth_header_key_is_not_reported_as_unauthenticated() {
+    for key in ["Authorization", "proxy-authorization", "X-Api-Key"] {
+        let mut server = http_server(
+            "remote-authed",
+            "Remote server with a credential",
+            "https://mcp.remote.internal/mcp",
+            DiscoverySource::McpConfig,
+            None,
+            None,
+        );
+        server.headers = [(key.to_string(), "Bearer SENTINEL_7716".to_string())]
+            .into_iter()
+            .collect();
+        let report = report(&[server], &[]);
+        let asset = &report.assets[0];
+
+        assert_ne!(
+            asset.auth_exposure,
+            ShadowAuthExposure::NetworkHttpNoAuthMetadata,
+            "{key}"
+        );
+        assert_ne!(
+            asset.remediation.action,
+            ShadowRemediationAction::Quarantine,
+            "{key}"
+        );
+        assert_eq!(report.summary.network_exposed_total, 0, "{key}");
+        let serialized = serde_json::to_string(&report).unwrap();
+        assert!(!serialized.contains("SENTINEL_7716"), "{serialized}");
+        assert!(
+            !serialized.contains("unauthenticated_http_endpoint"),
+            "{serialized}"
+        );
+    }
+}
+
+/// MIK-7716: a header whose value is a client-only variable (`${input:token}`)
+/// is dropped from adoption, but its name still marks the server as sending an
+/// auth header. A non-auth header changes nothing.
+#[test]
+fn a_client_resolved_auth_header_still_counts() {
+    let entry = |name: &str, headers: Value| {
+        crate::discovery::client_entry::parse(
+            name,
+            &serde_json::json!({ "url": "https://mcp.remote.internal/mcp", "headers": headers }),
+            &DiscoverySource::VsCode,
+            Path::new("mcp.json"),
+        )
+        .expect("an HTTP entry parses")
+    };
+    let report = report(
+        &[
+            entry(
+                "weather",
+                serde_json::json!({ "AUTHORIZATION": "Bearer ${input:token}" }),
+            ),
+            entry("maps", serde_json::json!({ "X-Trace": "${input:trace}" })),
+        ],
+        &[],
+    );
+    let asset = |name: &str| {
+        report
+            .assets
+            .iter()
+            .find(|asset| asset.name == name)
+            .expect("asset reported")
+    };
+
+    let authed = asset("weather");
+    assert_eq!(authed.auth_exposure, ShadowAuthExposure::HttpAuthHeader);
+    assert_eq!(authed.severity, ShadowRiskSeverity::Medium);
+    // The public shadow_radar.v1 spelling.
+    assert_eq!(
+        serde_json::to_value(authed).unwrap()["auth_exposure"],
+        "http_auth_header"
+    );
+    for code in ["http_auth_header_configured", "server_auth_unverified"] {
+        assert!(authed.risk_reasons.iter().any(|r| r == code), "{code}");
+        let risk = authed.risks.iter().find(|risk| risk.code == code);
+        // Its own detail, not the catch-all.
+        assert!(
+            risk.is_some_and(|risk| !risk.detail.starts_with("Unmanaged MCP asset")),
+            "{code}"
+        );
+    }
+    assert_eq!(
+        asset("maps").auth_exposure,
+        ShadowAuthExposure::NetworkHttpNoAuthMetadata
+    );
+}
+
+/// MIK-7716: adopting a server would drop a header only the client can
+/// resolve, so the scan asks the owner instead of offering an apply command.
+#[test]
+fn a_dropped_header_is_not_proposed_for_adoption() {
+    let server = crate::discovery::client_entry::parse(
+        "weather",
+        &serde_json::json!({
+            "url": "https://mcp.remote.internal/mcp",
+            "headers": { "Authorization": "Bearer ${input:token}" },
+        }),
+        &DiscoverySource::VsCode,
+        Path::new("mcp.json"),
+    )
+    .expect("an HTTP entry parses");
+    let report = report(&[server], &[]);
+    let remediation = &report.assets[0].remediation;
+
+    assert_eq!(remediation.action, ShadowRemediationAction::RequestOwner);
+    assert!(remediation.apply_command.is_none());
+}
+
+/// MIK-7716: a header whose value is not a string sends nothing, so it is no
+/// auth signal.
+#[test]
+fn a_non_string_auth_header_is_no_auth_signal() {
+    let server = crate::discovery::client_entry::parse(
+        "weather",
+        &serde_json::json!({
+            "url": "https://mcp.remote.internal/mcp",
+            "headers": { "Authorization": null },
+        }),
+        &DiscoverySource::VsCode,
+        Path::new("mcp.json"),
+    )
+    .expect("an HTTP entry parses");
+    let report = report(&[server], &[]);
+
+    assert_eq!(
+        report.assets[0].auth_exposure,
+        ShadowAuthExposure::NetworkHttpNoAuthMetadata
     );
 }
