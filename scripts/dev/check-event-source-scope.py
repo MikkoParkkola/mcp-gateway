@@ -12,7 +12,12 @@ add files under `src/events/` and add bare module declarations in
 `src/events/mod.rs` for the modules it adds (the registry line). Any other
 edit under `src/events/` is a core change and fails. A source impl in test
 code (`*_tests.rs`, `tests/`) or a comment does not count as adding one.
-An impl a macro generates is not seen. A change that adds no source is not judged: core fixes land through
+An impl a macro generates is not seen, nor one that replaces a same-named
+impl in another inline module, and comments are stripped without a Rust
+lexer (strings and nested comments can mislead it): this is a tripwire for
+an honest source PR, and reviewers still read every diff. It errs towards
+failing: an inline test mock, a respelled path or a dropped alias can make a
+core refactor look like a new source. A change that adds no source is not judged: core fixes land through
 their own review.
 
 Usage: check-event-source-scope.py [BASE]   (default: origin/docs/ranking-1-release-line)
