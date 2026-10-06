@@ -682,6 +682,7 @@ fn scan_direct_tools_list_response(
         caller,
         external_server: backend_name,
         external_tool: "tools/list",
+        subject: None,
     };
     let _ = super::response_pass::inspect_tools_call_response(
         state.firewall.as_deref(),
