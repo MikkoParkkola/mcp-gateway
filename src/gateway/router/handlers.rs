@@ -1775,7 +1775,11 @@ async fn meta_mcp_dispatch(
                 );
                 // A redaction changed the delivery: its receipt is rebuilt from what goes out.
                 let delivered = call_response.result.as_ref();
-                state.meta_mcp.restage_if_changed(snapshot, delivered);
+                let shape =
+                    crate::gateway::meta_mcp::invoke::relay::AnswerShape::of(&external_tool);
+                state
+                    .meta_mcp
+                    .restage_if_changed(snapshot, delivered, shape);
             }
 
             call_response
@@ -1976,11 +1980,7 @@ async fn meta_mcp_dispatch(
         } else {
             GatewayStamps::Legacy
         };
-        let shape = if external_tool == "gateway_invoke" {
-            AnswerShape::InvokeWrapped
-        } else {
-            AnswerShape::Literal
-        };
+        let shape = AnswerShape::of(&external_tool);
         state
             .meta_mcp
             .rebuild_receipt_from_final(response.result.as_ref(), stamps, shape);
