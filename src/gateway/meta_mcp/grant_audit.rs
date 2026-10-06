@@ -471,6 +471,9 @@ pub(crate) async fn slot_rpc<'a, X: Send + 'a>(
     }
 }
 
+/// Largest replaced answer `slot_http` reads to recover its request id.
+const ID_RECOVERY_LIMIT: usize = 16 * 1024 * 1024;
+
 /// An HTTP answer, replaced by a 503 carrying -32005 under the replaced
 /// answer's request id when the slot's write failed.
 pub(crate) async fn slot_http<'a, R: axum::response::IntoResponse + Send + 'a>(
@@ -493,7 +496,9 @@ pub(crate) async fn slot_http<'a, R: axum::response::IntoResponse + Send + 'a>(
     let (id, judged) = if let Some(id) = held {
         (id, Some(response))
     } else {
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await;
+        // Read only to recover the id, so bounded: an answer past the bound
+        // is refused with a null id instead of being buffered whole.
+        let body = axum::body::to_bytes(response.into_body(), ID_RECOVERY_LIMIT).await;
         let id = body
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
