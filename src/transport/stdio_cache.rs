@@ -3,6 +3,10 @@
 //! Per-backend package-manager cache directories for stdio children (#2258).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+
+/// The npm cache variable: the one cache the start-path repair may clear.
+pub(super) const CACHE_ENV: &str = "npm_config_cache";
 
 /// A per-backend package cache, so backends sharing a command cannot tear one
 /// tree. Each runner reads its own variable; `npm_config_cache` alone does
@@ -17,11 +21,7 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     if vars.is_empty() {
         return backend_env;
     }
-    let dir = crate::config_persistence::gateway_data_dir()
-        .join("pkg-cache")
-        .join(cache_component(backend_name))
-        .to_string_lossy()
-        .into_owned();
+    let dir = cache_dir(backend_name).to_string_lossy().into_owned();
     for var in vars {
         // An operator-set value wins.
         backend_env
@@ -29,6 +29,39 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
             .or_insert_with(|| dir.clone());
     }
     backend_env
+}
+
+/// The cache directory the gateway assigns to a backend, or `None` when it
+/// assigns none.
+///
+/// `None` means the value in the child's environment, if there is one, came
+/// from the operator: either this backend does not invoke npm, or its
+/// configuration already names a cache. That distinction is the whole point of
+/// returning the path rather than only writing it into the environment — the
+/// repair deletes what it is handed, and a directory the gateway did not create
+/// is not the gateway's to delete, however much a caller's `npm_config_cache`
+/// looks like one [#1759].
+///
+/// Only npm's cache is answered for: the repair was reviewed against npm's
+/// install failures, and the other runners' trees are left to their own tools.
+#[must_use]
+pub fn assigned_package_cache_dir<S: std::hash::BuildHasher>(
+    backend_name: &str,
+    command: &str,
+    backend_env: &HashMap<String, String, S>,
+) -> Option<PathBuf> {
+    if !cache_vars_for(command).contains(&CACHE_ENV) || backend_env.contains_key(CACHE_ENV) {
+        return None;
+    }
+    Some(cache_dir(backend_name))
+}
+
+/// One backend's cache directory: the single source of the path, so the one
+/// written into the environment and the one the repair compares against agree.
+fn cache_dir(backend_name: &str) -> PathBuf {
+    crate::config_persistence::gateway_data_dir()
+        .join("pkg-cache")
+        .join(cache_component(backend_name))
 }
 
 /// The variables a runner reads for its cache directory. pnpm keeps installs

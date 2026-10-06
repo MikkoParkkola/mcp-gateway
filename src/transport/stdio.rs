@@ -34,7 +34,7 @@ use crate::{Error, Result};
 
 #[path = "stdio_cache.rs"]
 mod cache;
-pub use cache::isolated_package_manager_env;
+pub use cache::{assigned_package_cache_dir, isolated_package_manager_env};
 
 #[path = "stdio_env.rs"]
 mod env;
@@ -79,6 +79,13 @@ pub struct StdioTransport {
     pub(crate) taps: super::upstream_tap::Taps,
     /// Longest frame the reader accepts; set before `start`.
     max_frame_bytes: AtomicUsize,
+    /// What a failed start said, kept only long enough to classify it (#1759).
+    failure: start_failure::FailureRecord,
+    /// The cache directory the gateway assigned this backend, or `None`.
+    ///
+    /// `Some` is the gateway's to clear; `None` says the value that reaches
+    /// the child, if any, came from the operator's own configuration.
+    assigned_cache: Option<std::path::PathBuf>,
 }
 
 impl StdioTransport {
@@ -95,22 +102,7 @@ impl StdioTransport {
         request_timeout: std::time::Duration,
         protocol_version: Option<String>,
     ) -> Arc<Self> {
-        Arc::new(Self {
-            child: Mutex::new(None),
-            pending: dashmap::DashMap::new(),
-            request_id: AtomicU64::new(1),
-            connected: AtomicBool::new(false),
-            command: command.to_string(),
-            env,
-            cwd,
-            request_timeout,
-            writer: Mutex::new(None),
-            protocol_version: RwLock::new(protocol_version),
-            progress_destinations: dashmap::DashMap::new(),
-            start: early_exit::StartState::default(),
-            taps: super::upstream_tap::Taps::default(),
-            max_frame_bytes: AtomicUsize::new(DEFAULT_MAX_FRAME_BYTES),
-        })
+        Self::new_with_assigned_cache(command, env, cwd, request_timeout, protocol_version, None)
     }
 
     /// Set the longest frame this transport accepts (clamped to the ceiling).
@@ -120,16 +112,21 @@ impl StdioTransport {
             .store(bytes.clamp(1, CEILING_MAX_FRAME_BYTES), Ordering::Relaxed);
     }
 
-    fn diagnostic_command(&self) -> String {
+    pub(crate) fn diagnostic_command(&self) -> String {
         crate::security::summarize_stdio_command(&self.command)
     }
 
-    /// Start the subprocess
+    /// Start the subprocess and complete the MCP handshake.
+    ///
+    /// A failure leaves the child's last stderr lines settled, so whoever
+    /// decides what to do about the failure can read what it said.
     ///
     /// # Errors
     ///
     /// Returns an error if the command cannot be spawned or MCP initialization fails.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
+        self.failure.begin();
+
         let parts = crate::transport::split_command(&self.command).ok_or_else(|| {
             Error::Config(format!(
                 "Invalid stdio command quoting: {}",
@@ -246,6 +243,7 @@ impl StdioTransport {
         });
 
         let stderr_tail = early_exit::spawn_stderr_tail(stderr, self.diagnostic_command());
+        self.failure.track(&stderr_tail.1);
 
         // Initialize with protocol version negotiation. If initialization
         // fails, tear down the spawned process now rather than waiting for the
@@ -254,11 +252,21 @@ impl StdioTransport {
         // child running until that handle happens to go away.
         // (Promptness only: the reader holds a `Weak`, so a drop would reap it.)
         if let Err(mut error) = self.initialize().await {
-            if self.start.exited_early() {
+            // Order matters on the late path: the exit status has to be read
+            // before `close` kills the child, and the stderr after, because the
+            // reader only reaches EOF once the child is gone.
+            let late_reader = if self.start.exited_early() {
                 error = self.early_exit_error(stderr_tail, &parts).await;
-            }
+                None
+            } else {
+                self.settle_child_exit().await;
+                Some(stderr_tail.0)
+            };
             if let Err(close_error) = self.close().await {
                 warn!(error = %close_error, "Failed to clean up stdio process after initialization error");
+            }
+            if let Some(reader) = late_reader {
+                Self::settle_stderr_tail(reader).await;
             }
             return Err(error);
         }
@@ -719,6 +727,8 @@ mod early_exit;
 mod listen;
 #[path = "stdio_progress.rs"]
 mod progress;
+#[path = "stdio_start_failure.rs"]
+mod start_failure;
 use progress::{progress_token_string, request_progress_token};
 
 #[cfg(test)]

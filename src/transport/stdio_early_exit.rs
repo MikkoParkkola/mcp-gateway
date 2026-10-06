@@ -346,6 +346,8 @@ impl StdioTransport {
             }
             None => None,
         };
+        // Kept for classifying the failure (#1759); the excerpt below is the log's.
+        self.failure.record_exit(status);
         let (reader, tail) = stderr_tail;
         let abort = reader.abort_handle();
         if tokio::time::timeout(DRAIN, reader).await.is_err() {
