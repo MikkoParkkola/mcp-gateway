@@ -143,6 +143,8 @@ mod tests {
             ("client_secret: 'k-7978-three'", "k-7978-three"),
             (r#"{"password":"alpha\"rest-7978"}"#, "rest-7978"),
             (r"TOKEN='a\'rest-7979'", "rest-7979"),
+            ("{'api_key': 'k-7978-four', 'port': 3}", "k-7978-four"),
+            ("ssh passphrase: k-7978-five", "k-7978-five"),
         ] {
             let out = one(line);
             assert!(!out.contains(secret), "{out}");
@@ -195,6 +197,49 @@ mod tests {
             "id x1234567890abcdefghijkl."
         );
         assert_eq!(one("id x1234567890abcdefghijklm."), "id [masked].");
+    }
+
+    #[test]
+    fn a_base64_key_body_is_masked_whole() {
+        // Letters and digits left once the masks are taken out.
+        let residue = |s: &str| {
+            s.replace(MASK, "")
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .count()
+        };
+        let body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcw+ggSjAgEAAoIB/AQC7k9x2Q==";
+        for line in [body.to_string(), format!("stderr: {body} end")] {
+            let out = one(&line);
+            assert!(out.contains(MASK), "{line} -> {out}");
+            assert_eq!(residue(&out), residue(&line.replace(body, "")), "{out}");
+        }
+        for path in [
+            "/usr/lib/node/modules/server/filesystem/dist/index",
+            "/usr/lib/python3/dist/packages/mcp/server/filesystem.py",
+        ] {
+            assert_eq!(one(path), path, "a path stays readable");
+        }
+    }
+
+    #[test]
+    fn a_block_body_without_base64_cues_is_masked() {
+        let body = "MIIEvQIBADANBg/kqhkiG9w0BAQEFAASCBKcwggSjAgEA/AoIBAQC7k9x2Q";
+        let out = shown(&[
+            b"-----BEGIN EXAMPLE BLOCK-----",
+            body.as_bytes(),
+            b"-----END EXAMPLE BLOCK-----",
+            b"after the block",
+        ]);
+        assert_eq!(
+            out,
+            [
+                "-----BEGIN EXAMPLE BLOCK-----",
+                MASK,
+                "-----END EXAMPLE BLOCK-----",
+                "after the block"
+            ]
+        );
     }
 
     #[test]
