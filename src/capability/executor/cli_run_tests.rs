@@ -658,6 +658,16 @@ fn a_four_character_number_form_credential_is_redacted() {
     assert_eq!(value["n"], "[redacted]", "{value}");
 }
 
+/// "00.5" loses all of its leading zeros to the trim; one zero goes back
+/// before the "." so it parses, and the child's 0.5 is redacted. The needle
+/// is not a substring of "0.5", so only the value comparison can find it.
+#[test]
+fn a_credential_of_only_zeros_before_its_point_is_redacted_as_a_number() {
+    let mut value: Value = serde_json::from_str(r#"{"n": 0.5}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["00.5".to_owned()]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+}
+
 /// The covered grammar, by construction rather than by example: an injected
 /// credential in JSON number form with at most one leading sign, crossed
 /// with leading zeros, integer, decimal and exponent forms, and magnitudes

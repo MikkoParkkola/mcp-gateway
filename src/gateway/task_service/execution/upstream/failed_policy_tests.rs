@@ -12,18 +12,22 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::super::{TaskExecutor, UpstreamAnswer, UpstreamHandle, UpstreamRecovery};
-use super::{RecoveredRead, UpstreamCapture};
+use super::{RecoveredRead, RecoveryRefusal, UpstreamCapture};
 use crate::backend::BackendRegistry;
+use crate::gateway::authz::HTTP_STATUS_DATA_KEY;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::upstream::RECOVERED_ERROR_WITHHELD;
 use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};
-use crate::gateway::task_service::{CreateOutcome, StoreLimits, Task, TaskOptions, TaskService};
+use crate::gateway::task_service::{
+    CommittedTask, CreateOutcome, ErrorAuthor, StoreLimits, Task, TaskOptions, TaskService,
+};
 use crate::idempotency::admission::{ExecutionAdmission, Mode, Request};
 use crate::protocol::JsonRpcError;
 
 const OWNER: &str = "verified-owner";
 const BACKEND: &str = "peer";
 const TOOL: &str = "slow_echo";
+const SUBSTITUTE: &str = "the upstream task was cancelled";
 /// Matches the shipped CRITICAL `secret` rule the product's response
 /// inspection carries, so the reaction here is the configured policy's.
 const MARKER: &str = "ghp_abcdefghijklmnopqrstuvwxyz1234567890";
@@ -37,6 +41,8 @@ enum Reply {
     Completed,
     /// A completed result whose text carries the marker.
     CompletedSecret,
+    /// The job was cancelled: the gateway's own words stand in for the peer's.
+    Substituted,
 }
 
 struct StubPeer(Reply);
@@ -67,6 +73,13 @@ impl UpstreamRecovery for StubPeer {
                 "content": [{"type": "text", "text": format!("finished upstream with {MARKER}")}],
                 "isError": false,
             })),
+            // Only the transport's HTTP status in its data: the settlement
+            // strips it, so nothing of the data survives.
+            Reply::Substituted => UpstreamAnswer::Substituted(JsonRpcError {
+                code: -32603,
+                message: SUBSTITUTE.into(),
+                data: Some(json!({ HTTP_STATUS_DATA_KEY: 503 })),
+            }),
         }
     }
 }
@@ -163,6 +176,13 @@ async fn recover(reply: Reply) -> (Value, tempfile::TempDir) {
 
 /// [`recover`] against a caller-built gateway.
 async fn recover_with(reply: Reply, meta: MetaMcp) -> (Value, tempfile::TempDir) {
+    let (committed, directory) = recover_committed(reply, meta).await;
+    let wire = serde_json::to_value(committed.task.wire()).expect("the wire projection serializes");
+    (wire, directory)
+}
+
+/// [`recover_with`], returning the whole committed row.
+async fn recover_committed(reply: Reply, meta: MetaMcp) -> (CommittedTask, tempfile::TempDir) {
     let (service, executor, id, directory) = seed_capturable_task(reply).await;
     let meta = Arc::new(meta);
     let owner_digest = service
@@ -199,7 +219,6 @@ async fn recover_with(reply: Reply, meta: MetaMcp) -> (Value, tempfile::TempDir)
     let committed = service
         .get(OWNER, &id)
         .expect("the settled row is readable");
-    let wire = serde_json::to_value(committed.task.wire()).expect("the wire projection serializes");
     drop(executor);
     Arc::try_unwrap(service)
         .ok()
@@ -207,7 +226,7 @@ async fn recover_with(reply: Reply, meta: MetaMcp) -> (Value, tempfile::TempDir)
         .close()
         .await
         .expect("custody is released");
-    (wire, directory)
+    (committed, directory)
 }
 
 /// Every byte the store wrote, so "before disk" is asserted against disk.
@@ -344,4 +363,83 @@ async fn a_benign_recovered_result_passes_the_firewall() {
         Some("completed"),
         "{wire}"
     );
+}
+
+/// MIK-7887.RECEIPT.1: a cancelled upstream job settles failed with the
+/// gateway's substitute, recorded as the gateway's words and never served as
+/// the peer's error. The benign peer failure is the control: its author is the
+/// peer, so the author follows the answer and is not fixed.
+#[tokio::test]
+async fn a_recovered_substitute_settles_as_the_gateways_own_error() {
+    let meta = || {
+        let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        meta.enable_response_inspection_action_mode();
+        meta
+    };
+    let (substituted, _directory) = recover_committed(Reply::Substituted, meta()).await;
+    let wire =
+        serde_json::to_value(substituted.task.wire()).expect("the wire projection serializes");
+    assert_eq!(
+        wire.pointer("/status").and_then(Value::as_str),
+        Some("failed")
+    );
+    assert_eq!(
+        wire.pointer("/error/message").and_then(Value::as_str),
+        Some(SUBSTITUTE)
+    );
+    assert_eq!(
+        wire.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32603)
+    );
+    assert!(
+        wire.pointer("/error/data").is_none_or(Value::is_null),
+        "the transport's HTTP status is stripped before the row settles: {wire}"
+    );
+    // Only the peer's authorship is recorded; absent is the gateway's.
+    assert_eq!(substituted.error_author, None);
+    assert!(
+        substituted.backend_error().is_none(),
+        "a substitute is never handed out as the peer's error"
+    );
+
+    let (peer, _directory) = recover_committed(Reply::FailedBenign, meta()).await;
+    assert_eq!(peer.error_author, Some(ErrorAuthor::Peer));
+    assert!(peer.backend_error().is_some());
+}
+
+/// A store that closes between the revision re-read and the commit refuses
+/// the read as unavailable: it neither claims a settlement nor serves the row
+/// as retained.
+#[tokio::test]
+async fn a_recovery_whose_commit_fails_is_unavailable() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let (service, executor, id, _directory) = seed_capturable_task(Reply::Completed).await;
+    let owner_digest = service
+        .owner(OWNER)
+        .expect("admission hashes the fixture principal")
+        .as_digest()
+        .to_owned();
+    let settled = Arc::new(AtomicBool::new(false));
+    let (closing, reached) = (Arc::clone(&service), Arc::clone(&settled));
+    let outcome = executor
+        .recover_upstream_read(
+            &owner_digest,
+            &id,
+            true,
+            |result: Value| -> Result<Value, JsonRpcError> { Ok(result) },
+            |error: JsonRpcError| (error, ErrorAuthor::Peer),
+            move |event, _notes| async move {
+                reached.store(true, Ordering::SeqCst);
+                closing.shutdown().await.expect("the store closes");
+                (event, true)
+            },
+            Duration::from_secs(5),
+        )
+        .await;
+    assert!(
+        settled.load(Ordering::SeqCst),
+        "the refusal must come from the commit, after settlement was recorded"
+    );
+    assert_eq!(outcome, Err(RecoveryRefusal::Unavailable));
 }
