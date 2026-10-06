@@ -373,6 +373,7 @@ pub(super) fn caller_key(
 /// bucket is stricter than that, and on an auth-off gateway every caller is
 /// the same operator anyway. It cannot collide with a caller key (`subject:`,
 /// `credential:`) or a session id (`gw-`).
+#[cfg(feature = "firewall")]
 pub(super) const AUTH_DISABLED_SESSION_LESS_CALLER: &str = "local:auth-disabled:session-less:v1";
 
 /// The key the per-caller controls score on: the caller key; else, with no
@@ -380,6 +381,7 @@ pub(super) const AUTH_DISABLED_SESSION_LESS_CALLER: &str = "local:auth-disabled:
 /// authentication is on; else, for an auth-off legacy request on a session
 /// minted just now, [`AUTH_DISABLED_SESSION_LESS_CALLER`]. A modern request
 /// has no session (`session_id` empty) and stays empty: refused unattributed.
+#[cfg(feature = "firewall")]
 pub(super) fn control_identity(
     caller_key: String,
     session_id: &str,
@@ -417,6 +419,10 @@ fn trimmed_non_empty(value: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "identity_header_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "identity_control_tests.rs"]
+mod control_tests;
 
 #[cfg(test)]
 #[path = "identity_cf_edge_tests.rs"]
