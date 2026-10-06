@@ -207,8 +207,11 @@ fn a_truncated_double_encoded_document_is_uninspected() {
     ] {
         assert!(g.response_uninspected(&text_block(cut)), "{cut}");
     }
-    // An unclosed quote around prose is read as far as it goes: inspected.
-    assert!(!g.response_uninspected(&text_block("\"just a cut string")));
+    // An unclosed quote around prose is read as far as it goes, even when
+    // the cut splits an escape: inspected.
+    for prose in ["\"just a cut string", "\"just a cut string\\u00"] {
+        assert!(!g.response_uninspected(&text_block(prose)), "{prose}");
+    }
 }
 
 /// Review (gap 3): a byte-order mark before JSON does not hide it.

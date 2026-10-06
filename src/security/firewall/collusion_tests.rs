@@ -647,3 +647,37 @@ fn stale_copy_and_future_redelivery_do_not_excuse() {
     d.record_delivery_at(T, B, false, &s, now);
     assert!(d.check_egress_at(B, U, &s, now).is_none());
 }
+
+/// MIK-7881.RELAY.1: thinning B's copies never drops the one held at the
+/// egress. Copies at 0, 4, 8 and 12 minutes: at 11 minutes only the 8-minute
+/// copy is in the window and before the egress, so it must survive.
+#[test]
+fn thinned_copies_keep_the_one_held_at_the_egress() {
+    let d = detector();
+    let start = Instant::now();
+    let min = Duration::from_secs(60);
+    let s = secret();
+    for m in [0, 4, 8, 12] {
+        d.record_delivery_at(T, B, false, &s, start + min * m);
+    }
+    let now = start + min * 11;
+    d.record_delivery_at(T, A, true, &s, now);
+    assert!(d.check_egress_at(B, U, &s, now).is_none());
+}
+
+/// MIK-7881.RELAY.1: past the copy cap the oldest copy goes, not the newest.
+/// Copies at 0, 6, 12 and 18 minutes: at 23 minutes only the 18-minute copy
+/// is in the window.
+#[test]
+fn the_copy_cap_drops_the_oldest() {
+    let d = detector();
+    let start = Instant::now();
+    let min = Duration::from_secs(60);
+    let s = secret();
+    for m in [0, 6, 12, 18] {
+        d.record_delivery_at(T, B, false, &s, start + min * m);
+    }
+    let now = start + min * 23;
+    d.record_delivery_at(T, A, true, &s, now);
+    assert!(d.check_egress_at(B, U, &s, now).is_none());
+}
