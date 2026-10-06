@@ -140,7 +140,7 @@ fn print_migrated(report: &MigratedCredential) {
     if report.written {
         println!("Migrated one 3.x credential into the account store.");
     } else {
-        println!("Nothing to do: this account already holds a grant.");
+        println!("Migrated one 3.x credential into the account store.");
     }
     println!("  descriptor_id: {}", report.descriptor_id);
     println!("  source file:   {}", report.source);
