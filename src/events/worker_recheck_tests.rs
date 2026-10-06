@@ -185,7 +185,6 @@ async fn silent_backend(hub: &Arc<EventsHub>) -> Arc<AtomicUsize> {
 /// The baseline is one direct authorize against the same kind of backend.
 #[tokio::test]
 async fn an_attempt_waits_on_a_silent_catalogue_once() {
-    use crate::events::EventSource as _;
     const NAME: &str = "backend.b.resource_updated";
     let uri = serde_json::json!({"uri": "file:///a"});
 
