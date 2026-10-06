@@ -1,0 +1,114 @@
+name: Perf CPU per call
+
+# Throwaway branch only (never merged). Gateway CPU per tools/call for
+# MIK-7917, three arms paired on one hosted VM: P = parent of the B14 work,
+# T0 = this commit's parent (B14 head without the request-label change),
+# T1 = B14 head. T0-T1 is item 1; P-T0 is the rest of B14 (item 2, plus
+# 7916 and 7663, assumed off the unlogged tools/call path). Bar (lead
+# 2026-10-06): a saving >= 1 us/call whose 95% median interval excludes 0.
+# Latency is not measured here; the workload harness is the no-regression check.
+on:
+  push:
+    branches: ["throwaway/perf-cpu-*"]
+
+permissions:
+  contents: read
+
+env:
+  REF_P: 1f13e90f84384f6cae71b5336d06b3c019e98bf5
+  REF_T1: 82d5d378fc9749f9128250927f9bfc9ba2029603
+  FEATURES: a2a,webui,config-export,cost-governance,firewall,discovery,semantic-search,tool-profiles,metrics
+  REPS: "12"
+  WARMUP: "2000"
+  CALLS: "48000"
+  # Under the workload config's 500/s rate limit, so no call is refused.
+  RATE: "400"
+  PORT: "39420"
+
+jobs:
+  cpu:
+    name: CPU per call
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    steps:
+      - name: Reserve the port
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo sysctl -w net.ipv4.ip_local_reserved_ports="$PORT"
+          mkdir -p "$RUNNER_TEMP/out"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.98.0
+      - name: Build arms
+        shell: bash
+        run: |
+          set -euo pipefail
+          T0="$(git rev-parse HEAD^)"
+          # T0 must differ from T1 by the request-label change alone.
+          git diff --stat "$T0" "$REF_T1" | tee "$RUNNER_TEMP/out/t0-t1.diff"
+          changed="$(git diff --name-only "$T0" "$REF_T1" | tr '\n' ' ')"
+          [[ "$changed" == "src/protocol_revision_telemetry.rs src/protocol_revision_telemetry_metrics_tests.rs " ]] \
+            || { echo "VOID: T0 differs from T1 by more than item 1: $changed"; exit 3; }
+          for arm in "P:$REF_P" "T0:$T0" "T1:$REF_T1"; do
+            name="${arm%%:*}"; sha="${arm#*:}"; dir="$RUNNER_TEMP/arms/$name"
+            git worktree add --detach "$dir" "$sha" > /dev/null
+            ( cd "$dir" && cargo build --release --locked --features "$FEATURES" )
+            echo "$name $(git -C "$dir" rev-parse HEAD)" | tee -a "$RUNNER_TEMP/out/arms.txt"
+          done
+          { echo "nproc $(nproc)"; uname -m; echo "loadavg $(cat /proc/loadavg)"; } > "$RUNNER_TEMP/out/host.txt"
+      - name: Measure
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/out"; config="$RUNNER_TEMP/gateway.workload.yaml"
+          fixture="$PWD/benchmarks/workload/mcp_backend.py"
+          # shellcheck disable=SC2016 # the placeholder is literal, as the harness renders it
+          python3 -c 'import sys; t=open(sys.argv[1]).read(); assert "${WORKLOAD_FIXTURE}" in t; open(sys.argv[2],"w").write(t.replace("${WORKLOAD_FIXTURE}", sys.argv[3]))' \
+            benchmarks/workload/gateway.workload.yaml "$config" "$fixture"
+          # 4.0 refuses a config other users can read (UPGRADING-4.0 §35).
+          chmod 600 "$config"
+          # Load1 below 1.0 before the first rep: the builds just pegged every core.
+          for _ in $(seq 120); do awk '{exit !($1 < 1.0)}' /proc/loadavg && break; sleep 5; done
+          echo "idle_load1 $(cut -d' ' -f1 /proc/loadavg)" >> "$out/host.txt"
+          # Each of the six arm orders twice: no arm keeps a slot or a neighbour.
+          orders=("P T0 T1" "P T1 T0" "T0 P T1" "T0 T1 P" "T1 P T0" "T1 T0 P")
+          port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; }
+          for rep in $(seq 1 "$REPS"); do
+            for arm in ${orders[$(( (rep - 1) % 6 ))]}; do
+              held="$(ss -Htan "( sport = :$PORT )")"
+              [[ -z "$held" ]] || { echo "$held"; echo "VOID: port held before rep$rep-$arm"; exit 3; }
+              home="$RUNNER_TEMP/home-$rep-$arm"; mkdir -p "$home"
+              HOME="$home" RUST_LOG=error WORKLOAD_FIXTURE="$fixture" \
+                "$RUNNER_TEMP/arms/$arm/target/release/mcp-gateway" --config "$config" --port "$PORT" \
+                > "$out/rep$rep-$arm.stdout" 2> "$out/rep$rep-$arm.stderr" &
+              pid=$!
+              for _ in $(seq 150); do
+                curl -fsS "http://127.0.0.1:$PORT/health" > /dev/null 2>&1 && break
+                kill -0 "$pid" 2>/dev/null || { echo "VOID: rep$rep-$arm exited during startup"; exit 3; }
+                sleep 0.2
+              done
+              curl -fsS "http://127.0.0.1:$PORT/health" > /dev/null || { echo "VOID: rep$rep-$arm never healthy"; exit 3; }
+              python3 benchmarks/workload/cpu_per_call.py measure "$PORT" "$pid" "$WARMUP" "$CALLS" "$RATE" "$out/rep$rep-$arm.json"
+              kill "$pid" || true; wait "$pid" 2>/dev/null || true
+              for _ in $(seq 100); do port_open || break; sleep 0.2; done
+            done
+          done
+      - name: Score
+        shell: bash
+        run: python3 benchmarks/workload/cpu_per_call.py summarize "$RUNNER_TEMP/out" | tee "$RUNNER_TEMP/out/summary.json"
+      - name: Socket table on failure
+        if: failure()
+        shell: bash
+        run: ss -tanp > "$RUNNER_TEMP/out/ss-on-failure.txt" 2>&1 || true
+      - name: Upload the run
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-cpu-${{ github.run_id }}
+          path: ${{ runner.temp }}/out/
+          retention-days: 30
