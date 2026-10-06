@@ -113,14 +113,15 @@ async fn a_redacted_task_plan_keeps_each_steps_delivered_text() {
         "step B was stored unchanged and kept its receipt: {relayed_b}"
     );
     let relayed_a = relay_until_refused(&state, 200, PROSE).await;
-    assert_eq!(
-        relayed_a["error"]["code"], -32002,
-        "step A's unredacted text kept its receipt: {relayed_a}"
-    );
 
+    // Read only after both relays: a read could renew a receipt.
     let settled = poll_until_terminal(&state, "key-a", &task).await;
     assert_eq!(status_of(&settled), "completed", "base: {settled}");
     let stored = settled["result"]["result"].to_string();
+    assert_eq!(
+        relayed_a["error"]["code"], -32002,
+        "step A's unredacted text kept its receipt: {relayed_a}; stored: {stored}"
+    );
     assert!(
         stored.contains("harbour committee") && !stored.contains(CANARY),
         "base: settlement redacted the canary and kept both steps: {stored}"
