@@ -195,7 +195,9 @@ fn served(port: u16, read_only: bool) -> Arc<crate::capability::CapabilityBacken
 /// read-only catalogue entry, but the definition the executor runs is not
 /// read-only (a reload in between), so the poll is refused before any
 /// request. The control polls the same route and arrives, so the refusal is
-/// the read-only call's, carried across the whole dispatch.
+/// the read-only call's, carried across the whole dispatch. The endpoint's
+/// count pins "before any request": a guard that called and then refused
+/// would pass the result check alone.
 #[tokio::test]
 async fn a_poll_runs_only_what_the_executor_finds_read_only() {
     use crate::events::watch_source::{Charge, CredentialUse, Target};
@@ -207,7 +209,8 @@ async fn a_poll_runs_only_what_the_executor_finds_read_only() {
         credential: CredentialUse::Free,
         input_schema: json!({}),
     };
-    for (read_only, arrives) in [(true, true), (false, false)] {
+    // The endpoint is shared, so `hits` counts every request so far.
+    for (read_only, arrives, hits) in [(true, true, 1), (false, false, 1)] {
         let fx = fixture(Answer::Ok, |_| {}).await;
         fx.state
             .meta_mcp
@@ -227,5 +230,6 @@ async fn a_poll_runs_only_what_the_executor_finds_read_only() {
         )
         .await;
         assert_eq!(polled.is_ok(), arrives, "read_only {read_only}: {polled:?}");
+        assert_eq!(endpoint.arrivals(), hits, "read_only {read_only}: requests");
     }
 }

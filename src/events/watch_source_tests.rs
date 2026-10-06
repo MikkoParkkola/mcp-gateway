@@ -381,6 +381,29 @@ async fn watch_stops_when_its_capability_changes_credential_class() {
     assert!(hub.store.subscriptions().is_empty(), "withdrawn");
 }
 
+/// A poller that withdraws its type retires its key before it lets go of the
+/// lifecycle lock: a subscribe in that gap (the capability watchable again)
+/// starts a fresh poller instead of joining a key with nothing polling.
+#[tokio::test]
+async fn a_withdrawing_poller_retires_its_key_under_the_lock() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    let name = "watch.weather.changed";
+    admit(&hub, "p", name, &json!({}));
+    let poller = run(&hub, &host, "p", name, &json!({}));
+    let started = (SourceKind::RestWatch, poller.key.clone());
+    hub.lifecycle.lock().await.insert(started.clone());
+    *host.targets.lock() = vec![target("weather", false, CredentialUse::Free)];
+    let mut last = None;
+    assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
+    // Read before the background reconcile can run: what a subscribe taking
+    // the lock next would find.
+    let gap = hub.lifecycle.try_lock().expect("the lock is free");
+    assert!(!gap.contains(&started), "the key is no longer started");
+    assert!(poller.stop.load(Ordering::Acquire), "marked stopped");
+}
+
 /// A reclassification read once is confirmed under the lifecycle lock before
 /// anything is withdrawn: a capability that is watchable again by then keeps
 /// its subscriptions, including one admitted after the flip back.
