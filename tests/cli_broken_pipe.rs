@@ -134,6 +134,13 @@ fn library_printed_output_exits_as_with_a_reader() {
             .output()
             .expect("run mcp-gateway");
         assert!(!read.stdout.is_empty(), "{args:?} printed nothing");
+        // A clean exit with a reader, so an exit without one that fails
+        // (a broken pipe reported as an error) cannot hide behind it.
+        assert!(
+            read.status.success(),
+            "{args:?} must succeed with a reader; pick a fixture that does: {:?}",
+            read.status
+        );
         let (status, stderr) = run_with_reader_gone(args);
         assert!(
             !stderr.contains("panicked") && !stderr.contains("Broken pipe"),
