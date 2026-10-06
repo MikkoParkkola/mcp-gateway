@@ -435,9 +435,12 @@ fn open_journal_windows(journal: &Path) -> std::io::Result<std::fs::File> {
         return Ok(file);
     }
     let shown = journal.display().to_string();
+    // The check comes first: a repair run before it would make an untrusted
+    // journal look trusted to the next reader (MIK-7881).
     Err(std::io::Error::other(format!(
-        "Refusing to append to the grant journal {shown}{}Check its entries against \
-         the grant file or restore a trusted copy first.\n",
+        "Refusing to append to the grant journal {shown}. Check its entries against \
+         the grant file, or restore a trusted copy, before running any repair below.\n\
+         Refused{}",
         refusal_detail(&shown, &found, Protects::Integrity)
     )))
 }

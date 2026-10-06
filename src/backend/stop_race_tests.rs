@@ -54,7 +54,7 @@ async fn a_start_overtaken_by_stop_refuses_as_not_found() {
         BackendConfig {
             transport: TransportConfig::Http {
                 http_url: upstream().await,
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             timeout: Duration::from_secs(10),

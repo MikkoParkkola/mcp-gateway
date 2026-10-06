@@ -1,13 +1,21 @@
 # Prometheus alert rules for mcp-gateway.
 #
-# Source of truth for the prose rationale: docs/DEPLOYMENT.md, section
-# "Alerting on a backend that would not stop". Keep this file and that
-# section in sync — this is the copy promtool actually validates.
+# Source of truth for the prose rationale: docs/DEPLOYMENT.md, sections
+# "Alerting on a backend that would not stop", "Alerting on caller slots" and
+# "Signing nonce telemetry and capacity alerting". Keep this file and those
+# sections in sync — this is the copy promtool actually validates.
+#
+# Every counter here is created at its first increment, already at 1, so a
+# rule on a single event pairs increase() with an `unless ... offset` branch
+# that fires for a series new in the window: increase() alone reads 0 there.
 groups:
   - name: mcp-gateway
     rules:
       - alert: McpBackendIdleStopCloseFailures
-        expr: increase(mcp_backend_idle_stop_close_failures[15m]) > 0
+        expr: >-
+          increase(mcp_backend_idle_stop_close_failures[15m]) > 0
+          or (mcp_backend_idle_stop_close_failures
+          unless mcp_backend_idle_stop_close_failures offset 15m) > 0
         labels:
           severity: warning
         annotations:
@@ -34,8 +42,32 @@ groups:
         expr: >-
           sum(increase(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}[5m]))
           > 0
+          or sum(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}
+          unless mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"} offset 5m)
+          > 0
         labels:
           severity: warning
           category: security
         annotations:
           summary: "Signing nonce admissions are being refused for capacity"
+
+      # Caller pool slots (MIK-7547). 53 is a recommended starting point: the
+      # shared slot plus about 80% of the 64 caller slots, held past the
+      # 5-minute idle reclaim. Tune it to your traffic.
+      - alert: McpBackendCallerSlotsNearCap
+        expr: mcp_backend_pool_slots >= 53
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backend {{ $labels.backend }} holds {{ $value }} of its 65 pool slots"
+
+      - alert: McpBackendCallerSlotsRefused
+        expr: >-
+          increase(mcp_backend_identity_slots_refused_total[15m]) > 0
+          or (mcp_backend_identity_slots_refused_total
+          unless mcp_backend_identity_slots_refused_total offset 15m) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backend {{ $labels.backend }} refused callers at its {{ $labels.limit }} slot limit"

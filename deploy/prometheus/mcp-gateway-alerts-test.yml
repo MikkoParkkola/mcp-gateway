@@ -227,3 +227,120 @@ tests:
       - eval_time: 13m
         alertname: McpSigningNonceCapacityRefusal
         exp_alerts: []
+
+  # ── First occurrence (MIK-7547 review) ─────────────────────────────────────
+  #
+  # The gateway creates each counter at its first increment, already at 1: the
+  # series is absent before it, never 0. The cases above start from 0, which
+  # hid that `increase()` alone reads 0 for such a series and never fires. Each
+  # case below starts the series absent (`_`), as a real scrape sees it.
+
+  # (l) The first idle-stop failure fires, then ages out of the 15m window.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_backend_idle_stop_close_failures{backend="stdio-a"}'
+        values: "_x5 1x20"
+
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: McpBackendIdleStopCloseFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              backend: stdio-a
+            exp_annotations:
+              summary: "Backend stdio-a did not stop cleanly when idle"
+      - eval_time: 22m
+        alertname: McpBackendIdleStopCloseFailures
+        exp_alerts: []
+
+  # (m) A counter that exists at 0 is quiet while it is new in the window: the
+  # `> 0` on the new-series branch is what keeps it so.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_backend_idle_stop_close_failures{backend="stdio-a"}'
+        values: "0x20"
+
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: McpBackendIdleStopCloseFailures
+        exp_alerts: []
+
+  # (n) The first capacity refusal of a reason fires, with no reason label.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_message_signing_nonce_rejections_total{reason="principal_capacity"}'
+        values: "_x5 1x20"
+
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: McpSigningNonceCapacityRefusal
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              category: security
+            exp_annotations:
+              summary: "Signing nonce admissions are being refused for capacity"
+      - eval_time: 13m
+        alertname: McpSigningNonceCapacityRefusal
+        exp_alerts: []
+
+  # ── Caller pool slots (MIK-7547) ───────────────────────────────────────────
+
+  # (o) The first slot refusal fires, carrying backend and limit.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_backend_identity_slots_refused_total{backend="ledger",limit="principal"}'
+        values: "_x5 1x20"
+
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: McpBackendCallerSlotsRefused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              backend: ledger
+              limit: principal
+            exp_annotations:
+              summary: "Backend ledger refused callers at its principal slot limit"
+      - eval_time: 22m
+        alertname: McpBackendCallerSlotsRefused
+        exp_alerts: []
+
+  # (p) A later refusal on an existing series fires through increase().
+  - interval: 1m
+    input_series:
+      - series: 'mcp_backend_identity_slots_refused_total{backend="ledger",limit="backend"}'
+        values: "1x20 2x10"
+
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: McpBackendCallerSlotsRefused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              backend: ledger
+              limit: backend
+            exp_annotations:
+              summary: "Backend ledger refused callers at its backend slot limit"
+
+  # (q) 53 slots held for 10 minutes fires; 52 never does.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_backend_pool_slots{backend="ledger"}'
+        values: "53x20"
+      - series: 'mcp_backend_pool_slots{backend="quiet"}'
+        values: "52x20"
+
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: McpBackendCallerSlotsNearCap
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: McpBackendCallerSlotsNearCap
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              backend: ledger
+            exp_annotations:
+              summary: "Backend ledger holds 53 of its 65 pool slots"

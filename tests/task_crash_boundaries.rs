@@ -14,8 +14,8 @@
 //! the kill lands there (#2298).
 //!
 //! The two principals are delegated OIDC bearers from a temporary HTTPS
-//! issuer: with auth on, task creation needs a verified caller identity, and a
-//! static API key carries none.
+//! issuer, so each task owner is a verified identity. Static API keys own
+//! tasks too (by credential, MIK-7967); this file exercises the OIDC owner.
 //!
 //! Unix-non-Apple only: `Gateway::kill` is a unix `SIGKILL`, and the child can
 //! be told to trust the temporary issuer's CA only through `SSL_CERT_FILE`,
@@ -70,9 +70,9 @@ fn client() -> reqwest::Client {
         .expect("bounded fixture HTTP client")
 }
 
-/// Two principals proven by delegated OIDC bearers. With auth on, task creation
-/// needs a verified caller identity, which a static API key does not carry;
-/// the key-server path is the one that proves who the caller is.
+/// Two principals proven by delegated OIDC bearers, so each task is owned by a
+/// verified identity through the key-server path. API-key owners are covered
+/// by `e2e_task_api_key_owner`.
 struct Principals {
     issuer: issuer::Issuer,
     ca: String,
