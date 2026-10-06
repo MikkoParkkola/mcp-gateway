@@ -18,6 +18,7 @@ fn shared_with(ineligible: crate::events::backend_source::Ineligible) -> Arc<Sha
         name: "b".to_owned(),
         need: Mutex::new(Need::default()),
         ledger: Arc::default(),
+        recycle: RECYCLE,
         snapshot: Mutex::new(Snapshot::default()),
         wake: watch::channel(0).0,
         stop: CancellationToken::new(),
@@ -808,6 +809,10 @@ async fn a_failed_open_backs_off() {
         .expect("room");
     for _ in 0..3 {
         state.maintain(&backend, &Weak::new(), &handle, true).await;
+        if let Some(opening) = state.opening.take() {
+            let (opened, requested) = opening.await;
+            state.on_opened(opened, requested);
+        }
     }
     assert_eq!(state.open_failures, 1, "the second and third waited");
     assert!(next_open_in(&state) > Duration::from_millis(500));
@@ -831,4 +836,67 @@ fn a_legacy_pass_resumes_after_the_last_uri_reached() {
     assert_eq!(order(Some("a")), ["b", "c", "a"]);
     assert_eq!(order(Some("c")), ["a", "b", "c"], "past the end wraps");
     assert_eq!(order(None), ["a", "b", "c"]);
+}
+
+/// MIK-7899 CLASS.3b (D2): an acknowledged stream past `recycle` gets a
+/// replacement with the same filter, and `maintain` does not wait for it.
+#[tokio::test]
+async fn an_aged_stream_is_replaced_make_before_break() {
+    let (backend, handle) = offline();
+    let mut shared = shared();
+    Arc::get_mut(&mut shared).expect("sole owner").recycle = Duration::ZERO;
+    let mut state = State::new(&shared, Era::Modern);
+    state.current = Some((stream(), Requested::default()));
+    state.acked = Some(Instant::now());
+    state.maintain(&backend, &Weak::new(), &handle, true).await;
+    assert!(state.opening.is_some(), "a replacement is opening");
+    assert!(
+        state.current.is_some(),
+        "the current stream stays meanwhile"
+    );
+}
+
+/// D2: at the replacement's acknowledgement, what the old stream had already
+/// queued is routed under the old filter, then the old stream is closed.
+#[test]
+fn the_old_streams_queued_notes_are_delivered_at_the_cutover() {
+    let shared = shared();
+    shared
+        .need
+        .lock()
+        .add(&Interest::PromptsChanged)
+        .expect("room");
+    let mut state = State::new(&shared, Era::Modern);
+    let (old_tx, old_rx) = tokio::sync::mpsc::channel(4);
+    state.current = Some((FrameStream::new(old_rx), Requested::default()));
+    let old = KindSet {
+        prompts_changed: true,
+        ..KindSet::default()
+    };
+    state.honoured = Some((old, Vec::new()));
+    state.acked = Some(Instant::now());
+    old_tx
+        .try_send(UpstreamNote::Notice {
+            kind: NoteKind::PromptsChanged,
+            uri: None,
+        })
+        .expect("queued");
+    state.pending = Some(Pending {
+        stream: stream(),
+        requested: Requested::default(),
+        since: Instant::now(),
+    });
+    state.note(
+        UpstreamNote::Ack {
+            kinds: KindSet::default(),
+            uris: Vec::new(),
+        },
+        true,
+    );
+    assert!(
+        state.coalescer.next().is_some(),
+        "the queued notice was routed"
+    );
+    assert!(old_tx.is_closed(), "the old stream takes no more frames");
+    assert!(state.pending.is_none());
 }

@@ -47,6 +47,11 @@ fn snapshot_interval(cache_ttl: Duration) -> Duration {
 const SNAPSHOT_RETRY: Duration = Duration::from_secs(5);
 /// A stream that stayed open this long resets the backoff (§9).
 const STABLE: Duration = Duration::from_secs(60);
+/// A modern stream this old is replaced make-before-break, ahead of the
+/// hourly cut of its POST (`STREAM_TIMEOUT`, 3600 s, in `http/listen.rs`).
+pub(super) const RECYCLE: Duration = Duration::from_secs(55 * 60);
+// The replacement must open and be acknowledged before the old stream's cut.
+const _: () = assert!(OPEN_LIMIT.as_secs() + ACK_DEADLINE.as_secs() < 3600 - RECYCLE.as_secs());
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
 const BACKOFF_CAP: Duration = Duration::from_secs(300);
 /// A tools refill that did not fill is retried once after this: the backend's
@@ -157,6 +162,11 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         let delay = match session(&shared, &backend, &hub).await {
             Outcome::Stopped => return,
             Outcome::Unsupported => BACKOFF_CAP,
+            // A stream cut at its hourly end (a legacy GET) reconnects at once.
+            Outcome::Ended { lasted, .. } if lasted >= shared.recycle => {
+                failures = 0;
+                Duration::ZERO
+            }
             Outcome::Ended { acked, lasted } => {
                 failures = if acked || lasted >= STABLE {
                     0
@@ -242,6 +252,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             note = recv(&mut state.current) => Ev::Current(note),
             note = recv_pending(&mut state.pending) => Ev::Pending(note),
             filled = refilled(&mut refill) => Ev::Refilled(filled),
+            opened = opened(&mut state.opening) => Ev::Opened(opened),
             _ = wake.changed() => Ev::Wake,
             _ = tick.tick() => Ev::Tick,
         };
@@ -258,6 +269,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
                 state.note(note, true);
             }
             Ev::Pending(None) => state.pending_ended(),
+            Ev::Opened((opened, requested)) => state.on_opened(opened, requested),
             Ev::Refilled(filled) => {
                 // The refill ended (filled or timed out): the hub may hear now.
                 refill = None;
@@ -363,8 +375,22 @@ enum Ev {
     Current(Option<UpstreamNote>),
     Pending(Option<UpstreamNote>),
     Refilled(bool),
+    Opened((Result<FrameStream, Refused>, Requested)),
     Wake,
     Tick,
+}
+
+/// A replacement listen being opened (D2): polled as one arm of the loop's
+/// select, so the current stream keeps draining while it opens.
+type Opening = std::pin::Pin<
+    Box<dyn std::future::Future<Output = (Result<FrameStream, Refused>, Requested)> + Send>,
+>;
+
+async fn opened(opening: &mut Option<Opening>) -> (Result<FrameStream, Refused>, Requested) {
+    match opening {
+        Some(future) => future.await,
+        None => std::future::pending().await,
+    }
 }
 
 /// An in-flight tools refill; `true` when it filled the list.
@@ -455,6 +481,7 @@ struct State<'a> {
     era: Era,
     current: Option<(FrameStream, Requested)>,
     pending: Option<Pending>,
+    opening: Option<Opening>,
     acked: Option<Instant>,
     /// What the current stream's acknowledgement honoured; a notice outside
     /// it is not delivered (MIK-7898). `None` before an acknowledgement and
@@ -493,6 +520,7 @@ impl<'a> State<'a> {
             era,
             current: None,
             pending: None,
+            opening: None,
             acked: None,
             honoured: None,
             unsupported: false,
@@ -661,15 +689,41 @@ impl<'a> State<'a> {
                 "backend honoured less of the upstream listen than asked; the rest stays silent"
             );
         }
-        if from_pending {
+        if from_pending && let Some(p) = self.pending.take() {
             // Make before break: the replacement is live, the old one goes.
-            if let Some(p) = self.pending.take() {
-                self.current = Some((p.stream, p.requested));
+            // Closed first, so no new frame lands on it; what it had already
+            // queued was asked for under the old acknowledgement, which still
+            // stands here, so it is routed before the new one replaces it.
+            if let Some((mut old, _)) = self.current.take() {
+                old.rx.close();
+                while let Ok(note) = old.rx.try_recv() {
+                    if !note.ends() {
+                        self.note(note, false);
+                    }
+                }
             }
+            self.current = Some((p.stream, p.requested));
+            self.opened = Instant::now();
         }
         self.honoured = Some((kinds, uris.to_vec()));
         self.acked = Some(Instant::now());
         self.open_failures = 0;
+    }
+
+    /// A replacement open finished: it waits for its acknowledgement, or
+    /// the next open backs off.
+    fn on_opened(&mut self, opened: Result<FrameStream, Refused>, requested: Requested) {
+        self.opening = None;
+        match opened {
+            Ok(stream) => {
+                self.pending = Some(Pending {
+                    stream,
+                    requested,
+                    since: Instant::now(),
+                });
+            }
+            Err(_) => self.unacked(),
+        }
     }
 
     /// The replacement listen closed before its acknowledgement.
@@ -713,23 +767,24 @@ impl<'a> State<'a> {
             }
             let want = requested(self.shared);
             let have = self.current.as_ref().map(|(_, r)| r.clone());
-            if self.pending.is_none() && have.as_ref() != Some(&want) && now >= self.retry_open_at {
-                let opened = tokio::time::timeout(
-                    OPEN_LIMIT,
-                    open(handle, true, want.clone(), Watched::default()),
-                )
-                .await
-                .unwrap_or(Err(Refused::Expired));
-                match opened {
-                    Ok(stream) => {
-                        self.pending = Some(Pending {
-                            stream,
-                            requested: want,
-                            since: Instant::now(),
-                        });
-                    }
-                    Err(_) => self.unacked(),
-                }
+            // An acknowledged stream this old is replaced with the same
+            // filter, before the hourly cut of its POST (D2).
+            let aged = self.acked.is_some() && self.opened.elapsed() >= self.shared.recycle;
+            if self.pending.is_none()
+                && self.opening.is_none()
+                && (have.as_ref() != Some(&want) || aged)
+                && now >= self.retry_open_at
+            {
+                let handle = handle.clone();
+                self.opening = Some(Box::pin(async move {
+                    let opened = tokio::time::timeout(
+                        OPEN_LIMIT,
+                        open(&handle, true, want.clone(), Watched::default()),
+                    )
+                    .await
+                    .unwrap_or(Err(Refused::Expired));
+                    (opened, want)
+                }));
             }
         } else {
             self.sync_legacy(backend, handle).await;

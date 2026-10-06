@@ -36,6 +36,8 @@ pub(super) struct Shared {
     /// every task of the backend; taken after `need` when both are held.
     pub ledger: Arc<Mutex<Ledger>>,
     pub snapshot: Mutex<Snapshot>,
+    /// A modern stream's age at which it is replaced (D2); tests shorten it.
+    pub recycle: std::time::Duration,
     /// Bumped on every change of the upstream filter.
     pub wake: watch::Sender<u64>,
     pub stop: CancellationToken,
@@ -430,6 +432,7 @@ impl UpstreamListeners {
             name: backend.to_owned(),
             need: Mutex::new(need),
             ledger,
+            recycle: super::upstream_session::RECYCLE,
             snapshot: Mutex::new(Snapshot::default()),
             wake,
             stop: self.stop.child_token(),
