@@ -137,8 +137,8 @@ source's descriptor (`charge: false`), which is the one field this design
 adds to `EventDescriptor`. The parent ships that field from 4.0.0 with
 default `true`, so these sources leave the core unchanged.
 
-**Core changes needed:** none, given the `charge` field lands with the parent
-(added to P§4 for this reason).
+**Core changes needed:** one, corrected 2026-10-06: the parent never shipped
+`charge`; it lands as `EventSource::charges(name)`, default `true`, read by the worker.
 
 ## 4. Scheduler time events
 
