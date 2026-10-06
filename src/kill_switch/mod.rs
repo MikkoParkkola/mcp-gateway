@@ -75,6 +75,14 @@ pub(crate) fn decide_budget_action(
 // Kill switch
 // ============================================================================
 
+/// A backend's kill switch flipped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KillChange {
+    pub backend: String,
+    /// `true` when it was killed, `false` when revived.
+    pub killed: bool,
+}
+
 /// Operator-controlled kill switch for backend servers with per-capability
 /// error budgets.
 ///
@@ -96,6 +104,8 @@ pub struct KillSwitch {
     /// Key: `"{backend}:{capability}"`. Capabilities are re-enabled
     /// automatically once the cooldown period elapses.
     disabled_capabilities: DashMap<String, Instant>,
+    /// Told of every kill and revive (the operational events source).
+    observer: crate::observer::Observer<KillChange>,
 }
 
 impl KillSwitch {
@@ -107,6 +117,7 @@ impl KillSwitch {
             budgets: DashMap::new(),
             capability_budgets: DashMap::new(),
             disabled_capabilities: DashMap::new(),
+            observer: crate::observer::Observer::default(),
         }
     }
 
@@ -116,7 +127,7 @@ impl KillSwitch {
     ///
     /// Idempotent — calling this on an already-killed server is a no-op.
     pub fn kill(&self, server: &str) {
-        if self.killed.insert(server.to_string()) {
+        if self.set_killed(server, true) {
             warn!(server = server, "Kill switch engaged: server disabled");
         }
     }
@@ -126,13 +137,35 @@ impl KillSwitch {
     /// Idempotent — calling this on an already-live server is a no-op.
     /// Also resets the error-budget window so the backend gets a clean slate.
     pub fn revive(&self, server: &str) {
-        if self.killed.remove(server).is_some() {
+        if self.set_killed(server, false) {
             info!(server = server, "Kill switch released: server re-enabled");
         }
         // Reset the budget window so the revived server starts fresh.
         if let Some(budget) = self.budgets.get(server) {
             budget.lock().reset();
         }
+    }
+
+    /// Attach the observer told of every kill and revive.
+    pub(crate) fn observe(&self, observer: crate::observer::ObserverFn<KillChange>) {
+        self.observer.set(observer);
+    }
+
+    /// The one place `killed` changes, so every flip reaches the observer.
+    /// `true` when the state changed.
+    fn set_killed(&self, server: &str, killed: bool) -> bool {
+        let changed = if killed {
+            self.killed.insert(server.to_string())
+        } else {
+            self.killed.remove(server).is_some()
+        };
+        if changed {
+            self.observer.call(KillChange {
+                backend: server.to_owned(),
+                killed,
+            });
+        }
+        changed
     }
 
     /// Returns `true` when `server` is currently disabled.
@@ -207,7 +240,8 @@ impl KillSwitch {
                     threshold = threshold,
                     "Error budget exhausted — auto-killing server"
                 );
-                self.killed.insert(server.to_string());
+                drop(window);
+                self.set_killed(server, true);
                 return true;
             }
             BudgetAction::Ignore => {}
