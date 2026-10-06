@@ -385,6 +385,8 @@ mod env_poll;
 // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
 #[cfg(all(test, target_os = "linux"))]
 mod env_poll_e2e_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod env_poll_announce_tests;
 pub(crate) mod grant_audit;
 mod grant_audit_plan;
 mod grant_delta;
