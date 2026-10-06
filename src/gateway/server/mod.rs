@@ -1973,6 +1973,7 @@ impl Gateway {
                 &self.config,
                 Arc::clone(&self.env),
                 identity_grant_sink,
+                meta_mcp_for_shutdown.get_capabilities(),
                 shutdown_tx.subscribe(),
             ) {
                 Ok(w) => {

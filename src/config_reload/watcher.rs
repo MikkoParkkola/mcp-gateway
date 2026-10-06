@@ -107,6 +107,10 @@ impl ConfigWatcher {
     /// `hardened` posture, a backend that already connected over HTTP or
     /// WebSocket before any destination policy was stamped cannot be pinned in
     /// place (MIK-7700), and nothing is started.
+    ///
+    /// `capabilities` is the backend whose listing a login or key edit can
+    /// change; such a reload announces it, as the explicit reload does.
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         config_path: PathBuf,
         live_config: Arc<LiveConfig>,
@@ -114,6 +118,7 @@ impl ConfigWatcher {
         initial_config: &Config,
         env: Arc<LiveEnv>,
         identity_grants: Option<Arc<IdentityGrantSink>>,
+        capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<Self> {
         // Pair first, so a refusal is returned before any watcher or task
@@ -160,6 +165,7 @@ impl ConfigWatcher {
             cache_ttl,
             env,
             identity_grants,
+            capabilities,
             event_rx,
             shutdown_rx,
             Arc::clone(&env_reloads),
@@ -231,6 +237,7 @@ impl ConfigWatcher {
         cache_ttl: Duration,
         env: Arc<LiveEnv>,
         identity_grants: Option<Arc<IdentityGrantSink>>,
+        capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
         mut event_rx: tokio::sync::mpsc::Receiver<ReloadTrigger>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         env_reloads: Arc<env_poll::EnvReloadCounts>,
@@ -259,7 +266,8 @@ impl ConfigWatcher {
             ) {
                 Ok(ctx) => ctx
                     .with_env(env)
-                    .with_identity_grant_sink_opt(identity_grants),
+                    .with_identity_grant_sink_opt(identity_grants)
+                    .with_capabilities(capabilities),
                 Err(error) => {
                     tracing::error!(%error, "Config watcher not started");
                     return;

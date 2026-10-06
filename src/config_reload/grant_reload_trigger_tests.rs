@@ -234,6 +234,7 @@ async fn w_a_watcher_driven_config_reload_applies_a_revocation() {
             ResolvedEnvFiles::default(),
         )),
         Some(sink),
+        None,
         event_rx,
         shutdown_rx,
         Arc::default(),
