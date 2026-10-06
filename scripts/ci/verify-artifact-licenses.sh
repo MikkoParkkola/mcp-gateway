@@ -60,13 +60,17 @@ if [ -f Dockerfile ]; then
   ok "Dockerfile copies all license files into the image"
 fi
 
-# 4. Homebrew — bare-binary formula can't embed a text file, so require a
-#    licensing pointer in caveats (the license field is checked in 5).
-if [ -f homebrew/mcp-gateway.rb ]; then
-  grep -q 'COMMERCIAL\.md' homebrew/mcp-gateway.rb \
-    || fail "homebrew formula caveats must point to the license/COMMERCIAL terms"
-  ok "homebrew formula: licensing caveat"
-fi
+# 4. Homebrew — bare-binary formula can't embed a text file, so the caveats
+#    block users see on install must point to the commercial terms. Only the
+#    `def caveats` block counts: a comment elsewhere in the formula is not shown.
+caveats() { awk '/def caveats/{f=1} f{print} f&&/^[[:space:]]*end[[:space:]]*$/{exit}' "$1"; }
+caveat_rc=0
+for f in homebrew/mcp-gateway.rb .github/workflows/release.yml; do
+  [ -f "$f" ] || continue
+  grep -q 'COMMERCIAL\.md' <<<"$(caveats "$f")" \
+    || { fail "$f: formula caveats must point to COMMERCIAL.md"; caveat_rc=1; }
+done
+[ "$caveat_rc" -eq 0 ] && ok "homebrew formula caveats point to COMMERCIAL.md"
 
 # 5. Package metadata (ADR-013) — the crates and both Homebrew formulas declare
 #    the SPDX identifier the file headers carry; npm points at LICENSES.md.
