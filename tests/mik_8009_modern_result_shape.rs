@@ -119,7 +119,11 @@ async fn stdio_modern_results_carry_the_fields_2026_07_28_requires() {
         let result = reply
             .get("result")
             .unwrap_or_else(|| panic!("{method} must answer with a result: {reply}"));
-        let found = violations(result, required);
+        let mut found = violations(result, required);
+        // The other half of the modern contract the shaper writes.
+        if result["_meta"][mcp_gateway::protocol::meta::KEY_SERVER_INFO].is_null() {
+            found.push("missing _meta serverInfo".to_string());
+        }
         if !found.is_empty() {
             failures.push(format!("{method}: {found:?}"));
         }

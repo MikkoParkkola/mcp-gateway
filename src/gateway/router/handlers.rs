@@ -49,7 +49,7 @@ mod owner;
 pub(super) mod request_checks;
 mod tasks;
 
-pub(super) use modern_response::shape_modern_response;
+pub(crate) use modern_response::shape_modern_response;
 #[cfg(test)]
 use modern_response::{CACHEABLE_METHODS, build_modern_response};
 pub(super) use owner::owner_of;
@@ -1925,9 +1925,11 @@ async fn meta_mcp_dispatch(
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
     };
 
-    if is_modern {
-        shape_modern_response(&mut response, &method);
-    }
+    let stamps = if is_modern {
+        shape_modern_response(&mut response, &method)
+    } else {
+        crate::gateway::meta_mcp::invoke::relay::GatewayStamps::Legacy
+    };
     let caller = client
         .as_ref()
         .map_or("anonymous", |client| client.name.as_str());
@@ -1974,12 +1976,7 @@ async fn meta_mcp_dispatch(
         .expect("an answer frame stays an answer through its replacements");
     // MIK-7887.RECEIPT.4: the receipt describes this, the delivered answer.
     {
-        use crate::gateway::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
-        let stamps = if is_modern {
-            GatewayStamps::Modern
-        } else {
-            GatewayStamps::Legacy
-        };
+        use crate::gateway::meta_mcp::invoke::relay::AnswerShape;
         let shape = AnswerShape::of(&external_tool);
         state
             .meta_mcp
