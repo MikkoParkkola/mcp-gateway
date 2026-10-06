@@ -83,7 +83,7 @@ impl MetaMcp {
                 && let Some(digest) = fw.delivery_digest(
                     &one.server,
                     &one.tool,
-                    &match shape {
+                    &*match shape {
                         AnswerShape::InvokeWrapped => {
                             super::super::audit::delivered_value(delivered)
                         }
