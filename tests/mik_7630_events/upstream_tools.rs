@@ -43,8 +43,15 @@ async fn t39m_a_legacy_stdio_tools_notice_becomes_an_event() {
     let gw = start_listed(dir.path(), &receiver, cfg).await;
     let name = event("tools_changed");
     let id = sub(&gw, ALICE, &name, &receiver, json!({})).await;
-    // The backend starts for the subscription; give the listener its channel.
-    tokio::time::sleep(QUIET).await;
+    // MIK-7898 SESS.4b: a watched URI makes the listener send
+    // `resources/subscribe`, which it does only once the unsolicited channel
+    // is open, so the peer seeing it proves the tap is attached; no sleep.
+    let updated = event("resource_updated");
+    let _watch = sub(&gw, ALICE, &updated, &receiver, json!({"uri": URI_A})).await;
+    eventually("the listener's resources/subscribe", || {
+        !peer.method("resources/subscribe").is_empty()
+    })
+    .await;
     peer.push(TOOLS_CHANGED, json!({}));
     expect_events(&receiver, &id, &name, 1).await;
 }
