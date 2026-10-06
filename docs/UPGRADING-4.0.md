@@ -3315,8 +3315,9 @@ Everything here applies only under `security.posture: hardened`; `standard` is u
   retry-field checks on `/mcp/{backend}`. It runs before tool policy and dispatch, so a call
   the policy would refuse gets `-32602` for a malformed nonce instead of the policy refusal, and
   is counted as an invalid-nonce rejection. Under `standard` with `message_signing` enabled,
-  where only a `gateway_invoke` on `/mcp` is signed, its nonce is judged after the invocation
-  policy instead: a denied call gets the policy refusal and counts no nonce rejection. Answers
+  where only a `gateway_invoke` is signed, its nonce is judged after the invocation policy
+  instead, on `/mcp` and over `serve --stdio` alike: a denied call gets the policy refusal and
+  counts no nonce rejection. Answers
   given before the nonce is
   admitted are delivered unsigned and leave the nonce unspent: a task-augmented destructive
   call's confirmation challenge or refusal, and on `/mcp/{backend}` a tool-policy or
