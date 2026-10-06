@@ -98,7 +98,7 @@ impl ConfigWatcher {
     /// recorded, for changes.
     ///
     /// Spawns a debounced background task that re-parses the file and calls
-    /// [`apply_patch`] on each detected change.
+    /// [`super::apply_patch`] on each detected change.
     ///
     /// # Errors
     ///

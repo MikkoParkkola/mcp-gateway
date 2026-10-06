@@ -62,7 +62,7 @@ Two conflicting Linear comments exist (an early "closed as documented residual" 
 and `rg -n "set_var" src/` both return **zero matches** — the crate denies `unsafe`
 (`src/lib.rs:25`), so a live reload literally cannot mutate the process environment anymore.
 Replacement mechanism: `EnvOverlay` (`src/config/env_overlay.rs`), consumed by
-`Config::load_with_overlay` and `load_config_patch` (`src/config_reload/mod.rs:1252-1272`).
+`Config::load_with_overlay` and `load_config_patch` (`src/config_reload/reload_context.rs`).
 
 The ticket's own scored verdict table (`docs/internal/design/mik-7256-ac-verdicts.md`, commit `30b462a8`)
 is the most honest artifact in this whole sweep — it states plainly: **"this change does not pass

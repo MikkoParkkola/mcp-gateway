@@ -34,10 +34,9 @@
 //!
 //! Revert is modelled as a restart, not a live mutation, because the gateway
 //! has no runtime mutator for the flag the handlers read: `LiveConfig::set`
-//! (`src/config_reload/mod.rs:296`) writes the `inner` field, while
-//! `LiveConfig::running` (`:268`) returns the separate `running` field seeded
-//! once at `new` and documented as "what the running process actually applied,
-//! fixed at startup" (`:243-253`). Every handler reads
+//! writes the `inner` field, while `LiveConfig::running` returns the separate
+//! `running` field seeded once at `new` and documented as "what the running
+//! process actually applied, fixed at startup" (both on `LiveConfig`). Every handler reads
 //! `live_config.running().server.modern_protocol`, so `set` cannot move it. The
 //! gateway says so itself: `pending_restart_fields` (`:545-557`) declares the
 //! whole `server` section — `modern_protocol` included — restart-required.
