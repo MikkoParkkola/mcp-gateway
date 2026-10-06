@@ -51,7 +51,6 @@ impl HttpTransport {
         if !self.reinit_if_needed().await {
             return Ok(Err(404));
         }
-        let carried = self.carried_session();
         let id = self.next_id();
         let id_value = serde_json::to_value(&id).map_err(|e| Error::Protocol(e.to_string()))?;
         let params = with_modern_meta(
@@ -66,6 +65,7 @@ impl HttpTransport {
             header::ACCEPT,
             header::HeaderValue::from_static("text/event-stream"),
         );
+        let carried = carried_session(&headers);
         let body = json!({"jsonrpc": "2.0", "id": id, "method": METHOD, "params": params});
         let response = self
             .client
@@ -107,32 +107,44 @@ impl HttpTransport {
     }
 }
 
-impl HttpTransport {
-    /// The shared bucket's session id, as a stream open is about to carry it.
-    fn carried_session(&self) -> Option<String> {
-        self.sessions.read().get(Self::bucket_key(None)).cloned()
-    }
+/// The session id an outgoing stream open carries, read from its headers.
+fn carried_session(headers: &header::HeaderMap) -> Option<String> {
+    headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+}
 
+impl HttpTransport {
     /// A stream open was refused with `status`. A 404 says the session it
     /// carried expired: that id is dropped only if it is still current (a
     /// late 404 from an older session leaves a newer one alone) and the
     /// session is re-handshaken. A sessionless 404 changes nothing.
     async fn refused(&self, status: u16, carried: Option<String>) -> u16 {
-        let bucket = Self::bucket_key(None);
-        let dropped = status == 404 && carried.is_some() && {
-            let mut sessions = self.sessions.write();
-            let current = sessions.get(bucket) == carried.as_ref();
-            if current {
-                sessions.remove(bucket);
-            }
-            current
-        };
-        if dropped {
-            self.reinit_needed
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            let _ = self.reinit_if_needed().await;
+        if status == 404
+            && let Some(carried) = carried
+        {
+            self.session_expired(&carried).await;
         }
         status
+    }
+
+    /// The shared session `carried` expired: drop it if it is still current
+    /// (a newer one is left alone) and re-handshake. Dropping and marking run
+    /// under the recovery lock, so they never interleave a re-handshake.
+    pub(super) async fn session_expired(&self, carried: &str) -> bool {
+        {
+            let _held = self.reinit_lock.lock().await;
+            let mut sessions = self.sessions.write();
+            let bucket = Self::bucket_key(None);
+            if sessions.get(bucket).map(String::as_str) != Some(carried) {
+                return false;
+            }
+            sessions.remove(bucket);
+            self.reinit_needed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.reinit_if_needed().await
     }
 
     /// Re-handshake while an earlier 404 left the shared session dropped;
@@ -147,7 +159,10 @@ impl HttpTransport {
         if !self.reinit_needed.load(Ordering::SeqCst) {
             return true;
         }
-        let healed = self.initialize().await.is_ok();
+        // Cleared only once a session exists: a handshake that left none
+        // keeps recovery pending for the next caller.
+        let healed = self.initialize().await.is_ok()
+            && self.sessions.read().contains_key(Self::bucket_key(None));
         if healed {
             self.reinit_needed.store(false, Ordering::SeqCst);
         }
@@ -171,10 +186,10 @@ impl HttpTransport {
         if !self.reinit_if_needed().await {
             return Ok(Err(404));
         }
-        let carried = self.carried_session();
         let headers = self
             .build_mcp_headers(HeaderMode::SessionStream, None)
             .await?;
+        let carried = carried_session(&headers);
         let mut response = self
             .client
             .get(self.get_message_url())
