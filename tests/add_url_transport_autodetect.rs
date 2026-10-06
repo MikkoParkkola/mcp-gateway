@@ -9,8 +9,7 @@
 //! that always opens with `GET` fails on its first call. An explicit flag
 //! that the server refuses with such a 4xx gets one try of the other transport.
 
-#[path = "common/gateway_bin.rs"]
-mod gateway_bin;
+use stdio_session::gateway_bin;
 
 #[path = "common/stdio_session.rs"]
 mod stdio_session;

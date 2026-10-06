@@ -10,8 +10,7 @@
 //! is this same binary over stdio (which the destination policy does not
 //! cover), running `standard` and forwarding to the counting HTTP fixture.
 
-#[path = "common/gateway_bin.rs"]
-mod gateway_bin;
+use signing_gateway::gateway_bin;
 
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;

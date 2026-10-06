@@ -4,8 +4,7 @@
 //! startup WARN and in `doctor`. The config leaves `remote_server_signing` out
 //! entirely, so what loads is the shipped default.
 
-#[path = "common/gateway_bin.rs"]
-mod gateway_bin;
+use stdio_session::gateway_bin;
 
 use std::path::Path;
 use std::process::Stdio;

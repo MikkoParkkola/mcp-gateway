@@ -234,7 +234,7 @@ pub(super) async fn redirecting_listener(location: String) -> u16 {
 async fn recording_redirecting_listener(
     location: String,
 ) -> (u16, tokio::sync::oneshot::Receiver<String>) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -251,32 +251,33 @@ async fn recording_redirecting_listener(
             let _ = stream.write_all(reply.as_bytes()).await;
         }
     });
+    (port, rx)
+}
 
-    /// One read can return the headers alone: read until the body that
-    /// `Content-Length` announces has arrived too.
-    async fn read_request(stream: &mut tokio::net::TcpStream) -> String {
-        let mut request = Vec::new();
-        let mut buf = [0u8; 4096];
-        while let Ok(n @ 1..) = stream.read(&mut buf).await {
-            request.extend_from_slice(&buf[..n]);
-            let text = String::from_utf8_lossy(&request);
-            if let Some(end) = text.find("\r\n\r\n") {
-                let length = text[..end]
-                    .lines()
-                    .find_map(|line| {
-                        let (name, value) = line.split_once(':')?;
-                        name.eq_ignore_ascii_case("content-length")
-                            .then(|| value.trim().parse::<usize>().ok())?
-                    })
-                    .unwrap_or(0);
-                if request.len() >= end + 4 + length {
-                    break;
-                }
+/// One read can return the headers alone: read until the body that
+/// `Content-Length` announces has arrived too.
+async fn read_request(stream: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut request = Vec::new();
+    let mut buf = [0u8; 4096];
+    while let Ok(n @ 1..) = stream.read(&mut buf).await {
+        request.extend_from_slice(&buf[..n]);
+        let text = String::from_utf8_lossy(&request);
+        if let Some(end) = text.find("\r\n\r\n") {
+            let length = text[..end]
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())?
+                })
+                .unwrap_or(0);
+            if request.len() >= end + 4 + length {
+                break;
             }
         }
-        String::from_utf8_lossy(&request).into_owned()
     }
-    (port, rx)
+    String::from_utf8_lossy(&request).into_owned()
 }
 
 /// The redirect policy is wired into the production OAuth client: a hop to a

@@ -6,7 +6,7 @@
 //! its isolated YAML and runs its production constructor.
 
 #[path = "gateway_bin.rs"]
-mod gateway_bin;
+pub(crate) mod gateway_bin;
 
 use std::path::Path;
 use std::process::Stdio;

@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Production `serve --stdio` tools/call and JSON-RPC batch signing coverage.
 
-#[path = "common/gateway_bin.rs"]
-mod gateway_bin;
+use signing_gateway::gateway_bin;
 
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;
