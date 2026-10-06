@@ -132,12 +132,14 @@ impl CallbackServer {
     /// Abort every listener and wait until each has let go of its socket.
     /// Dropping alone frees a port only on the listener's next poll.
     async fn shutdown(mut self) {
-        let handles = std::mem::take(&mut self.server_handles);
-        for handle in &handles {
+        for handle in &self.server_handles {
             handle.abort();
         }
-        for handle in handles {
+        // Each handle leaves `self` only once joined: a shutdown interrupted
+        // mid-way leaves the rest to `Drop`, which keeps the guard until then.
+        while let Some(handle) = self.server_handles.last_mut() {
             let _ = handle.await;
+            self.server_handles.pop();
         }
     }
 }

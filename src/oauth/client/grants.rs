@@ -488,9 +488,18 @@ impl OAuthClient {
         // registration. A cancel during registration ends it there: no
         // browser opens, and the listener is closed before this returns.
         let registered = tokio::select! {
-            registered = self.ensure_client_id_with_redirect(&callback_url) => registered,
+            biased;
             () = cancel.cancelled() => Err(cancelled()),
+            registered = self.ensure_client_id_with_redirect(&callback_url) => registered,
         };
+        // A cancel that lands as registration completes still wins.
+        let registered = registered.and_then(|id| {
+            if cancel.is_cancelled() {
+                Err(cancelled())
+            } else {
+                Ok(id)
+            }
+        });
         let client_id = match registered {
             Ok(client_id) => client_id,
             Err(e) => {
