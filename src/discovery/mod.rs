@@ -49,6 +49,11 @@ pub struct DiscoveredServer {
     /// [`SecretMap`].
     #[serde(default, skip_serializing_if = "SecretMap::is_empty")]
     pub headers: SecretMap,
+    /// Names of client headers left out of `headers` because their value is
+    /// one only the client can resolve (`${input:token}`). Names only, for
+    /// the shadow scan's auth-header check (MIK-7716).
+    #[serde(skip)]
+    pub(crate) unresolved_header_names: Vec<String>,
 }
 
 /// Source of discovery
@@ -111,6 +116,7 @@ impl DiscoveredServer {
             metadata,
             env: SecretMap::default(),
             headers: SecretMap::default(),
+            unresolved_header_names: Vec::new(),
         }
     }
 

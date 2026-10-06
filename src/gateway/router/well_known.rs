@@ -206,38 +206,102 @@ fn resolve_resource_origin(config: &Config, bind_origin: Option<&str>) -> Option
 
 /// The authorization servers whose tokens this gateway accepts as bearers
 /// (RFC 9728 section 2): the OIDC issuers of an enabled key server with
-/// `delegated_bearer` on, in configured order, blank and repeated ones
-/// dropped. Empty otherwise, and then omitted from the document: an
-/// exchange-only key server accepts no issuer token on the MCP routes, and the
-/// gateway itself serves no authorization-server metadata.
-fn authorization_servers(config: &Config) -> Vec<String> {
-    let key_server = &config.key_server;
-    if !(key_server.enabled && key_server.delegated_bearer) {
+/// `delegated_bearer` on, behind enabled auth and no agent auth, in configured
+/// order, blank, repeated and unpublishable ones dropped. Empty otherwise, and then omitted
+/// from the document: an exchange-only key server accepts no issuer token on
+/// the MCP routes, auth off accepts no token at all, and the gateway itself
+/// serves no authorization-server metadata.
+///
+/// `running` is the configuration this process started with: `auth` and
+/// `key_server` apply only on restart, so a pending reload must not change
+/// which issuers are named.
+fn authorization_servers(running: &Config) -> Vec<String> {
+    // Once per process: the running config never changes, and the endpoint
+    // needs no sign-in, so a per-request warning would let anyone flood the log.
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    let key_server = &running.key_server;
+    // Agent auth refuses every bearer that is not a registered agent's token,
+    // an OIDC ID token included.
+    if !(running.auth.enabled
+        && !running.agent_auth.enabled
+        && key_server.enabled
+        && key_server.delegated_bearer)
+    {
         return Vec::new();
     }
     let mut issuers: Vec<String> = Vec::new();
-    for provider in &key_server.oidc {
+    let mut skipped: Vec<usize> = Vec::new();
+    for (idx, provider) in key_server.oidc.iter().enumerate() {
         // Exactly as configured: the token check compares the `iss` claim to
         // this string, so a client must be sent the same identifier.
         let issuer = provider.issuer.as_str();
-        if !issuer.trim().is_empty() && !issuers.iter().any(|seen| seen == issuer) {
-            issuers.push(issuer.to_string());
+        if issuer.trim().is_empty() || issuers.iter().any(|seen| seen == issuer) {
+            continue;
         }
+        if is_publishable_issuer(issuer) {
+            issuers.push(issuer.to_string());
+        } else {
+            skipped.push(idx);
+        }
+    }
+    if !skipped.is_empty() {
+        WARNED.call_once(|| {
+            for idx in &skipped {
+                // The issuer is not echoed: it may carry a credential.
+                tracing::warn!(
+                    "key_server.oidc[{idx}] issuer is not an http(s) URL free of userinfo, \
+                     query and fragment; not advertised in protected-resource metadata"
+                );
+            }
+        });
     }
     issuers
 }
 
+/// `true` when `issuer` may be published on the unauthenticated metadata
+/// endpoint: an http(s) URL with a host and no userinfo, query or fragment
+/// (the RFC 8414 issuer shape). Anything else either may leak a credential or
+/// names nothing a client can fetch metadata from, and redacting it would send
+/// clients an identifier the token check refuses.
+fn is_publishable_issuer(issuer: &str) -> bool {
+    // Published verbatim, so refuse what the parser would silently rewrite.
+    if issuer
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || c == '\\')
+    {
+        return false;
+    }
+    // The parser repairs `https:host`, `https:///host` and empty userinfo
+    // (`https://@host`), so the raw text must already be `scheme://authority`
+    // with no `@` in the authority, which ends at the first `/`, `?` or `#`.
+    let Some(rest) = issuer
+        .strip_prefix("https://")
+        .or_else(|| issuer.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+    url::Url::parse(issuer)
+        .is_ok_and(|parsed| parsed.query().is_none() && parsed.fragment().is_none())
+}
+
 /// Build RFC 9728 protected-resource metadata, or `None` when no honest
-/// `resource` identifier is available (see module docs).
+/// `resource` identifier is available (see module docs). `config` is the live
+/// snapshot (`public_url` is re-read per request); `running` is the config
+/// the process started with, which decides the advertised issuers.
 #[must_use]
 pub fn build_protected_resource_metadata(
     config: &Config,
+    running: &Config,
     bind_origin: Option<&str>,
 ) -> Option<ProtectedResourceMetadata> {
     let resource = resolve_resource_origin(config, bind_origin)?;
     Some(ProtectedResourceMetadata {
         resource,
-        authorization_servers: authorization_servers(config),
+        authorization_servers: authorization_servers(running),
         bearer_methods_supported: vec!["header".to_string()],
         scopes_supported: Vec::new(),
     })
@@ -247,7 +311,7 @@ pub fn build_protected_resource_metadata(
 ///
 /// `bind_origin` is the startup loopback bind origin captured at router
 /// construction (`None` for a non-loopback bind); `public_url` is read live so
-/// a reload is reflected without a restart.
+/// a reload is reflected without a restart, the restart-only issuers are not.
 pub async fn oauth_protected_resource_handler(
     state: Arc<AppState>,
     bind_origin: Option<String>,
@@ -257,7 +321,11 @@ pub async fn oauth_protected_resource_handler(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("application/json"),
     );
-    match build_protected_resource_metadata(&config, bind_origin.as_deref()) {
+    match build_protected_resource_metadata(
+        &config,
+        state.live_config.running(),
+        bind_origin.as_deref(),
+    ) {
         Some(metadata) => (StatusCode::OK, [json_header], Json(metadata)).into_response(),
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -293,7 +361,7 @@ mod tests {
         config.server.public_url = Some("https://gateway.internal".to_string());
         // Even with a non-loopback bind, the advertised resource is the
         // configured public origin — never the request host or bind address.
-        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
         assert_eq!(meta.resource, "https://gateway.internal");
     }
 
@@ -334,7 +402,7 @@ mod tests {
             );
             let config = config_with_host(host, 8080);
             assert!(
-                build_protected_resource_metadata(&config, None).is_none(),
+                build_protected_resource_metadata(&config, &config, None).is_none(),
                 "{host} without public_url must not publish a resource"
             );
         }
@@ -349,7 +417,8 @@ mod tests {
         };
         // public_url wins over the loopback bind fallback; trailing slash dropped.
         let meta =
-            build_protected_resource_metadata(&config, Some("http://127.0.0.1:39400")).unwrap();
+            build_protected_resource_metadata(&config, &config, Some("http://127.0.0.1:39400"))
+                .unwrap();
         assert_eq!(meta.resource, "https://mcp.acme.internal");
         assert!(!meta.resource.contains("127.0.0.1"));
     }
@@ -358,7 +427,7 @@ mod tests {
     fn authorization_servers_empty_without_a_delegated_issuer() {
         let mut config = config_with_host("gw.internal", 9000);
         config.server.public_url = Some("https://gw.internal:9000".to_string());
-        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
         assert!(
             meta.authorization_servers.is_empty(),
             "the default config accepts no issuer token and the gateway serves no authorization-server metadata of its own, so it names none"
@@ -368,6 +437,7 @@ mod tests {
     fn config_with_issuers(enabled: bool, delegated: bool, issuers: &[&str]) -> Config {
         let mut config = config_with_host("gw.internal", 9000);
         config.server.public_url = Some("https://gw.internal:9000".to_string());
+        config.auth.enabled = true;
         config.key_server.enabled = enabled;
         config.key_server.delegated_bearer = delegated;
         config.key_server.oidc = issuers
@@ -396,7 +466,7 @@ mod tests {
                 "https://login.corp.internal/tenant",
             ],
         );
-        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
         assert_eq!(
             meta.authorization_servers,
             [
@@ -419,12 +489,125 @@ mod tests {
     fn issuers_are_not_advertised_unless_their_tokens_are_accepted() {
         for (enabled, delegated) in [(true, false), (false, true), (false, false)] {
             let config = config_with_issuers(enabled, delegated, &["https://idp.corp.internal"]);
-            let meta = build_protected_resource_metadata(&config, None).unwrap();
+            let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
             assert!(
                 meta.authorization_servers.is_empty(),
                 "enabled={enabled} delegated_bearer={delegated}"
             );
         }
+    }
+
+    /// `auth` and `key_server` apply only on restart, so the issuers named are
+    /// the ones the running process accepts, while `public_url` is read live
+    /// (MIK-7941 findings 1, 2 and 5).
+    #[test]
+    fn issuers_come_from_the_running_config_not_a_pending_reload() {
+        let running = config_with_issuers(true, true, &["https://idp.running.internal"]);
+        let mut pending = config_with_issuers(true, true, &["https://idp.pending.internal"]);
+        pending.server.public_url = Some("https://gw.reloaded.internal".to_string());
+        let meta = build_protected_resource_metadata(&pending, &running, None).unwrap();
+        assert_eq!(meta.resource, "https://gw.reloaded.internal");
+        assert_eq!(meta.authorization_servers, ["https://idp.running.internal"]);
+
+        let off = config_with_issuers(false, true, &["https://idp.running.internal"]);
+        let meta = build_protected_resource_metadata(&pending, &off, None).unwrap();
+        assert!(
+            meta.authorization_servers.is_empty(),
+            "a key server enabled only in a pending reload accepts no token yet"
+        );
+    }
+
+    /// With `auth.enabled: false` every caller is anonymous and no issuer
+    /// token is ever checked, so none is advertised (MIK-7941 finding 4).
+    #[test]
+    fn issuers_are_not_advertised_when_auth_is_off() {
+        let mut config = config_with_issuers(true, true, &["https://idp.corp.internal"]);
+        config.auth.enabled = false;
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
+        assert!(meta.authorization_servers.is_empty());
+    }
+
+    /// The endpoint is unauthenticated: an issuer carrying userinfo, a query
+    /// or a fragment is never published, and neither is an opaque one a
+    /// client cannot fetch metadata from (MIK-7941 finding 3).
+    #[test]
+    fn credential_bearing_or_opaque_issuers_are_not_advertised() {
+        let config = config_with_issuers(
+            true,
+            true,
+            &[
+                "https://user:pw@idp.corp.internal/tenant",
+                "https://token@idp.corp.internal",
+                "https://idp.corp.internal/tenant?k=secret",
+                "https://idp.corp.internal/tenant#frag",
+                "mcp-gateway",
+                "https://idp.corp.internal/tenant\n",
+                "https://idp.corp.internal/tenant",
+            ],
+        );
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
+        assert_eq!(
+            meta.authorization_servers,
+            ["https://idp.corp.internal/tenant"]
+        );
+        let json = serde_json::to_string(&meta).unwrap();
+        for leaked in ["pw", "token@", "secret", "frag", "mcp-gateway"] {
+            assert!(!json.contains(leaked), "leaked {leaked:?}: {json}");
+        }
+    }
+
+    /// Review follow-up to MIK-7941: empty userinfo is stripped by the URL
+    /// parser but published verbatim, so the raw authority is checked; an `@`
+    /// in the path is fine.
+    #[test]
+    fn issuers_with_empty_userinfo_are_not_advertised() {
+        let config = config_with_issuers(
+            true,
+            true,
+            &[
+                "https://@idp.corp.internal",
+                "https://:@idp.corp.internal/tenant",
+                // No `//`: the parser still reads userinfo here.
+                "https:user@idp.corp.internal",
+                "https::pw@idp.corp.internal",
+                "ftp://idp.corp.internal",
+                // The parser reads `\` as `/`; published verbatim it would differ.
+                "https://idp.corp.internal\\tenant",
+                "https://idp.corp.internal/t@nant",
+            ],
+        );
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
+        assert_eq!(
+            meta.authorization_servers,
+            ["https://idp.corp.internal/t@nant"]
+        );
+    }
+
+    /// Second review follow-up to MIK-7941: an issuer without exactly
+    /// `scheme://authority` is refused; the parser repairs both of these.
+    #[test]
+    fn issuers_without_a_plain_authority_are_not_advertised() {
+        let config = config_with_issuers(
+            true,
+            true,
+            &[
+                "https:@idp.corp.internal",
+                "https:///@idp.corp.internal",
+                "https://idp.corp.internal",
+            ],
+        );
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
+        assert_eq!(meta.authorization_servers, ["https://idp.corp.internal"]);
+    }
+
+    /// Agent auth refuses every bearer that is not a registered agent's
+    /// token, an OIDC ID token included, so no issuer is named while it is on.
+    #[test]
+    fn issuers_are_not_advertised_under_agent_auth() {
+        let mut agent = config_with_issuers(true, true, &["https://idp.corp.internal"]);
+        agent.agent_auth.enabled = true;
+        let meta = build_protected_resource_metadata(&agent, &agent, None).unwrap();
+        assert!(meta.authorization_servers.is_empty());
     }
 
     #[test]
@@ -438,7 +621,7 @@ mod tests {
                 "https://idp.corp.internal",
             ],
         );
-        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
         assert_eq!(meta.authorization_servers, ["https://idp.corp.internal"]);
     }
 
@@ -447,7 +630,7 @@ mod tests {
         // RFC 9728 §3.2: zero-value parameters are omitted, not sent as `[]`.
         let mut config = config_with_host("gw.internal", 9000);
         config.server.public_url = Some("https://gw.internal:9000".to_string());
-        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
         let json = serde_json::to_string(&meta).unwrap();
         assert!(!json.contains("authorization_servers"));
         assert!(!json.contains("scopes_supported"));
@@ -457,7 +640,7 @@ mod tests {
     fn serializes_rfc9728_shaped_json() {
         let mut config = config_with_host("gw.internal", 9000);
         config.server.public_url = Some("https://gw.internal:9000".to_string());
-        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
         let json = serde_json::to_string(&meta).unwrap();
         assert!(json.contains("\"resource\":\"https://gw.internal:9000\""));
         assert!(json.contains("\"bearer_methods_supported\":[\"header\"]"));
@@ -482,7 +665,8 @@ mod tests {
             let mut config = config_with_host("127.0.0.1", 39400);
             config.server.public_url = Some(bad.to_string());
             let meta =
-                build_protected_resource_metadata(&config, Some("http://127.0.0.1:39400")).unwrap();
+                build_protected_resource_metadata(&config, &config, Some("http://127.0.0.1:39400"))
+                    .unwrap();
             assert_eq!(
                 meta.resource, "http://127.0.0.1:39400",
                 "malformed public_url {bad:?} must fall back to the bind origin, never be published"
