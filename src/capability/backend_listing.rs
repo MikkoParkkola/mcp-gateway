@@ -56,12 +56,25 @@ impl CapabilityBackend {
         changed
     }
 
-    /// The catalogue changed (a load, reload or removal, each announced by its
-    /// own path): what is listed now is what clients are told next, so it is
-    /// the baseline, and the watch plans again for the new entries' expiries.
+    /// The catalogue changed (a load, reload or removal): what is listed now is
+    /// what clients are told next, so it is the baseline, and the watch plans
+    /// again for the new entries' expiries. The change itself is announced by
+    /// its path: the watcher after a reload (a quarantine unload is followed by
+    /// one), [`Self::finish_initial_scan`] for the startup scan.
     pub(super) fn catalogue_changed(&self) {
         *self.listing.lock() = Some(self.listed_names());
         self.listing_wake.notify_one();
+    }
+
+    /// The startup scan loaded every directory. A client served while it ran
+    /// may have listed part of it, and no reload announces its loads: mark the
+    /// scan complete (readiness, MIK-7268), then announce once if anything is
+    /// listed.
+    pub(crate) fn finish_initial_scan(&self, registry: &BackendRegistry) {
+        self.mark_initial_scan_complete();
+        if !self.listed_names().is_empty() {
+            registry.announce_change(&self.name);
+        }
     }
 
     /// When the earliest listed `oauth:` login stops counting, if any.
