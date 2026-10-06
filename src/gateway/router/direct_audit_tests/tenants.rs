@@ -213,8 +213,11 @@ async fn direct_replayed_chain_refusal_keeps_its_uninspected_attribution() {
     // The replay answers the stored error; the stored marker stays internal.
     let error = &answers[1]["error"];
     assert_eq!(error["code"], answers[0]["error"]["code"], "{answers:?}");
-    assert!(error.get("uninspected").is_none(), "{error}");
-    assert!(error.pointer("/data/uninspected").is_none(), "{error}");
+    assert!(error.get("_gatewayUninspected").is_none(), "{error}");
+    assert!(
+        error.pointer("/data/_gatewayUninspected").is_none(),
+        "{error}"
+    );
     let all = invocations(&fx);
     assert_eq!(all.len(), 2, "{all:?}");
     let (first, replay) = (&all[0], &all[1]);

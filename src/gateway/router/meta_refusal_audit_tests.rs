@@ -164,3 +164,19 @@ async fn a_modern_refusal_without_a_trace_is_keyed_on_the_minted_trace_id() {
     }
     assert_ne!(first["session_id"], second["session_id"], "{written}");
 }
+
+/// MIK-7640 control: a legacy call has a session id, so a refusal with no
+/// caller trace id is keyed on the session, as before.
+#[tokio::test]
+async fn a_legacy_refusal_without_a_trace_is_keyed_on_the_session() {
+    let fx = fixture(AuditFailurePolicy::FailClosed).await;
+    let (status, body) = refused_invoke(&fx, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let written = std::fs::read_to_string(&fx.audit_path).unwrap_or_default();
+    let record: Value = written
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .find(|entry: &Value| entry.get("correlation_source").is_some())
+        .unwrap_or_else(|| panic!("a refusal record: {written}"));
+    assert_eq!(record["correlation_source"], json!("session_id"), "{record}");
+}
