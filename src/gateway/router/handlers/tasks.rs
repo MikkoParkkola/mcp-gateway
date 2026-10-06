@@ -396,10 +396,8 @@ async fn recover_from_upstream(
                 // dispatch applies, from the same implementation.
                 meta_mcp
                     .recover_task_result(&server, &tool, api_key_name.as_deref(), &trace, result)
-                    .map_err(|error| crate::protocol::JsonRpcError {
-                        code: -32603,
-                        message: error.to_string(),
-                        data: None,
+                    .map_err(|error| {
+                        crate::gateway::meta_mcp::response_security::recovered_result_error(&error)
                     })
             },
             error_policy,
