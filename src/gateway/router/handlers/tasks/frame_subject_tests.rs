@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 
 use super::{RecoveryCaller, task_frames};
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::streaming::{TaskFrameDelivery as _, TaskFrames as _};
 use crate::identity_grants::GrantSubject;
 use crate::protocol::RequestId;
 use crate::protocol::subscriptions::SubscriptionId;
