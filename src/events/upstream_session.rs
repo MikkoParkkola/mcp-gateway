@@ -221,7 +221,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             Ev::Pending(Some(note)) => {
                 state.note(note, true);
             }
-            Ev::Pending(None) => state.pending = None,
+            Ev::Pending(None) => state.pending_ended(),
             Ev::Refilled => {
                 // The refill ended (filled or timed out): the hub may hear now.
                 refill = None;
@@ -412,6 +412,9 @@ struct State<'a> {
     snapshot_retry_at: Instant,
     /// A modern replacement listen is not retried before this.
     retry_open_at: Instant,
+    /// Listens that ended, or failed to open, unacknowledged since the last
+    /// acknowledgement (MIK-7898 SESS.2a).
+    open_failures: u32,
 }
 
 impl<'a> State<'a> {
@@ -434,6 +437,7 @@ impl<'a> State<'a> {
             snapshot_due: now + SNAPSHOT_TTL,
             snapshot_retry_at: now,
             retry_open_at: now,
+            open_failures: 0,
         }
     }
 
@@ -557,6 +561,20 @@ impl<'a> State<'a> {
         }
         self.honoured = Some((kinds, uris.to_vec()));
         self.acked = Some(Instant::now());
+        self.open_failures = 0;
+    }
+
+    /// The replacement listen closed before its acknowledgement.
+    fn pending_ended(&mut self) {
+        self.pending = None;
+        self.unacked();
+    }
+
+    /// A listen ended or failed unacknowledged: the next open waits one
+    /// backoff step longer than the last (1 s doubling to 300 s, jittered).
+    fn unacked(&mut self) {
+        self.retry_open_at = Instant::now() + backoff(self.open_failures);
+        self.open_failures = self.open_failures.saturating_add(1);
     }
 
     /// Keep the channel matching the counted interest and the snapshot
@@ -576,10 +594,14 @@ impl<'a> State<'a> {
                 .is_some_and(|p| p.since.elapsed() > ACK_DEADLINE)
             {
                 self.pending = None;
-                self.retry_open_at = now + Duration::from_secs(5);
+                self.unacked();
             }
-            if self.acked.is_none() && self.opened.elapsed() > ACK_DEADLINE {
+            if self.acked.is_none()
+                && self.current.is_some()
+                && self.opened.elapsed() > ACK_DEADLINE
+            {
                 self.current = None;
+                self.unacked();
             }
             let want = requested(self.shared);
             let have = self.current.as_ref().map(|(_, r)| r.clone());
@@ -598,7 +620,7 @@ impl<'a> State<'a> {
                             since: Instant::now(),
                         });
                     }
-                    Err(_) => self.retry_open_at = Instant::now() + Duration::from_secs(5),
+                    Err(_) => self.unacked(),
                 }
             }
         } else {
