@@ -6,13 +6,14 @@
 //! timeout, while its stderr, which named the cause, had already been read and
 //! dropped. Now the start notices stdout closing, and reports the exit status.
 //!
-//! The child's stderr never reaches an MCP client: it is another program's
-//! output and can hold secrets, and a transport error travels to the client
-//! verbatim. The returned error names the exit status and points at the
-//! gateway log; the bounded, redacted tail goes to that log record, as its
-//! `stderr` field, which is where `doctor --start-stdio` reads it too.
+//! The child's stderr reaches neither an MCP client nor the gateway log: it is
+//! another program's output and can hold a secret no redaction pattern knows
+//! (MIK-7978). The bounded tail is only matched against a fixed list of
+//! needles; the error and the log record carry the exit status, the class and
+//! the matched needle, all text of ours. `doctor --start-stdio` shows the
+//! error.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt as _, BufReader};
 use tokio::process::ChildStderr;
@@ -26,10 +27,6 @@ const TAIL_LINES: usize = 20;
 /// Bytes read of one line; the rest of an overlong line is discarded unread
 /// into memory, so the reader is bounded whatever the child writes.
 const RAW_LINE_BYTES: usize = 4096;
-/// Characters kept of one line, cut after redaction.
-const LINE_CHARS: usize = 256;
-/// Bytes kept of the whole excerpt.
-const EXCERPT_BYTES: usize = 2048;
 /// How long the start waits for the exit status and the last stderr bytes.
 const DRAIN: std::time::Duration = std::time::Duration::from_secs(1);
 
@@ -91,145 +88,33 @@ async fn discard_rest_of_line(reader: &mut BufReader<ChildStderr>) {
     }
 }
 
-/// The tail as one excerpt. Each line is redacted whole (every secret the
-/// gateway handed the child: argv arguments, `env:` values, and every
-/// recognisable credential) BEFORE it is cut, so a cut can never split a
-/// secret out of the reach of its match. A line cut at [`RAW_LINE_BYTES`] on
-/// read can still end in the head of a secret; that fragment is masked too.
-pub(super) fn excerpt(
-    tail: &VecDeque<Vec<u8>>,
-    argv: &[String],
-    env: &HashMap<String, String>,
-) -> String {
-    // Matched line by line, so a multi-line value (a PEM key) is matched by
-    // each of its own lines, and normalised as the lines are, so a value with
-    // its own control characters still matches; longest first, so a value
-    // that is a prefix of another cannot break the longer one's match.
-    let mut secrets: Vec<String> = argv
-        .iter()
-        .chain(env.values())
-        .flat_map(|s| s.lines())
-        .map(|s| s.chars().filter(|c| !c.is_control()).collect::<String>())
-        .map(|s| s.trim().to_string())
-        .filter(|s| s.len() >= 4)
-        .collect();
-    // Dedup needs equal values adjacent; the stable length sort then keeps
-    // longest first, so a secret containing another is replaced first.
-    secrets.sort_unstable();
-    secrets.dedup();
-    secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
-    let secrets: Vec<&str> = secrets.iter().map(String::as_str).collect();
-    let lines: Vec<String> = tail.iter().map(|raw| redact_line(raw, &secrets)).collect();
-    let mut text = lines.join("\n");
-    if text.len() > EXCERPT_BYTES {
-        let mut cut = text.len() - EXCERPT_BYTES;
-        while !text.is_char_boundary(cut) {
-            cut += 1;
-        }
-        text = text[cut..].to_string();
-    }
-    text
-}
+/// Known causes, as (needle, class). The first needle found, scanning from
+/// the last line back, names the cause; the needle is logged, never the line.
+const NEEDLES: &[(&str, &str)] = &[
+    ("Cannot find module", "missing_module"),
+    ("ERR_MODULE_NOT_FOUND", "missing_module"),
+    ("ModuleNotFoundError", "missing_module"),
+    ("command not found", "missing_file"),
+    ("No such file or directory", "missing_file"),
+    ("EACCES", "permission_denied"),
+    ("Permission denied", "permission_denied"),
+    ("EADDRINUSE", "address_in_use"),
+    ("address already in use", "address_in_use"),
+];
 
-/// One stderr line, normalised first (lossy UTF-8, control characters out, a
-/// character split by the read limit dropped) so redaction sees what the log
-/// will show, then redacted, then cut to [`LINE_CHARS`]. Without the `firewall`
-/// feature there is no credential recogniser, so the line is withheld.
-fn redact_line(raw: &[u8], secrets: &[&str]) -> String {
-    let cut_on_read = raw.len() == RAW_LINE_BYTES && !raw.ends_with(b"\n");
-    let whole = if cut_on_read {
-        without_split_char(raw)
-    } else {
-        raw
-    };
-    let mut line: String = String::from_utf8_lossy(whole)
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect();
-    for secret in secrets {
-        line = line.replace(secret, "[REDACTED]");
-        if cut_on_read {
-            mask_secret_head(&mut line, secret);
+/// Class used when no needle matches.
+const UNCLASSIFIED: &str = "unclassified";
+
+/// The early exit's class and the needle that chose it, from the raw tail.
+pub(super) fn classify(tail: &VecDeque<Vec<u8>>) -> (&'static str, Option<&'static str>) {
+    for line in tail.iter().rev() {
+        for &(needle, class) in NEEDLES {
+            if line.windows(needle.len()).any(|w| w == needle.as_bytes()) {
+                return (class, Some(needle));
+            }
         }
     }
-    recognise(line, RECOGNISER)
-        .chars()
-        .take(LINE_CHARS)
-        .collect()
-}
-
-/// Whether this build can recognise credential-shaped text in stderr.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Recogniser {
-    /// The firewall redactor masks what it recognises.
-    Firewall,
-    /// No recogniser is built in, so the text is withheld outright.
-    Absent,
-}
-
-/// This build's recogniser: a value, so both arms are testable in any build.
-pub(super) const RECOGNISER: Recogniser = if cfg!(feature = "firewall") {
-    Recogniser::Firewall
-} else {
-    Recogniser::Absent
-};
-
-/// Placeholder for a line no recogniser could vet.
-pub(super) const WITHHELD: &str = "[stderr withheld: built without the firewall redactor]";
-
-/// Mask credential-shaped text, or withhold the line when nothing can.
-pub(super) fn recognise(line: String, recogniser: Recogniser) -> String {
-    match recogniser {
-        Recogniser::Firewall => firewall_redact(line),
-        Recogniser::Absent => WITHHELD.to_string(),
-    }
-}
-
-#[cfg(feature = "firewall")]
-fn firewall_redact(line: String) -> String {
-    let mut value = serde_json::Value::String(line);
-    crate::security::firewall::redactor::Redactor::new().scan_and_redact(&mut value);
-    value.as_str().unwrap_or_default().to_string()
-}
-
-/// Never selected without the feature (see [`RECOGNISER`]); withholds if it were.
-#[cfg(not(feature = "firewall"))]
-fn firewall_redact(_line: String) -> String {
-    WITHHELD.to_string()
-}
-
-/// `raw` without a trailing incomplete UTF-8 sequence, whatever precedes it:
-/// a character the read limit split would otherwise decode to U+FFFD and hide
-/// the secret head before it from [`mask_secret_head`].
-fn without_split_char(raw: &[u8]) -> &[u8] {
-    for back in 1..=3.min(raw.len()) {
-        let byte = raw[raw.len() - back];
-        let width = match byte {
-            0xC0..=0xDF => 2,
-            0xE0..=0xEF => 3,
-            0xF0..=0xF7 => 4,
-            0x80..=0xBF => continue,
-            _ => return raw,
-        };
-        return if width > back {
-            &raw[..raw.len() - back]
-        } else {
-            raw
-        };
-    }
-    raw
-}
-
-/// Replace the end of a line cut at the read limit when it is the first bytes
-/// of `secret`: the fragment the cut left behind.
-fn mask_secret_head(line: &mut String, secret: &str) {
-    let body = line.len();
-    let longest = (1..secret.len().min(body + 1))
-        .rev()
-        .find(|&k| secret.is_char_boundary(k) && line[..body].ends_with(&secret[..k]));
-    if let Some(k) = longest {
-        line.replace_range(body - k..body, "[REDACTED]");
-    }
+    (UNCLASSIFIED, None)
 }
 
 /// The reply, or `None` if stdout closed first. A reply read before EOF has
@@ -248,20 +133,20 @@ pub(super) async fn reply_or_eof<T>(
 
 /// Per-start state: the stdout-closed latch (fresh each start, so a previous
 /// generation's exit cannot answer this one) and whether the race saw it. Tests
-/// also keep the excerpt of the last early exit.
+/// also keep the class and needle of the last early exit.
 #[derive(Default)]
 pub(super) struct StartState {
     eof: parking_lot::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     exited: std::sync::atomic::AtomicBool,
     // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
     #[cfg(all(test, unix))]
-    failure: parking_lot::Mutex<Option<String>>,
+    failure: parking_lot::Mutex<Option<(&'static str, Option<&'static str>)>>,
 }
 
 impl StartState {
     pub(super) fn begin(&self, eof: tokio::sync::watch::Receiver<bool>) {
         *self.eof.lock() = Some(eof);
-        // An excerpt describes the last start only.
+        // A class describes the last start only.
         // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
         #[cfg(all(test, unix))]
         {
@@ -277,12 +162,12 @@ impl StartState {
 }
 
 impl StdioTransport {
-    /// The redacted stderr tail of the last start that ended in an early exit,
-    /// as the log record carried it.
+    /// The class and needle of the last start that ended in an early exit, as
+    /// the log record carried them.
     // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
     #[cfg(all(test, unix))]
-    pub(super) fn start_failure_excerpt(&self) -> Option<String> {
-        self.start.failure.lock().clone()
+    pub(super) fn start_failure_class(&self) -> Option<(&'static str, Option<&'static str>)> {
+        *self.start.failure.lock()
     }
 
     /// The `initialize` request, raced against this start's stdout closing.
@@ -326,13 +211,12 @@ impl StdioTransport {
         response
     }
 
-    /// Turn an early exit into its report: the exit status for the caller,
-    /// the redacted stderr tail for the log. Kills a child that closed stdout
-    /// but is still running.
+    /// Turn an early exit into its report: the exit status, class and needle,
+    /// for the caller and the log alike. Kills a child that closed stdout but
+    /// is still running.
     pub(super) async fn early_exit_error(
         &self,
         stderr_tail: (tokio::task::JoinHandle<()>, StderrTail),
-        argv: &[String],
     ) -> Error {
         let child = self.child.lock().await.take();
         let status = match child {
@@ -352,22 +236,24 @@ impl StdioTransport {
             // Something still holds the pipe; keep what was read so far.
             abort.abort();
         }
-        let excerpt = excerpt(&tail.lock(), argv, &self.env);
+        let (class, needle) = classify(&tail.lock());
         let command = self.diagnostic_command();
         let what = match status {
             Some(status) => format!("exited before initialize ({status})"),
             None => "closed its stdout before initialize".to_string(),
         };
-        // `doctor --start-stdio` reads this record's `stderr` field.
-        warn!(command = %command, stderr = %excerpt, "stdio backend {what}");
+        let cause = match needle {
+            Some(needle) => format!("{class}, stderr matched \"{needle}\""),
+            None => class.to_string(),
+        };
+        // Never the stderr text itself: no redaction pattern list is complete.
+        warn!(command = %command, class, needle = needle.unwrap_or("none"), "stdio backend {what}");
         // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
         #[cfg(all(test, unix))]
         {
-            *self.start.failure.lock() = Some(excerpt);
+            *self.start.failure.lock() = Some((class, needle));
         }
-        Error::Transport(format!(
-            "stdio backend {command} {what}; its stderr is in the gateway log"
-        ))
+        Error::Transport(format!("stdio backend {command} {what}: {cause}"))
     }
 }
 
