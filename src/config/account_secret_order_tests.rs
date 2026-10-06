@@ -108,3 +108,22 @@ fn a_disabled_block_with_an_adapter_records_its_file_keys() {
         "an adapter's block has its file: keys recorded"
     );
 }
+
+/// MIK-7714 scope: a disabled block with no adapter reads no reference, so a
+/// literal key in it is left as it was and the load succeeds.
+#[test]
+fn a_disabled_block_without_an_adapter_still_loads_a_literal_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(
+        &config_path,
+        format!(
+            "accounts:\n  schema_version: accounts.v1\n  enabled: false\n  deployment: single_process\n  instance_id: gateway-a\n  store_dir: {store:?}\n  authority_dir: {authority:?}\n  current_key_id: current\n  keys:\n    current: not-a-reference\n",
+            store = dir.path().join("store"),
+            authority = dir.path().join("authority"),
+        ),
+    )
+    .unwrap();
+
+    Config::load_evaluated(Some(&config_path)).expect("a disabled block without an adapter loads");
+}
