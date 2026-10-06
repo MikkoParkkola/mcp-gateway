@@ -120,8 +120,11 @@ backend topology, so they are operator-only.
 
 **Producers.** Each is a single emit call at a point that already exists:
 
-- the cost enforcer's threshold evaluation (`BudgetEnforcer::check`,
-  `src/cost_accounting/enforcer.rs:183`) for budgets;
+- the cost enforcer's committed spend (`BudgetEnforcer::record_spend`,
+  `src/cost_accounting/enforcer.rs:500`) for budgets. `check` sees only the
+  projected spend of a call that may still be refused or fail, so a crossing
+  read there could report one that never happened, and again on every
+  refused retry;
 - the backend health and circuit-breaker transition for health;
 - the kill-switch flip (`gateway_kill_server` / revive) for the kill switch.
 
@@ -158,8 +161,11 @@ five fields, no seconds.
 - the parent's per-principal subscription cap;
 - a minimum period of 5 minutes, refused with `-32602` and
   `data.field = "arguments.cron"` when the expression can fire more often;
-- `events.schedule.max_timers` (default 1000, global) with a per-principal
-  sub-cap of 20.
+- `events.schedule.max_timers` (default 1000, global). There is no
+  per-principal timer cap: the lifecycle hooks fire only for a timer's first
+  and last subscriber, so the source never sees a second principal join a
+  shared timer and could not count it. The parent's per-principal
+  subscription cap bounds the timers one principal can start.
 
 **on_first_subscriber / on_last_subscriber.** Start or stop one timer per
 canonical `(cron, timezone, label)`. Timers share one minute-boundary ticker
