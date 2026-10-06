@@ -10,6 +10,7 @@
 //! own capacity, never an uncounted subscription.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use super::{Full, MAX_URI_BUDGET_BYTES, MAX_URIS, encoded};
 
@@ -39,7 +40,14 @@ struct Entry {
     held: Held,
     stranded: bool,
     errors: u8,
+    /// A call that left the key still due is not repeated before this.
+    retry_at: Option<Instant>,
+    backoff: Duration,
 }
+
+/// First and last wait between repeated calls on one key.
+const RETRY_FIRST: Duration = Duration::from_secs(1);
+const RETRY_CAP: Duration = Duration::from_secs(300);
 
 /// A call in flight, as [`Ledger::sent`] recorded it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +66,8 @@ pub(crate) struct Ledger {
     bytes: usize,
     /// Wanted URIs that found no room after a holder change (retried).
     unplaced: BTreeSet<String>,
+    /// Identity of the holder the current generation stands for.
+    holder: Option<u64>,
 }
 
 impl Ledger {
@@ -68,6 +78,8 @@ impl Ledger {
     pub(crate) fn want(&mut self, uri: &str) -> Result<(), Full> {
         if let Some(entry) = self.keys.get_mut(&(self.generation, uri.to_owned())) {
             entry.wanted = true;
+            entry.retry_at = None;
+            entry.backoff = RETRY_FIRST;
             return Ok(());
         }
         self.insert(uri)
@@ -79,6 +91,8 @@ impl Ledger {
         let key = (self.generation, uri.to_owned());
         if let Some(entry) = self.keys.get_mut(&key) {
             entry.wanted = false;
+            entry.retry_at = None;
+            entry.backoff = RETRY_FIRST;
         }
         self.prune(&key);
     }
@@ -97,6 +111,8 @@ impl Ledger {
                 held: Held::No,
                 stranded: false,
                 errors: 0,
+                retry_at: None,
+                backoff: RETRY_FIRST,
             },
         );
         Ok(())
@@ -124,21 +140,15 @@ impl Ledger {
         }
     }
 
-    /// The calls the next pass sends, one per URI at a time:
+    /// The calls the next pass sends at `now`, one per URI at a time:
     /// `(uri, subscribe)`.
-    pub(crate) fn due(&self) -> Vec<(String, bool)> {
+    pub(crate) fn due(&self, now: Instant) -> Vec<(String, bool)> {
         self.keys
             .iter()
-            .filter(|((g, _), e)| *g == self.generation && e.in_flight == 0)
-            .filter_map(|((_, uri), e)| {
-                if e.wanted && e.held != Held::Yes {
-                    Some((uri.clone(), true))
-                } else if !e.wanted && !e.stranded && e.held != Held::No {
-                    Some((uri.clone(), false))
-                } else {
-                    None
-                }
+            .filter(|((g, _), e)| {
+                *g == self.generation && e.in_flight == 0 && e.retry_at.is_none_or(|at| at <= now)
             })
+            .filter_map(|((_, uri), e)| wanted_call(e).map(|subscribe| (uri.clone(), subscribe)))
             .collect()
     }
 
@@ -173,7 +183,7 @@ impl Ledger {
     /// Record how `call` ended. An answer from an earlier holder is ignored:
     /// that holder's keys are already stranded. `true` when this is the
     /// third error answer to an unsubscribe (warn once).
-    pub(crate) fn answered(&mut self, call: &Call, outcome: Outcome) -> bool {
+    pub(crate) fn answered(&mut self, call: &Call, outcome: Outcome, now: Instant) -> bool {
         if call.generation != self.generation {
             return false;
         }
@@ -209,14 +219,30 @@ impl Ledger {
                 entry.stranded = true;
             }
         }
+        if wanted_call(entry).is_some() {
+            entry.retry_at = Some(now + entry.backoff);
+            entry.backoff = (entry.backoff * 2).min(RETRY_CAP);
+        } else {
+            entry.retry_at = None;
+            entry.backoff = RETRY_FIRST;
+        }
         self.prune(&key);
         warn
+    }
+
+    /// Note which holder a pass is about to talk to; a different one than
+    /// before is a holder change.
+    pub(crate) fn observe(&mut self, holder: u64) {
+        if self.holder.is_some_and(|h| h != holder) {
+            self.holder_changed();
+        }
+        self.holder = Some(holder);
     }
 
     /// The holder changed (a new HTTP session id, stdio process or
     /// WebSocket connection): what the old one may hold stays charged, and
     /// each wanted URI needs a fresh key on the new one.
-    pub(crate) fn holder_changed(&mut self) {
+    fn holder_changed(&mut self) {
         let old = self.generation;
         self.generation += 1;
         let current: Vec<(u64, String)> = self
@@ -260,6 +286,18 @@ impl Ledger {
     /// Wanted URIs that have no key on the current holder (shown, retried).
     pub(crate) fn unplaced(&self) -> usize {
         self.unplaced.len()
+    }
+}
+
+/// The call a key is due for, ignoring timing: `Some(true)` subscribe,
+/// `Some(false)` unsubscribe.
+fn wanted_call(e: &Entry) -> Option<bool> {
+    if e.wanted && e.held != Held::Yes {
+        Some(true)
+    } else if !e.wanted && !e.stranded && e.held != Held::No {
+        Some(false)
+    } else {
+        None
     }
 }
 
