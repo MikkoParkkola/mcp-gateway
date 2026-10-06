@@ -37,7 +37,7 @@ pub(super) struct Caller {
     /// The caller's own spend key (MIK-7653), empty for a keyless caller.
     /// Owned here so a session-less call's `BackendCall` can borrow it for
     /// the whole route.
-    pub(super) caller_key: String,
+    pub(super) spend_key: String,
 }
 
 impl Caller {
@@ -132,7 +132,7 @@ pub(super) async fn resolve_caller(
         verified_identity,
         inbound_headers: request.headers().clone(),
         grant_subject: None,
-        caller_key: String::new(),
+        spend_key: String::new(),
     };
     validate_agent(state, &request, &caller)?;
 
@@ -157,7 +157,7 @@ pub(super) async fn resolve_caller(
         Ok(subject) => subject,
         Err(refusal) => return Err(super::super::identity::identity_refusal_response(refusal)),
     };
-    caller.caller_key = super::super::identity::caller_key(
+    caller.spend_key = super::super::identity::caller_key(
         caller.grant_subject.as_ref(),
         caller.cert_identity.as_ref(),
         caller.client.as_ref(),
@@ -215,7 +215,7 @@ pub(super) async fn read_envelope(
         caller.client.as_ref(),
         caller.grant_subject.as_ref(),
     );
-    reads.capture(state, &json_request, || caller.caller_key.clone());
+    reads.capture(state, &json_request, || caller.spend_key.clone());
 
     // After the audit hash (D2-e: params as sent), before anything else reads
     // the request: parse, telemetry and every forwarding arm see no token.

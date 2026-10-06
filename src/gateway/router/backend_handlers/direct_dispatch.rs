@@ -189,7 +189,7 @@ pub(super) async fn admit<'a>(
     let caller_key = route
         .session_id
         .is_none_or(str::is_empty)
-        .then_some(caller.caller_key.as_str());
+        .then_some(caller.spend_key.as_str());
     let call = BackendCall {
         server: name,
         tool: envelope

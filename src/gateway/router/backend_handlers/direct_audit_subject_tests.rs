@@ -133,7 +133,7 @@ fn credentialed_caller() -> Caller {
         verified_identity: None,
         inbound_headers: axum::http::HeaderMap::new(),
         grant_subject: None,
-        caller_key: String::new(),
+        spend_key: String::new(),
     }
 }
 
