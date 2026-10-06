@@ -35,7 +35,8 @@ pub(super) struct Shared {
     /// read at each use (MIK-7894).
     pub ineligible: super::backend_source::Ineligible,
     /// A backend tools notice whose refill has not started yet. Kept across
-    /// sessions, so one that ends first does not drop it (MIK-8007).
+    /// sessions, so one that ends first does not drop it (MIK-8007). Not
+    /// across a task stop: that ends the interest the notice was owed to.
     pub tools_owed: std::sync::atomic::AtomicBool,
 }
 
