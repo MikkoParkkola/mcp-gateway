@@ -45,7 +45,7 @@ pub(crate) use adapters::AdapterConfig;
 // Gateway-credential view for the separation checks; only `config::Config` sees `auth`.
 pub(crate) use adapters::GatewayCredential;
 use journey::HostedConfig;
-use references::{is_reference, reference_name, resolve_key};
+use references::{is_reference, reference_name, resolve_key, validate_key_references};
 
 /// Structural gateway separation for the whole block: no adapter names the same
 /// environment variable as a gateway credential.
@@ -146,6 +146,7 @@ pub(crate) fn resolve_adapter_runtime(
     adapters::validate_no_gateway_reference_alias(&accounts.adapters, credentials)?;
     adapters::validate_no_gateway_material_reuse(&accounts.adapters, overlay, credentials)?;
 
+    validate_key_references(&accounts.keys)?;
     let mut keys = BTreeMap::new();
     for (key_id, reference) in &accounts.keys {
         keys.insert(key_id.clone(), resolve_key(key_id, reference, overlay)?);
@@ -471,13 +472,7 @@ pub(crate) fn resolve(
 
     // Reject malformed references anywhere in the block before resolving any
     // secret. A later invalid key must not cause an earlier environment read.
-    for (key_id, reference) in &accounts.keys {
-        if !is_reference(reference) {
-            return Err(AccountsConfigError::KeyNotAReference {
-                key_id: key_id.clone(),
-            });
-        }
-    }
+    validate_key_references(&accounts.keys)?;
 
     let mut keys = BTreeMap::new();
     let mut secret_refs_read = Vec::new();
@@ -542,6 +537,11 @@ pub(crate) fn validate_descriptors(
     }
     adapters::validate(&accounts.adapters)?;
     journey::validate(accounts)?;
+    // Load records these references whenever they are read: store enabled, or
+    // an adapter (which runs with it disabled). MIK-7714.
+    if accounts.enabled || !accounts.adapters.is_empty() {
+        validate_key_references(&accounts.keys)?;
+    }
     let Some(descriptors) = accounts.descriptors.as_ref() else {
         return Ok(());
     };

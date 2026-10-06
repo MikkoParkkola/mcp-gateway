@@ -121,7 +121,7 @@ async fn stdio_refuses_an_account_dependent_call_and_serves_a_local_mutation() {
         BackendConfig {
             transport: TransportConfig::Http {
                 http_url: url,
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             enabled: true,

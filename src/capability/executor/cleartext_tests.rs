@@ -248,3 +248,193 @@ auth:
         assert!(error.contains("cleartext"), "{service}: {error}");
     }
 }
+
+/// MIK-7958: a capability without `auth.required` whose header, query or body
+/// template fills in a `{env.X}`/`{keychain.X}` secret sends that secret too.
+fn templated_secret(url_line: &str, template_line: &str) -> CapabilityDefinition {
+    parse_capability(&format!(
+        "
+name: template_secret_probe
+description: probe
+providers:
+  primary:
+    service: rest
+    config:
+      {url_line}
+      path: /v1/items
+      method: POST
+      {template_line}
+"
+    ))
+    .expect("parses")
+}
+
+#[test]
+fn a_secret_in_a_header_query_or_body_template_refuses_cleartext_at_load() {
+    for (template_line, field) in [
+        (
+            "headers: {X-Api-Key: \"{env.MCP_GW_7958_KEY}\"}",
+            "providers.primary.config.headers.X-Api-Key",
+        ),
+        (
+            "params: {key: \"{keychain.mik7958}\"}",
+            "providers.primary.config.params.key",
+        ),
+        (
+            "body: {auth: {token: \"Bearer {env.MCP_GW_7958_KEY}\"}}",
+            "providers.primary.config.body",
+        ),
+    ] {
+        let cap = templated_secret("base_url: http://api.example.com", template_line);
+        let error = validate_capability(&cap)
+            .expect_err(template_line)
+            .to_string();
+        assert!(error.contains("template_secret_probe"), "{error}");
+        assert!(error.contains(field), "{template_line}: {error}");
+        assert!(
+            error.contains("providers.primary.config.base_url"),
+            "{error}"
+        );
+        assert!(error.contains("https://"), "{error}");
+        assert!(!error.contains("api.example.com"), "URL echoed: {error}");
+    }
+}
+
+#[test]
+fn a_template_secret_on_https_or_loopback_and_a_caller_value_on_http_still_load() {
+    for (url_line, template_line) in [
+        (
+            "base_url: https://api.example.com",
+            "headers: {X-Api-Key: \"{env.K}\"}",
+        ),
+        (
+            "base_url: http://127.0.0.1:8000",
+            "params: {key: \"{keychain.k}\"}",
+        ),
+        // A caller parameter is not a secret the gateway holds.
+        (
+            "base_url: http://api.example.com",
+            "headers: {X-Q: \"{q}\"}",
+        ),
+        // `{env.}` names nothing; the resolver leaves it as written.
+        (
+            "base_url: http://api.example.com",
+            "params: {k: \"{env.}\"}",
+        ),
+    ] {
+        validate_capability(&templated_secret(url_line, template_line))
+            .unwrap_or_else(|e| panic!("{url_line} / {template_line}: {e}"));
+    }
+}
+
+/// The URL is filled per call, so the refusal is at send time, and it comes
+/// before the secret is read: an unset variable would otherwise be the error.
+#[tokio::test]
+async fn a_template_secret_to_a_templated_cleartext_url_is_refused_before_the_read() {
+    for template_line in [
+        "headers: {X-Api-Key: \"{env.MCP_GW_7958_UNSET}\"}",
+        "params: {key: \"{env.MCP_GW_7958_UNSET}\"}",
+        "body: {items: [{token: \"{env.MCP_GW_7958_UNSET}\"}]}",
+        "body_content_type: text/plain\n      body: \"key={env.MCP_GW_7958_UNSET}\"",
+    ] {
+        let cap = templated_secret("base_url: \"http://{host}\"", template_line);
+        let provider = cap.providers.named.get("primary").expect("primary");
+        let error = CapabilityExecutor::new()
+            .execute_provider_with_context(
+                &cap,
+                provider,
+                &json!({"host": "off-machine.invalid"}),
+                &CapabilityExecutionContext::default(),
+            )
+            .await
+            .expect_err(template_line)
+            .to_string();
+        assert!(error.contains("cleartext"), "{template_line}: {error}");
+        assert!(!error.contains("is not set"), "secret read first: {error}");
+        assert!(
+            !error.contains("off-machine.invalid"),
+            "URL echoed: {error}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn graphql_and_jsonrpc_refuse_a_header_secret_over_cleartext_before_the_read() {
+    use super::super::rest::{ExecutionContext, ProtocolExecutor};
+    let executor = CapabilityExecutor::new();
+    for service in ["graphql", "jsonrpc"] {
+        let cap = parse_capability(&format!(
+            "
+name: template_secret_{service}
+description: probe
+providers:
+  primary:
+    service: {service}
+    config:
+      endpoint: http://93.184.215.14/rpc
+      method: probe
+      body: \"{{ probe }}\"
+      headers: {{X-Api-Key: \"{{env.MCP_GW_7958_UNSET}}\"}}
+"
+        ))
+        .expect("parses");
+        let config = cap.providers.named["primary"].protocol_config();
+        let ctx = ExecutionContext {
+            capability: &cap,
+            timeout_secs: 10,
+            context: CapabilityExecutionContext::default(),
+        };
+        let result = if service == "graphql" {
+            let graphql = super::GraphqlExecutor {
+                executor: &executor,
+            };
+            graphql.execute(&config, json!({}), &ctx).await
+        } else {
+            let jsonrpc = super::super::jsonrpc::JsonRpcExecutor {
+                executor: &executor,
+            };
+            jsonrpc.execute(&config, json!({}), &ctx).await
+        };
+        let error = result.expect_err(service).to_string();
+        assert!(error.contains("cleartext"), "{service}: {error}");
+        assert!(!error.contains("is not set"), "{service}: {error}");
+    }
+}
+
+/// No shipped capability is refused by either cleartext rule, and
+/// `number_facts` (plain `http://`, no secret) still loads.
+#[test]
+fn every_shipped_capability_still_passes_the_cleartext_rules() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("readable").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+    let mut files = Vec::new();
+    walk(&root, &mut files);
+    let mut checked = 0;
+    for path in &files {
+        let yaml = std::fs::read_to_string(path).expect("readable");
+        let Ok(cap) = parse_capability(&yaml) else {
+            continue;
+        };
+        checked += 1;
+        if let Err(e) = validate_capability(&cap) {
+            assert!(
+                !e.to_string().contains("cleartext"),
+                "{}: {e}",
+                path.display()
+            );
+        }
+    }
+    assert!(checked > 50, "only {checked} capabilities parsed");
+    let facts = std::fs::read_to_string(root.join("knowledge/number_facts.yaml"))
+        .expect("number_facts ships");
+    validate_capability(&parse_capability(&facts).expect("parses")).expect("number_facts loads");
+}

@@ -403,21 +403,24 @@ impl CapabilityBackend {
             let mut caps = self.capabilities.write();
             let incoming: HashMap<&str, &CapabilityDefinition> =
                 admitted.iter().map(|c| (c.name.as_str(), c)).collect();
-            // Revoke the in-flight calls of a capability that is gone OR edited:
-            // a call holding the old definition must not start or replace a
-            // child under the new one (MIK-7870).
+            // Revoke the in-flight calls of a capability that is gone OR edited,
+            // and stop its children: a call holding the old definition must not
+            // start or replace a child under the new one (MIK-7870, MIK-7925).
+            let mut revoked = std::collections::HashSet::new();
             for (name, &pos) in &caps.index {
-                let revoked = incoming
+                if incoming
                     .get(name.as_str())
-                    .is_none_or(|new| definition_changed(&caps.entries[pos], new));
-                if revoked {
+                    .is_none_or(|new| definition_changed(&caps.entries[pos], new))
+                {
                     self.executor.bump_mcp_generation(name);
+                    revoked.insert(name.clone());
                 }
             }
             caps.replace_all(admitted);
             self.executor.bump_policy_epoch();
-            self.executor
-                .stop_unloaded_mcp(&|name| caps.index.contains_key(name));
+            self.executor.stop_unloaded_mcp(&|name| {
+                !revoked.contains(name) && caps.index.contains_key(name)
+            });
         }
 
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");

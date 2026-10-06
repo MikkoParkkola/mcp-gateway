@@ -283,7 +283,7 @@ mod tests {
                 enabled: true,
                 transport: TransportConfig::Http {
                     http_url: format!("http://{address}/"),
-                    streamable_http: true,
+                    streamable_http: Some(true),
                     protocol_version: None,
                 },
                 ..BackendConfig::default()

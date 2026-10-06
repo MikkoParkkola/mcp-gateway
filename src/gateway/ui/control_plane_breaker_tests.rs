@@ -10,7 +10,7 @@ use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
 fn backend() -> Backend {
     let transport = TransportConfig::Http {
         http_url: "http://127.0.0.1:9/mcp".to_string(),
-        streamable_http: false,
+        streamable_http: Some(false),
         protocol_version: None,
     };
     let config = BackendConfig {

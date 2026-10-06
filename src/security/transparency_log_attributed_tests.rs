@@ -86,13 +86,21 @@ fn tenant_list_is_capped_with_an_overflow_marker() {
 // time.
 const _: () = assert!(MAX_RECORDED_TENANTS * 19 < super::rotation::MAX_RECORD_BYTES / 8);
 
-/// T24. `extra` cannot overwrite a domain field or forge a chain field;
-/// nothing is appended.
+/// T24. `extra` cannot overwrite a domain field, forge a chain field, or
+/// supply the overflow count only the writer derives (MIK-7646); nothing is
+/// appended.
 #[test]
 fn extra_fields_cannot_collide_with_record_fields() {
     let dir = tempfile::tempdir().unwrap();
     let (logger, path) = open(&dir);
-    for key in ["route", "caller", "request_hash", "entry_hash", "counter"] {
+    for key in [
+        "route",
+        "caller",
+        "request_hash",
+        "entry_hash",
+        "counter",
+        "tenants_total",
+    ] {
         let mut extra = Map::new();
         extra.insert(key.into(), json!("forged"));
         assert!(

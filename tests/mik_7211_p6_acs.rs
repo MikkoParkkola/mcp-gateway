@@ -223,7 +223,7 @@ mod fixture {
             passthrough,
             transport: TransportConfig::Http {
                 http_url: url.to_string(),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             ..BackendConfig::default()

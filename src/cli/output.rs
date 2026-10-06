@@ -7,6 +7,7 @@
 //! - `table` — aligned columns for human scanning
 //! - `plain` — minimal text for scripting
 
+use crate::cli::stdout::println;
 use serde_json::Value;
 
 /// Output format selection for CLI commands.
