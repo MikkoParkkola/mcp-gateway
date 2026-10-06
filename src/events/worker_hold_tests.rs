@@ -132,7 +132,7 @@ impl crate::events::EventSource for Vanishing {
         name == "probe.vanish"
             && self
                 .offers
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                 .is_ok()
     }
     fn matches(
