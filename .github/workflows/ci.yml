@@ -1695,7 +1695,8 @@ jobs:
   # rehearsal dispatch publishes to the private `charts-rehearsal` package from
   # a pinned, already-signed image and never touches `charts`; it runs without
   # docker-manifest, so the condition reads that job's result only on a tag.
-  # The `charts/mcp-gateway` package must grant this repository Actions write.
+  # The first tag run's push creates `charts/mcp-gateway`, linked to this
+  # repository with its Actions write access; never create it by hand.
   helm-chart-publish:
     name: Publish and sign the Helm chart
     needs: docker-manifest
