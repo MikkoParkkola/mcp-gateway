@@ -553,9 +553,10 @@ pub(super) fn with_path_defaults<'a>(
 }
 
 /// Every template `build_url` fills for this call: the endpoint, or the base
-/// URL with the path and the path the selector picks, read as `build_url`
-/// reads it (absent or null takes the default). An unpicked path names nothing
-/// this call sends (MIK-7943).
+/// URL with the path, or with the path the selector picks instead, read as
+/// `build_url` reads it (absent or null takes the default). With a selector,
+/// `path` is only a compatibility copy of the default route that `build_url`
+/// never reads, and an unpicked route names nothing this call sends (MIK-7943).
 fn url_templates<'a>(
     config: &'a crate::capability::definition::RestConfig,
     params: &Value,
@@ -563,19 +564,21 @@ fn url_templates<'a>(
     if config.uses_endpoint() {
         return vec![config.endpoint.as_str()];
     }
-    let mut templates = vec![config.base_url.as_str(), config.path.as_str()];
-    if let Some(selector) = &config.path_selector {
-        let picked = match params.get(&selector.parameter) {
-            None | Some(Value::Null) => Some(selector.default.as_str()),
-            Some(Value::String(value)) => Some(value.as_str()),
-            Some(_) => None,
-        };
-        templates.extend(
-            picked
-                .and_then(|key| selector.paths.get(key))
-                .map(String::as_str),
-        );
-    }
+    let mut templates = vec![config.base_url.as_str()];
+    let Some(selector) = &config.path_selector else {
+        templates.push(config.path.as_str());
+        return templates;
+    };
+    let picked = match params.get(&selector.parameter) {
+        None | Some(Value::Null) => Some(selector.default.as_str()),
+        Some(Value::String(value)) => Some(value.as_str()),
+        Some(_) => None,
+    };
+    templates.extend(
+        picked
+            .and_then(|key| selector.paths.get(key))
+            .map(String::as_str),
+    );
     templates
 }
 
