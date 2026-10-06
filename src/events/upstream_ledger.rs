@@ -16,8 +16,9 @@ use parking_lot::Mutex;
 use tracing::warn;
 
 use super::{Full, MAX_URI_BUDGET_BYTES, MAX_URIS, encoded};
-use crate::Error;
-use crate::backend::Backend;
+use std::sync::Weak;
+
+use crate::transport::upstream_tap::UpstreamListen;
 
 /// Whether the current holder has our subscription for a URI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -334,20 +335,32 @@ impl Drop for InFlight<'_> {
     }
 }
 
-/// Send one due call and record how it ended. `false` when the peer has no
-/// resource interest (`-32601`). `holder` names who the call reaches; read
-/// before the send and after the answer, a change means the answer may be
-/// another holder's, so it counts as uncertain.
+/// Who a legacy call on `handle` lands on: the transport instance and the
+/// holder its pin names (an HTTP session), as one ledger identity.
+pub(crate) fn holder_of(handle: &Weak<dyn UpstreamListen>, pinned: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    Weak::as_ptr(handle).cast::<()>().hash(&mut hasher);
+    pinned.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Send one due call on the session's own transport, pinned to the holder
+/// the ledger charges, and record how it ended. `false` when the peer has
+/// no resource interest (`-32601`). A gone transport sends nothing.
 pub(crate) async fn drive(
     ledger: &Mutex<Ledger>,
-    backend: &Backend,
+    backend: &str,
+    handle: &Weak<dyn UpstreamListen>,
     uri: &str,
     subscribe: bool,
     limit: Duration,
-    holder: &(dyn Fn() -> u64 + Sync),
 ) -> bool {
-    let before = holder();
-    ledger.lock().observe(before);
+    let Some(transport) = handle.upgrade() else {
+        return true;
+    };
+    let pin = transport.legacy_pin();
+    ledger.lock().observe(holder_of(handle, pin.holder));
     let Some(call) = ledger.lock().sent(uri, subscribe) else {
         return true;
     };
@@ -355,29 +368,24 @@ pub(crate) async fn drive(
         ledger,
         call: Some(call),
     };
-    let result =
-        tokio::time::timeout(limit, backend.legacy_resource_interest(uri, subscribe)).await;
+    let result = tokio::time::timeout(limit, transport.legacy_interest(pin, uri, subscribe)).await;
     let outcome = match &result {
-        Ok(Ok(true)) => Outcome::Done,
-        Ok(Ok(false) | Err(Error::JsonRpc { .. } | Error::JsonRpcRetryable { .. })) => {
-            Outcome::Refused
-        }
+        Ok(Ok(answer)) if answer.error.is_none() => Outcome::Done,
+        Ok(Ok(_)) => Outcome::Refused,
         Ok(Err(e)) if e.is_pre_dispatch() => Outcome::NotSent,
         Ok(Err(_)) | Err(_) => Outcome::Uncertain,
     };
-    let after = holder();
-    let outcome = if after == before {
-        outcome
-    } else {
-        Outcome::Uncertain
-    };
     if in_flight.end(outcome) {
-        warn!(backend = %backend.name, "upstream listener: unsubscribe refused three times");
+        warn!(
+            backend,
+            "upstream listener: unsubscribe refused three times"
+        );
     }
-    // Applied to the old key first (it strands), then the new holder.
-    ledger.lock().observe(after);
-    !matches!(result, Ok(Ok(false)))
+    !matches!(&result, Ok(Ok(answer)) if answer.error.as_ref().is_some_and(|e| e.code == METHOD_NOT_FOUND))
 }
+
+/// `-32601`: the peer offers no resource interest at all.
+const METHOD_NOT_FOUND: i32 = -32601;
 
 /// The call a key is due for, ignoring timing: `Some(true)` subscribe,
 /// `Some(false)` unsubscribe.
