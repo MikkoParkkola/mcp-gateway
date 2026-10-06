@@ -90,9 +90,11 @@ impl DeliveryWatch {
         use std::sync::atomic::Ordering::{AcqRel, Release};
         if written {
             self.written.store(true, Release);
-            // Taken before it runs, so the lock is not held across the work.
-            let commit = self.commit.lock().take();
-            if let Some(commit) = commit {
+            // Held while the work runs: another copy's stream waits here and
+            // cannot write the prompt before its receipt is recorded. The
+            // work is an in-memory record that never touches this watch.
+            let mut slot = self.commit.lock();
+            if let Some(commit) = slot.take() {
                 commit.commit();
             }
         }
