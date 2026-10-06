@@ -229,7 +229,8 @@ fn every_url_template_gets_its_parameter_defaults() {
     ] {
         let rest: crate::capability::RestConfig =
             serde_json::from_value(config.clone()).expect("a REST config");
-        let effective = super::with_path_defaults(&rest, &schema, &json!({}));
+        let args = json!({});
+        let effective = super::with_path_defaults(&rest, &schema, &args);
         assert_eq!(effective["region"], "eu", "{config}");
     }
 }
