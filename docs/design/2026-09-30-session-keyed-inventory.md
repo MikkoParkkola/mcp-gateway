@@ -173,9 +173,10 @@ These are recorded here, not fixed here. Each is routed through the 4.0 lane rul
   (#2448, `cost_accounting/mod.rs:501`, `gateway/meta_mcp/invoke.rs:1967`).
 - **G5** (fixed by #2577, 434017e49: the HTTP start is refused, `security/firewall/anomaly_config.rs:70`,
   called from `gateway/server/mod.rs:1289`; UPGRADING-4.0 item 76).
-  - Setup (before the fix): modern protocol, auth off, `anomaly_detection` on (default off,
-    `security/firewall/mod.rs:147`).
-  - Effect (before the fix): every meta-route call had an empty caller key, so the firewall refused all of them. The gateway now refuses to start in that configuration.
+  - Setup (before the fix): modern protocol, the firewall on with `anomaly_detection` on (default
+    off, `security/firewall/mod.rs:147`), and no source of a caller key: `auth.enabled`,
+    `mtls.enabled` and `agent_auth.enabled` all off and `security.caller_identity.mode` off.
+  - Effect (before the fix): every meta-route call had an empty caller key, so the firewall refused all of them. The gateway now refuses to start in exactly that configuration (`refuse_keyless_http_anomaly`); any one caller-key source, or the firewall or anomaly detection off, lets it start. Stdio is not checked.
 - **G6.** A security finding, routed privately to the release coordinator on 2026-09-30.
 - **G7.** MIK-7215.CONTROL.5 cites the 12-row RFC-0061 table as complete. This inventory replaces
   it as the governing list.
