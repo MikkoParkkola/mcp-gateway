@@ -128,27 +128,18 @@ async fn a_capability_loaded_later_has_its_expiry_announced() {
     let _ = shutdown.send(());
 }
 
-/// The startup scan's loads have no reload to announce them: finishing a scan
-/// that lists something announces once, and marks it complete.
+/// The startup scan's loads have no reload to announce them: finishing the
+/// scan announces once, even when what it ends with lists nothing (a tool shown
+/// mid-scan may have been hidden again), and marks it complete.
 #[test]
-fn a_finished_scan_that_lists_something_is_announced_once() {
+fn a_finished_scan_is_announced_once() {
     let backend = backend(3600);
     backend.begin_initial_scan();
+    backend.executor.oauth_tokens.read().remove(PROVIDER);
+    assert!(backend.listed_names().is_empty());
     let (registry, mut feed) = registry_feed();
     backend.finish_initial_scan(&registry);
     assert!(backend.initial_scan_complete());
     assert_eq!(feed.try_recv().as_deref(), Ok("caps"));
     assert!(feed.try_recv().is_err(), "once");
-}
-
-/// A scan whose every capability is hidden (no credential) changed nothing a
-/// client sees: no announcement.
-#[test]
-fn a_finished_scan_that_lists_nothing_is_not_announced() {
-    let backend = backend(3600);
-    backend.executor.oauth_tokens.read().remove(PROVIDER);
-    assert!(backend.listed_names().is_empty());
-    let (registry, mut feed) = registry_feed();
-    backend.finish_initial_scan(&registry);
-    assert!(feed.try_recv().is_err());
 }
