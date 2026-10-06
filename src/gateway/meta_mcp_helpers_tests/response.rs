@@ -338,3 +338,16 @@ fn wrap_tool_success_carries_a_failed_payloads_is_error() {
         "the recovery payload stays: {text}"
     );
 }
+
+#[test]
+fn wrap_tool_success_reads_is_error_only_as_a_true_boolean() {
+    for content in [
+        json!({"isError": false, "content": []}),
+        json!({"isError": "true", "content": []}),
+        json!({"result": {"isError": true}}),
+    ] {
+        let response = wrap_tool_success(RequestId::Number(8), &content, false);
+        let result: ToolsCallResult = serde_json::from_value(response.result.unwrap()).unwrap();
+        assert!(!result.is_error, "{content}");
+    }
+}
