@@ -167,6 +167,8 @@ pub struct CapabilityBackend {
     initial_scan: std::sync::atomic::AtomicU8,
     /// What was listed when a listing change was last announced.
     listing: parking_lot::Mutex<Option<Vec<String>>>,
+    /// Wakes the listing watch when the catalogue changes.
+    listing_wake: tokio::sync::Notify,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -194,6 +196,7 @@ impl CapabilityBackend {
             multi_user: std::sync::atomic::AtomicBool::new(false),
             initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
             listing: parking_lot::Mutex::new(None),
+            listing_wake: tokio::sync::Notify::new(),
         }
     }
 
@@ -247,6 +250,7 @@ impl CapabilityBackend {
             false
         };
         drop(caps);
+        self.catalogue_changed();
         // After the epoch bump: a call that started before it is stopped here,
         // and one that starts after it is refused at `acquire`.
         self.executor.stop_unloaded_mcp(&|loaded| loaded != name);
@@ -425,6 +429,7 @@ impl CapabilityBackend {
                 !revoked.contains(name) && caps.index.contains_key(name)
             });
         }
+        self.catalogue_changed();
 
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
         Ok(total)
@@ -668,6 +673,8 @@ impl CapabilityBackend {
             self.executor.bump_mcp_generation(&name);
             self.executor.stop_mcp(&name);
         }
+        drop(caps);
+        self.catalogue_changed();
         Ok(())
     }
 

@@ -45,3 +45,34 @@ async fn an_owner_scoped_occurrence_is_not_refused_by_its_source() {
         );
     }
 }
+
+/// Owner-scoped skips only the source's verdict: a caller whose API key is no
+/// longer configured is still refused (access is checked on every attempt).
+#[tokio::test]
+async fn an_owner_scoped_occurrence_still_needs_its_callers_access() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.register_source(Arc::new(Flipping {
+        admits: usize::MAX,
+        asked: AtomicUsize::new(0),
+    }) as Arc<dyn crate::events::EventSource>);
+    // No API keys configured: the subscription's key is gone.
+    let services = logged_services(dir.path());
+    let (port, accepted) = counting_callback().await;
+    queued_with(&hub, port, "evt_owner_key", "probe.flip", |sub, record| {
+        record.owner_scoped = true;
+        sub.credential_kind = Some(crate::security::audit::CredentialKind::ApiKey);
+        sub.api_key = Some(crate::events::records::ApiKeyRef {
+            name: "gone".to_owned(),
+            principal: "000000000000".to_owned(),
+        });
+    });
+    hub.attempt(&services, "evt_owner_key").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "not sent");
+    assert!(hub.store.subscriptions().is_empty(), "revoked");
+}

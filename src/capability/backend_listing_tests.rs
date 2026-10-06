@@ -99,3 +99,28 @@ fn one_transition_is_announced_once() {
     assert_eq!(feed.try_recv().as_deref(), Ok("caps"));
     assert!(feed.try_recv().is_err(), "once");
 }
+
+/// A capability loaded after the watch started (the initial scan, a reload)
+/// is planned for too: its expiry is announced (r1 review).
+#[tokio::test]
+async fn a_capability_loaded_later_has_its_expiry_announced() {
+    let executor = Arc::new(CapabilityExecutor::new());
+    let backend = Arc::new(CapabilityBackend::new("caps", Arc::clone(&executor)));
+    let (registry, mut feed) = registry_feed();
+    let (shutdown, rx) = tokio::sync::broadcast::channel(1);
+    backend.spawn_listing_watch(Arc::clone(&registry), rx);
+    let mut token: crate::oauth::TokenInfo =
+        serde_json::from_value(serde_json::json!({"access_token": "t"})).unwrap();
+    token.expires_at = Some(now() + 63);
+    executor
+        .oauth_tokens
+        .read()
+        .insert(PROVIDER.to_string(), token);
+    backend.register_capability(oauth_cap()).unwrap();
+    assert_eq!(backend.listed_names(), ["oauthy"]);
+    let announced = tokio::time::timeout(Duration::from_secs(10), feed.recv())
+        .await
+        .expect("the later capability's expiry was announced");
+    assert_eq!(announced.as_deref(), Some("caps"));
+    let _ = shutdown.send(());
+}
