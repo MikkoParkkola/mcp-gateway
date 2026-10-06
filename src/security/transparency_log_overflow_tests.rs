@@ -18,7 +18,10 @@ const MAX: u64 = u64::MAX;
 const MODES: [VerifyMode; 2] = [VerifyMode::Live, VerifyMode::Archive];
 
 fn fields(v: Value) -> Map<String, Value> {
-    v.as_object().unwrap().clone()
+    match v {
+        Value::Object(map) => map,
+        other => panic!("fields takes an object: {other}"),
+    }
 }
 
 /// Write `records` (counter, fields) to `file` as one chain from `prev`;

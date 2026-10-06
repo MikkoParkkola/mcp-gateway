@@ -67,7 +67,7 @@ fn files(path: &Path) -> Vec<PathBuf> {
 /// whole log: each recomputed hash replaces its old value wherever a later
 /// record or `.hwm` names it. Unsigned; `.hwm` is rewritten to match.
 fn rechain(path: &Path, mut edit: impl FnMut(usize, usize, &mut Value)) {
-    let mut renamed: std::collections::HashMap<String, String> = Default::default();
+    let mut renamed = std::collections::HashMap::<String, String>::new();
     for (f, file) in files(path).iter().enumerate() {
         let mut body = String::new();
         for (i, mut v) in lines(file).into_iter().enumerate() {
@@ -337,7 +337,7 @@ fn a_bad_anchor_file_is_refused() {
         }
         let good = std::fs::read(sibling(&path, "hwm")).unwrap();
         let mut bad_mac = good.clone();
-        let end = bad_mac.iter().rposition(|b| b.is_ascii_hexdigit()).unwrap();
+        let end = bad_mac.iter().rposition(u8::is_ascii_hexdigit).unwrap();
         bad_mac[end] = if bad_mac[end] == b'0' { b'1' } else { b'0' };
         let mut oversized = good.clone();
         oversized.extend_from_slice(b"0123456789");
