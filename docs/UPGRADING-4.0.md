@@ -4039,12 +4039,15 @@ present a key on a public path), have them reuse their session, raise
 **Startup:** no notice, the start is refused with its own error, which names both credentials; refuses to start
 
 A configured bearer token or API key is identified by the first 48 bits of its SHA-256 digest,
-and sessions, grants, journals and task owners are keyed on that principal. In 3.x two
-credentials with the same principal, such as one key listed twice under two names, were one
-caller: each could read and cancel the other's tasks and sessions. Config load, reload and
-startup now refuse such a configuration, naming the two credentials and never a secret or
-digest. The principal encoding is unchanged, so existing sessions, grants and tasks stay
-readable. Remove the duplicate entry, or replace one of the two credentials.
+and sessions, grants, journals and task owners are keyed on that principal. Two credentials
+with the same principal, such as one key listed twice under two names, were one caller: in
+3.5.0 and 3.5.1 each could attach to the other's sessions, and in the 4.0.0 pre-releases each
+could also read and cancel the other's tasks. Config load, reload and startup now refuse such
+a configuration, naming the two credentials and never a secret or digest. The check covers
+the bearer token and API keys configured together; OIDC callers carry their own identity and
+are not checked, nor is a principal that a removed credential once held. The principal
+encoding is unchanged, so existing sessions, grants and tasks stay readable. Remove the
+duplicate entry, or replace one of the two credentials.
 
 ## Upgrading from 3.5.x: a walkthrough
 
