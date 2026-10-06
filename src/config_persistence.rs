@@ -89,12 +89,14 @@ mod splice;
 /// re-serialised. When the edit cannot be proven to load as `config`, this
 /// is [`write_config`].
 ///
-/// Public only because the `add` and `remove` commands live in the binary
-/// crate.
+/// Internal to the gateway CLI, not a library API: public only because the
+/// `add` and `remove` commands live in the binary crate, and hidden from the
+/// docs so no library user comes to rely on it.
 ///
 /// # Errors
 ///
 /// Returns `Err` on validation, serialisation, or I/O failure.
+#[doc(hidden)]
 pub fn write_config_keeping_comments(
     path: &Path,
     before: &Config,
