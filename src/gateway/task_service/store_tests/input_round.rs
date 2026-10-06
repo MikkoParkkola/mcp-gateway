@@ -599,7 +599,11 @@ async fn a_foreign_owner_cannot_write_the_dispatch_marker_or_a_round() {
             at(2),
         )
         .await;
-    assert!(matches!(refused, Err(StoreError::NotFound)), "{refused:?}");
+    assert!(
+        matches!(refused, Err(StoreError::NotFound)),
+        "{:?}",
+        refused.as_ref().err()
+    );
     let refused = store
         .close_round(OTHER, task.id(), revision, "closed".to_owned())
         .await;
