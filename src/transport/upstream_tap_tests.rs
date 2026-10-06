@@ -273,3 +273,20 @@ fn a_tools_notice_projects_and_needs_its_tag() {
         Err(Dropped::Untagged)
     );
 }
+
+/// MIK-7898 SESS.3: an acknowledgement counts only as a listen's first frame;
+/// one after another frame is dropped, not routed.
+#[test]
+fn an_acknowledgement_after_the_first_frame_is_dropped() {
+    let taps = Taps::default();
+    let id = json!(7);
+    let mut rx = taps.listen(&id, requested());
+    assert!(taps.notification(RESOURCES_CHANGED, Some(&tag(&id, json!({})))));
+    assert!(matches!(rx.try_recv(), Ok(UpstreamNote::Notice { .. })));
+    let ack = tag(
+        &id,
+        json!({"notifications": {"resourcesListChanged": true}}),
+    );
+    assert!(taps.notification(ACKNOWLEDGED, Some(&ack)));
+    assert!(rx.try_recv().is_err(), "a late acknowledgement was routed");
+}

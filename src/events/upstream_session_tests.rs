@@ -356,3 +356,70 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     let left = after_withdrawal(&hub).await;
     assert_eq!(left, ["backend.b.tools_changed"]);
 }
+
+fn changed(kind: NoteKind) -> UpstreamNote {
+    UpstreamNote::Notice { kind, uri: None }
+}
+
+/// MIK-7898 SESS.1: a notice still inside its coalescing window when the
+/// session ends is delivered, not dropped with the session's state.
+#[tokio::test]
+async fn a_coalesced_notice_is_delivered_when_the_session_ends() {
+    let dir = tempfile::tempdir().expect("dir");
+    let reload = Reload::new(dir.path());
+    reload.to(true).await;
+    let backend = reload.registry.get("b").expect("b registered");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    shared
+        .need
+        .lock()
+        .add(&Interest::ResourcesChanged)
+        .expect("room");
+    let mut state = State::new(&shared, Era::Modern);
+    state.note(changed(NoteKind::ResourcesChanged), false);
+    let _ = finish_refill(&mut state, &shared, &backend, &weak, None, Instant::now()).await;
+    assert!(
+        intake.try_recv().is_ok(),
+        "the notice in its window was dropped with the session"
+    );
+}
+
+/// MIK-7898 SESS.3: a notice of a kind the peer's acknowledgement did not
+/// honour is not delivered. Control: the honoured kind is.
+#[tokio::test]
+async fn a_kind_the_acknowledgement_did_not_honour_is_not_delivered() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    for interest in [Interest::ResourcesChanged, Interest::PromptsChanged] {
+        shared.need.lock().add(&interest).expect("room");
+    }
+    let mut state = State::new(&shared, Era::Modern);
+    let honoured = KindSet {
+        resources_changed: true,
+        ..KindSet::default()
+    };
+    state.note(
+        UpstreamNote::Ack {
+            kinds: honoured,
+            uris: Vec::new(),
+        },
+        false,
+    );
+    state.note(changed(NoteKind::PromptsChanged), false);
+    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
+    state.flush(&weak);
+    assert!(
+        intake.try_recv().is_err(),
+        "a kind the peer did not acknowledge was delivered"
+    );
+    state.note(changed(NoteKind::ResourcesChanged), false);
+    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
+    state.flush(&weak);
+    assert!(intake.try_recv().is_ok(), "control: the honoured kind");
+}
