@@ -48,7 +48,9 @@ impl MetaMcp {
     /// delivered, so the text the caller still got keeps its receipt and the
     /// removed text stops being tracked. A plan's step receipts are kept for
     /// [`MetaMcp::rebuild_receipt_from_final`], which keeps each to the text
-    /// the final answer still delivers; until then they never commit. Several
+    /// the final answer still delivers; until then they never commit. A task
+    /// envelope with no delivered slot keeps every staged receipt, as the
+    /// rebuild does (they came from the stored slot). Otherwise several
     /// receipts of no plan cannot be told apart and are dropped.
     ///
     /// `shape` is how the caller delivered the answer: only a `gateway_invoke`
