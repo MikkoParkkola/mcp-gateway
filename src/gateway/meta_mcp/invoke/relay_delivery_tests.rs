@@ -443,6 +443,29 @@ async fn a_task_envelope_receipts_only_its_delivered_slot() {
     );
 }
 
+/// MIK-7939 (B04b-1 design, task envelope): an envelope with no delivered
+/// slot keeps the receipt staged from the stored slot, also when a final
+/// check rewrote the envelope in place (as the rebuild does).
+#[tokio::test]
+async fn a_rewritten_slotless_envelope_keeps_the_stored_receipt() {
+    let (meta, firewall) = relay_meta();
+    let stored = text_result(PROSE);
+    let before = json!({"taskId": "t-1", "status": "working", "statusMessage": OTHER_PROSE});
+    let after = json!({"taskId": "t-1", "status": "working", "statusMessage": "[redacted]"});
+    let ((), staged) = meta
+        .collecting_staged(async {
+            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &stored);
+            let snapshot = meta.relay_snapshot(&before);
+            meta.restage_if_changed(snapshot, Some(&after), AnswerShape::of("tasks/get"));
+        })
+        .await;
+    staged.commit(true);
+    assert!(
+        relayed_by_bob(&firewall, PROSE),
+        "the stored slot lost its receipt"
+    );
+}
+
 /// Rebuild from `delivered`, built inside the same delivery scope by `build`
 /// (the gateway's write sites run there), as a `gateway_invoke` answer.
 async fn receipt_after_invoke(
