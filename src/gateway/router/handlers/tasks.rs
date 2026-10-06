@@ -181,10 +181,6 @@ pub(super) fn task_intent_for_call(
         poll_interval_ms: (tasks.tasks.poll_interval_ms > 0)
             .then_some(tasks.tasks.poll_interval_ms),
     };
-    // The worker records its call's transition hints under this key. Only a
-    // request or a resume renews the key's `IDLE_TTL` deadline, so a task that
-    // outlives a caller quiet for that long writes after the key was reclaimed;
-    // that one entry stays until the caller is next seen and then goes quiet.
     let caller_key = super::super::identity::caller_key(
         req.grant_subject.as_ref(),
         req.cert_identity,
