@@ -599,8 +599,8 @@ jobs:
             # Required because the artifact basename ends in the architecture (arm64/x86_64),
             # which a clean Homebrew install can otherwise mis-detect as the version.
             version "${VERSION}"
-            # Licence: PolyForm-Noncommercial-1.0.0. See LICENSES.md / COMMERCIAL.md.
-            license :cannot_represent
+            # See LICENSES.md / COMMERCIAL.md.
+            license "PolyForm-Noncommercial-1.0.0"
 
             on_macos do
               on_arm do
