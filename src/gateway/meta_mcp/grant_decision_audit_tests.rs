@@ -389,7 +389,15 @@ async fn no_logger_dispatch_tail_skips_the_slot() {
         AuditFailurePolicy::BestEffort,
     );
     let slotted = call(&logged, &who, "gateway_invoke", invoke_args()).await;
-    assert_eq!(answer, slotted, "the unslotted answer is the slotted one");
+    // Each call mints a fresh invocation id; everything else must match.
+    let ids = regex::Regex::new("gw-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        .unwrap();
+    let same = |answer: &Value| ids.replace_all(&answer.to_string(), "gw-ID").into_owned();
+    assert_eq!(
+        same(&answer),
+        same(&slotted),
+        "the unslotted answer is the slotted one"
+    );
 }
 
 /// T27 (H1). A direct-name call to a surfaced personal tool is a dispatch
