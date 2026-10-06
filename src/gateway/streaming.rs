@@ -118,6 +118,14 @@ impl SessionFrame {
     pub fn into_inner(self) -> TaggedNotification {
         self.note
     }
+
+    /// Report this copy written, as the SSE stream does past its gates.
+    #[cfg(test)]
+    pub(crate) fn written(&self) {
+        if let Some(watch) = &self.watch {
+            watch.report(true);
+        }
+    }
 }
 
 /// Client session state

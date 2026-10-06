@@ -466,10 +466,10 @@ fn counting_commit() -> (
     (commit, runs)
 }
 
-/// A request that reached the session's stream commits before the reply, and
-/// stays committed when the wait is abandoned.
+/// A request a stream of the session wrote commits before the reply, and
+/// stays committed when the wait is abandoned (MIK-7939: written, not queued).
 #[tokio::test]
-async fn a_bridged_request_commits_once_it_reaches_the_session_stream() {
+async fn a_bridged_request_commits_once_the_session_stream_writes_it() {
     use crate::gateway::input_bridge::ClientChannel as _;
     use std::sync::atomic::Ordering;
     let mux = make_multiplexer();
@@ -486,6 +486,8 @@ async fn a_bridged_request_commits_once_it_reaches_the_session_stream() {
         .try_recv()
         .expect("the request reached the session stream");
     assert_eq!(sent.data["method"], "elicitation/create");
+    assert_eq!(runs.load(Ordering::SeqCst), 0, "queued is not written");
+    sent.written();
     assert_eq!(runs.load(Ordering::SeqCst), 1);
 }
 
@@ -507,4 +509,69 @@ async fn a_bridged_request_to_no_session_commits_nothing() {
         .await;
     assert!(matches!(sent, Err(DeliveryError::NoSession)), "{sent:?}");
     assert_eq!(runs.load(Ordering::SeqCst), 0);
+}
+
+/// MIK-7939 D6.RELAY.5/.11: a bridged prompt's relay receipt commits when a
+/// stream writes it, not when it is queued: a queued copy can still be
+/// withheld by the stream's audit gate or dropped by a lagging subscriber.
+#[tokio::test]
+async fn a_bridged_prompt_commits_its_receipt_only_when_written() {
+    use std::sync::atomic::Ordering;
+    let mux = make_multiplexer();
+    let (session, mut rx) = mux.get_or_create_session(Some("sess-commit"));
+    let proxy = Arc::new(ProxyManager::new(Arc::clone(&mux)));
+    let (commit, commits) = counting_commit();
+    let (task_proxy, origin) = (Arc::clone(&proxy), session.clone());
+    let wait = tokio::spawn(async move {
+        task_proxy
+            .send_request_committing(&origin, "rq-1", "elicitation/create", None, Some(commit))
+            .await
+    });
+    let queued = tokio::time::timeout(Duration::from_millis(500), rx.recv())
+        .await
+        .expect("the session receives the prompt")
+        .expect("channel open");
+    assert_eq!(queued.data["id"], "rq-1");
+    assert_eq!(
+        commits.load(Ordering::SeqCst),
+        0,
+        "the receipt committed while the prompt was only queued"
+    );
+    // A second copy (another stream of the session) is the same frame.
+    let copy = queued.clone();
+    queued.written();
+    assert_eq!(
+        commits.load(Ordering::SeqCst),
+        1,
+        "a written prompt commits"
+    );
+    copy.written();
+    assert_eq!(commits.load(Ordering::SeqCst), 1, "it commits once");
+    wait.abort();
+}
+
+/// MIK-7939: a copy that is never written (dropped by a lagging subscriber,
+/// or by a stream that closed) commits nothing.
+#[tokio::test]
+async fn an_unwritten_prompt_commits_nothing() {
+    use std::sync::atomic::Ordering;
+    let mux = make_multiplexer();
+    let (session, mut rx) = mux.get_or_create_session(Some("sess-dropped"));
+    let proxy = Arc::new(ProxyManager::new(Arc::clone(&mux)));
+    let (commit, commits) = counting_commit();
+    let (task_proxy, origin) = (Arc::clone(&proxy), session.clone());
+    let wait = tokio::spawn(async move {
+        task_proxy
+            .send_request_committing(&origin, "rq-2", "elicitation/create", None, Some(commit))
+            .await
+    });
+    let queued = tokio::time::timeout(Duration::from_millis(500), rx.recv())
+        .await
+        .expect("the session receives the prompt")
+        .expect("channel open");
+    drop(queued);
+    drop(rx);
+    wait.abort();
+    let _ = wait.await;
+    assert_eq!(commits.load(Ordering::SeqCst), 0);
 }

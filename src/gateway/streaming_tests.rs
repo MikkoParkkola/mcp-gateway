@@ -621,3 +621,64 @@ async fn a_request_fails_only_when_every_copy_is_withheld() {
         "both copies were withheld before the count"
     );
 }
+
+/// MIK-7939 D6.RELAY.5/.11: a bridged prompt's relay receipt commits when the
+/// SSE stream writes it past the audit gate, never while it is only queued,
+/// and never for a prompt the gate withholds (a tenant read whose record fails
+/// closed). A receipt exempts the caller later, so it must name only text the
+/// caller was shown.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_bridged_prompt_commits_only_when_the_stream_writes_it() {
+    use crate::gateway::input_bridge::{ClientChannel, DeliveryCommit, DeliveryError};
+    use crate::gateway::proxy::ProxyManager;
+    use futures::StreamExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (_dir, log, multiplexer, id, mut body) = judged_sse();
+    log.set_append_failure_for_test(true);
+    let proxy = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
+    let commits = Arc::new(AtomicUsize::new(0));
+    let ask = |rid: &'static str, params: serde_json::Value| {
+        let (proxy, id, counted) = (Arc::clone(&proxy), id.clone(), Arc::clone(&commits));
+        let commit = DeliveryCommit::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        });
+        tokio::spawn(async move {
+            proxy
+                .send_request_committing(&id, rid, "elicitation/create", Some(params), Some(commit))
+                .await
+        })
+    };
+    let withheld = ask("withheld-prompt", json!({"customer_id": "cust-b"}));
+    let written = ask("written-prompt", json!({"message": "Proceed?"}));
+
+    let mut seen = String::new();
+    let read = async {
+        while let Some(chunk) = body.next().await {
+            seen.push_str(&String::from_utf8_lossy(&chunk.unwrap()));
+        }
+    };
+    let ended = tokio::select! {
+        ended = tokio::time::timeout(Duration::from_secs(5), withheld) => ended,
+        () = read => panic!("the stream ended"),
+    };
+    assert!(
+        matches!(ended, Ok(Ok(Err(DeliveryError::TimedOut)))),
+        "the tenant prompt was not withheld: {ended:?}"
+    );
+    while !seen.contains("written-prompt") {
+        let chunk = tokio::time::timeout(Duration::from_secs(5), body.next())
+            .await
+            .expect("the written prompt reaches the stream")
+            .expect("the stream is open");
+        seen.push_str(&String::from_utf8_lossy(&chunk.unwrap()));
+    }
+    assert!(!seen.contains("withheld-prompt"), "{seen}");
+    assert_eq!(
+        commits.load(Ordering::SeqCst),
+        1,
+        "only the written prompt may commit its receipt"
+    );
+    written.abort();
+}
