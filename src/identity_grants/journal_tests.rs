@@ -121,10 +121,10 @@ async fn two_spellings_of_one_grant_file_share_journal_and_lock() {
     change(&real, upsert(row("g1", "r"), false)).await.unwrap();
 
     assert_eq!(lock_path(&link), lock_path(&real), "one lock for both");
-    let read = super::journal::read_locked(&link, std::time::Duration::from_secs(5))
+    let locked = super::journal::read_locked(&link, std::time::Duration::from_secs(5))
         .await
         .expect("lock taken");
-    let JournalRead::Bytes(bytes) = read.journal else {
+    let JournalRead::Bytes(bytes) = locked.journal else {
         panic!("gateway saw no journal through the symlink");
     };
     let verbs: Vec<_> = parse_journal(&bytes)
