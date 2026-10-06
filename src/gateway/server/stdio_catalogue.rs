@@ -57,7 +57,8 @@ fn operator() -> relay::CatalogueCaller {
         key: crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL.to_owned(),
         keyed: true,
         name: "stdio".to_owned(),
-        session: "stdio".to_owned(),
+        // The id the stdio dispatcher keys this connection by (MIK-7942).
+        session: super::STDIO_SESSION_ID.to_owned(),
     }
 }
 

@@ -343,6 +343,18 @@ impl TenantGuard {
         }
     }
 
+    /// The tenant `value` names when it sits under the member `key`: what a
+    /// document walk reads at that member, for a caller that scans the
+    /// member's contents elsewhere and only needs the name match (MIK-7942).
+    pub(crate) fn key_names_tenant(&self, key: &str, value: &Value) -> Option<String> {
+        self.config
+            .arg_keys
+            .iter()
+            .any(|k| k == key)
+            .then(|| Self::tenant_name(value))
+            .flatten()
+    }
+
     /// Render a tenant identifier as a string, if the value is one.
     ///
     /// Strings and numbers both name tenants in practice. A structure under a
