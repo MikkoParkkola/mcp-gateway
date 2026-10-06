@@ -347,6 +347,8 @@ pub(super) async fn with_grant_slot<F: Future>(
     // The batch is owned by its own task, so a caller cancelled while the
     // flush waits cannot drop records that were never submitted.
     let writer = Arc::clone(logger);
+    #[cfg(test)]
+    BOOKKEEPING.with(|b| b.borrow_mut().flushes_spawned += 1);
     let flush = tokio::spawn(async move { write_records(&writer, &notes).await });
     let written = flush
         .await
@@ -445,6 +447,8 @@ pub(crate) async fn slot_rpc<'a, X: Send + 'a>(
     future: impl Future<Output = (JsonRpcResponse, X)> + Send + 'a,
 ) -> (JsonRpcResponse, X) {
     // Erased, so an opener's future type stays shallow (E0275 at the stdio spawn).
+    #[cfg(test)]
+    note_boxed();
     let future: Pin<Box<dyn Future<Output = (JsonRpcResponse, X)> + Send + 'a>> = Box::pin(future);
     match with_grant_slot(logger, future).await {
         ((response, extra), Ok(())) => (response, extra),
@@ -549,6 +553,8 @@ impl super::MetaMcp {
         confirmed_in_band: bool,
     ) -> JsonRpcResponse {
         let (logger, id) = (self.transparency_logger.as_ref(), target.id.clone());
+        #[cfg(test)]
+        note_boxed();
         let answer: Pin<Box<dyn Future<Output = JsonRpcResponse> + Send + '_>> =
             Box::pin(self.dispatch_below_gate_shaped_in_slot(target, shape, confirmed_in_band));
         slot_rpc(logger, id, async { (answer.await, ()) }).await.0
@@ -580,12 +586,21 @@ pub(super) fn allow_unslotted_check_for_test() -> UnslottedCheckAllowed {
     UnslottedCheckAllowed
 }
 
-/// Test-only: slots opened and notes taken on this thread.
+/// Test-only: slots opened, notes taken, flush tasks spawned, and futures
+/// boxed for the dispatch tail's slot (`dispatch_below_gate_shaped` and
+/// `slot_rpc`) on this thread.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct GrantBookkeeping {
     pub(super) slots_opened: usize,
     pub(super) notes_taken: usize,
+    pub(super) flushes_spawned: usize,
+    pub(super) slot_futures_boxed: usize,
+}
+
+#[cfg(test)]
+fn note_boxed() {
+    BOOKKEEPING.with(|b| b.borrow_mut().slot_futures_boxed += 1);
 }
 
 #[cfg(test)]

@@ -156,6 +156,11 @@ async fn grant_denial_writes_decision_record() {
     assert!(record.get("timestamp").is_some(), "{record}");
     assert_eq!(trace_of(&record), trace_of(&invocation), "{record}");
     assert!(trace_of(&record).is_some(), "{record}");
+    // Control for the empty-flush row below: a slot holding a note flushes.
+    assert!(
+        super::grant_audit::grant_bookkeeping_for_test().flushes_spawned >= 1,
+        "a slot holding a decision note spawns its flush"
+    );
 }
 
 /// T2. A matching grant is one `ok` record naming the grant.
@@ -203,6 +208,13 @@ async fn public_capability_writes_no_decision() {
         );
         only(invocations(&dir), "invocation record");
     }
+    // MIK-7663.GH2409.1: a slot that collected no decision note writes
+    // nothing, so it spawns no flush task.
+    assert_eq!(
+        super::grant_audit::grant_bookkeeping_for_test().flushes_spawned,
+        0,
+        "an empty slot spawns no flush"
+    );
 }
 
 /// T7. Under `FailClosed` a failed decision write withholds the answer;
@@ -332,6 +344,38 @@ async fn no_logger_changes_nothing() {
         super::grant_audit::GrantBookkeeping::default(),
         "no logger: no slot opened, no note taken"
     );
+}
+
+/// MIK-7917 item 2. With no logger, a `tools/call` through the dispatch tail
+/// awaits the dispatch directly: no slot future is boxed, and the answer is
+/// the one the slotted path gives.
+#[tokio::test]
+async fn no_logger_dispatch_tail_boxes_nothing() {
+    let endpoint = Endpoint::start(false).await;
+    let who = api_key("alice");
+    let unlogged = gateway(
+        &endpoint,
+        vec![grant("g1", ALICE, ALICE)],
+        None,
+        AuditFailurePolicy::BestEffort,
+    );
+    let answer = call(&unlogged, &who, "gateway_invoke", invoke_args()).await;
+    assert!(answer.get("error").is_none(), "{answer}");
+    assert_eq!(
+        super::grant_audit::grant_bookkeeping_for_test(),
+        super::grant_audit::GrantBookkeeping::default(),
+        "no logger: the dispatch tail opens no slot and boxes no slot future"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let logged = gateway(
+        &endpoint,
+        vec![grant("g1", ALICE, ALICE)],
+        Some(&dir),
+        AuditFailurePolicy::BestEffort,
+    );
+    let slotted = call(&logged, &who, "gateway_invoke", invoke_args()).await;
+    assert_eq!(answer, slotted, "the unslotted answer is the slotted one");
 }
 
 /// T27 (H1). A direct-name call to a surfaced personal tool is a dispatch
