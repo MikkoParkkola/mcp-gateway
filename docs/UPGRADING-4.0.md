@@ -3960,6 +3960,29 @@ The nested schema is given an `$id` of the form
 scopes references with `id` rather than `$id`, is not covered. A root with `properties` and no `type` is
 advertised with `type: "object"` added and is otherwise unchanged.
 
+## 148. An `http_url` backend detects its transport when `streamable_http` is unset
+
+**Startup:** no notice, decided per backend at connect, with one warning when a configured transport is refused and the other answers
+
+An `http_url` backend with no `streamable_http` key POSTs `initialize` first
+(Streamable HTTP) and falls back to the legacy SSE `GET` only when that POST is
+refused with a 4xx other than 401, 403, 407, 408 or 429; those are about the
+credential or a retry, not the transport. `add --url` no longer writes
+`streamable_http: false`, so a server added that way connects over Streamable
+HTTP when it speaks it.
+
+An explicit `true` or `false` is still tried first. When the server refuses it
+with such a 4xx, the other transport is tried once, and a warning names the
+backend and the value to set. A config the old `add --url` wrote keeps
+working; to skip the refused request, set the value the warning names or remove
+the key.
+
+MCP Events eligibility is read from config: a backend with the key unset is
+refused MCP Events even when it connects over Streamable HTTP. Set
+`streamable_http: true` to offer them.
+
+Library users: `TransportConfig::Http::streamable_http` is now `Option<bool>`.
+
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
