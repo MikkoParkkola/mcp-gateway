@@ -1909,11 +1909,16 @@
     },
     {
       "id": "MIK-7630.W401.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-06 by the operator decision moving MIK-7720 (three event sources) and MIK-7811 back into 4.0.0; not built yet."
+      "evidence": [
+        "src/events/operational_source.rs",
+        "src/events/operational_source_tests.rs",
+        "src/cost_accounting/enforcer_crossings_tests.rs",
+        "src/events/worker_charge_tests.rs"
+      ],
+      "note": "Graded 2026-10-06 at 5ddc1226f (PR #3102, after #3099 at 2485388b4 for the charge exemption and admin-only types). Red first on throwaway heads: run 37422745681 failed 7 rows at their own assertions (the four producers, non-admin and demoted-admin fan-out, budget hook rows); run 37422749555 failed the budget-scope row. Green: CI run 37480963744 at head 5b703f873 (Tests, Clippy, Windows, macOS, U10 guard); feature combinations run 37484554048 green. Mutants o1-o8 all RED (run 37447142665 on ba5607d83; later commits added a feature gate and a lint allow, no behaviour change). Reviews: gpt SHIP after a CRITICAL budget-scope fix; second seat GLM SHIP on the deltas (kimi returned 429). Existing producers to events: health_and_kill_switch_transitions_become_events (src/events/operational_source_tests.rs:162), a_spent_budget_becomes_threshold_and_exhaustion_events (:202), crossings reported once (src/cost_accounting/enforcer_crossings_tests.rs:32, :53). Admins only, a non-admin sees only their own budget events: :94 and :271. Not charged to the budget they report: :149 and only_the_types_a_source_charges_are_charged (src/events/worker_charge_tests.rs:15)."
     },
     {
       "id": "MIK-7630.W401.3",
