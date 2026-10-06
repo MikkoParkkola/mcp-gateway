@@ -5,6 +5,7 @@
 //! operator's stdio gateway alive past it.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -17,8 +18,10 @@ use crate::gateway::Gateway;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
-/// A transport whose close never returns.
-struct NeverCloses;
+/// A transport whose close never returns, and says when it was entered.
+struct NeverCloses {
+    entered: Arc<AtomicBool>,
+}
 
 #[async_trait]
 impl Transport for NeverCloses {
@@ -42,11 +45,15 @@ impl Transport for NeverCloses {
     }
 
     async fn close(&self) -> crate::Result<()> {
+        self.entered.store(true, Ordering::SeqCst);
         std::future::pending().await
     }
 }
 
-#[tokio::test]
+// Paused time: the bound is tens of seconds of timers, not of work. Tokio
+// does not auto-advance while a blocking task (file IO) runs, so the IO stays
+// real (MIK-7839).
+#[tokio::test(start_paused = true)]
 async fn stdio_eof_returns_within_the_bound_when_a_backend_never_stops() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
@@ -73,7 +80,10 @@ async fn stdio_eof_returns_within_the_bound_when_a_backend_never_stops() {
     );
     stuck.budgets.close_stage = Duration::from_secs(3600);
     let stuck = Arc::new(stuck);
-    stuck.set_transport_for_test(Arc::new(NeverCloses));
+    let entered = Arc::new(AtomicBool::new(false));
+    stuck.set_transport_for_test(Arc::new(NeverCloses {
+        entered: Arc::clone(&entered),
+    }));
     assert!(gateway.backends.register(Arc::clone(&stuck)));
 
     let (stdin, input) = tokio::io::duplex(64 * 1024);
@@ -91,4 +101,8 @@ async fn stdio_eof_returns_within_the_bound_when_a_backend_never_stops() {
         .expect("the serve task does not panic")
         .expect("run_stdio_on returns Ok");
     assert!(eof.elapsed() < bound, "{:?}", eof.elapsed());
+    assert!(
+        entered.load(Ordering::SeqCst),
+        "teardown reached the close that never returns, so the bound ended it"
+    );
 }

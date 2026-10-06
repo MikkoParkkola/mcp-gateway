@@ -136,7 +136,7 @@ pub(super) async fn reply_or_eof<T>(
 /// also keep the class and needle of the last early exit.
 #[derive(Default)]
 pub(super) struct StartState {
-    eof: parking_lot::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
+    eof: parking_lot::Mutex<Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>>,
     exited: std::sync::atomic::AtomicBool,
     // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
     #[cfg(all(test, unix))]
@@ -144,7 +144,7 @@ pub(super) struct StartState {
 }
 
 impl StartState {
-    pub(super) fn begin(&self, eof: tokio::sync::watch::Receiver<bool>) {
+    pub(super) fn begin(&self, eof: std::sync::Arc<tokio::sync::watch::Sender<bool>>) {
         *self.eof.lock() = Some(eof);
         // A class describes the last start only.
         // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
@@ -158,7 +158,7 @@ impl StartState {
 
     /// This start's stdout-closed latch, or `None` before the first start.
     pub(super) fn eof_receiver(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
-        self.eof.lock().clone()
+        self.eof.lock().as_ref().map(|eof| eof.subscribe())
     }
 
     pub(super) fn exited_early(&self) -> bool {
