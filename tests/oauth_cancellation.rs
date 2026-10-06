@@ -94,7 +94,8 @@ async fn spawn_side_effect_persists_after_outer_drop() {
     };
 
     // Outer races a short timeout it cannot meet.
-    let _ = tokio::time::timeout(Duration::from_millis(30), outer).await;
+    let outer_result = tokio::time::timeout(Duration::from_millis(30), outer).await;
+    assert!(outer_result.is_err(), "the outer future must be cancelled");
 
     // Wait long enough for the detached task to finish its work.
     tokio::time::sleep(Duration::from_millis(500)).await;
