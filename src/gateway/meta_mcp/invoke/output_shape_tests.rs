@@ -69,6 +69,13 @@ fn an_undeclared_key_is_never_named_in_the_log() {
     );
 }
 
+/// A token as the whole result, where an object was declared: the root's
+/// type is logged, never the value.
+#[test]
+fn a_root_type_mismatch_log_names_the_type_not_the_value() {
+    assert_logged_without_token(&json!(TOKEN), &["$: got string"]);
+}
+
 /// MIK-7959: an array root published under `items` is validated in its
 /// declared shape, as the capability route runs it, and the text content is
 /// not rewritten into the wrapped shape.

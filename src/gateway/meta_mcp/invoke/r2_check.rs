@@ -170,6 +170,6 @@ impl MetaMcp {
         )
         .record(started.elapsed().as_secs_f64());
         self.record_error_budget(server, tool, BudgetOutcome::of_error(error));
-        dispatch_error_result(error, tool, server)
+        dispatch_error_result(error, tool, server, self.hint_surface())
     }
 }

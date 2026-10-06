@@ -191,3 +191,73 @@ async fn the_resolved_credential_reaches_token_env_and_not_an_error() {
         .to_string();
     assert!(!err.contains(token), "token leaked into the error: {err}");
 }
+
+/// MIK-7955.FIX.1: no secret survives in the output, whether it is part of
+/// the marker or formed where the marker meets the text around it.
+#[test]
+fn the_marker_never_reproduces_a_secret() {
+    let secrets = ["redacted".to_owned()];
+    let out = super::redact_untruncated("x redacted y", &secrets, &[]);
+    assert!(!out.contains("redacted"), "{out}");
+
+    // `]x` is not in the input; a marker ending in `]` would create it.
+    let secrets = ["SECRET-1".to_owned(), "]x".to_owned()];
+    let out = super::redact_untruncated("SECRET-1x", &secrets, &[]);
+    assert!(!out.contains("]x") && !out.contains("SECRET-1"), "{out}");
+
+    let secrets = ["redacted".to_owned()];
+    let mut value = json!({"k": "redacted", "redacted": 1, "pin": 12_345_678});
+    super::redact_value(&mut value, &secrets);
+    assert!(!value.to_string().contains("redacted"), "{value}");
+}
+
+/// MIK-7955.FIX.2: many short matches cannot grow the output past the input
+/// by more than one marker.
+#[test]
+fn redacted_output_is_capped_relative_to_the_input() {
+    let text = "sX".repeat(1000);
+    let secrets = ["s".to_owned()];
+    let out = super::redact_untruncated(&text, &secrets, &[]);
+    assert!(!out.contains('s'), "{out}");
+    assert!(
+        out.len() <= text.len() + "[redacted]".len(),
+        "{}",
+        out.len()
+    );
+
+    let mut value = json!({ "k": text });
+    super::redact_value(&mut value, &secrets);
+    let got = value["k"].as_str().unwrap();
+    assert!(
+        got.len() <= text.len() + "[redacted]".len(),
+        "{}",
+        got.len()
+    );
+}
+
+/// MIK-7955.FIX.1 on the other paths: a redacted number takes a marker free of
+/// every secret, a renamed key skips a suffix that forms one, and text whose
+/// every marker holds a secret is dropped whole.
+#[test]
+fn every_marker_path_avoids_the_secrets() {
+    let secrets = ["redacted".to_owned(), "12345678".to_owned()];
+    let mut value = json!({"pin": 12_345_678});
+    super::redact_value(&mut value, &secrets);
+    let text = value.to_string();
+    assert!(
+        !text.contains("redacted") && !text.contains("12345678"),
+        "{text}"
+    );
+
+    // Both keys collapse to `x[redacted]`; the second may not become `#2`.
+    let secrets = ["k1".to_owned(), "k2".to_owned(), "#2".to_owned()];
+    let mut value = json!({"xk1": 1, "xk2": 2});
+    super::redact_value(&mut value, &secrets);
+    let keys: Vec<&String> = value.as_object().unwrap().keys().collect();
+    assert_eq!(keys.len(), 2, "{value}");
+    assert!(keys.iter().all(|k| !k.contains("#2")), "{value}");
+
+    let secrets = ["redacted", "removed", "hidden"].map(str::to_owned);
+    let out = super::redact_untruncated("a redacted b", &secrets, &[]);
+    assert!(secrets.iter().all(|s| !out.contains(s.as_str())), "{out}");
+}

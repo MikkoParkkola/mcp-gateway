@@ -112,7 +112,7 @@ fn sse_backend_at(url: &str) -> Backend {
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: url.to_string(),
-                streamable_http: false,
+                streamable_http: Some(false),
                 protocol_version: None,
             },
             ..BackendConfig::default()

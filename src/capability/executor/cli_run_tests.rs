@@ -503,12 +503,13 @@ fn an_injected_multi_line_key_is_removed_whole() {
 }
 
 /// A one-character needle matches at every position of a long text (the case
-/// that made one span per match costly): the whole run is one marker.
+/// that made one span per match costly): the whole run is one marker, and
+/// not `[redacted]`, which holds the needle (MIK-7955).
 #[test]
 fn a_needle_that_matches_everywhere_collapses_to_one_marker() {
     let long = "a".repeat(1024 * 1024);
     let out = super::super::cli::redact_untruncated(&long, &["a".to_owned(), "a".to_owned()], &[]);
-    assert_eq!(out, "[redacted]");
+    assert_eq!(out, "<removed>");
 }
 
 /// An injected value equal to the word a credential pattern keys on does not
