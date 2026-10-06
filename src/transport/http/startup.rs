@@ -101,19 +101,28 @@ impl HttpTransport {
             self.store_refresh_task(handle);
         }
 
-        // An undetected flavour starts as Streamable HTTP: the MCP
-        // backwards-compatibility rule POSTs first, and `handshake` falls back.
-        if *self.streamable_http.read() != Some(false) {
-            // Streamable HTTP: use URL directly
-            // Never add trailing slash — Dart/shelf (Pieces) returns 404 for trailing slash.
-            // Starlette compatibility was the original reason, but it handles both.
-            let url = self.base_url.clone();
-            *self.message_url.write() = Some(url.clone());
-            info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&url), oauth = self.oauth_client.is_some(), "Streamable HTTP mode - direct POST");
-        } else {
-            self.connect_sse().await?;
+        self.switched.store(false, Ordering::Relaxed);
+        if *self.streamable_http.read() == Some(false) {
+            let Err(sse_error) = self.connect_sse().await else {
+                return Ok(());
+            };
+            // Configs written before detection existed say `false` for
+            // servers that only speak Streamable HTTP; such a server refuses
+            // the GET, so try the other transport once.
+            let Some(status) = refused_as_wrong_transport(&sse_error) else {
+                return Err(sse_error);
+            };
+            info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&self.base_url), status, "SSE GET refused; trying Streamable HTTP");
+            *self.streamable_http.write() = Some(true);
+            self.switched.store(true, Ordering::Relaxed);
         }
-
+        // Streamable HTTP, or a flavour not yet detected: the MCP
+        // backwards-compatibility rule POSTs first, and `handshake` falls back.
+        // Never add trailing slash — Dart/shelf (Pieces) returns 404 for trailing slash.
+        // Starlette compatibility was the original reason, but it handles both.
+        let url = self.base_url.clone();
+        *self.message_url.write() = Some(url.clone());
+        info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&url), oauth = self.oauth_client.is_some(), "Streamable HTTP mode - direct POST");
         Ok(())
     }
 
@@ -126,19 +135,24 @@ impl HttpTransport {
         Ok(())
     }
 
-    /// [`Self::legacy_handshake`], detecting the flavour when config left it
-    /// open. The MCP backwards-compatibility rule: a 4xx refusal of the
-    /// `initialize` POST means a legacy HTTP+SSE server, so open its SSE
-    /// stream and handshake over the endpoint it names. An explicit flavour
-    /// never falls back.
+    /// [`Self::legacy_handshake`], with the MCP backwards-compatibility
+    /// fallback: a 4xx refusal of the `initialize` POST means a legacy
+    /// HTTP+SSE server, so open its SSE stream and handshake over the endpoint
+    /// it names. It applies to an explicit `streamable_http: true` as well, so
+    /// a wrong flag costs one refused request rather than the backend. At most
+    /// one switch per start: not after [`Self::connect`] already switched, and
+    /// never away from an SSE endpoint that answered.
     async fn handshake(&self) -> Result<()> {
-        if self.streamable_http.read().is_some() {
+        if *self.streamable_http.read() == Some(false) {
             return self.legacy_handshake().await;
         }
         let Err(post_error) = self.legacy_handshake().await else {
             *self.streamable_http.write() = Some(true);
             return Ok(());
         };
+        if self.switched.load(Ordering::Relaxed) {
+            return Err(post_error);
+        }
         let Some(status) = refused_as_wrong_transport(&post_error) else {
             return Err(post_error);
         };
@@ -150,7 +164,14 @@ impl HttpTransport {
             ))
         })?;
         *self.streamable_http.write() = Some(false);
+        self.switched.store(true, Ordering::Relaxed);
         self.legacy_handshake().await
+    }
+
+    /// The flavour this transport connected with, once known: `Some(true)`
+    /// for Streamable HTTP, `Some(false)` for the legacy SSE handshake.
+    pub(crate) fn streamable(&self) -> Option<bool> {
+        *self.streamable_http.read()
     }
 
     /// Finish a connected start in the dialect `era` names (RFC-0061 §2.4).
@@ -564,7 +585,8 @@ impl HttpTransport {
     }
 }
 
-/// The status of a 4xx the HTTP transport reported as `HTTP <status>` text,
+/// The status of a 4xx the HTTP transport reported as `HTTP <status>` (a
+/// POST) or `SSE endpoint returned: <status>` (the SSE GET) text,
 /// when it says "wrong transport" rather than "wrong credential" or "not now":
 /// 401/403/407 are about the credential, and 408/429 invite a retry. Those
 /// keep their own error rather than becoming an SSE fault.
@@ -572,7 +594,12 @@ fn refused_as_wrong_transport(error: &Error) -> Option<u16> {
     let Error::Transport(text) = error else {
         return None;
     };
-    let status: u16 = text.strip_prefix("HTTP ")?.get(..3)?.parse().ok()?;
+    let status: u16 = text
+        .strip_prefix("HTTP ")
+        .or_else(|| text.strip_prefix("SSE endpoint returned: "))?
+        .get(..3)?
+        .parse()
+        .ok()?;
     ((400..500).contains(&status) && !matches!(status, 401 | 403 | 407 | 408 | 429))
         .then_some(status)
 }
@@ -586,6 +613,11 @@ mod wrong_transport_tests {
         let status = |text: &str| refused_as_wrong_transport(&Error::Transport(text.into()));
         assert_eq!(status("HTTP 405 Method Not Allowed"), Some(405));
         assert_eq!(status("HTTP 404 Not Found"), Some(404));
+        assert_eq!(
+            status("SSE endpoint returned: 405 Method Not Allowed"),
+            Some(405)
+        );
+        assert_eq!(status("SSE endpoint returned: 401 Unauthorized"), None);
         for kept in [
             "HTTP 401 Unauthorized",
             "HTTP 403 Forbidden",

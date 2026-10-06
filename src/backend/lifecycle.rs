@@ -425,6 +425,17 @@ impl Backend {
                     .await
                     .unwrap_or(crate::protocol::era::Era::Legacy);
                 transport.finish_startup(era).await?;
+                if let Some(configured) = *streamable_http
+                    && transport.streamable() == Some(!configured)
+                {
+                    // The configured transport was refused and the other one
+                    // answered; say which value would skip the refused try.
+                    warn!(
+                        backend = %self.name,
+                        "`streamable_http: {configured}` was refused with a 4xx and the other HTTP transport answered; set `streamable_http: {}` for this backend, or remove the key to detect it",
+                        !configured
+                    );
+                }
                 listen = Some(super::listen::handle_of(&transport));
                 transport
             }

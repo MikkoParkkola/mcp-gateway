@@ -6,7 +6,8 @@
 //! The spec's backwards-compatibility rule: POST `initialize` first (Streamable
 //! HTTP) and fall back to the legacy SSE `GET` only when that POST is refused
 //! with a 4xx. A streamable-only server answers `GET` with 405, so a config
-//! that always opens with `GET` fails on its first call.
+//! that always opens with `GET` fails on its first call. An explicit flag
+//! that the server refuses with such a 4xx gets one try of the other transport.
 
 #[path = "common/stdio_session.rs"]
 mod stdio_session;
@@ -213,17 +214,22 @@ async fn add_url_leaves_the_transport_to_detection() {
     );
 }
 
-/// An explicit `streamable_http: false` is the operator's word: the gateway
-/// opens with the SSE `GET` and never probes with a `POST`.
+fn write_explicit(home: &Path, url: &str, streamable: bool) {
+    let yaml = format!(
+        "backends:\n  {BACKEND}:\n    http_url: \"{url}\"\n    streamable_http: {streamable}\n"
+    );
+    mcp_gateway::gateway::test_helpers::write_owner_only(home.join("gateway.yaml"), yaml)
+        .expect("write gateway.yaml");
+}
+
+/// An explicit `streamable_http: false` that the server accepts is used as
+/// written: the gateway opens with the SSE `GET` and never probes with a `POST`.
 #[tokio::test]
 async fn explicit_streamable_false_is_honoured() {
     let hits = Hits::default();
     let url = sse_server(&hits).await;
     let home = tempfile::tempdir().expect("home");
-    let yaml =
-        format!("backends:\n  {BACKEND}:\n    http_url: \"{url}\"\n    streamable_http: false\n");
-    mcp_gateway::gateway::test_helpers::write_owner_only(home.path().join("gateway.yaml"), yaml)
-        .expect("write gateway.yaml");
+    write_explicit(home.path(), &url, false);
 
     let reply = invoke_ping(home.path()).await;
     assert!(reply.to_string().contains("pong-sse"), "reply: {reply}");
@@ -234,4 +240,33 @@ async fn explicit_streamable_false_is_honoured() {
         .filter(|(method, path)| *method == Method::POST && path == "/sse")
         .count();
     assert_eq!(posts_to_sse, 0, "explicit `false` must not probe with POST");
+}
+
+/// The config the old `add --url` wrote: an explicit `false` naming a server
+/// that speaks only Streamable HTTP. The refused `GET` costs one request, not
+/// the backend.
+#[tokio::test]
+async fn an_old_add_config_reaches_a_streamable_only_server() {
+    let hits = Hits::default();
+    let url = streamable_server(&hits).await;
+    let home = tempfile::tempdir().expect("home");
+    write_explicit(home.path(), &url, false);
+
+    let reply = invoke_ping(home.path()).await;
+    assert!(
+        reply.to_string().contains("pong-streamable"),
+        "reply: {reply}"
+    );
+}
+
+/// The mirror case: an explicit `true` naming a legacy SSE server.
+#[tokio::test]
+async fn explicit_streamable_true_still_reaches_a_legacy_sse_server() {
+    let hits = Hits::default();
+    let url = sse_server(&hits).await;
+    let home = tempfile::tempdir().expect("home");
+    write_explicit(home.path(), &url, true);
+
+    let reply = invoke_ping(home.path()).await;
+    assert!(reply.to_string().contains("pong-sse"), "reply: {reply}");
 }
