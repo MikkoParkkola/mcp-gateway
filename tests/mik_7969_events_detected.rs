@@ -31,7 +31,7 @@ mod upstream_sub;
 
 use std::time::{Duration, Instant};
 
-use delivery::{DEADLINE, start_cfg, wait_until};
+use delivery::{DEADLINE, records, start_cfg, wait_until};
 use gateway::{ALICE, BOB, Gateway, error};
 use mcp_http_servers::{Hits, recording, serve, sse_server, streamable_server};
 use receiver::{Receiver, whsec};
@@ -331,4 +331,44 @@ async fn an_open_circuit_refuses_the_subscribe_without_a_connect() {
         "the circuit refusal: {answer}"
     );
     assert_eq!(hits.lock().expect("hits").len(), tripped, "no connect");
+}
+
+/// T21, H2 (MIK-7969 k11c): a backend redeployed as legacy SSE behind the
+/// same URL, found by a session recovery while its event stream sits quiet,
+/// loses the listener and its listener-only subscription. Nothing on the
+/// stream announces the switch and the transport is the same one: only the
+/// listener's per-tick live read of the detected transport can end it.
+#[tokio::test]
+async fn a_recovery_onto_sse_ends_a_quiet_listener() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = HttpPeer::start(Era::Legacy).await;
+    let cfg = cold_config(dir.path(), json!({"http_url": peer.url}), &[]);
+    let gw = start_cfg(dir.path(), &receiver, cfg).await;
+    sub(&gw, ALICE, RESOURCES_CHANGED, &receiver, json!({})).await;
+    assert!(
+        wait_until(DEADLINE, || peer.open_gets() == 1).await,
+        "control: a listener opens the session GET"
+    );
+    assert_eq!(records(dir.path(), "subs").len(), 1, "control: stored");
+
+    peer.redeploy_as_sse();
+    // Any request on the old session finds it gone; the recovery's
+    // `initialize` is refused, so the transport falls back to SSE in place.
+    let invoke = json!({"server": "x", "tool": "ping", "arguments": {}});
+    let call = json!({"name": "gateway_invoke", "arguments": invoke});
+    gw.rpc(Some(ALICE), "tools/call", call).await;
+    assert!(
+        wait_until(DEADLINE, || peer.sse_handshakes() > 0).await,
+        "control: the recovery fell back to SSE: {:?}",
+        peer.seen()
+    );
+    assert!(
+        wait_until(DEADLINE, || peer.open_gets() == 0).await,
+        "the listener outlived the switch to SSE"
+    );
+    assert!(
+        wait_until(DEADLINE, || records(dir.path(), "subs").is_empty()).await,
+        "the listener-only subscription outlived the switch to SSE"
+    );
 }
