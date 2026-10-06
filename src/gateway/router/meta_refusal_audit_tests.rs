@@ -178,5 +178,9 @@ async fn a_legacy_refusal_without_a_trace_is_keyed_on_the_session() {
         .filter_map(|line| serde_json::from_str(line).ok())
         .find(|entry: &Value| entry.get("correlation_source").is_some())
         .unwrap_or_else(|| panic!("a refusal record: {written}"));
-    assert_eq!(record["correlation_source"], json!("session_id"), "{record}");
+    assert_eq!(
+        record["correlation_source"],
+        json!("session_id"),
+        "{record}"
+    );
 }
