@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `TrustCard` projection helpers for live MCP tool descriptors.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock, PoisonError};
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -84,34 +87,95 @@ pub fn project_tool_descriptor_trust_card(
     server_name: impl Into<String>,
     tool: &Tool,
 ) -> Value {
-    let trust_card = ToolDescriptorTrustCard::from_tool(server_id, server_name, tool);
-    let mut descriptor = serde_json::to_value(tool).unwrap_or_else(|_| {
+    with_card(
+        descriptor_of(tool),
+        computed_card(server_id, server_name, tool),
+    )
+}
+
+/// The tool as published; the fallback keeps the two required fields when
+/// the tool cannot be serialised whole.
+fn descriptor_of(tool: &Tool) -> Value {
+    serde_json::to_value(tool).unwrap_or_else(|_| {
         json!({
             "name": tool.name.clone(),
             "inputSchema": tool.input_schema.clone(),
         })
-    });
+    })
+}
 
+fn computed_card(
+    server_id: impl Into<String>,
+    server_name: impl Into<String>,
+    tool: &Tool,
+) -> Value {
+    #[cfg(test)]
+    CARD_COMPUTATIONS.with(|n| n.set(n.get() + 1));
+    let trust_card = ToolDescriptorTrustCard::from_tool(server_id, server_name, tool);
+    serde_json::to_value(trust_card).unwrap_or(Value::Null)
+}
+
+fn with_card(mut descriptor: Value, card: Value) -> Value {
     if let Value::Object(object) = &mut descriptor {
-        object.insert(
-            TOOL_DESCRIPTOR_TRUST_CARD_KEY.to_string(),
-            serde_json::to_value(trust_card).unwrap_or(Value::Null),
-        );
+        object.insert(TOOL_DESCRIPTOR_TRUST_CARD_KEY.to_string(), card);
     }
-
     descriptor
 }
 
+/// Computed references by server identity, then tool name. A reference is a
+/// pure function of the server identity and the tool, and an entry is reused
+/// only while the tool serialises to exactly the descriptor it was computed
+/// from, so a tool changed under the same name is recomputed, never served
+/// stale (MIK-7916).
+type CardMemo = HashMap<(String, String), HashMap<String, (Value, Value)>>;
+
+// ponytail: a full map keeps its residents and computes newcomers uncached,
+// so a churning catalog can lose its saving; an LRU if that ever shows.
+const MEMO_SERVERS: usize = 1024;
+const MEMO_TOOLS_PER_SERVER: usize = 8192;
+
+fn card_memo() -> &'static Mutex<CardMemo> {
+    static MEMO: OnceLock<Mutex<CardMemo>> = OnceLock::new();
+    MEMO.get_or_init(Mutex::default)
+}
+
 /// Project `TrustCard` references into a list of live MCP tool descriptors.
+///
+/// Every `tools/list` lists the same catalog, so each reference is computed
+/// once per tool version rather than once per request.
 #[must_use]
 pub fn project_tool_descriptors_trust_cards(
     server_id: &str,
     server_name: &str,
     tools: &[Tool],
 ) -> Vec<Value> {
+    let mut memo = card_memo().lock().unwrap_or_else(PoisonError::into_inner);
+    let key = (server_id.to_string(), server_name.to_string());
+    if memo.len() >= MEMO_SERVERS && !memo.contains_key(&key) {
+        return tools
+            .iter()
+            .map(|tool| project_tool_descriptor_trust_card(server_id, server_name, tool))
+            .collect();
+    }
+    let cards = memo.entry(key).or_default();
     tools
         .iter()
-        .map(|tool| project_tool_descriptor_trust_card(server_id, server_name, tool))
+        .map(|tool| {
+            let Ok(descriptor) = serde_json::to_value(tool) else {
+                return project_tool_descriptor_trust_card(server_id, server_name, tool);
+            };
+            let card = match cards.get(&tool.name) {
+                Some((seen, card)) if *seen == descriptor => card.clone(),
+                _ => {
+                    let card = computed_card(server_id, server_name, tool);
+                    if cards.len() < MEMO_TOOLS_PER_SERVER || cards.contains_key(&tool.name) {
+                        cards.insert(tool.name.clone(), (descriptor.clone(), card.clone()));
+                    }
+                    card
+                }
+            };
+            with_card(descriptor, card)
+        })
         .collect()
 }
 
@@ -124,10 +188,122 @@ pub fn tools_list_result_with_trust_cards(tools: Vec<Value>) -> Value {
 }
 
 #[cfg(test)]
+thread_local! {
+    /// Test-only: `TrustCard` references computed on this thread.
+    static CARD_COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
+
+    fn computations() -> usize {
+        CARD_COMPUTATIONS.with(std::cell::Cell::get)
+    }
+
+    /// A catalog under a server identity no other test uses, so a shared
+    /// memo cannot have seen it.
+    fn catalog(server: &str) -> Vec<Tool> {
+        (0..3)
+            .map(|i| Tool {
+                name: format!("{server}_tool_{i}"),
+                description: Some(format!("tool {i}")),
+                ..tool()
+            })
+            .collect()
+    }
+
+    /// MIK-7916 AC1: an unchanged catalog computes each reference once; a
+    /// changed tool is recomputed, and only that one.
+    #[test]
+    fn unchanged_catalog_computes_each_card_once() {
+        let (id, name) = ("backend:memo-once", "memo-once");
+        let mut tools = catalog(name);
+        let start = computations();
+        let first = project_tool_descriptors_trust_cards(id, name, &tools);
+        let second = project_tool_descriptors_trust_cards(id, name, &tools);
+        assert_eq!(first, second);
+        assert_eq!(
+            computations() - start,
+            tools.len(),
+            "one computation per tool, not per list"
+        );
+
+        tools[1].description = Some("changed".to_string());
+        let third = project_tool_descriptors_trust_cards(id, name, &tools);
+        assert_eq!(
+            computations() - start,
+            tools.len() + 1,
+            "only the changed tool is recomputed"
+        );
+        assert_ne!(
+            third[1]["trustCard"], first[1]["trustCard"],
+            "a changed tool gets a new card"
+        );
+        assert_eq!(third[0], first[0]);
+    }
+
+    /// MIK-7916 AC2: whatever is reused, the projection equals a fresh
+    /// per-tool computation, digests included.
+    #[test]
+    fn memoised_projection_equals_a_fresh_one() {
+        let (id, name) = ("backend:memo-fresh", "memo-fresh");
+        let tools = catalog(name);
+        for _ in 0..2 {
+            let listed = project_tool_descriptors_trust_cards(id, name, &tools);
+            for (descriptor, tool) in listed.iter().zip(&tools) {
+                assert_eq!(
+                    descriptor,
+                    &project_tool_descriptor_trust_card(id, name, tool)
+                );
+            }
+        }
+    }
+
+    /// MIK-7916 review: a server over the per-server bound keeps its resident
+    /// cards; an unchanged list recomputes only the tools that did not fit.
+    #[test]
+    fn a_catalog_over_the_bound_recomputes_only_the_overflow() {
+        let (id, name) = ("backend:memo-overflow", "memo-overflow");
+        let tools: Vec<Tool> = (0..=MEMO_TOOLS_PER_SERVER)
+            .map(|i| Tool {
+                name: format!("{name}_tool_{i}"),
+                ..tool()
+            })
+            .collect();
+        let _ = project_tool_descriptors_trust_cards(id, name, &tools);
+        let start = computations();
+        let _ = project_tool_descriptors_trust_cards(id, name, &tools);
+        assert_eq!(computations() - start, 1, "only the overflow tool");
+    }
+
+    /// MIK-7916 review: identities that concatenate alike stay apart; a NUL
+    /// inside one must not let another server's card be reused.
+    #[test]
+    fn identities_that_join_alike_do_not_share_a_card() {
+        let tools = catalog("memo-nul");
+        let _ = project_tool_descriptors_trust_cards("backend:x\0y", "memo-nul", &tools);
+        let other = project_tool_descriptors_trust_cards("backend:x", "y\0memo-nul", &tools);
+        assert_eq!(
+            other[0],
+            project_tool_descriptor_trust_card("backend:x", "y\0memo-nul", &tools[0])
+        );
+    }
+
+    /// The same tool under another server identity is a different card.
+    #[test]
+    fn server_identity_is_part_of_the_key() {
+        let tools = catalog("memo-identity");
+        let a = project_tool_descriptors_trust_cards("backend:a", "memo-identity-a", &tools);
+        let b = project_tool_descriptors_trust_cards("backend:b", "memo-identity-b", &tools);
+        assert_ne!(a[0]["trustCard"]["serverId"], b[0]["trustCard"]["serverId"]);
+        assert_eq!(
+            b[0],
+            project_tool_descriptor_trust_card("backend:b", "memo-identity-b", &tools[0])
+        );
+    }
 
     fn tool() -> Tool {
         Tool {
