@@ -141,6 +141,37 @@ async fn hardened_refuses_an_anonymous_caller() {
     assert_refused(&reply, "an anonymous POST /mcp");
 }
 
+/// Row 8's "before its body is read", on both routes: the body fails as
+/// soon as it is read, so a check that read it first would answer with that
+/// failure instead of the identity refusal.
+#[tokio::test]
+async fn hardened_refuses_before_reading_the_body() {
+    let (state, _store) = gateway(SecurityPosture::Hardened, true).await;
+    for uri in ["/mcp", "/mcp/alpha"] {
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = Arc::clone(&polled);
+        let unreadable = Body::from_stream(futures::stream::poll_fn(move |_| {
+            seen.store(true, std::sync::atomic::Ordering::SeqCst);
+            std::task::Poll::Ready(Some(Err::<axum::body::Bytes, _>(std::io::Error::other(
+                "the body was read",
+            ))))
+        }));
+        let request = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {SHARED}"))
+            .body(unreadable)
+            .unwrap();
+        let reply = send(&state, request).await;
+        assert_refused(&reply, &format!("POST {uri} with an unreadable body"));
+        assert!(
+            !polled.load(std::sync::atomic::Ordering::SeqCst),
+            "POST {uri}: the body was read before the refusal"
+        );
+    }
+}
+
 #[tokio::test]
 async fn personal_api_key_is_identity() {
     let (state, _store) = gateway(SecurityPosture::Hardened, true).await;

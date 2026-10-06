@@ -31,7 +31,7 @@ fn seen(fx: &Fx, body: &Value) -> Seen {
 }
 
 /// One row: arm the control, then make one call on `route`.
-async fn row(control: &str, direct: bool) -> Seen {
+async fn row(control: &str, route: Route) -> Seen {
     let (answer, arm): (Answer, fn(&mut MetaMcp)) = match control {
         "kill_switch" => (Answer::Ok, |m| m.kill_switch().kill("alpha")),
         "capability_disable" => (Answer::Ok, |m| {
@@ -42,29 +42,76 @@ async fn row(control: &str, direct: bool) -> Seen {
             }
         }),
         "session_profile" | "cost_budget" | "error_budget" | "response_gates" => {
-            return armed_row(control, direct).await;
+            return armed_row(control, route).await;
         }
         other => panic!("no parity row for control `{other}`"),
     };
     let fx = fixture(answer, arm).await;
-    let body = call(&fx, direct, None).await;
+    let body = call(&fx, route, None).await;
     seen(&fx, &body)
 }
 
-async fn call(fx: &Fx, direct: bool, session: Option<&str>) -> Value {
-    if direct {
-        post_direct(fx, "alpha", "k-budget", "read", json!({}), None, session)
-            .await
-            .1
-    } else {
-        post_meta_invoke(fx, "k-budget", "alpha", "read", json!({}), None, session)
-            .await
-            .1
+/// Which way a row's call reaches the backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Route {
+    /// `gateway_invoke` on `/mcp`.
+    Meta,
+    /// The per-backend `/mcp/{name}` route.
+    Direct,
+    /// An events watch poll (`poll_capability`): no request, no session.
+    Poll,
+}
+
+async fn call(fx: &Fx, route: Route, session: Option<&str>) -> Value {
+    match route {
+        Route::Direct => {
+            post_direct(fx, "alpha", "k-budget", "read", json!({}), None, session)
+                .await
+                .1
+        }
+        Route::Meta => {
+            post_meta_invoke(fx, "k-budget", "alpha", "read", json!({}), None, session)
+                .await
+                .1
+        }
+        Route::Poll => poll(fx, "k-budget", json!({})).await,
+    }
+}
+
+/// One watch poll of `alpha`/`read` as API key `key`, shaped as a JSON-RPC
+/// body: `result` with the application value, or `error` naming the control
+/// that refused (code 0: a poll has no wire code).
+async fn poll(fx: &Fx, key: &str, arguments: Value) -> Value {
+    use crate::events::watch_source::{Charge, CredentialUse, Target};
+    let client = fx
+        .state
+        .auth_config
+        .client_for_key(key, &crate::gateway::auth::principal_of(key))
+        .expect("the fixture key is live");
+    let target = Target {
+        capability: "read".into(),
+        backend: "alpha".into(),
+        read_only: true,
+        credential: CredentialUse::Keyed,
+        input_schema: json!({}),
+    };
+    match super::watch_poll::poll_capability(
+        &fx.state,
+        &client,
+        "subscriber",
+        Charge::Holder,
+        &target,
+        arguments,
+    )
+    .await
+    {
+        Ok(value) => json!({ "result": value }),
+        Err(refused) => json!({ "error": { "code": 0, "refused": format!("{refused:?}") } }),
     }
 }
 
 /// Rows whose arming needs more than a `fn` pointer.
-async fn armed_row(control: &str, direct: bool) -> Seen {
+async fn armed_row(control: &str, route: Route) -> Seen {
     match control {
         "session_profile" => {
             // The gateway mints session ids, so bind the profile on one it issued.
@@ -77,7 +124,7 @@ async fn armed_row(control: &str, direct: bool) -> Seen {
                 .meta_mcp
                 .session_profiles()
                 .set_profile(&session, "no-read");
-            let body = call(&fx, direct, Some(&session)).await;
+            let body = call(&fx, route, Some(&session)).await;
             seen(&fx, &body)
         }
         "error_budget" => {
@@ -96,9 +143,9 @@ async fn armed_row(control: &str, direct: bool) -> Seen {
             })
             .await;
             for _ in 0..4 {
-                call(&fx, direct, None).await;
+                call(&fx, route, None).await;
             }
-            let body = call(&fx, direct, None).await;
+            let body = call(&fx, route, None).await;
             seen(&fx, &body)
         }
         "response_gates" => {
@@ -111,19 +158,19 @@ async fn armed_row(control: &str, direct: bool) -> Seen {
                 });
             })
             .await;
-            let body = call(&fx, direct, None).await;
+            let body = call(&fx, route, None).await;
             Seen {
                 refused: body.get("error").map(|_| 0),
                 calls: fx.calls.load(Ordering::SeqCst),
             }
         }
-        "cost_budget" => cost_row(direct).await,
+        "cost_budget" => cost_row(route).await,
         other => panic!("no parity row for control `{other}`"),
     }
 }
 
 #[cfg(feature = "cost-governance")]
-async fn cost_row(direct: bool) -> Seen {
+async fn cost_row(route: Route) -> Seen {
     use crate::cost_accounting::config::CostGovernanceConfig;
     let mut cfg = CostGovernanceConfig {
         enabled: true,
@@ -140,12 +187,12 @@ async fn cost_row(direct: bool) -> Seen {
         meta.with_cost_governance(enforcer, registry)
     })
     .await;
-    let body = call(&fx, direct, None).await;
+    let body = call(&fx, route, None).await;
     seen(&fx, &body)
 }
 
 #[cfg(not(feature = "cost-governance"))]
-async fn cost_row(_direct: bool) -> Seen {
+async fn cost_row(_route: Route) -> Seen {
     Seen {
         refused: Some(-32003),
         calls: 0,
@@ -172,8 +219,8 @@ fn deny_read_profiles() -> crate::routing_profile::ProfileRegistry {
 async fn t8_every_shared_control_behaves_the_same_on_both_routes() {
     let mut differing = Vec::new();
     for control in DISPATCH_CONTROLS {
-        let meta = row(control, false).await;
-        let direct = row(control, true).await;
+        let meta = row(control, Route::Meta).await;
+        let direct = row(control, Route::Direct).await;
         assert!(
             meta.refused.is_some(),
             "{control}: the meta route must refuse: {meta:?}"
@@ -188,14 +235,14 @@ async fn t8_every_shared_control_behaves_the_same_on_both_routes() {
     );
 }
 
-/// T8, allowed baseline: with nothing armed, both routes dispatch once.
+/// T8, allowed baseline: with nothing armed, every route dispatches once.
 #[tokio::test]
 async fn t8_allowed_baseline_dispatches_once_on_both_routes() {
-    for direct in [false, true] {
+    for route in [Route::Meta, Route::Direct, Route::Poll] {
         let fx = fixture(Answer::Ok, |_| {}).await;
-        let body = call(&fx, direct, None).await;
-        assert!(body.get("result").is_some(), "direct={direct}: {body}");
-        assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "direct={direct}");
+        let body = call(&fx, route, None).await;
+        assert!(body.get("result").is_some(), "{route:?}: {body}");
+        assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{route:?}");
     }
 }
 
@@ -600,3 +647,6 @@ fn t3c_the_bridged_round_admits_spend_through_the_shared_stage() {
         "bridged round still calls admit_spend"
     );
 }
+
+#[path = "watch_poll_parity_tests.rs"]
+mod watch_poll_parity;
