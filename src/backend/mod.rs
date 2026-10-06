@@ -69,7 +69,7 @@ pub(crate) use annotations::prepare_tool_metadata;
 #[cfg(test)]
 pub(crate) use descriptor_gate::descriptor_digest;
 pub(crate) use descriptor_gate::{Judging, Listing};
-pub(crate) use fill_check::text_absent;
+pub(crate) use fill_check::{LIST_FILL_COOLDOWN, text_absent};
 pub(crate) use identity_slots::passthrough_binding;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,

@@ -49,9 +49,9 @@ const STABLE: Duration = Duration::from_secs(60);
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
 const BACKOFF_CAP: Duration = Duration::from_secs(300);
 /// A tools refill that did not fill is retried once after this: the backend's
-/// list-fill cooldown (`LIST_FILL_COOLDOWN`), which fails every fill inside it
-/// without reaching the backend (MIK-8007).
-const REFILL_RETRY: Duration = Duration::from_secs(10);
+/// list-fill cooldown, which fails every fill inside it without reaching the
+/// backend (MIK-8007). Taken from it, so the two cannot drift apart.
+const REFILL_RETRY: Duration = crate::backend::LIST_FILL_COOLDOWN;
 
 /// The backend tools notices a listener task has not yet served (MIK-8007).
 #[derive(Default)]
