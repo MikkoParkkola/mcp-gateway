@@ -126,22 +126,27 @@ fn journal_beside(grants: &Path) -> PathBuf {
 
 /// A 4.0.0 pre-release kept the journal beside the grant path as spelled,
 /// so a path spelled through a symlink left it beside the link. Called under
-/// the lock: while the resolved journal does not exist yet, that one is moved
-/// to it, or copied when the move crosses filesystems, so its entries are
-/// still read (MIK-7715).
+/// the lock: while the resolved journal does not exist yet, that one is
+/// renamed to it, which keeps its owner and mode for the checked reader
+/// (MIK-7715). It is never copied or merged: a journal on another filesystem,
+/// or one beside a resolved journal that already exists, is left in place
+/// and named in a warning, for an operator to append by hand.
 async fn adopt_spelled_journal(spelled: &Path, grants: &Path) {
     let (old, new) = (journal_beside(spelled), journal_path(grants));
-    if tokio::fs::symlink_metadata(&new).await.is_ok()
-        || !tokio::fs::symlink_metadata(&old)
-            .await
-            .is_ok_and(|meta| meta.is_file())
+    if !tokio::fs::symlink_metadata(&old)
+        .await
+        .is_ok_and(|meta| meta.is_file())
+        || resolved(&old) == resolved(&new)
     {
         return;
     }
-    if tokio::fs::rename(&old, &new).await.is_err()
-        && let Err(error) = tokio::fs::copy(&old, &new).await
-    {
-        tracing::warn!(%error, from = %old.display(), to = %new.display(), "grant journal from a pre-release path not adopted");
+    let outcome = if tokio::fs::symlink_metadata(&new).await.is_ok() {
+        Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists))
+    } else {
+        tokio::fs::rename(&old, &new).await
+    };
+    if let Err(error) = outcome {
+        tracing::warn!(%error, from = %old.display(), to = %new.display(), "a grant journal from a pre-release path is not read; append its entries to the journal beside the real grant file, then remove it");
     }
 }
 
