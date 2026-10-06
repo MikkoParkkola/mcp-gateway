@@ -254,3 +254,52 @@ async fn a_denied_target_never_dispatches() {
     assert!(!succeeded(&refused), "{refused}");
     assert_eq!(count(&stdio.calls, DENIED), 0);
 }
+
+/// MIK-7928: over stdio under `standard` a `gateway_invoke` nonce is judged
+/// after the invocation policy, as on `/mcp`. A denied call with a malformed
+/// nonce gets the policy refusal and counts no nonce rejection; an allowed one
+/// is refused `-32602` and counted once. Driven on a current-thread runtime
+/// inside the scoped recorder, so every metric the call emits is seen.
+#[test]
+fn stdio_judges_an_invoke_nonce_after_policy() {
+    use crate::security::message_signing::nonce_metrics_support::{
+        INVALID_REFUSAL, assert_no_rejections, assert_single_rejection, observe,
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let stdio = runtime.block_on(stdio(Signing::On));
+    let call = |policy: &Arc<ToolPolicy>, id: &str, tool: &str| {
+        let mut request = keyed(id, tool, id);
+        request["params"]["arguments"]["nonce"] = Value::Null;
+        observe(|| runtime.block_on(dispatch(&stdio, policy, request)))
+    };
+
+    let (denied, events) = call(&stdio.denying, "n1", DENIED);
+    assert!(!succeeded(&denied), "{denied}");
+    assert_ne!(
+        denied["error"]["code"],
+        json!(-32602),
+        "policy answers first: {denied}"
+    );
+    assert!(!denied.to_string().contains(INVALID_REFUSAL), "{denied}");
+    assert!(
+        denied.to_string().contains(&format!(
+            "Tool '{DENIED}' on server '{BACKEND}' is blocked by security policy"
+        )),
+        "the policy's own refusal: {denied}"
+    );
+    assert_no_rejections(&events);
+    assert_eq!(count(&stdio.calls, DENIED), 0);
+
+    let (allowed, events) = call(&stdio.permitting, "n2", NEIGHBOUR);
+    assert_eq!(allowed["error"]["code"], json!(-32602), "{allowed}");
+    assert_eq!(
+        allowed["error"]["message"],
+        json!(INVALID_REFUSAL),
+        "{allowed}"
+    );
+    assert_single_rejection(&events, "invalid");
+    assert_eq!(count(&stdio.calls, NEIGHBOUR), 0);
+}
