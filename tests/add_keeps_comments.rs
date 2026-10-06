@@ -126,8 +126,12 @@ fn a_file_another_writer_broke_is_not_spliced_into() {
 
     write_config_keeping_comments(&path, &before, &config, "new").expect("write config");
     let written = std::fs::read_to_string(&path).expect("read");
-    Config::load_literal(Some(&path))
+    let loaded = Config::load_literal(Some(&path))
         .unwrap_or_else(|e| panic!("the written config must load: {e}\n{written}"));
+    assert!(
+        loaded.backends.contains_key("new"),
+        "the added backend is kept:\n{written}"
+    );
 }
 
 #[test]

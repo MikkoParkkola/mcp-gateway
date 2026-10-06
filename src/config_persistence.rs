@@ -116,14 +116,12 @@ pub fn write_config_keeping_comments(
 /// `before`: a file another writer changed since `before` was loaded is never
 /// spliced into, and gets the full rewrite instead.
 ///
-/// The file is read on both sides of the reload so the text is the one that
-/// loaded. An edit landing after the second read is overwritten by the rename,
-/// as the full rewrite overwrites it.
+/// The text is the one the strict checks ran on, from a single read, so no
+/// other bytes can be spliced. An edit landing after that read is overwritten
+/// by the rename, as the full rewrite overwrites it.
 fn unchanged_since_load(path: &Path, before: &Config) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let reloaded = serde_json::to_value(load_existing_or_default(path).ok()?).ok()?;
-    let same = reloaded == serde_json::to_value(before).ok()?;
-    (same && std::fs::read_to_string(path).ok()? == text).then_some(text)
+    let (reloaded, text) = Config::load_literal_with_text(path).ok()?;
+    (serde_json::to_value(reloaded).ok()? == serde_json::to_value(before).ok()?).then_some(text)
 }
 
 /// How many times a rename is retried before the write is reported failed.
