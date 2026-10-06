@@ -412,7 +412,7 @@ fn executable_name_keeps_raw_process_text_literal() {
 /// name only; its value never reaches the report.
 #[test]
 fn an_auth_header_key_is_not_reported_as_unauthenticated() {
-    for key in ["Authorization", "proxy-authorization"] {
+    for key in ["Authorization", "proxy-authorization", "X-Api-Key"] {
         let mut server = http_server(
             "remote-authed",
             "Remote server with a credential",
@@ -489,6 +489,12 @@ fn a_client_resolved_auth_header_still_counts() {
     );
     for code in ["http_auth_header_configured", "server_auth_unverified"] {
         assert!(authed.risk_reasons.iter().any(|r| r == code), "{code}");
+        let risk = authed.risks.iter().find(|risk| risk.code == code);
+        // Its own detail, not the catch-all.
+        assert!(
+            risk.is_some_and(|risk| !risk.detail.starts_with("Unmanaged MCP asset")),
+            "{code}"
+        );
     }
     assert_eq!(
         asset("maps").auth_exposure,
