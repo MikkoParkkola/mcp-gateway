@@ -8,7 +8,10 @@
 //! (`panic = "abort"`) dumps core. A CLI whose reader has left has nothing more
 //! to say: it should exit quietly and successfully.
 
-use std::process::{Command, Stdio};
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
+use std::process::Stdio;
 
 /// A stdout whose reader is closed before the child starts, so its first
 /// write fails however quickly the command runs.
@@ -22,11 +25,9 @@ fn gone_reader() -> Stdio {
 /// write fails with a broken pipe whatever the output's size.
 fn run_with_reader_gone(args: &[&str]) -> (std::process::ExitStatus, String) {
     let home = tempfile::tempdir().expect("home");
-    let child = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let child = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
         .args(args)
         .current_dir(home.path())
-        .env("HOME", home.path())
-        .env("MCP_GATEWAY_TEST_HOME_DIR", home.path())
         .stdin(Stdio::null())
         .stdout(gone_reader())
         .stderr(Stdio::piped())
@@ -60,11 +61,9 @@ fn a_closed_stdout_is_a_clean_exit() {
 fn a_reader_that_takes_one_line_and_leaves_is_a_clean_exit() {
     use std::io::BufRead;
     let home = tempfile::tempdir().expect("home");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let mut child = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
         .args(["list", "--available"])
         .current_dir(home.path())
-        .env("HOME", home.path())
-        .env("MCP_GATEWAY_TEST_HOME_DIR", home.path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -95,11 +94,9 @@ fn any_other_stdout_error_still_fails() {
         .write(true)
         .open("/dev/full")
         .expect("open /dev/full");
-    let output = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let output = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
         .args(["list", "--available"])
         .current_dir(home.path())
-        .env("HOME", home.path())
-        .env("MCP_GATEWAY_TEST_HOME_DIR", home.path())
         .stdin(Stdio::null())
         .stdout(full)
         .stderr(Stdio::piped())
@@ -132,11 +129,9 @@ fn library_printed_output_exits_as_with_a_reader() {
         &["validate", capability][..],
     ] {
         let home = tempfile::tempdir().expect("home");
-        let read = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        let read = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
             .args(args)
             .current_dir(home.path())
-            .env("HOME", home.path())
-            .env("MCP_GATEWAY_TEST_HOME_DIR", home.path())
             .stdin(Stdio::null())
             .output()
             .expect("run mcp-gateway");

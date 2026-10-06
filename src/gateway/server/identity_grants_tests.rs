@@ -314,20 +314,20 @@ async fn t12_http_snapshot_precedes_the_listener() {
     apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
         .await
         .unwrap();
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .and_then(|l| l.local_addr())
-        .map(|a| a.port())
-        .unwrap();
     let mut config = config(dir.path(), true);
     config.server.host = "127.0.0.1".to_string();
-    config.server.port = port;
+    // Port 0: the gateway reports the port it bound (MIK-7984).
+    config.server.port = 0;
     config.tasks.store_dir = dir.path().join("tasks").to_string_lossy().into_owned();
-    let gateway = Gateway::new(config)
+    let mut gateway = Gateway::new(config)
         .await
         .unwrap()
         .with_data_dir(dir.path().to_path_buf());
+    let bound = gateway.bound_port_for_test();
     let server = tokio::spawn(async move { Box::pin(gateway.run()).await });
     let up = tokio::time::timeout(Duration::from_secs(60), async {
+        // A run that ends before binding drops the sender; `ended` reports it.
+        let Ok(port) = bound.await else { return };
         while tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
             .is_err()
@@ -339,9 +339,13 @@ async fn t12_http_snapshot_precedes_the_listener() {
     .await;
     let log = governance_log(dir.path());
     server.abort();
-    let ended = server.await.ok();
+    // Only the abort may end it: a panic or a returned run is a failure.
+    let ended = server.await;
     assert!(
-        up.is_ok() && ended.is_none(),
+        up.is_ok()
+            && ended
+                .as_ref()
+                .is_err_and(tokio::task::JoinError::is_cancelled),
         "the HTTP gateway never bound: {ended:?}"
     );
     assert!(log.contains("loaded_complete"), "{log}");
