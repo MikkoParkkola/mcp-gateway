@@ -21,6 +21,8 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::process::{Child, Command};
 
+use gateway_bin::{ANY_PORT, reported_port};
+
 /// Start-up, including a cold binary on a shared runner.
 const STARTUP: Duration = Duration::from_secs(60);
 /// One reload: a 2 s env poll and a sub-second debounce, with CI margin.
@@ -32,10 +34,6 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 const CONFIG_RELOADED: &str = "Config reload: complete";
 const ENV_RELOADED: &str = "Config reload: env file changed, reloaded";
 const RELOAD_TOOL: &str = "gateway_reload_config";
-
-/// `server.port: 0`: the child binds an OS-chosen port and logs the one it
-/// got, so no port is picked here and dropped before the child binds it.
-const ANY_PORT: u16 = 0;
 
 fn write_owner_only(path: &Path, text: &str) {
     if let Some(dir) = path.parent() {
@@ -77,38 +75,6 @@ fn gateway_command(cwd: &Path, home: &Path) -> Command {
         .env("RUST_LOG", "info")
         .kill_on_drop(true);
     command
-}
-
-/// The port in the gateway's `Listening` banner line, with terminal colour
-/// codes stripped (their digits are not part of the port). The last `port`
-/// on the line is the field; the module path before it can contain the word.
-fn reported_port(log: &str) -> Option<u16> {
-    // Only a line already ended by a newline: the child may be mid-write, and
-    // a prefix such as `port=39` would parse as a wrong port.
-    let line = log
-        .split_inclusive('\n')
-        .filter(|line| line.ends_with('\n'))
-        .find(|line| line.contains("Listening") && line.contains("port"))?;
-    let mut plain = String::new();
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        if c == '\u{1b}' {
-            for skipped in chars.by_ref() {
-                if skipped.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            plain.push(c);
-        }
-    }
-    let rest = &plain[plain.rfind("port")? + "port".len()..];
-    let digits: String = rest
-        .chars()
-        .skip_while(|c| !c.is_ascii_digit())
-        .take_while(char::is_ascii_digit)
-        .collect();
-    digits.parse().ok()
 }
 
 /// An HTTP gateway whose stdout and stderr go to one log file.

@@ -122,11 +122,6 @@ fn http_client() -> reqwest::Client {
         .expect("an HTTP client")
 }
 
-fn free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-    listener.local_addr().expect("its address").port()
-}
-
 /// One MCP client session over the gateway's HTTP endpoint.
 struct Session {
     http: reqwest::Client,
@@ -374,13 +369,12 @@ struct Gateway {
 
 impl Gateway {
     async fn start(ws: &Workspace) -> Self {
-        let port = free_port();
         let log = ws.root.join("serve.log");
         let out = std::fs::File::create(&log).expect("serve log");
         let err = out.try_clone().expect("log handle");
         let mut command = tokio::process::Command::from(ws.command());
         let child = command
-            .args(["-c", "gateway.yaml", "-p", &port.to_string(), "serve"])
+            .args(["-c", "gateway.yaml", "-p", "0", "serve"])
             .stdout(Stdio::from(out))
             .stderr(Stdio::from(err))
             .kill_on_drop(true)
@@ -389,7 +383,7 @@ impl Gateway {
         let mut gateway = Self {
             child,
             log,
-            url: format!("http://127.0.0.1:{port}"),
+            url: String::new(),
         };
         gateway.wait_ready().await;
         gateway
@@ -399,19 +393,26 @@ impl Gateway {
         std::fs::read_to_string(&self.log).unwrap_or_default()
     }
 
+    /// Read the port the child bound (`-p 0`) from its log, then wait for
+    /// `/health` on it.
     async fn wait_ready(&mut self) {
-        let health = format!("{}/health", self.url);
         let deadline = tokio::time::Instant::now() + READY_BOUND;
         let http = http_client();
         loop {
             if let Some(status) = self.child.try_wait().expect("child status") {
                 panic!("serve exited before ready ({status})\n{}", self.logs());
             }
-            if http
-                .get(&health)
-                .send()
-                .await
-                .is_ok_and(|r| r.status().is_success())
+            if self.url.is_empty()
+                && let Some(port) = gateway_bin::logged_port(&self.log)
+            {
+                self.url = format!("http://127.0.0.1:{port}");
+            }
+            if !self.url.is_empty()
+                && http
+                    .get(format!("{}/health", self.url))
+                    .send()
+                    .await
+                    .is_ok_and(|r| r.status().is_success())
             {
                 return;
             }

@@ -80,3 +80,46 @@ fn isolated(mut command: Command, home: &Path, inherit: Inherit) -> Command {
         .env("XDG_STATE_HOME", home.join(".local").join("state"));
     command
 }
+
+/// `server.port: 0` (or `-p 0`): the child binds an OS-chosen port and logs
+/// the one it got, so no port is picked here and dropped before the child
+/// binds it (MIK-7634, MIK-7984). Read it back with [`logged_port`].
+pub const ANY_PORT: u16 = 0;
+
+/// The port a child started on [`ANY_PORT`] reports in `log`, once its
+/// `Listening` line is complete.
+pub fn logged_port(log: &Path) -> Option<u16> {
+    reported_port(&std::fs::read_to_string(log).ok()?)
+}
+
+/// The port in the gateway's `Listening` banner line, with terminal colour
+/// codes stripped (their digits are not part of the port). The last `port`
+/// on the line is the field; the module path before it can contain the word.
+pub fn reported_port(log: &str) -> Option<u16> {
+    // Only a line already ended by a newline: the child may be mid-write, and
+    // a prefix such as `port=39` would parse as a wrong port.
+    let line = log
+        .split_inclusive('\n')
+        .filter(|line| line.ends_with('\n'))
+        .find(|line| line.contains("Listening") && line.contains("port"))?;
+    let mut plain = String::new();
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for skipped in chars.by_ref() {
+                if skipped.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    let rest = &plain[plain.rfind("port")? + "port".len()..];
+    let digits: String = rest
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
