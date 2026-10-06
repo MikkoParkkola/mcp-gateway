@@ -510,13 +510,13 @@ async fn a_settled_dispatched_error_keeps_its_key() {
 /// row is the only thing that observes it.
 #[tokio::test]
 async fn pre_dispatch_failure_releases_its_key() {
-    // A port nothing listens on: bind it to learn an address that is free, then
-    // give it up. Connecting is refused before a byte of the request is written.
-    let closed = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind ephemeral port");
+    // Bound for the whole test, never listening: connecting is refused before a
+    // byte is written, and no parallel test can take the port (MIK-7984).
+    let closed = tokio::net::TcpSocket::new_v4().expect("socket");
+    closed
+        .bind("127.0.0.1:0".parse().unwrap())
+        .expect("bind without listening");
     let address = closed.local_addr().expect("local addr");
-    drop(closed);
 
     let (state, _store_dir) = route_state().await;
     register_route_backend(

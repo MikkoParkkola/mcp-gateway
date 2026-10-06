@@ -949,21 +949,20 @@ enum ResourceDocument {
 /// Serving address and claimed identity are separate parameters so a test can
 /// make them differ by exactly one character.
 async fn serve_oauth_documents(
-    base: &str,
+    listener: tokio::net::TcpListener,
     resource_document: ResourceDocument,
     issuer_claimed: &str,
 ) -> String {
     use axum::{Router, response::IntoResponse, routing::get};
 
-    let addr: std::net::SocketAddr = base.trim_start_matches("http://").parse().unwrap();
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
 
     let as_body = serde_json::json!({
         "issuer": issuer_claimed,
         "authorization_endpoint": format!("{issuer_claimed}authorize"),
         "token_endpoint": format!("{issuer_claimed}token"),
     });
-    let resource = base.to_string();
+    let resource = base.clone();
     let prm_body = match resource_document {
         ResourceDocument::Absent => None,
         ResourceDocument::WithoutAuthorizationServer => {
@@ -1000,7 +999,7 @@ async fn serve_oauth_documents(
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    base.to_string()
+    base
 }
 
 fn client_for(resource_url: &str, dir: &std::path::Path) -> OAuthClient {
@@ -1014,11 +1013,11 @@ fn client_for(resource_url: &str, dir: &std::path::Path) -> OAuthClient {
     )
 }
 
-async fn free_addr() -> String {
+/// Bind and keep an ephemeral port: no parallel test can take it (MIK-7984).
+async fn bound_base() -> (tokio::net::TcpListener, String) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    format!("http://{addr}")
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    (listener, base)
 }
 
 /// The comparison arm is only half the control: which arm runs is decided by
@@ -1027,9 +1026,9 @@ async fn free_addr() -> String {
 /// URL so the classification itself is under test.
 #[tokio::test]
 async fn an_issuer_advertised_by_protected_resource_metadata_is_compared_exactly() {
-    let base = free_addr().await;
+    let (listener, base) = bound_base().await;
     let served = serve_oauth_documents(
-        &base,
+        listener,
         ResourceDocument::Advertising(base.clone()),
         &format!("{base}/"),
     )
@@ -1052,8 +1051,9 @@ async fn an_issuer_advertised_by_protected_resource_metadata_is_compared_exactly
 /// shaped server stays reachable.
 #[tokio::test]
 async fn an_issuer_reached_by_the_origin_fallback_tolerates_a_trailing_slash() {
-    let base = free_addr().await;
-    let served = serve_oauth_documents(&base, ResourceDocument::Absent, &format!("{base}/")).await;
+    let (listener, base) = bound_base().await;
+    let served =
+        serve_oauth_documents(listener, ResourceDocument::Absent, &format!("{base}/")).await;
     let dir = tempfile::tempdir().unwrap();
     let mut client = client_for(&format!("{served}/mcp"), dir.path());
 
@@ -1069,9 +1069,9 @@ async fn an_issuer_reached_by_the_origin_fallback_tolerates_a_trailing_slash() {
 /// tests above.
 #[tokio::test]
 async fn resource_metadata_naming_no_authorization_server_falls_back_to_the_origin() {
-    let base = free_addr().await;
+    let (listener, base) = bound_base().await;
     let served = serve_oauth_documents(
-        &base,
+        listener,
         ResourceDocument::WithoutAuthorizationServer,
         &format!("{base}/"),
     )
