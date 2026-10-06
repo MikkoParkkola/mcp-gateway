@@ -143,13 +143,13 @@ CHANGELOG `[Unreleased]`; OWASP ASI03/ASI07/ASI10 cite this.
 
 | # | Rule | Test name | Mutant that must redden it |
 |---|---|---|---|
-| 1 | firewall detector learns from real calls on both routes | `anomaly_scores_move_after_real_calls` (firewall built by the server wiring; drive meta and direct calls; assert a score != 0.5 and a block) | restore the unfed `TransitionTracker::new()` |
-| 2 | a never-seen transition scores above a rarely-seen one | `never_seen_transition_scores_one` | revert 1.0 to 0.95 |
-| 3 | warm-up: a predecessor with fewer than min observations is neither flagged nor blocked | `cold_predecessor_is_warming_up_not_scored` | return `Scored(0.5)` for warm-up |
-| 3b | a threshold <= 0.5 refuses load; at 0.51 a warm-up call is not flagged and increments the `WarmingUp` counter, not a score | `anomaly_threshold_half_refused_at_load`, `warmup_counted_not_scored` | drop the range check / return `Scored(0.5)` |
+| 1 | firewall detector learns from real calls on both routes | `real_direct_calls_train_the_router_firewall`, `real_meta_calls_train_the_router_firewall` (`tests/anomaly_learning_e2e.rs`; firewall built by the server wiring; drive meta and direct calls; assert a score != 0.5 and a block) | restore the unfed `TransitionTracker::new()` |
+| 2 | a never-seen transition scores above a rarely-seen one | `never_seen_scores_one_and_above_rare` | revert 1.0 to 0.95 |
+| 3 | warm-up: a predecessor with fewer than min observations is neither flagged nor blocked | `cold_predecessor_is_warming_up` | return `Scored(0.5)` for warm-up |
+| 3b | a threshold <= 0.5 refuses load; at 0.51 a warm-up call is not flagged and increments the `WarmingUp` counter, not a score | `anomaly_ranges_refused_at_load`, `warmup_has_no_score_and_is_counted` | drop the range check / return `Scored(0.5)` |
 | 3c | a warmed predecessor with 20 equally likely successors (each scores 0.95) does not block at the hardened default | `diverse_warm_predecessor_not_blocked_at_default` | default block threshold 0.95 |
-| 4 | recording leaves `last_per_session` empty; pair cap full: hardened refuses (`Unobservable`), standard counts and passes | `firewall_recording_leaves_session_map_empty`, `pair_cap_full_hardened_refuses`, `pair_cap_full_standard_counts_and_passes` | call `record_transition` / same outcome in both postures |
-| 4b | a blocked A->B moves nothing; one identity's concurrent calls serialize (B->C scored against B), also at the identity cap without deadlock | `blocked_retry_does_not_train_baseline`, `concurrent_calls_serialize_per_identity`, `serialized_at_identity_cap_no_deadlock` | update in `observe` / hold a DashMap entry guard |
+| 4 | recording leaves `last_per_session` empty; pair cap full: hardened refuses (`Unobservable`), standard counts and passes | `record_pair_leaves_session_map_empty`, `pair_cap_full_hardened_refuses`, `pair_cap_full_standard_counts_and_passes` | call `record_transition` / same outcome in both postures |
+| 4b | a blocked A->B moves nothing; one identity's concurrent calls serialize (B->C scored against B), also at the identity cap without deadlock | `blocked_call_is_not_learned`, `stripe_lock_serializes_one_identity`, `committed_pairs_form_one_path`, `serialized_at_identity_cap_no_deadlock` | update in `observe` / hold a DashMap entry guard |
 | 4c | an Allow rule cannot downgrade an anomaly block, in both postures | `anomaly_block_survives_allow_rule_standard`, `..._hardened` | force only under hardened |
 | 5 | hardened raises the preset floor and keeps enterprise_strict | `hardened_raises_monitor_only_to_team_shared`, `hardened_keeps_enterprise_strict` | skip the floor / overwrite strict |
 | 6 | hardened with a secret set only via env still resolves it; no secret refuses start | `hardened_resolves_env_secret_before_signing_check`, `hardened_without_signing_secret_refuses` | resolve posture after `resolve_with_env` / warn instead |
@@ -162,7 +162,7 @@ CHANGELOG `[Unreleased]`; OWASP ASI03/ASI07/ASI10 cite this.
 | 12b | under hardened, a set `capabilities.egress_proxy` refuses startup (#1881) | `hardened_refuses_capability_egress_proxy` | accept the key under hardened |
 | 13 | listed backend reaches an RFC 1918 literal and hostname but never 169.254.169.254 | `listed_private_backend_policy` | apply the list to the resolver only |
 | 14 | a posture change on reload is refused | `reload_refuses_posture_change` | drop the posture diff check |
-| 15 | the WARN and doctor agree | `doctor_and_startup_share_unhardened_predicate` (table over auth shapes) | doctor passes `has_oidc=false` |
+| 15 | the WARN and doctor agree | `startup_warn_matches_unhardened_table` and `doctor_row_matches_unhardened_table` (one shared table over auth shapes) | doctor passes `has_oidc=false` |
 | 16 | `standard` applies none of the posture overrides (rows 5-8, 10-14); row 9's `CallerKey` is posture-independent | `standard_posture_applies_no_override` | apply any override under standard |
 | 17 | each startup refusal fires: no firewall feature, short secret, no configured backend named, block threshold < 0.9 | `hardened_startup_refusals` (table) | drop any one check |
 

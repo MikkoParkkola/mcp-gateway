@@ -1,6 +1,7 @@
 # MIK-7630 I5 — the upstream listener (detailed design)
 
-Status: design for review; no product code yet.
+Status: implemented in #2767 (`src/events/upstream_listener.rs`,
+`src/events/upstream_session.rs`); the text below is the design as reviewed.
 Parent: `docs/design/2026-10-01-mik-7630-mcp-events.md` (§3.3 b2, §4, §11 I5, row T39).
 Depends on: I2 (outbox, fan-out, `EventsHub::emit`) and I4 (the refcounted
 `on_first_subscriber` / `on_last_subscriber` hooks and the `BackendNotification`
