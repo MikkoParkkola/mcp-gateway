@@ -179,6 +179,16 @@ fn fired_file(key: &str) -> String {
     format!("{}.json", hex::encode(sha2::Sha256::digest(key.as_bytes())))
 }
 
+/// Whether `key` is among the earliest-granted `cap` of the timers `held`.
+fn within_cap(held: &HashMap<String, DateTime<Utc>>, key: &str, cap: usize) -> bool {
+    let mut order: Vec<(DateTime<Utc>, &String)> = held.iter().map(|(k, at)| (*at, k)).collect();
+    order.sort();
+    order
+        .iter()
+        .position(|(_, k)| *k == key)
+        .is_some_and(|rank| rank < cap)
+}
+
 /// The `schedule.tick` source.
 pub(crate) struct ScheduleSource {
     hub: Weak<EventsHub>,
@@ -373,11 +383,7 @@ impl EventSource for ScheduleSource {
             // Two subscribes that join running timers at once both pass the
             // check below; here, at every fan-out, a principal past the cap
             // keeps its earliest timers and loses the rest.
-            let mut order: Vec<(DateTime<Utc>, &String)> =
-                held.iter().map(|(k, at)| (*at, k)).collect();
-            order.sort();
-            let rank = order.iter().position(|(_, k)| **k == key).unwrap_or(0);
-            return if rank < self.max_per_principal {
+            return if within_cap(&held, &key, self.max_per_principal) {
                 Ok(())
             } else {
                 Err(RpcError::forbidden())
@@ -431,10 +437,15 @@ impl EventSource for ScheduleSource {
     ) -> Result<(), RpcError> {
         let (_, timer) = canonical(arguments)?;
         // Again under the lifecycle lock, against committed rows: two
-        // concurrent subscribes for new timers cannot both pass the cap.
-        let mut held = self.held_by(principal);
-        held.remove(key);
-        if held.len() >= self.max_per_principal {
+        // concurrent subscribes for new timers cannot both pass the cap, and
+        // after a restart or a lowered cap the earliest timers still start.
+        let held = self.held_by(principal);
+        let within = if held.contains_key(key) {
+            within_cap(&held, key, self.max_per_principal)
+        } else {
+            held.len() < self.max_per_principal
+        };
+        if !within {
             return Err(RpcError::exhausted(
                 "schedule_timers_per_principal",
                 Some(self.max_per_principal),
