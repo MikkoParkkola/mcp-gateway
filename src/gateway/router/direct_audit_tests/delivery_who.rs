@@ -134,3 +134,111 @@ async fn a_record_without_a_subject_is_unchanged() {
         );
     }
 }
+
+/// `trusted_proxy` mode with one allowed proxy, under authority `corp-sso`.
+fn proxy_setup() -> Setup {
+    Setup {
+        caller_identity: Some(crate::security::caller_identity::CallerIdentityConfig {
+            mode: crate::security::caller_identity::CallerIdentityMode::TrustedProxy,
+            trusted_proxies: vec!["10.0.0.5".parse().unwrap()],
+            authority: "corp-sso".to_string(),
+            ..crate::security::caller_identity::CallerIdentityConfig::default()
+        }),
+        ..Setup::default()
+    }
+}
+
+/// `request` as the trusted proxy forwards it: from 10.0.0.5, naming `alice`.
+fn through_proxy(
+    mut request: axum::http::Request<axum::body::Body>,
+) -> axum::http::Request<axum::body::Body> {
+    request.headers_mut().insert(
+        "x-gateway-identity-subject",
+        axum::http::HeaderValue::from_static("alice"),
+    );
+    request.extensions_mut().insert(axum::extract::ConnectInfo(
+        "10.0.0.5:4000".parse::<std::net::SocketAddr>().unwrap(),
+    ));
+    request
+}
+
+/// Send `request` and require a 200.
+async fn send_ok(fx: &Fixture, request: axum::http::Request<axum::body::Body>) {
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+}
+
+/// ATTR.4: a subject named by a trusted proxy's header reaches the delivery
+/// record on the direct route. A Cloudflare Access subject resolves through
+/// `caller_grant_subject` into a `GrantSubject` of its own; its header
+/// verification is pinned in `identity_header_tests`.
+#[tokio::test]
+async fn a_trusted_proxy_subject_is_named_in_the_direct_delivery_record() {
+    let fx = fixture(proxy_setup()).await;
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/alpha")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(tools_call("t")))
+        .unwrap();
+    send_ok(&fx, through_proxy(request)).await;
+    assert_named(&fx, "corp-sso", "alice");
+}
+
+/// ATTR.4: that subject on the meta route (`POST /mcp`, `gateway_invoke`).
+#[tokio::test]
+async fn a_trusted_proxy_subject_is_named_in_the_meta_delivery_record() {
+    let fx = fixture(proxy_setup()).await;
+    let invoke = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+        "params": {"name": "gateway_invoke",
+                   "arguments": {"server": "alpha", "tool": "t", "arguments": {"q": 1}},
+                   "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                             "io.modelcontextprotocol/clientCapabilities": {}}}});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "gateway_invoke")
+        .body(axum::body::Body::from(invoke.to_string()))
+        .unwrap();
+    send_ok(&fx, through_proxy(request)).await;
+    assert_named(&fx, "corp-sso", "alice");
+}
+
+/// ATTR.5: an API-key caller that also presents a verified certificate gets
+/// the certificate subject in its delivery record; the key's client stays the
+/// `caller`.
+#[tokio::test]
+async fn a_key_and_certificate_caller_is_named_by_the_certificate() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        ..Setup::default()
+    })
+    .await;
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/alpha")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer k")
+        .body(axum::body::Body::from(tools_call("t")))
+        .unwrap();
+    insert_identity(&mut request, &Caller::Cert);
+    send_ok(&fx, request).await;
+    let delivery = only_attempt(&fx);
+    let invocation = only_invocation(&fx);
+    assert_eq!(delivery["who"]["authority"], "mtls", "{delivery}");
+    assert_eq!(
+        delivery["who"]["subject"], "spiffe://example.invalid/cert-7938",
+        "{delivery}"
+    );
+    assert_eq!(
+        delivery["who"]["subject"], invocation["who"]["subject"],
+        "{invocation}"
+    );
+    assert_eq!(delivery["caller"], "alpha-client", "{delivery}");
+}

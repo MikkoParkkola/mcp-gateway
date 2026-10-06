@@ -112,6 +112,8 @@ struct Setup {
     meta_mode: MetaMode,
     /// The backends refuse every notification (L1254).
     notify_refused: bool,
+    /// `security.caller_identity` (MIK-7938 ATTR.4).
+    caller_identity: Option<crate::security::caller_identity::CallerIdentityConfig>,
 }
 
 /// One optional meta-layer switch a cell turns on (MIK-7116.MIN.1 cells).
@@ -208,6 +210,9 @@ async fn fixture(setup: Setup) -> Fixture {
             Arc::new(crate::idempotency::IdempotencyCache::new()),
             crate::idempotency::CLEANUP_INTERVAL,
         );
+    }
+    if let Some(config) = setup.caller_identity {
+        meta = meta.with_caller_identity(config);
     }
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.transparency_log = Some(Arc::clone(&log));
