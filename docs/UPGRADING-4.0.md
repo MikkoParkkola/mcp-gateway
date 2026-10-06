@@ -175,7 +175,8 @@ backend" and "fails a capability file" first.**
 | 148 | An `http_url` backend with no `streamable_http` key POSTs `initialize` first and falls back to the legacy SSE `GET` only when that POST is refused with a 4xx that is not about the credential or a retry (any but 401, 403, 407, 408, 429); `add --url` no longer writes `streamable_http: false`. An explicit `true` or `false` is tried first, and when the server refuses it with such a 4xx the other transport is tried once, with a warning naming the backend and the value to set. `TransportConfig::Http::streamable_http` is now `Option<bool>` | None. A config the old `add --url` wrote keeps working; to skip the refused request, set the value the warning names or remove the key. A backend with the key unset is refused MCP Events even when it connects over Streamable HTTP, since eligibility is read from config: set `streamable_http: true` to offer them |
 | 149 | A meta-tool result whose payload says `isError: true` (a failed `gateway_invoke`, or a backend's own tool error) carries `isError: true` on the outer `tools/call` result; it was always `false`, with the failure only in the text | A client that read failure from the text alone keeps working; one that treated `isError: true` as a protocol failure should read the text and its `recovery` hint instead |
 | 150 | `mcp_gateway::cli::invoke::resolve_args` takes a fourth parameter, `kv_schema: Option<&Value>`: `key=value` text is typed by that input schema; `None` keeps the old behaviour | An embedder passes the tool's input schema, or `None` |
-| 151 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
+| 151 | A legacy client that calls without a credential (authentication off, or on with the path in `auth.public_paths`, as `/mcp` is in the shipped presets) and does not resume a session the gateway issued is counted under one shared identity by the anomaly detector, the tenant guard and the call budget; in 3.x each such request was a new session and the first call in it | None unless these controls refuse such clients: give them a credential, have them keep the `mcp-session-id` from `initialize`, or raise the limit |
+| 152 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1616,7 +1617,7 @@ Forward audit records off-host: `control_plane.export` writes a local NDJSON fil
 protection holds only once an agent running as another account ships that file to a store (a
 SIEM, for example) where the gateway account cannot delete or alter records already landed. To
 detect a wipe or rollback, keep a copy of `<log>.hwm` off the host and verify with
-`audit verify --anchor` (item 151).
+`audit verify --anchor` (item 152).
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
@@ -4013,7 +4014,28 @@ gateway call coerces it (`count=007` against an integer is `7`, `flag=TRUE` agai
 `true`, `zip=007` against a string stays `"007"`); JSON from `--args` or stdin is left as
 written. `None` keeps the old behaviour. `mcp-gateway invoke` passes the tool's schema.
 
-## 151. `audit verify --anchor` checks the log against an off-host anchor
+## 151. Keyless legacy clients without a session share one anomaly history
+
+**Startup:** no notice
+
+This applies when `security.firewall.anomaly_detection` is on, `anomaly_block_threshold` is
+set, and legacy clients call the gateway without a credential: either authentication is off,
+or it is on and the path they call is listed in `auth.public_paths` (the shipped presets list
+`/mcp`). In 3.x such a client that sent no `mcp-session-id` was given a new session on every
+request. Anomaly scoring followed that session, so each call was the first in its session: it
+scored 0.5 and built no history, and a block threshold above 0.5 never blocked it. In 4.0
+every keyless legacy request that does not resume a session the gateway issued is scored as
+one shared caller. The calls of all such clients form one sequence, and the block threshold
+applies to them together. A client that keeps the `mcp-session-id` its `initialize` returned
+keeps its own history, as before, and a client that presents an API key or token is scored
+under its own credential.
+
+If such clients are now refused, give them a credential (turn authentication on, or have them
+present a key on a public path), have them reuse their session, raise
+`anomaly_block_threshold`, or remove it to log without blocking. The 4.0 tenant guard
+(`tenant_guard`) and call budget (`budget`) count these clients the same way.
+
+## 152. `audit verify --anchor` checks the log against an off-host anchor
 
 **Startup:** no notice
 
