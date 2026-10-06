@@ -333,7 +333,7 @@ mod emitted_document_tests {
     use serde_json::{Value, json};
 
     use super::{Payload, emitted_document};
-    use crate::protocol::{JsonRpcResponse, RequestId};
+    use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId};
 
     /// The member names of `doc` and of its `error` object.
     fn key_set(doc: &Value) -> Vec<String> {
@@ -350,18 +350,37 @@ mod emitted_document_tests {
         keys
     }
 
+    /// Every field written out: a new serialized member fails to compile
+    /// here until it is set, and then the pin below checks the view has it.
+    fn every_member(result: Option<Value>, data: Option<Value>) -> JsonRpcResponse {
+        JsonRpcResponse {
+            jsonrpc: "2.0".to_owned(),
+            id: Some(RequestId::Number(1)),
+            result,
+            error: Some(JsonRpcError {
+                code: -32000,
+                message: "no".to_owned(),
+                data,
+            }),
+            confirmation_refusal: true,
+            delivery_refusal: true,
+            discovery_inspected: true,
+            chain_source: crate::protocol::ChainSource::NotEligible,
+            chain_upstream: None,
+        }
+    }
+
     /// MIK-7942 D6.CATALOGUE.8 (pin b): the placeholder view serializes every
     /// envelope member the sink writes for the same response.
     #[test]
     fn the_view_keeps_every_envelope_member() {
-        let mut success = JsonRpcResponse::success(RequestId::Number(1), json!({"a": 1}));
-        success.confirmation_refusal = true;
-        success.delivery_refusal = true;
-        success.discovery_inspected = true;
-        let failure =
-            JsonRpcResponse::error_with_data(Some(RequestId::Number(2)), -32000, "no", json!([1]));
-        let bare = JsonRpcResponse::error(None, -32601, "missing");
-        for response in [success, failure, bare] {
+        let responses = [
+            every_member(Some(json!({"a": 1})), Some(json!([1]))),
+            every_member(Some(Value::Null), Some(Value::Null)),
+            JsonRpcResponse::success(RequestId::Number(2), json!({"a": 1})),
+            JsonRpcResponse::error(None, -32601, "missing"),
+        ];
+        for response in responses {
             let written = serde_json::to_value(&response).expect("serializes");
             let view = emitted_document(&Payload::Response(response)).expect("a document");
             assert_eq!(key_set(&view), key_set(&written), "{written}");
