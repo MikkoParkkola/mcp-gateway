@@ -24,6 +24,7 @@ mod fanout;
 mod governance;
 mod lifecycle;
 mod limiter;
+mod operational_source;
 mod outbox;
 mod rate;
 mod records;

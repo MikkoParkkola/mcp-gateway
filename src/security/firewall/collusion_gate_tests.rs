@@ -245,6 +245,51 @@ fn a_capped_digest_has_no_fingerprint_across_its_cut() {
     );
 }
 
+/// MIK-7934.PLANRCPT.3: two whole leaves the cap keeps, with the leaf between
+/// them dropped, record no fingerprint whose k-gram spans the two.
+#[test]
+fn a_dropped_middle_leaf_leaves_no_fingerprint_across_it() {
+    use std::collections::HashSet;
+
+    use super::super::collusion::{CollusionDetector, RelayParams};
+    let detector = CollusionDetector::new(RelayParams::default());
+    // Each outer leaf fills its half exactly, so the middle one is dropped whole.
+    let half = RECORD_CAP / 2;
+    let words = |tag: &str| {
+        let mut text = (0..half)
+            .map(|i| format!("{tag}{i:05}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        text.truncate(half - 1);
+        text
+    };
+    let (a, b) = (words("a"), words("b"));
+    let (digest, cut) = DeliveryDigest::of_leaves(&[&a, "the middle leaf", &b], false);
+    assert!(cut);
+    let segments = digest.segment_texts();
+    assert_eq!(
+        segments,
+        [(a.as_str(), false), (b.as_str(), true)],
+        "A whole, the middle dropped, B whole behind a seam"
+    );
+    let apart: HashSet<u64> = detector
+        .fingerprints(&a)
+        .into_iter()
+        .chain(detector.fingerprints(&b))
+        .collect();
+    let joined = detector.fingerprints(&format!("{a}\n{b}"));
+    assert!(
+        joined.iter().any(|fp| !apart.contains(fp)),
+        "premise: joined, A|B carries fingerprints of its own"
+    );
+    assert!(
+        digest
+            .fingerprints(&detector)
+            .iter()
+            .all(|fp| apart.contains(fp))
+    );
+}
+
 /// MIK-7887.RECEIPT.2: retention keeps exactly the source fingerprints whose
 /// k-gram a delivered leaf holds, including one the delivered leaf's own
 /// winnowing did not select, and drops every other.
@@ -519,42 +564,72 @@ fn allowed_flows_are_checked_at_load() {
 #[cfg(feature = "metrics")]
 #[test]
 fn a_reported_relay_increments_the_metric() {
-    crate::metrics::install();
-    let count = |action: &str| -> u64 {
-        let line = format!("mcp_gateway_collusion_relay_total{{action=\"{action}\"}} ");
-        crate::metrics::render()
-            .lines()
-            .find_map(|l| l.strip_prefix(&line).and_then(|v| v.trim().parse().ok()))
-            .unwrap_or(0)
-    };
     for (action, label) in [
         (CollusionAction::Observe, "observe"),
         (CollusionAction::Block, "block"),
     ] {
         let (fw, _dir) = observing(|c| c.action = action);
         delivered(&fw, "alice");
-        let before = count(label);
+        let series = format!("mcp_gateway_collusion_relay_total{{action=\"{label}\"}}");
+        let before = rendered_count(&series);
         let _ = egress(&fw, RelayCaller::Keyed("bob"));
-        assert!(count(label) > before, "{label}: not counted");
+        assert!(rendered_count(&series) > before, "{label}: not counted");
     }
+}
+
+/// The value of one rendered metric series, 0 while it is absent.
+#[cfg(feature = "metrics")]
+fn rendered_count(series: &str) -> u64 {
+    crate::metrics::install();
+    let prefix = format!("{series} ");
+    crate::metrics::render()
+        .lines()
+        .find_map(|l| l.strip_prefix(&prefix).and_then(|v| v.trim().parse().ok()))
+        .unwrap_or(0)
 }
 
 /// An egress checked without an authenticated caller is counted, by action.
 #[cfg(feature = "metrics")]
 #[test]
 fn a_keyless_egress_increments_the_unkeyed_metric() {
-    crate::metrics::install();
-    let count = || -> u64 {
-        let line = "mcp_gateway_collusion_unkeyed_egress_total{action=\"observe\"} ";
-        crate::metrics::render()
-            .lines()
-            .find_map(|l| l.strip_prefix(line).and_then(|v| v.trim().parse().ok()))
-            .unwrap_or(0)
-    };
+    let series = "mcp_gateway_collusion_unkeyed_egress_total{action=\"observe\"}";
     let (fw, _dir) = observing(|_| {});
-    let before = count();
+    let before = rendered_count(series);
     let _ = egress(&fw, RelayCaller::Unkeyed("direct:alpha"));
-    assert!(count() > before, "not counted");
+    assert!(rendered_count(series) > before, "not counted");
+}
+
+/// MIK-7873.RELAY.1: an unkeyed egress refused under `block` is a reported
+/// relay, counted under `block` like a matched one.
+#[cfg(feature = "metrics")]
+#[test]
+fn an_unkeyed_block_increments_the_relay_metric() {
+    let series = "mcp_gateway_collusion_relay_total{action=\"block\"}";
+    let (fw, _dir) = observing(|c| c.action = CollusionAction::Block);
+    let before = rendered_count(series);
+    let verdict = egress(&fw, RelayCaller::Unkeyed("direct:alpha"));
+    assert!(!verdict.allowed, "premise: an unkeyed egress is refused");
+    assert!(
+        rendered_count(series) > before,
+        "unkeyed block: not counted"
+    );
+}
+
+/// MIK-7934.PLANRCPT.2: a plan whose answer is over the bound its receipts
+/// are kept against is counted where an operator can read it.
+#[cfg(feature = "metrics")]
+#[test]
+fn a_dropped_plan_receipt_increments_the_metric() {
+    let series = "mcp_gateway_collusion_plan_receipts_dropped_total";
+    let (fw, _dir) = observing(|_| {});
+    let before = rendered_count(series);
+    let text = "x".repeat(super::super::collusion_digest::DELIVERED_SET_CAP + 1);
+    let answer = json!({"content": [{"type": "text", "text": text}]});
+    assert!(
+        fw.delivered_for_plan(&answer).is_none(),
+        "premise: over the bound"
+    );
+    assert!(rendered_count(series) > before, "dropped plan: not counted");
 }
 
 /// The observed-relay warnings `check` logs, as parsed records.

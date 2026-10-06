@@ -36,6 +36,9 @@ impl Default for EventsRateLimit {
 #[serde(default)]
 #[allow(clippy::struct_excessive_bools)] // config surface: independent on/off source switches
 pub struct EventsSourcesConfig {
+    /// Gateway operational events: budgets, backend health, the kill switch.
+    /// Off by default.
+    pub operational: bool,
     /// Backend change notifications (`backend.<server>.*`).
     pub backend_notifications: bool,
     /// Task settlement (`task.settled`).
@@ -88,6 +91,7 @@ impl Default for EventsScheduleConfig {
 impl Default for EventsSourcesConfig {
     fn default() -> Self {
         Self {
+            operational: false,
             backend_notifications: true,
             task_settled: true,
             rest_watch: false,
