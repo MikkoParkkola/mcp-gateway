@@ -187,6 +187,30 @@ fn a_backend_offer_with_a_guessed_seal_keeps_the_prefixed_text() {
     assert!(error.data.is_none(), "{:?}", error.data);
 }
 
+/// MIK-7559: the seal marks gateway authorship, not an offer. A sealed upstream
+/// rejection carries no offer keys, so its text keeps today's prefix.
+#[test]
+fn a_sealed_upstream_rejection_keeps_the_prefixed_text() {
+    // GIVEN: the gateway's own rejection mark, sealed like an offer
+    let refused = Error::Config("backend 'drive' refused the account credential (HTTP 401)".into());
+    let rejection = crate::personal_accounts::refusal::mark_rejection(
+        crate::personal_accounts::RejectionOutcome::Stale,
+        &refused,
+    );
+
+    // WHEN: it is projected for the client
+    let response = error_response_preserving_status(RequestId::Number(96), &rejection);
+
+    // THEN: the message is the Display text, prefix included
+    let error = response.error.unwrap();
+    assert!(
+        error.message.starts_with("JSON-RPC error "),
+        "{}",
+        error.message
+    );
+    assert_eq!(error.message, rejection.to_string());
+}
+
 #[test]
 fn a_gateway_sealed_offer_forwards_its_keys_and_never_the_seal() {
     // GIVEN: an offer built on the gateway's own construction path
