@@ -51,6 +51,7 @@ jobs:
       contents: read
     outputs:
       run_build: ${{ steps.decide.outputs.run_build }}
+      compile_check: ${{ steps.decide.outputs.compile_check }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -70,6 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           decide() { echo "run_build=$1" >> "$GITHUB_OUTPUT"; echo "run_build=$1 ($2)"; }
+          compile() { echo "compile_check=$1" >> "$GITHUB_OUTPUT"; echo "compile_check=$1 ($2)"; }
           if [ "$EVENT" != pull_request ]; then
             decide true "not a pull request"; exit 0
           fi
@@ -81,6 +83,7 @@ jobs:
               decide false "docs-only pull request"
             else
               decide true "pull request into $BASE_REF"
+              compile true "pull request into $BASE_REF"
             fi
             exit 0
           fi
@@ -97,15 +100,62 @@ jobs:
                 "+refs/pull/$PR_NUMBER/head:refs/probe/head" 2>&1 \
               && [ "$(git -C probe rev-parse refs/probe/head)" = "$HEAD_SHA" ] \
               && git -C probe diff --name-only "$BASE_SHA" "$HEAD_SHA"); then
-            decide true "could not list changed files: $files"; exit 0
+            decide true "could not list changed files: $files"
+            compile true "could not list changed files"; exit 0
+          fi
+          # Source changes do not build the image before merge (see
+          # `release-compile`), but they do compile on the image's toolchains.
+          if grep -Eq '^(src/|crates/|Cargo\.toml|Cargo\.lock)' <<<"$files"; then
+            compile true "source changed"
           fi
           # A here-string, not a pipe: `grep -q` exiting early would make the
           # producer's SIGPIPE fail the pipeline under pipefail.
-          if grep -Eq '^(Dockerfile|\.dockerignore|\.trivyignore|Cargo\.toml|Cargo\.lock|\.github/workflows/docker\.yml|\.github/osv-scanner\.toml|docker/|scripts/ci/smoke-[^/]*\.sh|scripts/dev/helm-kind-real-image\.sh|deploy/helm/)' <<<"$files"; then
+          if grep -Eq '^(Dockerfile|\.dockerignore|\.trivyignore|Cargo\.toml|Cargo\.lock|\.github/workflows/docker\.yml|\.github/osv-scanner\.toml|docker/|scripts/ci/smoke-[^/]*\.sh|scripts/dev/helm-kind-real-image\.sh|deploy/|README\.md|docs/QUICKSTART\.md|docs/DEPLOYMENT\.md|scripts/dev/(docker-smoke\.sh|smoke_fixture_server\.py|smoke-fixture-capability\.sh|assert_capability_response\.py))' <<<"$files"; then
             decide true "image inputs changed"
           else
             decide false "no image inputs changed; the image builds after merge"
           fi
+
+  # Why a source-only PR into the release line does not build the image before
+  # merge (MIK-7835): each image build holds two scarce runners, and the push
+  # run builds, scans and smoke-tests the image once per merge. The image's own
+  # inputs (Dockerfile, lockfiles, smoke scripts, the documented recipes) still
+  # build before merge, through `scope`. What a source change alone can break
+  # in the image is the release compile on the image's toolchain, so this job
+  # runs that compile on every source PR: on the Dockerfile's pinned toolchain,
+  # and on the declared rust-version a `cargo install` user may have. Both are
+  # read from the files that declare them, so neither can drift from this job.
+  release-compile:
+    name: Release compile (${{ matrix.source }})
+    needs: scope
+    if: needs.scope.outputs.compile_check == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [dockerfile, rust-version]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain the ${{ matrix.source }} declares
+        env:
+          SOURCE: ${{ matrix.source }}
+        run: |
+          set -euo pipefail
+          case "$SOURCE" in
+            dockerfile) version="$(sed -n 's/^FROM rust:\([0-9][0-9.]*\)-slim .*/\1/p' Dockerfile)" ;;
+            rust-version) version="$(sed -n 's/^rust-version = "\([0-9][0-9.]*\)"$/\1/p' Cargo.toml)" ;;
+          esac
+          if [ -z "${version:-}" ] || [ "$(wc -l <<<"$version")" -ne 1 ]; then
+            echo "::error::expected one toolchain version from $SOURCE, found: '${version:-}'"; exit 1
+          fi
+          rustup toolchain install "$version" --profile minimal
+          echo "TOOLCHAIN=$version" >> "$GITHUB_ENV"
+      - name: Compile as the image does (release, locked, default features)
+        run: cargo +"$TOOLCHAIN" check --release --locked
 
   # Dependency-vulnerability gate for the image build. ci.yml runs `cargo audit`
   # on every PR/push; this re-scans the Cargo.lock against OSV so the published
@@ -298,6 +348,19 @@ jobs:
       # be blocked from here, so it gates itself.
       - name: Smoke test the image (it must start and report healthy)
         run: scripts/ci/smoke-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan"
+
+      # The documented run recipe (README, QUICKSTART, DEPLOYMENT: publish on
+      # 127.0.0.1, bind 0.0.0.0, the unauthenticated-bind opt-in), held in
+      # scripts/dev/docker-smoke.sh, must serve a routed tool call, not only
+      # start (MIK-7484). One leg: the recipe is arch-independent.
+      - name: Smoke the documented container recipe (it must serve a tool call)
+        if: matrix.arch == 'amd64'
+        timeout-minutes: 15
+        env:
+          MCP_GATEWAY_DOCKER_BUILD: "0"
+          MCP_GATEWAY_INIT_IN_IMAGE: "1"
+          MCP_GATEWAY_DOCKER_IMAGE: ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan
+        run: scripts/dev/docker-smoke.sh
 
       # The smoke above runs the image with its own config and a writable root.
       # The chart runs it read-only, as a numeric non-root user, with rendered
