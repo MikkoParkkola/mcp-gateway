@@ -86,9 +86,9 @@ fn a_replay_into_a_suspended_subscription_is_refused() {
     let outcome = store
         .revive("e1", now, record("e1", "s1", now), OUTBOX, || now)
         .expect("io");
-    assert_ne!(
+    assert_eq!(
         outcome,
-        Revived::Written,
+        Revived::Suspended,
         "a suspended subscription takes no replay"
     );
     assert_eq!(store.dead_summaries().len(), 1, "the dead letter stays");

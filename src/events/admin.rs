@@ -21,6 +21,8 @@ use super::store::Revived;
 pub(crate) enum ReplayRefusal {
     NotFound,
     SubscriptionGone,
+    /// Suspended until its subscriber refreshes it.
+    SubscriptionSuspended,
     AccessRevoked,
     FirewallBlocked,
     TooLarge,
@@ -35,6 +37,7 @@ impl ReplayRefusal {
         match self {
             Self::NotFound => "not_found",
             Self::SubscriptionGone => "subscription_gone",
+            Self::SubscriptionSuspended => "subscription_suspended",
             Self::AccessRevoked => "access_revoked",
             Self::FirewallBlocked => "firewall_blocked",
             Self::TooLarge => "too_large",
@@ -140,7 +143,6 @@ impl EventsHub {
             attempt: 0,
             next_attempt_at: now,
             first_attempt_at: None,
-            created_at: now,
             state: OutboxState::Pending,
             last_status: None,
             dead_as: None,
@@ -176,6 +178,7 @@ impl EventsHub {
                 Ok(())
             }
             Some(Revived::NoSubscription) => Err(ReplayRefusal::SubscriptionGone),
+            Some(Revived::Suspended) => Err(ReplayRefusal::SubscriptionSuspended),
             Some(Revived::Full) => Err(ReplayRefusal::OutboxFull),
             Some(Revived::AlreadyPending) => Err(ReplayRefusal::AlreadyPending),
             Some(Revived::Missing) => Err(ReplayRefusal::NotFound),
