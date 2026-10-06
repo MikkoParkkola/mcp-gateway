@@ -93,3 +93,76 @@ fn a_wrapped_output_root_is_validated_unwrapped_and_keeps_its_text() {
     assert_eq!(validated["structuredContent"], json!({ "items": payload }));
     assert_eq!(validated["content"][0]["text"], json!(text));
 }
+
+/// MIK-7959 through the dispatch tail: a capability whose declared root is an
+/// array answers a `gateway_invoke` with that array under `items` in
+/// `structuredContent`, and its text content in the declared shape. Dispatch
+/// reads the result unwrapped (transform, schema) and wraps it again after.
+#[tokio::test]
+async fn an_array_root_is_published_under_items_through_dispatch() {
+    use std::sync::Arc;
+
+    use crate::capability::{CapabilityBackend, CapabilityExecutor, parse_capability};
+    use crate::gateway::meta_mcp::MetaMcp;
+    use crate::gateway::meta_mcp::grant_decision_audit_tests::{api_key, context};
+
+    let names = json!(["ada", "grace"]);
+    let served = names.clone();
+    let app = axum::Router::new().route(
+        "/names",
+        axum::routing::get(move || {
+            let served = served.clone();
+            async move { axum::Json(served) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, app).await });
+
+    let definition = parse_capability(&format!(
+        "name: name_list\n\
+         description: List two names\n\
+         schema:\n\
+         \x20 output:\n\
+         \x20   type: array\n\
+         \x20   items:\n\
+         \x20     type: string\n\
+         providers:\n\
+         \x20 primary:\n\
+         \x20   service: rest\n\
+         \x20   config:\n\
+         \x20     base_url: http://localhost:{port}\n\
+         \x20     path: /names\n\
+         \x20     method: GET\n"
+    ))
+    .expect("the capability parses");
+    let executor =
+        Arc::new(CapabilityExecutor::new().with_test_http_client(reqwest::Client::new()));
+    let backend = Arc::new(CapabilityBackend::new("caps", executor));
+    backend.register_capability(definition).expect("registers");
+    let meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new())).with_code_mode(true);
+    meta.set_capabilities(backend);
+
+    let who = api_key("alice");
+    let response = Box::pin(meta.handle_tools_call(
+        crate::protocol::RequestId::Number(1),
+        "gateway_invoke",
+        json!({ "server": "caps", "tool": "name_list", "arguments": {} }),
+        Some("output-root"),
+        context(&who),
+    ))
+    .await;
+    let answer = serde_json::to_value(&response).unwrap();
+    let result = &answer["result"];
+    assert_eq!(
+        result["structuredContent"],
+        json!({ "items": names }),
+        "{answer}"
+    );
+    let text = result["content"][0]["text"].as_str().unwrap_or_default();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(text).ok(),
+        Some(names),
+        "the text content keeps the declared shape: {answer}"
+    );
+}
