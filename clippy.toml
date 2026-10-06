@@ -3,5 +3,5 @@
 # Windows, where `dirs` ignores HOME and USERPROFILE (MIK-8001).
 disallowed-methods = [
     { path = "dirs::home_dir", reason = "use crate::home_dir::home_dir" },
-    { path = "dirs::config_dir", reason = "use crate::home_dir::config_dir" },
+    { path = "dirs::config_dir", reason = "use crate::home_dir::config_dir (crate::home_dir::home_dir on macOS)" },
 ]

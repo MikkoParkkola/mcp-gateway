@@ -7,6 +7,9 @@
 //! the fix the red run creates `.mcp-gateway/oauth` in the runner's real home.
 //! CI runners are ephemeral; on Linux and macOS the red run lands in `HOME`,
 //! a temp dir here, and never touches the real home.
+//!
+//! Debug builds only: release builds compile the override out on purpose.
+#![cfg(debug_assertions)]
 
 use std::process::{Command, Stdio};
 
