@@ -39,6 +39,7 @@ also fails, since the capture sees only that profile's view.
 A `--token-file` given to `check` names the key the catalog was captured
 with: a key carrying `allowed_tools` or `denied_tools` fails, as its view is
 not every tool, and a key absent from `auth.api_keys` fails as unverifiable.
+With auth enabled, `check` without `--token-file` fails as unverifiable.
 
 Limits: capability tools exposed only in another capability state are not
 captured. A backend whose tools/list drain stopped early (page cap or budget,
@@ -78,8 +79,10 @@ PLAIN = re.compile(r"^(?:export\s+)?MCP_GATEWAY_(?i:SERVER__IDEMPOTENCY_KEY)\s*=
 # Routing keys too: they change which tools a capture can see.
 # The gateway lowercases path segments after MCP_GATEWAY_, so matching is
 # case-insensitive. ENV_FILES and HOME change which env files are read.
+# Auth keys too: an env-set key can filter what the capture key sees.
 TOUCHES = ("MCP_GATEWAY_IDEMPOTENCY", ENV_KEY, "MCP_GATEWAY_ENV_FILES",
-           "MCP_GATEWAY_DEFAULT_ROUTING_PROFILE", "MCP_GATEWAY_ROUTING_PROFILES")
+           "MCP_GATEWAY_DEFAULT_ROUTING_PROFILE", "MCP_GATEWAY_ROUTING_PROFILES",
+           "MCP_GATEWAY_AUTH")
 HOME = re.compile(r"^(?:export\s+)?HOME\s*=")
 
 
@@ -97,7 +100,7 @@ def env_value(path: Path) -> str | None:
             if text.startswith("#") or not any(t in text.upper() for t in TOUCHES):
                 continue
             if not (match := PLAIN.match(text)):
-                raise Unverifiable(f"{path}: env line sets idempotency config this check cannot grade")
+                raise Unverifiable(f"{path}: env line sets config this check cannot grade")
             found = match.group(2).lower()
     return found
 
@@ -138,9 +141,11 @@ def profile_problems(config: dict) -> list[str]:
 
 def key_problems(config: dict, token: str | None) -> list[str]:
     """A capture made with a key sees that key's view; one that filters tools hides some."""
-    if token is None:
-        return []
     auth = config.get("auth") or {}
+    if token is None:
+        if auth.get("enabled"):
+            raise Unverifiable("auth is enabled: pass the capture key with --token-file")
+        return []
     if token == auth.get("bearer_token"):
         return []
     digest = "sha256:" + hashlib.sha256(token.encode()).hexdigest()
