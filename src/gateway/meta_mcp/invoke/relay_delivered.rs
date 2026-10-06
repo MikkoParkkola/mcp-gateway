@@ -5,6 +5,8 @@
 
 use serde_json::Value;
 
+#[cfg(feature = "firewall")]
+use super::super::gateway_writes::Layer;
 use super::RELAY_RECEIPTS;
 use super::{MetaMcp, RelayKey};
 
@@ -46,7 +48,9 @@ impl MetaMcp {
     /// delivered, so the text the caller still got keeps its receipt and the
     /// removed text stops being tracked. A plan's step receipts are kept for
     /// [`MetaMcp::rebuild_receipt_from_final`], which keeps each to the text
-    /// the final answer still delivers; until then they never commit. Several
+    /// the final answer still delivers; until then they never commit. A task
+    /// envelope with no delivered slot keeps every staged receipt, as the
+    /// rebuild does (they came from the stored slot). Otherwise several
     /// receipts of no plan cannot be told apart and are dropped.
     ///
     /// `shape` is how the caller delivered the answer: only a `gateway_invoke`
@@ -62,9 +66,22 @@ impl MetaMcp {
         result: Option<&Value>,
         shape: AnswerShape,
     ) {
-        if !snapshot.is_some_and(|before| Some(&before) != result) {
+        let Some(before) = snapshot.filter(|before| Some(before) != result) else {
             return;
+        };
+        #[cfg(feature = "firewall")]
+        let shape = result.map_or(shape, |answer| shape.as_built(answer));
+        // MIK-7939: an in-place rewrite keeps the gateway's members its own.
+        #[cfg(feature = "firewall")]
+        if let Some(after) = result {
+            use super::super::gateway_writes::rebind;
+            rebind(Layer::Answer, &before, after);
+            if let (Some(b), Some(a)) = (tool_value(&before, shape), tool_value(after, shape)) {
+                rebind(Layer::Value, &b, &a);
+            }
         }
+        #[cfg(not(feature = "firewall"))]
+        drop(before);
         let _ = RELAY_RECEIPTS.try_with(|receipts| {
             let mut receipts = receipts.borrow_mut();
             let mut staged = std::mem::take(&mut *receipts);
@@ -78,6 +95,14 @@ impl MetaMcp {
                 *receipts = staged;
                 return;
             }
+            // No slot: the receipt came from the stored slot, never from the
+            // envelope's fields, and stays (as `rebuild_receipt_from_final`).
+            #[cfg(feature = "firewall")]
+            if shape == AnswerShape::TaskEnvelope && result.is_some_and(|d| task_slot(d).is_none())
+            {
+                *receipts = staged;
+                return;
+            }
             #[cfg(feature = "firewall")]
             if let ([one], Some(delivered), Some(fw)) = (staged.as_slice(), result, &self.firewall)
                 && let Some(digest) = fw.delivery_digest(
@@ -88,6 +113,10 @@ impl MetaMcp {
                             super::super::audit::delivered_value(delivered)
                         }
                         AnswerShape::Literal => std::borrow::Cow::Borrowed(delivered),
+                        // A slotless envelope kept its receipt above.
+                        AnswerShape::TaskEnvelope => std::borrow::Cow::Borrowed(
+                            task_slot(delivered).unwrap_or(&serde_json::Value::Null),
+                        ),
                     },
                 )
             {
@@ -138,7 +167,12 @@ impl MetaMcp {
             }
             let _ = RELAY_RECEIPTS.try_with(|receipts| {
                 let mut receipts = receipts.borrow_mut();
-                let copy = receipt_copy(result, stamps, shape);
+                // A task envelope with no delivered slot keeps the staged
+                // receipt: it was staged from the stored slot, never from
+                // the envelope's own fields.
+                let Some(copy) = receipt_copy(result, stamps, shape) else {
+                    return;
+                };
                 if receipts.iter().any(|r| r.in_plan) {
                     keep_plan_receipts(fw, &mut receipts, &plan_answer(copy));
                     return;
@@ -212,17 +246,33 @@ pub(crate) enum AnswerShape {
     InvokeWrapped,
     /// A surfaced tool's answer: its blocks are read as the caller sees them.
     Literal,
+    /// A task's answer: the gateway's task envelope around the slot it
+    /// delivers (`result`, `inputRequests` or `error`); only that slot is
+    /// the backend's (MIK-7939).
+    TaskEnvelope,
 }
 
 impl AnswerShape {
-    /// The shape the gateway gives an answer to `external_tool`: only a
-    /// `gateway_invoke` answer is wrapped.
+    /// The shape the gateway gives an answer to `external_tool`: a
+    /// `gateway_invoke` or single-tool `gateway_execute` answer is wrapped
+    /// (`wrap_tool_success`), a `tasks/*` answer is a task envelope.
     #[must_use]
     pub(crate) fn of(external_tool: &str) -> Self {
-        if external_tool == "gateway_invoke" {
-            Self::InvokeWrapped
+        match external_tool {
+            "gateway_invoke" | "gateway_execute" => Self::InvokeWrapped,
+            method if method.starts_with("tasks/") => Self::TaskEnvelope,
+            _ => Self::Literal,
+        }
+    }
+
+    /// The shape `answer` was built in: a task envelope the gateway built
+    /// on this call (a task-augmented `tools/call`) whatever the method.
+    #[cfg(feature = "firewall")]
+    fn as_built(self, answer: &Value) -> Self {
+        if super::super::gateway_writes::built_task_envelope(answer) {
+            Self::TaskEnvelope
         } else {
-            Self::Literal
+            self
         }
     }
 }
@@ -232,7 +282,8 @@ impl AnswerShape {
 /// envelope's retained result), a modern answer's `serverInfo` stamp removed,
 /// and a `gateway_invoke` wrapper read decoded.
 #[cfg(feature = "firewall")]
-fn receipt_copy(result: &Value, stamps: GatewayStamps, shape: AnswerShape) -> Value {
+fn receipt_copy(result: &Value, stamps: GatewayStamps, shape: AnswerShape) -> Option<Value> {
+    let shape = shape.as_built(result);
     let mut copy = result.clone();
     crate::security::signature_chain::strip_chain(&mut copy);
     // Clamped as the wire clamps it, so a backend's text in a scope, top
@@ -243,15 +294,37 @@ fn receipt_copy(result: &Value, stamps: GatewayStamps, shape: AnswerShape) -> Va
     {
         meta.remove(crate::protocol::meta::KEY_SERVER_INFO);
     }
+    // MIK-7939: what the gateway itself wrote on this call is not backend
+    // text, at either layer, and nothing else is removed for its name.
+    super::super::gateway_writes::strip(&mut copy, Layer::Answer);
+    let mut value = tool_value(&copy, shape)?;
+    super::super::gateway_writes::strip(&mut value, Layer::Value);
+    Some(value)
+}
+
+/// The tool value an answer of `shape` carries: a wrapper read decoded, a
+/// task envelope's delivered slot, anything else as it stands.
+#[cfg(feature = "firewall")]
+fn tool_value(answer: &Value, shape: AnswerShape) -> Option<Value> {
     // An interim answer (`inputRequests`, `requestState`) is a promoted
     // native result, not a wrapper: its members are delivered as they stand.
-    let interim = copy.get("inputRequests").is_some() || copy.get("requestState").is_some();
+    let interim = answer.get("inputRequests").is_some() || answer.get("requestState").is_some();
     match shape {
         AnswerShape::InvokeWrapped if !interim => {
-            super::super::audit::delivered_value(&copy).into_owned()
+            Some(super::super::audit::delivered_value(answer).into_owned())
         }
-        AnswerShape::InvokeWrapped | AnswerShape::Literal => copy,
+        AnswerShape::InvokeWrapped | AnswerShape::Literal => Some(answer.clone()),
+        AnswerShape::TaskEnvelope => task_slot(answer).cloned(),
     }
+}
+
+/// The slot a task envelope delivers: its retained result, its pending input
+/// requests, or a failed task's error.
+#[cfg(feature = "firewall")]
+fn task_slot(envelope: &Value) -> Option<&Value> {
+    ["result", "inputRequests", "error"]
+        .iter()
+        .find_map(|slot| envelope.get(slot))
 }
 
 #[cfg(all(test, feature = "firewall"))]
@@ -270,7 +343,8 @@ mod tests {
     /// stamp and leaves the receipt copy; the rest of `_meta` stays.
     #[test]
     fn a_modern_copy_drops_the_server_info_stamp() {
-        let copy = receipt_copy(&answered(), GatewayStamps::Modern, AnswerShape::Literal);
+        let copy =
+            receipt_copy(&answered(), GatewayStamps::Modern, AnswerShape::Literal).expect("a copy");
         assert!(copy["_meta"].get(KEY_SERVER_INFO).is_none(), "{copy}");
         assert_eq!(copy["_meta"]["keep"], 1, "{copy}");
     }
@@ -279,7 +353,8 @@ mod tests {
     /// delivered as sent, so it stays in the receipt copy.
     #[test]
     fn a_legacy_copy_keeps_the_backends_server_info() {
-        let copy = receipt_copy(&answered(), GatewayStamps::Legacy, AnswerShape::Literal);
+        let copy =
+            receipt_copy(&answered(), GatewayStamps::Legacy, AnswerShape::Literal).expect("a copy");
         assert_eq!(copy["_meta"][KEY_SERVER_INFO]["name"], "named", "{copy}");
     }
 }
