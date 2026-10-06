@@ -76,7 +76,7 @@ fn validate_rejects_invalid_http_url() {
         BackendConfig {
             transport: TransportConfig::Http {
                 http_url: "not a url!@#".to_string(),
-                streamable_http: false,
+                streamable_http: Some(false),
                 protocol_version: None,
             },
             ..BackendConfig::default()
@@ -97,7 +97,7 @@ fn validate_rejects_empty_http_url() {
         BackendConfig {
             transport: TransportConfig::Http {
                 http_url: String::new(),
-                streamable_http: false,
+                streamable_http: Some(false),
                 protocol_version: None,
             },
             ..BackendConfig::default()
@@ -118,7 +118,7 @@ fn validate_accepts_valid_http_backend() {
         BackendConfig {
             transport: TransportConfig::Http {
                 http_url: "http://localhost:3000/mcp".to_string(),
-                streamable_http: false,
+                streamable_http: Some(false),
                 protocol_version: None,
             },
             ..BackendConfig::default()
@@ -277,7 +277,7 @@ fn backend_with_idp(idp: IdentityPropagationConfig) -> BackendConfig {
     BackendConfig {
         transport: TransportConfig::Http {
             http_url: "https://backend.internal/mcp".to_string(),
-            streamable_http: false,
+            streamable_http: Some(false),
             protocol_version: None,
         },
         identity_propagation: Some(idp),

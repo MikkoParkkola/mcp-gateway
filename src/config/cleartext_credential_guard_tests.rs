@@ -15,7 +15,7 @@ fn http_backend(url: &str) -> BackendConfig {
     BackendConfig {
         transport: TransportConfig::Http {
             http_url: url.to_string(),
-            streamable_http: false,
+            streamable_http: Some(false),
             protocol_version: None,
         },
         ..Default::default()

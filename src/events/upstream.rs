@@ -54,7 +54,8 @@ pub(crate) fn parse_name(name: &str) -> Option<(&str, Kind)> {
 pub(crate) enum Ineligible {
     /// An `http_url` without `streamable_http: true`: the SSE-handshake
     /// transport, whose GET stream is read only up to its `endpoint` event
-    /// (design §11 D2).
+    /// (design §11 D2). An absent flag is detected only at connect, and this
+    /// is read from config alone, so it counts as SSE here.
     SseHandshake,
     /// A2A carries no MCP notifications (D2).
     #[cfg_attr(not(feature = "a2a"), allow(dead_code, reason = "a2a feature off"))]
@@ -131,7 +132,7 @@ pub(crate) fn ineligible_backends(
 fn reason(backend: &BackendConfig, multi_user: bool) -> Option<Ineligible> {
     match &backend.transport {
         TransportConfig::Http {
-            streamable_http: false,
+            streamable_http: Some(false) | None,
             ..
         } => return Some(Ineligible::SseHandshake),
         #[cfg(feature = "a2a")]

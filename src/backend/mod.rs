@@ -422,3 +422,7 @@ mod websocket_backend_tests;
 
 #[cfg(test)]
 mod destination_tests;
+
+#[cfg(test)]
+#[path = "stop_race_tests.rs"]
+mod stop_race_tests;

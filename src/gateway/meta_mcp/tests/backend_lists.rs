@@ -222,7 +222,7 @@ async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: url,
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             stop_when_idle_for: None,
