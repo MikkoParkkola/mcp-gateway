@@ -69,7 +69,7 @@ fn integer_forms_with_fraction_zeros_or_a_zero_coefficient_match() {
     assert_eq!(value["one"], 1, "{value}");
 }
 
-/// What serde_json accepts as a number is matched as one: whitespace around
+/// What `serde_json` accepts as a number is matched as one: whitespace around
 /// the text, and a zero coefficient under an exponent past i64.
 #[test]
 fn padded_and_overflowing_zero_forms_match_their_integer() {
@@ -81,4 +81,14 @@ fn padded_and_overflowing_zero_forms_match_their_integer() {
     assert_eq!(value["zero"], "[redacted]", "{value}");
     assert_eq!(value["near"], 12346, "{value}");
     assert_eq!(value["one"], 1, "{value}");
+}
+
+/// Below the floor a number secret matches by JSON equality alone: "1e5" is
+/// the float 1e5, so the integer 100000 stays.
+#[test]
+fn a_short_exponent_secret_leaves_the_equal_integer() {
+    let mut value: Value = serde_json::from_str(r#"{"f": 1e5, "i": 100000}"#).unwrap();
+    redact_value(&mut value, &["1e5".to_owned()]);
+    assert_eq!(value["f"], "[redacted]", "{value}");
+    assert_eq!(value["i"], 100_000, "{value}");
 }
