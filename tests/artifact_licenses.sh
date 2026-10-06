@@ -43,13 +43,16 @@ mutate() {
 
 check() { bash "$1/scripts/ci/verify-artifact-licenses.sh" >"$1.out" 2>&1; }
 
+# <name> [<file> <perl substitution>]: the check passes, after the edit if given.
 assert_pass() {
   local tree
   tree="$(make_tree "$1")"
+  [ $# -eq 3 ] && mutate "$tree/$2" "$3"
   if ! check "$tree"; then
     cat "$tree.out" >&2
     echo "FAIL: $1 should pass" >&2
-    exit 1
+    failed=1
+    return
   fi
   echo "ok: $1"
 }
@@ -61,15 +64,20 @@ assert_fail() {
   mutate "$tree/$2" "$3"
   if check "$tree"; then
     echo "FAIL: $1 should fail the check" >&2
-    exit 1
+    failed=1
+    return
   fi
   if ! grep -qF -- "$4" "$tree.out"; then
     cat "$tree.out" >&2
     echo "FAIL: $1 should report: $4" >&2
-    exit 1
+    failed=1
+    return
   fi
   echo "ok: $1"
 }
+
+# Every case runs, so one red run lists all the checks that let a break through.
+failed=0
 
 assert_pass "unchanged-tree"
 
@@ -82,6 +90,31 @@ assert_fail "formula-without-caveats" homebrew/mcp-gateway.rb \
 assert_fail "formula-commercial-only-in-comment" homebrew/mcp-gateway.rb \
   's/ See https:\S*COMMERCIAL\.md//' \
   "homebrew/mcp-gateway.rb: formula caveats must point to COMMERCIAL.md"
+
+# Only the printed caveat counts (MIK-7972). A: a comment that mentions
+# `def caveats` must not be taken for the method. B: a Ruby comment inside
+# the method, outside the heredoc, is never shown on install.
+for f in homebrew/mcp-gateway.rb .github/workflows/release.yml; do
+  assert_fail "comment-naming-def-caveats:${f##*/}" "$f" \
+    's/ See https:\S*COMMERCIAL\.md//; s/^( *)(def caveats\n)/$1# def caveats must point to COMMERCIAL.md\n$1$2/m' \
+    "$f: formula caveats must point to COMMERCIAL.md"
+  assert_fail "ruby-comment-inside-caveats:${f##*/}" "$f" \
+    's/ See https:\S*COMMERCIAL\.md//; s/^( *)(def caveats\n)/$1$2$1  # COMMERCIAL.md\n/m' \
+    "$f: formula caveats must point to COMMERCIAL.md"
+  # A delimiter with a digit must still end the heredoc where Ruby does.
+  assert_fail "digit-delimiter-then-comment:${f##*/}" "$f" \
+    's/ See https:\S*COMMERCIAL\.md//; s/<<~(EOS|CAVEATS)\n/<<~${1}1\n/; s/^( *)(EOS|CAVEATS)\n/$1${2}1\n$1# COMMERCIAL.md\n/m' \
+    "$f: formula caveats must point to COMMERCIAL.md"
+  # A commented-out heredoc is not printed.
+  assert_fail "commented-heredoc-opener:${f##*/}" "$f" \
+    's/ See https:\S*COMMERCIAL\.md//; s/^( *)(<<~(?:EOS|CAVEATS)\n)/$1# <<~NOTE\n$1# COMMERCIAL.md\n$1# NOTE\n$1$2/m' \
+    "$f: formula caveats must point to COMMERCIAL.md"
+  # Ruby returns the last expression, so a heredoc followed by one is discarded.
+  assert_fail "heredoc-then-other-value:${f##*/}" "$f" \
+    's/^( *)(EOS|CAVEATS)\n/$1$2\n$1"no terms here"\n/m' \
+    "$f: formula caveats must point to COMMERCIAL.md"
+  assert_pass "quoted-delimiter:${f##*/}" "$f" "s/<<~(EOS|CAVEATS)\n/<<~'\$1'\n/"
+done
 
 assert_fail "generated-formula-without-caveats" .github/workflows/release.yml \
   's/\n *def caveats\n.*?\n *end\n//s' \
@@ -107,4 +140,5 @@ assert_fail "npm-licence-changed" npm/package.json \
   's/"SEE LICENSE IN LICENSES\.md"/"MIT"/' \
   'npm/package.json: "license" must be "SEE LICENSE IN LICENSES.md"'
 
+[ "$failed" -eq 0 ] || exit 1
 echo "ok: artifact licence check mutation cases"
