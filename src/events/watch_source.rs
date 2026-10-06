@@ -549,12 +549,16 @@ impl Run {
         } else {
             // Confirmed under the lock a subscribe commits under: a
             // capability watchable again by now keeps every subscription.
-            let started = hub.lifecycle.lock().await;
+            let mut started = hub.lifecycle.lock().await;
             if let Some(target) = self.host.targets().into_iter().find(watchable) {
                 target
             } else {
                 let (gone, owner) = (vec![self.name.clone()], Arc::clone(hub));
                 let _ = tokio::task::spawn_blocking(move || owner.withdraw(&gone)).await;
+                // Retired before the lock goes, as in `retire`: a subscribe
+                // next must start a fresh poller, not join this one.
+                started.remove(&(SourceKind::RestWatch, self.key.clone()));
+                self.stop.store(true, Ordering::Release);
                 drop(started);
                 hub.reconcile_stops_in_background();
                 return Step::Stop;
