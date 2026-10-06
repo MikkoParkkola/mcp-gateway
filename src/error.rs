@@ -241,6 +241,47 @@ pub enum Error {
     #[error("OAuth error: {0}")]
     OAuth(String),
 
+    /// An interactive login nobody completed within the authorization window
+    /// (MIK-7982). Every start that waited on that login ends with it.
+    #[error(
+        "authorization for backend '{backend}' was not completed within {window_secs}s; \
+         complete the login in the browser and retry"
+    )]
+    AuthorizationIncomplete {
+        /// The backend whose login it was.
+        backend: String,
+        /// The authorization window that passed.
+        window_secs: u64,
+    },
+
+    /// A login ended by a restart or shutdown of its backend before it
+    /// completed (MIK-7982).
+    #[error("authorization for backend '{backend}' was cancelled by a restart or shutdown; retry")]
+    AuthorizationCancelled {
+        /// The backend whose login it was.
+        backend: String,
+    },
+
+    /// A caller that never begins or waits on an interactive login (the
+    /// health probe) could not use the backend without one (MIK-7982).
+    #[error("backend '{backend}' is waiting on an interactive login")]
+    AuthorizationRequired {
+        /// The backend that needs the login.
+        backend: String,
+    },
+
+    /// A caller's own deadline passed while it waited on a login still in
+    /// progress: the person has not finished, the backend did not fail
+    /// (MIK-7982).
+    #[error(
+        "authorization for backend '{backend}' is still in progress; \
+         complete the login in the browser and retry"
+    )]
+    AuthorizationPending {
+        /// The backend whose login is in progress.
+        backend: String,
+    },
+
     /// TLS error: certificate loading, TLS acceptor setup, or handshake
     /// failure on the mTLS listener.
     ///
@@ -376,6 +417,20 @@ impl Error {
         matches!(
             self,
             Self::RateLimited(_) | Self::IdentitySlotsExhausted { .. }
+        )
+    }
+
+    /// The backend is waiting on a person to log in, not failing: an
+    /// unfinished, cancelled, required or pending authorization. The one
+    /// predicate every breaker and cooldown site excludes (MIK-7982).
+    #[must_use]
+    pub(crate) fn is_authorization_wait(&self) -> bool {
+        matches!(
+            self,
+            Self::AuthorizationIncomplete { .. }
+                | Self::AuthorizationCancelled { .. }
+                | Self::AuthorizationRequired { .. }
+                | Self::AuthorizationPending { .. }
         )
     }
 
