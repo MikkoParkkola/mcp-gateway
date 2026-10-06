@@ -159,10 +159,7 @@ impl HttpTransport {
         if !self.reinit_needed.load(Ordering::SeqCst) {
             return true;
         }
-        // Cleared only once a session exists: a handshake that left none
-        // keeps recovery pending for the next caller.
-        let healed = self.initialize().await.is_ok()
-            && self.sessions.read().contains_key(Self::bucket_key(None));
+        let healed = self.initialize().await.is_ok();
         if healed {
             self.reinit_needed.store(false, Ordering::SeqCst);
         }
