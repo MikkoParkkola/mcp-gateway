@@ -24,6 +24,7 @@ use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
 mod delivery;
+mod delivery_who;
 mod lost_round;
 mod meta_refusal;
 mod meta_replay;
@@ -288,6 +289,37 @@ enum Caller {
     Key,
     /// Anonymous, carrying an `mcp-session-id` header.
     Session,
+    /// Anonymous, with a verified client certificate (MIK-7938).
+    Cert,
+    /// Anonymous, with a verified OAuth agent token (MIK-7938).
+    Agent,
+}
+
+/// Put the verified identity a `Caller` stands for on `request`.
+fn insert_identity(request: &mut axum::http::Request<axum::body::Body>, caller: &Caller) {
+    let extensions = request.extensions_mut();
+    match caller {
+        Caller::Cert => {
+            extensions.insert(crate::mtls::CertIdentity {
+                common_name: Some("cert-7938".to_string()),
+                organizational_unit: None,
+                san_uris: vec!["spiffe://example.invalid/cert-7938".to_string()],
+                san_dns_names: vec![],
+                display_name: "cert-7938".to_string(),
+                quota_principal: None,
+            });
+        }
+        Caller::Agent => {
+            extensions.insert(crate::gateway::oauth::AgentIdentity {
+                client_id: "agent-7938".to_string(),
+                agent_name: "Agent 7938".to_string(),
+                scopes: vec![],
+                raw_scopes: vec![],
+                quota_principal: None,
+            });
+        }
+        _ => {}
+    }
 }
 
 async fn post(fx: &Fixture, backend: &str, body: &str, caller: &Caller) -> (StatusCode, Value) {
@@ -318,6 +350,7 @@ async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (Statu
             issuer: "https://a.example.invalid".to_string(),
         });
     }
+    insert_identity(&mut request, caller);
     let response = fx.router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
