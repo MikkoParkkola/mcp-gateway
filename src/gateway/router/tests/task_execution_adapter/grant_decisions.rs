@@ -8,8 +8,8 @@ use super::super::*;
 use super::support::*;
 
 use crate::gateway::meta_mcp::grant_audit_fixture::{
-    CAPS, Endpoint, PERSONAL, capability_backend, decisions, grant, grants, invocations, logger,
-    trace_of,
+    CAPS, DECISION_KIND, Endpoint, PERSONAL, capability_backend, decisions, grant, grants,
+    invocations, logger, trace_of,
 };
 use crate::security::audit::AuditFailurePolicy;
 
@@ -83,6 +83,17 @@ pub(super) fn personal_invoke(id: i64) -> Value {
         }),
         true,
     )
+}
+
+/// MIK-7663.GH2409.3: a failed decision write refuses the answer under the
+/// request's own id, recorded where the route parses the request.
+#[tokio::test]
+async fn failed_decision_write_refuses_under_the_request_id() {
+    let row = armed(true, false, AuditFailurePolicy::FailClosed, |meta| meta).await;
+    row.log.fail_next_append_of_kind_for_test(DECISION_KIND);
+    let answer = post(&row.state, "key-a", personal_invoke(7)).await;
+    std::assert_eq!(answer["error"]["code"], json!(-32005), "{answer}");
+    std::assert_eq!(answer["id"], json!(7), "{answer}");
 }
 
 /// A two-step `gateway_execute` chain calling the personal capability twice.

@@ -40,6 +40,7 @@ mod upstream;
 mod upstream_listener;
 mod upstream_need;
 mod upstream_session;
+pub(crate) mod watch_source;
 mod webhook_source;
 mod worker;
 
