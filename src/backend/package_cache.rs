@@ -61,6 +61,30 @@ fn arm_again(dir: &Path) {
     }
 }
 
+/// How many repairs of each cache have ended in a start that succeeded.
+///
+/// A start reads this before it spawns. If the count moved by the time its
+/// failure holds the cache's lock, another start cleared the cache and came up
+/// on a fresh install after this one began, so this failure describes the tree
+/// that was replaced: clearing again would delete the install the other start
+/// is now running from.
+fn repair_generations() -> &'static Mutex<HashMap<PathBuf, u64>> {
+    static GENERATIONS: OnceLock<Mutex<HashMap<PathBuf, u64>>> = OnceLock::new();
+    GENERATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn repair_generation(dir: &Path) -> u64 {
+    repair_generations()
+        .lock()
+        .map_or(0, |map| map.get(dir).copied().unwrap_or(0))
+}
+
+fn bump_repair_generation(dir: &Path) {
+    if let Ok(mut map) = repair_generations().lock() {
+        *map.entry(dir.to_path_buf()).or_default() += 1;
+    }
+}
+
 /// One mutex per cache directory, held across a repair.
 ///
 /// Two starts of one backend can both fail and both decide to repair, and the
@@ -111,12 +135,18 @@ pub(crate) enum Repair {
     /// The failure is not one a fresh install repairs, or the cache is not the
     /// gateway's to clear.
     NotRepaired,
+    /// Another start repaired this cache after this one began, so this call
+    /// retried on that install without clearing it.
+    Superseded,
 }
 
 /// [`start_with_repair`], reporting what the repair did.
 pub(crate) async fn start_reporting(
     transport: &Arc<StdioTransport>,
 ) -> (crate::Result<()>, Repair) {
+    let generation = transport
+        .assigned_package_cache_dir()
+        .map_or(0, repair_generation);
     let Err(error) = transport.start().await else {
         if let Some(dir) = transport.assigned_package_cache_dir() {
             arm_again(dir);
@@ -146,6 +176,13 @@ pub(crate) async fn start_reporting(
     // of this backend would otherwise delete underneath it.
     let lock = repair_lock(&dir);
     let _repairing = lock.lock().await;
+    if repair_generation(&dir) != generation {
+        warn!(
+            path = %dir.display(),
+            "package cache repaired by another start since this one began; retrying without clearing"
+        );
+        return (transport.start().await, Repair::Superseded);
+    }
     repair_while_locked(transport, &dir, needle, error).await
 }
 
@@ -182,6 +219,7 @@ async fn repair_while_locked(
     let retry = transport.start().await;
     if retry.is_ok() {
         arm_again(dir);
+        bump_repair_generation(dir);
     }
     (retry, Repair::Cleared)
 }

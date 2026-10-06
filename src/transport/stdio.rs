@@ -195,7 +195,7 @@ impl StdioTransport {
         // decide when it is safe.
         let transport = Arc::downgrade(self);
         let max_frame = self.max_frame_bytes.load(Ordering::Relaxed);
-        tokio::spawn(async move {
+        let stdout_reader = tokio::spawn(async move {
             debug!("Reader task started");
             let mut reader = BufReader::new(stdout);
             let mut frame = Vec::new();
@@ -269,6 +269,11 @@ impl StdioTransport {
             if let Some(reader) = late_reader {
                 Self::settle_stderr_tail(reader).await;
             }
+            // A retry may start on this same transport. This start's reader
+            // must be gone first: at its EOF it clears `pending` and marks the
+            // transport disconnected, which would land on the retry instead.
+            stdout_reader.abort();
+            let _ = stdout_reader.await;
             return Err(error);
         }
 

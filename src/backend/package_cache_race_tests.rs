@@ -105,3 +105,54 @@ async fn two_attempts_of_one_backend_leave_one_repair_to_clear_the_cache() {
         spawns(&log)
     );
 }
+
+/// A start whose failure predates another start's successful repair retries on
+/// that install instead of clearing it.
+///
+/// The test holds the cache's lock, lets one start fail on the old tree, then
+/// records a successful repair in its place before letting go. The waiting start
+/// must see that its failure describes a tree that no longer exists.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failure_older_than_a_successful_repair_does_not_clear_it_again() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    write_stub(workspace.path(), STUB);
+    let cache = seed_cache(workspace.path());
+    let log = workspace.path().join("spawns.log");
+    let env = env_with_cache(&log, "always-fail", CACHE_SHAPED, &cache.root);
+    let transport = transport(
+        workspace.path(),
+        env,
+        Duration::from_secs(5),
+        Some(&cache.root),
+    );
+
+    let lock = repair_lock(&cache.root);
+    let held = lock.lock().await;
+    let attempt = tokio::spawn({
+        let transport = Arc::clone(&transport);
+        async move { start_reporting(&transport).await }
+    });
+    // A spawn is logged after the start read the repair count.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while spawns(&log).is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the start never spawned"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    bump_repair_generation(&cache.root);
+    drop(held);
+
+    let (result, repair) = attempt.await.expect("the start task completes");
+    assert_eq!(repair, Repair::Superseded, "{result:?}");
+    assert_eq!(
+        spawns(&log).len(),
+        2,
+        "it retries once on the other start's install"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&cache.sentinel).expect("the repaired tree is left in place"),
+        SEEDED
+    );
+}

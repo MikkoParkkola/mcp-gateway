@@ -50,10 +50,24 @@ pub(crate) fn assigned_package_cache_dir<S: std::hash::BuildHasher>(
     command: &str,
     backend_env: &HashMap<String, String, S>,
 ) -> Option<PathBuf> {
-    if !cache_vars_for(command).contains(&CACHE_ENV) || backend_env.contains_key(CACHE_ENV) {
+    // npm reads its environment case-insensitively, so `NPM_CONFIG_CACHE` in a
+    // backend's `env:` is the operator naming a cache too.
+    if !cache_vars_for(command).contains(&CACHE_ENV)
+        || backend_env
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case(CACHE_ENV))
+    {
         return None;
     }
-    Some(cache_dir(backend_name))
+    // A relative data directory resolves against the gateway's working
+    // directory here and against the child's `cwd` there, so the path the
+    // repair would remove need not be the cache the child used.
+    absolute(cache_dir(backend_name))
+}
+
+/// The directory, when it names one place whatever the working directory.
+pub(super) fn absolute(dir: PathBuf) -> Option<PathBuf> {
+    dir.is_absolute().then_some(dir)
 }
 
 /// One backend's cache directory: the single source of the path, so the one

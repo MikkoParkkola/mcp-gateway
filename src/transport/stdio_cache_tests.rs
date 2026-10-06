@@ -465,3 +465,22 @@ fn only_an_npm_cache_the_gateway_set_is_reported_as_assigned() {
         );
     }
 }
+
+#[test]
+fn an_operator_cache_in_either_spelling_is_not_the_gateways() {
+    let operator = HashMap::from([("NPM_CONFIG_CACHE".to_string(), "/opt/cache".to_string())]);
+    assert_eq!(
+        assigned_package_cache_dir("b", "npx -y some-server", &operator),
+        None,
+        "npm reads its environment case-insensitively, so this names a cache too"
+    );
+}
+
+#[test]
+fn only_an_absolute_cache_directory_is_repairable() {
+    // Relative, it resolves against the gateway's working directory when
+    // removed and against the child's `cwd` when used: two different trees.
+    assert_eq!(cache::absolute("pkg-cache/b".into()), None);
+    let absolute = std::env::temp_dir().join("pkg-cache").join("b");
+    assert_eq!(cache::absolute(absolute.clone()), Some(absolute));
+}
