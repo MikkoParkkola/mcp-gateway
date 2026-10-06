@@ -608,6 +608,11 @@ async fn key_server_still_enforces_iat_cap() {
     let digest = <sha2::Sha256 as sha2::Digest>::digest(identity.stable_actor_id().as_bytes());
     assert_ne!(client.principal, hex::encode(&digest[..6]));
     assert!(
+        client.principal.starts_with("oidc:"),
+        "{}",
+        client.principal
+    );
+    assert!(
         key_server
             .verify_bearer_identity(&token(600))
             .await

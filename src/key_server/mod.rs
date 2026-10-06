@@ -115,7 +115,7 @@ impl KeyServer {
             name: actor,
             // A temporary token identifies one principal; its own key is the
             // stable identifier.
-            principal: crate::gateway::auth::principal_of(&temp.token),
+            principal: runtime_principal(RuntimeIssuer::KeyServerToken, &temp.token),
             rate_limit: temp.scopes.rate_limit,
             backends: temp.scopes.backends.clone(),
             allowed_tools: if temp.scopes.tools.is_empty() {
@@ -175,7 +175,7 @@ impl KeyServer {
             // above: one person's two credential mechanisms are one bucket.
             quota_principal: Some(QuotaPrincipal::oidc_identity(&actor)),
             // The verified subject identifies this principal.
-            principal: crate::gateway::auth::principal_of(&actor),
+            principal: runtime_principal(RuntimeIssuer::OidcBearer, &actor),
             name: actor,
             rate_limit: scopes.rate_limit,
             backends: scopes.backends.clone(),
@@ -191,6 +191,25 @@ impl KeyServer {
         };
         Some((client, identity))
     }
+}
+
+/// Who issued a runtime identity; each issuer has its own principal tag.
+#[derive(Clone, Copy)]
+enum RuntimeIssuer {
+    KeyServerToken,
+    OidcBearer,
+}
+
+/// MIK-8006: the principal of an identity issued at runtime. Configured
+/// credentials own the 12-hex space (`principal_of`, `principal_of_digest`);
+/// this is `<tag>:<full SHA-256 hex>`, and `:` never occurs in hex, so it can
+/// equal neither a configured principal nor one under the other tag.
+fn runtime_principal(issuer: RuntimeIssuer, material: &str) -> String {
+    let tag = match issuer {
+        RuntimeIssuer::KeyServerToken => "kst",
+        RuntimeIssuer::OidcBearer => "oidc",
+    };
+    format!("{tag}:{}", crate::hashing::sha256_hex(material.as_bytes()))
 }
 
 fn oidc_client_identity_key(identity: &VerifiedIdentity) -> String {
@@ -288,9 +307,25 @@ mod tests {
         let (client, _) = ks.validate_token(text).await.expect("token is live");
         let p = &client.principal;
         assert_ne!(*p, crate::gateway::auth::principal_of(text));
+        assert_eq!(*p, runtime_principal(RuntimeIssuer::KeyServerToken, text));
         assert!(
             !(p.len() == 12 && p.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))),
             "{p} is in the configured principal space"
+        );
+    }
+
+    /// MIK-8006 RTPRIN.3: each issuer has its own tag over a full digest.
+    #[test]
+    fn runtime_principals_carry_their_tag_and_a_full_digest() {
+        let digest = crate::hashing::sha256_hex(b"x");
+        assert_eq!(digest.len(), 64);
+        assert_eq!(
+            runtime_principal(RuntimeIssuer::KeyServerToken, "x"),
+            format!("kst:{digest}")
+        );
+        assert_eq!(
+            runtime_principal(RuntimeIssuer::OidcBearer, "x"),
+            format!("oidc:{digest}")
         );
     }
 }

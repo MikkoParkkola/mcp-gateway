@@ -81,8 +81,9 @@ pub(crate) fn principal_of_digest(digest: &[u8; 32]) -> String {
 /// principal, since each would then own the other's sessions, grants and tasks.
 ///
 /// Covers the bearer and API keys configured together. Identities issued at
-/// runtime, such as key-server tokens minted for an OIDC sign-in, are not
-/// checked here, nor is a principal that a removed credential once held.
+/// runtime (key-server tokens, delegated OIDC bearers) need no check: their
+/// principals are tagged and cannot fall in this space (MIK-8006). A principal
+/// that a removed credential once held is not checked either.
 ///
 /// The error names the two credentials, never a secret, digest or principal.
 pub(crate) fn refuse_shared_principals<'a>(
