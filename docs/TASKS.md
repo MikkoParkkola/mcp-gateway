@@ -48,7 +48,6 @@ ignores `task`. The gateway refuses to create a task when:
 |---|---|
 | The tasks extension is not declared | An error whose `data.requiredCapabilities` names the extension |
 | Auth is on and the caller presented no credential, for example on a public `/mcp` | `-32602` "no such task", the same answer as for a task that does not exist |
-| Auth is on and the caller signed in with an API key or the bearer token rather than a key-server (OIDC) token | `-32600` "task creation requires a verified caller identity" |
 | No idempotency key | `-32602` "task creation requires an idempotency key" |
 | The call needs a confirmation and the client did not declare `elicitation` | `-32021` |
 
