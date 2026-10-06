@@ -56,6 +56,14 @@ impl CapabilityBackend {
         changed
     }
 
+    /// The catalogue changed (a load, reload or removal, each announced by its
+    /// own path): what is listed now is what clients are told next, so it is
+    /// the baseline, and the watch plans again for the new entries' expiries.
+    pub(super) fn catalogue_changed(&self) {
+        *self.listing.lock() = Some(self.listed_names());
+        self.listing_wake.notify_one();
+    }
+
     /// When the earliest listed `oauth:` login stops counting, if any.
     fn next_listing_expiry(&self) -> Option<u64> {
         self.capabilities
@@ -91,6 +99,8 @@ impl CapabilityBackend {
                 });
                 tokio::select! {
                     _ = shutdown.recv() => return,
+                    // A new entry may expire sooner: plan again.
+                    () = backend.listing_wake.notified() => continue,
                     () = tokio::time::sleep(wait) => {}
                 }
                 if backend.announce_listing_change(&registry, || {}) {
