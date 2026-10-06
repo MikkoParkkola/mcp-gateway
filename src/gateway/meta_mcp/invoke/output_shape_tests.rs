@@ -162,7 +162,11 @@ async fn an_array_root_is_published_under_items_through_dispatch() {
     ))
     .await;
     let answer = serde_json::to_value(&response).unwrap();
-    let result = &answer["result"];
+    // `gateway_invoke` answers with the tool's result wrapped as JSON text.
+    let result: serde_json::Value = answer["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_else(|| panic!("no wrapped tool result: {answer}"));
     assert_eq!(
         result["structuredContent"],
         json!({ "items": names }),
