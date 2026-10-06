@@ -28,8 +28,10 @@ def test_the_job_runs_every_test_target_skipping_only_the_full_burst():
     assert "cargo test --all-features --tests --no-fail-fast" in job
     # Exact match on purpose: any change to the command must revisit this guard.
     runs = [l for l in job.splitlines() if "cargo test" in l]
-    skips = [s for l in runs for s in re.findall(r"--skip\s+(\S+)", l)]
-    assert skips == ["mik_7479_full_burst"], runs
+    # Any spelling of a skip counts (`--skip NAME`, `--skip=NAME`); only the
+    # ruled one may appear, once.
+    assert sum(l.count("--skip") for l in runs) == 1, runs
+    assert any(re.search(r"--skip[ =]mik_7479_full_burst(\s|$)", l) for l in runs), runs
 
 
 def test_no_met_criterion_cites_windows_execution_evidence():
