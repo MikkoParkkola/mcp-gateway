@@ -87,7 +87,15 @@ pub enum Error {
     #[error("Backend not found: {0}")]
     BackendNotFound(String),
 
-    /// Backend unavailable (circuit open)
+    /// The backend could not take the request: it would not start, its
+    /// concurrency limit closed, its tools could not be read in time.
+    ///
+    /// Invariant: constructed only before the request is sent. That is what
+    /// puts it on the [`Error::is_pre_dispatch`] allowlist, where a wrong
+    /// `true` frees an idempotency key for work that may have run, so an
+    /// after-send failure is `Transport` or `BackendTimeout`, never this
+    /// (MIK-7979). The files that construct it are pinned by a scan test
+    /// (`pre_send_scan_tests`); a new one needs its pre-send proof.
     #[error("Backend unavailable: {0}")]
     BackendUnavailable(String),
 
@@ -156,13 +164,14 @@ pub enum Error {
     /// When in doubt, use `Transport`. An unknown failure retrying is a cost;
     /// a recoverable failure classified permanent needs a restart to notice.
     ///
-    /// HTTP status codes are deliberately NOT classified here, and the attempt
-    /// is worth recording. A first pass marked 4xx permanent; two existing
-    /// tests refused it, because this protocol overloads BOTH 404 and 400 to
-    /// mean "your MCP session expired, reinitialise and retry" (#247). A
-    /// status-only classifier is therefore unsafe in this codebase, whatever it
-    /// would mean in a plain REST API. Classifying an HTTP failure needs the
-    /// body, not just the code.
+    /// HTTP status codes are classified here only with the body in hand. A
+    /// first pass marked every 4xx permanent; two existing tests refused it,
+    /// because this protocol overloads BOTH 404 and 400 to mean "your MCP
+    /// session expired, reinitialise and retry" (#247). So
+    /// [`crate::security::safe_http_status_error`] builds this variant only for
+    /// a 4xx outside {400, 401, 403, 404, 407, 408, 429} whose body carries no
+    /// session-expiry marker: the server answered and refused the request
+    /// (MIK-7979). Everything else stays `Transport`.
     #[error("Transport error (permanent): {0}")]
     TransportPermanent(String),
 
@@ -175,14 +184,16 @@ pub enum Error {
     /// terminal. The first provably did not, and settling it terminal denies a
     /// caller a retry of work that never ran.
     ///
-    /// Constructed at exactly one site --
-    /// [`crate::security::safe_request_error_for`] -- and only when reqwest
+    /// Constructed at exactly two sites. The first is
+    /// [`crate::security::safe_request_error_for`], and only when reqwest
     /// reports `is_connect()` AND the caller supplies
     /// [`crate::security::RedirectEvidence::NoRedirectFollowed`], which the
     /// transport derives from a redirect counter sampled either side of the
     /// send. A request that followed a redirect stays `Transport`: a 307
     /// re-submits the body, so the side effect may already have run at the
-    /// origin that redirected.
+    /// origin that redirected. The second is the stdio transport's send with
+    /// no stdin writer (MIK-7979): the writer is absent, so no write was
+    /// attempted.
     ///
     /// The counter, not `reqwest::Error::url()`, is what carries this. An
     /// earlier revision compared the error's URL against the posted URL; that
@@ -192,8 +203,8 @@ pub enum Error {
     ///
     /// The narrow construction is the point. This variant is on the
     /// `is_pre_dispatch` allowlist, where a wrong `true` licenses a second
-    /// execution of a side effect, so it must not grow the free-form
-    /// construction surface that keeps `BackendUnavailable` off that list.
+    /// execution of a side effect, so it must not grow a free-form
+    /// construction surface.
     ///
     /// Its `Display` is byte-identical to [`Error::Transport`]'s, deliberately:
     /// this is an internal classification and the wire contract must not
@@ -329,7 +340,9 @@ impl Error {
     /// `TransportConnect` earns its place by construction, not by variant: it
     /// exists only where reqwest proved the connection was never established
     /// on an unredirected request. See its doc comment for why a redirected
-    /// request is excluded.
+    /// request is excluded. `BackendUnavailable` earns it by its construction
+    /// invariant (raised only before the request is sent), which a scan test
+    /// holds to a reviewed list of files.
     #[must_use]
     pub fn is_pre_dispatch(&self) -> bool {
         matches!(
@@ -340,7 +353,19 @@ impl Error {
                 | Self::BackendNotFound(_)
                 | Self::ToolNotFound(_)
                 | Self::TransportConnect(_)
+                | Self::BackendUnavailable(_)
         )
+    }
+
+    /// The request may have left the gateway and no answer came back: the
+    /// stream died (`Transport`) or the wait ran out (`BackendTimeout`). The
+    /// effect is undetermined, so a same-key retry is told so rather than
+    /// served this error as if the work had failed (MIK-7979). Conservative by
+    /// design: where the send cannot be proven either way the notice says
+    /// "may have", and the work still never runs twice.
+    #[must_use]
+    pub(crate) fn is_lost_round(&self) -> bool {
+        matches!(self, Self::Transport(_) | Self::BackendTimeout(_))
     }
 
     /// The gateway's own limiter or slot admission refused: the backend was
@@ -416,8 +441,21 @@ pub mod rpc_codes {
 }
 
 #[cfg(test)]
+#[path = "error_pre_send_scan_tests.rs"]
+mod pre_send_scan_tests;
+
+#[cfg(test)]
 mod rpc_code_tests {
     use super::Error;
+
+    /// MIK-7979: every `BackendUnavailable` is raised before the request is
+    /// sent, so it frees an idempotency key; a lost round does not.
+    #[test]
+    fn backend_unavailable_is_pre_dispatch_and_a_lost_round_is_not() {
+        assert!(Error::BackendUnavailable("svc".to_string()).is_pre_dispatch());
+        assert!(!Error::Transport("reset".to_string()).is_pre_dispatch());
+        assert!(!Error::BackendTimeout("slow".to_string()).is_pre_dispatch());
+    }
 
     #[test]
     fn a_permanent_transport_failure_reports_as_a_backend_error() {
