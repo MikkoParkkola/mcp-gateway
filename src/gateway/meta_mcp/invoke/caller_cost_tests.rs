@@ -27,7 +27,9 @@ fn caller(key: &'static str) -> MetaMcpCallerContext<'static> {
 
 /// Run `alpha:tool` as `who` on `session`; the call must be served.
 async fn spend(meta: &MetaMcp, who: &MetaMcpCallerContext<'_>, session: Option<&str>, tool: &str) {
-    let served = meta.invoke_tool(&invoke_args("alpha", tool), session, who).await;
+    let served = meta
+        .invoke_tool(&invoke_args("alpha", tool), session, who)
+        .await;
     assert!(served.is_ok(), "the spend call on {tool}: {served:?}");
 }
 
@@ -57,8 +59,14 @@ async fn two_callers_on_one_credential_each_see_only_their_own_spend() {
     spend(&meta, &bob, None, "write").await;
 
     // WHEN: each asks for its report
-    let for_alice = meta.get_cost_report(&json!({}), None, &alice).await.expect("alice's report");
-    let for_bob = meta.get_cost_report(&json!({}), None, &bob).await.expect("bob's report");
+    let for_alice = meta
+        .get_cost_report(&json!({}), None, &alice)
+        .await
+        .expect("alice's report");
+    let for_bob = meta
+        .get_cost_report(&json!({}), None, &bob)
+        .await
+        .expect("bob's report");
 
     // THEN: each breakdown holds that caller's call and nothing else
     assert_eq!(
@@ -92,5 +100,8 @@ async fn a_caller_with_a_session_is_reported_under_its_session_only() {
         vec![("alpha:read".to_string(), 1)],
         "{report}"
     );
-    assert!(report["caller"].is_null(), "a sessioned call was also keyed on its caller: {report}");
+    assert!(
+        report["caller"].is_null(),
+        "a sessioned call was also keyed on its caller: {report}"
+    );
 }
