@@ -254,14 +254,17 @@ async fn send_with_retry_recovers_from_transient_timeouts() {
 
 #[tokio::test]
 async fn send_with_retry_records_transport_failures() {
-    // A refused port (listener bound then dropped) yields connection errors,
-    // which are always retried and recorded as transport failures. After
-    // enough consecutive failures the health tracker flips unhealthy (MIK-5080).
-    let addr = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        l.local_addr().unwrap()
-        // listener dropped here -> port now refuses connections
-    };
+    // A refused port yields connection errors, which are always retried and
+    // recorded as transport failures. After enough consecutive failures the
+    // health tracker flips unhealthy (MIK-5080). The port stays bound for the
+    // whole test but never listens: a connection is refused, and no parallel
+    // test can bind it in between (MIK-7981; a dropped listener's port could
+    // be taken, and the connect then succeeded).
+    let reserved = tokio::net::TcpSocket::new_v4().expect("socket");
+    reserved
+        .bind("127.0.0.1:0".parse().unwrap())
+        .expect("bind without listening");
+    let addr = reserved.local_addr().unwrap();
 
     let client = reqwest::Client::new();
     let url = format!("http://{addr}/");
@@ -279,6 +282,7 @@ async fn send_with_retry_records_transport_failures() {
         !health.is_healthy(),
         "consecutive transport failures should flip the tracker unhealthy"
     );
+    drop(reserved);
 }
 
 #[tokio::test]

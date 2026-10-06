@@ -592,8 +592,13 @@ impl HttpTransport {
 /// keep their own error rather than becoming an SSE fault. A 4xx whose body
 /// is a JSON-RPC error for this request arrives as `Error::JsonRpc` and never
 /// matches: a peer that answers a POST in JSON-RPC speaks Streamable HTTP.
+///
+/// Both `Transport` and `TransportPermanent` are read: a 4xx answer is built
+/// as the latter since MIK-7979, and a 405 must still fall back. It runs only
+/// while connecting, before a session exists, so it never competes with
+/// session-expiry recovery, which reads `Transport` text on a live session.
 fn refused_as_wrong_transport(error: &Error) -> Option<u16> {
-    let Error::Transport(text) = error else {
+    let (Error::Transport(text) | Error::TransportPermanent(text)) = error else {
         return None;
     };
     let status: u16 = text
@@ -633,5 +638,12 @@ mod wrong_transport_tests {
             refused_as_wrong_transport(&Error::Protocol("HTTP 405".into())),
             None
         );
+    }
+
+    /// MIK-7979: a 405 is now `TransportPermanent`; it still falls back.
+    #[test]
+    fn a_typed_4xx_still_falls_back() {
+        let typed = Error::TransportPermanent("HTTP 405 Method Not Allowed".into());
+        assert_eq!(refused_as_wrong_transport(&typed), Some(405));
     }
 }
