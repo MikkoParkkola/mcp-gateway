@@ -455,7 +455,7 @@ mod tests {
             },
             TransportConfig::Http {
                 http_url: "h".into(),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: Some("v".into()),
             },
             TransportConfig::WebSocket {

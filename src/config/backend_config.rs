@@ -231,9 +231,12 @@ pub enum TransportConfig {
     Http {
         /// HTTP URL.
         http_url: String,
-        /// Use Streamable HTTP (direct POST, no SSE handshake).
-        #[serde(default)]
-        streamable_http: bool,
+        /// `true`: Streamable HTTP (direct POST). `false`: the legacy SSE
+        /// handshake. Absent: detected at connect, POST `initialize` first and
+        /// the SSE `GET` only if that POST is refused with a 4xx (MCP
+        /// backwards-compatibility rule).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        streamable_http: Option<bool>,
         /// Override protocol version.
         #[serde(default)]
         protocol_version: Option<String>,
@@ -279,7 +282,7 @@ impl Default for TransportConfig {
     fn default() -> Self {
         Self::Http {
             http_url: String::new(),
-            streamable_http: false,
+            streamable_http: None,
             protocol_version: None,
         }
     }
@@ -293,11 +296,11 @@ impl TransportConfig {
             Self::Stdio { .. } => "stdio",
             Self::Http {
                 http_url,
-                streamable_http: false,
+                streamable_http: Some(false) | None,
                 ..
             } if http_url.ends_with("/sse") => "sse",
             Self::Http {
-                streamable_http: true,
+                streamable_http: Some(true),
                 ..
             } => "streamable-http",
             Self::Http { .. } => "http",

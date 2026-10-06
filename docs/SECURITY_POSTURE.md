@@ -19,7 +19,7 @@ with source files, is in the [OWASP Agentic AI self-assessment](OWASP_AGENTIC_AI
 | Per-caller visibility | A credentialled caller seeing or reaching backends it was not granted, once auth is on |
 | Destructive-call confirmation | A destructive meta-tool running without the user agreeing to it |
 | Capability pin check | Tampering with a pinned capability file. A file whose `sha256:` pin no longer matches is refused |
-| Process limits for CLI capabilities | A CLI capability starting arbitrary programs. It runs only if it is pinned and its command is on `capabilities.process_commands`, with no shell, in a private directory, with a cleared environment, an output cap and a timeout |
+| Process limits for CLI capabilities | A CLI capability starting arbitrary programs. It runs only if it is pinned and its command is on `capabilities.process_commands`, with no shell, in a private directory, with a cleared environment, an output cap and a timeout. Unset, the list admits the commands the shipped catalogue runs: `gws`, `openpencil-mcp`, `pact-mcp`, `pyghidra-mcp` and `skill-scanner scan`. Setting the key replaces that list, so keep the entries you still need |
 | Response inspection and context integrity | Nothing is blocked by default. Both observe tool output and record what they find |
 
 ## Opt-in
@@ -37,7 +37,7 @@ with source files, is in the [OWASP Agentic AI self-assessment](OWASP_AGENTIC_AI
 | mTLS | `mtls.enabled: true` ([Deployment Guide](DEPLOYMENT.md)) | Callers without a valid client certificate |
 | Identity headers from a proxy | `security.caller_identity` | Spoofed identity headers. They count only from listed proxy addresses or Cloudflare Access |
 | Remote backend provenance | `security.remote_server_signing` | A remote backend whose URL or identity was swapped |
-| Boundary-call attestation | `GATEWAY_ATTESTATION_MODE=enforce` | Calls outside their signed task scope |
+| Boundary-call attestation | `GATEWAY_ATTESTATION_MODE=enforce`, plus non-blank `GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_AUDIENCE`: without either, the gateway refuses to start ([upgrade item 46](UPGRADING-4.0.md#46-attestation-enforce-enforces-on-every-route)) | Calls outside their signed task scope |
 | Capability pinning | `mcp-gateway cap pin <file>` | Edits to a capability file you have pinned. Unpinned files still load |
 
 To turn CLI capabilities off entirely, set `capabilities.process_execution: disabled`.

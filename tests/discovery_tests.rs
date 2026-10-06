@@ -100,7 +100,7 @@ async fn test_discovered_server_to_backend_config() {
         DiscoverySource::Environment,
         TransportConfig::Http {
             http_url: "http://localhost:3000".to_string(),
-            streamable_http: false,
+            streamable_http: Some(false),
             protocol_version: None,
         },
         ServerMetadata {
@@ -156,7 +156,7 @@ fn make_discovered(name: &str) -> mcp_gateway::discovery::DiscoveredServer {
         DiscoverySource::Environment,
         TransportConfig::Http {
             http_url: format!("http://localhost:3000/{name}"),
-            streamable_http: false,
+            streamable_http: Some(false),
             protocol_version: None,
         },
         ServerMetadata::default(),
@@ -196,7 +196,7 @@ fn make_http_discovered(name: &str, url: &str) -> mcp_gateway::discovery::Discov
         DiscoverySource::Environment,
         TransportConfig::Http {
             http_url: url.to_string(),
-            streamable_http: false,
+            streamable_http: Some(false),
             protocol_version: None,
         },
         ServerMetadata {

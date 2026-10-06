@@ -69,7 +69,7 @@ fn config(reference: Option<&str>, id: &str, descriptor: AccountDescriptor) -> C
             account: reference.map(str::to_string),
             transport: TransportConfig::Http {
                 http_url: "https://drive.invalid/mcp".to_string(),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             ..BackendConfig::default()

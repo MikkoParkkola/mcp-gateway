@@ -156,7 +156,7 @@ fn backend_at(url: &str) -> Backend {
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: url.to_string(),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             headers: HashMap::new(),
