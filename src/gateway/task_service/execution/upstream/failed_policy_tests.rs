@@ -202,10 +202,8 @@ async fn recover_committed(reply: Reply, meta: MetaMcp) -> (CommittedTask, tempf
             move |result| {
                 result_policy
                     .recover_task_result(BACKEND, TOOL, None, &trace, result)
-                    .map_err(|error| JsonRpcError {
-                        code: -32603,
-                        message: error.to_string(),
-                        data: None,
+                    .map_err(|error| {
+                        crate::gateway::meta_mcp::response_security::recovered_result_error(&error)
                     })
             },
             move |error| error_policy.recover_task_error_with(BACKEND, TOOL, None, "trace", error),
@@ -345,6 +343,8 @@ async fn a_secret_bearing_recovered_result_is_refused_by_the_firewall() {
         Some("Response blocked by security firewall"),
         "{wire}"
     );
+    // MIK-7667: the native path's -32600 refusal, not an internal error.
+    assert_eq!(wire.pointer("/error/code"), Some(&json!(-32600)), "{wire}");
     assert!(wire.pointer("/result").is_none_or(Value::is_null), "{wire}");
     assert!(
         !wire.to_string().contains(MARKER) && !stored_bytes(&directory).contains(MARKER),

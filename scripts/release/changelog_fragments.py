@@ -26,6 +26,7 @@ import pathlib
 import re
 import subprocess
 import sys
+from collections import Counter
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FRAGMENT_DIR = "changelog.d"
@@ -68,8 +69,24 @@ def check(
     errors = fragment_name_errors(added)
     if SKIP_LABEL in labels:
         return errors
+    # A fragment re-added under the same number with another type is a retype
+    # (the diff runs without rename detection, so a rename arrives as a delete
+    # plus an add), not a loss. Pairs are one to one (MIK-7946): each addition
+    # excuses one deletion of its number, and an addition so paired replaces
+    # an old entry rather than adding a new one.
+    unpaired = Counter(FRAGMENT.match(n)[1] for n in added if FRAGMENT.match(n))
+    deleted = []
+    for status, path in changes:
+        name = path.split("/", 1)[1] if path.startswith(f"{FRAGMENT_DIR}/") else ""
+        if not (status.startswith("D") and FRAGMENT.match(name)):
+            continue
+        number = FRAGMENT.match(name)[1]
+        if unpaired[number]:
+            unpaired[number] -= 1
+        else:
+            deleted.append(path)
     touches_shipped = any(SOURCE.match(path) for _, path in changes)
-    if touches_shipped and not any(FRAGMENT.match(n) for n in added):
+    if touches_shipped and not any(unpaired.values()):
         errors.append(
             f"this PR changes shipped files but adds no {FRAGMENT_DIR}/<number>.<type>.md; "
             f"add one (see CONTRIBUTING.md) or apply the '{SKIP_LABEL}' label"
@@ -89,18 +106,7 @@ def check(
             f"instead, or apply the '{SKIP_LABEL}' label"
         )
     # A fragment leaves only by being folded into CHANGELOG.md; deleting one
-    # any other way loses another PR's entry. A fragment re-added under the
-    # same number with another type is a retype (the diff runs without rename
-    # detection, so a rename arrives as a delete plus an add), not a loss.
-    retyped = {FRAGMENT.match(n)[1] for n in added if FRAGMENT.match(n)}
-    deleted = [
-        path
-        for status, path in changes
-        if status.startswith("D")
-        and path.startswith(f"{FRAGMENT_DIR}/")
-        and FRAGMENT.match(path.split("/", 1)[1])
-        and FRAGMENT.match(path.split("/", 1)[1])[1] not in retyped
-    ]
+    # any other way, unpaired with a retype above, loses another PR's entry.
     if deleted and not (edits_changelog and folds):
         errors.append(
             f"this PR deletes {', '.join(deleted)} without folding every fragment into "
