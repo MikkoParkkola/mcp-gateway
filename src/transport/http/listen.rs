@@ -163,6 +163,10 @@ impl UpstreamListen for HttpTransport {
             )))),
         }
     }
+
+    fn detected_streamable(&self) -> Option<bool> {
+        self.streamable()
+    }
 }
 
 /// One legacy stream payload as a note: only the three notifications.

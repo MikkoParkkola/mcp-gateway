@@ -398,7 +398,7 @@ impl Backend {
     /// and the notify path start here, on every transport, so a command that
     /// cannot spawn, a refused or stalled upgrade and a failed `initialize` all
     /// count toward the breaker, whose refusal then names the start error.
-    async fn start_recorded(
+    pub(super) async fn start_recorded(
         &self,
         key: &super::pool::PoolKey,
         entry: &super::PooledEntry,
