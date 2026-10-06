@@ -350,10 +350,12 @@ fn validate_object(
             continue;
         };
 
-        if raw_value.is_null() {
+        if raw_value.is_null() && !admits_null(Some(prop_schema)) {
             // Null is acceptable for optional params not in `required`.
             continue;
         }
+        // A null the `type` admits is a value: it is checked (an `enum`
+        // without null refuses it) and forwarded (MIK-7943).
 
         let (coerced_value, type_violations) = validate_property(name, raw_value, prop_schema);
 

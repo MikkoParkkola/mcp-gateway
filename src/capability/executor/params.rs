@@ -533,7 +533,7 @@ pub(super) fn with_path_defaults<'a>(
         return std::borrow::Cow::Borrowed(params);
     };
     let mut merged: Option<serde_json::Map<String, Value>> = None;
-    let templates = url_templates(config);
+    let templates = url_templates(config, params);
     for (name, property) in properties {
         let Some(default) = property.get("default") else {
             continue;
@@ -552,15 +552,29 @@ pub(super) fn with_path_defaults<'a>(
     })
 }
 
-/// Every template `build_url` can fill: the endpoint, or the base URL with
-/// the path and each path a selector can pick (MIK-7943).
-fn url_templates(config: &crate::capability::definition::RestConfig) -> Vec<&str> {
+/// Every template `build_url` fills for this call: the endpoint, or the base
+/// URL with the path and the path the selector picks, read as `build_url`
+/// reads it (absent or null takes the default). An unpicked path names nothing
+/// this call sends (MIK-7943).
+fn url_templates<'a>(
+    config: &'a crate::capability::definition::RestConfig,
+    params: &Value,
+) -> Vec<&'a str> {
     if config.uses_endpoint() {
         return vec![config.endpoint.as_str()];
     }
     let mut templates = vec![config.base_url.as_str(), config.path.as_str()];
     if let Some(selector) = &config.path_selector {
-        templates.extend(selector.paths.values().map(String::as_str));
+        let picked = match params.get(&selector.parameter) {
+            None | Some(Value::Null) => Some(selector.default.as_str()),
+            Some(Value::String(value)) => Some(value.as_str()),
+            Some(_) => None,
+        };
+        templates.extend(
+            picked
+                .and_then(|key| selector.paths.get(key))
+                .map(String::as_str),
+        );
     }
     templates
 }

@@ -168,15 +168,15 @@ pub async fn execute_tool_with_context(
         .ok_or_else(|| Error::Config(format!("Tool not found: '{tool_name}'")))?;
 
     // The schema check a gateway call gets, before anything is sent
-    // (MIK-7943); the coerced arguments go on.
+    // (MIK-7943). The arguments go on as given: a coerced copy could turn a
+    // numeric path selector into a string, which the gateway refuses and
+    // `build_url` refuses here.
     let verdict = crate::capability::validate_arguments(&args, &cap.schema.input);
     if !verdict.is_valid() {
         return Err(Error::Config(verdict.format_error(&cap.schema.input)));
     }
     let executor = Arc::new(CapabilityExecutor::new());
-    executor
-        .execute_with_context(cap, verdict.coerced, context)
-        .await
+    executor.execute_with_context(cap, args, context).await
 }
 
 /// Build registry entries from the catalogue (for completion / listing).
@@ -446,5 +446,49 @@ providers:
         .expect_err("a missing required parameter")
         .to_string();
         assert!(error.contains("required parameter is missing"), "{error}");
+    }
+
+    /// A numeric path selector is refused, as a gateway call refuses it: the
+    /// schema check's coercion to a string does not reach the request.
+    #[tokio::test]
+    async fn a_cli_call_with_a_numeric_path_selector_is_refused() {
+        let cap = crate::capability::parse_capability(
+            "
+name: selector_probe
+description: probe
+schema:
+  input:
+    type: object
+    properties:
+      kind:
+        type: string
+        enum: [\"1\"]
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://selector-probe.invalid
+      path_selector:
+        parameter: kind
+        default: \"1\"
+        paths:
+          \"1\": /one
+      method: GET
+",
+        )
+        .expect("parses");
+        let cat = ToolCatalogue {
+            capabilities: vec![cap],
+        };
+        let error = execute_tool_with_context(
+            &cat,
+            "selector_probe",
+            json!({ "kind": 1 }),
+            CapabilityExecutionContext::default(),
+        )
+        .await
+        .expect_err("a numeric selector")
+        .to_string();
+        assert!(error.contains("must be a string"), "{error}");
     }
 }
