@@ -22,7 +22,13 @@ fn read(relative: &str) -> String {
 fn registered_in(table: &str) -> Result<Vec<String>, String> {
     // Composition forms this scanner cannot follow: refused anywhere in the
     // table, so a nested or merged router cannot carry an MCP route unseen.
-    for form in [".nest(", ".nest_service(", ".route_service("] {
+    for form in [
+        ".nest(",
+        ".nest_service(",
+        ".route_service(",
+        ".merge::<",
+        "::merge(",
+    ] {
         if table.contains(form) {
             return Err(format!("unsupported router composition: {form}"));
         }
@@ -120,12 +126,20 @@ fn registered_mcp_handlers() -> Vec<String> {
     registered_in(&read("src/gateway/router/mod.rs")).expect("the MCP routes are resolvable")
 }
 
-/// The declared return type in a signature: the text after its last `->`,
-/// without a trailing `where` clause, or `None` when nothing is declared.
+/// The declared return type in a signature: the `where` clause cut off
+/// first (its bounds may name `-> OutboundReply`), then the text after the
+/// last `->`, or `None` when nothing is declared.
 fn return_type(sig: &str) -> Option<&str> {
-    let (_, after) = sig.rsplit_once("->")?;
-    let declared = after.split("where").next().unwrap_or(after);
-    Some(declared.trim())
+    let cut = sig
+        .match_indices("where")
+        .find(|(at, _)| {
+            let before = sig[..*at].chars().next_back();
+            let after = sig[at + "where".len()..].chars().next();
+            before.is_some_and(char::is_whitespace) && after.is_none_or(char::is_whitespace)
+        })
+        .map_or(sig.len(), |(at, _)| at);
+    let (_, after) = sig[..cut].rsplit_once("->")?;
+    Some(after.trim())
 }
 
 /// The text of `fn name`'s signature, up to its body.
@@ -201,6 +215,10 @@ fn only_a_declared_outbound_reply_passes() {
         ),
         ("fn h<T>(t: T) -> OutboundReply where T: Send", true),
         (
+            "fn h<F>(f: F) -> Response\nwhere\n    F: Fn() -> OutboundReply,",
+            false,
+        ),
+        (
             "async fn h(s: State) -> Result<OutboundReply, Error>",
             false,
         ),
@@ -225,6 +243,8 @@ fn an_unreviewed_merged_router_fails_closed() {
         "\n.merge(mcp_router)",
         "\napp = app.merge(build(\"/mcp\"))",
         "\napp.merge(",
+        "\napp = app.merge::<Router<()>>(mcp_router);",
+        "\napp = Router::merge(app, mcp_router);",
     ] {
         let table = format!("{route}{merge}");
         assert!(registered_in(&table).is_err(), "must not pass: {table}");

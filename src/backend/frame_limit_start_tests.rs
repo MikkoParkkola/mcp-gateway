@@ -58,6 +58,12 @@ async fn a_configured_frame_limit_refuses_an_oversized_handshake_answer() {
         .expect("the default-limit start finished in time")
         .expect("premise: the 70 000-byte answer fits the default limit");
 
+    let raised = backend(&script, Some(128 * 1024));
+    tokio::time::timeout(Duration::from_secs(20), raised.start())
+        .await
+        .expect("the raised-limit start finished in time")
+        .expect("control: a configured limit above the answer admits it");
+
     let limited = backend(&script, Some(64 * 1024));
     let started = tokio::time::timeout(Duration::from_secs(20), limited.start())
         .await
