@@ -550,7 +550,7 @@ impl NotificationMultiplexer {
                 delivery(&authorizer, credential.as_ref(), Audience::Backend(backend)).await;
             if verdict == Delivery::Deliver
                 && self
-                    .enqueue(&session, notification.clone(), hidden.as_ref())
+                    .enqueue(&session, notification.clone(), hidden.as_ref(), None)
                     .is_ok()
             {
                 reached += 1;

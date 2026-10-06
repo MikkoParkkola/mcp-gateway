@@ -581,10 +581,11 @@ impl ClientChannel for ProxyManager {
 
         // A dropped sender means the entry went away without an answer, which
         // is what the bridge's own timeout arm means by `TimedOut`. Every copy
-        // withheld at write means no client was reached (MIK-7975 WAIT.1).
+        // withheld at write means nothing will come back either (MIK-7975
+        // WAIT.1); `NoSession` would send the legacy bridge to re-ask round one.
         tokio::select! {
             replied = rx => replied.map_err(|_| DeliveryError::TimedOut),
-            () = watch.failed() => Err(DeliveryError::NoSession),
+            () = watch.failed() => Err(DeliveryError::TimedOut),
         }
     }
 }
