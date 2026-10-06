@@ -354,7 +354,7 @@ def stub_handler(stub, emit_token):
 def body_length(headers):
     """(bytes to read, None) for a usable Content-Length, else (0, status):
     400 unless there is at most one header and it is ASCII digits only (HTTP's
-    1*DIGIT), 413 when it is over MAX_BODY. No header means no body."""
+    1*DIGIT) between spaces and tabs, 413 when it is over MAX_BODY. No header means no body."""
     values = headers.get_all("Content-Length") if hasattr(headers, "get_all") else (
         [headers["Content-Length"]] if "Content-Length" in headers else [])
     values = values or []
@@ -362,7 +362,7 @@ def body_length(headers):
         return 0, 400
     if not values:
         return 0, None
-    raw = values[0].strip()
+    raw = values[0].strip(" \t")  # HTTP OWS is SP/HTAB only; str.strip() also takes VT/FF
     if not (raw.isascii() and raw.isdigit()):
         return 0, 400
     digits = raw.lstrip("0") or "0"
