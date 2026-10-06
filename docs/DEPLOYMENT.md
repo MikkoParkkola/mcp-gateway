@@ -771,7 +771,8 @@ at 1, and `increase` alone reads 0 for a series with no earlier sample, so the
 `unless ... offset` branch fires for a series new in the window. That branch
 takes `max_over_time` over 5 minutes at the offset rather than one sample, so a
 single missed scrape a window back does not make an old series look new and fire
-again. Warning rather than page — the damage is one leaked process, not an outage.
+again. That needs a successful scrape somewhere in those 5 minutes: at a scrape
+interval of 2.5 minutes or less, one missed scrape still leaves one. Warning rather than page — the damage is one leaked process, not an outage.
 
 When it fires: check for an orphaned child process of the gateway
 (`pgrep -P $(pgrep -f mcp-gateway)`) and kill what the gateway no longer tracks.
