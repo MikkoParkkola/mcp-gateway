@@ -124,6 +124,27 @@ enum MetaMode {
     SurfacedT,
 }
 
+impl MetaMode {
+    /// `meta` with this mode's switch turned on.
+    fn arm(&self, mut meta: MetaMcp) -> MetaMcp {
+        match self {
+            Self::Plain => {}
+            Self::InspectionBlocks => meta.enable_response_inspection_action_mode(),
+            Self::Idempotent => meta.enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                crate::idempotency::CLEANUP_INTERVAL,
+            ),
+            Self::SurfacedT => {
+                return meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+                    server: "alpha".to_string(),
+                    tool: "t".to_string(),
+                }]);
+            }
+        }
+        meta
+    }
+}
+
 /// Backends `alpha` and `beta`, one logger shared by both routes.
 async fn fixture(setup: Setup) -> Fixture {
     let audit = tempfile::tempdir().unwrap();
@@ -199,22 +220,7 @@ async fn fixture(setup: Setup) -> Fixture {
         state_mut.firewall = Some(firewall(config.clone()));
         meta.set_firewall(Some(firewall(config)));
     }
-    if setup.meta_mode == MetaMode::InspectionBlocks {
-        meta.enable_response_inspection_action_mode();
-    }
-    if setup.meta_mode == MetaMode::Idempotent {
-        meta.enable_idempotency(
-            Arc::new(crate::idempotency::IdempotencyCache::new()),
-            crate::idempotency::CLEANUP_INTERVAL,
-        );
-    }
-    if setup.meta_mode == MetaMode::SurfacedT {
-        meta = meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
-            server: "alpha".to_string(),
-            tool: "t".to_string(),
-        }]);
-    }
-    state_mut.meta_mcp = Arc::new(meta);
+    state_mut.meta_mcp = Arc::new(setup.meta_mode.arm(meta));
     state_mut.transparency_log = Some(Arc::clone(&log));
     let router = create_router(Arc::clone(&state));
     Fixture {

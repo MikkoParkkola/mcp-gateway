@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::direct_bridge::operator_key;
 use super::{
     Bind, Descriptors, Dispatches, SEEDED_REVISION, WORK, caller_as, custody_with,
-    expected_identity_key_for, external_cfg, gateway_in, grant,
+    descriptor_revision, expected_identity_key_for, external_cfg, gateway_in, grant,
 };
 use crate::config::{ApiKeyConfig, AuthConfig, api_key_digest_spec};
 use crate::gateway::meta_mcp::MetaMcp;
@@ -321,9 +321,14 @@ async fn list_servers_keeps_the_view_of_an_expired_grant_without_refreshing() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn list_servers_hides_a_required_backend_behind_a_stale_descriptor_revision() {
     let stale = crate::personal_accounts::GrantRecord {
-        descriptor_revision: "an-earlier-account-configuration".to_string(),
+        descriptor_revision: "0".repeat(64),
         ..grant(OPERATOR_TOKEN, u64::MAX)
     };
+    assert_ne!(
+        stale.descriptor_revision,
+        descriptor_revision(),
+        "premise: the stored revision is not the configured one"
+    );
     let (row, custody) = operator_row(stale).await;
     assert_eq!(row["tools_count"], 0, "a fenced grant is no view: {row}");
     assert_eq!(

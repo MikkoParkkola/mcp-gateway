@@ -400,7 +400,7 @@ async fn response_hash_covers_returned_value() {
     );
 }
 
-/// MIK-7645 AC2: `audit_replay`'s FailClosed arm. The fault hits only the
+/// MIK-7645 AC2: `audit_replay`'s `FailClosed` arm. The fault hits only the
 /// replay's own invocation append (the one write after it is armed), so the
 /// cell isolates that arm: the replay is withheld with -32005, never
 /// delivered unrecorded.
