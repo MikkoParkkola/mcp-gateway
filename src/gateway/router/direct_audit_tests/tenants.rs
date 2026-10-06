@@ -202,9 +202,19 @@ async fn direct_replayed_chain_refusal_keeps_its_uninspected_attribution() {
         ..Setup::default()
     })
     .await;
+    let mut answers = Vec::new();
     for _ in 0..2 {
-        let _ = post_modern(&fx, "/mcp/alpha", &direct_call("cust-1", Some("k-chain"))).await;
+        answers.push(
+            post_modern(&fx, "/mcp/alpha", &direct_call("cust-1", Some("k-chain")))
+                .await
+                .1,
+        );
     }
+    // The replay answers the stored error; the stored marker stays internal.
+    let error = &answers[1]["error"];
+    assert_eq!(error["code"], answers[0]["error"]["code"], "{answers:?}");
+    assert!(error.get("uninspected").is_none(), "{error}");
+    assert!(error.pointer("/data/uninspected").is_none(), "{error}");
     let all = invocations(&fx);
     assert_eq!(all.len(), 2, "{all:?}");
     let (first, replay) = (&all[0], &all[1]);

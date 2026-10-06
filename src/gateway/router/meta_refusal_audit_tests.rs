@@ -133,25 +133,34 @@ async fn a_modern_refusal_without_a_trace_is_keyed_on_the_minted_trace_id() {
             }
         }
     });
-    let request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("authorization", "Bearer scoped-key")
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .header("mcp-protocol-version", "2026-07-28")
-        .header("mcp-method", "tools/call")
-        .header("mcp-name", "gateway_invoke")
-        .body(Body::from(body.to_string()))
-        .unwrap();
-    let response = fx.router.clone().oneshot(request).await.unwrap();
-    let _ = axum::body::to_bytes(response.into_body(), usize::MAX).await;
+    // Two stateless refusals: each is keyed on its own minted trace id.
+    for _ in 0..2 {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("authorization", "Bearer scoped-key")
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", "tools/call")
+            .header("mcp-name", "gateway_invoke")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = fx.router.clone().oneshot(request).await.unwrap();
+        let _ = axum::body::to_bytes(response.into_body(), usize::MAX).await;
+    }
     let written = std::fs::read_to_string(&fx.audit_path).unwrap_or_default();
-    let record: Value = written
+    let records: Vec<Value> = written
         .lines()
         .filter_map(|line| serde_json::from_str(line).ok())
-        .find(|entry: &Value| entry.get("correlation_source").is_some())
-        .unwrap_or_else(|| panic!("a refusal record: {written}"));
-    assert_eq!(record["correlation_source"], json!("trace_id"), "{record}");
-    assert_ne!(record["session_id"], json!(""), "{record}");
+        .filter(|entry: &Value| entry.get("correlation_source").is_some())
+        .collect();
+    let [first, second] = records.as_slice() else {
+        panic!("two refusal records: {written}");
+    };
+    for record in [first, second] {
+        assert_eq!(record["correlation_source"], json!("trace_id"), "{record}");
+        assert_ne!(record["session_id"], json!(""), "{record}");
+    }
+    assert_ne!(first["session_id"], second["session_id"], "{written}");
 }
