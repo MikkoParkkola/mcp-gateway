@@ -647,4 +647,49 @@ mod tests {
             .expect("the stream ends");
         assert_eq!(note, None);
     }
+
+    /// The note a listen answered with one complete JSON body delivers.
+    async fn note_for_json_answer(
+        body: impl Fn(&Value) -> String + Send + 'static,
+    ) -> Option<UpstreamNote> {
+        let url = peer(move |id| {
+            let body = body(id);
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                 content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        })
+        .await;
+        let mut stream = transport(&url).listen(req()).await.expect("opened");
+        tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
+            .await
+            .expect("the stream ends")
+    }
+
+    /// An untrusted upstream's single answer is capped at `FRAME_CAP`: the
+    /// answer that reaches the session as `Unsupported` at its normal size
+    /// is dropped unread once it is over the cap.
+    #[tokio::test]
+    async fn a_json_answer_over_the_frame_cap_is_not_classified() {
+        let note = note_for_json_answer(|id| {
+            json!({"jsonrpc": "2.0", "id": id,
+                "error": {"code": -32601, "message": "x".repeat(FRAME_CAP)}})
+            .to_string()
+        })
+        .await;
+        assert_eq!(note, None);
+    }
+
+    /// A single answer carrying another request's id is not this listen's.
+    #[tokio::test]
+    async fn a_json_answer_for_another_id_is_not_classified() {
+        let note = note_for_json_answer(|_| {
+            json!({"jsonrpc": "2.0", "id": "another-listen",
+                "error": {"code": -32601, "message": "Method not found"}})
+            .to_string()
+        })
+        .await;
+        assert_eq!(note, None);
+    }
 }

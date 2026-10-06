@@ -233,3 +233,50 @@ async fn a_poll_runs_only_what_the_executor_finds_read_only() {
         assert_eq!(endpoint.arrivals(), hits, "read_only {read_only}: requests");
     }
 }
+
+/// The source's own authorization of a holder (`GatewayWatchHost::may_invoke`):
+/// only a key that still authenticates under its own digest, and is granted
+/// the capability, may be polled for; a gateway that is gone admits no one.
+#[tokio::test]
+async fn the_watch_host_admits_only_a_live_granted_key() {
+    use super::super::watch_poll::GatewayWatchHost;
+    use crate::events::ApiKeyRef;
+    use crate::events::watch_source::{CredentialUse, Holder, Target, WatchHost};
+    let target = Target {
+        capability: "read".into(),
+        backend: "alpha".into(),
+        read_only: true,
+        credential: CredentialUse::Keyed,
+        input_schema: json!({}),
+    };
+    let holder = |name: &str, principal: String| Holder {
+        principal: "subscriber".into(),
+        api_key: ApiKeyRef {
+            name: name.into(),
+            principal,
+        },
+    };
+    let live = |name: &str| holder(name, crate::gateway::auth::principal_of(name));
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    let host = GatewayWatchHost::new(&fx.state);
+    assert!(
+        host.may_invoke(&live("k-std"), &target),
+        "a live granted key"
+    );
+    assert!(
+        !host.may_invoke(&live("k-deny"), &target),
+        "a key denied `read`"
+    );
+    assert!(
+        !host.may_invoke(&holder("k-std", "000000000000".into()), &target),
+        "the key's name under another digest (re-issued)"
+    );
+    assert!(!host.may_invoke(&live("k-gone"), &target), "an unknown key");
+    let (state, _store) = super::super::tests::test_router_app_state().await;
+    let gone = GatewayWatchHost::new(&state);
+    drop(state);
+    assert!(
+        !gone.may_invoke(&live("k-std"), &target),
+        "the gateway is gone"
+    );
+}
