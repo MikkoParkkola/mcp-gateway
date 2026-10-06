@@ -187,14 +187,64 @@ fn checked_arguments(
     Ok(arguments)
 }
 
-/// `sub_` + 32 hex of SHA-256 over the JCS array `[principal, url, name,
-/// arguments]` (design §6.3 step 7).
+/// `sub_` + 32 hex of SHA-256 over the canonical array `[principal, url,
+/// name, arguments]` (design §6.3 step 7; see `canonical`).
 pub(crate) fn subscription_id(principal: &str, url: &str, name: &str, arguments: &Value) -> String {
     use sha2::Digest as _;
-    let canonical = serde_json_canonicalizer::to_vec(&json!([principal, url, name, arguments]))
-        .unwrap_or_default();
+    let canonical = canonical(&json!([principal, url, name, arguments]));
     let digest = hex::encode(sha2::Sha256::digest(canonical));
     format!("sub_{}", &digest[..32])
+}
+
+/// The JCS form of `value` (RFC 8785), except for integers: JCS writes
+/// every number through `f64`, so integers past 2^53 can collide, and here
+/// an integer keeps its own exact digits. Within 2^53 either way those are
+/// the bytes JCS writes, so stored ids keep theirs; past it only ids that
+/// could already collide change (MIK-7977).
+pub(super) fn canonical(value: &Value) -> Vec<u8> {
+    let mut out = Vec::new();
+    write_canonical(value, &mut out);
+    out
+}
+
+fn write_canonical(value: &Value, out: &mut Vec<u8>) {
+    match value {
+        // Its own digits: what JCS writes within 2^53, and exact past it.
+        Value::Number(n) if n.is_i64() || n.is_u64() => {
+            out.extend_from_slice(n.to_string().as_bytes());
+        }
+        Value::Array(items) => {
+            out.push(b'[');
+            for (at, item) in items.iter().enumerate() {
+                if at > 0 {
+                    out.push(b',');
+                }
+                write_canonical(item, out);
+            }
+            out.push(b']');
+        }
+        Value::Object(map) => {
+            // JCS orders members by their names' UTF-16 code units.
+            let mut members: Vec<_> = map.iter().collect();
+            members.sort_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));
+            out.push(b'{');
+            for (at, (key, item)) in members.into_iter().enumerate() {
+                if at > 0 {
+                    out.push(b',');
+                }
+                out.extend(jcs_leaf(&Value::String(key.clone())));
+                out.push(b':');
+                write_canonical(item, out);
+            }
+            out.push(b'}');
+        }
+        leaf => out.extend(jcs_leaf(leaf)),
+    }
+}
+
+/// A scalar in the library's JCS form.
+fn jcs_leaf(leaf: &Value) -> Vec<u8> {
+    serde_json_canonicalizer::to_vec(leaf).unwrap_or_default()
 }
 
 /// The `-32013` answer for a cap an admission hit.

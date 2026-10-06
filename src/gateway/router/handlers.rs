@@ -940,17 +940,17 @@ async fn meta_mcp_dispatch(
     let owner = tasks::route_task_owner(
         &state,
         verified_identity.as_ref(),
-        &tasks::session_owner_key(client.as_ref()),
+        &tasks::task_owner_key(
+            grant_subject.as_ref(),
+            cert_identity.as_ref(),
+            client.as_ref(),
+        ),
     );
 
-    // An empty owner key is not an identity — `session_owner_key` says so in
-    // its own doc comment, and the firewall arm refuses on it. Only the task
-    // arms pooled: on a gateway that HAS identities, every caller that
-    // presented no credential answered to that one key and therefore owned
-    // every other unattributed caller's tasks. `/mcp` is listed public in the
-    // shipped local, compose and published-probe presets so ordinary tools stay
-    // open, which is precisely the deployment where credentialled and
-    // unattributed callers meet.
+    // An empty owner key is not an identity (`task_owner_key`); the firewall
+    // refuses on it too. On a gateway that HAS identities, every credential-less
+    // caller would own every other one's tasks. `/mcp` is public in the shipped
+    // presets: exactly where credentialled and unattributed callers meet.
     //
     // Auth DISABLED is the other case and it is not a defect: there are no
     // identities to keep apart, and `anonymous_client` documents one shared
@@ -1382,20 +1382,18 @@ async fn meta_mcp_dispatch(
                 if let Some(ref fw) = state.firewall {
                     let target = target.as_target();
                     let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
-                    // The key the per-caller controls score on: the caller's
-                    // `CallerKey` on both eras; the session id only when there
-                    // is no key at all (authentication off). Never the display
-                    // name: operator-chosen, shared by API keys and by every
-                    // anonymous caller, it would let one caller poison
-                    // another's history. Empty is no identity: refused.
-                    let mut control_identity = super::identity::caller_key(
-                        grant_subject.as_ref(),
-                        cert_identity.as_ref(),
-                        client.as_ref(),
+                    // The key the per-caller controls score on (MIK-7971):
+                    // never the display name, which every anonymous caller
+                    // shares. Empty is no identity: refused.
+                    let control_identity = super::identity::control_identity(
+                        super::identity::caller_key(
+                            grant_subject.as_ref(),
+                            cert_identity.as_ref(),
+                            client.as_ref(),
+                        ),
+                        &session_id,
+                        existing_session_id.as_deref(),
                     );
-                    if control_identity.is_empty() {
-                        control_identity.clone_from(&session_id);
-                    }
                     // Renew the reclaim deadline on every call (`IDLE_TTL`). An
                     // empty identity holds no per-identity state: not tracked.
                     if let Some(ref lifecycle) = state.session_lifecycle
