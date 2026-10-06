@@ -375,11 +375,9 @@ async fn follow_upstream_job(
                         stage_followed_result(state, relay, target, &processed);
                         TaskTransition::Complete(processed)
                     }
-                    Err(error) => TaskTransition::Fail(crate::protocol::JsonRpcError {
-                        code: -32603,
-                        message: error.to_string(),
-                        data: None,
-                    }),
+                    Err(error) => TaskTransition::Fail(
+                        crate::gateway::meta_mcp::response_security::recovered_result_error(&error),
+                    ),
                 },
                 ErrorAuthor::Gateway,
             )),

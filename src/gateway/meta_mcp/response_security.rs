@@ -614,6 +614,27 @@ impl super::MetaMcp {
     }
 }
 
+/// The error a recovered task result settles on when the gateway's own
+/// processing refuses it: a firewall refusal as a native task and the
+/// synchronous call report it (-32600, MIK-7667), anything else as internal.
+pub(crate) fn recovered_result_error(error: &crate::Error) -> crate::protocol::JsonRpcError {
+    if matches!(error, crate::Error::ResponseFirewallRefused)
+        && let Some(refusal) = crate::protocol::JsonRpcResponse::delivery_refusal_error(
+            None,
+            error.to_rpc_code(),
+            &error.to_string(),
+        )
+        .error
+    {
+        return refusal;
+    }
+    crate::protocol::JsonRpcError {
+        code: -32603,
+        message: error.to_string(),
+        data: None,
+    }
+}
+
 /// Turn a dispatch error into a JSON-RPC error response, keeping the HTTP
 /// status when the error is an authorization refusal.
 ///
