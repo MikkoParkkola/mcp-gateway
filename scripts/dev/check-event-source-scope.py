@@ -51,25 +51,26 @@ def aliases(texts):
 
 
 def implemented(text, names=()):
-    """The types `text` implements EventSource (or an alias in `names`) for."""
+    """The types `text` implements EventSource (or an alias in `names`) for,
+    counted: two inline modules may each implement it for their own `X`."""
     code = strip_comments(text)
     traits = "|".join(map(re.escape, ["EventSource", *names, *aliases([code])]))
     header = r"\bimpl\b[^{};]*?\b(?:%s)\s+for\s+([^{]+?)\s*(?:where\b|\{)" % traits
-    return {" ".join(target.split()) for target in re.findall(header, code)}
+    return Counter(" ".join(target.split()) for target in re.findall(header, code))
 
 
 def impl_count(text):
-    return len(implemented(text))
+    return sum(implemented(text).values())
 
 
 def adds_source(files, names=()):
     """Whether the non-test `(path, before, after)` files together implement
     EventSource for a type they did not before. Swapping one impl for another
-    counts; moving one between files does not. Counted per file, so a new
-    source named like one in another changed file is still seen."""
+    counts; moving one between files does not. Every impl is counted, so a
+    new source named like an existing one is still seen."""
     kept = [f for f in files if not is_test_path(f[0])]
-    before = Counter(t for _, b, _ in kept for t in implemented(b, names))
-    after = Counter(t for _, _, a in kept for t in implemented(a, names))
+    before = sum((implemented(b, names) for _, b, _ in kept), Counter())
+    after = sum((implemented(a, names) for _, _, a in kept), Counter())
     return bool(after - before)
 
 

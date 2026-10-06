@@ -94,6 +94,16 @@ class EventSourceScope(unittest.TestCase):
         impl = "impl EventSource for X {}\n"
         self.assertTrue(guard.adds_source([("src/events/a.rs", impl, impl), ("src/events/b.rs", "", impl)]))
 
+    def test_a_second_inline_module_impl_of_the_same_name_is_seen(self):
+        one = "mod a { impl EventSource for X {} }\n"
+        two = one + "mod b { impl EventSource for X {} }\n"
+        self.assertTrue(guard.adds_source([("src/events/a.rs", one, two)]))
+
+    def test_splitting_same_named_impls_across_files_is_not_a_new_source(self):
+        a = "mod a { impl EventSource for X {} }\n"
+        b = "mod b { impl EventSource for X {} }\n"
+        self.assertFalse(guard.adds_source([("src/events/a.rs", a + b, a), ("src/events/b.rs", "", b)]))
+
     def test_an_alias_declared_in_another_file_is_followed(self):
         self.assertTrue(guard.adds_source([("src/events/a.rs", "", "impl Src for X {}\n")], {"Src"}))
         self.assertEqual(guard.aliases(["pub(crate) use super::EventSource as Src;"]), {"Src"})
