@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Production `serve --stdio` tools/call and JSON-RPC batch signing coverage.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;
 
@@ -152,7 +155,7 @@ impl StdioGateway {
         eprintln!(
             "SIGNING_COVERAGE_CHILD pid={} binary={} normal_exit={}",
             self.child_pid,
-            env!("CARGO_BIN_EXE_mcp-gateway"),
+            gateway_bin::path(),
             status.success()
         );
         assert_child_profile(

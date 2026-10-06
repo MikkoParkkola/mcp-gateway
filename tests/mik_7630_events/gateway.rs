@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The shipped binary under an events config, restartable on one store.
 
+#[path = "../common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -202,11 +205,8 @@ impl Gateway {
         )
         .expect("write gateway config");
         let log = std::fs::File::create(self.log_path()).expect("gateway log");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        let mut command = gateway_bin::command(&self.root, gateway_bin::Inherit::Nothing);
         command
-            .env_clear()
-            .env("HOME", &self.root)
-            .env("MCP_GATEWAY_TEST_HOME_DIR", &self.root)
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
             .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))

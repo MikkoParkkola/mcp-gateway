@@ -8,7 +8,9 @@
 //! Driven through the built binary because the proxy comes from the process
 //! environment, which a library test cannot set without `unsafe`.
 
-use std::process::Command;
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -57,7 +59,7 @@ async fn the_credential_bypasses_an_environment_proxy() {
 
     let home = tempfile::tempdir().expect("temp dir");
     let out = tokio::task::spawn_blocking(move || {
-        Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
             .args(["dashboard-link", "--url", &gateway])
             .env("MCP_GATEWAY_TOKEN", "tok")
             .env("HTTP_PROXY", &proxy)
@@ -66,7 +68,6 @@ async fn the_credential_bypasses_an_environment_proxy() {
             .env("all_proxy", &proxy)
             .env_remove("NO_PROXY")
             .env_remove("no_proxy")
-            .env("HOME", home.path())
             .env("MCP_GATEWAY_CONFIG_DIR", home.path())
             .output()
             .expect("the command runs")
@@ -183,7 +184,7 @@ async fn the_command_reaches_a_listener_that_requires_a_client_certificate() {
 
     let home = tempfile::tempdir().expect("home");
     let run = |identity: bool| {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        let mut cmd = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment);
         cmd.args([
             "dashboard-link",
             "--url",
@@ -203,7 +204,6 @@ async fn the_command_reaches_a_listener_that_requires_a_client_certificate() {
             .env_remove("MCP_GATEWAY_CLIENT_CERT")
             .env_remove("MCP_GATEWAY_CLIENT_KEY")
             .env_remove("MCP_GATEWAY_CA_CERT")
-            .env("HOME", home.path())
             .env("MCP_GATEWAY_CONFIG_DIR", home.path());
         cmd
     };
@@ -253,7 +253,7 @@ async fn a_named_ca_replaces_the_system_roots() {
     let path = |name: &str| dir.path().join(name).to_string_lossy().into_owned();
     let home = tempfile::tempdir().expect("home");
     let run = |ca_flag: Option<String>| {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        let mut cmd = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment);
         cmd.args(["dashboard-link", "--url", &base]);
         if let Some(ca) = ca_flag {
             cmd.args(["--ca-cert", &ca]);
@@ -264,7 +264,6 @@ async fn a_named_ca_replaces_the_system_roots() {
             .env_remove("MCP_GATEWAY_CA_CERT")
             .env("SSL_CERT_FILE", path("ca.crt"))
             .env_remove("SSL_CERT_DIR")
-            .env("HOME", home.path())
             .env("MCP_GATEWAY_CONFIG_DIR", home.path());
         cmd
     };
@@ -331,7 +330,7 @@ async fn the_config_path_needs_only_the_identity_flags() {
             .expect("chmod 600");
     }
     let home = tempfile::tempdir().expect("home");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+    let mut cmd = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment);
     cmd.args(["--config", &config.to_string_lossy(), "dashboard-link"])
         .args(["--client-cert", &path("client.crt")])
         .args(["--client-key", &path("client.key")])
@@ -339,7 +338,6 @@ async fn the_config_path_needs_only_the_identity_flags() {
         .env_remove("MCP_GATEWAY_CLIENT_CERT")
         .env_remove("MCP_GATEWAY_CLIENT_KEY")
         .env_remove("MCP_GATEWAY_CA_CERT")
-        .env("HOME", home.path())
         .env("MCP_GATEWAY_CONFIG_DIR", home.path());
     let out = tokio::task::spawn_blocking(move || cmd.output().expect("runs"))
         .await

@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! End-to-end redaction tests for backend inspection commands.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 const ENV_SECRET: &str = "SENTINEL_CLI_ENV_37a1";
 const HEADER_SECRET: &str = "SENTINEL_CLI_HEADER_84dc";
@@ -16,12 +19,15 @@ const URL_FRAGMENT_SECRET: &str = "SENTINEL_CLI_URL_FRAGMENT_d209";
 const URL_PATH_SECRET: &str = "SENTINEL_CLI_URL_PATH_c0f4";
 
 fn run_gateway(config: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
-        .args(args)
-        .arg("--config")
-        .arg(config)
-        .output()
-        .expect("run mcp-gateway")
+    gateway_bin::command(
+        config.parent().expect("the config sits in a temp dir"),
+        gateway_bin::Inherit::Environment,
+    )
+    .args(args)
+    .arg("--config")
+    .arg(config)
+    .output()
+    .expect("run mcp-gateway")
 }
 
 fn combined_output(output: &Output) -> String {

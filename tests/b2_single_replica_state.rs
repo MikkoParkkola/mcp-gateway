@@ -8,9 +8,12 @@
 //! These prove the start path asks it: a gateway that skipped the call would
 //! bind and serve, and the wait below would time out on a running process.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::io::{Read as _, Write as _};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 fn free_port() -> u16 {
@@ -32,14 +35,8 @@ fn spawn(dir: &Path, port: u16, yaml: &str) -> (Child, std::path::PathBuf) {
     mcp_gateway::gateway::test_helpers::write_owner_only(&config, text).expect("write config");
     let out = std::fs::File::create(&log).expect("log file");
     let err = out.try_clone().expect("log handle");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-            command.env_remove(key);
-        }
-    }
+    let mut command = gateway_bin::command(dir, gateway_bin::Inherit::Environment);
     let child = command
-        .env("HOME", dir)
         .env("MCP_GATEWAY_CONFIG_DIR", dir.join("state"))
         .current_dir(dir)
         .arg("--config")

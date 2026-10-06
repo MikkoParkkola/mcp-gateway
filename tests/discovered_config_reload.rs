@@ -10,6 +10,9 @@
 //! `MCP_GATEWAY_*` variable. Waits are on completion lines, never trigger
 //! lines, and edits are sequential, so one reload never absorbs the next edit.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -67,17 +70,9 @@ fn http_config(port: u16, env_file: &str, auth: bool, backend: bool) -> String {
 
 /// The child's command: own cwd and HOME, a state dir inside `home`, INFO logs.
 fn gateway_command(cwd: &Path, home: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-    for (name, _) in std::env::vars_os() {
-        if name.to_string_lossy().starts_with("MCP_GATEWAY_") {
-            command.env_remove(name);
-        }
-    }
+    let mut command = gateway_bin::command(home, gateway_bin::Inherit::Environment);
     command
         .current_dir(cwd)
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .env("MCP_GATEWAY_TEST_HOME_DIR", home)
         .env("MCP_GATEWAY_CONFIG_DIR", home.join("state"))
         .env("RUST_LOG", "info")
         .kill_on_drop(true);

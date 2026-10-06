@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The shadow-scan docs and the shipped CLI must agree.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -18,14 +21,16 @@ fn mik_5843_shadow_scope_anchors() {
 
 #[test]
 fn mik_5843_shipped_shadow_cli_matches_the_documented_scope() {
-    let discover_help = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let home = tempfile::tempdir().expect("an isolated home");
+    let gateway = || gateway_bin::command(home.path(), gateway_bin::Inherit::Environment);
+    let discover_help = gateway()
         .args(["cap", "discover", "--help"])
         .output()
         .expect("run cap discover --help");
     assert!(discover_help.status.success());
     assert!(String::from_utf8_lossy(&discover_help.stdout).contains("--shadow"));
 
-    let doctor = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let doctor = gateway()
         .args(["doctor", "--shadow", "--shadow-format", "nginx"])
         .output()
         .expect("run doctor --shadow");
@@ -43,7 +48,7 @@ fn mik_5843_shipped_shadow_cli_matches_the_documented_scope() {
     assert!(!output.contains("httpHost"));
     assert!(!output.contains("httpRequestURI"));
 
-    let grep = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let grep = gateway()
         .args(["doctor", "--shadow", "--shadow-format", "grep"])
         .output()
         .expect("run portable grep export");

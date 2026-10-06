@@ -15,9 +15,12 @@
 // Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #![cfg(unix)]
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 /// Variable name the fixture config references as `env:...`.
 const KEY_VAR: &str = "ACCOUNTS_INIT_STORE_KEY";
@@ -82,13 +85,16 @@ fn fixture(key_value: Option<&str>) -> Fixture {
 }
 
 fn init_store(config: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
-        .args(["accounts", "init-store", "--config"])
-        .arg(config)
-        // Child-only: the test process's own environment is never touched.
-        .env_remove("MCP_GATEWAY_CONFIG")
-        .output()
-        .expect("the gateway binary must run")
+    gateway_bin::command(
+        config.parent().expect("the config sits in a temp dir"),
+        gateway_bin::Inherit::Environment,
+    )
+    .args(["accounts", "init-store", "--config"])
+    .arg(config)
+    // Child-only: the test process's own environment is never touched.
+    .env_remove("MCP_GATEWAY_CONFIG")
+    .output()
+    .expect("the gateway binary must run")
 }
 
 fn stdout_of(output: &Output) -> String {
@@ -274,7 +280,8 @@ fn a_wrong_length_key_is_refused() {
 
 #[test]
 fn init_store_without_a_config_refuses_instead_of_guessing_one() {
-    let output = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let home = tempfile::tempdir().expect("an isolated home");
+    let output = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
         .args(["accounts", "init-store"])
         .env_remove("MCP_GATEWAY_CONFIG")
         .output()

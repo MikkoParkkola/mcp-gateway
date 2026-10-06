@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! 4.0.0 item D1-a: with auth on, the audit log is required (D1-T1, T2, T13).
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -54,25 +57,19 @@ fn auth_enabled_with_audit_log_loads() {
 async fn stdio_serve_obeys_audit_required() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_config(&dir, AUTH_ON);
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+    let mut command = tokio::process::Command::from(gateway_bin::command(
+        dir.path(),
+        gateway_bin::Inherit::Environment,
+    ));
     command
         .args(["--config", path.to_str().unwrap(), "serve", "--stdio"])
         .current_dir(dir.path())
-        .env("HOME", dir.path())
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_DATA_HOME", dir.path().join("data"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    for (name, _) in std::env::vars_os() {
-        if name.to_string_lossy().starts_with("MCP_GATEWAY_") {
-            command.env_remove(name);
-        }
-    }
-    // Windows resolves home through the Known Folder API, not HOME: the
-    // debug build's override isolates the child's default task store too.
-    command.env("MCP_GATEWAY_TEST_HOME_DIR", dir.path());
     let mut child = command.spawn().expect("spawn shipped binary");
     let _stdin = child.stdin.take();
     let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())

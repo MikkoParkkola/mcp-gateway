@@ -12,6 +12,9 @@
 //! gate file, `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`, #2376), so that answer
 //! does not depend on the load being slower than the first probe.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -56,9 +59,7 @@ fn spawn(directory: &Path, port: u16, scan_gate: &Path) -> Child {
     )
     .expect("write gateway config");
     let log = std::fs::File::create(directory.join("gateway.log")).expect("gateway log");
-    Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
-        .env_clear()
-        .env("HOME", directory)
+    gateway_bin::command(directory, gateway_bin::Inherit::Nothing)
         .env(HOLD_SCAN_ENV, scan_gate)
         .env("XDG_CONFIG_HOME", directory.join(".config"))
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())

@@ -9,6 +9,9 @@
 //! that always opens with `GET` fails on its first call. An explicit flag
 //! that the server refuses with such a 4xx gets one try of the other transport.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 #[path = "common/stdio_session.rs"]
 mod stdio_session;
 
@@ -131,11 +134,9 @@ async fn sse_server(hits: &Hits) -> String {
 }
 
 fn add(home: &Path, url: &str) {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let output = gateway_bin::command(home, gateway_bin::Inherit::Environment)
         .args(["add", "--url", url, BACKEND, "--config"])
         .arg(home.join("gateway.yaml"))
-        .env("HOME", home)
-        .env("MCP_GATEWAY_TEST_HOME_DIR", home)
         .output()
         .expect("run mcp-gateway add");
     assert!(

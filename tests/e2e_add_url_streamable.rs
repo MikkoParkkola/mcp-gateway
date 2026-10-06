@@ -11,6 +11,9 @@
 
 #![cfg(unix)]
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -63,15 +66,9 @@ fn free_port() -> u16 {
 }
 
 fn gateway_command(root: &std::path::Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-            command.env_remove(key);
-        }
-    }
+    let mut command = gateway_bin::command(&root.join("home"), gateway_bin::Inherit::Environment);
     command
         .current_dir(root)
-        .env("HOME", root.join("home"))
         .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
         .stdin(Stdio::null());
     command

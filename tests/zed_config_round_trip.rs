@@ -15,8 +15,11 @@
 //! Both runs use the real binary in an isolated home with a cleared
 //! environment, so no other discovery source can supply the entry.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 use mcp_gateway::config::{Config, TransportConfig};
 use serde_json::Value;
@@ -54,12 +57,8 @@ impl Home {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        let mut command = gateway_bin::command(&self.root, gateway_bin::Inherit::Nothing);
         command
-            .env_clear()
-            .env("HOME", &self.root)
-            .env("USERPROFILE", &self.root)
-            .env("MCP_GATEWAY_TEST_HOME_DIR", &self.root)
             .env("XDG_CONFIG_HOME", &self.xdg)
             // Process discovery calls `ps` by name; an empty PATH keeps host
             // processes out of the discovered set.

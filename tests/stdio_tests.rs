@@ -9,6 +9,9 @@
 //! spawning required) and verify that the binary accepts `--stdio` as a valid
 //! CLI flag.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use mcp_gateway::config::Config;
 use mcp_gateway::gateway::Gateway;
 use mcp_gateway::gateway::test_helpers::{CallerStanding, InvokeScope, auth_state};
@@ -526,13 +529,9 @@ fn test_stdio_stdout_carries_only_jsonrpc() {
     mcp_gateway::gateway::test_helpers::write_owner_only(&cfg_path, "backends: {}\n")
         .expect("write temp config");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let mut child = gateway_bin::command(dir.path(), gateway_bin::Inherit::Environment)
         .args(["serve", "--stdio", "-c"])
         .arg(&cfg_path)
-        // An isolated home, so the default task store is the test's own (Windows
-        // reads the debug build's override, not HOME).
-        .env("HOME", dir.path())
-        .env("MCP_GATEWAY_TEST_HOME_DIR", dir.path())
         .env("RUST_LOG", "info") // guarantee startup logs are emitted
         .env("NO_COLOR", "1") // determinism; logs must still land on stderr
         .stdin(Stdio::piped())

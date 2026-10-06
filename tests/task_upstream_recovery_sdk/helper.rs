@@ -8,6 +8,9 @@
 //! copied from the proven synthetic-journey helper this target used to
 //! import.
 
+#[path = "../common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -132,13 +135,10 @@ impl Gateway {
         let out = std::fs::File::create(&log).expect("the child log opens under the temp root");
         let err = out.try_clone().expect("the child log handle clones");
 
-        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-        // Operator config overrides must not replace this child's isolated fixture.
-        for (key, _) in std::env::vars_os() {
-            if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-                command.env_remove(key);
-            }
-        }
+        let mut command = tokio::process::Command::from(gateway_bin::command(
+            root,
+            gateway_bin::Inherit::Environment,
+        ));
         command.env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"));
         for (key, value) in env {
             command.env(key, value);

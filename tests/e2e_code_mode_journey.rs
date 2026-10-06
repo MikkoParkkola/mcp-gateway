@@ -10,6 +10,9 @@
 
 #![cfg(unix)]
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -89,15 +92,12 @@ impl Gateway {
         let log = root.join("serve.log");
         let out = std::fs::File::create(&log).expect("serve log");
         let err = out.try_clone().expect("log handle");
-        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-        for (key, _) in std::env::vars_os() {
-            if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-                command.env_remove(key);
-            }
-        }
+        let mut command = tokio::process::Command::from(gateway_bin::command(
+            &root,
+            gateway_bin::Inherit::Environment,
+        ));
         let child = command
             .current_dir(&root)
-            .env("HOME", &root)
             .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
             .args(["-c", "gateway.yaml", "-p", &port.to_string(), "serve"])
             .stdin(Stdio::null())

@@ -50,15 +50,8 @@ impl HttpSession {
             .port();
         write_http_config(home, backend_url, port);
 
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-        command.arg("serve").current_dir(home).env("HOME", home);
-        // The developer's own environment must not decide what this child
-        // connects to.
-        for (name, _) in std::env::vars() {
-            if name.starts_with("MCP_GATEWAY_") {
-                command.env_remove(name);
-            }
-        }
+        let mut command = gateway_bin::command(home, gateway_bin::Inherit::Environment);
+        command.arg("serve").current_dir(home);
         let child = command
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())

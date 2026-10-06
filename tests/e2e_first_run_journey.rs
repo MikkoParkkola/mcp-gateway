@@ -13,13 +13,15 @@
 
 #![cfg(unix)]
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
-const BIN: &str = env!("CARGO_BIN_EXE_mcp-gateway");
 const BACKEND: &str = "tidebook";
 const TOOL: &str = "tide_table";
 const MARKER: &str = "tidebook-answered";
@@ -65,15 +67,10 @@ impl Workspace {
     /// The binary as a user in an empty project directory runs it: own HOME,
     /// own state dir, no inherited `MCP_GATEWAY_*` override.
     fn command(&self) -> Command {
-        let mut command = Command::new(BIN);
-        for (key, _) in std::env::vars_os() {
-            if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-                command.env_remove(key);
-            }
-        }
+        let mut command =
+            gateway_bin::command(&self.root.join("home"), gateway_bin::Inherit::Environment);
         command
             .current_dir(&self.root)
-            .env("HOME", self.root.join("home"))
             .env("MCP_GATEWAY_CONFIG_DIR", self.root.join("gateway-state"))
             .stdin(Stdio::null());
         command
