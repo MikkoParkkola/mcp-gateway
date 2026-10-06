@@ -24,6 +24,8 @@ mod receiver;
 mod upstream_peer;
 #[path = "mik_7630_events/upstream_tools.rs"]
 mod upstream_tools;
+#[path = "mik_7630_events/upstream_snapshot.rs"]
+mod upstream_snapshot;
 
 use std::path::Path;
 use std::time::Duration;
