@@ -85,6 +85,22 @@ persistent storage, so point those settings at a volume you mount yourself.
    is sealed with the instance id and with the key id named in its own envelope, which is the id
    that was current when it was last written.
 
+### Anchoring the audit log
+
+A backup kept on the same host proves nothing after the host is compromised: an attacker who
+deletes the sealed segments, cuts the active file back and rewrites `.hwm` to match leaves a log
+that verifies. Copy `<log>.hwm` (200 bytes) off the host on your own schedule, for example with
+each backup, and check the live log against the newest copy:
+
+```bash
+mcp-gateway audit verify --path <log> --anchor <copied .hwm>
+```
+
+The log must still hold the record the copy names; a wiped, rolled-back or replaced log fails
+with exit 1. With a `shared_secret`, the copy carries a MAC: verify with the same secret, or the
+anchor is refused. An anchor older than the retained segments fails with "predates the retained
+range"; take a newer one. UPGRADING-4.0 item 151 has the details.
+
 ## Restoring
 
 1. Stop the gateway.

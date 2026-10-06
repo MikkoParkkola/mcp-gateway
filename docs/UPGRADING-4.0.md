@@ -175,6 +175,7 @@ backend" and "fails a capability file" first.**
 | 148 | An `http_url` backend with no `streamable_http` key POSTs `initialize` first and falls back to the legacy SSE `GET` only when that POST is refused with a 4xx that is not about the credential or a retry (any but 401, 403, 407, 408, 429); `add --url` no longer writes `streamable_http: false`. An explicit `true` or `false` is tried first, and when the server refuses it with such a 4xx the other transport is tried once, with a warning naming the backend and the value to set. `TransportConfig::Http::streamable_http` is now `Option<bool>` | None. A config the old `add --url` wrote keeps working; to skip the refused request, set the value the warning names or remove the key. A backend with the key unset is refused MCP Events even when it connects over Streamable HTTP, since eligibility is read from config: set `streamable_http: true` to offer them |
 | 149 | A meta-tool result whose payload says `isError: true` (a failed `gateway_invoke`, or a backend's own tool error) carries `isError: true` on the outer `tools/call` result; it was always `false`, with the failure only in the text | A client that read failure from the text alone keeps working; one that treated `isError: true` as a protocol failure should read the text and its `recovery` hint instead |
 | 150 | `mcp_gateway::cli::invoke::resolve_args` takes a fourth parameter, `kv_schema: Option<&Value>`: `key=value` text is typed by that input schema; `None` keeps the old behaviour | An embedder passes the tool's input schema, or `None` |
+| 151 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4010,6 +4011,28 @@ hint instead.
 gateway call coerces it (`count=007` against an integer is `7`, `flag=TRUE` against a boolean is
 `true`, `zip=007` against a string stays `"007"`); JSON from `--args` or stdin is left as
 written. `None` keeps the old behaviour. `mcp-gateway invoke` passes the tool's schema.
+
+## 151. `audit verify --anchor` checks the log against an off-host anchor
+
+**Startup:** no notice
+
+Nothing on the host proves an audit log once existed after its sealed segments
+and `.hwm` are deleted and the active file is cut to empty, or after the log is
+rolled back and `.hwm` rewritten to match. Keep a copy of `<log>.hwm` off the
+host and pass it to `mcp-gateway audit verify --anchor <file>`: the log must
+still hold the record the copy names, or verification fails, in live and
+archive mode.
+
+- An anchor that is missing, torn, unparseable or fails its MAC is refused
+  (exit 1), never ignored. An anchor written with a shared secret is refused
+  when no secret is configured.
+- An anchor inside a range that retention expired fails with "predates the
+  retained range": verify with a newer anchor.
+- `verify_audit_log` gains a fourth parameter, `anchor: Option<&Path>`.
+
+Independently, a log whose oldest surviving segment opens with a
+`prev_entry_hash` other than the `prev_segment_final_hash` it links to now
+fails verification. The gateway never writes such a log.
 
 ## Upgrading from 3.5.x: a walkthrough
 
