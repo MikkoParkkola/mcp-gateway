@@ -345,7 +345,7 @@ impl OAuthClient {
     /// Returns an error if any step of the OAuth authorization flow fails
     /// (callback server, client registration, browser auth, or code exchange).
     pub async fn authorize(&self) -> Result<String> {
-        self.authorize_until(&tokio_util::sync::CancellationToken::new())
+        self.authorize_until(&tokio_util::sync::CancellationToken::new(), None)
             .await
     }
 
@@ -391,14 +391,15 @@ impl OAuthClient {
             Begin::Refused => Err(Error::AuthorizationCancelled {
                 backend: self.backend_name().to_string(),
             }),
-            Begin::Lead(lead) => {
+            Begin::Lead(mut lead) => {
                 // A login that ended while this client was being built may
                 // already have stored a token: use it, open no second login.
                 if let Some(access) = self.adopt_stored_login() {
                     lead.end(None);
                     return Ok(access);
                 }
-                let result = self.authorize_until(lead.cancel_token()).await;
+                let listeners = lead.take_listeners_guard();
+                let result = self.authorize_until(lead.cancel_token(), listeners).await;
                 lead.end(result.as_ref().err());
                 result
             }
@@ -453,6 +454,7 @@ impl OAuthClient {
     pub(crate) async fn authorize_until(
         &self,
         cancel: &tokio_util::sync::CancellationToken,
+        listeners: Option<tokio_util::sync::DropGuard>,
     ) -> Result<String> {
         let auth_meta = self
             .auth_metadata
@@ -467,20 +469,32 @@ impl OAuthClient {
 
         // Start callback server FIRST to get the actual callback URL
         // This must happen BEFORE client registration so we know the port
-        let callback_server = callback::start_callback_server(
+        let mut callback_server = callback::start_callback_server(
             state.clone(),
             self.callback_host.as_deref(),
             self.callback_port,
             self.callback_path.as_deref(),
         )
         .await?;
+        if let Some(guard) = listeners {
+            callback_server.hold_until_closed(guard);
+        }
         let callback_url = callback_server.callback_url.clone();
+        let cancelled = || Error::AuthorizationCancelled {
+            backend: self.backend_name().to_string(),
+        };
 
-        // Now ensure we have a client ID, passing the actual callback URL for registration
-        let client_id = match self.ensure_client_id_with_redirect(&callback_url).await {
+        // Now ensure we have a client ID, passing the actual callback URL for
+        // registration. A cancel during registration ends it there: no
+        // browser opens, and the listener is closed before this returns.
+        let registered = tokio::select! {
+            registered = self.ensure_client_id_with_redirect(&callback_url) => registered,
+            () = cancel.cancelled() => Err(cancelled()),
+        };
+        let client_id = match registered {
             Ok(client_id) => client_id,
             Err(e) => {
-                callback_server.stop();
+                callback_server.stop().await;
                 return Err(e);
             }
         };

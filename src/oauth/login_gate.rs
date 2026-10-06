@@ -16,7 +16,7 @@ use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 use tokio::sync::watch;
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::Error;
 
@@ -81,6 +81,9 @@ impl Cohort {
 pub(crate) struct Attempt {
     cohort: Arc<Cohort>,
     cancel: CancellationToken,
+    /// Fired once this login's callback listeners have let go of their
+    /// sockets (or it never bound any).
+    closed: CancellationToken,
     /// `None` while running; then `Some(None)` on a token, or the outcome.
     finished: watch::Sender<Option<Option<LoginOutcome>>>,
 }
@@ -113,6 +116,9 @@ pub(crate) enum Begin {
 pub(crate) struct Lead {
     gate: Arc<LoginGate>,
     attempt: Arc<Attempt>,
+    /// Handed to the login's callback server, which drops it only once its
+    /// listeners have let go of their sockets.
+    listeners: Option<DropGuard>,
     ended: bool,
 }
 
@@ -120,6 +126,12 @@ impl Lead {
     /// The token that ends this login early.
     pub(crate) fn cancel_token(&self) -> &CancellationToken {
         &self.attempt.cancel
+    }
+
+    /// The guard the login's callback server holds until its listeners are
+    /// closed (taken once).
+    pub(crate) fn take_listeners_guard(&mut self) -> Option<DropGuard> {
+        self.listeners.take()
     }
 
     /// Record how this login ended: `None` on a token.
@@ -131,9 +143,24 @@ impl Lead {
 
 impl Drop for Lead {
     fn drop(&mut self) {
-        if !self.ended {
-            self.gate
-                .release(&self.attempt, None, Some(LoginOutcome::Cancelled));
+        if self.ended {
+            return;
+        }
+        // Abandoned mid-login: its dropped callback server aborts listeners
+        // that free their port only when next polled. The attempt stays
+        // registered until they have, so the next login can bind a fixed port.
+        drop(self.listeners.take());
+        let (gate, attempt) = (Arc::clone(&self.gate), Arc::clone(&self.attempt));
+        let release = move || gate.release(&attempt, None, Some(LoginOutcome::Cancelled));
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) if !self.attempt.closed.is_cancelled() => {
+                let closed = self.attempt.closed.clone();
+                runtime.spawn(async move {
+                    closed.cancelled().await;
+                    release();
+                });
+            }
+            _ => release(),
         }
     }
 }
@@ -193,11 +220,13 @@ impl LoginGate {
         let attempt = Arc::new(Attempt {
             cohort: Arc::clone(&state.cohort),
             cancel: CancellationToken::new(),
+            closed: CancellationToken::new(),
             finished: watch::Sender::new(None),
         });
         state.attempt = Some(Arc::clone(&attempt));
         Begin::Lead(Lead {
             gate: Arc::clone(self),
+            listeners: Some(attempt.closed.clone().drop_guard()),
             attempt,
             ended: false,
         })
@@ -447,5 +476,30 @@ mod tests {
         assert!(matches!(failed.to_error("b"), Error::OAuth(m) if m == "invalid_grant"));
         let refused = LoginOutcome::of(&Error::Protocol("ssrf".into()));
         assert!(matches!(refused.to_error("b"), Error::Protocol(m) if m == "ssrf"));
+    }
+
+    /// MIK-7982 (delta review): an abandoned lead whose callback listeners
+    /// are still closing keeps its attempt registered until they have, so
+    /// the next login cannot race them for a fixed callback port.
+    #[tokio::test]
+    async fn an_abandoned_lead_holds_the_gate_until_its_listeners_close() {
+        let gate = Arc::new(LoginGate::default());
+        let Begin::Lead(mut lead) = gate.begin(None) else {
+            panic!("no login in flight, so the first caller leads");
+        };
+        let listeners = lead.take_listeners_guard().expect("guard handed once");
+        drop(lead);
+        tokio::task::yield_now().await;
+        assert!(gate.in_flight(), "released while its listeners still ran");
+
+        drop(listeners);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while gate.in_flight() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("released once its listeners closed");
+        assert!(matches!(gate.begin(None), Begin::Lead(_)));
     }
 }

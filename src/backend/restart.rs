@@ -67,6 +67,9 @@ impl Backend {
         } else if self.login_gate.in_flight() {
             return Err(required());
         }
+        // Set out after this restart's own cancel, before it queues: a second
+        // restart that cancels while this one waits refuses this one's login.
+        let set_out = self.login_gate.epoch();
 
         let entry = self.shared_entry();
         let _guard = if interactive {
@@ -115,7 +118,9 @@ impl Backend {
         // is no window here in which a live transport can be left behind and
         // nothing to take back. A start that failed for THAT reason is not a
         // fault worth reporting as one.
-        match self.start_entry(&PoolKey::Shared, &entry).await {
+        match crate::oauth::login_gate::set_out(set_out, self.start_entry(&PoolKey::Shared, &entry))
+            .await
+        {
             Ok(transport) => {
                 // Same obligation as the cold start path: the era describes the
                 // process on the other end, and this one has just been

@@ -76,13 +76,21 @@ pub struct CallbackServer {
     receiver: oneshot::Receiver<Result<CallbackResult>>,
     /// Server task handles (one per bound address)
     server_handles: Vec<tokio::task::JoinHandle<Result<()>>>,
+    /// Dropped only once every listener has let go of its socket (MIK-7982).
+    closed: Option<tokio_util::sync::DropGuard>,
 }
 
 impl CallbackServer {
+    /// Hold `guard` until the listeners are closed, however this server ends.
+    pub(crate) fn hold_until_closed(&mut self, guard: tokio_util::sync::DropGuard) {
+        self.closed = Some(guard);
+    }
+
     /// Stop listening without waiting for a callback, for an authorization
-    /// abandoned before the browser was sent anywhere.
-    pub(crate) fn stop(self) {
-        drop(self);
+    /// abandoned before the browser was sent anywhere. Returns once the
+    /// listeners have let go of their sockets.
+    pub(crate) async fn stop(self) {
+        self.shutdown().await;
     }
 
     /// Wait for the callback to be received
@@ -150,6 +158,20 @@ impl Drop for CallbackServer {
     fn drop(&mut self) {
         for handle in &self.server_handles {
             handle.abort();
+        }
+        // An aborted listener frees its port only when next polled: the
+        // guard is dropped once each one has actually ended.
+        let handles = std::mem::take(&mut self.server_handles);
+        if let Some(guard) = self.closed.take()
+            && !handles.is_empty()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move {
+                for handle in handles {
+                    let _ = handle.await;
+                }
+                drop(guard);
+            });
         }
     }
 }
@@ -310,6 +332,7 @@ pub async fn start_callback_server(
         callback_url,
         receiver: rx,
         server_handles: handles,
+        closed: None,
     })
 }
 
@@ -515,7 +538,7 @@ pub(in crate::oauth) mod tests {
         assert!(server.callback_url.starts_with("http://localhost:"));
         assert!(server.callback_url.ends_with("/oauth/callback"));
         // Clean up
-        server.stop();
+        server.stop().await;
     }
 
     /// #2578: the redirect URI names the configured callback host, as
@@ -592,7 +615,7 @@ pub(in crate::oauth) mod tests {
             .await
             .unwrap();
         assert!(server.callback_url.starts_with("http://localhost:"));
-        server.stop();
+        server.stop().await;
     }
 
     #[tokio::test]
@@ -601,7 +624,7 @@ pub(in crate::oauth) mod tests {
             .await
             .unwrap();
         assert!(server.callback_url.ends_with("/auth/cb"));
-        server.stop();
+        server.stop().await;
     }
 
     // =========================================================================
