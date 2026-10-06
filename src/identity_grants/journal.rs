@@ -84,11 +84,18 @@ impl std::fmt::Display for ChangeError {
 
 /// The grant file's one identity, whatever spelling names it (MIK-7715): its
 /// real path, or, before the file exists, its real directory plus its name.
-/// A path that resolves neither way is returned as given.
+/// A symlink whose target does not exist yet resolves as that target, so the
+/// first change creates the target and keeps the link. A path that resolves
+/// none of these ways is returned as given.
 ///
 /// The journal and lock derive from this, so a CLI and a gateway that spell
 /// one grant file two ways (a symlink, relative against absolute) share them.
 fn resolved(grants: &Path) -> PathBuf {
+    resolved_within(grants, 8)
+}
+
+/// [`resolved`], following at most `hops` dangling links, so a link loop ends.
+fn resolved_within(grants: &Path, hops: u8) -> PathBuf {
     if let Ok(real) = std::fs::canonicalize(grants) {
         return real;
     }
@@ -96,6 +103,9 @@ fn resolved(grants: &Path) -> PathBuf {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
+    if let (Ok(target), Some(left)) = (std::fs::read_link(grants), hops.checked_sub(1)) {
+        return resolved_within(&parent.join(target), left);
+    }
     match (std::fs::canonicalize(parent), grants.file_name()) {
         (Ok(dir), Some(name)) => dir.join(name),
         _ => grants.to_path_buf(),
@@ -275,7 +285,7 @@ pub(crate) async fn apply_change_with(
     // (below); the grant file needs the same treatment on every change.
     #[cfg(unix)]
     {
-        let dir_path = grants.to_path_buf();
+        let dir_path = grants.clone();
         tokio::task::spawn_blocking(move || sync_dir(&dir_path))
             .await
             .map_err(|e| ChangeError::Unjournalled(e.to_string()))?

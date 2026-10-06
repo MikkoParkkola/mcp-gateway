@@ -506,3 +506,27 @@ fn sample_entry(entry_id: &str) -> JournalEntry {
         os_account: None,
     }
 }
+
+/// MIK-7715: the first change through a symlink whose target does not exist
+/// yet creates the target and keeps the link.
+// Unix-only: plants a file symlink, which Windows gates behind a privilege.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_first_change_through_a_dangling_symlink_keeps_the_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("grants.yaml");
+    let link = dir.path().join("link.yaml");
+    std::os::unix::fs::symlink("grants.yaml", &link).unwrap();
+
+    change(&link, upsert(row("g1", "r"), false)).await.unwrap();
+
+    let meta = std::fs::symlink_metadata(&link).unwrap();
+    assert!(
+        meta.file_type().is_symlink(),
+        "the link was replaced by a file"
+    );
+    assert!(real.is_file(), "the link's target was not created");
+    assert_eq!(journal_path(&link), journal_path(&real));
+    let ids: Vec<_> = entries(&real).into_iter().map(|e| e.grant_id).collect();
+    assert_eq!(ids, vec!["g1"]);
+}
