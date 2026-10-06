@@ -234,14 +234,73 @@ pub(crate) fn require_tls_for_credentials(url: &str) -> Result<()> {
     ))
 }
 
-/// [`require_tls_for_credentials`] when `auth` injects a credential (as a
-/// header, an account header, or the `auth.param` query parameter).
-pub(crate) fn require_tls_for_auth(url: &str, auth: &super::AuthConfig) -> Result<()> {
-    if auth.required {
+/// [`require_tls_for_credentials`] when the request carries a credential:
+/// `auth` injects one (as a header, an account header, or the `auth.param`
+/// query parameter), or one of `templates` fills in a gateway secret
+/// (`{env.X}`, `{keychain.X}`; MIK-7958). Checked before any secret is read.
+pub(crate) fn require_tls_for_auth<'a>(
+    url: &str,
+    auth: &super::AuthConfig,
+    templates: impl IntoIterator<Item = &'a str>,
+) -> Result<()> {
+    if auth.required || templates.into_iter().any(crate::secrets::names_secret) {
         require_tls_for_credentials(url)
     } else {
         Ok(())
     }
+}
+
+/// [`require_tls_for_auth`] for a REST request built from `config`.
+pub(crate) fn require_tls_for_rest(
+    url: &str,
+    auth: &super::AuthConfig,
+    config: &super::RestConfig,
+) -> Result<()> {
+    require_tls_for_auth(
+        url,
+        auth,
+        secret_templates(config).into_iter().map(|(_, t)| t),
+    )
+}
+
+/// Every template in `config` that the secret resolver fills, keyed by its
+/// field: header and query parameter values, and each string in the body.
+/// Sorted, so the field an error names is stable. The URL and path take
+/// caller parameters only, never a secret.
+pub(crate) fn secret_templates(config: &super::RestConfig) -> Vec<(String, &str)> {
+    fn body<'a>(value: &'a serde_json::Value, out: &mut Vec<(String, &'a str)>) {
+        match value {
+            serde_json::Value::String(s) => out.push(("body".to_string(), s)),
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    body(item, out);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for item in map.values() {
+                    body(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let headers = config
+        .headers
+        .iter()
+        .map(|(k, v)| (format!("headers.{k}"), v));
+    let params = config
+        .params
+        .iter()
+        .map(|(k, v)| (format!("params.{k}"), v));
+    let mut out: Vec<(String, &str)> = headers
+        .chain(params)
+        .map(|(field, template)| (field, template.as_str()))
+        .collect();
+    out.sort_unstable();
+    if let Some(value) = &config.body {
+        body(value, &mut out);
+    }
+    out
 }
 
 fn url_targets_loopback_ip(url: &str) -> bool {
