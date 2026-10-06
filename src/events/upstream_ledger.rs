@@ -12,7 +12,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
+use parking_lot::Mutex;
+use tracing::warn;
+
 use super::{Full, MAX_URI_BUDGET_BYTES, MAX_URIS, encoded};
+use crate::Error;
+use crate::backend::Backend;
 
 /// Whether the current holder has our subscription for a URI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +75,8 @@ pub(crate) struct Ledger {
     unplaced: BTreeSet<String>,
     /// Identity of the holder the current generation stands for.
     holder: Option<u64>,
+    /// The cap-held-by-stranded-keys warning was logged.
+    warned: bool,
 }
 
 impl Ledger {
@@ -290,10 +297,73 @@ impl Ledger {
         !self.releasable().is_empty() || self.keys.values().any(|e| e.in_flight > 0)
     }
 
+    /// Whether a capacity refusal should be logged: once per ledger, and
+    /// only while stranded keys hold room.
+    pub(crate) fn warn_cap(&mut self) -> bool {
+        self.size().2 > 0 && !std::mem::replace(&mut self.warned, true)
+    }
+
     /// Wanted URIs that have no key on the current holder (shown, retried).
     pub(crate) fn unplaced(&self) -> usize {
         self.unplaced.len()
     }
+}
+
+/// A call between [`Ledger::sent`] and its answer. Dropped unanswered (a
+/// stop or a pass deadline cut it), the call is uncertain.
+struct InFlight<'a> {
+    ledger: &'a Mutex<Ledger>,
+    call: Option<Call>,
+}
+
+impl InFlight<'_> {
+    fn end(mut self, outcome: Outcome) -> bool {
+        self.call
+            .take()
+            .is_some_and(|call| self.ledger.lock().answered(&call, outcome, Instant::now()))
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        if let Some(call) = self.call.take() {
+            self.ledger
+                .lock()
+                .answered(&call, Outcome::Uncertain, Instant::now());
+        }
+    }
+}
+
+/// Send one due call and record how it ended. `false` when the peer has no
+/// resource interest (`-32601`).
+pub(crate) async fn drive(
+    ledger: &Mutex<Ledger>,
+    backend: &Backend,
+    uri: &str,
+    subscribe: bool,
+    limit: Duration,
+) -> bool {
+    let Some(call) = ledger.lock().sent(uri, subscribe) else {
+        return true;
+    };
+    let in_flight = InFlight {
+        ledger,
+        call: Some(call),
+    };
+    let result =
+        tokio::time::timeout(limit, backend.legacy_resource_interest(uri, subscribe)).await;
+    let outcome = match &result {
+        Ok(Ok(true)) => Outcome::Done,
+        Ok(Ok(false) | Err(Error::JsonRpc { .. } | Error::JsonRpcRetryable { .. })) => {
+            Outcome::Refused
+        }
+        Ok(Err(e)) if e.is_pre_dispatch() => Outcome::NotSent,
+        Ok(Err(_)) | Err(_) => Outcome::Uncertain,
+    };
+    if in_flight.end(outcome) {
+        warn!(backend = %backend.name, "upstream listener: unsubscribe refused three times");
+    }
+    !matches!(result, Ok(Ok(false)))
 }
 
 /// The call a key is due for, ignoring timing: `Some(true)` subscribe,

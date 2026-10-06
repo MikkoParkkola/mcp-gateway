@@ -243,6 +243,32 @@ struct Listen {
     first: bool,
 }
 
+/// Which legacy `resources/updated` URIs the session still watches (D5):
+/// an update for any other is ignored before it can take a tap slot, so a
+/// subscription that outlived its watcher never displaces a wanted notice.
+#[derive(Clone, Default)]
+pub(crate) struct Watched(Option<std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>>);
+
+impl Watched {
+    pub(crate) fn by(admits: impl Fn(&str) -> bool + Send + Sync + 'static) -> Self {
+        Self(Some(std::sync::Arc::new(admits)))
+    }
+
+    /// Whether `note` may be delivered; every note but a URI update may.
+    pub(crate) fn admits(&self, note: &UpstreamNote) -> bool {
+        match (note, &self.0) {
+            (
+                UpstreamNote::Notice {
+                    kind: NoteKind::ResourceUpdated,
+                    uri: Some(uri),
+                },
+                Some(admits),
+            ) => admits(uri),
+            _ => true,
+        }
+    }
+}
+
 /// The reader loop's routing table for upstream notes (design §4). Every
 /// send is `try_send`: the reader is the only reader of the peer's output
 /// and must never park; a full channel drops and counts.
@@ -250,7 +276,7 @@ struct Listen {
 pub(crate) struct Taps {
     /// Listens by the canonical text of their JSON-RPC id.
     listens: parking_lot::Mutex<std::collections::HashMap<String, Listen>>,
-    unsolicited: parking_lot::Mutex<Option<tokio::sync::mpsc::Sender<UpstreamNote>>>,
+    unsolicited: parking_lot::Mutex<Option<(tokio::sync::mpsc::Sender<UpstreamNote>, Watched)>>,
     /// Frames dropped: full tap, untagged, or oversize.
     pub drops: std::sync::atomic::AtomicU64,
 }
@@ -279,10 +305,14 @@ impl Taps {
         self.listens.lock().remove(&id.to_string());
     }
 
-    /// Route the legacy peer's out-of-request notifications to a receiver.
-    pub(crate) fn unsolicited(&self) -> tokio::sync::mpsc::Receiver<UpstreamNote> {
+    /// Route the legacy peer's out-of-request notifications that `watched`
+    /// admits to a receiver.
+    pub(crate) fn unsolicited(
+        &self,
+        watched: Watched,
+    ) -> tokio::sync::mpsc::Receiver<UpstreamNote> {
         let (tx, rx) = tokio::sync::mpsc::channel(TAP_CAPACITY);
-        *self.unsolicited.lock() = Some(tx);
+        *self.unsolicited.lock() = Some((tx, watched));
         rx
     }
 
@@ -319,12 +349,12 @@ impl Taps {
             }
         }
         let guard = self.unsolicited.lock();
-        let Some(tx) = guard.as_ref() else {
+        let Some((tx, watched)) = guard.as_ref() else {
             return false;
         };
         match project(method, params, None) {
             Ok(note) => {
-                if tx.try_send(note).is_err() {
+                if watched.admits(&note) && tx.try_send(note).is_err() {
                     self.drop_one();
                 }
                 true
@@ -429,13 +459,23 @@ pub(crate) trait UpstreamListen: Send + Sync {
     ) -> Result<FrameStream, Refused>;
 
     /// The legacy peer's out-of-request notifications.
-    async fn unsolicited(self: std::sync::Arc<Self>) -> Result<FrameStream, Refused>;
+    async fn unsolicited(
+        self: std::sync::Arc<Self>,
+        watched: Watched,
+    ) -> Result<FrameStream, Refused>;
 
     /// The HTTP transport this connection detected, read live: `Some(true)`
     /// for Streamable HTTP, `Some(false)` for the SSE handshake, `None`
     /// before it is known and for every other transport (MIK-7969).
     fn detected_streamable(&self) -> Option<bool> {
         None
+    }
+
+    /// Names the peer-side holder of legacy `resources/subscribe` state
+    /// beyond this transport instance (an HTTP session); `0` when the
+    /// instance is the holder.
+    fn holder(&self) -> u64 {
+        0
     }
 }
 

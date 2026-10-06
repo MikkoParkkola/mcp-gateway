@@ -56,6 +56,12 @@ impl Shared {
     pub(super) fn is_ineligible(&self) -> bool {
         (self.ineligible)().contains(&self.name)
     }
+
+    /// Nothing is watched and no pass can release anything more: the task
+    /// ends (D5 cleanup outlives interest only while it has work).
+    pub(super) fn is_idle(&self) -> bool {
+        self.need.lock().is_empty() && !self.ledger.lock().needs_cleanup()
+    }
 }
 
 /// An ended entry for `backend` (its task stopped, or never started, while the
@@ -187,9 +193,22 @@ impl UpstreamListeners {
             Ok(true) => shared.wake.send_modify(|n| *n += 1),
             Ok(false) => {}
             Err(full) => {
+                let mut ledger = shared.ledger.lock();
+                if ledger.warn_cap() {
+                    let ((keys, bytes, stranded), unplaced) = (ledger.size(), ledger.unplaced());
+                    tracing::warn!(
+                        backend,
+                        keys,
+                        bytes,
+                        stranded,
+                        unplaced,
+                        "upstream listener: URI cap held by stranded keys until config removal or restart"
+                    );
+                }
+                drop(ledger);
                 // A refusal for capacity keeps an idle task running while
                 // its passes can still release keys (D5 cleanup).
-                if idle(&shared) {
+                if shared.is_idle() {
                     shared.stop.cancel();
                     map.remove(backend);
                 } else {
@@ -265,7 +284,7 @@ impl UpstreamListeners {
             }
             changed
         };
-        if idle(&shared) {
+        if shared.is_idle() {
             shared.stop.cancel();
             map.remove(backend);
         } else if changed {
@@ -400,11 +419,6 @@ fn admit(shared: &Shared, interest: &Interest) -> Result<bool, Full> {
         shared.ledger.lock().unwant(uri);
     }
     outcome
-}
-
-/// Nothing is watched and no pass can release anything more: the task ends.
-fn idle(shared: &Shared) -> bool {
-    shared.need.lock().is_empty() && !shared.ledger.lock().needs_cleanup()
 }
 
 #[cfg(test)]

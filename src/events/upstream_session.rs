@@ -4,7 +4,6 @@
 //! §3, §5, §8, §9): open the era's channel, keep it matching the counted
 //! interest, coalesce what arrives, and emit through the hub only.
 
-use std::collections::BTreeSet;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
@@ -17,11 +16,12 @@ use super::fanout::SourceEvent;
 use super::types::{SourceKind, Visibility};
 use super::upstream::Kind;
 use super::upstream_listener::Shared;
+use super::upstream_need::ledger::drive;
 use super::upstream_need::{Coalescer, Verdict, WINDOW};
 use crate::backend::{Backend, BackendRegistry};
 use crate::protocol::era::Era;
 use crate::transport::upstream_tap::{
-    FrameStream, KindSet, NoteKind, Refused, Requested, UpstreamListen, UpstreamNote,
+    FrameStream, KindSet, NoteKind, Refused, Requested, UpstreamListen, UpstreamNote, Watched,
 };
 
 /// How often the loop looks at timers; also bounds coalescing latency.
@@ -29,6 +29,8 @@ const TICK: Duration = Duration::from_millis(250);
 /// A modern listen must be acknowledged within this (§3).
 /// Opening a channel may not outlast this.
 const OPEN_LIMIT: Duration = Duration::from_secs(30);
+/// The legacy unsubscribe walk on stop may not outlast this (D5).
+const RELEASE_LIMIT: Duration = Duration::from_secs(5);
 /// A modern listen must be acknowledged within this (§3).
 const ACK_DEADLINE: Duration = Duration::from_secs(10);
 /// The catalogue is re-read one backend cache TTL after each read (§7,
@@ -201,7 +203,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
     let first = requested(shared);
     let opened = tokio::select! {
         () = shared.stop.cancelled() => return Outcome::Stopped,
-        opened = tokio::time::timeout(OPEN_LIMIT, open(&target.handle, modern, first.clone())) => {
+        opened = tokio::time::timeout(OPEN_LIMIT, open(&target.handle, modern, first.clone(), watched_by(shared))) => {
             opened.unwrap_or(Err(Refused::Expired))
         }
     };
@@ -217,7 +219,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             return failed();
         }
     }
-    state.sync_legacy(backend).await;
+    state.sync_legacy(backend, &target.handle).await;
     let mut tick = tokio::time::interval(TICK);
     let mut wake = shared.wake.subscribe();
     // The tools refill a notice starts. Polled as one arm of the loop's select,
@@ -271,6 +273,10 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             state.release(backend).await;
             return Outcome::Stopped;
         }
+        if shared.is_idle() {
+            // Kept only to release keys (D5 cleanup), and nothing is left.
+            shared.stop.cancel();
+        }
         let tick = on_tick(backend.connected_streamable(), || shared.is_ineligible());
         if (state.flush(hub) || tick == OnTick::EndIneligible) && end_ineligible(shared, hub).await
         {
@@ -278,6 +284,26 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             return Outcome::Stopped;
         }
     }
+}
+
+/// The legacy URI filter of `shared`'s need, read at each update (D5).
+fn watched_by(shared: &Arc<Shared>) -> Watched {
+    let shared = Arc::downgrade(shared);
+    Watched::by(move |uri| {
+        shared
+            .upgrade()
+            .is_some_and(|s| s.need.lock().emits(NoteKind::ResourceUpdated, Some(uri)))
+    })
+}
+
+/// Who holds what this session asks a legacy peer for: the transport
+/// instance and, on HTTP, its session (D5 holder generation).
+fn holder_of(handle: &Weak<dyn UpstreamListen>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    Weak::as_ptr(handle).cast::<()>().hash(&mut hasher);
+    handle.upgrade().map(|t| t.holder()).hash(&mut hasher);
+    hasher.finish()
 }
 
 /// What a tick does about the backend's live transport (MIK-7969 H2).
@@ -417,6 +443,7 @@ async fn open(
     handle: &Weak<dyn UpstreamListen>,
     modern: bool,
     requested: Requested,
+    watched: Watched,
 ) -> Result<FrameStream, Refused> {
     let Some(transport) = handle.upgrade() else {
         return Err(Refused::Failed(crate::Error::Transport(
@@ -426,7 +453,7 @@ async fn open(
     if modern {
         transport.listen(requested).await
     } else {
-        transport.unsolicited().await
+        transport.unsolicited(watched).await
     }
 }
 
@@ -452,8 +479,6 @@ struct State<'a> {
     unsupported: bool,
     opened: Instant,
     coalescer: Coalescer,
-    /// Legacy: the URIs `resources/subscribe` was sent for.
-    subscribed: BTreeSet<String>,
     resource_interest_unsupported: bool,
     reread: bool,
     /// A backend tools notice waits to be handed to the hub (§14).
@@ -480,7 +505,6 @@ impl<'a> State<'a> {
             unsupported: false,
             opened: now,
             coalescer: Coalescer::default(),
-            subscribed: BTreeSet::new(),
             resource_interest_unsupported: false,
             reread: false,
             tools_pending: false,
@@ -676,9 +700,12 @@ impl<'a> State<'a> {
             let want = requested(self.shared);
             let have = self.current.as_ref().map(|(_, r)| r.clone());
             if self.pending.is_none() && have.as_ref() != Some(&want) && now >= self.retry_open_at {
-                let opened = tokio::time::timeout(OPEN_LIMIT, open(handle, true, want.clone()))
-                    .await
-                    .unwrap_or(Err(Refused::Expired));
+                let opened = tokio::time::timeout(
+                    OPEN_LIMIT,
+                    open(handle, true, want.clone(), Watched::default()),
+                )
+                .await
+                .unwrap_or(Err(Refused::Expired));
                 match opened {
                     Ok(stream) => {
                         self.pending = Some(Pending {
@@ -691,7 +718,7 @@ impl<'a> State<'a> {
                 }
             }
         } else {
-            self.sync_legacy(backend).await;
+            self.sync_legacy(backend, handle).await;
         }
         let watching = !requested(self.shared).uris.is_empty();
         let unread = watching && !self.shared.snapshot.lock().is_known();
@@ -701,44 +728,47 @@ impl<'a> State<'a> {
         }
     }
 
-    /// Legacy: one `resources/subscribe` or `unsubscribe` per URI change.
-    async fn sync_legacy(&mut self, backend: &Backend) {
+    /// Legacy: send the calls the backend's ledger has due (D5), one per
+    /// URI, the whole pass bounded by `OPEN_LIMIT`; a URI the deadline cut
+    /// is uncertain and the rest wait for the next pass.
+    async fn sync_legacy(&mut self, backend: &Backend, handle: &Weak<dyn UpstreamListen>) {
         if self.era == Era::Modern || self.resource_interest_unsupported {
             return;
         }
-        let want: BTreeSet<String> = requested(self.shared).uris.into_iter().collect();
-        for uri in want.difference(&self.subscribed.clone()) {
-            match backend.legacy_resource_interest(uri, true).await {
-                Ok(true) => {
-                    self.subscribed.insert(uri.clone());
+        let ledger = Arc::clone(&self.shared.ledger);
+        ledger.lock().observe(holder_of(handle));
+        let due = ledger.lock().due(Instant::now());
+        let pass = async {
+            for (uri, subscribe) in due {
+                if !drive(&ledger, backend, &uri, subscribe, OPEN_LIMIT).await {
+                    return false;
                 }
-                Ok(false) => {
-                    self.resource_interest_unsupported = true;
-                    return;
-                }
-                Err(_) => return,
             }
-        }
-        for uri in self.subscribed.clone().difference(&want) {
-            if backend.legacy_resource_interest(uri, false).await.is_ok() {
-                self.subscribed.remove(uri);
-            }
+            true
+        };
+        if !tokio::time::timeout(OPEN_LIMIT, pass).await.unwrap_or(true) {
+            self.resource_interest_unsupported = true;
         }
     }
 
     /// Best effort on stop: a legacy peer keeps `resources/subscribe` state
-    /// until told otherwise, so release what this connection subscribed.
+    /// until told otherwise, so unsubscribe every key an answer can still
+    /// release, in order, all within `RELEASE_LIMIT`. Keys not reached stay
+    /// charged; a later task's passes reconcile them.
     async fn release(&mut self, backend: &Backend) {
         if self.era == Era::Modern {
             return;
         }
-        for uri in std::mem::take(&mut self.subscribed) {
-            let _ = tokio::time::timeout(
-                Duration::from_secs(3),
-                backend.legacy_resource_interest(&uri, false),
-            )
-            .await;
-        }
+        let ledger = Arc::clone(&self.shared.ledger);
+        let uris = ledger.lock().releasable();
+        let walk = async {
+            for uri in uris {
+                if !drive(&ledger, backend, &uri, false, OPEN_LIMIT).await {
+                    return;
+                }
+            }
+        };
+        let _ = tokio::time::timeout(RELEASE_LIMIT, walk).await;
     }
 
     /// Emit the coalescing windows that closed (§8), through the hub only.

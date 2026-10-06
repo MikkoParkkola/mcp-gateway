@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use super::WebSocketTransport;
-use crate::transport::upstream_tap::{FrameStream, Refused, Requested, UpstreamListen};
+use crate::transport::upstream_tap::{FrameStream, Refused, Requested, UpstreamListen, Watched};
 
 #[async_trait::async_trait]
 impl UpstreamListen for WebSocketTransport {
@@ -15,7 +15,7 @@ impl UpstreamListen for WebSocketTransport {
         Err(Refused::Unsupported)
     }
 
-    async fn unsolicited(self: Arc<Self>) -> Result<FrameStream, Refused> {
-        Ok(FrameStream::new(self.inner.taps.unsolicited()))
+    async fn unsolicited(self: Arc<Self>, watched: Watched) -> Result<FrameStream, Refused> {
+        Ok(FrameStream::new(self.inner.taps.unsolicited(watched)))
     }
 }

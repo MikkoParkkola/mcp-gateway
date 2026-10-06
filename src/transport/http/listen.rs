@@ -21,7 +21,7 @@ use super::{HeaderMode, HttpTransport, finalise_modern_headers, with_modern_meta
 use crate::protocol::{JsonRpcMessage, RequestId};
 use crate::security::http_diagnostics::safe_request_error;
 use crate::transport::upstream_tap::{
-    Dropped, FrameStream, Refused, Requested, TAP_CAPACITY, UpstreamListen, UpstreamNote,
+    Dropped, FrameStream, Refused, Requested, TAP_CAPACITY, UpstreamListen, UpstreamNote, Watched,
     classify_response, listen_filter, project, project_listen,
 };
 use crate::{Error, Result};
@@ -115,6 +115,7 @@ impl HttpTransport {
     /// The request could not be built or sent.
     pub(crate) async fn open_session_stream(
         &self,
+        watched: Watched,
     ) -> Result<std::result::Result<mpsc::Receiver<UpstreamNote>, u16>> {
         let headers = self
             .build_mcp_headers(HeaderMode::SessionStream, None)
@@ -142,6 +143,7 @@ impl HttpTransport {
                     };
                     for event in events {
                         if let Some(note) = unsolicited_frame(&event.data)
+                            && watched.admits(&note)
                             && tx.send(note).await.is_err()
                         {
                             return;
@@ -172,6 +174,18 @@ impl HttpTransport {
 
 #[async_trait::async_trait]
 impl UpstreamListen for HttpTransport {
+    /// A hash of the shared-bucket session id: the peer keeps subscription
+    /// state per session, and the id itself (replayable) is not copied out.
+    fn holder(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.sessions
+            .read()
+            .get(Self::bucket_key(None))
+            .hash(&mut hasher);
+        hasher.finish()
+    }
+
     async fn listen(
         self: std::sync::Arc<Self>,
         requested: Requested,
@@ -180,8 +194,11 @@ impl UpstreamListen for HttpTransport {
         refused_as("listen", opened.map(FrameStream::new))
     }
 
-    async fn unsolicited(self: std::sync::Arc<Self>) -> std::result::Result<FrameStream, Refused> {
-        let opened = self.open_session_stream().await?;
+    async fn unsolicited(
+        self: std::sync::Arc<Self>,
+        watched: Watched,
+    ) -> std::result::Result<FrameStream, Refused> {
+        let opened = self.open_session_stream(watched).await?;
         refused_as("session stream", opened.map(FrameStream::new))
     }
 
@@ -398,7 +415,7 @@ mod tests {
             .await
             .expect_err("nothing listens on port 1");
         let session = transport
-            .open_session_stream()
+            .open_session_stream(Watched::default())
             .await
             .expect_err("nothing listens on port 1");
         for error in [listen.to_string(), session.to_string()] {
