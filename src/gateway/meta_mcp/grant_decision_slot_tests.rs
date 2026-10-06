@@ -283,3 +283,48 @@ fn stalled_log_bounds_the_decision_write() {
         "the slot-close decision write took the bounded path and was refused under the stall"
     );
 }
+
+/// MIK-7663.GH2409.3. A failed decision write replaces an HTTP answer with
+/// -32005 under the id the request recorded in its slot, so the replaced
+/// answer is never read back, however large; with no id recorded the
+/// refusal carries a null id, even when the answer names one.
+#[tokio::test]
+async fn http_refusal_carries_the_recorded_id_without_reading_the_answer() {
+    const PAST_ANY_READ: usize = 16 * 1024 * 1024 + 1;
+    for (recorded, padding, expected_id) in [
+        (Some(RequestId::Number(7)), PAST_ANY_READ, json!(7)),
+        (None, 16, Value::Null),
+    ] {
+        let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+        let log = logger(&dir, AuditFailurePolicy::FailClosed);
+        let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
+            .with_identity_grants(grants(vec![grant("g1", ALICE, ALICE)]));
+        meta.enable_transparency_log(Arc::clone(&log));
+        meta.set_capabilities(capability_backend(endpoint.port, ALICE));
+        log.fail_next_append_of_kind_for_test(super::grant_audit_fixture::DECISION_KIND);
+        let who = api_key("alice");
+        let answer = json!({ "jsonrpc": "2.0", "id": 7, "result": { "pad": "x".repeat(padding) } });
+
+        let response = super::grant_audit::slot_http(Some(Arc::clone(&log)), async {
+            super::grant_audit::note_answer_id(recorded.as_ref());
+            meta.check_invocation_policy(&invoke_args(), Some("d3a-session"), &context(&who))
+                .expect("alice holds the grant");
+            axum::Json(answer)
+        })
+        .await;
+
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let refusal: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(refusal["error"]["code"], json!(-32005), "{refusal}");
+        assert_eq!(
+            refusal["id"], expected_id,
+            "recorded {recorded:?}: {refusal}"
+        );
+    }
+}

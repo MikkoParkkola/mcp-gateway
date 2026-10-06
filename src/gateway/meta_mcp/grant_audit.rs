@@ -39,11 +39,17 @@ use crate::{Error, Result};
 /// The record kind a grant decision is written as.
 const DECISION_KIND: &str = "identity_grant_decision";
 
-type Notes = Arc<Mutex<Vec<GrantNote>>>;
+/// An open slot: its notes, and the request id an HTTP answer is refused
+/// under when their write fails (MIK-7663.GH2409.3).
+#[derive(Default)]
+struct Slot {
+    notes: Mutex<Vec<GrantNote>>,
+    answer_id: std::sync::OnceLock<RequestId>,
+}
 
 tokio::task_local! {
     /// The open slot's notes, owned by the outermost opener.
-    static GRANT_SLOT: Notes;
+    static GRANT_SLOT: Arc<Slot>;
     /// Set while a finished task's stored delivery is re-checked: the
     /// suppression store and the task-and-caller half of the repeat key.
     static REPEAT_SCOPE: (Arc<DecisionDedupe>, String);
@@ -202,7 +208,14 @@ impl GrantNote {
     }
 
     fn envelope(&self) -> AuditEnvelope {
-        let who = AuditWho::from_subject(self.subject.as_deref().unwrap_or("anonymous"));
+        let mut who = AuditWho::from_subject(self.subject.as_deref().unwrap_or("anonymous"));
+        // `who` names the same (authority, subject) pair the domain
+        // `subject` field records, not the subject alone.
+        who.authority = self
+            .fields
+            .get("subject")
+            .and_then(|subject| subject["authority"].as_str())
+            .map(str::to_string);
         AuditEnvelope {
             trace_id: self.trace_id.clone(),
             otel_trace_id: None,
@@ -235,13 +248,13 @@ pub(super) fn select_records(notes: &[GrantNote]) -> Vec<&GrantNote> {
 /// Owns a slot's notes: whatever is still pending when it drops (a cancelled
 /// call) is written on a spawned task through the bounded append.
 struct SlotGuard {
-    notes: Notes,
+    slot: Arc<Slot>,
     logger: Arc<TransparencyLogger>,
 }
 
 impl Drop for SlotGuard {
     fn drop(&mut self) {
-        let pending = std::mem::take(&mut *self.notes.lock().expect("grant slot lock"));
+        let pending = std::mem::take(&mut *self.slot.notes.lock().expect("grant slot lock"));
         if !pending.is_empty() {
             spawn_write(&self.logger, pending);
         }
@@ -325,28 +338,37 @@ async fn write_records(
 /// Run `future` inside a grant-decision slot, or inside the one already open.
 /// The outermost opener writes the selected notes before returning; the
 /// second value is that write's verdict: `AuditUnavailable` under
-/// `FailClosed` when it failed.
+/// `FailClosed` when it failed. The third is the id the call recorded with
+/// [`note_answer_id`], if any.
 pub(super) async fn with_grant_slot<F: Future>(
     logger: Option<&Arc<TransparencyLogger>>,
     future: F,
-) -> (F::Output, Result<()>) {
+) -> (F::Output, Result<()>, Option<RequestId>) {
     let Some(logger) = logger else {
-        return (future.await, Ok(()));
+        return (future.await, Ok(()), None);
     };
     if GRANT_SLOT.try_with(|_| ()).is_ok() {
-        return (future.await, Ok(()));
+        return (future.await, Ok(()), None);
     }
     #[cfg(test)]
     BOOKKEEPING.with(|b| b.borrow_mut().slots_opened += 1);
     let guard = SlotGuard {
-        notes: Arc::default(),
+        slot: Arc::default(),
         logger: Arc::clone(logger),
     };
-    let output = GRANT_SLOT.scope(Arc::clone(&guard.notes), future).await;
-    let notes = std::mem::take(&mut *guard.notes.lock().expect("grant slot lock"));
+    let output = GRANT_SLOT.scope(Arc::clone(&guard.slot), future).await;
+    let notes = std::mem::take(&mut *guard.slot.notes.lock().expect("grant slot lock"));
+    let answer_id = guard.slot.answer_id.get().cloned();
+    // A slot that collected no decision has nothing to write, so no flush
+    // task: every `/mcp` request opens a slot, and most decide nothing.
+    if notes.is_empty() {
+        return (output, Ok(()), answer_id);
+    }
     // The batch is owned by its own task, so a caller cancelled while the
     // flush waits cannot drop records that were never submitted.
     let writer = Arc::clone(logger);
+    #[cfg(test)]
+    BOOKKEEPING.with(|b| b.borrow_mut().flushes_spawned += 1);
     let flush = tokio::spawn(async move { write_records(&writer, &notes).await });
     let written = flush
         .await
@@ -358,7 +380,7 @@ pub(super) async fn with_grant_slot<F: Future>(
             AuditFailurePolicy::BestEffort => Ok(()),
         }
     });
-    (output, written)
+    (output, written, answer_id)
 }
 
 /// Note `event` for `(server, tool)` into the open slot. Outside every slot
@@ -391,7 +413,12 @@ pub(super) fn note_grant_decision(
     #[cfg(test)]
     BOOKKEEPING.with(|b| b.borrow_mut().notes_taken += 1);
     let unslotted = GRANT_SLOT
-        .try_with(|notes| notes.lock().expect("grant slot lock").push(note.clone()))
+        .try_with(|slot| {
+            slot.notes
+                .lock()
+                .expect("grant slot lock")
+                .push(note.clone());
+        })
         .is_err();
     if !unslotted {
         return Ok(());
@@ -416,8 +443,8 @@ pub(super) fn stamp_prepared(server: &str, tool: &str) {
     let Some(trace) = crate::gateway::trace::current() else {
         return;
     };
-    let _ = GRANT_SLOT.try_with(|notes| {
-        let mut notes = notes.lock().expect("grant slot lock");
+    let _ = GRANT_SLOT.try_with(|slot| {
+        let mut notes = slot.notes.lock().expect("grant slot lock");
         if let Some(note) = notes
             .iter_mut()
             .rev()
@@ -433,7 +460,7 @@ pub(crate) async fn slot_result<T>(
     logger: Option<&Arc<TransparencyLogger>>,
     future: impl Future<Output = Result<T>>,
 ) -> Result<T> {
-    let (output, written) = with_grant_slot(logger, future).await;
+    let (output, written, _) = with_grant_slot(logger, future).await;
     written.and(output)
 }
 
@@ -447,11 +474,20 @@ pub(crate) async fn slot_rpc<'a, X: Send + 'a>(
     // Erased, so an opener's future type stays shallow (E0275 at the stdio spawn).
     let future: Pin<Box<dyn Future<Output = (JsonRpcResponse, X)> + Send + 'a>> = Box::pin(future);
     match with_grant_slot(logger, future).await {
-        ((response, extra), Ok(())) => (response, extra),
-        ((_, extra), Err(error)) => (
+        ((response, extra), Ok(()), _) => (response, extra),
+        ((_, extra), Err(error), _) => (
             JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string()),
             extra,
         ),
+    }
+}
+
+/// Record the id a failed slot write refuses this HTTP answer under, so
+/// `slot_http` never reads the answer back. The first id recorded in the
+/// open slot wins; with no slot open (no log) nothing is kept or cloned.
+pub(crate) fn note_answer_id(id: Option<&RequestId>) {
+    if let Some(id) = id {
+        let _ = GRANT_SLOT.try_with(|slot| slot.answer_id.set(id.clone()));
     }
 }
 
@@ -462,7 +498,7 @@ pub(crate) async fn slot_http<'a, R: axum::response::IntoResponse + Send + 'a>(
     future: impl Future<Output = R> + Send + 'a,
 ) -> axum::response::Response {
     let future: Pin<Box<dyn Future<Output = R> + Send + 'a>> = Box::pin(future);
-    let (response, written) = with_grant_slot(logger.as_ref(), future).await;
+    let (response, written, answer_id) = with_grant_slot(logger.as_ref(), future).await;
     let Err(error) = written else {
         return response.into_response();
     };
@@ -477,12 +513,9 @@ pub(crate) async fn slot_http<'a, R: axum::response::IntoResponse + Send + 'a>(
     let (id, judged) = if let Some(id) = held {
         (id, Some(response))
     } else {
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await;
-        let id = body
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-            .and_then(|answer| serde_json::from_value::<RequestId>(answer["id"].clone()).ok());
-        (id, None)
+        // The id the route recorded when it parsed the request: the answer
+        // is dropped unread, whatever its size (MIK-7663.GH2409.3).
+        (answer_id, None)
     };
     let body = JsonRpcResponse::error(id, error.to_rpc_code(), error.to_string());
     let mut replacement = (
@@ -580,12 +613,14 @@ pub(super) fn allow_unslotted_check_for_test() -> UnslottedCheckAllowed {
     UnslottedCheckAllowed
 }
 
-/// Test-only: slots opened and notes taken on this thread.
+/// Test-only: slots opened, notes taken and flush tasks spawned on this
+/// thread.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct GrantBookkeeping {
     pub(super) slots_opened: usize,
     pub(super) notes_taken: usize,
+    pub(super) flushes_spawned: usize,
 }
 
 #[cfg(test)]
