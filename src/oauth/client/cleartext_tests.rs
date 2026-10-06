@@ -331,12 +331,12 @@ async fn client_for_refuses_cleartext_and_never_proxies_loopback() {
 
     let tls = client.client_for("https://auth.example/token").unwrap();
     assert!(
-        std::ptr::eq(tls, &client.http_client),
+        std::ptr::eq(tls, &raw const client.http_client),
         "https uses the configured client"
     );
     let loopback = client.client_for("http://127.0.0.1:9/token").unwrap();
     assert!(
-        !std::ptr::eq(loopback, &client.http_client),
+        !std::ptr::eq(loopback, &raw const client.http_client),
         "loopback http must not take the proxied client"
     );
 
