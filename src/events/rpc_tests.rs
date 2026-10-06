@@ -306,15 +306,13 @@ async fn the_commit_admits_only_a_detected_or_unneeded_transport() {
         Some(-32011),
         "no source offers it"
     );
-    let source = {
-        use super::super::EventSource as _;
-        hub.sources
-            .read()
-            .iter()
-            .find(|s| s.kind() == super::super::types::SourceKind::BackendNotification)
-            .cloned()
-            .expect("upstream source")
-    };
+    let source = hub
+        .sources
+        .read()
+        .iter()
+        .find(|s| s.kind() == super::super::types::SourceKind::BackendNotification)
+        .cloned()
+        .expect("upstream source");
     let first = |name: &'static str| {
         let source = Arc::clone(&source);
         async move { source.on_first_subscriber("k", "p", name, &json!({})).await }
