@@ -142,6 +142,10 @@ impl Backend {
     pub(super) async fn ensure_entry_started(&self, key: &PoolKey) -> Result<Arc<dyn Transport>> {
         const MAX_RACE_RETRIES: u8 = 3;
 
+        // MIK-7982 C1: the login this caller would wait behind, captured
+        // before it queues on the start lock.
+        let cohort = self.login_gate.cohort();
+
         for _attempt in 0..MAX_RACE_RETRIES {
             let entry = self.pooled_entry(key)?;
             // NOTE: deliberately does NOT touch the idle clocks. `last_used` means
@@ -170,6 +174,12 @@ impl Backend {
                 {
                     return Ok(Arc::clone(t));
                 }
+            }
+
+            // The login this caller queued behind ended without a token: it
+            // shares that end rather than opening a login of its own.
+            if let Some(outcome) = cohort.outcome() {
+                return Err(outcome.to_error(&self.name));
             }
 
             // Start transport for this slot.
