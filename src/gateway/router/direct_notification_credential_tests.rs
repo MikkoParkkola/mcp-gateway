@@ -167,7 +167,7 @@ impl Gateway {
 pub(super) fn http() -> TransportConfig {
     TransportConfig::Http {
         http_url: "https://ledger.invalid/mcp".to_string(),
-        streamable_http: true,
+        streamable_http: Some(true),
         protocol_version: None,
     }
 }

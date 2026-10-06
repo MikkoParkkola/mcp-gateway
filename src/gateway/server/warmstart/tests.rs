@@ -489,7 +489,7 @@ fn unreachable_backend(name: &str) -> Arc<crate::backend::Backend> {
         transport: crate::config::TransportConfig::Http {
             // Port 1 on loopback: refused immediately, no timeout wait.
             http_url: "http://127.0.0.1:1/mcp".to_string(),
-            streamable_http: false,
+            streamable_http: Some(false),
             protocol_version: None,
         },
         ..crate::config::BackendConfig::default()
