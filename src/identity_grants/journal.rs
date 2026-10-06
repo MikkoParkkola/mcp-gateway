@@ -241,29 +241,8 @@ pub(crate) async fn apply_change_with(
             grants.display()
         )));
     }
-    // Resolved so the lock, the read, the write and the append all name one
-    // file. Writing the real file also keeps a symlinked grant path a
-    // symlink: the atomic replace would swap the link itself for a regular
-    // file.
     let spelled = grants;
-    let mut target = resolved(grants);
-    if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| ChangeError::Refused(format!("could not lock the grant journal: {e}")))?;
-        // Again, now that a directory it named may exist.
-        target = resolved(&target);
-    }
-    if tokio::fs::symlink_metadata(&target)
-        .await
-        .is_ok_and(|meta| meta.file_type().is_symlink())
-    {
-        return Err(ChangeError::Refused(format!(
-            "identity grants file {} is a chain of symlinks that does not resolve",
-            spelled.display()
-        )));
-    }
-    let grants = &target;
+    let grants = &resolve_for_change(grants).await?;
     // Held until this function returns: from before the read to after the
     // append, so a gateway reload never sees the file without its entry.
     let _lock = acquire_lock(grants).await.map_err(ChangeError::Refused)?;
@@ -366,6 +345,32 @@ pub(crate) async fn apply_change_with(
         .map_err(|e| ChangeError::Unjournalled(e.to_string()))?
         .map_err(|e| ChangeError::Unjournalled(e.to_string()))?;
     Ok(row)
+}
+
+/// The grant file a change writes: the path resolved so the lock, the read,
+/// the write and the append all name one file. Writing the real file also
+/// keeps a symlinked grant path a symlink: the atomic replace would swap the
+/// link itself for a regular file. A chain of links that never resolves is
+/// refused, for the same reason.
+async fn resolve_for_change(grants: &Path) -> Result<PathBuf, ChangeError> {
+    let mut target = resolved(grants);
+    if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| ChangeError::Refused(format!("could not lock the grant journal: {e}")))?;
+        // Again, now that a directory it named may exist.
+        target = resolved(&target);
+    }
+    if tokio::fs::symlink_metadata(&target)
+        .await
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return Err(ChangeError::Refused(format!(
+            "identity grants file {} is a chain of symlinks that does not resolve",
+            grants.display()
+        )));
+    }
+    Ok(target)
 }
 
 /// Take the journal lock off the runtime; the CLI may wait behind a reload.
