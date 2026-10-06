@@ -26,7 +26,7 @@ const NOT_ON_POLLS: [&str; 1] = ["session_profile"];
 const POLL_STAGES: [&str; 5] = [
     "check_authenticated_client_rate_limit(",
     "fw.check_request(",
-    "read_only_call(",
+    "read_only_call_as(",
     "dispatch_below_gate_native_result(",
     "inspect_task_result(",
 ];

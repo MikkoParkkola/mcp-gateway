@@ -506,32 +506,34 @@ impl Run {
         hub: &Arc<EventsHub>,
         last: &mut Option<(BTreeMap<String, Value>, String)>,
     ) -> Step {
-        // The classification is re-read every poll (MIK-7216.IDEM.1): a
-        // capability removed or reclassified takes its subscriptions with it.
-        let Some(target) = self
-            .host
-            .targets()
-            .into_iter()
-            .find(|t| t.read_only && event_name(&t.capability) == self.name)
-            .filter(|t| t.credential != CredentialUse::Account)
-        else {
-            let (gone, owner) = (vec![self.name.clone()], Arc::clone(hub));
-            let _ = tokio::task::spawn_blocking(move || owner.withdraw(&gone)).await;
-            hub.reconcile_stops_in_background();
-            return Step::Stop;
+        // The classification is re-read every poll (MIK-7216.IDEM.1). A
+        // capability removed, reclassified as side-effecting, or moved to
+        // another credential class (a shared poller never calls under one
+        // sharer's credential) takes its subscriptions with it; subscribers
+        // subscribe again under the new class.
+        let watchable = |t: &Target| {
+            t.read_only
+                && event_name(&t.capability) == self.name
+                && t.credential != CredentialUse::Account
+                && (t.credential == CredentialUse::Free) == (self.charge == Charge::Global)
         };
-        // A move between credential-free and keyed re-keys the capability:
-        // this poller stops before any call (a shared poller never calls
-        // under one sharer's credential), and the core restarts the
-        // subscriptions under the new sharing rule. None is revoked.
-        if (target.credential == CredentialUse::Free) != (self.charge == Charge::Global) {
-            let owner = Arc::clone(hub);
-            tokio::spawn(async move {
-                owner.reconcile_stops().await;
-                owner.replay_starts().await;
-            });
-            return Step::Stop;
-        }
+        let found = self.host.targets().into_iter().find(watchable);
+        let target = if let Some(target) = found {
+            target
+        } else {
+            // Confirmed under the lock a subscribe commits under: a
+            // capability watchable again by now keeps every subscription.
+            let started = hub.lifecycle.lock().await;
+            if let Some(target) = self.host.targets().into_iter().find(watchable) {
+                target
+            } else {
+                let (gone, owner) = (vec![self.name.clone()], Arc::clone(hub));
+                let _ = tokio::task::spawn_blocking(move || owner.withdraw(&gone)).await;
+                drop(started);
+                hub.reconcile_stops_in_background();
+                return Step::Stop;
+            }
+        };
         let now = Utc::now();
         let rows: Vec<Subscription> = hub
             .store

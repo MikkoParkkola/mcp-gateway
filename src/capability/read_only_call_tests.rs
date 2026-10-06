@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use super::{read_only_call, read_only_call_as};
+use super::read_only_call_as;
 use crate::capability::{CapabilityBackend, CapabilityExecutor};
 
 fn capability(read_only: bool) -> crate::capability::CapabilityDefinition {
@@ -39,7 +39,7 @@ async fn a_read_only_call_refuses_a_capability_that_is_not_read_only() {
     backend
         .register_capability(capability(false))
         .expect("registered");
-    let refused = read_only_call(backend.call_tool("probe", json!({})))
+    let refused = read_only_call_as(false, backend.call_tool("probe", json!({})))
         .await
         .expect_err("refused");
     assert!(
