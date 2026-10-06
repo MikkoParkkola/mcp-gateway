@@ -351,7 +351,10 @@ async fn a_native_pretty_printed_json_text_keeps_its_numbers() {
 /// answer, whatever its name, is read as delivered.
 #[test]
 fn only_a_gateway_invoke_answer_is_wrapped() {
-    assert_eq!(AnswerShape::of("gateway_invoke"), AnswerShape::InvokeWrapped);
+    assert_eq!(
+        AnswerShape::of("gateway_invoke"),
+        AnswerShape::InvokeWrapped
+    );
     for tool in ["send", "gateway_search", "alpha__send"] {
         assert_eq!(AnswerShape::of(tool), AnswerShape::Literal, "{tool}");
     }
