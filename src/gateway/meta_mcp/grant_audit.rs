@@ -202,7 +202,14 @@ impl GrantNote {
     }
 
     fn envelope(&self) -> AuditEnvelope {
-        let who = AuditWho::from_subject(self.subject.as_deref().unwrap_or("anonymous"));
+        let mut who = AuditWho::from_subject(self.subject.as_deref().unwrap_or("anonymous"));
+        // `who` names the same (authority, subject) pair the domain
+        // `subject` field records, not the subject alone.
+        who.authority = self
+            .fields
+            .get("subject")
+            .and_then(|subject| subject["authority"].as_str())
+            .map(str::to_string);
         AuditEnvelope {
             trace_id: self.trace_id.clone(),
             otel_trace_id: None,
