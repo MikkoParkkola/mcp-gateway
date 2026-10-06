@@ -108,7 +108,11 @@ impl CallbackServer {
                 let result = answer
                     .map_err(|_| Error::OAuth("Callback channel closed unexpectedly".to_string()))
                     .and_then(|r| r);
-                return Ok(result.map(|r| (std::mem::take(&mut self.callback_url), r)));
+                let callback_url = std::mem::take(&mut self.callback_url);
+                // Closed before the login reports its end, so a restart or a
+                // new login can bind a fixed callback port at once.
+                self.shutdown().await;
+                return Ok(result.map(|r| (callback_url, r)));
             }
             () = tokio::time::sleep(window) => Unanswered::Window,
             () = cancel.cancelled() => Unanswered::Cancelled,
