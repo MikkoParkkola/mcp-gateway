@@ -42,9 +42,10 @@ static SECRET_VALUE: LazyLock<Regex> = LazyLock::new(|| {
 static LONG_TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[A-Za-z0-9_-]{24,}").expect("valid"));
 /// A long base64 run that `+` and `/` would otherwise cut into pieces
-/// shorter than [`LONG_TOKEN`]'s floor. Masked only when it holds a `+` or
-/// ends in `=` padding, so a slash-separated path stays readable; a PEM
-/// body line without either cue is caught by its block instead.
+/// shorter than [`LONG_TOKEN`]'s floor. Masked when it holds a `+`, ends in
+/// `=` padding, or is the whole line, as a PEM body line is even after the
+/// 20-line capture dropped its `-----BEGIN`. A path inside a sentence, or
+/// one holding `.`, `_` or `-`, stays readable.
 static BASE64_RUN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[A-Za-z0-9+/]{40,}={0,2}").expect("valid"));
 #[cfg(feature = "firewall")]
@@ -88,9 +89,10 @@ fn mask(line: &str) -> String {
     let line = URL_USERINFO.replace_all(&line, format!("${{1}}{MASK}@"));
     let line = AUTH_SCHEME.replace_all(&line, format!("${{1}} {MASK}"));
     let line = SECRET_VALUE.replace_all(&line, format!("${{1}}${{2}}{MASK}"));
+    let whole = line.trim();
     let line = BASE64_RUN.replace_all(&line, |run: &regex::Captures<'_>| {
         let run = &run[0];
-        let cue = run.contains('+') || run.ends_with('=');
+        let cue = run.contains('+') || run.ends_with('=') || run == whole;
         if cue {
             mask_mixed(run)
         } else {
@@ -269,6 +271,13 @@ mod tests {
                 "after the block"
             ]
         );
+        // The capture dropped the BEGIN line: body lines still go.
+        let evicted = shown(&[
+            body.as_bytes(),
+            body.as_bytes(),
+            b"-----END EXAMPLE BLOCK-----",
+        ]);
+        assert_eq!(evicted, [MASK, MASK, "-----END EXAMPLE BLOCK-----"]);
     }
 
     #[test]
