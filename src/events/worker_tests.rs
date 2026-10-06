@@ -756,3 +756,6 @@ async fn a_type_no_source_offers_any_more_is_not_sent_or_charged() {
         );
     }
 }
+
+#[path = "worker_hold_tests.rs"]
+mod hold;
