@@ -313,6 +313,8 @@ impl MetaMcp {
             return Err(Error::ToolNotFound(tool.to_string()));
         };
         let evaluation = self.identity_grants.read().evaluate(&request);
+        #[cfg(test)]
+        after_grant_evaluation::fire();
         // D3-a: a dispatch decision is noted for its record; an unslotted
         // check fails closed here, whatever the grant said.
         if emit == Emit::Audit {
@@ -385,6 +387,31 @@ impl InvokeScope<'static> {
         }
     }
 }
+
+/// A reload landing just after a grant evaluation, set by a test cell.
+#[cfg(test)]
+pub(super) mod after_grant_evaluation {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    }
+
+    /// Run `hook` once, after the next grant evaluation on this thread.
+    pub(in crate::gateway::meta_mcp) fn set(hook: impl FnOnce() + 'static) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn fire() {
+        if let Some(hook) = HOOK.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "withheld_grant_once_tests.rs"]
+mod withheld_grant_once_tests;
 
 #[cfg(test)]
 impl InvokeScope<'static> {
