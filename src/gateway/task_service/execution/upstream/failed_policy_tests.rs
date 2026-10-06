@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use super::super::{TaskExecutor, UpstreamAnswer, UpstreamHandle, UpstreamRecovery};
 use super::{RecoveredRead, RecoveryRefusal, UpstreamCapture};
 use crate::backend::BackendRegistry;
+use crate::gateway::authz::HTTP_STATUS_DATA_KEY;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::upstream::RECOVERED_ERROR_WITHHELD;
 use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};
@@ -72,10 +73,12 @@ impl UpstreamRecovery for StubPeer {
                 "content": [{"type": "text", "text": format!("finished upstream with {MARKER}")}],
                 "isError": false,
             })),
+            // Only the transport's HTTP status in its data: the settlement
+            // strips it, so nothing of the data survives.
             Reply::Substituted => UpstreamAnswer::Substituted(JsonRpcError {
                 code: -32603,
                 message: SUBSTITUTE.into(),
-                data: None,
+                data: Some(json!({ HTTP_STATUS_DATA_KEY: 503 })),
             }),
         }
     }
@@ -388,7 +391,12 @@ async fn a_recovered_substitute_settles_as_the_gateways_own_error() {
         wire.pointer("/error/code").and_then(Value::as_i64),
         Some(-32603)
     );
-    assert_eq!(substituted.error_author, Some(ErrorAuthor::Gateway));
+    assert!(
+        wire.pointer("/error/data").is_none_or(Value::is_null),
+        "the transport's HTTP status is stripped before the row settles: {wire}"
+    );
+    // Only the peer's authorship is recorded; absent is the gateway's.
+    assert_eq!(substituted.error_author, None);
     assert!(
         substituted.backend_error().is_none(),
         "a substitute is never handed out as the peer's error"
