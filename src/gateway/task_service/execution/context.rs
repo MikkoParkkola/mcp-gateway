@@ -49,6 +49,8 @@ pub(crate) struct OwnedCallerContext {
     /// The creating or resuming request's caller key, which the A/B arm and the
     /// hints key on (G4). Derived from that live request, never from a record.
     caller_key: Option<String>,
+    /// The creating or resuming request's meta-tool surface (MIK-7974).
+    surface_request: crate::gateway::recovery::SurfaceRequest,
     /// Classifier revision captured at admission. Borrowed into the rebuilt
     /// caller at dispatch. Not persisted on the durable task record.
     protocol_revision: Option<String>,
@@ -101,6 +103,7 @@ impl OwnedCallerContext {
             input_capabilities,
             session_id,
             caller_key: None,
+            surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
             protocol_revision,
             retry: RetryFields {
                 attestation,
@@ -115,6 +118,15 @@ impl OwnedCallerContext {
     #[must_use]
     pub(crate) fn with_caller_key(mut self, caller_key: Option<String>) -> Self {
         self.caller_key = caller_key.filter(|key| !key.is_empty());
+        self
+    }
+
+    /// The request's meta-tool surface, so the task's hints follow it.
+    pub(crate) fn with_surface_request(
+        mut self,
+        surface_request: crate::gateway::recovery::SurfaceRequest,
+    ) -> Self {
+        self.surface_request = surface_request;
         self
     }
 
@@ -218,7 +230,7 @@ impl OwnedCallerContext {
             caller_key: self.caller_key.as_deref(),
             verified_identity: self.verified_identity.as_ref(),
             is_admin: self.is_admin,
-            surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
+            surface_request: self.surface_request,
             input_capabilities: self.input_capabilities,
             confirmation: ConfirmationChannel::Unavailable,
             retry,

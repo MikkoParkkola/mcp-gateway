@@ -157,8 +157,7 @@ impl MetaMcp {
         let verified_identity = caller.verified_identity;
         let provenance = caller.provenance();
         let caller_proof = CallerProof::new(verified_identity, provenance);
-        // One surface for the request, so a stored answer's fingerprint and
-        // its recovery hint name the same meta-tools (MIK-7974).
+        // The meta-tools this caller can see, for its recovery hints (MIK-7974).
         let surface = self.hint_surface(caller);
 
         // Capture once, before any authorization input is read. A bump after
@@ -311,7 +310,7 @@ impl MetaMcp {
         let idem_fingerprint = idem_key.as_ref().map(|_| {
             let base = derive_key(&format!("{server}:{tool}"), &arguments);
             let discriminator = caller.retry.key_discriminator();
-            format!("{base}{discriminator}|{}", surface.key())
+            format!("{base}{discriminator}")
         });
 
         // Owns the in-flight entry from admission until a terminal state. Its

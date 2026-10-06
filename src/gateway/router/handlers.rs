@@ -543,10 +543,11 @@ async fn meta_mcp_dispatch(
     // Per-connection Code Mode override (issue #146).
     // Accepted value: ?codemode=search_and_execute
     // When the static config already enables Code Mode, this is a no-op.
-    let code_mode_url_active: bool = query_str.is_some_and(|q| {
+    let code_mode_url_active = query_str.is_some_and(|q| {
         q.split('&')
             .any(|pair| pair == "codemode=search_and_execute")
     });
+    let surface_request = SurfaceRequest::from_url(code_mode_url_active);
     // The refusal arm emits its own audit record. Before this change it
     // returned silently, so a proved-A-claimed-B refusal left no trace on the
     // one path an attacker is most likely to be on.
@@ -1574,6 +1575,7 @@ async fn meta_mcp_dispatch(
                         input_capabilities: declared_capabilities,
                         session_id: Some(session_id.as_str()),
                         protocol_revision: protocol_revision_owned.as_deref(),
+                        surface_request,
                     },
                 ) {
                     Ok(intent) => intent,
@@ -1624,7 +1626,7 @@ async fn meta_mcp_dispatch(
                 caller_key: Some(caller_key.as_str()).filter(|key| !key.is_empty()),
                 verified_identity: verified_identity.as_ref(),
                 is_admin: client.as_ref().is_some_and(|c| c.admin),
-                surface_request: SurfaceRequest::from_url(code_mode_url_active),
+                surface_request,
                 input_capabilities: declared_capabilities,
                 retry: &retry,
                 // Already derived at the top of this handler from the
@@ -1918,7 +1920,8 @@ async fn meta_mcp_dispatch(
             if method == "tasks/get" {
                 tasks::tasks_get(&state, &owner, id.clone(), params, &caller).await
             } else {
-                tasks::tasks_update(&state, &owner, id.clone(), params, &caller).await
+                let update = (params, surface_request);
+                tasks::tasks_update(&state, &owner, id.clone(), update, &caller).await
             }
         }
         "tasks/cancel" => tasks::tasks_cancel(&state, &owner, id.clone(), params).await,

@@ -59,7 +59,7 @@ impl super::MetaMcp {
     /// and `gateway_execute`, and `exposed_meta_tools` can hide either mode's
     /// discovery tool. `gateway_revive_server` is offered only when this caller
     /// may list and call it, by the predicate `tools/list` uses (MIK-7974).
-    pub(in crate::gateway::meta_mcp) fn hint_surface(
+    pub(super) fn hint_surface(
         &self,
         caller: &super::super::MetaMcpCallerContext<'_>,
     ) -> MetaSurface {

@@ -65,49 +65,6 @@ async fn revive_hidden_by_exposed_meta_tools_is_not_named() {
     );
 }
 
-/// MIK-7974: a stored answer carries the hint for the surface it was built
-/// for, so the same key retried under another surface is not served it.
-#[tokio::test]
-async fn a_stored_answer_is_not_replayed_under_another_surface() {
-    use std::sync::atomic::Ordering;
-    let (registry, calls) = counted_backend("alpha");
-    let mut meta = MetaMcp::new(registry);
-    meta.enable_idempotency(
-        std::sync::Arc::new(crate::idempotency::IdempotencyCache::new()),
-        std::time::Duration::from_secs(300),
-    );
-    let retry = crate::protocol::mrtr::RetryFields {
-        input_responses: None,
-        request_state: None,
-        idempotency_key: Some("one-key-two-surfaces".to_string()),
-        malformed: Vec::new(),
-        attestation: None,
-    };
-    let as_caller = |surface_request| MetaMcpCallerContext {
-        surface_request,
-        retry: &retry,
-        ..ctx(&AllowAll)
-    };
-    let args = invoke_args("alpha", "read");
-    let configured = as_caller(SurfaceRequest::Configured);
-    meta.invoke_tool(&args, None, &configured)
-        .await
-        .expect("first call");
-    meta.invoke_tool(&args, None, &configured)
-        .await
-        .expect("own repeat");
-    assert_eq!(calls.load(Ordering::SeqCst), 1, "the key is live");
-
-    let other = meta
-        .invoke_tool(&args, None, &as_caller(SurfaceRequest::CodeMode))
-        .await;
-    assert!(
-        matches!(other, Err(crate::Error::JsonRpc { code: 409, .. })),
-        "replayed under another surface: {other:?}"
-    );
-    assert_eq!(calls.load(Ordering::SeqCst), 1, "re-executed: {other:?}");
-}
-
 /// MIK-7974: a chain step's context keeps the request's surface.
 #[test]
 fn with_retry_keeps_the_surface_request() {

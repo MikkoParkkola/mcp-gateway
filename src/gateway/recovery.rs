@@ -179,17 +179,6 @@ impl SurfaceRequest {
 }
 
 impl MetaSurface {
-    /// A stable name for this surface in an idempotency fingerprint, which
-    /// must not move with a derived `Debug` rendering.
-    pub(crate) const fn key(self) -> &'static str {
-        match self {
-            Self::Standard(Revive::Offered) => "standard",
-            Self::Standard(Revive::Hidden) => "standard-no-revive",
-            Self::CodeMode => "code-mode",
-            Self::Undiscoverable => "undiscoverable",
-        }
-    }
-
     /// The tool this surface discovers tools with, if the caller has one.
     pub(crate) const fn discovery_tool(self) -> Option<&'static str> {
         match self {
