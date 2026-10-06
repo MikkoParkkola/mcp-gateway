@@ -344,6 +344,11 @@ pub(super) async fn with_grant_slot<F: Future>(
     };
     let output = GRANT_SLOT.scope(Arc::clone(&guard.notes), future).await;
     let notes = std::mem::take(&mut *guard.notes.lock().expect("grant slot lock"));
+    // A slot that collected no decision has nothing to write, so no flush
+    // task: every `/mcp` request opens a slot, and most decide nothing.
+    if notes.is_empty() {
+        return (output, Ok(()));
+    }
     // The batch is owned by its own task, so a caller cancelled while the
     // flush waits cannot drop records that were never submitted.
     let writer = Arc::clone(logger);
