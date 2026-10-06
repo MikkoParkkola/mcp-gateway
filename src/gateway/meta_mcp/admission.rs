@@ -149,6 +149,11 @@ pub(crate) struct ReplayAudit {
     outcome: StoredOutcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     response_hash: Option<String>,
+    /// MIK-7641: the request hash the first record carried. A retry admitted
+    /// as the same operation may send an equivalent but different envelope
+    /// (`arguments` as a JSON string), so it is never re-derived from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -173,7 +178,18 @@ impl ReplayAudit {
         Self {
             outcome,
             response_hash,
+            request_hash: None,
         }
+    }
+
+    /// These facts with the request hash their record was written under.
+    pub(crate) fn with_request_hash(mut self, request_hash: String) -> Self {
+        self.request_hash = Some(request_hash);
+        self
+    }
+
+    pub(crate) fn request_hash(&self) -> Option<&str> {
+        self.request_hash.as_deref()
     }
 
     pub(crate) fn outcome(&self) -> AuditOutcome {

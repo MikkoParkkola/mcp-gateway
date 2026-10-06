@@ -59,7 +59,11 @@ fn an_oauth_entry_is_written_with_an_enabled_oauth_stanza_over_streamable_http()
             ..
         } => {
             assert_eq!(http_url, "https://mcp.notion.com/mcp");
-            assert!(*streamable_http, "notion speaks Streamable HTTP");
+            assert_eq!(
+                *streamable_http,
+                Some(true),
+                "notion speaks Streamable HTTP"
+            );
         }
         other => panic!("expected http, got {other:?}"),
     }
@@ -70,7 +74,7 @@ fn an_sse_entry_keeps_the_legacy_handshake() {
     match registry("asana", &[]).backend.transport {
         TransportConfig::Http {
             streamable_http, ..
-        } => assert!(!streamable_http, "asana is an /sse endpoint"),
+        } => assert_eq!(streamable_http, Some(false), "asana is an /sse endpoint"),
         other => panic!("expected http, got {other:?}"),
     }
 }

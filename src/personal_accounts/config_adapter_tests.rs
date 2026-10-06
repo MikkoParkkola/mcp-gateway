@@ -106,6 +106,30 @@ fn adapter_runtime_refuses_a_literal_store_key_without_an_overlay_read() {
     );
 }
 
+/// MIK-7714: a literal key sorted after a valid one is refused before the
+/// valid one is read.
+#[test]
+fn adapter_runtime_checks_every_key_shape_before_reading_any() {
+    let tmp = root();
+    let env = adapter_overlay();
+    let mut config = with_adapter(valid(tmp.path()), ADAPTER_VAR);
+    config.keys.insert("zz-legacy".into(), KEY_B64.into());
+
+    assert_eq!(
+        domain_err(
+            resolve_adapter_runtime(Some(&config), &env, &[]),
+            "literal key"
+        ),
+        AccountsConfigError::KeyNotAReference {
+            key_id: "zz-legacy".into()
+        }
+    );
+    assert!(
+        !env.lookups().iter().any(|name| name == KEY_VAR),
+        "the valid key was read before the literal was refused"
+    );
+}
+
 #[test]
 fn resolve_refuses_an_unresolvable_adapter_secret_after_the_store_keys() {
     let tmp = root();

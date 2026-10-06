@@ -46,6 +46,40 @@ pub(crate) fn fill_placeholders(
     Ok(out)
 }
 
+/// The secret store a `{name}` placeholder reads.
+enum SecretName<'a> {
+    Keychain(&'a str),
+    Env(&'a str),
+}
+
+/// `{keychain.X}` or `{env.X}` with a non-empty `X`. The one classifier both
+/// [`SecretResolver::resolve_with`] and [`names_secret`] use, so what is
+/// checked is exactly what gets read.
+fn secret_name(name: &str) -> Option<SecretName<'_>> {
+    if let Some(service) = name.strip_prefix("keychain.")
+        && !service.is_empty()
+    {
+        Some(SecretName::Keychain(service))
+    } else if let Some(var_name) = name.strip_prefix("env.")
+        && !var_name.is_empty()
+    {
+        Some(SecretName::Env(var_name))
+    } else {
+        None
+    }
+}
+
+/// Whether resolving `template` would read a secret. It uses the resolver's
+/// own single scan and classifier, and reads nothing (MIK-7958).
+pub(crate) fn names_secret(template: &str) -> bool {
+    let mut found = false;
+    let _ = fill_placeholders(template, |name| {
+        found |= secret_name(name).is_some();
+        Ok(None)
+    });
+    found
+}
+
 /// Secret resolver with caching
 pub struct SecretResolver {
     /// Cached resolved secrets for the session
@@ -119,18 +153,10 @@ impl SecretResolver {
         // would otherwise splice a pre-reload half onto a post-reload half and
         // produce a credential that never existed in either generation.
         let env = self.env.get();
-        fill_placeholders(value, |name| {
-            if let Some(service) = name.strip_prefix("keychain.")
-                && !service.is_empty()
-            {
-                self.keychain_secret(service).map(Some)
-            } else if let Some(var_name) = name.strip_prefix("env.")
-                && !var_name.is_empty()
-            {
-                Self::env_secret(&env, var_name).map(Some)
-            } else {
-                Ok(other(name))
-            }
+        fill_placeholders(value, |name| match secret_name(name) {
+            Some(SecretName::Keychain(service)) => self.keychain_secret(service).map(Some),
+            Some(SecretName::Env(var_name)) => Self::env_secret(&env, var_name).map(Some),
+            None => Ok(other(name)),
         })
     }
 

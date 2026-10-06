@@ -754,6 +754,10 @@ pub(crate) fn build_circuit_breaker_stats_json(server: &str, stats: &CircuitBrea
 /// with the raw JSON value, as required by the MCP spec (2025-06-18) for tools
 /// that declare an `outputSchema`. The text `content` is always included as a
 /// fallback for clients that don't support structured output.
+///
+/// A payload that says `isError: true` (a failed dispatch with its recovery
+/// hint, or a backend's own tool error) keeps that flag on the outer result:
+/// MCP reports a tool-execution failure there, where the model reads it.
 pub(crate) fn wrap_tool_success(
     id: RequestId,
     content: &Value,
@@ -769,7 +773,7 @@ pub(crate) fn wrap_tool_success(
         } else {
             None
         },
-        is_error: false,
+        is_error: content.get("isError") == Some(&Value::Bool(true)),
     };
     JsonRpcResponse::success_serialized(id, result)
 }

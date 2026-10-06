@@ -180,7 +180,7 @@ fn backend_with(url: &str, statics: &[(&str, &str)]) -> Backend {
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: url.to_string(),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             headers: statics
@@ -1088,7 +1088,7 @@ async fn a_reconnect_to_a_modern_peer_sends_the_modern_sse_get() {
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: url,
-                streamable_http: false,
+                streamable_http: Some(false),
                 protocol_version: None,
             },
             headers: [("MCP-Session-Id".to_string(), "operator-pinned".to_string())]

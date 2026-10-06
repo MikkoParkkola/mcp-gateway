@@ -517,7 +517,7 @@ mod tests {
         let config = BackendConfig {
             transport: TransportConfig::Http {
                 http_url: "https://mem.internal/mcp".to_string(),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             oauth: Some(oauth),
@@ -565,7 +565,7 @@ mod tests {
         let config = BackendConfig {
             transport: TransportConfig::Http {
                 http_url: "https://mem.internal/mcp".to_string(),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             oauth: Some(oauth),

@@ -571,7 +571,7 @@ mod tests {
                 crate::config::BackendConfig {
                     transport: crate::config::TransportConfig::Http {
                         http_url: "http://127.0.0.1:9/mcp".to_string(),
-                        streamable_http: false,
+                        streamable_http: Some(false),
                         protocol_version: None,
                     },
                     ..crate::config::BackendConfig::default()
@@ -632,7 +632,7 @@ mod tests {
             crate::config::BackendConfig {
                 transport: crate::config::TransportConfig::Http {
                     http_url: "not a url".to_string(),
-                    streamable_http: false,
+                    streamable_http: Some(false),
                     protocol_version: None,
                 },
                 ..crate::config::BackendConfig::default()

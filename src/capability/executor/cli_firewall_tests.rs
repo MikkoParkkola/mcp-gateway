@@ -212,3 +212,23 @@ fn a_credential_split_by_the_excerpt_cut_leaves_no_fragment() {
     assert!(!text.contains(&KEY[10..]), "{text}");
     assert!(text.contains(OTHER_KEY), "{text}");
 }
+
+/// A credential that begins exactly at the cut lies wholly inside the
+/// excerpt: it stays for the firewall, which only a whole credential reaches.
+#[test]
+fn a_credential_starting_at_the_excerpt_cut_stays_for_the_firewall() {
+    // The last 2048 bytes start at KEY.
+    let filler = "b".repeat(2048 - KEY.len() - 1);
+    let stderr = format!("{} {KEY} {filler}", "a".repeat(100));
+    let Err(e) = interpret(
+        &invocation(),
+        CliOutput::Json,
+        &outcome(false, "", &stderr),
+        &[],
+        &json!({}),
+    ) else {
+        panic!("a failed child is an error");
+    };
+    let text = e.to_string();
+    assert!(text.contains(KEY), "{text}");
+}
