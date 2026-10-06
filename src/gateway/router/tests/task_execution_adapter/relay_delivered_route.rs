@@ -106,6 +106,36 @@ async fn a_modern_answer_is_receipted_as_delivered_not_as_the_backend_sent_it() 
     );
 }
 
+/// MIK-7939 at the POST route: the recovery hint the gateway attaches to a
+/// backend's `isError` answer is the gateway's text. The committed receipt
+/// keeps the backend's text and leaves the hint out.
+#[tokio::test]
+async fn a_hinted_failure_is_receipted_without_its_hint() {
+    let failed = crate::gateway::meta_mcp::invoke::receipt_test_support::backend_failure(PROSE);
+    let failed = json!({"content": [{"type": "text", "text": failed}], "isError": true});
+    let mock = MockBackend::answering(Answer::Sequence(vec![failed, text_ok()]));
+    let (state, _store) = surfaced_state(&mock).await;
+
+    let read = post(&state, "key-a", sync_invoke(1, json!({}))).await;
+    let hint = hint_text(&read);
+
+    let relayed = post(&state, "key-b", sync_invoke(2, json!({"text": PROSE}))).await;
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "the backend's text lost its receipt: {relayed}"
+    );
+    let hinted = post(&state, "key-b", sync_invoke(3, json!({"text": hint}))).await;
+    assert!(
+        hinted.get("error").is_none(),
+        "the gateway's hint was receipted: {hinted}"
+    );
+}
+
+/// The delivered hint's own text (not [`PROSE`]).
+fn hint_text(read: &Value) -> String {
+    crate::gateway::meta_mcp::invoke::receipt_test_support::own_hint_text(&read["result"], PROSE)
+}
+
 fn text_ok() -> Value {
     json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
 }
