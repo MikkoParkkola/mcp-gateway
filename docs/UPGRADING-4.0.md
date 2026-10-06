@@ -176,6 +176,7 @@ backend" and "fails a capability file" first.**
 | 149 | A meta-tool result whose payload says `isError: true` (a failed `gateway_invoke`, or a backend's own tool error) carries `isError: true` on the outer `tools/call` result; it was always `false`, with the failure only in the text | A client that read failure from the text alone keeps working; one that treated `isError: true` as a protocol failure should read the text and its `recovery` hint instead |
 | 150 | `mcp_gateway::cli::invoke::resolve_args` takes a fourth parameter, `kv_schema: Option<&Value>`: `key=value` text is typed by that input schema; `None` keeps the old behaviour | An embedder passes the tool's input schema, or `None` |
 | 151 | A legacy client that calls without a credential (authentication off, or on with the path in `auth.public_paths`, as `/mcp` is in the shipped presets) and does not resume a session the gateway issued is counted under one shared identity by the anomaly detector, the tenant guard and the call budget; in 3.x each such request was a new session and the first call in it | None unless these controls refuse such clients: give them a credential, have them keep the `mcp-session-id` from `initialize`, or raise the limit |
+| 152 | Two credentials that resolve to one principal (the same key listed twice, or two digests sharing their first 48 bits) are refused at load, reload and startup | Remove the duplicate entry, or replace one of the two credentials |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4032,6 +4033,18 @@ If such clients are now refused, give them a credential (turn authentication on,
 present a key on a public path), have them reuse their session, raise
 `anomaly_block_threshold`, or remove it to log without blocking. The 4.0 tenant guard
 (`tenant_guard`) and call budget (`budget`) count these clients the same way.
+
+## 152. Two credentials may not share one principal
+
+**Startup:** no notice, the start is refused with its own error, which names both credentials; refuses to start
+
+A configured bearer token or API key is identified by the first 48 bits of its SHA-256 digest,
+and sessions, grants, journals and task owners are keyed on that principal. In 3.x two
+credentials with the same principal, such as one key listed twice under two names, were one
+caller: each could read and cancel the other's tasks and sessions. Config load, reload and
+startup now refuse such a configuration, naming the two credentials and never a secret or
+digest. The principal encoding is unchanged, so existing sessions, grants and tasks stay
+readable. Remove the duplicate entry, or replace one of the two credentials.
 
 ## Upgrading from 3.5.x: a walkthrough
 
