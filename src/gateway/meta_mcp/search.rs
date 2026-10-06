@@ -442,7 +442,7 @@ impl MetaMcp {
                 -32602,
                 format!(
                     "Tool reference '{tool_ref}' is missing server prefix. \
-                     Use format 'server:tool_name' from gateway_search results."
+                     Search first."
                 ),
             )
         })?;
