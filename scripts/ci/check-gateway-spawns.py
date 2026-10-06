@@ -16,10 +16,9 @@ code clears a backend child's environment on purpose:
 - `env_clear()`;
 - setting or removing an isolation variable (HOME, USERPROFILE,
   MCP_GATEWAY_TEST_HOME_DIR, APPDATA, LOCALAPPDATA);
-- `.envs(...)` of a variable list, unless it goes through
-  `gateway_bin::checked_env`, which refuses isolation variables at run time
-  (one literal non-isolation variable, `std::env::var_os("SystemRoot")`, is
-  fine).
+- `.envs(...)` whose argument is not `gateway_bin::checked_env(...)`, which
+  refuses isolation variables at run time (`Inherit::Nothing` already keeps
+  `SystemRoot` and a coverage profile path).
 
 A test may still point the XDG directories elsewhere inside its own fixture;
 those only relocate state the helper already moved off the real home.
@@ -38,14 +37,13 @@ import tempfile
 
 HELPER = "tests/common/gateway_bin.rs"
 ISOLATION = r"(?:HOME|USERPROFILE|MCP_GATEWAY_TEST_HOME_DIR|APPDATA|LOCALAPPDATA)"
-BULK_OK = r'gateway_bin::checked_env\(|std::env::var_os\(\s*"(?!' + ISOLATION + r'")\w+"\s*\)'
 RULES = [
     ("names the gateway binary", re.compile(r'CARGO_BIN_EXE_mcp-gateway|cargo_bin\(\s*"mcp-gateway"\s*\)')),
     ("spawns the binary path around the helper", re.compile(r"Command::new\(\s*(?:gateway_bin::)?path\(\)")),
     ("clears a child environment", re.compile(r"\.env_clear\(\s*\)")),
     ("sets or removes an isolation variable",
      re.compile(r'\.env(?:_remove)?\(\s*"' + ISOLATION + r'"')),
-    ("sets a variable list around checked_env", re.compile(r"\.envs\(\s*(?!" + BULK_OK + r")")),
+    ("sets a variable list around checked_env", re.compile(r"\.envs\((?!\s*gateway_bin::checked_env\()")),
 ]
 OPT_OUT = re.compile(r"//\s*spawn-check:\s*not the gateway:\s*\S")
 
@@ -80,6 +78,7 @@ def self_test():
         "tests/no_reason.rs": 'node.env("HOME", dir); // spawn-check: not the gateway:\n',
         "tests/bulk.rs": "command.envs(vars.iter().copied());\n",
         "tests/bulk_home.rs": 'command.envs(std::env::var_os("HOME").map(|h| ("HOME", h)));\n',
+        "tests/bulk_renamed.rs": 'command.envs(std::env::var_os("UserProfile").map(|p| ("MCP_GATEWAY_TEST_HOME_DIR", p)));\n',
     }
     clean = {
         HELPER: 'pub fn path() -> &\'static str { env!("CARGO_BIN_EXE_mcp-gateway") }\ncommand.env_clear();\n',
@@ -87,7 +86,7 @@ def self_test():
         "tests/node.rs": 'node.env("HOME", dir); // spawn-check: not the gateway: the node verifier\n',
         "tests/config.rs": 'let line = format!("{} serve --stdio", gateway_bin::path());\n',
         "tests/checked.rs": "command.envs(gateway_bin::checked_env(vars.iter().copied()));\n",
-        "tests/system_root.rs": 'command.envs(std::env::var_os("SystemRoot").map(|r| ("SystemRoot", r)));\n',
+        "tests/checked_multiline.rs": "command.envs(\n    gateway_bin::checked_env(vars));\n",
         "src/transport/stdio.rs": "command.env_clear();\n",
     }
     with tempfile.TemporaryDirectory() as tmp:

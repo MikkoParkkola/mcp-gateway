@@ -66,9 +66,6 @@ fn spawn(directory: &Path, scan_gate: &Path) -> Child {
     .env(HOLD_SCAN_ENV, scan_gate)
     .env("XDG_CONFIG_HOME", directory.join(".config"))
     .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-    // Winsock cannot initialise without SystemRoot (os error 10106); unset off Windows.
-    .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
-    .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|p| ("LLVM_PROFILE_FILE", p)))
     .current_dir(directory)
     .arg("--config")
     .arg(&config_path)

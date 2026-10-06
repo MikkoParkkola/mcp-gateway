@@ -496,7 +496,6 @@ async fn the_cli_lists_and_replays_through_the_admin_route() {
                     .args(["--url", &url])
                     .env("PATH", std::env::var_os("PATH").unwrap_or_default())
                     .env("MCP_GATEWAY_TOKEN", token)
-                    .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|p| ("LLVM_PROFILE_FILE", p)))
                     .output()
                     .expect("run the CLI")
             })

@@ -339,9 +339,13 @@ async fn t12_http_snapshot_precedes_the_listener() {
     .await;
     let log = governance_log(dir.path());
     server.abort();
-    let ended = server.await.ok();
+    // Only the abort may end it: a panic or a returned run is a failure.
+    let ended = server.await;
     assert!(
-        up.is_ok() && ended.is_none(),
+        up.is_ok()
+            && ended
+                .as_ref()
+                .is_err_and(tokio::task::JoinError::is_cancelled),
         "the HTTP gateway never bound: {ended:?}"
     );
     assert!(log.contains("loaded_complete"), "{log}");

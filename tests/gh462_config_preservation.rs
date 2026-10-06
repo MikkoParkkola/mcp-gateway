@@ -394,7 +394,6 @@ mod cli {
     ) -> std::process::Output {
         let mut command = Command::from(gateway_bin::command(home, gateway_bin::Inherit::Nothing));
         command
-            .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root))) // a cleared Windows environment cannot start
             .env("XDG_CONFIG_HOME", home.join(".config"))
             // Process discovery invokes ps/wmic by name. An isolated child PATH
             // removes host-process input while retaining real client discovery.
