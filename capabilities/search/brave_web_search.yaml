@@ -1,4 +1,4 @@
-sha256: 6fb9e141556023354db38e24b434bee9f7ab3140f2e3f65f4971f2aafd0d74c8
+sha256: 6ed203d74458f5494bab70fb608bddf4bb37d27374f5fdcea9ca11062cc6d8e3
 fulcrum: "1.0"
 name: brave_web_search
 description: |
@@ -53,7 +53,6 @@ providers:
       params:
         q: "{q}"
         count: "{count}"
-        country: "{country}"
         freshness: "{freshness}"
 
 cache:

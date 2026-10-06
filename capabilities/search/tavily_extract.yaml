@@ -1,4 +1,4 @@
-sha256: 9de920ed0f042e1bacbd29a718dbebdc19bfbc6eb8b26d8efcf44bb5542f8b61
+sha256: b244ed1c180b78ecb71b02c628e7839af0cb4c1756602f6943c494c01216c580
 fulcrum: "1.0"
 name: tavily_extract
 description: |
@@ -43,7 +43,7 @@ providers:
       method: POST
       body:
         urls: "{urls}"
-        extract_depth: "{extract_depth}"
+        depth: "{extract_depth}"
 
 cache:
   strategy: exact

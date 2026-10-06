@@ -1,4 +1,4 @@
-sha256: 45b890190f48943c4f9d05116e3df21425f038e89a9d92d66a66919213431b23
+sha256: 7b44595edc3f347dc8b0ddceae08b1023e7f19a11aaaf482dc7fcba67ea34ea8
 fulcrum: "1.0"
 name: firecrawl_scrape
 description: |
@@ -24,7 +24,7 @@ schema:
   output:
     type: object
     properties:
-      success: { type: boolean }
+      success: { type: string }
       data: { type: object }
 
 providers:
@@ -39,7 +39,7 @@ providers:
       body:
         url: "{url}"
         formats: ["markdown"]
-        onlyMainContent: "{only_main_content}"
+        only_main_content: "{only_main_content}"
 
 cache:
   strategy: exact

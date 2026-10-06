@@ -1,4 +1,4 @@
-sha256: cf121c6f11e42724e5f51bc4550259924baa725b8c571e10e99e9df434030640
+sha256: 8c64c492d21f982412ed9b912390bc1f607e30639cc43ff4985f2df7752cb370
 fulcrum: "1.0"
 name: tavily_search
 description: |
@@ -57,7 +57,7 @@ providers:
       body:
         query: "{query}"
         max_results: "{max_results}"
-        search_depth: "{search_depth}"
+        depth: "{search_depth}"
         topic: "{topic}"
         include_answer: "{include_answer}"
 

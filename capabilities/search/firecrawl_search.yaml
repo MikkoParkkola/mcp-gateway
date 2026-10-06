@@ -1,4 +1,4 @@
-sha256: def74c378aab5c1e6fba47d611c868422d636c46e5f549a69e87ac779ceba29a
+sha256: 1121871532128437e5a0df31f964649f997b11ad8f986b5d032899ce4888bd53
 fulcrum: "1.0"
 name: firecrawl_search
 description: |
@@ -26,7 +26,7 @@ schema:
     type: object
     properties:
       success: { type: boolean }
-      data: { type: object }
+      data: { type: array }
 
 providers:
   primary:
@@ -38,7 +38,7 @@ providers:
       path: /v2/search
       method: POST
       static_params:
-        limit: 5
+        limit: 10
       body:
         query: "{query}"
         limit: "{limit}"

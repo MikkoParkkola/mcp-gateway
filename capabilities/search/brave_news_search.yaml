@@ -1,4 +1,4 @@
-sha256: 89148392a315856be400f6c547cfd960bf61f41f8c1488139a529c3652073402
+sha256: bf29ead5c6a864171632bdcedf161581295a0a04ec068b3bb494c04d912c6ded
 fulcrum: "1.0"
 name: brave_news_search
 description: |
@@ -45,7 +45,7 @@ providers:
       headers:
         Accept: "application/json"
       static_params:
-        count: "10"
+        count: "20"
       params:
         q: "{q}"
         count: "{count}"
