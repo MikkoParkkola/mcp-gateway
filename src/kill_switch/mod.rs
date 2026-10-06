@@ -117,6 +117,7 @@ impl KillSwitch {
             budgets: DashMap::new(),
             capability_budgets: DashMap::new(),
             disabled_capabilities: DashMap::new(),
+            observer: crate::observer::Observer::default(),
         }
     }
 
