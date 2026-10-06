@@ -1614,8 +1614,9 @@ gateway restarts and starts a fresh log, verify passes on it, and nothing in the
 shows an earlier log existed. A log stored only in that directory cannot prove it existed.
 Forward audit records off-host: `control_plane.export` writes a local NDJSON file, and the
 protection holds only once an agent running as another account ships that file to a store (a
-SIEM, for example) where the gateway account cannot delete or alter records already landed. An
-off-host anchor is not built in 4.0.
+SIEM, for example) where the gateway account cannot delete or alter records already landed. To
+detect a wipe or rollback, keep a copy of `<log>.hwm` off the host and verify with
+`audit verify --anchor` (item 151).
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
@@ -4027,7 +4028,10 @@ archive mode.
   (exit 1), never ignored. An anchor written with a shared secret is refused
   when no secret is configured.
 - An anchor inside a range that retention expired fails with "predates the
-  retained range": verify with a newer anchor.
+  retained range": verify with a newer anchor. An anchor at the last record
+  of the newest expired segment passes only for a signed log (a
+  `shared_secret` set): without one, the expiry record that vouches for it
+  can be forged. Take anchors more often than retention expires segments.
 - `verify_audit_log` gains a fourth parameter, `anchor: Option<&Path>`.
 
 Independently, a log whose oldest surviving segment opens with a

@@ -80,20 +80,32 @@ pub(super) struct Walked<'a> {
     pub(super) last: Option<u64>,
     pub(super) at_pin: Option<&'a str>,
     pub(super) boundary: Option<(u64, &'a str)>,
+    /// Every record's HMAC was checked, so the expiry record naming the
+    /// boundary is authenticated.
+    pub(super) signed: bool,
 }
 
 /// The anchor rule, both modes. An anchor inside an expired range is
-/// refused rather than passed with a warning: without HMAC an attacker can
-/// forge a self-consistent expiry record and link.
+/// refused rather than passed with a warning. The expired boundary stands in
+/// for the anchored record only in a signed log: without HMAC an attacker
+/// who wiped the log can forge an open record and an expiry record naming
+/// the anchored counter and hash.
 pub(super) fn check_anchor(
     pin: &HighWater,
     walked: &Walked<'_>,
 ) -> Result<(), (Option<u64>, String)> {
     let n = pin.counter;
-    let held = walked
-        .at_pin
-        .or(walked.boundary.filter(|(c, _)| *c == n).map(|(_, h)| h));
-    match held {
+    let at_boundary = walked.boundary.filter(|(c, _)| *c == n).map(|(_, h)| h);
+    if walked.at_pin.is_none() && at_boundary.is_some() && !walked.signed {
+        return Err((
+            Some(n),
+            format!(
+                "the anchored record at counter {n} has expired, and an unsigned log cannot \
+                 prove its expiry: verify with a newer anchor"
+            ),
+        ));
+    }
+    match walked.at_pin.or(at_boundary) {
         Some(h) if h == pin.entry_hash => Ok(()),
         Some(_) => Err((
             Some(n),

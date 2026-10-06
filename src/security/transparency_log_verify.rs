@@ -704,6 +704,7 @@ impl Stream<'_> {
                 last: self.prev.as_ref().map(|p| p.0),
                 at_pin: self.at_pin.as_deref(),
                 boundary: self.boundary.as_ref().map(|(c, h)| (*c, h.as_str())),
+                signed: self.secret.is_some(),
             };
             check_anchor(pin, &walked)?;
         }
