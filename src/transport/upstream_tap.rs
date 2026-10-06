@@ -303,8 +303,10 @@ impl Taps {
             let mut listens = self.listens.lock();
             if let Some(listen) = listens.get_mut(&tag.to_string()) {
                 let first = std::mem::replace(&mut listen.first, false);
+                // The last slot stays free for the listen's terminal answer, so
+                // a full tap still reports `Unsupported` rather than `Closed`.
                 let routed = project_listen(method, params, tag, &listen.requested, first)
-                    .is_ok_and(|note| listen.tx.try_send(note).is_ok());
+                    .is_ok_and(|note| listen.tx.capacity() > 1 && listen.tx.try_send(note).is_ok());
                 if !routed {
                     self.drop_one();
                 }

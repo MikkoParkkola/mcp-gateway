@@ -319,3 +319,21 @@ fn a_method_not_found_answer_is_unsupported() {
     assert_eq!(rx.try_recv(), Ok(UpstreamNote::Unsupported));
     assert!(!taps.response(&id, None, None), "the listen is gone");
 }
+
+/// MIK-7899 CLASS.1: a tap whose notices filled it still reports a `-32601`
+/// answer as `Unsupported`; the last slot is kept for the listen's end.
+#[test]
+fn a_full_tap_still_reports_unsupported() {
+    let taps = Taps::default();
+    let id = json!(7);
+    let mut rx = taps.listen(&id, requested());
+    for _ in 0..TAP_CAPACITY + 4 {
+        taps.notification(RESOURCES_CHANGED, Some(&tag(&id, json!({}))));
+    }
+    assert!(taps.response(&id, None, Some(-32601)));
+    let mut last = None;
+    while let Ok(note) = rx.try_recv() {
+        last = Some(note);
+    }
+    assert_eq!(last, Some(UpstreamNote::Unsupported));
+}

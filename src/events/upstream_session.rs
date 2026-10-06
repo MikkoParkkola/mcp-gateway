@@ -465,7 +465,7 @@ impl<'a> State<'a> {
                 false
             }
             UpstreamNote::Notice { kind, uri } => {
-                if !self.honours(kind, uri.as_deref()) {
+                if !self.honours(kind, uri.as_deref(), from_pending) {
                     return false;
                 }
                 if kind == NoteKind::ResourcesChanged && !requested(self.shared).uris.is_empty() {
@@ -491,10 +491,16 @@ impl<'a> State<'a> {
         }
     }
 
-    /// Whether the current stream's acknowledgement covers a notice.
-    fn honours(&self, kind: NoteKind, uri: Option<&str>) -> bool {
-        let Some((kinds, uris)) = &self.honoured else {
+    /// Whether an acknowledgement covers a notice. A legacy stream has none
+    /// and is not gated; on a modern one, a notice before the stream's
+    /// acknowledgement (a replacement's, or the first listen's) is dropped:
+    /// the acknowledgement must be the first frame (§3).
+    fn honours(&self, kind: NoteKind, uri: Option<&str>, from_pending: bool) -> bool {
+        if self.era == Era::Legacy {
             return true;
+        }
+        let (false, Some((kinds, uris))) = (from_pending, &self.honoured) else {
+            return false;
         };
         match kind {
             NoteKind::ResourceUpdated => uri.is_some_and(|u| uris.iter().any(|w| w == u)),

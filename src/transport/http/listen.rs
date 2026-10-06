@@ -263,20 +263,23 @@ async fn read_single(
     tx: &mpsc::Sender<UpstreamNote>,
 ) {
     let mut body = Vec::new();
-    while let Ok(Some(chunk)) = response.chunk().await {
-        body.extend_from_slice(&chunk);
+    // Only a body read to its end is classified: a read error can cut a
+    // longer answer down to a shorter valid one.
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+            Ok(None) => break,
+            Err(_) => return,
+        }
         if body.len() > FRAME_CAP {
             debug!("listen answer over the cap; ending the stream");
             return;
         }
     }
-    if let Frame::Note(note) = frame(
-        &String::from_utf8_lossy(&body),
-        id,
-        id_value,
-        requested,
-        true,
-    ) {
+    let Ok(text) = std::str::from_utf8(&body) else {
+        return;
+    };
+    if let Frame::Note(note) = frame(text, id, id_value, requested, true) {
         let _ = tx.send(note).await;
     }
 }

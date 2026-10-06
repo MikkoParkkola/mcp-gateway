@@ -144,7 +144,7 @@ async fn emission_waits_for_the_snapshot_to_list_the_uri() {
         .lock()
         .add(&Interest::ResourceUpdated("file:///a".to_owned()))
         .expect("room");
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, Era::Legacy);
     let changed = || UpstreamNote::Notice {
         kind: NoteKind::ResourceUpdated,
         uri: Some("file:///a".to_owned()),
@@ -196,7 +196,7 @@ async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
     // The backend's listener-only subscription and the one the gateway also
     // announces itself.
     admit_both(&hub);
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, Era::Legacy);
     let changed = || UpstreamNote::Notice {
         kind: NoteKind::ResourcesChanged,
         uri: None,
@@ -309,7 +309,7 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     tokio::time::sleep(Duration::from_millis(2600)).await;
     assert!(!task.is_finished(), "control: an eligible listener ended");
     assert!(!shared.stop.is_cancelled());
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, Era::Legacy);
     let changed = || UpstreamNote::Notice {
         kind: NoteKind::ResourcesChanged,
         uri: None,
@@ -378,7 +378,7 @@ async fn a_coalesced_notice_is_delivered_when_the_session_ends() {
         .lock()
         .add(&Interest::ResourcesChanged)
         .expect("room");
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, Era::Legacy);
     state.note(changed(NoteKind::ResourcesChanged), false);
     let _ = finish_refill(&mut state, &shared, &backend, &weak, None, Instant::now()).await;
     assert!(
@@ -412,15 +412,13 @@ async fn a_kind_the_acknowledgement_did_not_honour_is_not_delivered() {
         false,
     );
     state.note(changed(NoteKind::PromptsChanged), false);
-    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
-    state.flush(&weak);
+    state.flush_at(&weak, Instant::now() + WINDOW);
     assert!(
         intake.try_recv().is_err(),
         "a kind the peer did not acknowledge was delivered"
     );
     state.note(changed(NoteKind::ResourcesChanged), false);
-    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
-    state.flush(&weak);
+    state.flush_at(&weak, Instant::now() + WINDOW);
     assert!(intake.try_recv().is_ok(), "control: the honoured kind");
 }
 
@@ -470,11 +468,54 @@ async fn a_uri_the_acknowledgement_did_not_list_is_not_delivered() {
         uri: Some(uri.to_owned()),
     };
     state.note(updated(&b), false);
-    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
-    state.flush(&weak);
+    state.flush_at(&weak, Instant::now() + WINDOW);
     assert!(intake.try_recv().is_err(), "an unlisted URI was delivered");
     state.note(updated(&a), false);
-    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
-    state.flush(&weak);
+    state.flush_at(&weak, Instant::now() + WINDOW);
     assert!(intake.try_recv().is_ok(), "control: the listed URI");
+}
+
+/// MIK-7898 SESS.3: on a modern stream a notice before the acknowledgement,
+/// the first listen's or a replacement's, is not delivered; a legacy stream,
+/// which has none, is not gated.
+#[tokio::test]
+async fn a_notice_before_the_acknowledgement_is_not_delivered() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    shared
+        .need
+        .lock()
+        .add(&Interest::ResourcesChanged)
+        .expect("room");
+    let mut modern = State::new(&shared, Era::Modern);
+    modern.note(changed(NoteKind::ResourcesChanged), false);
+    modern.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(
+        intake.try_recv().is_err(),
+        "before the first acknowledgement"
+    );
+    let all = KindSet {
+        resources_changed: true,
+        ..KindSet::default()
+    };
+    modern.note(
+        UpstreamNote::Ack {
+            kinds: all,
+            uris: Vec::new(),
+        },
+        false,
+    );
+    modern.note(changed(NoteKind::ResourcesChanged), true);
+    modern.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(
+        intake.try_recv().is_err(),
+        "a replacement before its acknowledgement"
+    );
+    let mut legacy = State::new(&shared, Era::Legacy);
+    legacy.note(changed(NoteKind::ResourcesChanged), false);
+    legacy.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(intake.try_recv().is_ok(), "control: a legacy stream");
 }
