@@ -15,7 +15,14 @@ code clears a backend child's environment on purpose:
 - `Command::new(...)` of the helper's `path()`, which bypasses `command()`;
 - `env_clear()`;
 - setting or removing an isolation variable (HOME, USERPROFILE,
-  MCP_GATEWAY_TEST_HOME_DIR, APPDATA, LOCALAPPDATA).
+  MCP_GATEWAY_TEST_HOME_DIR, APPDATA, LOCALAPPDATA);
+- `.envs(...)` of a variable list, unless it goes through
+  `gateway_bin::checked_env`, which refuses isolation variables at run time
+  (one literal non-isolation variable, `std::env::var_os("SystemRoot")`, is
+  fine).
+
+A test may still point the XDG directories elsewhere inside its own fixture;
+those only relocate state the helper already moved off the real home.
 
 A line that sets one of those for a process that is not the gateway carries
 `// spawn-check: not the gateway: <reason>` on the same line; the reason is
@@ -31,18 +38,22 @@ import tempfile
 
 HELPER = "tests/common/gateway_bin.rs"
 ISOLATION = r"(?:HOME|USERPROFILE|MCP_GATEWAY_TEST_HOME_DIR|APPDATA|LOCALAPPDATA)"
+BULK_OK = r'gateway_bin::checked_env\(|std::env::var_os\(\s*"(?!' + ISOLATION + r'")\w+"\s*\)'
 RULES = [
     ("names the gateway binary", re.compile(r'CARGO_BIN_EXE_mcp-gateway|cargo_bin\(\s*"mcp-gateway"\s*\)')),
     ("spawns the binary path around the helper", re.compile(r"Command::new\(\s*(?:gateway_bin::)?path\(\)")),
     ("clears a child environment", re.compile(r"\.env_clear\(\s*\)")),
     ("sets or removes an isolation variable",
      re.compile(r'\.env(?:_remove)?\(\s*"' + ISOLATION + r'"')),
+    ("sets a variable list around checked_env", re.compile(r"\.envs\(\s*(?!" + BULK_OK + r")")),
 ]
 OPT_OUT = re.compile(r"//\s*spawn-check:\s*not the gateway:\s*\S")
 
 
 def violations(root):
     root = pathlib.Path(root)
+    if not (root / "tests").is_dir():
+        raise SystemExit(f"FAIL: {root / 'tests'} is not a directory; nothing was checked")
     found = []
     for base in ("tests",):
         for path in sorted((root / base).rglob("*.rs")):
@@ -67,12 +78,16 @@ def self_test():
         "tests/home.rs": 'command.env(\n    "HOME", dir);\n',
         "tests/bypass.rs": "let c = Command::new(gateway_bin::path());\n",
         "tests/no_reason.rs": 'node.env("HOME", dir); // spawn-check: not the gateway:\n',
+        "tests/bulk.rs": "command.envs(vars.iter().copied());\n",
+        "tests/bulk_home.rs": 'command.envs(std::env::var_os("HOME").map(|h| ("HOME", h)));\n',
     }
     clean = {
         HELPER: 'pub fn path() -> &\'static str { env!("CARGO_BIN_EXE_mcp-gateway") }\ncommand.env_clear();\n',
         "tests/ok.rs": "let c = gateway_bin::command(home, gateway_bin::Inherit::Nothing);\n",
         "tests/node.rs": 'node.env("HOME", dir); // spawn-check: not the gateway: the node verifier\n',
         "tests/config.rs": 'let line = format!("{} serve --stdio", gateway_bin::path());\n',
+        "tests/checked.rs": "command.envs(gateway_bin::checked_env(vars.iter().copied()));\n",
+        "tests/system_root.rs": 'command.envs(std::env::var_os("SystemRoot").map(|r| ("SystemRoot", r)));\n',
         "src/transport/stdio.rs": "command.env_clear();\n",
     }
     with tempfile.TemporaryDirectory() as tmp:
@@ -85,6 +100,13 @@ def self_test():
     flagged = {line.split(":")[0] for line in got}
     assert flagged == set(planted), got
     assert "tests/home.rs:1: sets or removes an isolation variable" in got, got
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            violations(tmp)
+        except SystemExit as refused:
+            assert "nothing was checked" in str(refused), refused
+        else:
+            raise AssertionError("a root with no tests/ directory passed")
     print("check-gateway-spawns self-test: ok")
     return 0
 

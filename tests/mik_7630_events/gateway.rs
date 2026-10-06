@@ -212,7 +212,9 @@ impl Gateway {
         command
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
-            .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .envs(gateway_bin::checked_env(
+                self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+            ))
             // Under cargo-llvm-cov the child writes its profile here; env_clear()
             // would otherwise drop it and the child's coverage with it.
             .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|p| ("LLVM_PROFILE_FILE", p)))

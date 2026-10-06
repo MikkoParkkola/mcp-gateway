@@ -448,14 +448,6 @@ impl Gateway {
             gateway_bin::Inherit::Environment,
         ));
         command.env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"));
-        // The bound port is read from an info-level banner, so an inherited
-        // filter keeps its own directives but may not hide that one line.
-        if let Ok(filter) = std::env::var("RUST_LOG") {
-            command.env(
-                "RUST_LOG",
-                format!("{filter},mcp_gateway::gateway::server::support=info"),
-            );
-        }
         for (key, value) in env {
             command.env(key, value);
         }
@@ -514,7 +506,7 @@ impl Gateway {
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "the gateway was not ready within {READY_BOUND:?} (no `Listening` line \
-                 means it never logged one; a RUST_LOG above info hides it)\n{}",
+                 means it never bound)\n{}",
                 self.logs()
             );
             tokio::time::sleep(POLL_GAP).await;

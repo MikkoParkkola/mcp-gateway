@@ -520,12 +520,6 @@ impl HttpGateway {
             gateway_bin::Inherit::Environment,
         ));
         command.env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state-http"));
-        if let Ok(filter) = std::env::var("RUST_LOG") {
-            command.env(
-                "RUST_LOG",
-                format!("{filter},mcp_gateway::gateway::server::support=info"),
-            );
-        }
         let child = command
             .current_dir(root)
             .arg("--config")

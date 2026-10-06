@@ -15,7 +15,11 @@
 //! override that Windows needs because `dirs::home_dir()` there reads the
 //! Known Folder API and ignores both (#2368); `APPDATA` and `LOCALAPPDATA`;
 //! and the XDG config, data and state directories. Inherited `MCP_GATEWAY_*`
-//! variables are removed, so an operator's own overrides never reach a test.
+//! variables are removed, so an operator's own overrides never reach a test, and
+//! an inherited `RUST_LOG` keeps the port banner visible.
+//!
+//! Known gap (MIK-8001): product paths that call `dirs::home_dir()` directly,
+//! not `crate::home_dir`, still resolve the real home on Windows.
 #![allow(dead_code, reason = "each test crate uses part of this helper")]
 
 use std::path::Path;
@@ -55,9 +59,19 @@ fn isolated(mut command: Command, home: &Path, inherit: Inherit) -> Command {
     match inherit {
         Inherit::Environment => {
             for (name, _) in std::env::vars_os() {
-                if name.to_string_lossy().starts_with("MCP_GATEWAY_") {
+                // Case-blind: Windows looks variables up that way.
+                if name
+                    .to_string_lossy()
+                    .to_ascii_uppercase()
+                    .starts_with("MCP_GATEWAY_")
+                {
                     command.env_remove(name);
                 }
+            }
+            // The bound port is read from an info-level banner, so an
+            // inherited filter keeps its own directives but may not hide it.
+            if let Ok(filter) = std::env::var("RUST_LOG") {
+                command.env("RUST_LOG", format!("{filter},{BANNER_TARGET}=info"));
             }
         }
         Inherit::Nothing => {
@@ -80,6 +94,35 @@ fn isolated(mut command: Command, home: &Path, inherit: Inherit) -> Command {
         .env("XDG_STATE_HOME", home.join(".local").join("state"));
     command
 }
+
+/// The variables [`command`] fixes; a caller must not set them again.
+const ISOLATION: [&str; 5] = [
+    "HOME",
+    "USERPROFILE",
+    "MCP_GATEWAY_TEST_HOME_DIR",
+    "APPDATA",
+    "LOCALAPPDATA",
+];
+
+/// Caller-chosen variables for a gateway command, refusing any isolation
+/// variable, which would undo [`command`]'s home. The spawn check requires a
+/// variable list passed to `.envs(...)` to come through here.
+pub fn checked_env<I, K, V>(vars: I) -> impl Iterator<Item = (K, V)>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<std::ffi::OsStr>,
+{
+    vars.into_iter().inspect(|(name, _)| {
+        let name = name.as_ref().to_string_lossy().to_ascii_uppercase();
+        assert!(
+            !ISOLATION.contains(&name.as_str()),
+            "{name} would undo the gateway's isolated home"
+        );
+    })
+}
+
+/// The module that logs the `Listening` banner [`logged_port`] reads.
+const BANNER_TARGET: &str = "mcp_gateway::gateway::server::support";
 
 /// `server.port: 0` (or `-p 0`): the child binds an OS-chosen port and logs
 /// the one it got, so no port is picked here and dropped before the child

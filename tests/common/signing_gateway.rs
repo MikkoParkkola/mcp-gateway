@@ -194,7 +194,7 @@ impl HttpGateway {
         .expect("write gateway config");
         let log = std::fs::File::create(directory.path().join("gateway.log")).expect("gateway log");
         let mut command = child_command(directory.path(), &config_path);
-        command.envs(env.iter().copied());
+        command.envs(gateway_bin::checked_env(env.iter().copied()));
         command
             .stdin(Stdio::null())
             .stdout(Stdio::from(log.try_clone().expect("clone gateway log")))
