@@ -39,6 +39,28 @@ pub struct EventsSourcesConfig {
     pub backend_notifications: bool,
     /// Task settlement (`task.settled`).
     pub task_settled: bool,
+    /// Change notifications for read-only REST capabilities
+    /// (`watch.<capability>.changed`). Off by default.
+    pub rest_watch: bool,
+}
+
+/// Bounds on `watch.<capability>.changed` pollers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EventsWatchConfig {
+    /// Pollers across all principals.
+    pub max_pollers: usize,
+    /// Pollers one principal holds alone (credentialed capabilities).
+    pub max_pollers_per_principal: usize,
+}
+
+impl Default for EventsWatchConfig {
+    fn default() -> Self {
+        Self {
+            max_pollers: 100,
+            max_pollers_per_principal: 10,
+        }
+    }
 }
 
 impl Default for EventsSourcesConfig {
@@ -46,6 +68,7 @@ impl Default for EventsSourcesConfig {
         Self {
             backend_notifications: true,
             task_settled: true,
+            rest_watch: false,
         }
     }
 }
@@ -110,6 +133,8 @@ pub struct EventsConfig {
     pub callback_allow_private: Vec<String>,
     /// Built-in sources.
     pub sources: EventsSourcesConfig,
+    /// `watch.<capability>.changed` poller bounds.
+    pub watch: EventsWatchConfig,
     /// First retry delay; later ones grow by a factor of 3, with full jitter.
     #[serde(with = "humantime_serde")]
     pub retry_base: Duration,
@@ -154,6 +179,7 @@ impl Default for EventsConfig {
             verification_per_host_per_minute: 10,
             callback_allow_private: Vec::new(),
             sources: EventsSourcesConfig::default(),
+            watch: EventsWatchConfig::default(),
             retry_base: Duration::from_secs(10),
             retry_max_attempts: 5,
             retry_window: Duration::from_secs(15 * 60),
@@ -196,6 +222,11 @@ impl EventsConfig {
             (
                 "max_verified_tail_per_principal",
                 self.max_verified_tail_per_principal,
+            ),
+            ("watch.max_pollers", self.watch.max_pollers),
+            (
+                "watch.max_pollers_per_principal",
+                self.watch.max_pollers_per_principal,
             ),
         ];
         if let Some((name, _)) = caps.iter().find(|(_, v)| *v == 0) {
