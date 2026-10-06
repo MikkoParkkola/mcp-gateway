@@ -77,3 +77,34 @@ fn a_reader_that_takes_one_line_and_leaves_is_a_clean_exit() {
         output.status
     );
 }
+
+/// Only `BrokenPipe` is a clean exit. A write that fails any other way (here
+/// ENOSPC from `/dev/full`) must still fail loudly, as std's `println!` does.
+#[cfg(target_os = "linux")]
+#[test]
+fn any_other_stdout_error_still_fails() {
+    let home = tempfile::tempdir().expect("home");
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .expect("open /dev/full");
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        .args(["list", "--available"])
+        .current_dir(home.path())
+        .env("HOME", home.path())
+        .env("MCP_GATEWAY_TEST_HOME_DIR", home.path())
+        .stdin(Stdio::null())
+        .stdout(full)
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run mcp-gateway");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "a full disk was swallowed:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("failed printing to stdout"),
+        "the failure must be reported:\n{stderr}"
+    );
+}
