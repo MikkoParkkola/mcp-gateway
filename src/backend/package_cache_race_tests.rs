@@ -186,3 +186,66 @@ async fn a_cancelled_removal_keeps_the_cache_locked_until_it_ends() {
         .await
         .expect("the lock is released once the removal ends");
 }
+
+/// A start that cannot get its cache's lock within the request timeout fails
+/// as unavailable instead of queueing behind it forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_gives_up_waiting_for_a_held_cache() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    write_stub(workspace.path(), STUB);
+    let cache = seed_cache(workspace.path());
+    let log = workspace.path().join("spawns.log");
+    let env = env_with_cache(&log, "succeed", CACHE_SHAPED, &cache.root);
+    let transport = transport(
+        workspace.path(),
+        env,
+        Duration::from_millis(300),
+        Some(&cache.root),
+    );
+
+    let lock = repair_lock(&cache.root);
+    let _held = lock.lock().await;
+    let (result, repair) =
+        tokio::time::timeout(Duration::from_secs(5), start_reporting(&transport))
+            .await
+            .expect("the wait is bounded by the request timeout");
+
+    assert!(
+        matches!(result, Err(Error::BackendUnavailable(_))),
+        "{result:?}"
+    );
+    assert_eq!(repair, Repair::NotRepaired);
+    assert!(spawns(&log).is_empty(), "nothing spawned without the lock");
+}
+
+/// A removal that does not finish in time is given up on, and the cache stays
+/// locked until the orphaned removal really ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_removal_past_its_limit_is_abandoned_but_keeps_the_lock() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let dir = temp_root(workspace.path()).join(unique_leaf());
+    let lock = repair_lock(&dir);
+    let held = Arc::clone(&lock).lock_owned().await;
+
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let outcome = remove_within(
+        &dir,
+        held,
+        move |_| {
+            release_rx.recv().expect("the test releases the removal");
+            true
+        },
+        Duration::from_millis(200),
+    )
+    .await;
+
+    assert!(outcome.is_err(), "the removal is given up on at its limit");
+    assert!(
+        lock.try_lock().is_err(),
+        "the orphaned removal still holds the cache"
+    );
+    release_tx.send(()).expect("the removal is waiting");
+    tokio::time::timeout(Duration::from_secs(5), lock.lock())
+        .await
+        .expect("the lock is released once the removal ends");
+}

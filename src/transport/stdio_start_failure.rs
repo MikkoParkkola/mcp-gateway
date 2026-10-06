@@ -93,6 +93,11 @@ impl StdioTransport {
         })
     }
 
+    /// The per-request timeout, which also bounds the cache repair's waits.
+    pub(crate) fn request_timeout(&self) -> std::time::Duration {
+        self.request_timeout
+    }
+
     /// The cache directory this gateway assigned, if it assigned one.
     pub(crate) fn assigned_package_cache_dir(&self) -> Option<&Path> {
         self.assigned_cache.as_deref()

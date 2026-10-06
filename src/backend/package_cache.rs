@@ -126,13 +126,29 @@ pub(crate) async fn start_reporting(
     // Held from the first spawn to the end of any retry: see `repair_lock`.
     // The cache is per backend (its name is hashed into the path), so only
     // other starts of this same backend wait. Each `initialize` request is
-    // capped by the backend's request timeout T, so in the normal case a failed
-    // attempt, the removal and a failed retry hold it for about 4T + 4s + the
-    // time to delete the tree. Writes to the child's stdin, reaping it and the
-    // removal itself carry no timeout of their own.
+    // capped by the backend's request timeout T, and the removal is given up
+    // on after T, so in the normal case a failed attempt, the removal and a
+    // failed retry hold it for about 5T + 4s. Waiting for it gives up after T.
+    // Writes to the child's stdin and reaping it carry no timeout of their own.
     let lock = transport.assigned_package_cache_dir().map(repair_lock);
+    // Waiting is bounded too: a removal stuck on a wedged filesystem keeps the
+    // lock (see `remove_cache_dir`), and a start must fail rather than queue
+    // behind it forever.
     let held = match lock {
-        Some(lock) => Some(lock.lock_owned().await),
+        Some(lock) => {
+            match tokio::time::timeout(transport.request_timeout(), lock.lock_owned()).await {
+                Ok(held) => Some(held),
+                Err(_) => {
+                    let error = Error::BackendUnavailable(format!(
+                        "stdio backend {}: its package cache is still locked by another start or \
+                         a removal after {:?}",
+                        transport.diagnostic_command(),
+                        transport.request_timeout()
+                    ));
+                    return (Err(error), Repair::NotRepaired);
+                }
+            }
+        }
         None => None,
     };
     let Err(error) = transport.start().await else {
@@ -188,7 +204,16 @@ async fn repair_while_locked(
     }
     // Kept to the end of the retry. If this future is dropped mid-removal, the
     // guard is still inside the blocking task, which Tokio cannot abort.
-    let (removed, _held) = remove_cache_dir(dir, held, remove_now).await;
+    let limit = transport.request_timeout();
+    let Ok((removed, _held)) = remove_within(dir, held, remove_now, limit).await else {
+        warn!(path = %dir.display(), "package cache removal did not finish in time; abandoning the repair");
+        let error = Error::BackendUnavailable(format!(
+            "stdio backend {}: its package cache removal did not finish within {limit:?}; \
+             the backend cannot start until it does",
+            transport.diagnostic_command()
+        ));
+        return (Err(error), Repair::NotRepaired);
+    };
     if !removed {
         // The start never got its repair, so the latch is not spent: a later
         // start can try the same cache again.
@@ -240,6 +265,24 @@ pub(crate) fn install_failure_needle(error: &Error, stderr: &str) -> Option<&'st
 /// How the child ended, as a log field.
 fn exit_status_text(status: Option<std::process::ExitStatus>) -> String {
     status.map_or_else(|| "running".to_string(), |status| status.to_string())
+}
+
+/// [`remove_cache_dir`], given up on after `limit`.
+///
+/// Giving up drops only the wait. The blocking removal cannot be stopped, so
+/// its thread is orphaned until the filesystem answers, and it keeps the
+/// cache's lock until then: later starts fail fast as busy instead of
+/// installing into a tree that is still being deleted.
+async fn remove_within<F>(
+    dir: &Path,
+    held: CacheGuard,
+    remove: F,
+    limit: std::time::Duration,
+) -> Result<(bool, Option<CacheGuard>), tokio::time::error::Elapsed>
+where
+    F: FnOnce(&Path) -> bool + Send + 'static,
+{
+    tokio::time::timeout(limit, remove_cache_dir(dir, held, remove)).await
 }
 
 /// Removes a directory tree, treating "already gone" as success.
