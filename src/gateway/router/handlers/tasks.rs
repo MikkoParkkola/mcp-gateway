@@ -133,14 +133,17 @@ pub(super) fn task_intent_for_call(
     }
     // A gateway that HAS identities must not create a task for a caller that
     // presented none: the record would answer to whatever key the unattributed
-    // path resolves, and every other unattributed caller reads it. With
-    // authentication off there are no identities to confuse, and the owner
-    // resolved for this request is the gateway's own constant.
-    if state.auth_config.enabled && req.verified_identity.is_none() {
+    // path resolves, and every other unattributed caller reads it. "None" is
+    // an EMPTY resolved owner, not a missing OIDC identity: an API-key caller
+    // owns its tasks as `credential:<principal>` (`route_task_owner`), and
+    // checking the same string the record is admitted under keeps one
+    // rendering of the caller (MIK-7967). With authentication off the owner
+    // is the gateway's own constant, never empty.
+    if state.auth_config.enabled && req.owner.is_empty() {
         return Err(Box::new(JsonRpcResponse::error(
             Some(id),
             -32600,
-            "task creation requires a verified caller identity",
+            "task creation requires an authenticated caller",
         )));
     }
     let Some(key) = req.retry.idempotency_key.as_deref() else {

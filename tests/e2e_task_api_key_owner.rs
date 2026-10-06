@@ -244,19 +244,42 @@ async fn an_api_key_caller_owns_its_task_and_no_one_else_sees_it() {
     );
 
     // MIK-7967.ISOLATE.1: another key is told the task does not exist.
+    // Pinned by comparison: key A's task must be indistinguishable, to key B,
+    // from a task that does not exist (`missing_task_error`). The made-up id
+    // keeps the real one's shape, so only existence differs.
     let other = gateway
         .post(Some(BRAVO), 3, "tasks/get", json!({ "taskId": task_id }))
+        .await;
+    let made_up = {
+        let mut id = task_id.clone();
+        let last = id.pop().expect("a non-empty task id");
+        id.push(if last == '0' { '1' } else { '0' });
+        id
+    };
+    let missing = gateway
+        .post(Some(BRAVO), 3, "tasks/get", json!({ "taskId": made_up }))
         .await;
     assert!(
         other.get("result").is_none() && other.get("error").is_some(),
         "a second API key must not see the first key's task: {other}"
     );
+    assert_eq!(
+        other.get("error"),
+        missing.get("error"),
+        "another key's task must answer exactly like a missing one"
+    );
 
     // MIK-7967.ANON.1: a caller with no credential still cannot create one.
+    // It is answered as a missing task (the unattributed gate, which names
+    // nothing), the code TASKS.md documents.
     let anonymous = gateway.create_task(None, 4, "anon-1").await;
+    assert_eq!(
+        anonymous.pointer("/error/code"),
+        Some(&json!(-32602)),
+        "a caller with no credential must be refused as a missing task: {anonymous}"
+    );
     assert!(
-        anonymous.pointer("/result/resultType") != Some(&json!("task"))
-            && anonymous.get("error").is_some(),
-        "a caller with no credential must be refused: {anonymous}"
+        anonymous.get("result").is_none(),
+        "a refused create carries no result: {anonymous}"
     );
 }

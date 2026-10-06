@@ -96,13 +96,31 @@ async fn a_resumed_call_is_not_a_new_task() {
 }
 
 #[tokio::test]
-async fn auth_on_without_a_verified_identity_refuses_task_creation() {
+async fn auth_on_with_an_empty_owner_refuses_task_creation() {
     let state = state(true).await;
     let (args, retry) = (json!({}), keyed());
-    let outcome = task_intent_for_call(&state, RequestId::Number(3), request(&args, &retry, true));
+    let unattributed = TaskIntentRequest {
+        owner: "",
+        ..request(&args, &retry, true)
+    };
+    let outcome = task_intent_for_call(&state, RequestId::Number(3), unattributed);
     let (code, message) = refusal(outcome).expect("a refusal");
     assert_eq!(code, -32600);
-    assert_eq!(message, "task creation requires a verified caller identity");
+    assert_eq!(message, "task creation requires an authenticated caller");
+}
+
+/// MIK-7967: an API-key caller has no OIDC identity but does have an owner
+/// (`credential:<principal>`); that owner is what the record answers to.
+#[tokio::test]
+async fn auth_on_with_a_credential_owner_and_no_identity_is_not_refused() {
+    let state = state(true).await;
+    let (args, retry) = (json!({}), keyed());
+    let api_key_caller = TaskIntentRequest {
+        owner: "credential:alpha",
+        ..request(&args, &retry, true)
+    };
+    let outcome = task_intent_for_call(&state, RequestId::Number(4), api_key_caller);
+    assert_eq!(refusal(outcome), None, "an owned caller is not refused");
 }
 
 #[tokio::test]
