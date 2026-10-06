@@ -191,8 +191,8 @@ const FLOOR_TAG_QUERY_TOP1: f64 = 0.600;
 
 /// Production capabilities the floors were last measured against. Adding or
 /// removing a capability changes the candidate pool, so this is bumped only
-/// after re-running against the floors. It lives here, not in corpus.json:
-/// that file's `tool_inventory_size` is what gen_corpus.py derived from the
+/// after re-running against the floors. It lives here, not in `corpus.json`:
+/// that file's `tool_inventory_size` is what `gen_corpus.py` derived from the
 /// frozen 119-tool tree (FREEZE.md), and editing it would stop the generator
 /// reproducing the corpus byte for byte (MIK-7850.TESTS.2).
 const POOL_SIZE_AT_LAST_MEASUREMENT: usize = 137;
