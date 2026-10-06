@@ -122,8 +122,18 @@ pub(super) async fn start_stdio_backend(
 }
 
 /// The `--show-stderr` lines, banner first: masking is best effort.
-fn stderr_section(_lines: &[String]) -> String {
-    String::new()
+fn stderr_section(lines: &[String]) -> String {
+    if lines.is_empty() {
+        return "\n  (no stderr captured)".to_string();
+    }
+    let mut section =
+        "\n  stderr tail (may contain secrets: masking is best effort, review before sharing):"
+            .to_string();
+    for line in lines {
+        section.push_str("\n    ");
+        section.push_str(line);
+    }
+    section
 }
 
 // Unix-only (W-L5): the probed backends are `sh -c` scripts, which Windows does not provide.

@@ -9,11 +9,77 @@
 //! saying they may still hold a secret: no pattern list is complete.
 
 use std::collections::VecDeque;
+use std::sync::LazyLock;
+
+use regex::Regex;
+
+/// Lines shown, the last ones.
+const SHOWN_LINES: usize = 20;
+/// Characters shown of one line, counted after masking so a cut never splits
+/// a secret out of its pattern's reach.
+const SHOWN_CHARS: usize = 240;
+const MASK: &str = "[masked]";
+
+/// Everything between a URL scheme and the last `@` of the word: userinfo,
+/// however its slashes are spelled (`https:tok@`, `https:///tok@`).
+static URL_USERINFO: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\b([a-z][a-z0-9+.-]*:)\S*@").expect("valid"));
+/// The word after `Bearer` or `Basic`.
+static AUTH_SCHEME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)\b(bearer|basic)\s+[^\s"',;]+"#).expect("valid"));
+/// A secret-named key's value, in env (`K=v`), YAML (`k: v`) and JSON
+/// (`"k": "v"`) forms.
+static SECRET_VALUE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)([a-z0-9_.-]*(?:key|secret|token|passw(?:or)?d|pwd|credential|auth)[a-z0-9_.-]*)("?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&]+)"#,
+    )
+    .expect("valid")
+});
+#[cfg(feature = "firewall")]
+static REDACTOR: LazyLock<crate::security::firewall::redactor::Redactor> =
+    LazyLock::new(crate::security::firewall::redactor::Redactor::new);
 
 /// The tail as shown: UTF-8 lines only, control characters as spaces,
 /// credentials masked, each line and the line count capped.
-pub(super) fn sanitize(_tail: &VecDeque<Vec<u8>>) -> Vec<String> {
-    Vec::new()
+pub(super) fn sanitize(tail: &VecDeque<Vec<u8>>) -> Vec<String> {
+    let lines: Vec<String> = tail
+        .iter()
+        .filter_map(|raw| std::str::from_utf8(raw).ok())
+        .map(|line| line.trim_end_matches(['\r', '\n']))
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| mask(line).chars().take(SHOWN_CHARS).collect())
+        .collect();
+    let skip = lines.len().saturating_sub(SHOWN_LINES);
+    lines.into_iter().skip(skip).collect()
+}
+
+/// One line with control characters as spaces and every known credential
+/// shape masked. Spaces first, so a tab still separates `Bearer` from its value.
+fn mask(line: &str) -> String {
+    let line: String = line
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    #[cfg(feature = "firewall")]
+    let line = mask_spans(&line, &REDACTOR.credential_spans(&line));
+    let line = URL_USERINFO.replace_all(&line, format!("${{1}}{MASK}@"));
+    let line = AUTH_SCHEME.replace_all(&line, format!("${{1}} {MASK}"));
+    SECRET_VALUE
+        .replace_all(&line, format!("${{1}}${{2}}{MASK}"))
+        .into_owned()
+}
+
+#[cfg(feature = "firewall")]
+fn mask_spans(text: &str, spans: &[(usize, usize)]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for &(start, end) in spans {
+        out.push_str(&text[cursor..start]);
+        out.push_str(MASK);
+        cursor = end;
+    }
+    out.push_str(&text[cursor..]);
+    out
 }
 
 #[cfg(test)]
