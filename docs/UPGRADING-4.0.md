@@ -172,6 +172,7 @@ backend" and "fails a capability file" first.**
 | 145 | The `plugin` command is removed (`search`, `install`, `uninstall`, `list`), with `mcp_gateway::registry::marketplace` and `mcp_gateway::config::MarketplaceConfig`; a `marketplace:` block in the config loads and warns once | Delete the `marketplace:` block and `~/.mcp-gateway/plugins`; add tools as `backends:` entries or capability files (`mcp-gateway cap`) |
 | 146 | An OAuth backend whose authorization server, authorization endpoint, token endpoint or registration endpoint is `http://` to a host off this machine fails at connect, and so does a redirect from one to such a URL; a capability that sends a credential (`auth.required`) and names an `http://` `base_url` or `endpoint` off this machine fails to load, and a templated one is refused at call time. `http://` to a loopback host is allowed, and is no longer proxied | Serve the authorization server and the capability's API over `https://`, or on a loopback host (`localhost`, `127.0.0.1`, `[::1]`). `allow_cleartext_credentials` does not cover either |
 | 147 | A capability whose declared output root is not object-shaped (an array, a string, a type list) advertises `outputSchema` as an object and publishes `structuredContent` under `items` | Read `structuredContent.items` for the nine shipped capabilities listed below, and for your own; the text content is unchanged |
+| 148 | An `http_url` backend with no `streamable_http` key POSTs `initialize` first and falls back to the legacy SSE `GET` only when that POST is refused with a 4xx (not 401/403); `add --url` no longer writes `streamable_http: false`. `TransportConfig::Http::streamable_http` is now `Option<bool>` | None. Set `streamable_http: false` to keep a backend on SSE without the first POST; an SSE-only backend left unset is still refused MCP Events, as before |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3604,7 +3605,8 @@ without it, while `add` printed the key as set. Now `add` writes:
 - for a hosted server that logs in with OAuth, `oauth: {}`, so the first use opens the login in a
   browser; for one that takes a token in a header, the header with a `${VAR}` reference (or the
   value from `-e`);
-- `streamable_http` as the endpoint speaks it.
+- `streamable_http` as the endpoint speaks it, for a registry server; for `--url`, nothing, and the
+  gateway detects the transport at connect (item 148).
 
 `add` writes the server **disabled**, and prints why, when a `${VAR}` it wrote does not resolve
 (unset or empty in the environment and every `env_files` entry), because an enabled backend with an

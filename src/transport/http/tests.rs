@@ -178,7 +178,7 @@ async fn request_through_retry(
 fn new_creates_transport_with_defaults() {
     let t = make_transport("http://localhost:8080/mcp");
     assert_eq!(t.base_url, "http://localhost:8080/mcp");
-    assert!(t.streamable_http);
+    assert_eq!(*t.streamable_http.read(), Some(true));
     assert!(!t.is_connected());
     assert!(t.message_url.read().is_none());
     assert!(default_session(&t).is_none());
@@ -197,7 +197,7 @@ fn new_with_custom_headers() {
     )
     .unwrap();
     assert_eq!(t.headers.get("X-Custom").unwrap(), "value");
-    assert!(!t.streamable_http);
+    assert_eq!(*t.streamable_http.read(), Some(false));
 }
 
 #[test]

@@ -252,7 +252,7 @@ fn t8_a_malformed_digest_pin_is_refused_at_load() {
             BackendConfig {
                 transport: crate::config::TransportConfig::Http {
                     http_url: "http://localhost:3000/mcp".to_string(),
-                    streamable_http: false,
+                    streamable_http: Some(false),
                     protocol_version: None,
                 },
                 allow_flagged_tools: [(POISONED.to_string(), pin)].into(),

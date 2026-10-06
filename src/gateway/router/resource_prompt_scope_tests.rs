@@ -101,7 +101,7 @@ fn required_propagation() -> BackendConfig {
     BackendConfig {
         transport: crate::config::TransportConfig::Http {
             http_url: "https://ledger.invalid/mcp".to_string(),
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         identity_propagation: Some(IdentityPropagationConfig {

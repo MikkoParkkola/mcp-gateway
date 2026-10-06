@@ -41,7 +41,7 @@ impl HttpTransport {
     /// or protocol version negotiation is unsuccessful.
     pub async fn initialize(&self) -> Result<()> {
         self.connect().await?;
-        self.legacy_handshake().await
+        self.handshake().await
     }
 
     /// Everything a request needs before one can be sent: the OAuth token and
@@ -101,7 +101,9 @@ impl HttpTransport {
             self.store_refresh_task(handle);
         }
 
-        if self.streamable_http {
+        // An undetected flavour starts as Streamable HTTP: the MCP
+        // backwards-compatibility rule POSTs first, and `handshake` falls back.
+        if *self.streamable_http.read() != Some(false) {
             // Streamable HTTP: use URL directly
             // Never add trailing slash — Dart/shelf (Pieces) returns 404 for trailing slash.
             // Starlette compatibility was the original reason, but it handles both.
@@ -109,14 +111,46 @@ impl HttpTransport {
             *self.message_url.write() = Some(url.clone());
             info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&url), oauth = self.oauth_client.is_some(), "Streamable HTTP mode - direct POST");
         } else {
-            // SSE mode: GET the SSE endpoint to receive the message endpoint
-            let message_endpoint = self.establish_sse_connection().await?;
-            let full_message_url = self.resolve_message_url(&message_endpoint)?;
-            *self.message_url.write() = Some(full_message_url.clone());
-            info!(target: HTTP_TARGET, sse_url = %sanitize_url_for_diagnostics(&self.base_url), message_url = %sanitize_url_for_diagnostics(full_message_url.as_str()), oauth = self.oauth_client.is_some(), "SSE handshake complete");
+            self.connect_sse().await?;
         }
 
         Ok(())
+    }
+
+    /// SSE mode: GET the SSE endpoint to receive the message endpoint.
+    async fn connect_sse(&self) -> Result<()> {
+        let message_endpoint = self.establish_sse_connection().await?;
+        let full_message_url = self.resolve_message_url(&message_endpoint)?;
+        *self.message_url.write() = Some(full_message_url.clone());
+        info!(target: HTTP_TARGET, sse_url = %sanitize_url_for_diagnostics(&self.base_url), message_url = %sanitize_url_for_diagnostics(full_message_url.as_str()), oauth = self.oauth_client.is_some(), "SSE handshake complete");
+        Ok(())
+    }
+
+    /// [`Self::legacy_handshake`], detecting the flavour when config left it
+    /// open. The MCP backwards-compatibility rule: a 4xx refusal of the
+    /// `initialize` POST means a legacy HTTP+SSE server, so open its SSE
+    /// stream and handshake over the endpoint it names. An explicit flavour
+    /// never falls back.
+    async fn handshake(&self) -> Result<()> {
+        if self.streamable_http.read().is_some() {
+            return self.legacy_handshake().await;
+        }
+        let Err(post_error) = self.legacy_handshake().await else {
+            *self.streamable_http.write() = Some(true);
+            return Ok(());
+        };
+        let Some(status) = refused_as_wrong_transport(&post_error) else {
+            return Err(post_error);
+        };
+        info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&self.base_url), status, "Streamable HTTP POST refused; falling back to the legacy SSE transport");
+        // Both answers, so a mistyped URL is not reported as an SSE fault alone.
+        self.connect_sse().await.map_err(|sse_error| {
+            Error::Transport(format!(
+                "POST initialize returned HTTP {status}, and the legacy SSE fallback failed: {sse_error}"
+            ))
+        })?;
+        *self.streamable_http.write() = Some(false);
+        self.legacy_handshake().await
     }
 
     /// Finish a connected start in the dialect `era` names (RFC-0061 §2.4).
@@ -137,6 +171,12 @@ impl HttpTransport {
     pub(crate) async fn finish_startup(&self, era: Era) -> Result<()> {
         match era {
             Era::Modern => {
+                // A modern answer came over a POST: the peer is streamable.
+                let mut flavour = self.streamable_http.write();
+                if flavour.is_none() {
+                    *flavour = Some(true);
+                }
+                drop(flavour);
                 self.connected.store(true, Ordering::Relaxed);
                 debug!(target: HTTP_TARGET,
                     url = %sanitize_url_for_diagnostics(&self.base_url),
@@ -144,7 +184,7 @@ impl HttpTransport {
                 );
                 Ok(())
             }
-            Era::Legacy => self.legacy_handshake().await,
+            Era::Legacy => self.handshake().await,
         }
     }
 
@@ -317,7 +357,7 @@ impl HttpTransport {
         }
 
         self.connected.store(true, Ordering::Relaxed);
-        debug!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&self.base_url), streamable = %self.streamable_http, "HTTP transport initialized");
+        debug!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&self.base_url), streamable = ?*self.streamable_http.read(), "HTTP transport initialized");
 
         Ok(())
     }
@@ -521,5 +561,43 @@ impl HttpTransport {
             .read()
             .clone()
             .unwrap_or_else(|| self.base_url.clone())
+    }
+}
+
+/// The status of a 4xx the HTTP transport reported as `HTTP <status>` text,
+/// when it says "wrong transport" rather than "wrong credential" or "not now":
+/// 401/403/407 are about the credential, and 408/429 invite a retry. Those
+/// keep their own error rather than becoming an SSE fault.
+fn refused_as_wrong_transport(error: &Error) -> Option<u16> {
+    let Error::Transport(text) = error else {
+        return None;
+    };
+    let status: u16 = text.strip_prefix("HTTP ")?.get(..3)?.parse().ok()?;
+    ((400..500).contains(&status) && !matches!(status, 401 | 403 | 407 | 408 | 429))
+        .then_some(status)
+}
+
+#[cfg(test)]
+mod wrong_transport_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_transport_shaped_4xx_falls_back() {
+        let status = |text: &str| refused_as_wrong_transport(&Error::Transport(text.into()));
+        assert_eq!(status("HTTP 405 Method Not Allowed"), Some(405));
+        assert_eq!(status("HTTP 404 Not Found"), Some(404));
+        for kept in [
+            "HTTP 401 Unauthorized",
+            "HTTP 403 Forbidden",
+            "HTTP 429 Too Many Requests",
+        ] {
+            assert_eq!(status(kept), None, "{kept}");
+        }
+        assert_eq!(status("HTTP 500 Internal Server Error"), None);
+        assert_eq!(status("connection refused"), None);
+        assert_eq!(
+            refused_as_wrong_transport(&Error::Protocol("HTTP 405".into())),
+            None
+        );
     }
 }
