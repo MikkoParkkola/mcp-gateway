@@ -339,6 +339,7 @@ impl Firewall {
                 caller,
                 external_server: server,
                 external_tool: tool,
+                subject: None,
             };
             let tenants = self.tenant_guard.request_tenants(args);
             audit.log_request_attributed(&labels, args, &verdict, &tenants);
@@ -500,6 +501,7 @@ impl Firewall {
             caller,
             external_server: server,
             external_tool: tool,
+            subject: None,
         };
         // The compatibility API always supplies one target. Keep the defensive
         // error branch fail-closed rather than panicking at an inspection boundary.
