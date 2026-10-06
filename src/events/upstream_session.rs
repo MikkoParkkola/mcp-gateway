@@ -242,9 +242,20 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             // came; a notice during a refill waits for the next one.
             state.tools_due = None;
             backend.invalidate_tools();
-            let backend = Arc::clone(backend);
+            let (backend, name) = (Arc::clone(backend), shared.name.clone());
             refill = Some(Box::pin(async move {
-                let _ = tokio::time::timeout(OPEN_LIMIT, backend.get_tools()).await;
+                // The shared fetch, so a reader of the list meanwhile waits on
+                // this one; bounded by the backend's own `timeout` and by
+                // OPEN_LIMIT. A refill that did not fill still announces the
+                // change: the notice said the list changed, and the
+                // subscriber's own re-read fetches it (MIK-7951).
+                let filled = matches!(
+                    tokio::time::timeout(OPEN_LIMIT, backend.get_tools_shared()).await,
+                    Ok(Ok(_))
+                );
+                if !filled {
+                    warn!(backend = %name, "upstream listener: tools refill did not complete; announcing the change anyway");
+                }
             }));
         }
         if !backend_still_current(backend, &target.handle) {

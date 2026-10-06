@@ -49,10 +49,17 @@ async fn t39m_a_legacy_stdio_tools_notice_becomes_an_event() {
     expect_events(&receiver, &id, &name, 1).await;
 }
 
+/// An HTTP backend whose calls time out after 2 s, which bounds a hanging
+/// tools refill too (MIK-7951 REFILLFU.4).
+fn quick_backend(peer: &HttpPeer) -> Value {
+    let mut backend = http_backend(peer);
+    backend["timeout"] = json!("2s");
+    backend
+}
+
 /// MIK-7937 REFILL.1: a tools notice starts a refill of the cached list. With
 /// the backend's `tools/list` hanging, another notice on the same session is
-/// still delivered promptly: the refill must not hold the session loop for
-/// its 30 s bound.
+/// still delivered promptly: the refill must not hold the session loop.
 #[tokio::test]
 async fn a_hanging_tools_refill_does_not_hold_other_notices() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -61,7 +68,7 @@ async fn a_hanging_tools_refill_does_not_hold_other_notices() {
     let gw = start_listed(
         dir.path(),
         &receiver,
-        upstream_config(dir.path(), http_backend(&peer), &[]),
+        upstream_config(dir.path(), quick_backend(&peer), &[]),
     )
     .await;
     let resources = event("resources_changed");
@@ -93,9 +100,10 @@ async fn a_hanging_tools_refill_does_not_hold_other_notices() {
         prompt,
         "a resources notice waited behind the hanging tools refill"
     );
-    // REFILL.2: the tools change is still announced, once the refill ends
-    // (here by its 30 s bound, the peer holding the list for a minute).
-    let announced = wait_until(Duration::from_secs(45), || {
+    // REFILL.2, MIK-7951 REFILLFU.3: a refill that ends without filling
+    // (here the backend's 2 s timeout, the peer holding the list for a
+    // minute) still announces the tools change.
+    let announced = wait_until(Duration::from_secs(10), || {
         delivered(&receiver, &tools, &tools_name).len() > tools_before
     })
     .await;
@@ -151,4 +159,77 @@ async fn a_refill_in_flight_is_kept_and_announced_when_the_session_ends() {
     })
     .await;
     assert!(announced, "a session end dropped the refill's tools change");
+}
+
+/// Subscribe to `tools_changed` on a modern HTTP peer and wait for the listen
+/// to ask for it: the gateway, the subscription and the counts before.
+async fn tools_session(
+    dir: &Path,
+    receiver: &Receiver,
+    peer: &HttpPeer,
+) -> (Gateway, Value, String, String) {
+    let cfg = upstream_config(dir, quick_backend(peer), &[]);
+    let gw = start_listed(dir, receiver, cfg.clone()).await;
+    let name = event("tools_changed");
+    let tools = sub(&gw, ALICE, &name, receiver, json!({})).await;
+    eventually("the listen asks for tools", || {
+        peer.open_listens()
+            .iter()
+            .any(|f| f["notifications"]["toolsListChanged"] == true)
+    })
+    .await;
+    (gw, cfg, name, tools)
+}
+
+/// MIK-7951 REFILLFU.5: a second tools notice during a refill is served by
+/// the next refill, which runs once the first ends, and the change is
+/// announced.
+#[tokio::test]
+async fn a_notice_during_a_refill_is_served_by_the_next_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = HttpPeer::start(Era::Modern).await;
+    let (_gw, _cfg, name, tools) = tools_session(dir.path(), &receiver, &peer).await;
+    let lists_before = peer.frames("tools/list").len();
+    peer.hang_tools_list();
+    peer.push(TOOLS_CHANGED, json!({}));
+    eventually("the first refill reached the backend", || {
+        peer.frames("tools/list").len() > lists_before
+    })
+    .await;
+    peer.push(TOOLS_CHANGED, json!({}));
+    tokio::time::sleep(QUIET).await;
+    assert_eq!(
+        peer.frames("tools/list").len(),
+        lists_before + 1,
+        "the second notice waits for the refill in flight"
+    );
+    peer.release_tools_list();
+    eventually("the next refill served the second notice", || {
+        peer.frames("tools/list").len() > lists_before + 1
+    })
+    .await;
+    expect_events(&receiver, &tools, &name, 1).await;
+}
+
+/// MIK-7951 REFILLFU.6: a refill that ends as the backend's transport is
+/// replaced (a config reload) still announces the tools change.
+#[tokio::test]
+async fn a_refill_ending_across_a_transport_replacement_is_announced() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = HttpPeer::start(Era::Modern).await;
+    let (mut gw, mut cfg, name, tools) = tools_session(dir.path(), &receiver, &peer).await;
+    let lists_before = peer.frames("tools/list").len();
+    peer.hang_tools_list();
+    peer.push(TOOLS_CHANGED, json!({}));
+    eventually("the refill reached the backend", || {
+        peer.frames("tools/list").len() > lists_before
+    })
+    .await;
+    // A reload that changes the backend replaces its transport.
+    cfg["backends"]["x"]["timeout"] = json!("3s");
+    gw.rewrite_config(cfg);
+    peer.release_tools_list();
+    expect_events(&receiver, &tools, &name, 1).await;
 }
