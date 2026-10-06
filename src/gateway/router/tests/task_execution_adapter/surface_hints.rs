@@ -8,6 +8,7 @@
 
 use super::super::*;
 use super::support::*;
+use pretty_assertions::assert_eq;
 
 fn admin_auth() -> AuthConfig {
     AuthConfig {
