@@ -21,6 +21,8 @@ use crate::security::firewall::tenant_guard::TenantGuardConfig;
 use crate::security::firewall::{Firewall, FirewallConfig};
 use crate::security::transparency_log::TransparencyLogConfig;
 
+mod races;
+
 const UPSTREAM_HANDLE: &str = "upstream-job-settlement-record";
 const ARRIVAL_BOUND: Duration = Duration::from_secs(10);
 
@@ -502,16 +504,25 @@ async fn r2_an_owner_read_names_the_admission_principal_not_the_reader() {
 
 /// R3, both paths: a recovered result an output policy refuses settles failed,
 /// and its record keeps the raw response's tenants, the refusal's code and no
-/// response hash.
+/// response hash. The firewall's refusal is the -32600 a native task reads
+/// (MIK-7667); anomaly screening, which runs first when armed, stays -32603.
 #[tokio::test]
 async fn r3_a_refused_recovered_result_is_recorded_with_its_tenants() {
     let note = format!("AWS_ACCESS_KEY_ID={}", example_access_key());
-    for path in BOTH {
+    for (path, screening) in BOTH.into_iter().flat_map(|p| [(p, false), (p, true)]) {
         let mut setup = Setup::answering(Terminal::Completed(result_naming_cust9(&note)));
-        setup.refusing = true;
+        setup.refusing = screening;
         let fx = fixture(setup, path).await;
         let (_, fetched) = fx.settle(path, |_| {}).await;
+        let code = json!(if screening { -32603 } else { -32600 });
         std::assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
+        let error = &fetched["result"]["error"];
+        std::assert_eq!(error["code"], code, "{path:?} {screening}: {fetched}");
+        std::assert!(
+            screening || error["message"] == "Response blocked by security firewall",
+            "{path:?}: {fetched}"
+        );
+        std::assert!(!fetched.to_string().contains(&example_access_key()));
 
         let record = fx.only_settlement(path);
         std::assert!(
@@ -519,7 +530,7 @@ async fn r3_a_refused_recovered_result_is_recorded_with_its_tenants() {
             "{path:?}: {record}"
         );
         std::assert_ne!(record["outcome"], json!("ok"), "{path:?}: {record}");
-        std::assert_eq!(record["error_code"], json!(-32603), "{path:?}: {record}");
+        std::assert_eq!(record["error_code"], code, "{path:?}: {record}");
         std::assert!(record.get("response_hash").is_none(), "{path:?}: {record}");
     }
 }
@@ -645,81 +656,6 @@ async fn r7_a_failed_write_under_best_effort_commits_the_result() {
         );
         std::assert!(fx.settlement_records().is_empty(), "{:?}", fx.records());
     }
-}
-
-/// R8 (a): a worker settlement and an owner read of one task write exactly one
-/// record. They share the record's query slot, so they never both settle it.
-#[tokio::test]
-async fn r8_a_worker_and_an_owner_read_write_one_record() {
-    let path = Path::Worker;
-    let fx = fixture(
-        Setup::answering(Terminal::Completed(result_naming_cust9(""))),
-        path,
-    )
-    .await;
-    let id = fx.submit("min1-settlement-r8").await;
-    fx.recovery.wait_for_queries(1).await;
-    let reader = tokio::spawn({
-        let (state, id) = (Arc::clone(&fx.state), id.clone());
-        async move { get_task(&state, "key-a", &id).await }
-    });
-    for _ in 0..200 {
-        tokio::task::yield_now().await;
-    }
-    fx.recovery.release_all();
-    let fetched = reader.await.expect("the owner's read answers");
-    join_workers(&fx.state).await;
-    std::assert_eq!(status_of(&fetched), "completed", "{fetched}");
-    let record = fx.only_settlement(path);
-    std::assert_eq!(record["task_id"], json!(id), "{record}");
-}
-
-/// R8 (b): a cancel that wins the commit after the record was written leaves
-/// that one record and a cancelled task.
-#[tokio::test]
-async fn r8_a_cancel_winning_after_the_record_leaves_one_record() {
-    let path = Path::OwnerRead;
-    let fx = fixture(
-        Setup::answering(Terminal::Completed(result_naming_cust9(""))),
-        path,
-    )
-    .await;
-    let id = fx.submit("min1-settlement-r8-cancel").await;
-    fx.recovery.wait_for_queries(1).await;
-    join_workers(&fx.state).await;
-
-    // The next append, the settlement record, is held until released.
-    let stall = fx.log.stall_next_write_for_test(Duration::from_secs(30));
-    fx.recovery.release_all();
-    let reader = tokio::spawn({
-        let (state, id) = (Arc::clone(&fx.state), id.clone());
-        async move { get_task(&state, "key-a", &id).await }
-    });
-    let deadline = Instant::now() + ARRIVAL_BOUND;
-    while !stall.0.is_entered() {
-        std::assert!(
-            Instant::now() < deadline,
-            "no settlement record write began before the recovery's commit"
-        );
-        tokio::task::yield_now().await;
-    }
-    let cancelled = post(
-        &fx.state,
-        "key-a",
-        task_method(9_002, "tasks/cancel", json!({ "taskId": id })),
-    )
-    .await;
-    std::assert!(cancelled.get("error").is_none(), "{cancelled}");
-    stall.0.release();
-    let _ = reader.await.expect("the owner's read answers");
-
-    let fetched = get_task(&fx.state, "key-a", &id).await;
-    std::assert_eq!(
-        status_of(&fetched),
-        "cancelled",
-        "the cancel's commit stands: {fetched}"
-    );
-    std::assert_eq!(fx.settlement_records().len(), 1, "{:?}", fx.records());
 }
 
 /// R9: the submission record carries the gateway task id whenever the raw
