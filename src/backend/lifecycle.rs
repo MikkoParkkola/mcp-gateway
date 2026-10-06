@@ -198,8 +198,13 @@ impl Backend {
             }
 
             // Start transport for this slot.
-            let transport =
-                crate::oauth::login_gate::set_out(set_out, self.start_entry(key, &entry)).await?;
+            // Erased to `dyn Future`: the start future is deep enough that
+            // proving the dispatch future `Send` through it overflows the
+            // trait solver (E0275). The erasure restarts that proof here.
+            let start: std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<Arc<dyn Transport>>> + Send + '_>,
+            > = Box::pin(self.start_entry(key, &entry));
+            let transport = crate::oauth::login_gate::set_out(set_out, start).await?;
 
             // Reconcile: did the evictor remove this exact entry while we
             // were building its transport?
