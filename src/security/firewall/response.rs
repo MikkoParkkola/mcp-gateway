@@ -36,6 +36,9 @@ impl Firewall {
         targets.sort_unstable();
         targets.dedup();
 
+        // Copied only when redaction is not allowed, so a changed protected value can be
+        // restored whole before the Block. The routed tools/call pass redacts and never
+        // copies (MIK-7917 item 3).
         let original = (mutation != ResponseMutationPolicy::Redact).then(|| response.clone());
         let findings = self.inspect_response_content(response, correlation);
         let mut action = targets
