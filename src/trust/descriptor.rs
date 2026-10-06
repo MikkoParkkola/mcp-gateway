@@ -94,8 +94,11 @@ pub fn project_tool_descriptor_trust_card(
 }
 
 /// The tool as published; the fallback keeps the two required fields when
-/// the tool cannot be serialised whole.
+/// the tool cannot be serialised whole. Every serialisation of a tool in this
+/// module goes through here, so the test counter sees each one.
 fn descriptor_of(tool: &Tool) -> Value {
+    #[cfg(test)]
+    TOOL_SERIALISATIONS.with(|n| n.set(n.get() + 1));
     serde_json::to_value(tool).unwrap_or_else(|_| {
         json!({
             "name": tool.name.clone(),
@@ -256,6 +259,8 @@ pub fn tools_list_result_with_trust_cards(tools: Vec<Value>) -> Value {
 thread_local! {
     /// Test-only: `TrustCard` references computed on this thread.
     static CARD_COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Test-only: tools serialised into a descriptor on this thread.
+    static TOOL_SERIALISATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -266,6 +271,32 @@ mod tests {
 
     fn computations() -> usize {
         CARD_COMPUTATIONS.with(std::cell::Cell::get)
+    }
+
+    fn serialisations() -> usize {
+        TOOL_SERIALISATIONS.with(std::cell::Cell::get)
+    }
+
+    /// MIK-7916 AC3: a repeat list serialises no tool; a changed tool is
+    /// serialised exactly once. The second half keeps the first honest: a
+    /// projection that never serialised anything would pass "zero" alone.
+    #[test]
+    fn a_hit_serialises_no_tool_and_a_miss_exactly_one() {
+        let (id, name) = ("backend:memo-serialise", "memo-serialise");
+        let mut tools = catalog(name);
+        let _ = project_tool_descriptors_trust_cards(id, name, &tools);
+        let start = serialisations();
+        let _ = project_tool_descriptors_trust_cards(id, name, &tools);
+        assert_eq!(serialisations() - start, 0, "a hit list serialised a tool");
+
+        tools[2].description = Some("changed".to_string());
+        let start = serialisations();
+        let _ = project_tool_descriptors_trust_cards(id, name, &tools);
+        assert_eq!(
+            serialisations() - start,
+            1,
+            "one changed tool, one serialisation"
+        );
     }
 
     /// A catalog under a server identity no other test uses, so a shared

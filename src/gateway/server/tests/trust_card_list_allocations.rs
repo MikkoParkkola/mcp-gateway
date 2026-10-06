@@ -1,11 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7916 AC3: every `tools/list` projects the same catalogue, so a memo
-//! hit must cost no more than handing back a copy of what it already holds.
-//! The copy is the oracle: a hit that re-serialises each tool, re-inserts
-//! the `trustCard` key or allocates its lookup key asks the allocator for
-//! more than `clone()` of its own output does. The AC3 bar itself is a CPU
-//! share, which no unit test can state; the profile rerun grades that.
+//! hit must allocate no more than handing back a copy of what it already
+//! holds. The copy is the oracle, and the bound is relative to it.
+//!
+//! What this can and cannot see: `serde_json::to_value` allocates one for one
+//! with `Value::clone` (a `String` per key and string, an exact-capacity `Vec`
+//! per array), so re-serialising a tool costs the same allocations as copying
+//! its descriptor. The memo the fix replaced failed here by a fixed 2 calls,
+//! its per-list `(String, String)` lookup key, whatever the schema size. The
+//! serialisation itself is caught by `TOOL_SERIALISATIONS` in
+//! `trust::descriptor`, and the CPU share by the AC3 profile.
 
 use serde_json::json;
 
