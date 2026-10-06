@@ -181,3 +181,27 @@ fn credentials_other_than_api_keys_bound_the_grant() {
         "an API key is re-checked live instead"
     );
 }
+
+/// MIK-7977 ID.2: within 2^53 the canonical form is the library's JCS, byte
+/// for byte, for scalars, nesting, escapes and the integer boundaries.
+#[test]
+fn canonical_is_the_libraries_jcs_within_2_pow_53() {
+    for value in [
+        json!(0),
+        json!(-0.0),
+        json!(-1),
+        json!(1.0),
+        json!(1e21),
+        json!(9_007_199_254_740_992_u64),
+        json!(-9_007_199_254_740_992_i64),
+        json!([[], {}, [null, false, 0.1, -2.5e-7, "\u{7f}\u{2028}é😀"]]),
+        json!({"z": {"b": [1, {"\u{e000}": 2, "\u{10000}": 3}], "a": 1.5}, "": null}),
+    ] {
+        assert_eq!(
+            String::from_utf8(canonical(&value)).expect("utf-8"),
+            String::from_utf8(serde_json_canonicalizer::to_vec(&value).expect("jcs"))
+                .expect("utf-8"),
+            "{value}"
+        );
+    }
+}
