@@ -15,8 +15,8 @@ permissions:
 
 env:
   REF_B: v3.5.1
-  REF_C: 0edeff8815e781344d410f3c5e937faecb4b0cd2
-  REF_T: b6b336206197b910741965df97711b18344ab3fe
+  REF_C: 5ddc1226ff413d4ca54203b8c480224985e9be5b
+  REF_T: 0d615f38b4ea03356506a3f83c1b08eb10171862
   FEATURES: a2a,webui,config-export,cost-governance,firewall,discovery,semantic-search,tool-profiles,metrics
   CARGO_PROFILE_RELEASE_STRIP: none
   CARGO_PROFILE_RELEASE_DEBUG: "1"
@@ -97,6 +97,28 @@ jobs:
             curl -fsS "http://127.0.0.1:$PORT/health" > /dev/null || { echo "VOID: $2 never healthy"; exit 3; }
           }
           stop() { kill "$pid" || true; wait "$pid" 2>/dev/null || true; for _ in $(seq 100); do port_open || break; sleep 0.2; done; }
+          # -B: no build-id pass after recording. On 4.0 binaries that pass
+          # hung in addr2line until the job timed out (runs 37484979867,
+          # 37500520719); symbols still resolve by each arm's own path.
+          record() { # record <arm> <seconds>: profile $pid into $RUNNER_TEMP/<arm>.data
+            timeout -s INT 600 "$PERF" record -B -F 1999 --call-graph dwarf,16384 -p "$pid" -o "$RUNNER_TEMP/$1.data" -- sleep "$2" \
+              2> "$out/prof-$1.record.err" || { echo "VOID: perf record $1 did not finish"; exit 3; }
+          }
+          # Smoke: a short record and report per arm before any measured rep,
+          # so a profiler fault voids in minutes, not at the job timeout.
+          for arm in B C T; do
+            start "$arm" "smoke-$arm"
+            python3 benchmarks/workload/cpu_per_call.py measure "$PORT" "$pid" 0 "$(( RATE * 6 ))" "$RATE" "$out/smoke-$arm.json" &
+            driver=$!
+            sleep 1
+            record "smoke-$arm" 3
+            wait "$driver"
+            stop
+            timeout 120 "$PERF" report -i "$RUNNER_TEMP/smoke-$arm.data" --no-inline --children --sort symbol -g none --stdio \
+              > "$out/smoke-$arm.children.txt" 2> "$out/smoke-$arm.report.err" || { echo "VOID: smoke report $arm failed"; exit 3; }
+            grep -q 'mcp_gateway' "$out/smoke-$arm.children.txt" || { echo "VOID: smoke report $arm has no gateway frame"; exit 3; }
+            rm -f "$RUNNER_TEMP/smoke-$arm.data"
+          done
           # Arm order rotates, so no arm always runs first or last.
           n=0
           for order in "B C T" "C T B" "T B C"; do
@@ -113,7 +135,7 @@ jobs:
             driver=$!
             # Past the warm-up (WARMUP / RATE seconds), inside the measured calls.
             sleep $(( WARMUP / RATE + 3 ))
-            "$PERF" record -F 1999 --call-graph dwarf,16384 -p "$pid" -o "$RUNNER_TEMP/$arm.data" -- sleep "$PROFILE_SECONDS" 2> "$out/prof-$arm.record.err"
+            record "$arm" "$PROFILE_SECONDS"
             wait "$driver"
             stop
           done
