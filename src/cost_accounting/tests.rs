@@ -36,8 +36,8 @@ fn budget_window_secs_values_are_correct() {
 #[test]
 fn session_cost_accumulates_records() {
     let sc = SessionCost::new("sid1", Some("key_a".to_string()));
-    sc.record(CostRecord::new("srv1", "t1", 500, 15.0));
-    sc.record(CostRecord::new("srv2", "t2", 300, 15.0));
+    sc.record(&CostRecord::new("srv1", "t1", 500, 15.0));
+    sc.record(&CostRecord::new("srv2", "t2", 300, 15.0));
 
     let snap = sc.snapshot();
     assert_eq!(snap.call_count, 2);
@@ -50,9 +50,9 @@ fn session_cost_accumulates_records() {
 #[test]
 fn session_cost_groups_by_backend_and_tool() {
     let sc = SessionCost::new("sid2", None);
-    sc.record(CostRecord::new("srv1", "tool", 100, 10.0));
-    sc.record(CostRecord::new("srv1", "tool", 200, 10.0));
-    sc.record(CostRecord::new("srv2", "other", 50, 10.0));
+    sc.record(&CostRecord::new("srv1", "tool", 100, 10.0));
+    sc.record(&CostRecord::new("srv1", "tool", 200, 10.0));
+    sc.record(&CostRecord::new("srv2", "other", 50, 10.0));
 
     let snap = sc.snapshot();
     // Two distinct backends
@@ -69,14 +69,19 @@ fn session_cost_groups_by_backend_and_tool() {
 
 // ── KeyCost ───────────────────────────────────────────────────────
 
+/// Record `rec` on `kc` at the current time.
+fn spend(kc: &KeyCost, rec: CostRecord) {
+    kc.record(&rec, now_secs());
+}
+
 #[test]
 fn key_cost_window_totals_exclude_old_records() {
     let kc = KeyCost::new("k1", BudgetConfig::default());
     // Insert a record manually with a very old timestamp
     let mut old_rec = CostRecord::new("s", "t", 9_999, 15.0);
     old_rec.timestamp = 1; // epoch + 1 second — definitely older than 24 h
-    kc.records.lock().push(old_rec);
-    kc.record(CostRecord::new("s", "t", 100, 15.0));
+    spend(&kc, old_rec);
+    spend(&kc, CostRecord::new("s", "t", 100, 15.0));
 
     let (tokens, _) = kc.window_totals(BudgetWindow::Day.secs());
     // Only the recent record should count
@@ -92,7 +97,7 @@ fn key_cost_budget_status_ok_when_no_limit() {
             ..Default::default()
         },
     );
-    kc.record(CostRecord::new("s", "t", 1_000_000, 15.0)); // $15
+    spend(&kc, CostRecord::new("s", "t", 1_000_000, 15.0)); // $15
     assert_eq!(kc.budget_status(), BudgetStatus::Ok);
 }
 
@@ -107,7 +112,7 @@ fn key_cost_budget_status_warning_at_80_percent() {
         },
     );
     // $8.5 = 85 % of $10 → Warning
-    kc.record(CostRecord::new("s", "t", 566_667, 15.0)); // ≈ $8.50
+    spend(&kc, CostRecord::new("s", "t", 566_667, 15.0)); // ≈ $8.50
     let status = kc.budget_status();
     assert!(matches!(status, BudgetStatus::Warning { .. }));
 }
@@ -122,20 +127,21 @@ fn key_cost_budget_status_exceeded_at_100_percent() {
             window: BudgetWindow::Day,
         },
     );
-    kc.record(CostRecord::new("s", "t", 100_000, 15.0)); // $1.50
+    spend(&kc, CostRecord::new("s", "t", 100_000, 15.0)); // $1.50
     assert!(matches!(kc.budget_status(), BudgetStatus::Exceeded { .. }));
 }
 
 #[test]
-fn key_cost_evict_old_removes_stale_records() {
+fn key_cost_keeps_no_bucket_for_spend_past_the_month() {
     let kc = KeyCost::new("k5", BudgetConfig::default());
     let mut old = CostRecord::new("s", "t", 100, 15.0);
     old.timestamp = 1;
-    kc.records.lock().push(old);
-    kc.record(CostRecord::new("s", "t", 50, 15.0));
-    assert_eq!(kc.records.lock().len(), 2);
-    kc.evict_old();
-    assert_eq!(kc.records.lock().len(), 1);
+    spend(&kc, old);
+    spend(&kc, CostRecord::new("s", "t", 50, 15.0));
+    // One hour bucket (the current one); the old spend lives on only in the
+    // all-time per-tool row.
+    assert_eq!(kc.spend.lock().0.len(), 1);
+    assert_eq!(kc.snapshot().by_tool[0].token_count, 150);
 }
 
 // ── CostTracker ───────────────────────────────────────────────────
@@ -317,4 +323,64 @@ fn many_calls_in_one_session_hold_a_bounded_number_of_entries() {
     let snap = tracker.session_snapshot("s1").unwrap();
     assert_eq!((snap.call_count, snap.total_tokens), (1_000, 1_000));
     assert_eq!(snap.by_tool[0].call_count, 1_000);
+}
+
+#[test]
+fn a_key_idle_for_a_month_reports_zero_windows_but_keeps_its_tool_rows() {
+    // GIVEN: a key whose only spend was 31 days ago
+    let kc = KeyCost::new("idle", BudgetConfig::default());
+    let mut old = CostRecord::new("srv", "t", 7, 15.0);
+    old.timestamp = now_secs() - 31 * 86_400;
+    spend(&kc, old);
+    // THEN: every window reads zero; the all-time row is still there
+    let snap = kc.snapshot();
+    assert_eq!(
+        (
+            snap.window_24h.tokens,
+            snap.window_7d.tokens,
+            snap.window_30d.tokens
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(snap.by_tool[0].token_count, 7);
+}
+
+#[test]
+fn the_sweep_drops_idle_keys_and_keeps_budgeted_ones() {
+    let tracker = CostTracker::new();
+    let month_ago = now_secs() - 31 * 86_400;
+    // GIVEN: an idle key, and an idle key with a set budget
+    tracker.set_key_budget("budgeted", BudgetConfig::default());
+    for name in ["idle", "budgeted"] {
+        let key = tracker.per_key.get(name).map(|k| Arc::clone(&k));
+        let key = key.unwrap_or_else(|| {
+            let fresh = Arc::new(KeyCost::new(name, BudgetConfig::default()));
+            tracker.per_key.insert(name.to_string(), Arc::clone(&fresh));
+            fresh
+        });
+        key.last_spend.store(month_ago, Ordering::Relaxed);
+    }
+    // WHEN: another key spends, which runs the due sweep
+    tracker.record("", Some("active"), "srv", "t", 1, 15.0);
+    // THEN: the idle key is gone; the budgeted and the active keys stay
+    assert!(tracker.key_snapshot("idle").is_none());
+    assert!(tracker.key_snapshot("budgeted").is_some());
+    assert!(tracker.key_snapshot("active").is_some());
+}
+
+#[test]
+fn key_and_session_breakdowns_fold_tools_past_the_cap() {
+    // GIVEN: one key on one session calling 300 distinct tools
+    let tracker = CostTracker::new();
+    for i in 0..300 {
+        tracker.record("s1", Some("k"), "srv", &format!("t{i}"), 1, 15.0);
+    }
+    // THEN: both breakdowns hold the cap plus (other), with every call counted
+    let session = tracker.session_snapshot("s1").unwrap();
+    let key = tracker.key_snapshot("k").unwrap();
+    for by_tool in [&session.by_tool, &key.by_tool] {
+        assert_eq!(by_tool.len(), tally::MAX_TOOL_ROWS + 1);
+        assert_eq!(by_tool.iter().map(|row| row.call_count).sum::<u64>(), 300);
+    }
+    assert_eq!(session.call_count, 300);
 }
