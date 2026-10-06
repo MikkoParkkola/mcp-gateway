@@ -232,6 +232,7 @@ fn authorization_servers(config: &Config) -> Vec<String> {
 #[must_use]
 pub fn build_protected_resource_metadata(
     config: &Config,
+    _running: &Config,
     bind_origin: Option<&str>,
 ) -> Option<ProtectedResourceMetadata> {
     let resource = resolve_resource_origin(config, bind_origin)?;
@@ -257,7 +258,11 @@ pub async fn oauth_protected_resource_handler(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("application/json"),
     );
-    match build_protected_resource_metadata(&config, bind_origin.as_deref()) {
+    match build_protected_resource_metadata(
+        &config,
+        state.live_config.running(),
+        bind_origin.as_deref(),
+    ) {
         Some(metadata) => (StatusCode::OK, [json_header], Json(metadata)).into_response(),
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -293,7 +298,7 @@ mod tests {
         config.server.public_url = Some("https://gateway.internal".to_string());
         // Even with a non-loopback bind, the advertised resource is the
         // configured public origin — never the request host or bind address.
-        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
         assert_eq!(meta.resource, "https://gateway.internal");
     }
 
@@ -334,7 +339,7 @@ mod tests {
             );
             let config = config_with_host(host, 8080);
             assert!(
-                build_protected_resource_metadata(&config, None).is_none(),
+                build_protected_resource_metadata(&config, &config, None).is_none(),
                 "{host} without public_url must not publish a resource"
             );
         }
@@ -349,7 +354,8 @@ mod tests {
         };
         // public_url wins over the loopback bind fallback; trailing slash dropped.
         let meta =
-            build_protected_resource_metadata(&config, Some("http://127.0.0.1:39400")).unwrap();
+            build_protected_resource_metadata(&config, &config, Some("http://127.0.0.1:39400"))
+                .unwrap();
         assert_eq!(meta.resource, "https://mcp.acme.internal");
         assert!(!meta.resource.contains("127.0.0.1"));
     }
@@ -358,7 +364,7 @@ mod tests {
     fn authorization_servers_empty_without_a_delegated_issuer() {
         let mut config = config_with_host("gw.internal", 9000);
         config.server.public_url = Some("https://gw.internal:9000".to_string());
-        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
         assert!(
             meta.authorization_servers.is_empty(),
             "the default config accepts no issuer token and the gateway serves no authorization-server metadata of its own, so it names none"
@@ -368,6 +374,7 @@ mod tests {
     fn config_with_issuers(enabled: bool, delegated: bool, issuers: &[&str]) -> Config {
         let mut config = config_with_host("gw.internal", 9000);
         config.server.public_url = Some("https://gw.internal:9000".to_string());
+        config.auth.enabled = true;
         config.key_server.enabled = enabled;
         config.key_server.delegated_bearer = delegated;
         config.key_server.oidc = issuers
@@ -396,7 +403,7 @@ mod tests {
                 "https://login.corp.internal/tenant",
             ],
         );
-        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
         assert_eq!(
             meta.authorization_servers,
             [
@@ -419,11 +426,69 @@ mod tests {
     fn issuers_are_not_advertised_unless_their_tokens_are_accepted() {
         for (enabled, delegated) in [(true, false), (false, true), (false, false)] {
             let config = config_with_issuers(enabled, delegated, &["https://idp.corp.internal"]);
-            let meta = build_protected_resource_metadata(&config, None).unwrap();
+            let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
             assert!(
                 meta.authorization_servers.is_empty(),
                 "enabled={enabled} delegated_bearer={delegated}"
             );
+        }
+    }
+
+    /// `auth` and `key_server` apply only on restart, so the issuers named are
+    /// the ones the running process accepts, while `public_url` is read live
+    /// (MIK-7941 findings 1, 2 and 5).
+    #[test]
+    fn issuers_come_from_the_running_config_not_a_pending_reload() {
+        let running = config_with_issuers(true, true, &["https://idp.running.internal"]);
+        let mut pending = config_with_issuers(true, true, &["https://idp.pending.internal"]);
+        pending.server.public_url = Some("https://gw.reloaded.internal".to_string());
+        let meta = build_protected_resource_metadata(&pending, &running, None).unwrap();
+        assert_eq!(meta.resource, "https://gw.reloaded.internal");
+        assert_eq!(meta.authorization_servers, ["https://idp.running.internal"]);
+
+        let off = config_with_issuers(false, true, &["https://idp.running.internal"]);
+        let meta = build_protected_resource_metadata(&pending, &off, None).unwrap();
+        assert!(
+            meta.authorization_servers.is_empty(),
+            "a key server enabled only in a pending reload accepts no token yet"
+        );
+    }
+
+    /// With `auth.enabled: false` every caller is anonymous and no issuer
+    /// token is ever checked, so none is advertised (MIK-7941 finding 4).
+    #[test]
+    fn issuers_are_not_advertised_when_auth_is_off() {
+        let mut config = config_with_issuers(true, true, &["https://idp.corp.internal"]);
+        config.auth.enabled = false;
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
+        assert!(meta.authorization_servers.is_empty());
+    }
+
+    /// The endpoint is unauthenticated: an issuer carrying userinfo, a query
+    /// or a fragment is never published, and neither is an opaque one a
+    /// client cannot fetch metadata from (MIK-7941 finding 3).
+    #[test]
+    fn credential_bearing_or_opaque_issuers_are_not_advertised() {
+        let config = config_with_issuers(
+            true,
+            true,
+            &[
+                "https://user:pw@idp.corp.internal/tenant",
+                "https://token@idp.corp.internal",
+                "https://idp.corp.internal/tenant?k=secret",
+                "https://idp.corp.internal/tenant#frag",
+                "mcp-gateway",
+                "https://idp.corp.internal/tenant",
+            ],
+        );
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
+        assert_eq!(
+            meta.authorization_servers,
+            ["https://idp.corp.internal/tenant"]
+        );
+        let json = serde_json::to_string(&meta).unwrap();
+        for leaked in ["pw", "token@", "secret", "frag", "mcp-gateway"] {
+            assert!(!json.contains(leaked), "leaked {leaked:?}: {json}");
         }
     }
 
@@ -438,7 +503,7 @@ mod tests {
                 "https://idp.corp.internal",
             ],
         );
-        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
         assert_eq!(meta.authorization_servers, ["https://idp.corp.internal"]);
     }
 
@@ -447,7 +512,7 @@ mod tests {
         // RFC 9728 §3.2: zero-value parameters are omitted, not sent as `[]`.
         let mut config = config_with_host("gw.internal", 9000);
         config.server.public_url = Some("https://gw.internal:9000".to_string());
-        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
         let json = serde_json::to_string(&meta).unwrap();
         assert!(!json.contains("authorization_servers"));
         assert!(!json.contains("scopes_supported"));
@@ -457,7 +522,7 @@ mod tests {
     fn serializes_rfc9728_shaped_json() {
         let mut config = config_with_host("gw.internal", 9000);
         config.server.public_url = Some("https://gw.internal:9000".to_string());
-        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
         let json = serde_json::to_string(&meta).unwrap();
         assert!(json.contains("\"resource\":\"https://gw.internal:9000\""));
         assert!(json.contains("\"bearer_methods_supported\":[\"header\"]"));
@@ -482,7 +547,8 @@ mod tests {
             let mut config = config_with_host("127.0.0.1", 39400);
             config.server.public_url = Some(bad.to_string());
             let meta =
-                build_protected_resource_metadata(&config, Some("http://127.0.0.1:39400")).unwrap();
+                build_protected_resource_metadata(&config, &config, Some("http://127.0.0.1:39400"))
+                    .unwrap();
             assert_eq!(
                 meta.resource, "http://127.0.0.1:39400",
                 "malformed public_url {bad:?} must fall back to the bind origin, never be published"
