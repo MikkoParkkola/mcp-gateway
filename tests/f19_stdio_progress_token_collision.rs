@@ -61,9 +61,15 @@ done
 "#;
 
 /// A path as `sh` reads it: forward slashes, since a Windows backslash is an
-/// escape to the shell (and to a quoted YAML scalar).
+/// escape to the shell.
 fn sh_path(path: &std::path::Path) -> String {
     path.display().to_string().replace('\\', "/")
+}
+
+/// `path` as one `sh` word inside the peer script: single quotes keep a space
+/// in it from splitting the word.
+fn sh_word(path: &std::path::Path) -> String {
+    format!("'{}'", sh_path(path).replace('\'', r"'\''"))
 }
 
 /// A home whose path holds a space, so a path the peer script or the
@@ -78,11 +84,11 @@ fn spaced_home() -> tempfile::TempDir {
 fn register_command_backend(state: &Arc<AppState>, home: &std::path::Path) -> std::path::PathBuf {
     let log = home.join("calls.log");
     let script = home.join("peer.sh");
-    std::fs::write(&script, PEER.replace("__LOG__", &sh_path(&log))).expect("write the peer");
+    std::fs::write(&script, PEER.replace("__LOG__", &sh_word(&log))).expect("write the peer");
     let config = BackendConfig {
         enabled: true,
         transport: TransportConfig::Stdio {
-            command: format!("sh {}", sh_path(&script)),
+            command: format!("sh \"{}\"", sh_path(&script)),
             cwd: None,
             protocol_version: None,
         },

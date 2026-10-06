@@ -42,9 +42,15 @@ done
 "#;
 
 /// A path as `sh` reads it: forward slashes, since a Windows backslash is an
-/// escape to the shell (and to the quoted YAML scalar it sits in).
+/// escape to the shell.
 fn sh_path(path: &Path) -> String {
     path.display().to_string().replace('\\', "/")
+}
+
+/// `path` as one `sh` word inside the peer script: single quotes keep a space
+/// in it from splitting the word.
+fn sh_word(path: &Path) -> String {
+    format!("'{}'", sh_path(path).replace('\'', r"'\''"))
 }
 
 /// A home whose path holds a space, so a path the peer script or the
@@ -65,13 +71,13 @@ fn write_command_config(home: &Path) -> std::path::PathBuf {
     let body = COMMAND_PEER
         .replace("__VERSION__", CLIENT_PROTOCOL_VERSION)
         .replace("__TOOL__", SLOW_TOOL)
-        .replace("__LOG__", &sh_path(&log))
-        .replace("__RELEASE__", &sh_path(&release));
+        .replace("__LOG__", &sh_word(&log))
+        .replace("__RELEASE__", &sh_word(&release));
     std::fs::write(&script, body).expect("write command peer");
     mcp_gateway::gateway::test_helpers::write_owner_only(
         home.join("gateway.yaml"),
         format!(
-            "backends:\n  {BACKEND}:\n    command: \"sh {}\"\n",
+            "backends:\n  {BACKEND}:\n    command: 'sh \"{}\"'\n",
             sh_path(&script)
         ),
     )
