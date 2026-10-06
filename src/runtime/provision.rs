@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Runtime-substrate provisioning entry point (the wired call path).
 //!
-//! **WIRING (MIK-5226 follow-up)**: the [`runtime`](super) module ships a
-//! pure descriptor-to-substrate [`Compiler`](super::compiler::Compiler) that
+//! **WIRING (MIK-5226 follow-up)**: the [`runtime`](crate::runtime) module ships a
+//! pure descriptor-to-substrate [`Compiler`](crate::runtime::compiler::Compiler) that
 //! was previously *dormant* — nothing in the gateway invoked it. This module
 //! is the minimal, real call path that exercises it, reachable from the
 //! `mcp-gateway runtime compile` CLI subcommand.
@@ -14,16 +14,17 @@
 //!
 //! # Why this layer exists (adversarial-review hardening)
 //!
-//! [`Compiler::compile`](super::compiler::Compiler::compile) is **infallible** —
+//! [`Compiler::compile`](crate::runtime::compiler::Compiler::compile) is **infallible** —
 //! it never validates the descriptor and never probes whether the selected
 //! substrate is actually runnable on the host. Compiling an invalid or unsafe
 //! descriptor silently produces a malformed bundle. This entry point closes
 //! that gap by running, in order:
 //!
 //! 1. [`SandboxDescriptor::validate`] — schema-level checks.
-//! 2. [`preflight`] — security/privilege checks that `validate` does not cover
-//!    (path-traversal mounts, dangerous capabilities, fail-open egress, NaN
-//!    resources). See [`PreflightError`].
+//! 2. [`preflight`](crate::runtime::provision::preflight) — security/privilege
+//!    checks that `validate` does not cover (path-traversal mounts, dangerous
+//!    capabilities, fail-open egress, NaN resources). See
+//!    [`PreflightError`](crate::runtime::provision::PreflightError).
 //! 3. [`Compiler::compile`] / `compile_both` — only after the gates pass.
 
 use std::path::Path;
