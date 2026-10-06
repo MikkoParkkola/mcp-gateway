@@ -26,6 +26,7 @@ const MARKER: &str = "tidebook-answered";
 const READY_BOUND: Duration = Duration::from_secs(60);
 const SEARCH_BOUND: Duration = Duration::from_secs(30);
 const POLL_GAP: Duration = Duration::from_millis(100);
+const REQUEST_BOUND: Duration = Duration::from_secs(30);
 
 /// A stdio MCP server with one tool. Any other request with an id gets an
 /// empty result, so warm-start probes and pings are answered.
@@ -114,6 +115,16 @@ fn documented_meta_tools() -> usize {
     usize::try_from(count).expect("small count")
 }
 
+/// Every HTTP wait is bounded, and loopback never goes through an inherited
+/// proxy.
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(REQUEST_BOUND)
+        .no_proxy()
+        .build()
+        .expect("an HTTP client")
+}
+
 fn free_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
     listener.local_addr().expect("its address").port()
@@ -131,7 +142,7 @@ struct Session {
 impl Session {
     async fn open(url: &str, token: Option<String>) -> Self {
         let mut session = Self {
-            http: reqwest::Client::new(),
+            http: http_client(),
             url: url.to_string(),
             token,
             id: None,
@@ -181,7 +192,10 @@ impl Session {
         let id = self.next;
         self.next += 1;
         let body = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-        let text = self.send(&body).await.text().await.expect("a body");
+        let response = self.send(&body).await;
+        let status = response.status();
+        let text = response.text().await.expect("a body");
+        assert_eq!(status, reqwest::StatusCode::OK, "{method}: {text}");
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("{method}: not JSON ({e}): {text}"))
     }
 
@@ -242,6 +256,11 @@ fn init(ws: &Workspace) {
         );
     }
     let stderr = String::from_utf8_lossy(&init.stderr);
+    assert!(
+        stderr.contains("Skipped '"),
+        "with no launcher on PATH, init must say which starters it skipped\n{}",
+        show(&init)
+    );
     for line in stderr.lines().filter(|l| !l.trim().is_empty()) {
         assert!(
             line.starts_with("Skipped '") && line.contains("is not on PATH"),
@@ -263,7 +282,13 @@ fn init(ws: &Workspace) {
     assert!(samples.count() > 0, "no sample capabilities written");
 
     // A second init refuses rather than overwriting the credential.
+    let before = std::fs::read(&config).expect("config bytes");
     let again = ws.run(&["init"]);
+    assert_eq!(
+        std::fs::read(&config).expect("config bytes"),
+        before,
+        "a refused init must leave gateway.yaml as it was"
+    );
     assert!(
         !again.status.success(),
         "second init must refuse\n{}",
@@ -380,11 +405,14 @@ impl Gateway {
     async fn wait_ready(&mut self) {
         let health = format!("{}/health", self.url);
         let deadline = tokio::time::Instant::now() + READY_BOUND;
+        let http = http_client();
         loop {
             if let Some(status) = self.child.try_wait().expect("child status") {
                 panic!("serve exited before ready ({status})\n{}", self.logs());
             }
-            if reqwest::get(&health)
+            if http
+                .get(&health)
+                .send()
                 .await
                 .is_ok_and(|r| r.status().is_success())
             {
@@ -470,4 +498,5 @@ async fn first_run_journey_init_add_serve_search_invoke() {
         gateway.logs()
     );
     assert_ne!(result["isError"], true, "{answer}");
+    assert_ne!(answer["result"]["isError"], true, "{answer}");
 }
