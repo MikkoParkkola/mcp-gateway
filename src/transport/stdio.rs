@@ -555,7 +555,9 @@ impl StdioTransport {
         };
 
         if let Some(ref id) = response.id
-            && self.taps.response_to(id, response.result.as_ref())
+            && self
+                .taps
+                .response_to(id, response.result.as_ref(), response.error.as_ref())
         {
             // A listen is never a pending request (design §4).
             return Ok(());
@@ -601,7 +603,7 @@ impl StdioTransport {
             debug!("Write complete and flushed");
             Ok(())
         } else {
-            Err(Error::Transport("Not connected".to_string()))
+            Err(Error::TransportConnect("Not connected".to_string()))
         }
     }
 
