@@ -142,3 +142,47 @@ async fn a_start_waits_for_its_caches_lock_before_spawning() {
     assert_eq!(repair, Repair::NotRepaired);
     assert_eq!(spawns(&log).len(), 1);
 }
+
+/// A start cancelled while its removal runs keeps the cache locked until the
+/// tree is really gone.
+///
+/// Tokio cannot abort a started blocking task, so the removal outlives the
+/// cancelled start. If the lock were released with the start, another start of
+/// the backend could install into the tree the removal is still deleting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_removal_keeps_the_cache_locked_until_it_ends() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let dir = temp_root(workspace.path()).join(unique_leaf());
+    let lock = repair_lock(&dir);
+    let held = Arc::clone(&lock).lock_owned().await;
+
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let removal = tokio::spawn({
+        let dir = dir.clone();
+        async move {
+            remove_cache_dir(&dir, held, move |_| {
+                started_tx.send(()).expect("the test is listening");
+                release_rx.recv().expect("the test releases the removal");
+                true
+            })
+            .await
+        }
+    });
+    tokio::task::spawn_blocking(move || started_rx.recv())
+        .await
+        .expect("the wait does not panic")
+        .expect("the removal starts");
+
+    removal.abort();
+    let _ = removal.await;
+    assert!(
+        lock.try_lock().is_err(),
+        "the start that held the lock is gone, but its removal is still running"
+    );
+
+    release_tx.send(()).expect("the removal is waiting");
+    tokio::time::timeout(Duration::from_secs(5), lock.lock())
+        .await
+        .expect("the lock is released once the removal ends");
+}

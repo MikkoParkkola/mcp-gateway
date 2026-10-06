@@ -75,6 +75,9 @@ fn repair_locks() -> &'static Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>
     LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// A held cache lock, owned so it can travel into the blocking removal.
+type CacheGuard = tokio::sync::OwnedMutexGuard<()>;
+
 fn repair_lock(dir: &Path) -> Arc<tokio::sync::Mutex<()>> {
     let mut locks = repair_locks()
         .lock()
@@ -122,13 +125,14 @@ pub(crate) async fn start_reporting(
 ) -> (crate::Result<()>, Repair) {
     // Held from the first spawn to the end of any retry: see `repair_lock`.
     // The cache is per backend (its name is hashed into the path), so only
-    // other starts of this same backend wait. The wait is bounded: each
-    // `initialize` request is capped by the backend's request timeout T, so a
-    // failed attempt, the removal and a failed retry hold it for about
-    // 4T + 4s + the time to delete the tree.
+    // other starts of this same backend wait. Each `initialize` request is
+    // capped by the backend's request timeout T, so in the normal case a failed
+    // attempt, the removal and a failed retry hold it for about 4T + 4s + the
+    // time to delete the tree. Writes to the child's stdin, reaping it and the
+    // removal itself carry no timeout of their own.
     let lock = transport.assigned_package_cache_dir().map(repair_lock);
-    let _starting = match &lock {
-        Some(lock) => Some(lock.lock().await),
+    let held = match lock {
+        Some(lock) => Some(lock.lock_owned().await),
         None => None,
     };
     let Err(error) = transport.start().await else {
@@ -156,7 +160,12 @@ pub(crate) async fn start_reporting(
         return (Err(error), Repair::NotRepaired);
     };
 
-    repair_while_locked(transport, &dir, needle, error).await
+    // `dir` came from the same assignment the lock was taken for, so the lock
+    // is held here; without it there is no repair.
+    let Some(held) = held else {
+        return (Err(error), Repair::NotRepaired);
+    };
+    repair_while_locked(transport, &dir, needle, error, held).await
 }
 
 /// The section the cache's lock guards: latch, remove, retry.
@@ -168,6 +177,7 @@ async fn repair_while_locked(
     dir: &Path,
     needle: &'static str,
     error: Error,
+    held: CacheGuard,
 ) -> (crate::Result<()>, Repair) {
     if !mark_repaired(dir) {
         warn!(
@@ -176,7 +186,10 @@ async fn repair_while_locked(
         );
         return (Err(error), Repair::AlreadyRepaired);
     }
-    if !remove_cache_dir(dir).await {
+    // Kept to the end of the retry. If this future is dropped mid-removal, the
+    // guard is still inside the blocking task, which Tokio cannot abort.
+    let (removed, _held) = remove_cache_dir(dir, held, remove_now).await;
+    if !removed {
         // The start never got its repair, so the latch is not spent: a later
         // start can try the same cache again.
         arm_again(dir);
@@ -234,13 +247,21 @@ fn exit_status_text(status: Option<std::process::ExitStatus>) -> String {
 /// The tree is being removed because it is damaged, and it is the largest state
 /// a backend has, so the delete runs on the blocking pool rather than parking an
 /// async worker on it.
-async fn remove_cache_dir(dir: &Path) -> bool {
+///
+/// The cache's lock travels into the blocking task and comes back with the
+/// result. A started blocking task cannot be aborted, so if the start awaiting
+/// it is cancelled, the removal keeps running. Holding the lock inside the task
+/// keeps every other start of this backend out until the tree is really gone.
+async fn remove_cache_dir<F>(dir: &Path, held: CacheGuard, remove: F) -> (bool, Option<CacheGuard>)
+where
+    F: FnOnce(&Path) -> bool + Send + 'static,
+{
     let target = dir.to_path_buf();
-    match tokio::task::spawn_blocking(move || remove_now(&target)).await {
-        Ok(removed) => removed,
+    match tokio::task::spawn_blocking(move || (remove(&target), held)).await {
+        Ok((removed, held)) => (removed, Some(held)),
         Err(error) => {
             warn!(%error, "package cache removal task failed");
-            false
+            (false, None)
         }
     }
 }

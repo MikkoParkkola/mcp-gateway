@@ -267,6 +267,9 @@ impl StdioTransport {
                 warn!(error = %close_error, "Failed to clean up stdio process after initialization error");
             }
             if let Some(reader) = late_reader {
+                // The child `close` just killed: record that ending, so the
+                // failure is not reported as a child still running.
+                self.settle_child_exit().await;
                 Self::settle_stderr_tail(reader).await;
             }
             // A retry may start on this same transport. This start's reader
