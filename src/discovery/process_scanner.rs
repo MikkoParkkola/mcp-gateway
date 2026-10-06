@@ -128,20 +128,27 @@ impl ProcessScanner {
     /// Scan processes on Windows
     #[cfg(target_os = "windows")]
     async fn scan_windows(&self) -> Result<Vec<DiscoveredServer>> {
+        let stdout = Self::powershell_listing("Win32_Process").await?;
+        Ok(self.parse_ps_output(&stdout))
+    }
+
+    /// List `class` instances that carry a command line, one "pid command"
+    /// line each behind a header line, the shape `parse_ps_output` reads.
+    ///
+    /// wmic is absent from current Windows images (removed from 11 24H2 and
+    /// Server 2025), so this asks CIM. The class is a parameter so a test can
+    /// run the production pipeline against a class that does not exist.
+    #[cfg(target_os = "windows")]
+    async fn powershell_listing(class: &str) -> Result<String> {
         use tokio::process::Command;
 
-        // wmic is absent from current Windows images (removed from 11 24H2 and
-        // Server 2025), so ask CIM. One "pid command" line per process behind
-        // a header line, the shape `parse_ps_output` reads.
+        let script = format!(
+            "'PID COMMAND'; Get-CimInstance {class} | Where-Object {{ $_.CommandLine }} | ForEach-Object {{ '{{0}} {{1}}' -f $_.ProcessId, $_.CommandLine }}"
+        );
         let output = Command::new("powershell")
             // A PowerShell 7 parent leaks a module path Windows PowerShell cannot load.
             .env_remove("PSModulePath")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "'PID COMMAND'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine } | ForEach-Object { '{0} {1}' -f $_.ProcessId, $_.CommandLine }",
-            ])
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .output()
             .await
             .map_err(|e| Error::Internal(format!("Failed to run powershell: {e}")))?;
@@ -153,8 +160,7 @@ impl ProcessScanner {
             )));
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(self.parse_ps_output(&stdout))
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
     /// Parse ps output (macOS/Linux) or the Windows equivalent
@@ -264,6 +270,29 @@ impl Default for ProcessScanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MIK-7666.GH2367.1: a CIM query that fails without a terminating error
+    /// is an error, not an empty process list.
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn a_failing_cim_query_is_an_error_not_an_empty_list() {
+        let listing = ProcessScanner::powershell_listing("Win32_NoSuchClassMik7666").await;
+        assert!(listing.is_err(), "a failed query listed: {listing:?}");
+    }
+
+    /// Control: the production query still lists processes, this one included.
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn the_process_query_lists_this_process() {
+        let listing = ProcessScanner::powershell_listing("Win32_Process")
+            .await
+            .expect("the process query succeeds");
+        let own = format!("{} ", std::process::id());
+        assert!(
+            listing.lines().any(|line| line.starts_with(&own)),
+            "pid {own}missing from:\n{listing}"
+        );
+    }
 
     #[test]
     fn test_extract_port_from_command() {
