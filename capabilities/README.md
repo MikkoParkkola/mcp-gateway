@@ -10,7 +10,7 @@ This ships, loads and is listed, but refuses to run, so it is not counted:
 |------|-----|
 | `trawl_extract` | The tool cannot refuse private addresses at connect time, so the gateway cannot confine its network access (MIK-7788). |
 
-Held operation of a counted capability: `cisco_scanner` `scan_mcp_server` is not offered, for the same network-access reason (MIK-7788); its skill scan runs.
+Held operation of a counted capability: `cisco_scanner` `scan_mcp_server` is not offered, for the same network-access reason (MIK-7788); its skill scan runs. `check_weather` `get_forecast` is held for a break-proof run.
 
 ## Categories
 
