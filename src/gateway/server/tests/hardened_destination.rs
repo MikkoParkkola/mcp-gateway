@@ -44,7 +44,7 @@ async fn start_under(posture: SecurityPosture, listed: &[&str]) -> (crate::Resul
         BackendConfig {
             transport: TransportConfig::Http {
                 http_url: format!("http://localhost:{port}/mcp"),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             enabled: true,

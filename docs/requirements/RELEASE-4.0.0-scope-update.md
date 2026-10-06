@@ -17,7 +17,7 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 134
+Approved supplemental criteria: 139
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
@@ -172,6 +172,11 @@ Deferred by the same ruling to a later release (tier 4, not criteria here): key 
 | MIK-7630.RELIABLE.2 | Event ids are stable per occurrence and subscription across retries, restarts and replays, and inbound webhook repeats are dropped by delivery id where a route configures one (MIK-7630 extended scope). | EVENTS |
 | MIK-7630.RELIABLE.3 | Undeliverable events go to a dead-letter store with a reason and can be listed and replayed through an admin route and CLI, with the Meta-MCP tool count unchanged (MIK-7630 extended scope). | EVENTS |
 | MIK-7630.DISCOVER.1 | Events visible to a caller are returned by gateway_search as kind event with their input schema (MIK-7630 extended scope). | DISCOVERY |
+| MIK-7630.W401.1 | REST capability watch: watch.<capability>.changed is offered only for read-only REST capabilities, emits on a digest change of the selected fields (the first poll emits nothing) with pointers and digests, not values, shares pollers only for credential-free capabilities, gives every transition a distinct event id, floors the interval at 60 s, stops when the capability is removed or reclassified, and ignores default volatile fields (MIK-7720; design rows U1-U4, U11, U12). | EVENTS |
+| MIK-7630.W401.2 | Gateway operational events: gateway.budget.threshold, gateway.budget.exhausted, gateway.backend.health_changed and gateway.kill_switch.changed come from the existing producers; health and kill-switch events reach admins only, a non-admin receives only their own budget events, and budget events are not charged to the budget they report (MIK-7720; U5-U7). | EVENTS |
+| MIK-7630.W401.3 | Scheduler time events: schedule.tick fires once per cron boundary with a 5-minute minimum period, does not fire twice across a restart within the same minute, and caps and scans the label (MIK-7720; U8, U9). | EVENTS |
+| MIK-7630.W401.4 | None of these three sources changes the events core: a CI check fails a change that adds a source and edits src/events outside its own module and the registry line (MIK-7720; U10). | EVENTS |
+| MIK-7630.W401.5 | An occurrence that carries a lifecycle key reaches only subscriptions holding that key, so a credentialed watch never delivers one principal's poll to another holding the same arguments (MIK-7811). | SAFETY |
 
 ## Boundaries
 

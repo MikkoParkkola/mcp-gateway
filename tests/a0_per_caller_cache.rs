@@ -248,7 +248,7 @@ async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, temp
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: url,
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             ..BackendConfig::default()

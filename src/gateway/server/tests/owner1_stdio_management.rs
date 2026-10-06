@@ -148,7 +148,7 @@ async fn managed() -> Managed {
             transport: TransportConfig::Http {
                 // Never contacted: no row here dispatches to a backend.
                 http_url: "http://127.0.0.1:9/".to_string(),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             enabled: true,

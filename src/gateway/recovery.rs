@@ -132,8 +132,42 @@ pub struct RecoveryContext<'a> {
 /// structured error response.  Call sites only need to classify the error;
 /// the default message and suggestion come from this function.
 #[must_use]
-#[allow(clippy::too_many_lines)] // match arms are inherently verbose; splitting would add no clarity
 pub fn recovery_for(category: ErrorCategory, ctx: RecoveryContext<'_>) -> RecoveryHint {
+    recovery_for_surface(category, ctx, MetaSurface::Standard)
+}
+
+/// The meta-tool surface the caller has, which decides the tools a hint may
+/// name: a hint that points at a tool the caller cannot see is a dead end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MetaSurface {
+    /// The full meta-tool set (`gateway_list_tools`, `gateway_revive_server`, ...).
+    Standard,
+    /// Code Mode: only `gateway_search` and `gateway_execute`.
+    CodeMode,
+    /// The operator's `exposed_meta_tools` hides this mode's discovery tool,
+    /// so a hint names no tool to discover with.
+    Undiscoverable,
+}
+
+impl MetaSurface {
+    /// The tool this surface discovers tools with, if the caller has one.
+    pub(crate) const fn discovery_tool(self) -> Option<&'static str> {
+        match self {
+            Self::Standard => Some("gateway_list_tools"),
+            Self::CodeMode => Some("gateway_search"),
+            Self::Undiscoverable => None,
+        }
+    }
+}
+
+/// [`recovery_for`] for a caller on `surface`.
+#[must_use]
+#[allow(clippy::too_many_lines)] // match arms are inherently verbose; splitting would add no clarity
+pub(crate) fn recovery_for_surface(
+    category: ErrorCategory,
+    ctx: RecoveryContext<'_>,
+    surface: MetaSurface,
+) -> RecoveryHint {
     let tool_label = ctx.tool.unwrap_or("<unknown tool>");
     let backend_label = ctx.backend.unwrap_or("<unknown backend>");
 
@@ -177,10 +211,19 @@ pub fn recovery_for(category: ErrorCategory, ctx: RecoveryContext<'_>) -> Recove
                 },
                 str::to_string,
             ),
-            suggest: "Wait for the circuit breaker to recover (automatic) or use \
+            suggest: match surface {
+                MetaSurface::Standard => {
+                    "Wait for the circuit breaker to recover (automatic) or use \
                       `gateway_revive_server` to reset it manually. \
                       Do not retry in a tight loop."
-                .to_string(),
+                        .to_string()
+                }
+                MetaSurface::CodeMode | MetaSurface::Undiscoverable => {
+                    "Wait for the circuit breaker to recover (automatic). \
+                      Do not retry in a tight loop."
+                        .to_string()
+                }
+            },
             fix_example: None,
             related_tools: ctx.related_tools,
             retry: false,
@@ -192,14 +235,16 @@ pub fn recovery_for(category: ErrorCategory, ctx: RecoveryContext<'_>) -> Recove
                 || format!("Tool '{tool_label}' was not found on backend '{backend_label}'"),
                 str::to_string,
             ),
-            suggest: if ctx.related_tools.is_empty() {
-                "Use `gateway_list_tools` to discover available tools.".to_string()
-            } else {
-                format!(
-                    "Did you mean one of: {}? \
-                     Use `gateway_list_tools` to see all available tools.",
+            suggest: match (ctx.related_tools.is_empty(), surface.discovery_tool()) {
+                (true, Some(discover)) => {
+                    format!("Use `{discover}` to discover available tools.")
+                }
+                (true, None) => "Check the tool name against the tools you were given.".to_string(),
+                (false, Some(discover)) => format!(
+                    "Did you mean one of: {}? Use `{discover}` to see all available tools.",
                     ctx.related_tools.join(", ")
-                )
+                ),
+                (false, None) => format!("Did you mean one of: {}?", ctx.related_tools.join(", ")),
             },
             fix_example: None,
             related_tools: ctx.related_tools,
@@ -551,6 +596,39 @@ mod tests {
             assert!(
                 is_rate_limited(s),
                 "the stripped forms are literal; {s:?} must still match"
+            );
+        }
+    }
+
+    #[test]
+    fn code_mode_hints_name_only_code_mode_tools() {
+        for category in [ErrorCategory::NotFound, ErrorCategory::CircuitBreakerTrip] {
+            let hint = recovery_for_surface(category, ctx_for("t"), MetaSurface::CodeMode);
+            for hidden in ["gateway_list_tools", "gateway_revive_server"] {
+                assert!(
+                    !hint.suggest.contains(hidden),
+                    "{category:?}: {}",
+                    hint.suggest
+                );
+            }
+        }
+        let hint =
+            recovery_for_surface(ErrorCategory::NotFound, ctx_for("t"), MetaSurface::CodeMode);
+        assert!(
+            hint.suggest.contains("`gateway_search`"),
+            "{}",
+            hint.suggest
+        );
+    }
+
+    #[test]
+    fn an_undiscoverable_surface_names_no_meta_tool() {
+        for category in [ErrorCategory::NotFound, ErrorCategory::CircuitBreakerTrip] {
+            let hint = recovery_for_surface(category, ctx_for("t"), MetaSurface::Undiscoverable);
+            assert!(
+                !hint.suggest.contains("gateway_"),
+                "{category:?}: {}",
+                hint.suggest
             );
         }
     }

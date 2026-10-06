@@ -217,7 +217,7 @@ async fn verdict_after_a_reload_during_the_lookup(reload: Reload) -> Result<(), 
     let config = BackendConfig {
         transport: TransportConfig::Http {
             http_url: format!("http://127.0.0.1:{port}/mcp"),
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         timeout: std::time::Duration::from_secs(1),

@@ -335,3 +335,21 @@ fn a_group_writable_state_file_is_refused() {
 
     assert!(loaded.is_err(), "a group-writable state file was trusted");
 }
+
+/// MIK-7715: a gateway configured with a symlink to the grant file records a
+/// CLI change made through the real path as an `add`, not `out_of_band`.
+// Unix-only: plants a file symlink, which Windows gates behind a privilege.
+#[cfg(unix)]
+#[tokio::test]
+async fn cli_change_through_another_spelling_is_recorded_as_add() {
+    let mut f = Fixture::new();
+    let link = f.grants.with_file_name("link.yaml");
+    std::os::unix::fs::symlink(&f.grants, &link).unwrap();
+    f.cli(add(row("g1", "r"))).await;
+    f.grants = link;
+    f.restart();
+    f.reconcile().await.unwrap();
+    let got = f.records();
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(got[0].0 == V::Add && got[0].1 == "g1", "{got:?}");
+}
