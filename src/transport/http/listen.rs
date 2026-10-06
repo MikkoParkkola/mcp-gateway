@@ -816,3 +816,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "session_heal_tests.rs"]
+mod session_heal_tests;
