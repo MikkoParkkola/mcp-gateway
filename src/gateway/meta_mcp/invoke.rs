@@ -738,6 +738,9 @@ mod captured_invoke_tests;
 mod cancel_settles_tests;
 
 #[cfg(test)]
+mod caller_cost_tests;
+
+#[cfg(test)]
 mod f13_hint_scope_tests;
 
 #[cfg(test)]
