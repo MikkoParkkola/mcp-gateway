@@ -174,6 +174,9 @@ backend" and "fails a capability file" first.**
 | 147 | A capability whose declared output root is not object-shaped (an array, a string, a type list) advertises `outputSchema` as an object and publishes `structuredContent` under `items` | Read `structuredContent.items` for the nine shipped capabilities listed below, and for your own; the text content is unchanged |
 | 148 | An `http_url` backend with no `streamable_http` key POSTs `initialize` first and falls back to the legacy SSE `GET` only when that POST is refused with a 4xx that is not about the credential or a retry (any but 401, 403, 407, 408, 429); `add --url` no longer writes `streamable_http: false`. An explicit `true` or `false` is tried first, and when the server refuses it with such a 4xx the other transport is tried once, with a warning naming the backend and the value to set. `TransportConfig::Http::streamable_http` is now `Option<bool>` | None. A config the old `add --url` wrote keeps working; to skip the refused request, set the value the warning names or remove the key. A backend with the key unset is refused MCP Events even when it connects over Streamable HTTP, since eligibility is read from config: set `streamable_http: true` to offer them |
 | 149 | A meta-tool result whose payload says `isError: true` (a failed `gateway_invoke`, or a backend's own tool error) carries `isError: true` on the outer `tools/call` result; it was always `false`, with the failure only in the text | A client that read failure from the text alone keeps working; one that treated `isError: true` as a protocol failure should read the text and its `recovery` hint instead |
+| 150 | Reserved: lands with a pending change | None yet |
+| 151 | Reserved: lands with a pending change | None yet |
+| 152 | A cron expression with a stepped weekday field (such as `*/2`) matches only the days the step selects; 7 is read as Sunday only, so it no longer matched every day | Check each scheduled job and `schedule.tick` subscription whose weekday field uses `/`; one meant to run daily uses `*` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4002,7 +4005,7 @@ hint instead.
 
 ## 152. A stepped weekday field in a cron expression matches only its own days
 
-**Startup:** no notice; scheduled jobs and `schedule.tick` timers with a stepped weekday field fire on fewer days
+**Startup:** no notice, scheduled jobs and `schedule.tick` timers with a stepped weekday field fire on fewer days
 
 A cron expression whose weekday field uses a step, such as `0 9 * * */2`,
 used to match every day of the week: the scheduler also tested each weekday
