@@ -343,3 +343,7 @@ impl UpstreamListeners {
 #[cfg(test)]
 #[path = "upstream_listener_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "upstream_charge_tests.rs"]
+mod charge_tests;
