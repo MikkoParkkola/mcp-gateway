@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `TrustCard` projection helpers for live MCP tool descriptors.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock, PoisonError};
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -84,36 +87,94 @@ pub fn project_tool_descriptor_trust_card(
     server_name: impl Into<String>,
     tool: &Tool,
 ) -> Value {
-    #[cfg(test)]
-    CARD_COMPUTATIONS.with(|n| n.set(n.get() + 1));
-    let trust_card = ToolDescriptorTrustCard::from_tool(server_id, server_name, tool);
-    let mut descriptor = serde_json::to_value(tool).unwrap_or_else(|_| {
+    with_card(
+        descriptor_of(tool),
+        computed_card(server_id, server_name, tool),
+    )
+}
+
+/// The tool as published; the fallback keeps the two required fields when
+/// the tool cannot be serialised whole.
+fn descriptor_of(tool: &Tool) -> Value {
+    serde_json::to_value(tool).unwrap_or_else(|_| {
         json!({
             "name": tool.name.clone(),
             "inputSchema": tool.input_schema.clone(),
         })
-    });
+    })
+}
 
+fn computed_card(
+    server_id: impl Into<String>,
+    server_name: impl Into<String>,
+    tool: &Tool,
+) -> Value {
+    #[cfg(test)]
+    CARD_COMPUTATIONS.with(|n| n.set(n.get() + 1));
+    let trust_card = ToolDescriptorTrustCard::from_tool(server_id, server_name, tool);
+    serde_json::to_value(trust_card).unwrap_or(Value::Null)
+}
+
+fn with_card(mut descriptor: Value, card: Value) -> Value {
     if let Value::Object(object) = &mut descriptor {
-        object.insert(
-            TOOL_DESCRIPTOR_TRUST_CARD_KEY.to_string(),
-            serde_json::to_value(trust_card).unwrap_or(Value::Null),
-        );
+        object.insert(TOOL_DESCRIPTOR_TRUST_CARD_KEY.to_string(), card);
     }
-
     descriptor
 }
 
+/// Computed references by server identity, then tool name. A reference is a
+/// pure function of the server identity and the tool, and an entry is reused
+/// only while the tool serialises to exactly the descriptor it was computed
+/// from, so a tool changed under the same name is recomputed, never served
+/// stale (MIK-7916).
+type CardMemo = HashMap<String, HashMap<String, (Value, Value)>>;
+
+// ponytail: a full map is cleared, not evicted entry by entry; an LRU if
+// catalogs ever outgrow these bounds.
+const MEMO_SERVERS: usize = 1024;
+const MEMO_TOOLS_PER_SERVER: usize = 8192;
+
+fn card_memo() -> &'static Mutex<CardMemo> {
+    static MEMO: OnceLock<Mutex<CardMemo>> = OnceLock::new();
+    MEMO.get_or_init(Mutex::default)
+}
+
 /// Project `TrustCard` references into a list of live MCP tool descriptors.
+///
+/// Every `tools/list` lists the same catalog, so each reference is computed
+/// once per tool version rather than once per request.
 #[must_use]
 pub fn project_tool_descriptors_trust_cards(
     server_id: &str,
     server_name: &str,
     tools: &[Tool],
 ) -> Vec<Value> {
+    let mut memo = card_memo().lock().unwrap_or_else(PoisonError::into_inner);
+    if memo.len() >= MEMO_SERVERS {
+        memo.clear();
+    }
+    let cards = memo
+        .entry(format!("{server_id}\0{server_name}"))
+        .or_default();
     tools
         .iter()
-        .map(|tool| project_tool_descriptor_trust_card(server_id, server_name, tool))
+        .map(|tool| {
+            let Ok(descriptor) = serde_json::to_value(tool) else {
+                return project_tool_descriptor_trust_card(server_id, server_name, tool);
+            };
+            let card = match cards.get(&tool.name) {
+                Some((seen, card)) if *seen == descriptor => card.clone(),
+                _ => {
+                    let card = computed_card(server_id, server_name, tool);
+                    if cards.len() >= MEMO_TOOLS_PER_SERVER {
+                        cards.clear();
+                    }
+                    cards.insert(tool.name.clone(), (descriptor.clone(), card.clone()));
+                    card
+                }
+            };
+            with_card(descriptor, card)
+        })
         .collect()
 }
 
