@@ -106,6 +106,16 @@ async fn a_redacted_task_plan_keeps_each_steps_delivered_text() {
     );
     let created = post(&state, "key-a", plan).await;
     let task = task_id(&created);
+    // The relays below call the same backend: they wait until both plan
+    // steps have taken their answers, so the plan gets A then B.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while mock.calls() < 2 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the plan never ran both steps"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 
     let relayed_b = relay_until_refused(&state, 100, OTHER_PROSE).await;
     assert_eq!(
