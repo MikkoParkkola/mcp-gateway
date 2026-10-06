@@ -254,10 +254,12 @@ The gateway's own per-backend limiter (`failsafe.rate_limit`) is covered by item
 There is nothing to change. Expect fewer spurious breaker openings, and note that a genuinely
 broken backend that happens to answer 429 will now stay in rotation longer.
 
-One boundary is worth knowing: a capacity failure worded as a throttle — for example
-`request throttled: upstream out of capacity` — is still treated as rate limiting and
-therefore still exempt. Narrowing that needs a rate-limit co-signal; it is 4.0.0 work tracked
-in #1613, and this paragraph changes when it lands.
+A throttle phrase alone is not a rate limit. An error worded only as a throttle — for example
+`request throttled: upstream out of capacity` — counts toward the error budgets and the circuit
+breaker, and gets the generic recovery hint instead of `RATE_LIMITED`. A tool result with
+`isError: true` worded that way counts as an answered call, like any other tool error. A real
+throttle carries a `429` or a rate-limit phrase (`too many requests`, `rate limit`,
+`RESOURCE_EXHAUSTED`).
 
 ## 5. One license across the repository
 
