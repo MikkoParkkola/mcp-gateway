@@ -454,19 +454,20 @@ pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
 /// large the value is past any integer a JSON result can carry exactly.
 fn exact_integer(text: &str) -> Option<String> {
     let (mantissa, exponent) = match text.find(['e', 'E']) {
-        Some(at) => (&text[..at], text[at + 1..].parse::<i64>().ok()?),
-        None => (text, 0),
+        Some(at) => (&text[..at], &text[at + 1..]),
+        None => (text, "0"),
     };
     let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
     // Only significant digits count toward the width bound below: zeros
     // leading the fraction ("0.0001e8") are not, and a zero coefficient is 0
-    // whatever its exponent ("0e99").
+    // whatever its exponent, even one past i64 ("0e99", "0e9223372036854775808").
     let mut digits = format!("{whole}{fraction}")
         .trim_start_matches('0')
         .to_owned();
     if digits.is_empty() {
         return Some("0".to_owned());
     }
+    let exponent = exponent.parse::<i64>().ok()?;
     let shift = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?;
     if shift >= 0 {
         // u128 holds at most 39 digits; anything wider cannot equal a result.
@@ -518,7 +519,9 @@ fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
                 // below, which also keeps integers past i64 exact. Covered:
                 // JSON number grammar with at most one leading sign, leading
                 // zeros allowed. Other notations ("0x1F", "12_345") are out of
-                // scope here (MIK-7954).
+                // scope here (MIK-7954). Whitespace around it is dropped, as
+                // the JSON parser does ("12345.0\n" is 12345).
+                let needle = needle.trim_ascii();
                 let needle = needle.strip_prefix(['+', '-']).unwrap_or(needle);
                 if needle.is_empty() || !needle.bytes().all(|b| b.is_ascii_digit()) {
                     // A credential injected in another number form ("12.5",
