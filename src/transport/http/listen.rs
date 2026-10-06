@@ -47,6 +47,10 @@ impl HttpTransport {
         &self,
         requested: Requested,
     ) -> Result<std::result::Result<mpsc::Receiver<UpstreamNote>, u16>> {
+        if !self.reinit_if_needed().await {
+            return Ok(Err(404));
+        }
+        let carried = self.carried_session();
         let id = self.next_id();
         let id_value = serde_json::to_value(&id).map_err(|e| Error::Protocol(e.to_string()))?;
         let params = with_modern_meta(
@@ -72,7 +76,7 @@ impl HttpTransport {
             .await
             .map_err(|e| safe_request_error("listen", &e))?;
         if !response.status().is_success() {
-            return Ok(Err(response.status().as_u16()));
+            return Ok(Err(self.refused(response.status().as_u16(), carried).await));
         }
         // A peer may answer the POST with one JSON response instead of a
         // stream: the end, the compatible acknowledgement or a `-32601`.
@@ -103,6 +107,52 @@ impl HttpTransport {
 }
 
 impl HttpTransport {
+    /// The shared bucket's session id, as a stream open is about to carry it.
+    fn carried_session(&self) -> Option<String> {
+        self.sessions.read().get(Self::bucket_key(None)).cloned()
+    }
+
+    /// A stream open was refused with `status`. A 404 says the session it
+    /// carried expired: that id is dropped only if it is still current (a
+    /// late 404 from an older session leaves a newer one alone) and the
+    /// session is re-handshaken. A sessionless 404 changes nothing.
+    async fn refused(&self, status: u16, carried: Option<String>) -> u16 {
+        let bucket = Self::bucket_key(None);
+        let dropped = status == 404 && carried.is_some() && {
+            let mut sessions = self.sessions.write();
+            let current = sessions.get(bucket) == carried.as_ref();
+            if current {
+                sessions.remove(bucket);
+            }
+            current
+        };
+        if dropped {
+            self.reinit_needed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = self.reinit_if_needed().await;
+        }
+        status
+    }
+
+    /// Re-handshake while an earlier 404 left the shared session dropped;
+    /// `false` while that still fails. One caller at a time; the flag is read
+    /// again under the lock, so concurrent callers share one `initialize`.
+    pub(super) async fn reinit_if_needed(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        if !self.reinit_needed.load(Ordering::SeqCst) {
+            return true;
+        }
+        let _held = self.reinit_lock.lock().await;
+        if !self.reinit_needed.load(Ordering::SeqCst) {
+            return true;
+        }
+        let healed = self.initialize().await.is_ok();
+        if healed {
+            self.reinit_needed.store(false, Ordering::SeqCst);
+        }
+        healed
+    }
+
     /// Open the legacy session GET (§3): the backend's out-of-request
     /// notifications on the shared bucket's session, or sessionless when the
     /// backend assigned none. One at a time per backend: a legacy server
@@ -117,6 +167,10 @@ impl HttpTransport {
         &self,
         watched: Watched,
     ) -> Result<std::result::Result<mpsc::Receiver<UpstreamNote>, u16>> {
+        if !self.reinit_if_needed().await {
+            return Ok(Err(404));
+        }
+        let carried = self.carried_session();
         let headers = self
             .build_mcp_headers(HeaderMode::SessionStream, None)
             .await?;
@@ -129,7 +183,7 @@ impl HttpTransport {
             .await
             .map_err(|e| safe_request_error("session stream", &e))?;
         if !response.status().is_success() {
-            return Ok(Err(response.status().as_u16()));
+            return Ok(Err(self.refused(response.status().as_u16(), carried).await));
         }
         let (tx, rx) = mpsc::channel(TAP_CAPACITY);
         let cancel = self.listen_cancel.clone();
