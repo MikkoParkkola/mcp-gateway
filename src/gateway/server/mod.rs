@@ -1929,6 +1929,16 @@ impl Gateway {
             dashboard_bootstrap,
         });
 
+        // REST capability watch polls through the router's controls, so it
+        // joins the running events hub once the router state exists.
+        if self.config.events.sources.rest_watch
+            && let Some(hub) = state.meta_mcp.events()
+        {
+            hub.install_watch_source(Arc::new(crate::gateway::router::GatewayWatchHost::new(
+                &state,
+            )));
+        }
+
         // Webhook routes are built BEFORE the router and handed to it, so the
         // origin gate covers them. Merging them onto the finished router would
         // put them outside the layer that refuses cross-site requests.
@@ -3070,11 +3080,7 @@ impl Gateway {
         // answer, and a replaced answer commits no receipt.
         {
             use super::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
-            let shape = if external_tool == "gateway_invoke" {
-                AnswerShape::InvokeWrapped
-            } else {
-                AnswerShape::Literal
-            };
+            let shape = AnswerShape::of(&external_tool);
             meta_mcp.rebuild_receipt_from_final(
                 response.result.as_ref(),
                 GatewayStamps::Legacy,
