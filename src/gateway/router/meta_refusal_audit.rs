@@ -6,6 +6,8 @@
 //! firewall refused on `/mcp` without a trace in the chain, while the same
 //! refusals on `/mcp/{name}` were recorded (D2-a).
 
+use std::collections::BTreeSet;
+
 use axum::http::StatusCode;
 use serde_json::Value;
 
@@ -15,7 +17,7 @@ use crate::gateway::meta_mcp::invoke::audit::DispatchNotes;
 use crate::identity_grants::GrantSubject;
 use crate::protocol::RequestId;
 use crate::security::audit::{
-    AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationTarget,
+    AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationRoute, InvocationTarget,
 };
 use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
 
@@ -31,6 +33,14 @@ pub(super) struct Refused<'a> {
     /// credential kind, principal, key name and verified subject.
     who: AuditWho,
     session_id: &'a str,
+}
+
+/// What a refusal records: its outcome and the target resolved before it.
+struct Refusal<'t> {
+    outcome: AuditOutcome,
+    server: &'t str,
+    tool: Option<&'t str>,
+    tenants: BTreeSet<String>,
 }
 
 impl<'a> Refused<'a> {
@@ -59,6 +69,46 @@ impl<'a> Refused<'a> {
         message: String,
         status: StatusCode,
     ) -> axum::response::Response {
+        // MIK-7116.MIN.1: the tenants the refused request named; nothing was
+        // fetched, so there is no response side and no data class.
+        let tenants = state.meta_mcp.request_tenants(target.arguments);
+        let refusal = Refusal {
+            outcome: AuditOutcome::Denied(code),
+            server: target.server,
+            tool: Some(target.tool),
+            tenants,
+        };
+        self.record(state, refusal, id, code, message, status).await
+    }
+
+    /// MIK-7660 AC3: record a call refused for malformed retry fields as
+    /// `invalid`, then answer it -32602/400. It is refused before any target
+    /// is resolved, so the record names no server, no tool and no tenant.
+    pub(super) async fn answer_malformed(
+        self,
+        state: &AppState,
+        id: RequestId,
+        message: String,
+    ) -> axum::response::Response {
+        let refusal = Refusal {
+            outcome: AuditOutcome::Invalid(-32602),
+            server: "",
+            tool: None,
+            tenants: BTreeSet::new(),
+        };
+        self.record(state, refusal, id, -32602, message, StatusCode::BAD_REQUEST)
+            .await
+    }
+
+    async fn record(
+        self,
+        state: &AppState,
+        refusal: Refusal<'_>,
+        id: RequestId,
+        code: i32,
+        message: String,
+        status: StatusCode,
+    ) -> axum::response::Response {
         // D4: every meta-route refusal decided before dispatch is counted
         // here, with or without a log; the meta layer never sees it.
         crate::security::security_metrics::meta_refused(code);
@@ -73,40 +123,47 @@ impl<'a> Refused<'a> {
         let trace_id =
             crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
         let envelope = AuditEnvelope {
-            trace_id: Some(trace_id),
+            trace_id: Some(trace_id.clone()),
             otel_trace_id: otel_trace_id.clone(),
-            outcome: AuditOutcome::Denied(code),
+            outcome: refusal.outcome,
             who: self.who,
         };
         let request_hash = format!(
             "sha256:{}",
             crate::hashing::canonical_json_sha256(self.arguments)
         );
-        let (server, tool) = (target.server.to_string(), target.tool.to_string());
-        // MIK-7116.MIN.1: the tenants the refused request named; nothing was
-        // fetched, so there is no response side and no data class.
-        let tenants = state.meta_mcp.request_tenants(target.arguments);
-        let attribution = DispatchNotes::default().attribution(&state.meta_mcp, tenants, None);
+        let server = refusal.server.to_string();
+        let tool = refusal.tool.map(str::to_string);
+        let attribution =
+            DispatchNotes::default().attribution(&state.meta_mcp, refusal.tenants, None);
         let session = self.session_id.to_string();
-        // The meta writer's correlation ladder: caller trace id, then session.
+        // The meta writer's correlation ladder: caller trace id, session, then
+        // the trace id minted here. The modern route carries "no session" as
+        // "", which is no key: every stateless call would correlate as one.
         let written = log
             .append_bounded(move |log| {
-                // The handler always has a session id, as `invoke_tool` is
-                // handed one, so the trace-id rung is never reached here.
-                let key = match otel_trace_id.as_deref() {
-                    Some(otel) => CorrelationKey {
+                let key = match (otel_trace_id.as_deref(), session.as_str()) {
+                    (Some(otel), _) => CorrelationKey {
                         id: otel,
                         source: CorrelationSource::OtelTraceId,
                     },
-                    None => CorrelationKey {
-                        id: &session,
+                    (None, "") => CorrelationKey {
+                        id: &trace_id,
+                        source: CorrelationSource::TraceId,
+                    },
+                    (None, session) => CorrelationKey {
+                        id: session,
                         source: CorrelationSource::SessionId,
                     },
                 };
                 log.log_invocation_attributed(
                     key,
                     &envelope,
-                    InvocationTarget::meta(&server, &tool),
+                    InvocationTarget {
+                        route: InvocationRoute::Meta,
+                        server: &server,
+                        tool: tool.as_deref(),
+                    },
                     &request_hash,
                     None,
                     attribution,
