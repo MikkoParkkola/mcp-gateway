@@ -53,12 +53,17 @@ pub(super) fn dispatch_error_result(
 
 impl super::MetaMcp {
     /// The meta-tools this gateway's callers can see, for recovery hints: a
-    /// Code Mode gateway exposes only `gateway_search` and `gateway_execute`.
+    /// Code Mode gateway exposes only `gateway_search` and `gateway_execute`,
+    /// and `exposed_meta_tools` can hide either mode's discovery tool.
     pub(super) fn hint_surface(&self) -> MetaSurface {
-        if self.code_mode_enabled {
+        let surface = if self.code_mode_enabled {
             MetaSurface::CodeMode
         } else {
             MetaSurface::Standard
+        };
+        match surface.discovery_tool() {
+            Some(tool) if !self.meta_tool_exposure.is_exposed(tool) => MetaSurface::Undiscoverable,
+            _ => surface,
         }
     }
 }

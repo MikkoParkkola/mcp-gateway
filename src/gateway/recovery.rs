@@ -144,14 +144,18 @@ pub(crate) enum MetaSurface {
     Standard,
     /// Code Mode: only `gateway_search` and `gateway_execute`.
     CodeMode,
+    /// The operator's `exposed_meta_tools` hides this mode's discovery tool,
+    /// so a hint names no tool to discover with.
+    Undiscoverable,
 }
 
 impl MetaSurface {
-    /// The tool this surface discovers tools with.
-    const fn discovery_tool(self) -> &'static str {
+    /// The tool this surface discovers tools with, if the caller has one.
+    pub(crate) const fn discovery_tool(self) -> Option<&'static str> {
         match self {
-            Self::Standard => "gateway_list_tools",
-            Self::CodeMode => "gateway_search",
+            Self::Standard => Some("gateway_list_tools"),
+            Self::CodeMode => Some("gateway_search"),
+            Self::Undiscoverable => None,
         }
     }
 }
@@ -214,9 +218,11 @@ pub(crate) fn recovery_for_surface(
                       Do not retry in a tight loop."
                         .to_string()
                 }
-                MetaSurface::CodeMode => "Wait for the circuit breaker to recover (automatic). \
+                MetaSurface::CodeMode | MetaSurface::Undiscoverable => {
+                    "Wait for the circuit breaker to recover (automatic). \
                       Do not retry in a tight loop."
-                    .to_string(),
+                        .to_string()
+                }
             },
             fix_example: None,
             related_tools: ctx.related_tools,
@@ -229,18 +235,16 @@ pub(crate) fn recovery_for_surface(
                 || format!("Tool '{tool_label}' was not found on backend '{backend_label}'"),
                 str::to_string,
             ),
-            suggest: if ctx.related_tools.is_empty() {
-                format!(
-                    "Use `{}` to discover available tools.",
-                    surface.discovery_tool()
-                )
-            } else {
-                format!(
-                    "Did you mean one of: {}? \
-                     Use `{}` to see all available tools.",
-                    ctx.related_tools.join(", "),
-                    surface.discovery_tool()
-                )
+            suggest: match (ctx.related_tools.is_empty(), surface.discovery_tool()) {
+                (true, Some(discover)) => {
+                    format!("Use `{discover}` to discover available tools.")
+                }
+                (true, None) => "Check the tool name against the tools you were given.".to_string(),
+                (false, Some(discover)) => format!(
+                    "Did you mean one of: {}? Use `{discover}` to see all available tools.",
+                    ctx.related_tools.join(", ")
+                ),
+                (false, None) => format!("Did you mean one of: {}?", ctx.related_tools.join(", ")),
             },
             fix_example: None,
             related_tools: ctx.related_tools,
@@ -615,5 +619,17 @@ mod tests {
             "{}",
             hint.suggest
         );
+    }
+
+    #[test]
+    fn an_undiscoverable_surface_names_no_meta_tool() {
+        for category in [ErrorCategory::NotFound, ErrorCategory::CircuitBreakerTrip] {
+            let hint = recovery_for_surface(category, ctx_for("t"), MetaSurface::Undiscoverable);
+            assert!(
+                !hint.suggest.contains("gateway_"),
+                "{category:?}: {}",
+                hint.suggest
+            );
+        }
     }
 }
