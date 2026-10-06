@@ -196,6 +196,19 @@ fn a_truncated_double_encoded_document_is_uninspected() {
     for cut in [&full[..full.len() - 8], &format!(" {}", &full[..20])] {
         assert!(g.response_uninspected(&text_block(cut)), "{cut}");
     }
+    // Escaped leading whitespace, an escaped brace, a third encoding, and a
+    // cut inside an escape all hide the brace from a first-character check.
+    let triple = serde_json::to_string(&full).unwrap();
+    for cut in [
+        r#""\n{\"customer_id\":\"cust-9"#,
+        r#""{\"customer_id\":\"cust-9"#,
+        &triple[..triple.len() - 8],
+        r#""{\"customer_id\":\"cust-9\u00"#,
+    ] {
+        assert!(g.response_uninspected(&text_block(cut)), "{cut}");
+    }
+    // An unclosed quote around prose is read as far as it goes: inspected.
+    assert!(!g.response_uninspected(&text_block("\"just a cut string")));
 }
 
 /// Review (gap 3): a byte-order mark before JSON does not hide it.
