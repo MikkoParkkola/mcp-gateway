@@ -23,10 +23,12 @@ impl Firewall {
     ///
     /// The identity is the caller's control identity: after MCP 2026-07-28
     /// there is no session, so a per-request key would see a first call every
-    /// time. Empty is not an identity (every stateless caller would share one
-    /// bucket), so the caller passes `None` and the call is refused unscored:
-    /// a detector with nothing to key on cannot protect, and allowing the call
-    /// anyway is the failure that reads as success.
+    /// time. Empty is not an identity, so the caller passes `None` and the
+    /// call is refused unscored: a detector with nothing to key on cannot
+    /// protect, and allowing the call anyway is the failure that reads as
+    /// success. A shared bucket is chosen deliberately, never by default: with
+    /// authentication off, legacy callers on no established session key on
+    /// one named constant (MIK-7971), stricter than a key per request.
     pub(super) fn score_anomaly(
         &self,
         session_id: &str,

@@ -102,3 +102,44 @@ async fn an_established_session_keeps_its_own_window() {
         "session a's own window still counts"
     );
 }
+
+/// The anomaly default, pinned: session-less callers share one history, so
+/// their interleaved sequences produce transitions neither made. Without an
+/// `anomaly_block_threshold` that is scored and logged, never refused; the
+/// same history under a threshold is refused (positive control).
+#[test]
+fn a_shared_session_less_history_is_never_blocked_without_a_block_threshold() {
+    use crate::security::firewall::{Firewall, FirewallConfig};
+    use crate::transition::TransitionTracker;
+    let key = super::super::identity::AUTH_DISABLED_SESSION_LESS_CALLER;
+    let admits_all = |block: Option<f64>| {
+        let config = FirewallConfig {
+            anomaly_detection: true,
+            anomaly_block_threshold: block,
+            anomaly_min_observations: 1,
+            ..FirewallConfig::default()
+        };
+        let fw = Firewall::from_config(config, Some(Arc::new(TransitionTracker::new())));
+        let call = |tool: &str| {
+            fw.check_request(key, "alpha", tool, &json!({}), "anonymous", key)
+                .allowed
+        };
+        // Two clients' a1->a2 and b1->b2, interleaved into one history.
+        let mut all = true;
+        for _ in 0..25 {
+            for tool in ["a1", "a2", "b1", "b2"] {
+                all &= call(tool);
+            }
+        }
+        // A transition no client ever made.
+        all & call("z")
+    };
+    assert!(
+        admits_all(None),
+        "no block threshold: scored, never refused"
+    );
+    assert!(
+        !admits_all(Some(0.9)),
+        "positive control: the shared history is refused at 0.9"
+    );
+}
