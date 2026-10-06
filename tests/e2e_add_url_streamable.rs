@@ -26,6 +26,16 @@ const TOOL: &str = "tide_table";
 const MARKER: &str = "tidebook-answered-over-streamable-http";
 const READY_BOUND: Duration = Duration::from_secs(60);
 
+/// Every HTTP wait is bounded, and loopback never goes through an inherited
+/// proxy.
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .no_proxy()
+        .build()
+        .expect("an HTTP client")
+}
+
 /// POST-only MCP server: GET is answered 405 by the router.
 async fn mcp(Json(body): Json<Value>) -> Response {
     let Some(id) = body.get("id").filter(|id| !id.is_null()).cloned() else {
@@ -128,8 +138,11 @@ async fn add_url_reaches_a_streamable_http_server() {
     let logs = || std::fs::read_to_string(&log).unwrap_or_default();
 
     let base = format!("http://127.0.0.1:{port}");
+    let http = http_client();
     let deadline = tokio::time::Instant::now() + READY_BOUND;
-    while !reqwest::get(format!("{base}/health"))
+    while !http
+        .get(format!("{base}/health"))
+        .send()
         .await
         .is_ok_and(|r| r.status().is_success())
     {
@@ -144,7 +157,6 @@ async fn add_url_reaches_a_streamable_http_server() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    let http = reqwest::Client::new();
     let mcp_url = format!("{base}/mcp");
     let init = post(
         &http,
