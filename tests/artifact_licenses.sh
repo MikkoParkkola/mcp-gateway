@@ -43,13 +43,16 @@ mutate() {
 
 check() { bash "$1/scripts/ci/verify-artifact-licenses.sh" >"$1.out" 2>&1; }
 
+# <name> [<file> <perl substitution>]: the check passes, after the edit if given.
 assert_pass() {
   local tree
   tree="$(make_tree "$1")"
+  [ $# -eq 3 ] && mutate "$tree/$2" "$3"
   if ! check "$tree"; then
     cat "$tree.out" >&2
     echo "FAIL: $1 should pass" >&2
-    exit 1
+    failed=1
+    return
   fi
   echo "ok: $1"
 }
@@ -98,6 +101,19 @@ for f in homebrew/mcp-gateway.rb .github/workflows/release.yml; do
   assert_fail "ruby-comment-inside-caveats:${f##*/}" "$f" \
     's/ See https:\S*COMMERCIAL\.md//; s/^( *)(def caveats\n)/$1$2$1  # COMMERCIAL.md\n/m' \
     "$f: formula caveats must point to COMMERCIAL.md"
+  # A delimiter with a digit must still end the heredoc where Ruby does.
+  assert_fail "digit-delimiter-then-comment:${f##*/}" "$f" \
+    's/ See https:\S*COMMERCIAL\.md//; s/<<~(EOS|CAVEATS)\n/<<~${1}1\n/; s/^( *)(EOS|CAVEATS)\n/$1${2}1\n$1# COMMERCIAL.md\n/m' \
+    "$f: formula caveats must point to COMMERCIAL.md"
+  # A commented-out heredoc is not printed.
+  assert_fail "commented-heredoc-opener:${f##*/}" "$f" \
+    's/ See https:\S*COMMERCIAL\.md//; s/^( *)(<<~(?:EOS|CAVEATS)\n)/$1# <<~NOTE\n$1# COMMERCIAL.md\n$1# NOTE\n$1$2/m' \
+    "$f: formula caveats must point to COMMERCIAL.md"
+  # Ruby returns the last expression, so a heredoc followed by one is discarded.
+  assert_fail "heredoc-then-other-value:${f##*/}" "$f" \
+    's/^( *)(EOS|CAVEATS)\n/$1$2\n$1"no terms here"\n/m' \
+    "$f: formula caveats must point to COMMERCIAL.md"
+  assert_pass "quoted-delimiter:${f##*/}" "$f" "s/<<~(EOS|CAVEATS)\n/<<~'\$1'\n/"
 done
 
 assert_fail "generated-formula-without-caveats" .github/workflows/release.yml \
