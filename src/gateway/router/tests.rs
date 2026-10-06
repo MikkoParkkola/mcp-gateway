@@ -423,7 +423,7 @@ pub(super) fn http_backend_at(name: &str, http_url: &str) -> Arc<Backend> {
         BackendConfig {
             transport: crate::config::TransportConfig::Http {
                 http_url: http_url.to_string(),
-                streamable_http: false,
+                streamable_http: Some(false),
                 protocol_version: None,
             },
             enabled: true,

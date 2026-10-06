@@ -246,7 +246,7 @@ pub fn write_config(
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: backend.to_string(),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             timeout: Duration::from_secs(30),

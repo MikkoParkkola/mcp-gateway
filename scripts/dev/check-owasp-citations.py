@@ -5,7 +5,8 @@
 
 The self-assessment cites source paths as evidence and lists the tests that pin
 each control. A path that no longer exists, or a test name that matches no test,
-is a claim nobody can check any more; this fails on either.
+is a claim nobody can check any more; this fails on either. It also fails when
+the headline or the summary table counts disagree with the matrix rows.
 
 Validation commands must have the shape `cargo test [--lib] <name>`; any other
 `cargo test` line is reported rather than skipped.
@@ -33,6 +34,63 @@ CARGO_LINE = re.compile(r"^\s*cargo\s+test\b.*$", re.M)
 CARGO_TEST = re.compile(r"^\s*cargo\s+test(\s+--lib)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*$")
 # A test function: `#[test]` or `#[tokio::test(...)]`, then attributes, then `fn`.
 TEST_FN = re.compile(r"#\[(?:tokio::)?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)")
+# A matrix row: `| ASI01 | <risk> | <STATUS> | ...`.
+MATRIX_ROW = re.compile(r"^\|\s*(ASI\d{2})\s*\|[^|]*\|\s*(COVERED|PARTIAL|GAP)\s*\|", re.M)
+# The headline: a bold run naming a status, e.g. `**3/10 COVERED, 7/10 PARTIAL**`.
+HEADLINE = re.compile(r"\*\*([^*]*\b(?:COVERED|PARTIAL|GAP)\b[^*]*)\*\*")
+# One status in the headline. `HEADLINE_STATUS` finds every status named, so a
+# status whose count does not parse is reported rather than skipped.
+HEADLINE_PART = re.compile(r"(\d+)\s*/\s*(\d+)\s+(COVERED|PARTIAL|GAP)\b")
+HEADLINE_STATUS = re.compile(r"\b(COVERED|PARTIAL|GAP)\b")
+# A summary row: `| COVERED | 3/10 | ASI01, ASI02, ASI08 |`.
+SUMMARY_ROW = re.compile(r"^\|\s*(COVERED|PARTIAL|GAP)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|", re.M)
+COUNT = re.compile(r"^(\d+)\s*/\s*(\d+)$")
+RISK = re.compile(r"ASI\d{2}")
+
+
+def count_problems(text: str) -> list[str]:
+    """The headline and the summary table must say what the matrix rows say.
+
+    The rows are the assessment; every count is derived from them, so a count
+    edited on its own is reported against the rows rather than trusted. Counts
+    are read whatever their spacing, and one that cannot be read is reported.
+    """
+    rows = MATRIX_ROW.findall(text)
+    headlines = HEADLINE.findall(text)
+    summaries = SUMMARY_ROW.findall(text)
+    if not rows:
+        return ["counts are claimed but no matrix rows were found"] if headlines or summaries else []
+    if not headlines:
+        return ["no header count found for the matrix rows"]
+    by_status: dict[str, list[str]] = {}
+    for risk, status in rows:
+        by_status.setdefault(status, []).append(risk)
+
+    def actual(status: str) -> str:
+        return f"{len(by_status.get(status, []))}/{len(rows)}"
+
+    found = []
+    for headline in headlines:
+        parts = HEADLINE_PART.findall(headline)
+        if len(parts) != len(HEADLINE_STATUS.findall(headline)):
+            found.append(f"header count not readable: {headline}")
+            continue
+        for num, den, status in parts:
+            if f"{num}/{den}" != actual(status):
+                found.append(f"header says {num}/{den} {status}; the matrix rows give {actual(status)}")
+    for status, count, risks in summaries:
+        match = COUNT.match(count)
+        if match is None:
+            found.append(f"summary {status} count not readable: {count}")
+            continue
+        claimed = f"{match.group(1)}/{match.group(2)}"
+        want = by_status.get(status, [])
+        if claimed != actual(status) or sorted(RISK.findall(risks)) != sorted(want):
+            found.append(
+                f"summary {status} says {claimed} {risks}; "
+                f"the matrix rows give {actual(status)} {', '.join(want) or '-'}"
+            )
+    return found
 
 
 def _rust_lexer():
@@ -84,6 +142,7 @@ def problems(doc: Path, root: Path) -> list[str]:
         pool = defined_lib if match.group(1) else defined
         if not any(name in d for d in pool):
             found.append(f"validation command matches no test: cargo test {'--lib ' if match.group(1) else ''}{name}")
+    found.extend(count_problems(text))
     return found
 
 
@@ -94,7 +153,7 @@ def main(argv: list[str]) -> int:
         print(f"{doc.relative_to(ROOT) if doc.is_relative_to(ROOT) else doc}: {line}")
     if found:
         return 1
-    print(f"{doc.name}: every cited path and validation test exists.")
+    print(f"{doc.name}: every cited path and validation test exists, and the counts match the rows.")
     return 0
 
 
