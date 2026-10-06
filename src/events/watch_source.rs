@@ -158,7 +158,7 @@ fn projection(value: &Value, fields: Option<&[String]>) -> BTreeMap<String, Valu
     match fields {
         Some(pointers) => pointers
             .iter()
-            .map(|p| (p.clone(), value.pointer(p).cloned().unwrap_or(Value::Null)))
+            .filter_map(|p| value.pointer(p).map(|v| (p.clone(), v.clone())))
             .collect(),
         None => match value {
             Value::Object(map) => map
@@ -180,8 +180,19 @@ fn projection(value: &Value, fields: Option<&[String]>) -> BTreeMap<String, Valu
 fn digest(projection: &BTreeMap<String, Value>) -> String {
     use sha2::Digest as _;
     let map: Map<String, Value> = projection.clone().into_iter().collect();
-    let bytes = serde_json_canonicalizer::to_vec(&Value::Object(map)).unwrap_or_default();
+    let bytes = serde_json::to_vec(&Value::Object(map)).unwrap_or_default();
     format!("sha256:{}", hex::encode(sha2::Sha256::digest(bytes)))
+}
+
+/// A poller's lifecycle key: the principal it runs for (none when shared),
+/// the event name and the arguments. Serialized with sorted keys and every
+/// integer kept, so arguments differing past 2^53 are two pollers.
+fn poll_key(principal: Option<&str>, name: &str, arguments: &Value) -> String {
+    match principal {
+        Some(principal) => json!([principal, name, arguments]),
+        None => json!([name, arguments]),
+    }
+    .to_string()
 }
 
 /// The pointers whose values differ between two projections.
@@ -358,13 +369,7 @@ impl EventSource for WatchSource {
         let shared = self
             .target(name)
             .is_some_and(|t| t.credential == CredentialUse::Free);
-        let key = if shared {
-            json!([name, arguments])
-        } else {
-            json!([principal, name, arguments])
-        };
-        String::from_utf8(serde_json_canonicalizer::to_vec(&key).unwrap_or_default())
-            .unwrap_or_default()
+        poll_key((!shared).then_some(principal), name, arguments)
     }
 
     async fn on_first_subscriber(
@@ -492,12 +497,8 @@ impl Run {
 
     /// The lifecycle key a row holds under this poller's sharing rule.
     fn key_of(&self, row: &Subscription) -> String {
-        let key = match self.charge {
-            Charge::Global => json!([row.name, row.arguments]),
-            Charge::Holder => json!([row.principal, row.name, row.arguments]),
-        };
-        String::from_utf8(serde_json_canonicalizer::to_vec(&key).unwrap_or_default())
-            .unwrap_or_default()
+        let alone = (self.charge == Charge::Holder).then_some(row.principal.as_str());
+        poll_key(alone, &row.name, &row.arguments)
     }
 
     async fn once(
@@ -507,21 +508,16 @@ impl Run {
     ) -> Step {
         // The classification is re-read every poll (MIK-7216.IDEM.1): a
         // capability removed or reclassified takes its subscriptions with it.
-        // A changed credential class is a reclassification too: a shared
-        // poller must never call under one sharer's credential.
-        let Some(target) = self.host.targets().into_iter().find(|t| {
-            t.read_only
-                && event_name(&t.capability) == self.name
-                && t.credential != CredentialUse::Account
-                && (t.credential == CredentialUse::Free) == (self.charge == Charge::Global)
-        }) else {
+        let Some(target) = self
+            .host
+            .targets()
+            .into_iter()
+            .find(|t| t.read_only && event_name(&t.capability) == self.name)
+        else {
             let (gone, owner) = (vec![self.name.clone()], Arc::clone(hub));
             let _ = tokio::task::spawn_blocking(move || owner.withdraw(&gone)).await;
             hub.reconcile_stops_in_background();
             return Step::Stop;
-        };
-        let Some(services) = hub.runtime.services.get().cloned() else {
-            return Step::Failed;
         };
         let now = Utc::now();
         let rows: Vec<Subscription> = hub
@@ -530,6 +526,20 @@ impl Run {
             .into_iter()
             .filter(|s| s.live(now) && s.name == self.name && self.key_of(s) == self.key)
             .collect();
+        // A changed credential class re-keys the capability: this poller's
+        // holders end (a shared poller never calls under one sharer's
+        // credential), and subscriptions made under the new class keep theirs.
+        if target.credential == CredentialUse::Account
+            || (target.credential == CredentialUse::Free) != (self.charge == Charge::Global)
+        {
+            for row in &rows {
+                hub.revoke(row).await;
+            }
+            return Step::Stop;
+        }
+        let Some(services) = hub.runtime.services.get().cloned() else {
+            return Step::Failed;
+        };
         let mut chosen = None;
         for row in rows {
             let passes = services
