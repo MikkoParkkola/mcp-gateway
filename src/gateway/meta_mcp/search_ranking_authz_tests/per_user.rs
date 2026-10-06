@@ -135,13 +135,21 @@ async fn a_bound_callers_search_does_not_fill_the_shared_slot() {
     let alpha = super::super::catalogue_per_caller_tests::identity("alpha");
     meta.seed_caller_slot_for_test(MCP_BACKEND, &alpha).await;
 
-    meta.search_tools(
-        &json!({ "query": QUERY }),
-        None,
-        &super::super::identified_caller(&alpha),
-    )
-    .await
-    .unwrap();
+    let response = meta
+        .search_tools(
+            &json!({ "query": QUERY }),
+            None,
+            &super::super::identified_caller(&alpha),
+        )
+        .await
+        .unwrap();
+    let mut names = tool_names(&response);
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["weak_match".to_string(), QUERY.to_string()],
+        "the caller's own fetch found its tools"
+    );
     // A background fill, had one started, runs on this runtime: let it.
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
