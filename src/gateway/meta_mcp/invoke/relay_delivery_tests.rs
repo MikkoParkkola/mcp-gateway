@@ -359,3 +359,33 @@ fn only_a_gateway_invoke_answer_is_wrapped() {
         assert_eq!(AnswerShape::of(tool), AnswerShape::Literal, "{tool}");
     }
 }
+
+/// MIK-7942 D6.CATALOGUE.1/.3/.5: a recorded catalogue result is classified
+/// as it is delivered. Personal data only in the signature-chain member, which
+/// delivery strips, sets no context-integrity verdict; the same data in a
+/// delivered text block does (control).
+#[test]
+fn a_recorded_prompt_is_classified_without_the_stripped_chain() {
+    use crate::security::signature_chain::CHAIN_META;
+    let meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    let pii = "Contact: keeper@orchardcoop.fi";
+    let only_in_chain = json!({
+        "contents": [{"uri": "res://orchard", "text": PROSE}],
+        "_meta": {CHAIN_META: {"link": pii}},
+    });
+    let recorded = meta.recorded_prompt(
+        ("alpha", "resources/read"),
+        None,
+        "catalogue",
+        &only_in_chain,
+    );
+    assert!(recorded.get("_context_integrity").is_none(), "{recorded}");
+    let delivered = json!({
+        "contents": [{"uri": "res://orchard", "text": format!("{PROSE} {pii}")}],
+    });
+    let recorded = meta.recorded_prompt(("alpha", "resources/read"), None, "catalogue", &delivered);
+    assert!(
+        recorded.get("_context_integrity").is_some(),
+        "control: {recorded}"
+    );
+}
