@@ -136,8 +136,10 @@ async fn an_array_root_is_published_under_items_through_dispatch() {
          \x20     method: GET\n"
     ))
     .expect("the capability parses");
-    let executor =
-        Arc::new(CapabilityExecutor::new().with_test_http_client(reqwest::Client::new()));
+    let executor = Arc::new(
+        CapabilityExecutor::new()
+            .with_test_http_client(reqwest::Client::builder().no_proxy().build().unwrap()),
+    );
     let backend = Arc::new(CapabilityBackend::new("caps", executor));
     backend.register_capability(definition).expect("registers");
     let meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new())).with_code_mode(true);
