@@ -58,7 +58,8 @@ providers:
 
 /// The selector must be a string; without the schema, `kind=12` is guessed as
 /// the number 12 and `build_url` refuses it. Typed by the schema, it is `"12"`
-/// and the call gets past the selector (and then fails to reach the host).
+/// and the call gets past the selector to the egress check, which refuses
+/// loopback by default: no request is made and nothing waits on DNS.
 #[test]
 fn tool_invoke_types_key_value_text_by_the_tool_schema() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -79,7 +80,7 @@ providers:
   primary:
     service: rest
     config:
-      base_url: https://selector-probe.invalid
+      base_url: https://127.0.0.1
       path_selector:
         parameter: kind
         default: \"12\"
@@ -94,9 +95,9 @@ providers:
         dir.path(),
         &["tool", "invoke", "selector_probe", "-C", &caps, "kind=12"],
     );
-    assert!(!out.status.success(), "the host does not resolve: {text}");
+    assert!(!out.status.success(), "{text}");
     assert!(
-        !text.contains("must be a string"),
-        "the selector was sent as a number: {text}"
+        text.contains("SSRF blocked"),
+        "the URL was built and reached the egress check: {text}"
     );
 }
