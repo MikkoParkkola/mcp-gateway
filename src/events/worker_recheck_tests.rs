@@ -275,3 +275,51 @@ async fn a_refusal_after_the_tenant_read_record_releases_the_frame() {
         "the refused frame released its reservation"
     );
 }
+
+/// MIK-7921: the lookup budget belongs to one attempt. Inside one scope a
+/// failed lookup is paid once; the next scope (the next attempt) reads the
+/// catalogue again, and outside any scope (subscribe, fan-out) every call reads.
+#[tokio::test]
+async fn the_lookup_budget_is_per_attempt() {
+    use crate::events::EventSource as _;
+    use crate::events::upstream_listener::FAILED_LOOKUP;
+    const NAME: &str = "backend.b.resource_updated";
+    let uri = serde_json::json!({"uri": "file:///a"});
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = open_hub(dir.path());
+    let connections = silent_backend(&hub).await;
+    let source = hub.source_offering(NAME).expect("offered");
+    let ask = || source.authorize("p", NAME, &uri);
+
+    let _ = ask().await;
+    let one = connections.load(Ordering::SeqCst);
+    assert!(one >= 1, "the lookup reached the backend");
+    let _ = ask().await;
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        2 * one,
+        "no scope: reads twice"
+    );
+
+    FAILED_LOOKUP
+        .scope(std::cell::Cell::new(false), async {
+            let _ = ask().await;
+            let _ = ask().await;
+        })
+        .await;
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        3 * one,
+        "one scope: reads once"
+    );
+    FAILED_LOOKUP
+        .scope(std::cell::Cell::new(false), async {
+            let _ = ask().await;
+        })
+        .await;
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        4 * one,
+        "the next attempt reads again"
+    );
+}
