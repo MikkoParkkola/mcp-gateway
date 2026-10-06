@@ -234,3 +234,30 @@ fn redacted_output_is_capped_relative_to_the_input() {
         got.len()
     );
 }
+
+/// MIK-7955.FIX.1 on the other paths: a redacted number takes a marker free of
+/// every secret, a renamed key skips a suffix that forms one, and text whose
+/// every marker holds a secret is dropped whole.
+#[test]
+fn every_marker_path_avoids_the_secrets() {
+    let secrets = ["redacted".to_owned(), "12345678".to_owned()];
+    let mut value = json!({"pin": 12_345_678});
+    super::redact_value(&mut value, &secrets);
+    let text = value.to_string();
+    assert!(
+        !text.contains("redacted") && !text.contains("12345678"),
+        "{text}"
+    );
+
+    // Both keys collapse to `x[redacted]`; the second may not become `#2`.
+    let secrets = ["k1".to_owned(), "k2".to_owned(), "#2".to_owned()];
+    let mut value = json!({"xk1": 1, "xk2": 2});
+    super::redact_value(&mut value, &secrets);
+    let keys: Vec<&String> = value.as_object().unwrap().keys().collect();
+    assert_eq!(keys.len(), 2, "{value}");
+    assert!(keys.iter().all(|k| !k.contains("#2")), "{value}");
+
+    let secrets = ["redacted", "removed", "hidden"].map(str::to_owned);
+    let out = super::redact_untruncated("a redacted b", &secrets, &[]);
+    assert!(secrets.iter().all(|s| !out.contains(s.as_str())), "{out}");
+}
