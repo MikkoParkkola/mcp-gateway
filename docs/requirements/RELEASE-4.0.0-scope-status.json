@@ -1901,11 +1901,16 @@
     },
     {
       "id": "MIK-7630.W401.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-06 by the operator decision moving MIK-7720 (three event sources) and MIK-7811 back into 4.0.0; not built yet."
+      "evidence": [
+        "src/events/watch_source.rs",
+        "src/events/watch_source_tests.rs",
+        "src/gateway/router/watch_poll_parity_tests.rs",
+        "src/capability/read_only_call_tests.rs"
+      ],
+      "note": "Graded 2026-10-06 at 1f9f91348 (PR #3065, after #3053 for the lifecycle key). Red first: run 37411090881 on 0aa322e5c, then review reds on throwaway heads (runs 37413938232, 37414125635, 37419432174, 37426963776, 37437256581, 37447746970, job 112291774863), each failing only its new rows at their own assertions. Green: CI run 37497039280 at head dae0c35c0 (Tests, Clippy, Windows, macOS, U10 guard); feature combinations run 37497047661 green. Mutants w1-w13 RED (run 37454272694 on 5233d6b8f) and w12, w14, w15 RED (run 37489368696 on 3ebaa38c0, after the withdraw-path change). Reviews: gpt SHIP on every delta; second seat GLM SHIP (kimi returned 429). Read-only only: watch_is_offered_only_for_read_only_capabilities (src/events/watch_source_tests.rs:173) and a_poll_runs_only_what_the_executor_finds_read_only (src/gateway/router/watch_poll_parity_tests.rs:202). Emits on a digest change, the first poll emits nothing, pointers and digests with no values: watch_emits_on_digest_change_only (:195). 60 s floor: :235. Shared only per canonical arguments for credential-free capabilities, distinct event id per transition: :293. Stops on reclassification: :344 (side-effecting) and :370 (credential class); a removed capability takes the same no-target branch (src/events/watch_source.rs:546). Default volatile fields ignored: :466."
     },
     {
       "id": "MIK-7630.W401.2",
