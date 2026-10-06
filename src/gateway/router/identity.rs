@@ -364,6 +364,37 @@ pub(super) fn caller_key(
         })
 }
 
+/// The key every legacy caller with authentication off shares when its
+/// request resumed no established session (MIK-7971).
+///
+/// A gateway-internal constant, like `AUTH_DISABLED_TASK_OWNER`: a minted
+/// session id is new on every such request, so keying on it gave the tenant
+/// guard, anomaly detector and call budget a first call every time. One shared
+/// bucket is stricter than that, and on an auth-off gateway every caller is
+/// the same operator anyway. It cannot collide with a caller key (`subject:`,
+/// `credential:`) or a session id (`gw-`).
+pub(super) const AUTH_DISABLED_SESSION_LESS_CALLER: &str = "local:auth-disabled:session-less:v1";
+
+/// The key the per-caller controls score on: the caller key; else, with no
+/// key, the session id when the request resumed it (`presented`) or when
+/// authentication is on; else, for an auth-off legacy request on a session
+/// minted just now, [`AUTH_DISABLED_SESSION_LESS_CALLER`]. A modern request
+/// has no session (`session_id` empty) and stays empty: refused unattributed.
+pub(super) fn control_identity(
+    caller_key: String,
+    session_id: &str,
+    presented: Option<&str>,
+    auth: &crate::gateway::auth::ResolvedAuthConfig,
+) -> String {
+    if !caller_key.is_empty() || session_id.is_empty() {
+        return caller_key;
+    }
+    if auth.enabled || presented == Some(session_id) {
+        return session_id.to_owned();
+    }
+    AUTH_DISABLED_SESSION_LESS_CALLER.to_owned()
+}
+
 /// The verified agent JWT `sub` is the subject verbatim, as on the OIDC path:
 /// never trimmed or truncated, so `" admin "` stays a different principal from
 /// `admin` (#2279). Only the display label is trimmed.
