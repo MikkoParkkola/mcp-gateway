@@ -812,3 +812,23 @@ async fn a_failed_open_backs_off() {
     assert_eq!(state.open_failures, 1, "the second and third waited");
     assert!(next_open_in(&state) > Duration::from_millis(500));
 }
+
+/// D5 (r1 HIGH): a pass resumes after the URI the last one reached, so a
+/// hanging prefix cannot starve the URIs ordered after it.
+#[test]
+fn a_legacy_pass_resumes_after_the_last_uri_reached() {
+    let sorted = || -> Vec<(String, bool)> {
+        ["a", "b", "c"]
+            .iter()
+            .map(|u| ((*u).to_owned(), true))
+            .collect()
+    };
+    let order = |last: Option<&str>| {
+        let mut due = sorted();
+        resume_after(&mut due, last);
+        due.into_iter().map(|(u, _)| u).collect::<Vec<_>>()
+    };
+    assert_eq!(order(Some("a")), ["b", "c", "a"]);
+    assert_eq!(order(Some("c")), ["a", "b", "c"], "past the end wraps");
+    assert_eq!(order(None), ["a", "b", "c"]);
+}

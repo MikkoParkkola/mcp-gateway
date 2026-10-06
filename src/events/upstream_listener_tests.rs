@@ -277,5 +277,51 @@ async fn a_backend_left_alone_during_the_lookup_is_admitted() {
     assert!(verdict.is_ok(), "{verdict:?}");
 }
 
+fn offline(name: &str) -> Arc<crate::backend::Backend> {
+    Arc::new(crate::backend::Backend::new(
+        name,
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ))
+}
+
+/// D5 release point (r1 HIGH): a backend replaced in the config gets a fresh
+/// ledger at the next admission; the interest still counted moves with it.
+#[tokio::test]
+async fn a_replaced_backend_gets_a_fresh_ledger_carrying_its_interest() {
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(offline("b")));
+    let listeners = UpstreamListeners::new(
+        Arc::clone(&registry),
+        Weak::new(),
+        Arc::new(std::collections::BTreeSet::new),
+    );
+    listeners.add("b", &watched("file:///a")).expect("room");
+    let first = Arc::clone(&listeners.backends.lock()["b"].ledger);
+    assert!(registry.remove("b"));
+    assert!(registry.register(offline("b")));
+    listeners.add("b", &watched("file:///b")).expect("room");
+    let second = Arc::clone(&listeners.backends.lock()["b"].ledger);
+    assert!(!Arc::ptr_eq(&first, &second), "fresh ledger");
+    assert_eq!(second.lock().size().0, 2, "a carried, b admitted");
+}
+
+/// While the registry holds the same backend, its ledger is kept.
+#[tokio::test]
+async fn the_same_backend_keeps_its_ledger() {
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(offline("b")));
+    let listeners = UpstreamListeners::new(
+        Arc::clone(&registry),
+        Weak::new(),
+        Arc::new(std::collections::BTreeSet::new),
+    );
+    listeners.add("b", &watched("file:///a")).expect("room");
+    let first = Arc::clone(&listeners.backends.lock()["b"].ledger);
+    listeners.add("b", &watched("file:///b")).expect("room");
+    assert!(Arc::ptr_eq(&first, &listeners.backends.lock()["b"].ledger));
+}
+
 #[path = "upstream_listener_revive_tests.rs"]
 mod revive;

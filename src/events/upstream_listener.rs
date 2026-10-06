@@ -62,6 +62,15 @@ impl Shared {
     pub(super) fn is_idle(&self) -> bool {
         self.need.lock().is_empty() && !self.ledger.lock().needs_cleanup()
     }
+
+    /// The task's own stop once idle, decided under `need` so a concurrent
+    /// admission either lands first (not idle) or sees the stop.
+    pub(super) fn cancel_if_idle(&self) {
+        let need = self.need.lock();
+        if need.is_empty() && !self.ledger.lock().needs_cleanup() {
+            self.stop.cancel();
+        }
+    }
 }
 
 /// An ended entry for `backend` (its task stopped, or never started, while the
@@ -183,12 +192,37 @@ impl UpstreamListeners {
     /// [`Full`] when the backend's URI budget is spent.
     pub(crate) fn add(&self, backend: &str, interest: &Interest) -> Result<(), Full> {
         let mut map = self.backends.lock();
-        let carried = take_ended(&mut map, backend);
-        let shared = Arc::clone(
-            map.entry(backend.to_owned())
-                .or_insert_with(|| self.start(backend, carried)),
-        );
-        let outcome = admit(&shared, interest);
+        let (shared, outcome) = loop {
+            // A task that ended (a reload made its backend ineligible, or it
+            // went idle) is replaced, not reused, if the interest returns; so
+            // is one whose ledger belongs to a `Backend` the registry no longer
+            // holds (config removal or replacement, D5). The replacement
+            // inherits the interest still counted, so later removals balance.
+            let ledger = self.ledger(backend);
+            let mut carried = Need::default();
+            if let Some(old) = map
+                .get(backend)
+                .filter(|s| s.stop.is_cancelled() || !Arc::ptr_eq(&s.ledger, &ledger))
+            {
+                old.stop.cancel();
+                carried = std::mem::take(&mut *old.need.lock());
+                map.remove(backend);
+            }
+            let shared = Arc::clone(
+                map.entry(backend.to_owned())
+                    .or_insert_with(|| self.start(backend, carried, ledger)),
+            );
+            // The task's idle self-stop also runs under `need`: either it
+            // stopped first and this picks a successor, or this admission
+            // makes the need non-empty before it looks.
+            let mut need = shared.need.lock();
+            if shared.stop.is_cancelled() {
+                continue;
+            }
+            let outcome = admit(&shared, &mut need, interest);
+            drop(need);
+            break (shared, outcome);
+        };
         match outcome {
             Ok(true) => shared.wake.send_modify(|n| *n += 1),
             Ok(false) => {}
@@ -227,7 +261,7 @@ impl UpstreamListeners {
     pub(crate) fn hold(&self, backend: &str, interest: &Interest) {
         let mut map = self.backends.lock();
         let shared = map.entry(backend.to_owned()).or_insert_with(|| {
-            let ended = self.entry(backend, Need::default());
+            let ended = self.entry(backend, Need::default(), self.ledger(backend));
             ended.stop.cancel();
             ended
         });
@@ -253,7 +287,7 @@ impl UpstreamListeners {
         for name in due {
             let carried = take_ended(&mut map, &name);
             tracing::debug!(backend = %name, "upstream listener: revived");
-            let shared = self.start(&name, carried);
+            let shared = self.start(&name, carried, self.ledger(&name));
             map.insert(name, shared);
         }
     }
@@ -372,11 +406,11 @@ impl UpstreamListeners {
         ledger
     }
 
-    fn start(&self, backend: &str, need: Need) -> Arc<Shared> {
+    fn start(&self, backend: &str, need: Need, ledger: Arc<Mutex<Ledger>>) -> Arc<Shared> {
         #[cfg(test)]
         self.starts
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let shared = self.entry(backend, need);
+        let shared = self.entry(backend, need, ledger);
         tokio::spawn(super::upstream_session::run(
             Arc::clone(&shared),
             Arc::clone(&self.registry),
@@ -385,12 +419,17 @@ impl UpstreamListeners {
         shared
     }
 
-    fn entry(&self, backend: &str, need: Need) -> Arc<Shared> {
+    fn entry(&self, backend: &str, need: Need, ledger: Arc<Mutex<Ledger>>) -> Arc<Shared> {
+        // Interest carried into a fresh ledger takes its keys there (fits:
+        // the need never holds more URIs than one ledger admits).
+        for uri in need.filter().1 {
+            let _ = ledger.lock().want(&uri);
+        }
         let (wake, _) = watch::channel(0);
         Arc::new(Shared {
             name: backend.to_owned(),
             need: Mutex::new(need),
-            ledger: self.ledger(backend),
+            ledger,
             snapshot: Mutex::new(Snapshot::default()),
             wake,
             stop: self.stop.child_token(),
@@ -403,8 +442,7 @@ impl UpstreamListeners {
 
 /// Count `interest`; a URI new to the need must first find room in the
 /// ledger, the admission authority (D5).
-fn admit(shared: &Shared, interest: &Interest) -> Result<bool, Full> {
-    let mut need = shared.need.lock();
+fn admit(shared: &Shared, need: &mut Need, interest: &Interest) -> Result<bool, Full> {
     let new_uri = match interest {
         Interest::ResourceUpdated(uri) if !need.emits(NoteKind::ResourceUpdated, Some(uri)) => {
             Some(uri)
