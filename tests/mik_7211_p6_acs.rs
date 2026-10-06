@@ -63,13 +63,21 @@ mod source_checks {
     /// `line` up to a `//` comment, if one starts outside a string literal
     /// (so a URL in a string does not cut the line short).
     fn code_part(line: &str) -> &str {
-        let (mut in_string, mut prev) = (false, '\0');
+        // `escaped`: the previous char was an unescaped `\` inside a string,
+        // so `"C:\\"` closes its string (escape parity, not the prior char).
+        let (mut in_string, mut escaped, mut prev) = (false, false, '\0');
         for (i, c) in line.char_indices() {
             match c {
-                '"' if prev != '\\' => in_string = !in_string,
+                '\\' if in_string && !escaped => {
+                    escaped = true;
+                    prev = c;
+                    continue;
+                }
+                '"' if !escaped => in_string = !in_string,
                 '/' if !in_string && prev == '/' => return &line[..i - 1],
                 _ => {}
             }
+            escaped = false;
             prev = c;
         }
         line
@@ -95,6 +103,12 @@ mod source_checks {
         assert!(!writes_the_key("let x = 1; // sets \"cacheScope\"\n"));
         assert!(writes_the_key(
             "let u = \"https://a.example\"; let _ = \"cacheScope\";\n"
+        ));
+        // An escaped backslash closes its string: the comment after it is cut,
+        // and a key after a URL that follows it still counts.
+        assert!(!writes_the_key("let p = \"C:\\\\\"; // \"cacheScope\"\n"));
+        assert!(writes_the_key(
+            "let p = \"C:\\\\\"; let u = \"https://a\"; let _ = \"cacheScope\";\n"
         ));
     }
 
