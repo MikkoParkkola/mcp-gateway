@@ -401,6 +401,50 @@ async fn response_hash_covers_returned_value() {
     );
 }
 
+/// MIK-7645 AC2: `audit_replay`'s `FailClosed` arm. The fault hits only the
+/// replay's own invocation append (the one write after it is armed), so the
+/// cell isolates that arm: the replay is withheld with -32005, never
+/// delivered unrecorded.
+#[tokio::test]
+async fn a_replay_whose_record_fails_is_withheld() {
+    use crate::security::audit::AuditFailurePolicy;
+    use crate::security::transparency_log::rotation_fault::WriteFault;
+    let dir = tempfile::tempdir().unwrap();
+    let mut meta = meta(Ok(ok_result()), &dir);
+    let logger = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: dir
+                .path()
+                .join("closed.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+            key_id: "d1".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("open log")
+        .with_failure_policy(AuditFailurePolicy::FailClosed),
+    );
+    meta.enable_transparency_log(Arc::clone(&logger));
+    let who = api_key_caller();
+    let replay = crate::protocol::JsonRpcResponse::success(RequestId::Number(7), ok_result());
+    logger.arm_write_fault(Some(WriteFault::WriteError));
+    let answer = meta
+        .audit_replay(
+            "gateway_invoke",
+            &args(),
+            None,
+            &context(&AllowAll, &who),
+            replay,
+            None,
+        )
+        .await;
+    assert!(answer.result.is_none(), "delivered unrecorded: {answer:?}");
+    let error = answer.error.expect("the replay is withheld");
+    assert_eq!(error.code, -32005, "{error:?}");
+    assert_eq!(logger.write_faults_fired(), 1, "the fault hit the record");
+}
+
 // MIK-7116.MIN.1 attribution, which reads the firewall's `arg_keys`.
 #[cfg(feature = "firewall")]
 mod tenants;

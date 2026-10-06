@@ -362,3 +362,7 @@ pub(super) fn derive_prompt_cache_key(args: &Value, session_id: Option<&str>) ->
             })
         })
 }
+
+#[cfg(test)]
+#[path = "prompt_cache_key_tests.rs"]
+mod prompt_cache_key_tests;
