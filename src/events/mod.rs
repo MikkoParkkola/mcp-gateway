@@ -113,11 +113,7 @@ pub(crate) trait EventSource: Send + Sync {
     /// What the core refcounts upstream work on: by default the event name
     /// and canonical arguments, shared across principals.
     fn lifecycle_key(&self, _principal: &str, name: &str, arguments: &serde_json::Value) -> String {
-        String::from_utf8(
-            serde_json_canonicalizer::to_vec(&serde_json::json!([name, arguments]))
-                .unwrap_or_default(),
-        )
-        .unwrap_or_default()
+        String::from_utf8(rpc::canonical(&serde_json::json!([name, arguments]))).unwrap_or_default()
     }
     /// The first live subscription for `key` appeared. A refusal fails that
     /// subscribe with the refusal's code.

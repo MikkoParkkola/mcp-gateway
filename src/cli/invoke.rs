@@ -88,6 +88,12 @@ impl ToolCatalogue {
 /// 2. `--args` / positional JSON string on the command line
 /// 3. Individual `key=value` pairs from `kv_args`
 ///
+/// A `key=value` value is text, so `kv_schema` (the tool's input schema) types
+/// it as a gateway call would: `count=007` against an integer is `7`, and
+/// `zip=007` against a string stays `"007"`. The JSON layers are the caller's
+/// own typing and are never touched. `None` keeps the guess `key=value`
+/// always made: JSON scalars parse, anything else is a string (MIK-7943).
+///
 /// # Errors
 ///
 /// Returns a parse error if any JSON source is malformed.
@@ -95,6 +101,7 @@ pub fn resolve_args(
     args_json: Option<&str>,
     kv_args: &[String],
     read_stdin: bool,
+    kv_schema: Option<&Value>,
 ) -> Result<Value> {
     let mut merged = Value::Object(serde_json::Map::new());
 
@@ -122,7 +129,7 @@ pub fn resolve_args(
 
     // Layer 3: key=value pairs
     for kv in kv_args {
-        let (k, v) = parse_kv(kv)?;
+        let (k, v) = parse_kv(kv, kv_schema)?;
         if let Value::Object(ref mut map) = merged {
             map.insert(k, v);
         }
@@ -167,6 +174,14 @@ pub async fn execute_tool_with_context(
         .find(tool_name)
         .ok_or_else(|| Error::Config(format!("Tool not found: '{tool_name}'")))?;
 
+    // The schema check a gateway call gets, before anything is sent
+    // (MIK-7943). The arguments go on as given: a coerced copy could turn a
+    // numeric path selector into a string, which the gateway refuses and
+    // `build_url` refuses here.
+    let verdict = crate::capability::validate_arguments(&args, &cap.schema.input);
+    if !verdict.is_valid() {
+        return Err(Error::Config(verdict.format_error(&cap.schema.input)));
+    }
     let executor = Arc::new(CapabilityExecutor::new());
     executor.execute_with_context(cap, args, context).await
 }
@@ -218,14 +233,42 @@ fn merge_json(dst: &mut Value, src: Value) {
 /// Values that look like JSON scalars (numbers, booleans, `null`, quoted
 /// strings, arrays, objects) are parsed as JSON.  Everything else is treated
 /// as a plain string.
-fn parse_kv(kv: &str) -> Result<(String, Value)> {
+fn parse_kv(kv: &str, kv_schema: Option<&Value>) -> Result<(String, Value)> {
     let eq = kv
         .find('=')
         .ok_or_else(|| Error::Config(format!("Expected key=value, got: {kv}")))?;
     let key = kv[..eq].to_string();
     let raw = &kv[eq + 1..];
-    let value = try_parse_scalar(raw);
+    let value = typed_kv(&key, raw, kv_schema);
     Ok((key, value))
+}
+
+/// The value of `key=raw`, typed by the property `kv_schema` declares for
+/// `key`, through the same coercion a gateway call gets. A key the schema does
+/// not declare, `null`, and text the declared type cannot take (an object or
+/// array written as JSON, a value outside an `enum`) keep the scalar guess,
+/// and the schema check reports what is still wrong.
+fn typed_kv(key: &str, raw: &str, kv_schema: Option<&Value>) -> Value {
+    let guessed = try_parse_scalar(raw);
+    let Some(property) = kv_schema
+        .and_then(|schema| schema.get("properties"))
+        .and_then(|properties| properties.get(key))
+    else {
+        return guessed;
+    };
+    if guessed.is_null() {
+        return guessed;
+    }
+    let mut properties = serde_json::Map::new();
+    properties.insert(key.to_string(), property.clone());
+    let probe = serde_json::json!({ "type": "object", "properties": properties });
+    let mut text = serde_json::Map::new();
+    text.insert(key.to_string(), Value::String(raw.to_string()));
+    let verdict = crate::capability::validate_arguments(&Value::Object(text), &probe);
+    match verdict.coerced.get(key) {
+        Some(typed) if verdict.is_valid() => typed.clone(),
+        _ => guessed,
+    }
 }
 
 /// Attempt to parse `raw` as a JSON scalar; fall back to plain string.
@@ -260,7 +303,7 @@ mod tests {
     #[test]
     fn parse_kv_plain_string_value() {
         // GIVEN: a key=value pair with a plain string
-        let (k, v) = parse_kv("query=rust async").unwrap();
+        let (k, v) = parse_kv("query=rust async", None).unwrap();
         // THEN: key is extracted and value is a string
         assert_eq!(k, "query");
         assert_eq!(v, json!("rust async"));
@@ -268,28 +311,28 @@ mod tests {
 
     #[test]
     fn parse_kv_integer_value() {
-        let (k, v) = parse_kv("limit=10").unwrap();
+        let (k, v) = parse_kv("limit=10", None).unwrap();
         assert_eq!(k, "limit");
         assert_eq!(v, json!(10));
     }
 
     #[test]
     fn parse_kv_boolean_true() {
-        let (k, v) = parse_kv("verbose=true").unwrap();
+        let (k, v) = parse_kv("verbose=true", None).unwrap();
         assert_eq!(v, json!(true));
         drop(k);
     }
 
     #[test]
     fn parse_kv_boolean_false() {
-        let (k, v) = parse_kv("debug=false").unwrap();
+        let (k, v) = parse_kv("debug=false", None).unwrap();
         assert_eq!(v, json!(false));
         drop(k);
     }
 
     #[test]
     fn parse_kv_null_value() {
-        let (k, v) = parse_kv("token=null").unwrap();
+        let (k, v) = parse_kv("token=null", None).unwrap();
         assert_eq!(v, json!(null));
         drop(k);
     }
@@ -297,7 +340,7 @@ mod tests {
     #[test]
     fn parse_kv_missing_equals_is_error() {
         // GIVEN: a string with no '='
-        let result = parse_kv("badarg");
+        let result = parse_kv("badarg", None);
         // THEN: returns an error
         assert!(result.is_err());
     }
@@ -305,7 +348,7 @@ mod tests {
     #[test]
     fn parse_kv_value_with_equals_in_value() {
         // GIVEN: a value that contains '='
-        let (k, v) = parse_kv("url=https://example.com?a=1").unwrap();
+        let (k, v) = parse_kv("url=https://example.com?a=1", None).unwrap();
         assert_eq!(k, "url");
         assert_eq!(v, json!("https://example.com?a=1"));
     }
@@ -337,27 +380,32 @@ mod tests {
 
     #[test]
     fn resolve_args_json_blob_parsed() {
-        let result = resolve_args(Some(r#"{"q": "test"}"#), &[], false).unwrap();
+        let result = resolve_args(Some(r#"{"q": "test"}"#), &[], false, None).unwrap();
         assert_eq!(result["q"], json!("test"));
     }
 
     #[test]
     fn resolve_args_kv_overrides_json_blob() {
         // GIVEN: --args JSON and a kv override
-        let result =
-            resolve_args(Some(r#"{"limit": 5}"#), &["limit=20".to_string()], false).unwrap();
+        let result = resolve_args(
+            Some(r#"{"limit": 5}"#),
+            &["limit=20".to_string()],
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(result["limit"], json!(20));
     }
 
     #[test]
     fn resolve_args_invalid_json_returns_error() {
-        let result = resolve_args(Some("not-json"), &[], false);
+        let result = resolve_args(Some("not-json"), &[], false, None);
         assert!(result.is_err());
     }
 
     #[test]
     fn resolve_args_empty_produces_empty_object() {
-        let result = resolve_args(None, &[], false).unwrap();
+        let result = resolve_args(None, &[], false, None).unwrap();
         assert!(result.as_object().is_some_and(serde_json::Map::is_empty));
     }
 
@@ -398,5 +446,140 @@ mod tests {
         };
         assert!(cat.is_empty());
         assert_eq!(cat.len(), 0);
+    }
+
+    /// MIK-7943 finding 3: a direct CLI call is held to the capability's
+    /// schema, as a gateway call is, before anything is sent.
+    #[tokio::test]
+    async fn a_cli_call_that_breaks_the_schema_is_refused_before_it_is_sent() {
+        let cap = crate::capability::parse_capability(
+            "
+name: schema_probe
+description: probe
+schema:
+  input:
+    type: object
+    properties:
+      id:
+        type: string
+    required: [id]
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://schema-probe.invalid
+      path: /items/{id}
+      method: GET
+",
+        )
+        .expect("parses");
+        let cat = ToolCatalogue {
+            capabilities: vec![cap],
+        };
+        let error = execute_tool_with_context(
+            &cat,
+            "schema_probe",
+            json!({}),
+            CapabilityExecutionContext::default(),
+        )
+        .await
+        .expect_err("a missing required parameter")
+        .to_string();
+        assert!(error.contains("required parameter is missing"), "{error}");
+    }
+
+    /// A numeric path selector is refused, as a gateway call refuses it: the
+    /// schema check's coercion to a string does not reach the request.
+    #[tokio::test]
+    async fn a_cli_call_with_a_numeric_path_selector_is_refused() {
+        let cap = crate::capability::parse_capability(
+            "
+name: selector_probe
+description: probe
+schema:
+  input:
+    type: object
+    properties:
+      kind:
+        type: string
+        enum: [\"1\"]
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://selector-probe.invalid
+      path_selector:
+        parameter: kind
+        default: \"1\"
+        paths:
+          \"1\": /one
+      method: GET
+",
+        )
+        .expect("parses");
+        let cat = ToolCatalogue {
+            capabilities: vec![cap],
+        };
+        let error = execute_tool_with_context(
+            &cat,
+            "selector_probe",
+            json!({ "kind": 1 }),
+            CapabilityExecutionContext::default(),
+        )
+        .await
+        .expect_err("a numeric selector")
+        .to_string();
+        assert!(error.contains("must be a string"), "{error}");
+    }
+
+    fn kv_schema() -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "count": { "type": "integer" },
+                "flag": { "type": "boolean" },
+                "zip": { "type": "string" }
+            }
+        })
+    }
+
+    /// The CLI's argument path for one tool's schema.
+    fn resolve_for(schema: &Value, args_json: Option<&str>, kv: &[&str]) -> Value {
+        let kv: Vec<String> = kv.iter().map(|s| (*s).to_string()).collect();
+        resolve_args(args_json, &kv, false, Some(schema)).unwrap()
+    }
+
+    /// MIK-7943: `key=value` text is typed by the schema, as a gateway call
+    /// coerces it, and only as the schema says: a string stays as written.
+    #[test]
+    fn key_value_text_is_typed_by_the_tool_schema() {
+        let schema = kv_schema();
+        let resolved = resolve_for(&schema, None, &["count=007", "flag=TRUE", "zip=007"]);
+        assert_eq!(
+            resolved,
+            json!({ "count": 7, "flag": true, "zip": "007" }),
+            "count=007 is 7, flag=TRUE is true, zip=007 stays \"007\""
+        );
+    }
+
+    /// Text the declared type cannot take keeps the old scalar guess: `7.5` is
+    /// no integer, so it goes out as the number 7.5 (and the schema check then
+    /// refuses it), not as the string the failed check left behind.
+    #[test]
+    fn key_value_text_the_schema_refuses_keeps_the_scalar_guess() {
+        let schema = kv_schema();
+        let resolved = resolve_for(&schema, None, &["count=7.5"]);
+        assert_eq!(resolved, json!({ "count": 7.5 }));
+    }
+
+    /// Typed JSON is the caller's own typing: `"007"` for an integer goes out
+    /// as written, and the schema check still lets it through, as it does today.
+    #[test]
+    fn typed_json_arguments_go_out_as_written() {
+        let schema = kv_schema();
+        let resolved = resolve_for(&schema, Some(r#"{"count":"007"}"#), &[]);
+        assert_eq!(resolved, json!({ "count": "007" }));
+        let verdict = crate::capability::validate_arguments(&resolved, &schema);
+        assert!(verdict.is_valid(), "{:?}", verdict.violations);
     }
 }
