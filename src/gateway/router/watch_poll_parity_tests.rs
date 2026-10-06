@@ -249,8 +249,8 @@ fn read_only(name: &str, providers: &str) -> crate::capability::CapabilityDefini
 
 /// MIK-7720 (U1): watch is offered for read-only REST capabilities only. A
 /// read-only capability served over GraphQL, JSON-RPC or a local process is
-/// no target, nor is a REST one with a non-REST fallback; a provider with no
-/// `service` is REST.
+/// no target, nor is a REST one with a non-REST fallback, nor a webhook-only
+/// one with no provider to poll; a provider with no `service` is REST.
 #[tokio::test]
 async fn only_read_only_rest_capabilities_are_watch_targets() {
     const REST: &str = "    config:\n      base_url: http://localhost:9\n      path: /read\n      \
@@ -284,6 +284,10 @@ async fn only_read_only_rest_capabilities_are_watch_targets() {
                 "  primary:\n    service: rest\n{REST}  fallback:\n    - service: cli\n      \
                  config:\n        command: gws\n        args: [gmail]\n"
             ),
+        ),
+        (
+            "webhook_only",
+            "  {}\nwebhooks:\n  push:\n    path: /webhook_only/push\n    method: POST\n".to_owned(),
         ),
     ];
     let backend = Arc::new(crate::capability::CapabilityBackend::new(
