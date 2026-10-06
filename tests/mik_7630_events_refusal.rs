@@ -5,8 +5,10 @@
 //! typed refusal naming why, never a silent no-op. The three names are
 //! `backend.<x>.resource_updated|resources_changed|prompts_changed`.
 //!
-//! Refused: the SSE-handshake HTTP transport (any `http_url` without
-//! `streamable_http: true`), A2A, and identity propagation. The refusal is
+//! Refused: the SSE-handshake HTTP transport (an explicit
+//! `streamable_http: false` never connected, or the transport a connect
+//! detected; MIK-7969), A2A, and identity propagation. An unset key is
+//! judged at connect, so an unreachable one answers the backend error. The refusal is
 //! `-32014` with `data.feature = "backendEvents"` and `data.reason`; it is
 //! answered only to a caller who may reach the backend, so it cannot be used
 //! to probe the config, and before any callback traffic.
@@ -40,7 +42,7 @@ fn key(name: &str, key: &str, backends: &[&str]) -> Value {
 fn refusal_config(root: &Path) -> Value {
     let mut cfg = config(root, &json!({}));
     cfg["backends"] = json!({
-        "sse": {"http_url": format!("{DEAD}/sse")},
+        "sse": {"http_url": format!("{DEAD}/sse"), "streamable_http": false},
         "plain": {"http_url": format!("{DEAD}/mcp")},
         "agent": {"a2a_url": DEAD},
         "idp": {
@@ -82,7 +84,6 @@ async fn ineligible_backends_refuse_upstream_events_with_the_reason() {
     let gw = Gateway::start(dir.path(), refusal_config(dir.path())).await;
     let cases = [
         ("sse", "sse_handshake_transport"),
-        ("plain", "sse_handshake_transport"),
         ("agent", "a2a_transport"),
         ("idp", "identity_propagation"),
     ];
@@ -98,6 +99,17 @@ async fn ineligible_backends_refuse_upstream_events_with_the_reason() {
                 "{name}: the refusal names the reason"
             );
         }
+    }
+    // MIK-7969: an unset key that cannot connect was never learned to be
+    // SSE; it answers the backend error, as `tools/call` would.
+    for kind in ["resource_updated", "resources_changed", "prompts_changed"] {
+        let name = format!("backend.plain.{kind}");
+        let answer = subscribe(&gw, ALICE, &name).await;
+        assert_eq!(
+            error(&answer)["code"],
+            -32000,
+            "{name}: backend error, got {answer}"
+        );
     }
 }
 
