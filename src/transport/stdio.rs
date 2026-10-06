@@ -117,29 +117,17 @@ impl StdioTransport {
         crate::security::summarize_stdio_command(&self.command)
     }
 
-    /// Start the subprocess and complete the MCP handshake.
-    ///
-    /// A failure leaves the child's last stderr lines settled, so whoever
-    /// decides what to do about the failure can read what it said.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the command cannot be spawned or MCP initialization fails.
-    pub async fn start(self: &Arc<Self>) -> Result<()> {
-        self.failure.begin();
-
+    /// The child's command line, piped stdio, environment and working directory.
+    fn spawn_command(&self) -> Result<Command> {
         let parts = crate::transport::split_command(&self.command).ok_or_else(|| {
             Error::Config(format!(
                 "Invalid stdio command quoting: {}",
                 crate::security::summarize_stdio_command(&self.command)
             ))
         })?;
-        if parts.is_empty() {
+        let Some((program, args)) = parts.split_first() else {
             return Err(Error::Config("Empty command".to_string()));
-        }
-
-        let program = parts[0].as_str();
-        let args = &parts[1..];
+        };
 
         let mut cmd = Command::new(program);
         cmd.args(args)
@@ -153,12 +141,24 @@ impl StdioTransport {
         // loaded into the gateway process must not be inherited implicitly.
         configure_child_environment(&mut cmd, &self.env);
 
-        // Set working directory
         if let Some(ref cwd) = self.cwd {
             cmd.current_dir(cwd);
         }
+        Ok(cmd)
+    }
 
-        let mut child = spawn_in_own_tree(cmd)?;
+    /// Start the subprocess and complete the MCP handshake.
+    ///
+    /// A failure leaves the child's last stderr lines settled, so whoever
+    /// decides what to do about the failure can read what it said.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command cannot be spawned or MCP initialization fails.
+    pub async fn start(self: &Arc<Self>) -> Result<()> {
+        self.failure.begin();
+
+        let mut child = spawn_in_own_tree(self.spawn_command()?)?;
 
         let stdin = child
             .stdin()

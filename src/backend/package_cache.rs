@@ -174,18 +174,16 @@ async fn start_reporting_with(
     let held = match lock {
         Some(lock) => {
             let wait = lock_hold_bound(transport.request_timeout());
-            match tokio::time::timeout(wait, lock.lock_owned()).await {
-                Ok(held) => Some(held),
-                Err(_) => {
-                    let error = Error::BackendUnavailable(format!(
-                        "stdio backend {}: its package cache is still locked by another start or \
-                         a rename after {:?}",
-                        transport.diagnostic_command(),
-                        wait
-                    ));
-                    return (Err(error), Repair::NotRepaired);
-                }
-            }
+            let Ok(held) = tokio::time::timeout(wait, lock.lock_owned()).await else {
+                let error = Error::BackendUnavailable(format!(
+                    "stdio backend {}: its package cache is still locked by another start or \
+                     a rename after {:?}",
+                    transport.diagnostic_command(),
+                    wait
+                ));
+                return (Err(error), Repair::NotRepaired);
+            };
+            Some(held)
         }
         None => None,
     };
