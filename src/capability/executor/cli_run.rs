@@ -102,9 +102,7 @@ pub(crate) fn child_env(
         }
     }
     for name in allowed {
-        if !is_reserved(name)
-            && let Some(value) = lookup(name)
-        {
+        if let Some(value) = lookup(name) {
             env.push((name.into(), value));
         }
     }
