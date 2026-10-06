@@ -513,12 +513,25 @@ impl Run {
             .targets()
             .into_iter()
             .find(|t| t.read_only && event_name(&t.capability) == self.name)
+            .filter(|t| t.credential != CredentialUse::Account)
         else {
             let (gone, owner) = (vec![self.name.clone()], Arc::clone(hub));
             let _ = tokio::task::spawn_blocking(move || owner.withdraw(&gone)).await;
             hub.reconcile_stops_in_background();
             return Step::Stop;
         };
+        // A move between credential-free and keyed re-keys the capability:
+        // this poller stops before any call (a shared poller never calls
+        // under one sharer's credential), and the core restarts the
+        // subscriptions under the new sharing rule. None is revoked.
+        if (target.credential == CredentialUse::Free) != (self.charge == Charge::Global) {
+            let owner = Arc::clone(hub);
+            tokio::spawn(async move {
+                owner.reconcile_stops().await;
+                owner.replay_starts().await;
+            });
+            return Step::Stop;
+        }
         let now = Utc::now();
         let rows: Vec<Subscription> = hub
             .store
@@ -526,17 +539,6 @@ impl Run {
             .into_iter()
             .filter(|s| s.live(now) && s.name == self.name && self.key_of(s) == self.key)
             .collect();
-        // A changed credential class re-keys the capability: this poller's
-        // holders end (a shared poller never calls under one sharer's
-        // credential), and subscriptions made under the new class keep theirs.
-        if target.credential == CredentialUse::Account
-            || (target.credential == CredentialUse::Free) != (self.charge == Charge::Global)
-        {
-            for row in &rows {
-                hub.revoke(row).await;
-            }
-            return Step::Stop;
-        }
         let Some(services) = hub.runtime.services.get().cloned() else {
             return Step::Failed;
         };
