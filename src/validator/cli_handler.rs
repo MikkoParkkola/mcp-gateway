@@ -11,6 +11,7 @@ use super::{
     ValidateConfig,
 };
 use crate::capability::parse_capability_file;
+use crate::cli::stdout::{print, println};
 
 /// Collect YAML capability files from paths.
 fn collect_capability_files(paths: &[PathBuf]) -> Vec<PathBuf> {
