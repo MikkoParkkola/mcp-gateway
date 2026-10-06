@@ -6,18 +6,17 @@
 //! Every run is the real binary with a cleared environment, so a failure to
 //! load the config cannot be hidden by a variable the test runner holds.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 const KEY: &str = "MIK7824_LIST_KEY";
 
 fn run(root: &Path, args: &[&str]) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+    let mut command = gateway_bin::command(root, gateway_bin::Inherit::Nothing);
     command
-        .env_clear()
-        .env("HOME", root)
-        .env("USERPROFILE", root)
-        .env("MCP_GATEWAY_TEST_HOME_DIR", root)
         .env("PATH", root.join("no-system-programs"))
         .current_dir(root)
         .stdin(Stdio::null())

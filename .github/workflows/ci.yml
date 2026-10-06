@@ -150,6 +150,10 @@ jobs:
         run: scripts/ci/check-loc-ceiling.sh --self-test
       - name: Hold the 800-LOC ceiling deviation at its current count
         run: scripts/ci/check-loc-ceiling.sh
+      - name: Validate the gateway-spawn check against planted spawns
+        run: python3 scripts/ci/check-gateway-spawns.py --self-test
+      - name: Start the gateway in tests only through its isolating helper
+        run: python3 scripts/ci/check-gateway-spawns.py
 
   service-template-smoke:
     name: Service template smoke

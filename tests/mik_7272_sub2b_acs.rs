@@ -26,6 +26,9 @@
 //! process-spawning helper to it to save one duplication is a wider blast
 //! radius than the duplication costs.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -294,19 +297,11 @@ struct StdioSession {
 
 impl StdioSession {
     fn spawn(home: &Path) -> Self {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-        command
-            .arg("serve")
-            .arg("--stdio")
-            .current_dir(home)
-            .env("HOME", home);
-        // The developer's own environment must not decide what this child
-        // connects to.
-        for (name, _) in std::env::vars() {
-            if name.starts_with("MCP_GATEWAY_") {
-                command.env_remove(name);
-            }
-        }
+        let mut command = Command::from(gateway_bin::command(
+            home,
+            gateway_bin::Inherit::Environment,
+        ));
+        command.arg("serve").arg("--stdio").current_dir(home);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
