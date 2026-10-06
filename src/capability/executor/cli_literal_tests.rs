@@ -92,3 +92,13 @@ fn a_short_exponent_secret_leaves_the_equal_integer() {
     assert_eq!(value["f"], "[redacted]", "{value}");
     assert_eq!(value["i"], 100_000, "{value}");
 }
+
+/// A number secret with a fraction names no integer: "12345.5" redacts the
+/// float 12345.5 and leaves the integer 12345 its digits start with.
+#[test]
+fn a_fractional_secret_leaves_the_integer_it_truncates_to() {
+    let mut value: Value = serde_json::from_str(r#"{"f": 12345.5, "i": 12345}"#).unwrap();
+    redact_value(&mut value, &["12345.5".to_owned()]);
+    assert_eq!(value["f"], "[redacted]", "{value}");
+    assert_eq!(value["i"], 12345, "{value}");
+}
