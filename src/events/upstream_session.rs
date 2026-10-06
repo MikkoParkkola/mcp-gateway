@@ -5,6 +5,7 @@
 //! interest, coalesce what arrives, and emit through the hub only.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
@@ -247,6 +248,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             // an emptied cache. At most once per tick however many notices
             // came; a notice during a refill waits for the next one.
             state.tools_due = None;
+            shared.tools_owed.store(false, Ordering::SeqCst);
             backend.invalidate_tools();
             refill = Some(start_refill(backend, &shared.name));
         }
@@ -421,7 +423,8 @@ impl<'a> State<'a> {
             resource_interest_unsupported: false,
             reread: false,
             tools_pending: false,
-            tools_due: None,
+            // A notice an earlier session ended owing (MIK-8007).
+            tools_due: shared.tools_owed.load(Ordering::SeqCst).then_some(now),
             // Due at once: a session that starts with no URI watched reads
             // the catalogue as soon as one is, even when the shared snapshot
             // is known from an earlier session.
@@ -491,6 +494,7 @@ impl<'a> State<'a> {
                     // Not coalesced here: the hub's own quiet window does it.
                     if self.shared.need.lock().emits(kind, None) {
                         self.tools_due.get_or_insert(Instant::now() + TICK);
+                        self.shared.tools_owed.store(true, Ordering::SeqCst);
                     }
                 } else if self.shared.need.lock().emits(kind, uri.as_deref()) {
                     self.coalescer.offer(kind, uri, Instant::now());

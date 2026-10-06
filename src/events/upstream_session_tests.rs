@@ -22,6 +22,7 @@ fn shared_with(ineligible: crate::events::backend_source::Ineligible) -> Arc<Sha
         stop: CancellationToken::new(),
         gate: Arc::default(),
         ineligible,
+        tools_owed: std::sync::atomic::AtomicBool::default(),
     })
 }
 
