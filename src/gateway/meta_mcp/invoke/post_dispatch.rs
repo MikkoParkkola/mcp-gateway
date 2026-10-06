@@ -12,12 +12,19 @@ use super::{INVOKE_TARGET, classify_from_detail, dispatch_error_result, withheld
 use crate::cost_accounting::suggestions;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::support::{CachePrincipal, response_cache_key_for};
-use crate::gateway::recovery::{RecoveryContext, attach_recovery, recovery_for};
+use crate::gateway::recovery::{
+    MetaSurface, RecoveryContext, attach_recovery, recovery_for_surface,
+};
 use crate::idempotency::IdempotencyReservation;
 use crate::security::http_diagnostics::is_upstream_unauthorized;
 use crate::{Error, Result};
 
-pub(super) fn attach_tool_error_recovery(value: Value, tool: &str, server: &str) -> Value {
+pub(super) fn attach_tool_error_recovery(
+    value: Value,
+    tool: &str,
+    server: &str,
+    surface: MetaSurface,
+) -> Value {
     // When the capability backend returns a tool-level error
     // (schema validation, executor failure) it sets `isError: true`
     // in the JSON value without propagating a Rust `Err`.  Attach a
@@ -42,7 +49,7 @@ pub(super) fn attach_tool_error_recovery(value: Value, tool: &str, server: &str)
         // the right recovery class (e.g. RATE_LIMITED, retryable)
         // instead of a misleading "fix your params" INVALID_PARAM.
         let category = classify_from_detail(detail);
-        let hint = recovery_for(
+        let hint = recovery_for_surface(
             category,
             RecoveryContext {
                 tool: Some(tool),
@@ -50,6 +57,7 @@ pub(super) fn attach_tool_error_recovery(value: Value, tool: &str, server: &str)
                 detail,
                 ..Default::default()
             },
+            surface,
         );
         attach_recovery(value, hint)
     } else {
@@ -104,7 +112,7 @@ impl MetaMcp {
         // The error budget already counted this failure (the shared
         // accounting stage).  The idempotency reservation is left
         // for the commit below unless the refusal was pre-dispatch.
-        Ok(dispatch_error_result(&e, tool, server))
+        Ok(dispatch_error_result(&e, tool, server, self.hint_surface()))
     }
 
     #[cfg(feature = "cost-governance")]
