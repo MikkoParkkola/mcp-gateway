@@ -422,6 +422,9 @@ jobs:
 
   windows-check:
     name: Windows check
+    # Waits for the Linux suite: a red head never takes one of the account's
+    # few concurrent runner slots for a Windows run that cannot pass.
+    needs: test
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: windows-2025
     steps:
