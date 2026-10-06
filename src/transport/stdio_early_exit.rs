@@ -64,7 +64,7 @@ pub(super) fn spawn_stderr_tail(
                     }
                     // Published first, so a held pipe cannot lose the prefix.
                     if n == RAW_LINE_BYTES && !buf.ends_with(b"\n") {
-                        discard_rest_of_line(&mut reader).await;
+                        discard_rest_of_line(&mut reader, &mut in_block, &buf).await;
                     }
                 }
             }
@@ -73,18 +73,30 @@ pub(super) fn spawn_stderr_tail(
     (task, tail)
 }
 
-/// Skip to the end of an overlong line in bounded chunks.
-async fn discard_rest_of_line(reader: &mut BufReader<ChildStderr>) {
-    let mut scratch = Vec::with_capacity(RAW_LINE_BYTES);
+/// Skip to the end of an overlong line in bounded chunks, still tracking key
+/// block markers in it: a `-----BEGIN` past the limit masks the body after it.
+async fn discard_rest_of_line(
+    reader: &mut BufReader<ChildStderr>,
+    in_block: &mut bool,
+    stored: &[u8],
+) {
+    let carry = sanitize::MARKER_CARRY;
+    let mut scratch = Vec::with_capacity(carry + RAW_LINE_BYTES);
+    scratch.extend_from_slice(&stored[stored.len().saturating_sub(carry)..]);
     loop {
-        scratch.clear();
         match (&mut *reader)
             .take(RAW_LINE_BYTES as u64)
             .read_until(b'\n', &mut scratch)
             .await
         {
-            Ok(n) if n == RAW_LINE_BYTES && !scratch.ends_with(b"\n") => {}
-            _ => return,
+            Ok(0) | Err(_) => return,
+            Ok(n) => {
+                sanitize::track_block(in_block, &scratch);
+                if n < RAW_LINE_BYTES || scratch.ends_with(b"\n") {
+                    return;
+                }
+                scratch.drain(..scratch.len() - carry);
+            }
         }
     }
 }

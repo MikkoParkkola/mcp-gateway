@@ -43,8 +43,9 @@ static LONG_TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[A-Za-z0-9_-]{24,}").expect("valid"));
 /// A long base64 run that `+` and `/` would otherwise cut into pieces
 /// shorter than [`LONG_TOKEN`]'s floor. Masked only when it holds a `+` or
-/// ends in `=` padding, so a slash-separated path stays readable; a key body
-/// line without either cue is dropped at capture by [`captured_line`].
+/// ends in `=` padding and mixes letters with digits, so a slash-separated
+/// path stays readable; a key body line without a cue is masked at capture
+/// by [`captured_line`].
 static BASE64_RUN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[A-Za-z0-9+/]{40,}={0,2}").expect("valid"));
 #[cfg(feature = "firewall")]
@@ -55,14 +56,30 @@ static REDACTOR: LazyLock<crate::security::firewall::redactor::Redactor> =
 /// `-----BEGIN`/`-----END` block becomes the mask before the tail can evict
 /// the `-----BEGIN` that marks it. A block left open masks the rest.
 pub(super) fn captured_line(in_block: &mut bool, line: &[u8]) -> Vec<u8> {
-    let has = |needle: &[u8]| line.windows(needle.len()).any(|w| w == needle);
-    let body = *in_block && !has(b"-----END");
-    if has(b"-----BEGIN") {
-        *in_block = !has(b"-----END");
-    } else if has(b"-----END") {
-        *in_block = false;
-    }
+    let body = *in_block && last(line, END).is_none();
+    track_block(in_block, line);
     if body { MASK.as_bytes() } else { line }.to_vec()
+}
+
+const BEGIN: &[u8] = b"-----BEGIN";
+const END: &[u8] = b"-----END";
+/// Bytes a reader carries from one chunk into the next, so a marker cut by
+/// the chunk boundary is still found. Too short to repeat a `-----BEGIN`; an
+/// `-----END` it repeats was the chunk's last marker, so the state holds.
+pub(super) const MARKER_CARRY: usize = BEGIN.len() - 1;
+
+/// Update the block state from one chunk of a line: the last marker in it
+/// decides. Also run over the unstored rest of an overlong line.
+pub(super) fn track_block(in_block: &mut bool, chunk: &[u8]) {
+    match (last(chunk, BEGIN), last(chunk, END)) {
+        (Some(begin), end) if end.is_none_or(|end| end < begin) => *in_block = true,
+        (_, Some(_)) => *in_block = false,
+        _ => {}
+    }
+}
+
+fn last(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).rposition(|w| w == needle)
 }
 
 /// The tail as shown: UTF-8 lines only, control characters as spaces,
