@@ -35,6 +35,9 @@ impl Default for EventsRateLimit {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EventsSourcesConfig {
+    /// Gateway operational events: budgets, backend health, the kill switch.
+    /// Off by default.
+    pub operational: bool,
     /// Backend change notifications (`backend.<server>.*`).
     pub backend_notifications: bool,
     /// Task settlement (`task.settled`).
@@ -44,6 +47,7 @@ pub struct EventsSourcesConfig {
 impl Default for EventsSourcesConfig {
     fn default() -> Self {
         Self {
+            operational: false,
             backend_notifications: true,
             task_settled: true,
         }
