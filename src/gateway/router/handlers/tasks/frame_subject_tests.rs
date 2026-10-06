@@ -44,6 +44,7 @@ async fn a_task_frame_record_names_the_listener_subject() {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
         principal: "anonymous".to_string(),
         authenticated: false,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
