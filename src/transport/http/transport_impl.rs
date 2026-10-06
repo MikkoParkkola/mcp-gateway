@@ -108,8 +108,22 @@ impl Transport for HttpTransport {
             // Heal the session on BOTH branches: it really is dead, and leaving
             // the stale bucket in place poisons every later call through this
             // identity — including the ones that ARE allowed to be resent.
+            // The shared bucket heals under the stream opens' recovery lock,
+            // so the two never undo each other; a failed handshake leaves
+            // recovery pending for the next caller instead of dropping it.
+            let shared = identity_key.is_none();
+            let _held = if shared {
+                Some(self.reinit_lock.lock().await)
+            } else {
+                None
+            };
             self.sessions.write().remove(bucket);
-            if self.initialize().await.is_err() {
+            let handshake = self.initialize().await;
+            if shared {
+                self.reinit_needed
+                    .store(handshake.is_err(), std::sync::atomic::Ordering::SeqCst);
+            }
+            if handshake.is_err() {
                 // The caller asked about their request, not about our
                 // handshake; surfacing the re-initialization's error instead
                 // would hide what actually failed.
