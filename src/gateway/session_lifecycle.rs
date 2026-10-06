@@ -526,6 +526,11 @@ mod tests {
             0,
             "reclaimed while one call still holds it"
         );
+        assert_eq!(
+            lifecycle.reap(now_unix() + IDLE_TTL.as_secs() + 1),
+            0,
+            "the first release freed a key the second call still holds"
+        );
         drop(second);
         let released = now_unix();
         assert_eq!(
