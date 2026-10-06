@@ -57,6 +57,7 @@ const FORBIDDEN_MOUNT_PREFIXES: &[&str] = &["/etc", "/root", "/var/run", "/proc"
 /// These are the adversarial-review findings turned into hard gates. Each
 /// variant maps to a failure mode that [`SandboxDescriptor::validate`] does
 /// **not** catch.
+/// See [`NoSuchProvisionItem`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreflightError {
     /// Schema validation failed (delegated to `SandboxDescriptor::validate`).

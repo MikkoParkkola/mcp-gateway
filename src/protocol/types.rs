@@ -332,7 +332,7 @@ pub struct ToolsCapability {
     pub list_changed: bool,
     /// SEP-1821: Server supports filtered `tools/list` with a `query` parameter.
     ///
-    /// Only present when the `spec-preview` feature is enabled.
+    /// Only present when the `spec-preview` feature is enabled. See [`NoSuchPreviewItem`].
     #[cfg(feature = "spec-preview")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filtering: Option<bool>,
