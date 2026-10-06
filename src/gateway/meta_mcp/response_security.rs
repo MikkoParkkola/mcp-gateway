@@ -681,8 +681,13 @@ pub(crate) fn error_response_preserving_status(
             _ => None,
         };
         // A connect offer only under the gateway's own seal (MIK-6745, ADR-008).
-        rpc_error.data =
-            crate::personal_accounts::refusal::offer_data(error).or(rpc_error.data.take());
+        // Its text is the gateway's own, so it goes out without the JSON-RPC
+        // prefix Display adds; an unsealed error keeps it (MIK-7559).
+        let offer = crate::personal_accounts::refusal::offer_data(error);
+        if let (Some(_), crate::Error::JsonRpc { message, .. }) = (&offer, error) {
+            rpc_error.message.clone_from(message);
+        }
+        rpc_error.data = offer.or(rpc_error.data.take());
     }
     response
 }
