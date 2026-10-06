@@ -356,3 +356,13 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     let left = after_withdrawal(&hub).await;
     assert_eq!(left, ["backend.b.tools_changed"]);
 }
+
+/// MIK-7950 FIX.3: the default catalogue cache TTL, which the session now
+/// re-reads at, is the 300 s the fixed interval was.
+#[test]
+fn the_default_snapshot_interval_is_unchanged() {
+    assert_eq!(
+        crate::config::MetaMcpConfig::default().cache_ttl,
+        SNAPSHOT_TTL
+    );
+}

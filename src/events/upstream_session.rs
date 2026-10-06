@@ -31,8 +31,11 @@ const TICK: Duration = Duration::from_millis(250);
 const OPEN_LIMIT: Duration = Duration::from_secs(30);
 /// A modern listen must be acknowledged within this (§3).
 const ACK_DEADLINE: Duration = Duration::from_secs(10);
-/// Re-read the catalogue at least this often while URIs are watched (§7).
+/// The first catalogue re-read is due this long after a session starts;
+/// after a read, the next is due one backend cache TTL later (§7, MIK-7950).
 const SNAPSHOT_TTL: Duration = Duration::from_secs(300);
+/// The shortest interval between two catalogue re-reads.
+const SNAPSHOT_FLOOR: Duration = Duration::from_secs(1);
 /// A failed catalogue read is retried after this.
 const SNAPSHOT_RETRY: Duration = Duration::from_secs(5);
 /// A stream that stayed open this long resets the backoff (§9).
@@ -437,7 +440,11 @@ impl<'a> State<'a> {
                     hub.revoke_absent_uris(&self.shared.name, &listed).await;
                 }
                 self.reread = false;
-                self.snapshot_due = Instant::now() + SNAPSHOT_TTL;
+                // The catalogue cache's own TTL: a shorter configured one
+                // re-reads sooner, so a removal is seen as soon as the
+                // cache would (MIK-7950). Never more than once a second,
+                // even with caching off (a zero TTL).
+                self.snapshot_due = Instant::now() + backend.cache_ttl().max(SNAPSHOT_FLOOR);
             }
             Err(error) => {
                 debug!(backend = %self.shared.name, %error, "upstream listener: catalogue read failed");
