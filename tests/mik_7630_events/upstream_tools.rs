@@ -248,4 +248,17 @@ async fn a_notice_owed_when_the_session_ends_is_still_served() {
         tools_lists(&peer) > lists_before + 1
     })
     .await;
+    // Served once: a later session owes nothing.
+    let served = tools_lists(&peer);
+    peer.drop_streams();
+    eventually("the backend is listened to again", || {
+        !peer.open_listens().is_empty()
+    })
+    .await;
+    tokio::time::sleep(QUIET).await;
+    assert_eq!(
+        tools_lists(&peer),
+        served,
+        "a served notice was refilled again"
+    );
 }
