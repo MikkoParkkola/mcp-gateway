@@ -1,10 +1,10 @@
 name: Perf profile per call
 
-# Throwaway branch only (never merged). Where the 4.0 per-call CPU over
-# v3.5.1 sits, on the grading host type: B = v3.5.1, C = the release-line
-# commit the final B14 head last merged, T = that head. Each arm gets a clean rep (CPU per
-# call, no profiler attached) and a profiled rep (perf, dwarf unwind) under
-# the same driver, fixture, config and rate as the CPU-per-call runs.
+# Throwaway branch only (never merged). MIK-7916 AC3: the trust-card share of
+# gateway CPU under the workload's request mix (k6_workload.js iteration:
+# health, initialize, tools/list, tools/call), on the grading host type.
+# C = the release-line commit #3182 last merged (no memo), T = that head.
+# Each arm gets clean reps (CPU per iteration, no profiler) and a profiled rep.
 # Symbols are kept by env override only; codegen is the release profile's.
 on:
   push:
@@ -14,16 +14,17 @@ permissions:
   contents: read
 
 env:
-  REF_B: v3.5.1
-  REF_C: 0edeff8815e781344d410f3c5e937faecb4b0cd2
-  REF_T: b6b336206197b910741965df97711b18344ab3fe
+  REF_C: 5ddc1226ff413d4ca54203b8c480224985e9be5b
+  REF_T: 0d615f38b4ea03356506a3f83c1b08eb10171862
+  CPC_MIX: workload
   FEATURES: a2a,webui,config-export,cost-governance,firewall,discovery,semantic-search,tool-profiles,metrics
   CARGO_PROFILE_RELEASE_STRIP: none
   CARGO_PROFILE_RELEASE_DEBUG: "1"
-  WARMUP: "2000"
-  CALLS: "40000"
-  # Under the workload config's 500/s rate limit, so no call is refused.
-  RATE: "400"
+  # Iterations of four requests each: 100/s is 400 requests/s, under the
+  # workload config's 500/s rate limit, so no call is refused.
+  WARMUP: "500"
+  CALLS: "10000"
+  RATE: "100"
   PROFILE_SECONDS: "80"
   PORT: "39420"
 
@@ -60,7 +61,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for arm in "B:$REF_B" "C:$REF_C" "T:$REF_T"; do
+          for arm in "C:$REF_C" "T:$REF_T"; do
             name="${arm%%:*}"; ref="${arm#*:}"; dir="$RUNNER_TEMP/arms/$name"
             git worktree add --detach "$dir" "$ref^{commit}" > /dev/null
             ( cd "$dir" && cargo build --release --locked --features "$FEATURES" )
@@ -99,7 +100,7 @@ jobs:
           stop() { kill "$pid" || true; wait "$pid" 2>/dev/null || true; for _ in $(seq 100); do port_open || break; sleep 0.2; done; }
           # Arm order rotates, so no arm always runs first or last.
           n=0
-          for order in "B C T" "C T B" "T B C"; do
+          for order in "C T" "T C" "C T"; do
             n=$(( n + 1 ))
             for arm in $order; do
               start "$arm" "clean-$arm-$n"
@@ -107,7 +108,7 @@ jobs:
               stop
             done
           done
-          for arm in B C T; do
+          for arm in C T; do
             start "$arm" "prof-$arm"
             python3 benchmarks/workload/cpu_per_call.py measure "$PORT" "$pid" "$WARMUP" "$CALLS" "$RATE" "$out/prof-$arm.json" &
             driver=$!
@@ -120,7 +121,7 @@ jobs:
           # Reports after every arm is recorded, so a slow report cannot cost a
           # recording. --no-inline: inline resolution per dwarf sample ran past
           # three hours in run 37461088507. Each report is time-boxed.
-          for arm in B C T; do
+          for arm in C T; do
             timeout 1200 "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-inline --children --sort symbol -g none --percent-limit 0.1 --stdio \
               > "$out/prof-$arm.children.txt" 2> "$out/prof-$arm.report.err" || echo "children report exit $?" >> "$out/prof-$arm.report.err"
             timeout 1200 "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-inline --no-children --sort symbol -g none --percent-limit 0.1 --stdio \

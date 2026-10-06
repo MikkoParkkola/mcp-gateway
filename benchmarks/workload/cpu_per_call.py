@@ -33,6 +33,39 @@ BODY = json.dumps({
 })
 HEADERS = {"Content-Type": "application/json", "MCP-Protocol-Version": "2025-06-18"}
 THREADS = 4
+# CPC_MIX=workload: one call is one k6_workload.js iteration (health,
+# initialize, tools/list, tools/call), each answer checked; CPU is per iteration.
+MIX = os.environ.get("CPC_MIX") == "workload"
+INIT = json.dumps({"jsonrpc": "2.0", "id": "1-initialize", "method": "initialize", "params": {
+    "protocolVersion": "2025-06-18", "capabilities": {},
+    "clientInfo": {"name": "nfr-workload-1", "version": "1"}}})
+LIST = json.dumps({"jsonrpc": "2.0", "id": "1-tools/list", "method": "tools/list", "params": {}})
+
+
+def exchange(conn, method: str, body: str | None) -> tuple[bool, str]:
+    """One request; ok when 200 and, for JSON-RPC, no error (tools/list must
+    list tools, tools/call must carry the pinned text)."""
+    if body is None:
+        conn.request("GET", "/health")
+    else:
+        conn.request("POST", "/mcp", body, HEADERS)
+    reply = conn.getresponse()
+    raw = reply.read()
+    if body is None:
+        return reply.status == 200, f"{reply.status} {raw[:200]!r}"
+    try:
+        answer = json.loads(raw)
+        ok = reply.status == 200 and "error" not in answer
+        if ok and method == "tools/list":
+            ok = bool(answer["result"]["tools"])
+        if ok and method == "tools/call":
+            ok = EXPECT in json.dumps(answer["result"])
+    except (ValueError, KeyError, TypeError):
+        ok = False
+    return ok, f"{method} {reply.status} {raw[:200]!r}"
+
+
+STEPS = ([("health", None), ("initialize", INIT), ("tools/list", LIST)] if MIX else []) + [("tools/call", BODY)]
 
 
 def cpu_ticks(pid: int) -> int:
@@ -58,17 +91,11 @@ def drive(port: int, calls: int, rate: float) -> list[str]:
                 if pause > 0:
                     time.sleep(pause)
                 due += interval
-                conn.request("POST", "/mcp", BODY, HEADERS)
-                reply = conn.getresponse()
-                raw = reply.read()
-                try:
-                    answer = json.loads(raw)
-                    ok = reply.status == 200 and "error" not in answer and EXPECT in json.dumps(answer["result"])
-                except (ValueError, KeyError, TypeError):
-                    ok = False
-                if not ok:
-                    errors.append(f"{reply.status} {raw[:200]!r}")
-                    return
+                for method, body in STEPS:
+                    ok, seen = exchange(conn, method, body)
+                    if not ok:
+                        errors.append(seen)
+                        return
                 done[index] += 1
             conn.close()
         except Exception as error:  # noqa: BLE001 -- any failure voids the arm
