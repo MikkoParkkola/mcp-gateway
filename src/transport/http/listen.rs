@@ -612,4 +612,39 @@ mod tests {
             .expect("the stream ends");
         assert_eq!(note, Some(UpstreamNote::Unsupported));
     }
+
+    /// A frame of no listen, with a method the tap does not know, is not this
+    /// listen's first frame: the acknowledgement after it still counts.
+    #[test]
+    fn an_untagged_frame_of_any_method_is_not_the_first() {
+        let (id, v, r) = (RequestId::Number(4), json!(4), req());
+        let message = json!({"jsonrpc": "2.0", "method": "notifications/message",
+            "params": {"level": "info"}});
+        assert!(matches!(
+            frame(&message.to_string(), &id, &v, &r, true),
+            Frame::Ignore
+        ));
+    }
+
+    /// A JSON answer cut short (a closed connection before its declared
+    /// length) is not classified, though its bytes so far parse.
+    #[tokio::test]
+    async fn a_truncated_json_answer_is_not_classified() {
+        let url = peer(|id| {
+            let body = json!({"jsonrpc": "2.0", "id": id,
+                "error": {"code": -32601, "message": "Method not found"}})
+            .to_string();
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                 content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len() + 100
+            )
+        })
+        .await;
+        let mut stream = transport(&url).listen(req()).await.expect("opened");
+        let note = tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
+            .await
+            .expect("the stream ends");
+        assert_eq!(note, None);
+    }
 }

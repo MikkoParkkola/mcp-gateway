@@ -514,6 +514,17 @@ async fn a_notice_before_the_acknowledgement_is_not_delivered() {
         intake.try_recv().is_err(),
         "a replacement before its acknowledgement"
     );
+    // Its acknowledgement makes the replacement current: its notices count.
+    modern.note(
+        UpstreamNote::Ack {
+            kinds: all,
+            uris: Vec::new(),
+        },
+        true,
+    );
+    modern.note(changed(NoteKind::ResourcesChanged), false);
+    modern.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(intake.try_recv().is_ok(), "the promoted replacement");
     let mut legacy = State::new(&shared, Era::Legacy);
     legacy.note(changed(NoteKind::ResourcesChanged), false);
     legacy.flush_at(&weak, Instant::now() + WINDOW);

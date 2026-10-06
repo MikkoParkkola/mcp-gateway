@@ -148,6 +148,11 @@ pub(crate) fn project_listen(
     requested: &Requested,
     first: bool,
 ) -> Result<UpstreamNote, Dropped> {
+    // The tag first: a frame of another listen, whatever its method, is not
+    // this listen's frame at all (the tap never routes it here).
+    if !tagged(params, listen_id) {
+        return Err(Dropped::Untagged);
+    }
     if method == ACKNOWLEDGED && !first {
         return Err(Dropped::Late);
     }
