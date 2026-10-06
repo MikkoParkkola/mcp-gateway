@@ -303,3 +303,41 @@ fn controller_watch_json_writes_one_document_per_line() {
         );
     }
 }
+
+/// MIK-7817: `list --available` prints the built-in library. Its JSON form is
+/// one array whose entries carry what the text form prints, and the text form
+/// counts and names those same entries.
+#[test]
+fn list_available_prints_the_built_in_library_in_both_forms() {
+    let home = Home::new();
+    let json = home.run(&["list", "--available", "--json"], false);
+    assert!(json.status.success(), "list --available --json: {json:?}");
+    let document = parse_whole("json", &String::from_utf8_lossy(&json.stdout))
+        .expect("--json writes one JSON document");
+    let entries = document.as_array().expect("an array of library entries");
+    assert!(!entries.is_empty(), "the built-in library is listed");
+    for entry in entries {
+        for field in ["name", "category", "transport", "description", "login"] {
+            assert!(
+                entry
+                    .get(field)
+                    .and_then(serde_json::Value::as_str)
+                    .is_some(),
+                "{field} missing: {entry}"
+            );
+        }
+    }
+
+    let text = home.run(&["list", "--available"], false);
+    assert!(text.status.success(), "list --available: {text:?}");
+    let stdout = String::from_utf8_lossy(&text.stdout);
+    let heading = format!("{} servers in the built-in library.", entries.len());
+    assert!(stdout.starts_with(&heading), "{stdout}");
+    for entry in entries {
+        let name = entry["name"].as_str().expect("a name");
+        assert!(
+            stdout.contains(&format!("  {name} (")),
+            "{name} is missing from the text listing"
+        );
+    }
+}

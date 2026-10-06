@@ -271,6 +271,13 @@ async fn cap_test(file: std::path::PathBuf, args: String) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // The schema check a gateway call gets (MIK-7943); the arguments go on as
+    // given, as in `invoke`.
+    let verdict = mcp_gateway::capability::validate_arguments(&params, &cap.schema.input);
+    if !verdict.is_valid() {
+        eprintln!("❌ {}", verdict.format_error(&cap.schema.input));
+        return ExitCode::FAILURE;
+    }
     println!("Testing capability: {}", cap.name);
     println!(
         "Arguments: {}",

@@ -30,6 +30,7 @@ mod records;
 mod reload;
 mod rpc;
 mod runtime;
+mod schedule_source;
 mod services;
 mod store;
 mod task_source;
@@ -113,11 +114,7 @@ pub(crate) trait EventSource: Send + Sync {
     /// What the core refcounts upstream work on: by default the event name
     /// and canonical arguments, shared across principals.
     fn lifecycle_key(&self, _principal: &str, name: &str, arguments: &serde_json::Value) -> String {
-        String::from_utf8(
-            serde_json_canonicalizer::to_vec(&serde_json::json!([name, arguments]))
-                .unwrap_or_default(),
-        )
-        .unwrap_or_default()
+        String::from_utf8(rpc::canonical(&serde_json::json!([name, arguments]))).unwrap_or_default()
     }
     /// The first live subscription for `key` appeared. A refusal fails that
     /// subscribe with the refusal's code.
@@ -133,6 +130,12 @@ pub(crate) trait EventSource: Send + Sync {
     /// The last subscription for `key` went away (unsubscribe, expiry,
     /// revocation or withdrawal).
     async fn on_last_subscriber(&self, _key: &str) {}
+    /// Whether a delivery of event type `name` is charged to a budget. A
+    /// source reporting on budgets answers `false`, so exhausting a budget
+    /// does not charge the event that reports it (event-sources design §3).
+    fn charges(&self, _name: &str) -> bool {
+        true
+    }
 }
 
 /// Distinct callback hosts the verification limiter tracks before it sheds

@@ -14,7 +14,15 @@ P = {"startup": ["src/gateway/server/"], "OAuth": ["src/oauth/"],
      "bridge": ["src/gateway/input_bridge.rs"],
      "tasks": ["src/gateway/task_service/", "src/gateway/router/handlers/tasks.rs", "src/gateway/meta_mcp/task_confirmation"],
      "account paths": ["src/personal_accounts/", "src/gateway/server/account_bindings.rs", "src/config/account_bindings.rs", "src/identity_propagation/"]}
-QUOTA = {"account paths": 16, "HTTP dispatch": 16}  # others 8 (bridge has 4)
+# One explicit quota per path, no default: a path missing here refuses the
+# draw rather than sampling under a number nobody chose (MIK-7852). Bridge's
+# quota is its whole frame: four rows.
+QUOTA = {
+    "account paths": 16, "HTTP dispatch": 16, "startup": 8, "OAuth": 8, "stdio dispatch": 8, "tasks": 8,
+    "bridge": 4,
+}
+if set(QUOTA) != set(P):
+    sys.exit(f"QUOTA and the named paths differ: {sorted(set(P) ^ set(QUOTA))}")
 nonce, inv = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "docs/release/v4.0.0-c6-sampling-frame.tsv")
 by = {}
 for line in open(inv, encoding="utf-8"):
@@ -29,5 +37,5 @@ for line in open(inv, encoding="utf-8"):
 for path, rows in sorted(by.items()):
     key = lambda f: hashlib.sha256("\t".join([nonce, f[0], f[5], f[2]]).encode()).hexdigest()
     for rank, f in enumerate(sorted(rows, key=key), 1):
-        tag = "SAMPLE" if rank <= QUOTA.get(path, 8) else "understudy"
+        tag = "SAMPLE" if rank <= QUOTA[path] else "understudy"
         print(rank, tag, path, f[0], f[5], f[2], f[6], sep="\t")

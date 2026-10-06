@@ -118,9 +118,8 @@ impl StdioTransport {
     }
 
     /// The child's command, with piped stdio, environment and working
-    /// directory, and the argv it was parsed into (the early-exit report
-    /// redacts against it).
-    fn spawn_command(&self) -> Result<(Command, Vec<String>)> {
+    /// directory.
+    fn spawn_command(&self) -> Result<Command> {
         let parts = crate::transport::split_command(&self.command).ok_or_else(|| {
             Error::Config(format!(
                 "Invalid stdio command quoting: {}",
@@ -146,7 +145,7 @@ impl StdioTransport {
         if let Some(ref cwd) = self.cwd {
             cmd.current_dir(cwd);
         }
-        Ok((cmd, parts))
+        Ok(cmd)
     }
 
     /// Start the subprocess and complete the MCP handshake.
@@ -160,7 +159,7 @@ impl StdioTransport {
     pub async fn start(self: &Arc<Self>) -> Result<()> {
         self.failure.begin();
 
-        let (cmd, parts) = self.spawn_command()?;
+        let cmd = self.spawn_command()?;
         let mut child = spawn_in_own_tree(cmd)?;
 
         let stdin = child
@@ -260,7 +259,7 @@ impl StdioTransport {
             // before `close` kills the child, and the stderr after, because the
             // reader only reaches EOF once the child is gone.
             let late_reader = if self.start.exited_early() {
-                error = self.early_exit_error(stderr_tail, &parts).await;
+                error = self.early_exit_error(stderr_tail).await;
                 None
             } else {
                 self.settle_child_exit().await;
