@@ -1,6 +1,6 @@
 # MIK-7211.PARENT.6: a public `cacheScope` cannot be built
 
-**Status**: design, for review. **Criterion**: MIK-7211.PARENT.6 (scope-update.md:136): "No surface emits
+**Status**: adopted, shipped in #2474 (a2359c9ba); envelope recognition narrowed by MIK-7734. **Criterion**: MIK-7211.PARENT.6 (scope-update.md:136): "No surface emits
 cacheScope public on a response computed from session-scoped state, enforced by a type or a lint
 that is named in the closing record". **Tier**: STANDARD. It changes what the direct route forwards: a backend's `public` becomes
 `private`.
