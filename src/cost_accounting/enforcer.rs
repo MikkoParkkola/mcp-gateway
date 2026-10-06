@@ -25,6 +25,10 @@ use serde::{Deserialize, Serialize};
 use super::config::{AlertAction, CostGovernanceConfig};
 use super::registry::CostRegistry;
 
+#[cfg(feature = "cost-governance")]
+#[path = "enforcer_crossings.rs"]
+pub(crate) mod crossings;
+
 // ── DailyAccumulator ─────────────────────────────────────────────────────────
 
 /// Daily spend accumulator with automatic day-boundary reset.
@@ -321,6 +325,8 @@ pub struct BudgetEnforcer {
     key_daily: DashMap<String, DailyAccumulator>,
     /// Spend reserved by in-flight admitted calls (MIK-7763).
     ledger: Arc<Ledger>,
+    /// Told when committed spend crosses 50, 80 or 100 % of a daily budget.
+    observer: crate::observer::Observer<crossings::BudgetCrossing>,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -334,6 +340,7 @@ impl BudgetEnforcer {
             global_daily: DailyAccumulator::new(),
             key_daily: DashMap::new(),
             ledger: Arc::default(),
+            observer: crate::observer::Observer::default(),
         }
     }
 
@@ -504,18 +511,27 @@ impl BudgetEnforcer {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let micro = (cost_usd * 1_000_000.0) as u64;
 
-        self.global_daily.add(micro);
+        let global = self.global_daily.add(micro);
 
-        self.tool_daily
+        let tool = self
+            .tool_daily
             .entry(tool_name.to_string())
             .or_default()
             .add(micro);
 
-        if let Some(key) = api_key_name {
+        let key = api_key_name.map(|key| {
             self.key_daily
                 .entry(key.to_string())
                 .or_default()
-                .add(micro);
+                .add(micro)
+        });
+        if self.observer.is_set() {
+            self.report_crossings(
+                tool_name,
+                api_key_name,
+                micro,
+                [global, tool, key.unwrap_or(0)],
+            );
         }
     }
 

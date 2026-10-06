@@ -327,7 +327,12 @@ impl Backend {
                     admit_fill(&entry, &self.name, bound, family.cooldown)?;
                     let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
                     let drained = run_bounded(&entry, &self.name, bound, async {
-                        let transport = self.ensure_entry_started(&key).await?;
+                        // A cold fill on the dispatch path has sent no tools/call
+                        // yet, so a failed start is a pre-send refusal (MIK-7979).
+                        let transport = self
+                            .ensure_entry_started(&key)
+                            .await
+                            .map_err(|e| super::lifecycle::pre_send_start_error(&self.name, e))?;
                         let (merged, truncated) = drain_list_pages(
                             transport.as_ref(),
                             &self.name,
