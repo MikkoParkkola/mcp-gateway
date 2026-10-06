@@ -29,15 +29,19 @@ mod upstream_peer;
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]
 mod upstream_sub;
 
-use delivery::start_cfg;
-use gateway::{ALICE, Gateway, error};
-use mcp_http_servers::{Hits, sse_server, streamable_server};
+use std::time::{Duration, Instant};
+
+use delivery::{DEADLINE, start_cfg, wait_until};
+use gateway::{ALICE, BOB, Gateway, error};
+use mcp_http_servers::{Hits, recording, serve, sse_server, streamable_server};
 use receiver::{Receiver, whsec};
 use serde_json::{Value, json};
 use upstream_peer::{Era, HttpPeer};
-use upstream_sub::{sub, sub_params, upstream_config};
+use upstream_sub::{expect_events, sub, sub_params, upstream_config};
 
 const RESOURCES_CHANGED: &str = "backend.x.resources_changed";
+const PROMPTS_CHANGED: &str = "backend.x.prompts_changed";
+const RES_CHANGED: &str = "notifications/resources/list_changed";
 
 /// A port with no listener.
 const DEAD: &str = "http://127.0.0.1:9/mcp";
@@ -66,7 +70,14 @@ async fn an_unset_key_on_a_streamable_backend_is_offered_the_events() {
     let peer = HttpPeer::start(Era::Legacy).await;
     let cfg = upstream_config(dir.path(), json!({"http_url": peer.url}), &[]);
     let gw = start_cfg(dir.path(), &receiver, cfg).await;
-    sub(&gw, ALICE, RESOURCES_CHANGED, &receiver, json!({})).await;
+    let id = sub(&gw, ALICE, RESOURCES_CHANGED, &receiver, json!({})).await;
+    // Accepted is not enough: a listener must attach and deliver.
+    assert!(
+        wait_until(DEADLINE, || peer.open_gets() == 1).await,
+        "a listener opens the session GET"
+    );
+    peer.push(RES_CHANGED, json!({}));
+    expect_events(&receiver, &id, RESOURCES_CHANGED, 1).await;
 }
 
 /// ELIG.3 with a fallback: an explicit `true` on a server that only speaks
@@ -130,4 +141,197 @@ async fn an_explicit_false_that_switched_to_streamable_is_offered() {
         .await;
     assert_ne!(invoked["isError"], true, "the backend connects: {invoked}");
     sub(&gw, ALICE, RESOURCES_CHANGED, &receiver, json!({})).await;
+}
+
+/// `initialize` requests the peer has answered: one per backend start.
+fn starts(peer: &HttpPeer) -> usize {
+    peer.frames("initialize").len()
+}
+
+/// T2, ELIG.2: an unset key on a server that only speaks legacy SSE is
+/// refused, but only after a connect learned it. Red before the fix at the
+/// GET assertion: config alone refused it with no connect.
+#[tokio::test]
+async fn an_unset_key_on_an_sse_server_is_refused_after_connecting() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let hits = Hits::default();
+    let url = sse_server(&hits).await;
+    let cfg = upstream_config(dir.path(), json!({"http_url": url}), &[]);
+    let gw = start_cfg(dir.path(), &receiver, cfg).await;
+    let answer = subscribe(&gw, &receiver).await;
+    let err = error(&answer);
+    assert_eq!(err["code"], -32014, "typed refusal, got {answer}");
+    assert_eq!(err["data"]["reason"], "sse_handshake_transport", "{answer}");
+    let gets = hits
+        .lock()
+        .expect("hits")
+        .iter()
+        .filter(|(method, path)| method == axum::http::Method::GET && path == "/sse")
+        .count();
+    assert!(
+        gets >= 1,
+        "the transport was learned by a connect: {hits:?}"
+    );
+}
+
+/// T5 guard (green before the fix): identity propagation is refused before
+/// the transport is judged, so the subscribe never connects the backend.
+#[tokio::test]
+async fn an_identity_backend_is_refused_without_a_connect() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = HttpPeer::start(Era::Legacy).await;
+    let backend = json!({
+        "http_url": peer.url,
+        "identity_propagation": {"strategy": "passthrough",
+            "audience": "https://idp.example", "session_mode": "per_user"},
+    });
+    let gw = start_cfg(
+        dir.path(),
+        &receiver,
+        upstream_config(dir.path(), backend, &[]),
+    )
+    .await;
+    let answer = subscribe(&gw, &receiver).await;
+    assert_eq!(
+        error(&answer)["data"]["reason"],
+        "identity_propagation",
+        "{answer}"
+    );
+    assert_eq!(starts(&peer), 0, "no connect for a refused backend");
+}
+
+/// T17 guard (green before the fix): an explicit `true` on a Streamable HTTP
+/// server, never started, subscribes.
+#[tokio::test]
+async fn an_explicit_true_on_a_streamable_server_subscribes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = HttpPeer::start(Era::Legacy).await;
+    let backend = json!({"http_url": peer.url, "streamable_http": true});
+    let gw = start_cfg(
+        dir.path(),
+        &receiver,
+        upstream_config(dir.path(), backend, &[]),
+    )
+    .await;
+    sub(&gw, ALICE, RESOURCES_CHANGED, &receiver, json!({})).await;
+}
+
+/// T6: an unset key is listed provisionally, and listing connects nothing.
+/// Red before the fix at the listing assertion: config alone hid it.
+#[tokio::test]
+async fn an_unset_key_is_listed_without_a_connect() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = HttpPeer::start(Era::Legacy).await;
+    let cfg = upstream_config(dir.path(), json!({"http_url": peer.url}), &[]);
+    let gw = start_cfg(dir.path(), &receiver, cfg).await;
+    let names = gw.event_names(Some(ALICE), Some(RESOURCES_CHANGED)).await;
+    assert!(
+        names.iter().any(|n| n == RESOURCES_CHANGED),
+        "listed while undetected: {names:?}"
+    );
+    assert_eq!(starts(&peer), 0, "listing never connects a backend");
+}
+
+/// T7: concurrent subscribes to one undetected backend share one start.
+/// Red before the fix at the first subscribe (refused by config).
+#[tokio::test]
+async fn concurrent_subscribes_share_one_start() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = HttpPeer::start(Era::Legacy).await;
+    let cfg = upstream_config(dir.path(), json!({"http_url": peer.url}), &[]);
+    let gw = start_cfg(dir.path(), &receiver, cfg).await;
+    tokio::join!(
+        sub(&gw, ALICE, RESOURCES_CHANGED, &receiver, json!({})),
+        sub(&gw, ALICE, PROMPTS_CHANGED, &receiver, json!({})),
+        sub(&gw, BOB, RESOURCES_CHANGED, &receiver, json!({})),
+    );
+    assert_eq!(starts(&peer), 1, "one start for three subscribes");
+}
+
+/// A server that accepts connections and never answers: a start that
+/// cannot complete.
+async fn silent_server() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind silent server");
+    let address = listener.local_addr().expect("silent address");
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    format!("http://{address}/mcp")
+}
+
+/// T8: a start that never completes bounds the subscribe by the backend
+/// timeout, and answers the backend error. Red before the fix at the code
+/// assertion: `-32014` by config.
+#[tokio::test]
+async fn a_start_that_never_completes_is_bounded_by_the_backend_timeout() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let backend = json!({"http_url": silent_server().await, "timeout": "2s"});
+    let gw = start_cfg(
+        dir.path(),
+        &receiver,
+        upstream_config(dir.path(), backend, &[]),
+    )
+    .await;
+    let began = Instant::now();
+    let answer = subscribe(&gw, &receiver).await;
+    let took = began.elapsed();
+    assert_eq!(
+        error(&answer)["code"],
+        -32000,
+        "the backend error: {answer}"
+    );
+    assert!(
+        took < Duration::from_secs(12),
+        "bounded by the timeout: {took:?}"
+    );
+}
+
+/// T9: an open circuit refuses the subscribe as it refuses `tools/call`,
+/// with no connect. Red before the fix at the code assertion.
+#[tokio::test]
+async fn an_open_circuit_refuses_the_subscribe_without_a_connect() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let hits = Hits::default();
+    let record = recording(&hits);
+    let app = axum::Router::new().fallback(move |method: axum::http::Method| {
+        let record = record.clone();
+        async move {
+            record(method, "/mcp".into());
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        }
+    });
+    let url = format!("{}/mcp", serve(app).await);
+    let mut cfg = upstream_config(dir.path(), json!({"http_url": url}), &[]);
+    cfg["failsafe"] = json!({"circuit_breaker":
+        {"failure_threshold": 1, "reset_timeout": "10m"}});
+    let gw = start_cfg(dir.path(), &receiver, cfg).await;
+    let invoke = json!({"server": "x", "tool": "ping", "arguments": {}});
+    gw.tool_call(ALICE, "gateway_invoke", invoke.clone()).await;
+    let tripped = hits.lock().expect("hits").len();
+    assert!(tripped > 0, "the failing start reached the server");
+    gw.tool_call(ALICE, "gateway_invoke", invoke).await;
+    assert_eq!(
+        hits.lock().expect("hits").len(),
+        tripped,
+        "precondition: the circuit is open"
+    );
+    let answer = subscribe(&gw, &receiver).await;
+    assert_eq!(
+        error(&answer)["code"],
+        -32000,
+        "the circuit refusal: {answer}"
+    );
+    assert_eq!(hits.lock().expect("hits").len(), tripped, "no connect");
 }
