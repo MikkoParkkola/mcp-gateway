@@ -1,6 +1,6 @@
 {
   "name": "@mikkoparkkola/mcp-gateway",
-  "version": "2.12.1",
+  "version": "4.0.0-beta.3",
   "description": "MCP gateway and Model Context Protocol proxy: connect unlimited MCP servers, tools and REST APIs to an AI client at a fixed context cost, with on-demand tool discovery and MCP revision bridging",
   "license": "SEE LICENSE IN LICENSES.md",
   "author": "Mikko Parkkola <mikko.parkkola@iki.fi>",
