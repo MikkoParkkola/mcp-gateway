@@ -223,7 +223,8 @@ fn rotation_keeps_the_stored_secret_as_previous() {
     let stored = store.get(&first.id).expect("row");
     assert_eq!(stored.secret, "whsec_second");
     assert_eq!(stored.previous_secret.as_deref(), Some("whsec_x"));
-    assert_eq!(stored.previous_until, Some(now + grace()));
+    // The grace runs from the commit that rotated, not the request.
+    assert_eq!(stored.previous_until, Some(stored.granted_at + grace()));
 }
 
 #[test]
