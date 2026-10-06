@@ -73,6 +73,11 @@ impl ResolvedAuthConfig {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        // MIK-7973: the one place every bearer form, `auto` included, is known.
+        super::refuse_shared_principals(
+            bearer_token.as_deref(),
+            api_keys.iter().map(|k| (k.name.as_str(), &k.digest)),
+        )?;
 
         // Pre-create rate limiters for clients with rate limits
         let rate_limiters = DashMap::new();
@@ -191,7 +196,7 @@ impl ResolvedAuthConfig {
                 quota_principal: Some(key.quota_principal.clone()),
                 name: key.name.clone(),
                 // MIK-6704.IDENT.1a: the validated key's digest, = principal_of(key).
-                principal: hex::encode(&key.digest[..6]),
+                principal: super::principal_of_digest(&key.digest),
                 rate_limit: key.rate_limit,
                 backends: key.backends.clone(),
                 allowed_tools: key.allowed_tools.clone(),
