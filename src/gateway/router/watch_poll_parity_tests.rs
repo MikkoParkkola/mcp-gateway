@@ -21,10 +21,12 @@ const NOT_ON_POLLS: [&str; 1] = ["session_profile"];
 
 /// The controls a poll runs, in this order, in `poll_capability`'s body: the
 /// two the router applies before `MetaMcp`, `MetaMcp`'s request-free tail (grant,
-/// kill switch, budget, response gates, audit), then the response firewall.
-const POLL_STAGES: [&str; 4] = [
+/// kill switch, budget, response gates, audit) inside a read-only call, then
+/// the response firewall.
+const POLL_STAGES: [&str; 5] = [
     "check_authenticated_client_rate_limit(",
     "fw.check_request(",
+    "read_only_call(",
     "dispatch_below_gate_native_result(",
     "inspect_task_result(",
 ];

@@ -569,6 +569,7 @@ impl CapabilityBackend {
             .get_with_generation(name)
             .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
         context.mcp_generation = Some(generation);
+        super::read_only_call::refuse_unless_read_only(&capability)?;
         validate_personal_capability_identity(&capability, &context)?;
 
         let multi_user = self.multi_user.load(std::sync::atomic::Ordering::Relaxed);

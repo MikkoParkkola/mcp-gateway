@@ -13,13 +13,11 @@ tokio::task_local! {
 }
 
 /// Run `call` as a read-only call.
-#[allow(dead_code, reason = "red: the watch poll uses it next")]
 pub(crate) async fn read_only_call<F: std::future::Future>(call: F) -> F::Output {
     READ_ONLY_CALL.scope((), call).await
 }
 
 /// Inside a read-only call, refuse `capability` unless it is read-only.
-#[allow(dead_code, reason = "red: the executor calls it next")]
 pub(super) fn refuse_unless_read_only(capability: &CapabilityDefinition) -> crate::Result<()> {
     if READ_ONLY_CALL.try_with(|()| ()).is_ok() && !capability.metadata.read_only {
         return Err(crate::Error::Config(format!(

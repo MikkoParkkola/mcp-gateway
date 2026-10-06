@@ -91,9 +91,10 @@ pub(crate) async fn poll_capability(
     let live = owned.host().upgrade().ok_or(PollRefused::Dispatch)?;
     let authorizer = live.authorizer(owned.authorizer());
     let caller = owned.dispatch_context(&live, &authorizer);
-    let response = state
-        .meta_mcp
-        .dispatch_below_gate_native_result(
+    // Read-only by the definition the executor runs, not only by the
+    // catalogue the source read before this call.
+    let response =
+        crate::capability::read_only_call(state.meta_mcp.dispatch_below_gate_native_result(
             RequestId::Number(0),
             "gateway_invoke",
             json!({
@@ -103,7 +104,7 @@ pub(crate) async fn poll_capability(
             }),
             None,
             &caller,
-        )
+        ))
         .await;
     let mut result = response.result.ok_or(PollRefused::Dispatch)?;
     let targets = [crate::security::response_policy::ResponsePolicyTarget {
