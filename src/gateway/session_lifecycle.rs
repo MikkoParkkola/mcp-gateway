@@ -441,4 +441,48 @@ mod tests {
         lifecycle.on_disconnect("no-handlers"); // should not panic
         assert_eq!(lifecycle.handler_count(), 0);
     }
+
+    #[test]
+    fn a_renewal_during_the_reap_keeps_the_state_it_writes() {
+        // MIK-7746: reaping removed the key, dropped the lock, then ran the
+        // handlers. A caller renewing in that window wrote fresh state the
+        // handler then wiped. The handler waits (bounded) for a renewal from
+        // another thread; the renewal's write must outlive the handler.
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let lifecycle = Arc::new(SessionLifecycle::new());
+        let store = Arc::new(parking_lot::Mutex::new(Vec::<&str>::new()));
+        let (entered_tx, entered_rx) = mpsc::channel::<()>();
+        let (renewed_tx, renewed_rx) = mpsc::channel::<()>();
+        let wiped = Arc::clone(&store);
+        let entered_tx = parking_lot::Mutex::new(Some(entered_tx));
+        lifecycle.register("hints", move |_key| {
+            if let Some(tx) = entered_tx.lock().take() {
+                tx.send(()).unwrap();
+                // Base: the renewal lands here. Fixed: it waits on the lock.
+                let _ = renewed_rx.recv_timeout(Duration::from_millis(300));
+            }
+            wiped.lock().clear();
+        });
+        lifecycle.track("caller", 0);
+
+        let renewer = std::thread::spawn({
+            let (lifecycle, store) = (Arc::clone(&lifecycle), Arc::clone(&store));
+            move || {
+                entered_rx.recv().unwrap();
+                lifecycle.track("caller", u64::MAX);
+                store.lock().push("fresh");
+                let _ = renewed_tx.send(());
+            }
+        });
+        assert_eq!(lifecycle.reap(1), 1);
+        renewer.join().unwrap();
+
+        assert_eq!(
+            *store.lock(),
+            ["fresh"],
+            "a caller renewed while its old deadline was reaped lost its fresh state"
+        );
+        assert_eq!(lifecycle.tracked_count(), 1, "and its new deadline stays");
+    }
 }
