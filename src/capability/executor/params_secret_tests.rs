@@ -328,3 +328,17 @@ fn a_filled_query_template_with_literal_braces_is_sent() {
         assert_eq!(pairs, vec![("filter".to_owned(), sent.to_owned())]);
     }
 }
+
+/// MIK-7943 finding 2: a parameter name holding a quote is still a parameter.
+/// Only a JSON fragment, which opens with a quoted key, is literal text.
+#[test]
+fn an_unfilled_parameter_whose_name_holds_a_quote_is_omitted() {
+    let (_dir, executor) = executor_holding("");
+    let template = std::collections::HashMap::from([("k".to_owned(), "{a\"b}".to_owned())]);
+    let pairs = executor.substitute_params(&template, &json!({})).unwrap();
+    assert!(pairs.is_empty(), "{pairs:?}");
+    let pairs = executor
+        .substitute_params(&template, &json!({ "a\"b": "x" }))
+        .unwrap();
+    assert_eq!(pairs, vec![("k".to_owned(), "x".to_owned())]);
+}

@@ -399,4 +399,44 @@ mod tests {
         assert!(cat.is_empty());
         assert_eq!(cat.len(), 0);
     }
+
+    /// MIK-7943 finding 3: a direct CLI call is held to the capability's
+    /// schema, as a gateway call is, before anything is sent.
+    #[tokio::test]
+    async fn a_cli_call_that_breaks_the_schema_is_refused_before_it_is_sent() {
+        let cap = crate::capability::parse_capability(
+            "
+name: schema_probe
+description: probe
+schema:
+  input:
+    type: object
+    properties:
+      id:
+        type: string
+    required: [id]
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://schema-probe.invalid
+      path: /items/{id}
+      method: GET
+",
+        )
+        .expect("parses");
+        let cat = ToolCatalogue {
+            capabilities: vec![cap],
+        };
+        let error = execute_tool_with_context(
+            &cat,
+            "schema_probe",
+            json!({}),
+            CapabilityExecutionContext::default(),
+        )
+        .await
+        .expect_err("a missing required parameter")
+        .to_string();
+        assert!(error.contains("required parameter is missing"), "{error}");
+    }
 }
