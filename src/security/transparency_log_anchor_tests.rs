@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::rotation_tests::{append, cfg, event, lines, log_path};
+use super::rotation_tests::{SECRET, append, cfg, event, lines, log_path};
 use super::segments::{self, HighWater, list_segments, sibling};
 use super::*;
 
@@ -235,8 +235,8 @@ fn an_intact_log_passes_its_anchors() {
 
 /// A retention-2 log whose segments 0..=2 expired, plus an anchor copied
 /// after the first append (its counter now lies in an expired segment).
-fn expired_log(path: &Path) -> PathBuf {
-    let l = logger(path, 2, false);
+fn expired_log(path: &Path, signed: bool) -> PathBuf {
+    let l = logger(path, 2, signed);
     append(&l, 0);
     let early = copy_anchor(path, "early.hwm");
     let mut spins = 0;
@@ -256,30 +256,41 @@ fn oldest_open(path: &Path) -> Value {
     open
 }
 
-/// An anchor at the expired boundary the oldest survivor links to.
-fn boundary_anchor(path: &Path) -> PathBuf {
+/// An anchor at the expired boundary the oldest survivor links to, MAC'd
+/// with `secret` when non-empty.
+fn boundary_anchor(path: &Path, secret: &str) -> PathBuf {
     let open = oldest_open(path);
     let hw = HighWater {
         counter: open["counter"].as_u64().unwrap() - 1,
         entry_hash: open["prev_segment_final_hash"].as_str().unwrap().into(),
         segment_seq: open["prev_segment_seq"].as_u64().unwrap(),
     };
-    write_anchor(path, "boundary.hwm", &hw, "")
+    write_anchor(path, "boundary.hwm", &hw, secret)
 }
 
-/// ANCHOR.EXPIRED: an anchor inside an expired range is refused (an unsigned
-/// expiry record is forgeable); one at the linked boundary passes.
+/// ANCHOR.EXPIRED: an anchor inside an expired range is refused. One at the
+/// linked boundary passes only for a signed log: without HMAC an attacker
+/// who wiped the log can forge an open record and an expiry record naming
+/// the anchored counter and hash.
 #[test]
-fn an_anchor_in_an_expired_range_fails_and_the_boundary_passes() {
-    for mode in MODES {
-        let dir = tempfile::tempdir().unwrap();
-        let path = log_path(&dir);
-        let early = expired_log(&path);
-        passes_without_anchor(&path, mode);
-        let r = check(&path, &early, mode, false).unwrap();
-        assert_fails(&r, anchor_counter(&early), "predates the retained range");
-        let r = check(&path, &boundary_anchor(&path), mode, false).unwrap();
-        assert!(r.ok, "{r:?}");
+fn an_anchor_in_an_expired_range_fails_and_the_boundary_needs_a_signed_log() {
+    for (signed, secret) in [(false, ""), (true, SECRET)] {
+        for mode in MODES {
+            let dir = tempfile::tempdir().unwrap();
+            let path = log_path(&dir);
+            let early = expired_log(&path, signed);
+            let config = cfg(&path, 12, signed);
+            assert!(verify_audit_log(&path, &config, mode, None).unwrap().ok);
+            let r = check(&path, &early, mode, signed).unwrap();
+            assert_fails(&r, anchor_counter(&early), "predates the retained range");
+            let boundary = boundary_anchor(&path, secret);
+            let r = check(&path, &boundary, mode, signed).unwrap();
+            if signed {
+                assert!(r.ok, "{r:?}");
+            } else {
+                assert_fails(&r, anchor_counter(&boundary), "unsigned");
+            }
+        }
     }
 }
 
@@ -291,8 +302,8 @@ fn an_oldest_survivor_split_from_its_link_fails() {
     for mode in MODES {
         let dir = tempfile::tempdir().unwrap();
         let path = log_path(&dir);
-        expired_log(&path);
-        let boundary = boundary_anchor(&path);
+        expired_log(&path, false);
+        let boundary = boundary_anchor(&path, "");
         rechain(&path, |f, i, v| {
             if f == 0 && i == 0 {
                 v["prev_entry_hash"] = format!("sha256:{}", "0".repeat(64)).into();
