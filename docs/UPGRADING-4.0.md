@@ -173,6 +173,7 @@ backend" and "fails a capability file" first.**
 | 146 | An OAuth backend whose authorization server, authorization endpoint, token endpoint or registration endpoint is `http://` to a host off this machine fails at connect, and so does a redirect from one to such a URL; a capability that sends a credential (`auth.required`, or a header, query or body template that fills in `{env.X}` or `{keychain.X}`) and names an `http://` `base_url` or `endpoint` off this machine fails to load, and a templated one is refused at call time. `http://` to a loopback host is allowed, and is no longer proxied | Serve the authorization server and the capability's API over `https://`, or on a loopback host (`localhost`, `127.0.0.1`, `[::1]`). `allow_cleartext_credentials` does not cover either |
 | 147 | A capability whose declared output root is not object-shaped (an array, a string, a type list) advertises `outputSchema` as an object and publishes `structuredContent` under `items` | Read `structuredContent.items` for the nine shipped capabilities listed below, and for your own; the text content is unchanged |
 | 148 | An `http_url` backend with no `streamable_http` key POSTs `initialize` first and falls back to the legacy SSE `GET` only when that POST is refused with a 4xx that is not about the credential or a retry (any but 401, 403, 407, 408, 429); `add --url` no longer writes `streamable_http: false`. An explicit `true` or `false` is tried first, and when the server refuses it with such a 4xx the other transport is tried once, with a warning naming the backend and the value to set. `TransportConfig::Http::streamable_http` is now `Option<bool>` | None. A config the old `add --url` wrote keeps working; to skip the refused request, set the value the warning names or remove the key. A backend with the key unset is refused MCP Events even when it connects over Streamable HTTP, since eligibility is read from config: set `streamable_http: true` to offer them |
+| 149 | A meta-tool result whose payload says `isError: true` (a failed `gateway_invoke`, or a backend's own tool error) carries `isError: true` on the outer `tools/call` result; it was always `false`, with the failure only in the text | A client that read failure from the text alone keeps working; one that treated `isError: true` as a protocol failure should read the text and its `recovery` hint instead |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3985,6 +3986,19 @@ refused MCP Events even when it connects over Streamable HTTP. Set
 `streamable_http: true` to offer them.
 
 Library users: `TransportConfig::Http::streamable_http` is now `Option<bool>`.
+
+## 149. A failed meta-tool call sets `isError` on the `tools/call` result
+
+**Startup:** no notice
+
+A meta-tool result whose payload says `isError: true` (a failed
+`gateway_invoke`, or a backend's own tool error) now carries `isError: true` on
+the outer `tools/call` result. It was always `false`, with the failure only in
+the text.
+
+A client that read failure from the text alone keeps working. One that treated
+`isError: true` as a protocol failure should read the text and its `recovery`
+hint instead.
 
 ## Upgrading from 3.5.x: a walkthrough
 
