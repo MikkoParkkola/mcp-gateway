@@ -17,6 +17,13 @@ const ROW_LIMIT: Duration = Duration::from_secs(5);
 
 /// Answers `initialize`, reads `notifications/initialized`, then runs `after`.
 async fn started(after: &str) -> (tempfile::TempDir, Arc<StdioTransport>) {
+    started_with_timeout(after, REQUEST_TIMEOUT).await
+}
+
+async fn started_with_timeout(
+    after: &str,
+    request_timeout: Duration,
+) -> (tempfile::TempDir, Arc<StdioTransport>) {
     let workspace = tempfile::tempdir().expect("workspace");
     let script = r#"id_of() { printf '%s' "$1" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p'; }
 read -r request
@@ -31,7 +38,7 @@ AFTER
         "sh server.sh",
         HashMap::new(),
         Some(workspace.path().to_string_lossy().into_owned()),
-        REQUEST_TIMEOUT,
+        request_timeout,
         None,
     );
     transport.start().await.expect("handshake");
@@ -39,15 +46,13 @@ AFTER
 }
 
 async fn stdout_closed(transport: &StdioTransport) {
-    // The reader drops `connected` after it trips the EOF latch and clears
-    // the pending map, and nothing else does while the child lives.
-    tokio::time::timeout(ROW_LIMIT, async {
-        while transport.is_connected() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the child closes stdout");
+    // The latch itself: `connected` is set after the handshake, so it can
+    // read true again after a child that closes stdout at once.
+    let mut eof = transport.start.eof_receiver().expect("a started transport");
+    tokio::time::timeout(ROW_LIMIT, eof.wait_for(|closed| *closed))
+        .await
+        .expect("the child closes stdout")
+        .expect("latch alive");
 }
 
 async fn fails_fast(transport: &StdioTransport, params: Option<Value>) -> Error {
@@ -128,5 +133,18 @@ while IFS= read -r l; do :; done"#,
         .expect("answered")
         .expect("a reply read before EOF is the answer");
     assert!(response.result.is_some(), "{response:?}");
+    let _ = t.close().await;
+}
+
+/// A child that keeps stdout open but never reads stdin: the request's own
+/// deadline covers the write, so the call ends at `request_timeout`.
+#[tokio::test]
+async fn a_write_the_child_never_reads_ends_at_the_request_timeout() {
+    let (_w, t) = started_with_timeout("sleep 60", Duration::from_millis(500)).await;
+    let err = tokio::time::timeout(ROW_LIMIT, t.request("tools/list", big_params()))
+        .await
+        .expect("the request timeout bounds the write")
+        .expect_err("nothing reads the request");
+    assert!(matches!(err, Error::BackendTimeout(_)), "{err:?}");
     let _ = t.close().await;
 }

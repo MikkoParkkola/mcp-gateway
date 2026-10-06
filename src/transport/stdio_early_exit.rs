@@ -156,6 +156,11 @@ impl StartState {
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// This start's stdout-closed latch, or `None` before the first start.
+    pub(super) fn eof_receiver(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
+        self.eof.lock().clone()
+    }
+
     pub(super) fn exited_early(&self) -> bool {
         self.exited.swap(false, std::sync::atomic::Ordering::SeqCst)
     }
@@ -176,7 +181,7 @@ impl StdioTransport {
         params: serde_json::Value,
     ) -> Result<crate::protocol::JsonRpcResponse> {
         use crate::transport::Transport as _;
-        let Some(mut eof) = self.start.eof.lock().clone() else {
+        let Some(mut eof) = self.start.eof_receiver() else {
             return self.request("initialize", Some(params)).await;
         };
         // `wait_for` reads the current value first, so the clone sees an EOF
