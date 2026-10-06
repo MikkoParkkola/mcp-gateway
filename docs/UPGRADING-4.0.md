@@ -3961,6 +3961,22 @@ The nested schema is given an `$id` of the form
 scopes references with `id` rather than `$id`, is not covered. A root with `properties` and no `type` is
 advertised with `type: "object"` added and is otherwise unchanged.
 
+## 148. With auth off, session-less legacy clients share one anomaly history
+
+**Startup:** no notice
+
+This applies when authentication is off, `security.firewall.anomaly_detection` is on and
+`anomaly_block_threshold` is set. In 3.x a legacy client that sent no `mcp-session-id` was
+given a new session on every request. Anomaly scoring followed that session, so each call was
+the first in its session and could never be blocked. In 4.0 every legacy request that does not
+resume a session the gateway issued is scored as one shared caller. The calls of all such
+clients form one sequence, and the block threshold applies to them together. A client that
+keeps the `mcp-session-id` its `initialize` returned keeps its own history, as before.
+
+If such clients are now refused, have them reuse their session, raise
+`anomaly_block_threshold`, or remove it to log without blocking. The 4.0 tenant guard
+(`tenant_guard`) and call budget (`budget`) count these clients the same way.
+
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
