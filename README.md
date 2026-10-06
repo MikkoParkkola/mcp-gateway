@@ -558,11 +558,13 @@ Free for personal and noncommercial use under PolyForm Noncommercial 1.0.0. Comm
 | [Multi-User Setup](docs/MULTI_USER.md) | Key server, policy scopes, per-backend identity propagation |
 | [OpenAPI Import](docs/OPENAPI_IMPORT.md) | Generate capabilities from OpenAPI specs |
 | [Webhooks](docs/WEBHOOKS.md) | Event integration setup |
+| [Long-running calls](docs/TASKS.md) | Tasks, progress and cancellation |
 | [Community Registry](docs/COMMUNITY_REGISTRY.md) | Share and install capabilities |
 | [Benchmarks](docs/BENCHMARKS.md) | Performance measurements |
 | [MCP compatibility](docs/PROTOCOL_COMPATIBILITY.md) | Client and backend revision pairings: what works, what is translated, what is refused |
 | [Windows limits](CONTRIBUTING.md#windows-test-coverage) | Unix-only behaviors and what the Windows CI job runs |
 | [Changelog](CHANGELOG.md) | Release history |
+| [Security posture](docs/SECURITY_POSTURE.md) | What is on by default, what to turn on, and known limits |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
 | [ShadowRadar](docs/SHADOW_SCAN.md) | Passive local discovery and static network-rule export |
 
