@@ -9,6 +9,13 @@ use super::*;
 /// Identical to [`mcp_backend`] but for the propagation config, and it does not
 /// assert the cache warmed: whether it warms is what the test asks.
 async fn per_user_mcp_backend(name: &str) -> Arc<crate::backend::Backend> {
+    let backend = cold_per_user_mcp_backend(name);
+    let _ = backend.get_tools_shared().await;
+    backend
+}
+
+/// [`per_user_mcp_backend`] with its shared tool cache never filled.
+fn cold_per_user_mcp_backend(name: &str) -> Arc<crate::backend::Backend> {
     use crate::backend::Backend;
     use crate::config::{BackendConfig, FailsafeConfig};
     use crate::identity_propagation::{
@@ -38,7 +45,6 @@ async fn per_user_mcp_backend(name: &str) -> Arc<crate::backend::Backend> {
     backend.set_transport_for_test(Arc::new(ToolsListTestTransport {
         tools: json!(payload),
     }));
-    let _ = backend.get_tools_shared().await;
     backend
 }
 
@@ -99,5 +105,47 @@ async fn per_user_backend_tools_are_discoverable() {
         names,
         vec!["weak_match".to_string(), QUERY.to_string()],
         "a per_user backend's tools must be discoverable, not blanked"
+    );
+}
+
+/// #3042: an identified caller's search over an empty per-user slot fetches
+/// with its own credential. It never starts the background fill of the
+/// shared slot, whose `tools/list` would carry no identity at all.
+#[tokio::test]
+async fn a_bound_callers_search_does_not_fill_the_shared_slot() {
+    let backend = cold_per_user_mcp_backend(MCP_BACKEND);
+    let backends = Arc::new(BackendRegistry::new());
+    assert!(backends.register(Arc::clone(&backend)));
+    let mut meta = MetaMcp::with_features(
+        backends,
+        None,
+        None,
+        Some(Arc::new(SearchRanker::new())),
+        Duration::from_secs(60),
+    )
+    .with_code_mode(false)
+    .with_profile_registry(registry_with_default(
+        "open",
+        RoutingProfileConfig {
+            description: "no backend or tool restrictions".to_string(),
+            ..Default::default()
+        },
+    ));
+    super::super::catalogue_per_caller_tests::install_minting(&mut meta);
+    let alpha = super::super::catalogue_per_caller_tests::identity("alpha");
+    meta.seed_caller_slot_for_test(MCP_BACKEND, &alpha).await;
+
+    meta.search_tools(
+        &json!({ "query": QUERY }),
+        None,
+        &super::super::identified_caller(&alpha),
+    )
+    .await
+    .unwrap();
+    // A background fill, had one started, runs on this runtime: let it.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !backend.cached_tools_known(),
+        "a bound caller's search filled the shared slot without an identity"
     );
 }
