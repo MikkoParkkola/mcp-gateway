@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 /// Join `rel` to the user's home directory.
 ///
-/// Falls back to the current directory if `dirs::home_dir()` returns `None`
+/// Falls back to the current directory if no home directory resolves
 /// (unusual, but possible in restricted environments).
 pub fn home_path(rel: &str) -> PathBuf {
     crate::home_dir::home_dir().unwrap_or_default().join(rel)
@@ -81,6 +81,10 @@ mod tests {
     /// on macOS and the OS config dir elsewhere (zed-industries/zed @ 1a28cff4,
     /// `crates/paths/src/paths.rs:133-152`).
     #[test]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the oracle is the platform answer, independent of the routed lookup"
+    )]
     fn zed_settings_path_matches_zed_config_dir() {
         let p = zed_settings_path();
         if cfg!(target_os = "macos") {

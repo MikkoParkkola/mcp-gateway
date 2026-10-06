@@ -7,6 +7,13 @@
 //! `USERPROFILE`, so a child process cannot otherwise be given an isolated
 //! home. Release builds compile the override out, and the release job greps
 //! the binary for its name.
+//!
+//! Everything else resolves home through here: `clippy.toml` disallows a direct
+//! `dirs::home_dir` or `dirs::config_dir` anywhere else in the crate (MIK-8001).
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the one place the platform lookups are called"
+)]
 
 use std::path::PathBuf;
 

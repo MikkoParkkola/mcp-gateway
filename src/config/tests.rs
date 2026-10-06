@@ -19,6 +19,10 @@ mod validate_config;
 /// at all.
 #[test]
 #[ignore = "driven by envfile_19d_home_unset_and_home_empty_both_resolve_to_the_dirs_fallback"]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the oracle is the platform answer, independent of the routed lookup"
+)]
 fn envfile_19d_child_resolves_against_dirs_home_dir() {
     assert!(
         env::var_os("MCP_GW_TEST_ENVFILE19D_VARIANT").is_some(),

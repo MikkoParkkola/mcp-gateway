@@ -394,10 +394,10 @@ fn grant_scope(scope: IdentityGrantScopeArg) -> GrantScope {
 fn expand_home_path(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
     if text == "~" {
-        return dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        return crate::home_dir::home_dir().unwrap_or_else(|| PathBuf::from("."));
     }
     if let Some(rest) = text.strip_prefix("~/") {
-        return dirs::home_dir()
+        return crate::home_dir::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(rest);
     }

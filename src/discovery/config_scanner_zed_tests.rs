@@ -53,6 +53,10 @@ fn a_nested_command_object_is_not_a_zed_shape() {
 }
 
 #[test]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the oracle is the platform answer, independent of the routed lookup"
+)]
 fn zed_config_path_matches_zed_config_dir() {
     let path = ConfigScanner::zed_config_path().expect("home dir");
     if cfg!(target_os = "macos") {

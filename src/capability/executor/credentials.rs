@@ -547,7 +547,7 @@ impl std::fmt::Debug for RefreshTokenResponse {
 
 fn expand_home_dir(path: &str) -> Result<std::path::PathBuf> {
     if let Some(rest) = path.strip_prefix("~/") {
-        match dirs::home_dir() {
+        match crate::home_dir::home_dir() {
             Some(home) => Ok(home.join(rest)),
             None => Err(Error::Config(
                 "Cannot expand ~ in file credential path: HOME not set".to_string(),
