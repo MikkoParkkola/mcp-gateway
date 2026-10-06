@@ -60,6 +60,12 @@ impl RpcError {
         )
     }
 
+    /// `-32000`: the backend could not be started to learn its transport, the
+    /// code `tools/call` answers a backend failure with (MIK-7969).
+    pub(crate) fn backend_unavailable() -> Self {
+        Self::new(-32000, "BackendUnavailable", None)
+    }
+
     /// `-32014` for an upstream-notification event `name` its backend cannot
     /// offer, naming why (I5 design §11 D2/D3).
     pub(crate) fn unsupported_backend_events(name: &str, reason: &'static str) -> Self {

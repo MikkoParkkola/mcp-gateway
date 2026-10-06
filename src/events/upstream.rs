@@ -136,7 +136,12 @@ pub(crate) fn ineligible_backends(
     multi_user: bool,
     detected: Detected<'_>,
 ) -> BTreeMap<String, Ineligible> {
-    judged_backends(config, multi_user, detected)
+    refused(judged_backends(config, multi_user, detected))
+}
+
+/// The definite refusals of a judged set; an unresolved backend is not one.
+pub(crate) fn refused(judged: BTreeMap<String, Judged>) -> BTreeMap<String, Ineligible> {
+    judged
         .into_iter()
         .filter_map(|(name, judged)| match judged {
             Judged::Refused(reason) => Some((name, reason)),

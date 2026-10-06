@@ -79,3 +79,102 @@ async fn a_tools_notice_clears_the_resend_permitted_set() {
         "a stale resend set outlived the tool list"
     );
 }
+
+/// A server that accepts connections and never answers.
+async fn silent_url() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let address = listener.local_addr().expect("address");
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    format!("http://{address}/mcp")
+}
+
+/// An unset-key HTTP backend at `url` with a short timeout.
+fn backend_at(url: &str) -> Arc<Backend> {
+    let cfg = BackendConfig {
+        transport: TransportConfig::Http {
+            http_url: url.to_owned(),
+            streamable_http: None,
+            protocol_version: None,
+        },
+        timeout: Duration::from_millis(500),
+        ..BackendConfig::default()
+    };
+    Arc::new(Backend::new(
+        "silent",
+        cfg,
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ))
+}
+
+fn resolutions(backend: &Backend) -> usize {
+    backend.events_resolutions.load(Ordering::SeqCst)
+}
+
+/// Wait (bounded) until no resolution is in flight.
+async fn settled(backend: &Backend) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while backend.events_resolution.lock().is_some() {
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    true
+}
+
+/// T11: a backend that never started has no detected transport.
+#[test]
+fn an_unstarted_backend_has_no_detected_transport() {
+    assert_eq!(backend().connected_streamable(), None);
+}
+
+/// T12 (MIK-7969 M2): concurrent subscribes waiting on one backend share
+/// one resolution task, and each wait is bounded by the backend timeout.
+#[tokio::test]
+async fn concurrent_resolutions_share_one_start_task() {
+    let backend = backend_at(&silent_url().await);
+    let began = std::time::Instant::now();
+    let started = futures::future::join_all((0..5).map(|_| backend.resolve_for_events())).await;
+    assert!(started.iter().all(|s| !s), "a silent server never starts");
+    assert!(began.elapsed() < Duration::from_secs(5), "bounded wait");
+    assert_eq!(resolutions(&backend), 1, "one start task for five waits");
+}
+
+/// T20: a settled resolution is cleared, so the next subscribe starts anew
+/// rather than reusing an old outcome.
+#[tokio::test]
+async fn a_settled_resolution_is_cleared() {
+    let backend = backend_at(&silent_url().await);
+    assert!(!backend.resolve_for_events().await);
+    assert!(settled(&backend).await, "the resolution was never cleared");
+    assert!(!backend.resolve_for_events().await);
+    assert_eq!(resolutions(&backend), 2, "a settled start was reused");
+}
+
+/// T18: a subscribe that stops waiting leaves the start running; it
+/// settles under its own handling.
+#[tokio::test]
+async fn a_cancelled_wait_leaves_the_start_to_settle() {
+    let backend = backend_at(&silent_url().await);
+    let waiter = tokio::spawn({
+        let backend = Arc::clone(&backend);
+        async move { backend.resolve_for_events().await }
+    });
+    while resolutions(&backend) == 0 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    waiter.abort();
+    assert!(
+        backend.events_resolution.lock().is_some(),
+        "the start ended with its waiter"
+    );
+    assert!(settled(&backend).await, "the start never settled");
+}

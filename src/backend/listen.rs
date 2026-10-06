@@ -115,6 +115,8 @@ impl Backend {
                 resolution.clone()
             } else {
                 let backend = Arc::clone(self);
+                #[cfg(test)]
+                self.events_resolutions.fetch_add(1, Ordering::SeqCst);
                 let task = tokio::spawn(async move {
                     let started = backend
                         .admitted_start()

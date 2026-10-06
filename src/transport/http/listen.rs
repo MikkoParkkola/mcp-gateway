@@ -259,6 +259,23 @@ mod tests {
         }
     }
 
+    /// T11 (MIK-7969): the detected transport is read live, so a session
+    /// recovery that switched it in place is seen at the next read.
+    #[test]
+    fn the_detected_transport_is_read_live() {
+        let transport = HttpTransport::new(
+            "http://127.0.0.1:9/mcp",
+            std::collections::HashMap::new(),
+            std::time::Duration::from_secs(1),
+            true,
+        )
+        .expect("transport");
+        for flavour in [Some(false), Some(true), None] {
+            *transport.streamable_http.write() = flavour;
+            assert_eq!(transport.detected_streamable(), flavour);
+        }
+    }
+
     /// A refused connection to a URL that carries credentials (userinfo, query): neither listen
     /// error may repeat them (MIK-7895; a `reqwest` error's text embeds the URL).
     #[tokio::test]
