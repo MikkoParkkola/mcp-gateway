@@ -47,11 +47,14 @@ elif args[0] == "push":
 elif args[0] == "pull":
     log("pull")
     mode = os.environ.get("STUB_LOOKUP", "")
+    version = args[args.index("--version") + 1]; dest = pathlib.Path(args[args.index("-d") + 1])
     if mode == "error":
         print('Error: GET "https://ghcr.io/token": response status code 403: denied', file=sys.stderr); sys.exit(1)
+    if mode == "blob":
+        print('Error: failed to perform "Fetch" on source: sha256:abc: not found', file=sys.stderr); sys.exit(1)
     if not pushed.exists():
-        print('Error: failed to perform "FetchReference" on source: chart: not found', file=sys.stderr); sys.exit(1)
-    version = args[args.index("--version") + 1]; dest = pathlib.Path(args[args.index("-d") + 1])
+        # Helm 4.3.0's wording for a tag that does not resolve.
+        print(f'Error: failed to perform "FetchReference" on source: ghcr.io/mikkoparkkola/charts/mcp-gateway:{version}: not found', file=sys.stderr); sys.exit(1)
     shutil.copy(pushed, dest / f"mcp-gateway-{version}.tgz")
     print("Digest: sha256:" + hashlib.sha256(pushed.read_bytes()).hexdigest())
 elif args[0] == "template":
@@ -120,12 +123,16 @@ class ExistingVersion(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("already published with other contents", done.stderr)
         self.assertEqual(self.pushes(), 0)
+        self.assertEqual((self.state / "pushed.tgz").read_bytes(), b"another chart")
 
     def test_a_lookup_error_stops_before_a_push(self):
-        done = self.publish(lookup="error")
-        self.assertNotEqual(done.returncode, 0)
-        self.assertIn("could not tell whether chart", done.stderr)
-        self.assertEqual(self.pushes(), 0)
+        for lookup in ("error", "blob"):
+            with self.subTest(lookup=lookup):
+                done = self.publish(lookup=lookup)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("could not tell whether chart", done.stderr)
+                self.assertEqual(self.pushes(), 0)
+                self.assertFalse((self.state / "pushed.tgz").exists())
 
 
 if __name__ == "__main__":

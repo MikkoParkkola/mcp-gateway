@@ -1713,6 +1713,8 @@ jobs:
     concurrency:
       group: helm-chart-publish-${{ github.event_name == 'workflow_dispatch' && 'rehearsal' || 'release' }}
       cancel-in-progress: false
+      # Without it a third arrival cancels the one already pending.
+      queue: max
     permissions:
       contents: read
       packages: write
