@@ -96,6 +96,7 @@ mod withheld_evidence;
 mod account_mint;
 
 use super::support::{augment_with_predictions, augment_with_trace, idempotency_key_for};
+pub(crate) use side_effect_markers::{LostRoundRoute, settle_lost_round};
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
 mod output_shape;
 mod provenance_stamp;
