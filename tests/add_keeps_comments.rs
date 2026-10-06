@@ -112,13 +112,17 @@ fn a_file_another_writer_broke_is_not_spliced_into() {
 
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
-    std::fs::write(&path, "backends: {}\n").expect("write");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, "backends: {}\n").expect("write");
     let before = load_existing_or_default(&path).expect("load");
     let mut config = before.clone();
     let backend: BackendConfig = serde_yaml::from_str("command: echo\n").expect("backend");
     config.backends.insert("new".into(), backend);
     // Another writer adds a key the loader refuses after `add` loaded the file.
-    std::fs::write(&path, "backends: {}\nnot_a_gateway_key: 1\n").expect("write");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &path,
+        "backends: {}\nnot_a_gateway_key: 1\n",
+    )
+    .expect("write");
 
     write_config_keeping_comments(&path, &before, &config, "new").expect("write config");
     let written = std::fs::read_to_string(&path).expect("read");
