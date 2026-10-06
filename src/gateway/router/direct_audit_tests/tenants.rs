@@ -239,6 +239,7 @@ async fn direct_replayed_chain_refusal_keeps_its_uninspected_attribution() {
     }
     // The replay answers the stored error; the stored marker stays internal.
     let error = &answers[1]["error"];
+    assert!(answers[0]["error"]["code"].is_i64(), "{answers:?}");
     assert_eq!(error["code"], answers[0]["error"]["code"], "{answers:?}");
     assert!(error.get("_gatewayUninspected").is_none(), "{error}");
     assert!(
