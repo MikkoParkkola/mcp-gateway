@@ -198,3 +198,30 @@ fn a_call_that_never_left_changes_nothing() {
     l.answered(&call, Outcome::NotSent, Instant::now());
     assert_eq!(l.releasable(), vec!["b".to_owned()], "still held Yes");
 }
+
+/// Seat 2 CRITICAL: a URI that is both keyed and still queued for room (a
+/// carried `want` landed first) is not re-inserted over its live key, which
+/// would forget what the holder holds and double-count its bytes.
+#[test]
+fn placing_a_queued_uri_keeps_its_live_key() {
+    let mut l = Ledger::default();
+    subscribed(&mut l, "a");
+    l.unplaced.insert("a".to_owned());
+    l.place();
+    assert_eq!(l.unplaced(), 0);
+    assert_eq!(l.size(), (1, encoded("a"), 0));
+    assert!(l.due(later()).is_empty(), "still held Yes");
+}
+
+/// Seat 2 MEDIUM: a call in flight when the holder changed is stranded and
+/// its answer is discarded, so it never keeps the task alive for cleanup.
+#[test]
+fn a_call_stranded_by_a_holder_change_needs_no_cleanup() {
+    let mut l = Ledger::default();
+    l.observe(1);
+    l.want("a").expect("room");
+    let _call = l.sent("a", true).expect("key");
+    l.unwant("a");
+    l.observe(2);
+    assert!(!l.needs_cleanup());
+}

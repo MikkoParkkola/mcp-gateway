@@ -20,7 +20,6 @@ use super::types::RpcError;
 use super::upstream_need::ledger::Ledger;
 use super::upstream_need::{Full, Interest, Need, Snapshot, Verdict};
 use crate::backend::{Backend, BackendRegistry};
-use crate::transport::upstream_tap::NoteKind;
 
 /// How often ended listeners are checked for a backend that can be listened
 /// to again (MIK-7944 `D6.EVENTS_MISC.6`).
@@ -77,9 +76,7 @@ impl Shared {
         let need = self.need.lock();
         let mut slot = self.ledger.lock();
         if !Arc::ptr_eq(&slot, &fresh) {
-            for uri in need.filter().1 {
-                let _ = fresh.lock().want(&uri);
-            }
+            fresh.lock().want_all(need.filter().1);
             *slot = fresh;
         }
     }
@@ -342,7 +339,7 @@ impl UpstreamListeners {
             let mut need = shared.need.lock();
             let changed = need.remove(interest);
             if let Interest::ResourceUpdated(uri) = interest
-                && !need.emits(NoteKind::ResourceUpdated, Some(uri))
+                && !need.watches(uri)
             {
                 shared.ledger().lock().unwant(uri);
             }
@@ -426,6 +423,11 @@ impl UpstreamListeners {
             .get(backend)
             .map_or_else(Weak::new, |b| Arc::downgrade(&b));
         let mut ledgers = self.ledgers.lock();
+        if current.strong_count() == 0 {
+            // Removed from the config: its charges are released with it.
+            ledgers.remove(backend);
+            return Arc::new(Mutex::new(Ledger::default()));
+        }
         if let Some((made_for, ledger)) = ledgers.get(backend)
             && Weak::ptr_eq(made_for, &current)
         {
@@ -450,11 +452,8 @@ impl UpstreamListeners {
     }
 
     fn entry(&self, backend: &str, need: Need, ledger: Arc<Mutex<Ledger>>) -> Arc<Shared> {
-        // Interest carried into a fresh ledger takes its keys there (fits:
-        // the need never holds more URIs than one ledger admits).
-        for uri in need.filter().1 {
-            let _ = ledger.lock().want(&uri);
-        }
+        // Interest carried into a fresh ledger takes its keys there.
+        ledger.lock().want_all(need.filter().1);
         let (wake, _) = watch::channel(0);
         Arc::new(Shared {
             name: backend.to_owned(),
@@ -479,9 +478,7 @@ impl UpstreamListeners {
 /// ledger, the admission authority (D5).
 fn admit(shared: &Shared, need: &mut Need, interest: &Interest) -> Result<bool, Full> {
     let new_uri = match interest {
-        Interest::ResourceUpdated(uri) if !need.emits(NoteKind::ResourceUpdated, Some(uri)) => {
-            Some(uri)
-        }
+        Interest::ResourceUpdated(uri) if !need.watches(uri) => Some(uri),
         _ => None,
     };
     if let Some(uri) = new_uri {
