@@ -420,7 +420,6 @@ impl EventsHub {
             .and_then(Value::as_str)
             .unwrap_or_default();
         let descriptor = self.visible(caller, name)?;
-        self.resolve_upstream(&descriptor.name).await?;
         let delivery = &params["delivery"];
         match delivery.get("mode") {
             Some(Value::String(mode)) if mode == "webhook" => {}
@@ -454,6 +453,9 @@ impl EventsHub {
                 .map_err(cap_refusal)?;
         }
 
+        // Last of the cheap refusals, before any callback traffic: it may
+        // start the backend.
+        self.resolve_upstream(&descriptor.name).await?;
         let tail = super::tail_policy(&self.config);
         let mut verified = self.store.is_verified(&principal, url.as_str(), now, tail);
         let existing = self.store.get(&id).filter(|s| s.live(now));

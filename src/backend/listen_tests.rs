@@ -189,14 +189,6 @@ fn http(url: &str) -> Arc<crate::transport::HttpTransport> {
     .expect("transport")
 }
 
-/// Install `transport` in `backend`'s shared slot as a start would.
-fn install(backend: &Backend, transport: &Arc<crate::transport::HttpTransport>) {
-    let entry = backend.shared_entry();
-    let erased: Arc<dyn crate::transport::Transport> = Arc::clone(transport) as _;
-    *entry.transport.write() = Some(erased);
-    *entry.listen.write() = Some(super::handle_of(transport));
-}
-
 /// T11 (MIK-7969 F2): the backend reads the installed transport's flavour
 /// live, so a session recovery that switched it is seen at the next read;
 /// a handle left by a transport no longer installed counts for nothing.
@@ -204,7 +196,7 @@ fn install(backend: &Backend, transport: &Arc<crate::transport::HttpTransport>) 
 fn the_slot_reads_its_installed_transport_live() {
     let backend = backend();
     let first = http("http://127.0.0.1:9/mcp");
-    install(&backend, &first);
+    backend.install_http_for_test(&first);
     for flavour in [Some(true), Some(false), None] {
         first.set_detected(flavour);
         assert_eq!(backend.connected_streamable(), flavour);

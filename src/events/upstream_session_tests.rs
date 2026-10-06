@@ -379,3 +379,56 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     let left = after_withdrawal(&hub).await;
     assert_eq!(left, ["backend.b.tools_changed"]);
 }
+
+/// MIK-7969 H2: every arm of the tick decision. Only a live read of the SSE
+/// handshake that the shared predicate confirms ends the listener; the
+/// predicate is not read otherwise.
+#[test]
+fn a_tick_ends_the_listener_only_on_a_confirmed_switch_to_sse() {
+    use super::{OnTick, on_tick};
+    let unread = || -> bool { panic!("the predicate was read for a non-SSE transport") };
+    assert_eq!(on_tick(Some(true), unread), OnTick::Keep, "streamable");
+    assert_eq!(
+        on_tick(None, unread),
+        OnTick::Keep,
+        "undetected is not refused"
+    );
+    assert_eq!(on_tick(Some(false), || true), OnTick::EndIneligible);
+    assert_eq!(
+        on_tick(Some(false), || false),
+        OnTick::Keep,
+        "eligible again by the time it is asked"
+    );
+}
+
+/// MIK-7969 H2 + T11: a session recovery that switches the installed
+/// transport in place is seen by the next tick, through the backend's live
+/// read, with no notification on the stream.
+#[test]
+fn a_tick_sees_an_in_place_switch_through_the_live_read() {
+    use super::{OnTick, on_tick};
+    let backend = crate::backend::Backend::new(
+        "b",
+        serde_yaml::from_str("http_url: http://127.0.0.1:9/mcp").expect("config"),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    );
+    let transport = crate::transport::HttpTransport::new(
+        "http://127.0.0.1:9/mcp",
+        std::collections::HashMap::new(),
+        Duration::from_secs(1),
+        true,
+    )
+    .expect("transport");
+    backend.install_http_for_test(&transport);
+    transport.set_detected(Some(true));
+    assert_eq!(
+        on_tick(backend.connected_streamable(), || true),
+        OnTick::Keep
+    );
+    transport.set_detected(Some(false));
+    assert_eq!(
+        on_tick(backend.connected_streamable(), || true),
+        OnTick::EndIneligible
+    );
+}

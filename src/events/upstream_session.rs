@@ -259,14 +259,33 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             state.release(backend).await;
             return Outcome::Stopped;
         }
-        // Also on every tick once the live connection detected the SSE
-        // handshake, which a quiet stream would otherwise never notice
-        // (MIK-7969); reading the backend's own transport is cheap.
-        let switched = || backend.connected_streamable() == Some(false) && shared.is_ineligible();
-        if (state.flush(hub) || switched()) && end_ineligible(shared, hub).await {
+        let tick = on_tick(backend.connected_streamable(), || shared.is_ineligible());
+        if (state.flush(hub) || tick == OnTick::EndIneligible) && end_ineligible(shared, hub).await
+        {
             state.release(backend).await;
             return Outcome::Stopped;
         }
+    }
+}
+
+/// What a tick does about the backend's live transport (MIK-7969 H2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnTick {
+    Keep,
+    EndIneligible,
+}
+
+/// A listener runs only for a backend that was eligible when subscribed.
+/// Once its live connection reads the SSE handshake (`live`, as
+/// `Backend::connected_streamable` reads it), a quiet stream would never
+/// notice, so the tick asks the shared predicate (`refused`, the costlier
+/// read) whether the backend is now refused. An undetected transport is not
+/// a refusal: a stopped slot reconnects through the loop head.
+fn on_tick(live: Option<bool>, refused: impl FnOnce() -> bool) -> OnTick {
+    if live == Some(false) && refused() {
+        OnTick::EndIneligible
+    } else {
+        OnTick::Keep
     }
 }
 

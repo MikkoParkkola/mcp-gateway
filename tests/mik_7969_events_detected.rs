@@ -100,13 +100,9 @@ async fn an_unreachable_backend_is_not_reported_as_sse() {
     let gw = start_cfg(dir.path(), &receiver, cfg).await;
     let answer = subscribe(&gw, &receiver).await;
     let err = error(&answer);
-    assert!(
-        !err.is_null(),
-        "an unreachable backend cannot subscribe: {answer}"
-    );
-    assert_ne!(
-        err["data"]["reason"], "sse_handshake_transport",
-        "the transport was never learned: {answer}"
+    assert_eq!(
+        err["code"], -32000,
+        "the backend error, as tools/call answers it: {answer}"
     );
 }
 

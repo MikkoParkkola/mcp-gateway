@@ -144,7 +144,6 @@ impl HttpTransport {
     }
 }
 
-#[async_trait::async_trait]
 #[cfg(test)]
 impl HttpTransport {
     /// Stand in for a connect or a session recovery that detected `flavour`.
@@ -153,6 +152,7 @@ impl HttpTransport {
     }
 }
 
+#[async_trait::async_trait]
 impl UpstreamListen for HttpTransport {
     async fn listen(
         self: std::sync::Arc<Self>,

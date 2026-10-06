@@ -101,6 +101,15 @@ impl Backend {
             .flatten()
     }
 
+    /// Install `transport` in the shared slot as a start publishes one.
+    #[cfg(test)]
+    pub(crate) fn install_http_for_test(&self, transport: &Arc<crate::transport::HttpTransport>) {
+        let entry = self.shared_entry();
+        let erased: Arc<dyn crate::transport::Transport> = Arc::clone(transport) as _;
+        *entry.transport.write() = Some(erased);
+        *entry.listen.write() = Some(handle_of(transport));
+    }
+
     /// Start the shared slot as a client request would, so an events
     /// subscribe can learn the HTTP transport (MIK-7969), and wait for it at
     /// most the backend timeout. `true` when the slot started.
