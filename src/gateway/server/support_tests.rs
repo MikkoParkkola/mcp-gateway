@@ -118,6 +118,63 @@ mod mtls_listener {
     use super::*;
     use crate::mtls::{CaParams, CertGenerator, GeneratedCert, LeafCertParams, MtlsConfig};
 
+    /// MIK-7673: an mTLS gateway stops within `server.shutdown_timeout`
+    /// through `listener::serve`, which hands its one handle to `serve_tls`.
+    /// A request held open forever over TLS, with a client certificate, must
+    /// not hold the shutdown past the bound.
+    #[tokio::test]
+    async fn an_mtls_request_that_never_ends_does_not_hold_shutdown_past_the_timeout() {
+        let pki = Pki::new();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+        let started = std::sync::Arc::new(std::sync::Mutex::new(Some(started_tx)));
+        let app = axum::Router::new().route(
+            "/hang",
+            axum::routing::get(move || {
+                let started = started.lock().expect("slot").take();
+                async move {
+                    if let Some(started) = started {
+                        let _ = started.send(());
+                    }
+                    std::future::pending::<()>().await;
+                }
+            }),
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let addr = listener.local_addr().expect("addr");
+        let grace = Duration::from_millis(100);
+        let mut config = crate::config::Config::default();
+        config.mtls = pki.config(true);
+        config.server.shutdown_timeout = grace;
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            crate::gateway::server::listener::serve(app, listener, addr, &config, async move {
+                let _ = stop_rx.await;
+            })
+            .await
+        });
+        let client = pki.client(Some("client"));
+        let request =
+            tokio::spawn(async move { client.get(format!("https://{addr}/hang")).send().await });
+        tokio::time::timeout(Duration::from_secs(10), started_rx)
+            .await
+            .expect("the TLS request reached its handler")
+            .expect("started");
+
+        let signalled = std::time::Instant::now();
+        stop_tx.send(()).expect("server is running");
+        let outcome = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("the mTLS server did not return within 5 s while a request was open");
+        let elapsed = signalled.elapsed();
+        outcome.expect("server task").expect("serve");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "mTLS shutdown took {elapsed:?} with a {grace:?} timeout"
+        );
+        request.abort();
+    }
+
     fn ca(cn: &str) -> GeneratedCert {
         CertGenerator::init_ca(&CaParams {
             cn,
