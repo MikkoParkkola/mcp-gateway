@@ -249,8 +249,14 @@ async fn a_codemode_param_caller_gets_code_mode_recovery_hints() {
         "params": {"name": "gateway_execute",
                    "arguments": {"tool": "absent:missing", "arguments": {}}}
     });
+    // Over HTTP the dispatch answer, hint included, rides in the tool
+    // result's text as JSON.
     let hint = |answer: &Value| {
-        answer["result"]["recovery"]["suggest"]
+        let text = answer["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no tool result in {answer}"));
+        let inner: Value = serde_json::from_str(text).expect("the tool result is JSON");
+        inner["recovery"]["suggest"]
             .as_str()
             .unwrap_or_else(|| panic!("no recovery hint in {answer}"))
             .to_owned()
@@ -264,4 +270,14 @@ async fn a_codemode_param_caller_gets_code_mode_recovery_hints() {
         code_mode.contains("`gateway_search`") && !code_mode.contains("gateway_list_tools"),
         "URL.1: {code_mode}"
     );
+    // The tool the hint names is one this caller's own listing shows.
+    let list = json!({"jsonrpc": "2.0", "id": 6, "method": "tools/list"});
+    let listed = post_mcp(&state, "/mcp?codemode=search_and_execute", &list).await;
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(names.contains(&"gateway_search"), "{names:?}");
 }
