@@ -215,13 +215,7 @@ pub(super) async fn read_envelope(
         caller.client.as_ref(),
         caller.grant_subject.as_ref(),
     );
-    reads.capture(state, &json_request, || {
-        super::super::identity::caller_key(
-            caller.grant_subject.as_ref(),
-            caller.cert_identity.as_ref(),
-            caller.client.as_ref(),
-        )
-    });
+    reads.capture(state, &json_request, || caller.caller_key.clone());
 
     // After the audit hash (D2-e: params as sent), before anything else reads
     // the request: parse, telemetry and every forwarding arm see no token.
