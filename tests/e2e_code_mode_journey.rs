@@ -21,6 +21,17 @@ const DOWN: &str = "downbook";
 const MARKER: &str = "tidebook-answered";
 const READY_BOUND: Duration = Duration::from_secs(60);
 const SEARCH_BOUND: Duration = Duration::from_secs(30);
+const REQUEST_BOUND: Duration = Duration::from_secs(30);
+
+/// Every HTTP wait is bounded, and loopback never goes through an inherited
+/// proxy.
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(REQUEST_BOUND)
+        .no_proxy()
+        .build()
+        .expect("an HTTP client")
+}
 
 /// A stdio MCP server with one tool; any other request gets an empty result.
 const PEER: &str = r#"
@@ -31,7 +42,7 @@ while IFS= read -r line; do
     *'"method":"initialize"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"tidebook","version":"0"}}}\n' "$id" ;;
     *'"method":"tools/list"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"tide_table","description":"Look up the tide table for a harbour.","inputSchema":{"type":"object","properties":{"harbour":{"type":"string"}}}}]}}\n' "$id" ;;
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"tide_table","description":"Look up the tide table for a harbour.","inputSchema":{"type":"object","properties":{"harbour":{"type":"string"}}}},{"name":"tide_secret","description":"Read the harbour master secret log.","inputSchema":{"type":"object"}}]}}\n' "$id" ;;
     *'"method":"tools/call"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"tidebook-answered"}]}}\n' "$id" ;;
     *)
@@ -58,7 +69,8 @@ impl Gateway {
         std::fs::write(
             &config,
             format!(
-                "server:\n  host: 127.0.0.1\ncode_mode:\n  enabled: true\nbackends:\n  \
+                "server:\n  host: 127.0.0.1\ncode_mode:\n  enabled: true\n\
+                 security:\n  tool_policy:\n    deny: [tide_secret]\nbackends:\n  \
                  {BACKEND}:\n    command: /bin/sh {peer}\n  \
                  {DOWN}:\n    command: /bin/sh -c \"exit 3\"\n",
                 peer = peer.display()
@@ -111,11 +123,14 @@ impl Gateway {
     async fn wait_ready(&mut self) {
         let health = format!("{}/health", self.url);
         let deadline = tokio::time::Instant::now() + READY_BOUND;
+        let http = http_client();
         loop {
             if let Some(status) = self.child.try_wait().expect("child status") {
                 panic!("serve exited before ready ({status})\n{}", self.logs());
             }
-            if reqwest::get(&health)
+            if http
+                .get(&health)
+                .send()
                 .await
                 .is_ok_and(|r| r.status().is_success())
             {
@@ -142,7 +157,7 @@ struct Session {
 impl Session {
     async fn open(gateway: &Gateway) -> Self {
         let mut session = Self {
-            http: reqwest::Client::new(),
+            http: http_client(),
             url: format!("{}/mcp", gateway.url),
             id: None,
             next: 1,
@@ -184,12 +199,18 @@ impl Session {
         response
     }
 
+    /// The JSON-RPC answer, with its HTTP status recorded as `_httpStatus`.
     async fn request(&mut self, method: &str, params: Value) -> Value {
         let id = self.next;
         self.next += 1;
         let body = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-        let text = self.send(&body).await.text().await.expect("a body");
-        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{method}: not JSON ({e}): {text}"))
+        let response = self.send(&body).await;
+        let status = response.status().as_u16();
+        let text = response.text().await.expect("a body");
+        let mut parsed: Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("{method}: not JSON ({e}): {text}"));
+        parsed["_httpStatus"] = json!(status);
+        parsed
     }
 
     async fn call(&mut self, tool: &str, arguments: Value) -> Value {
@@ -267,7 +288,39 @@ async fn code_mode_lists_two_tools_searches_executes_and_reports_errors() {
         .await;
     assert_eq!(text_of(&ran), MARKER, "{ran}\n{}", gateway.logs());
     assert_ne!(ran["isError"], true, "{ran}");
+    assert!(
+        ran["trace_id"].as_str().is_some_and(|t| !t.is_empty()),
+        "{ran}"
+    );
 
+    // The gateway is still serving after every error, chains included.
+    let step = json!({ "tool": "tidebook:tide_table", "arguments": { "harbour": "Bergen" } });
+    let chain = payload(
+        &mcp.call("gateway_execute", json!({ "chain": [step.clone(), step] }))
+            .await,
+    );
+    assert_eq!(chain["steps"], 2, "{chain}\n{}", gateway.logs());
+    assert_eq!(
+        chain["results"].as_array().map(Vec::len),
+        Some(2),
+        "{chain}"
+    );
+    for (i, result) in chain["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(result["step"], i, "{chain}");
+        assert_eq!(text_of(&result["result"]), MARKER, "{chain}");
+    }
+
+    assert_error_answers(&mut mcp).await;
+    assert_invoke_matches_execute(&mut mcp).await;
+}
+
+/// The errors a Code Mode user meets, each as the guide documents it.
+async fn assert_error_answers(mcp: &mut Session) {
     // A tool the backend does not list.
     let missing = mcp.execute("tidebook:no_such_tool", json!({})).await;
     assert_eq!(missing["isError"], true, "{missing}");
@@ -277,7 +330,8 @@ async fn code_mode_lists_two_tools_searches_executes_and_reports_errors() {
     let nowhere = mcp.execute("nosuch:tool", json!({})).await;
     assert_eq!(nowhere["isError"], true, "{nowhere}");
     assert!(
-        text_of(&nowhere).contains("Backend not found: nosuch"),
+        text_of(&nowhere).contains("Backend not found: nosuch")
+            && nowhere["recovery"]["error_code"] == "TOOL_NOT_FOUND",
         "{nowhere}"
     );
 
@@ -304,21 +358,43 @@ async fn code_mode_lists_two_tools_searches_executes_and_reports_errors() {
         "{down}"
     );
     assert_eq!(down["recovery"]["error_code"], "BACKEND_ERROR", "{down}");
+    assert_eq!(down["recovery"]["retry"], true, "{down}");
+}
 
-    // The gateway is still serving after every error, chains included.
-    let step = json!({ "tool": "tidebook:tide_table", "arguments": { "harbour": "Bergen" } });
-    let chain = payload(
-        &mcp.call("gateway_execute", json!({ "chain": [step.clone(), step] }))
-            .await,
+async fn assert_invoke_matches_execute(mcp: &mut Session) {
+    // Existing clients that call gateway_invoke by name keep working, and pass
+    // the same grant check as gateway_execute: a policy-denied tool is
+    // refused with the same answer on both paths.
+    let invoked = payload(
+        &mcp.call(
+            "gateway_invoke",
+            json!({ "server": BACKEND, "tool": "tide_table", "arguments": {} }),
+        )
+        .await,
     );
-    assert_eq!(chain["steps"], 2, "{chain}\n{}", gateway.logs());
-    for (i, result) in chain["results"]
-        .as_array()
-        .expect("results")
-        .iter()
-        .enumerate()
-    {
-        assert_eq!(result["step"], i, "{chain}");
-        assert_eq!(text_of(&result["result"]), MARKER, "{chain}");
-    }
+    assert_eq!(text_of(&invoked), MARKER, "{invoked}");
+    let denied_execute = mcp
+        .call(
+            "gateway_execute",
+            json!({ "tool": "tidebook:tide_secret", "arguments": {} }),
+        )
+        .await;
+    let denied_invoke = mcp
+        .call(
+            "gateway_invoke",
+            json!({ "server": BACKEND, "tool": "tide_secret", "arguments": {} }),
+        )
+        .await;
+    assert!(
+        denied_execute["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("blocked by security policy")),
+        "{denied_execute}"
+    );
+    assert_eq!(denied_execute["_httpStatus"], 403, "{denied_execute}");
+    assert_eq!(denied_invoke["_httpStatus"], 403, "{denied_invoke}");
+    assert_eq!(
+        denied_invoke["error"], denied_execute["error"],
+        "{denied_invoke}"
+    );
 }

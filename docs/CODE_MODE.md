@@ -26,6 +26,8 @@ The config file must be readable only by you (`chmod 600 gateway.yaml`). The gat
 
 Tools listed under `meta_mcp.surfaced_tools` are not added in this mode, so the count stays at two.
 
+Existing clients that call `gateway_invoke` by name keep working. It is not listed, but it still answers, and it passes the same checks as `gateway_execute`: a tool your policy denies is refused the same way on both paths.
+
 ## A session
 
 Search first:
@@ -79,9 +81,10 @@ A failed call comes back as a normal tool result whose payload has `"isError": t
 | Named a server that is not configured (`nosuch:tool`) | `isError: true`, "Backend not found: nosuch", `recovery.error_code: TOOL_NOT_FOUND` |
 | Passed a bare tool name (`tide_table`) | JSON-RPC error `-32602`: the reference is missing its server prefix; use `server:tool_name` from `gateway_search` |
 | Called a backend whose server will not start | `isError: true`, a transport error such as "stdio backend ... exited before initialize (exit status: 3); its stderr is in the gateway log", `recovery.error_code: BACKEND_ERROR`, `recovery.retry: true` |
+| Called a tool `security.tool_policy` denies | HTTP 403 with JSON-RPC error `-32600`: "Tool '...' on server '...' is blocked by security policy" |
 
-A backend that fails does not take the gateway down: other backends keep answering, and each new call to the failed one tries to start it again.
+A backend that fails does not take the gateway down: other backends keep answering.
 
 ## Tested
 
-`tests/e2e_code_mode_journey.rs` runs this page against the built binary in CI: listing, search, execute, a chain, and every error in the table.
+`tests/e2e_code_mode_journey.rs` runs this page against the built binary in CI: the two-tool listing, search, execute (with its `trace_id`), a two-step chain, every error in the table with the fields shown, and `gateway_invoke` by name, including the policy refusal it shares with `gateway_execute`.
