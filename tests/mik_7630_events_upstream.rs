@@ -660,7 +660,12 @@ async fn t39j_ineligible_backends_offer_no_upstream_events() {
         dir.path(),
         http_backend(&peer),
         &[
-            ("sse", json!({"http_url": sse_url})),
+            // An explicit `false` that never connected is refused (MIK-7969);
+            // an unset key is listed until a connect detects it.
+            (
+                "sse",
+                json!({"http_url": sse_url, "streamable_http": false}),
+            ),
             (
                 "idp",
                 json!({
@@ -674,6 +679,8 @@ async fn t39j_ineligible_backends_offer_no_upstream_events() {
     );
     let mut cfg = cfg;
     cfg["auth"]["api_keys"][0]["backends"] = json!(["x", "hooks", "sse", "idp"]);
+    // No boot connect, so `sse` is judged by its explicit value alone.
+    cfg["meta_mcp"]["warm_start"] = json!(["hooks"]);
     let gw = start_listed(dir.path(), &receiver, cfg).await;
     let names = gw.event_names(Some(ALICE), None).await;
     for backend in ["sse", "idp"] {
