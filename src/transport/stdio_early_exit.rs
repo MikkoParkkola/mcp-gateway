@@ -138,6 +138,9 @@ pub(super) async fn reply_or_eof<T>(
 pub(super) struct StartState {
     eof: parking_lot::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     exited: std::sync::atomic::AtomicBool,
+    /// The last early exit's stderr tail, already sanitized: the raw bytes
+    /// never outlive `early_exit_error`.
+    shown_stderr: parking_lot::Mutex<Vec<String>>,
     // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
     #[cfg(all(test, unix))]
     failure: parking_lot::Mutex<Option<(&'static str, Option<&'static str>)>>,
@@ -146,6 +149,7 @@ pub(super) struct StartState {
 impl StartState {
     pub(super) fn begin(&self, eof: tokio::sync::watch::Receiver<bool>) {
         *self.eof.lock() = Some(eof);
+        self.shown_stderr.lock().clear();
         // A class describes the last start only.
         // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
         #[cfg(all(test, unix))]
@@ -168,6 +172,15 @@ impl StdioTransport {
     #[cfg(all(test, unix))]
     pub(super) fn start_failure_class(&self) -> Option<(&'static str, Option<&'static str>)> {
         *self.start.failure.lock()
+    }
+
+    /// The last early exit's stderr tail, sanitized, for
+    /// `doctor --start-stdio --show-stderr` only (MIK-7978): never logged and
+    /// never in an error. Empty unless the last start exited early.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn last_failure_stderr(&self) -> Vec<String> {
+        self.start.shown_stderr.lock().clone()
     }
 
     /// The `initialize` request, raced against this start's stdout closing.
@@ -236,7 +249,11 @@ impl StdioTransport {
             // Something still holds the pipe; keep what was read so far.
             abort.abort();
         }
-        let (class, needle) = classify(&tail.lock());
+        let (class, needle) = {
+            let tail = tail.lock();
+            *self.start.shown_stderr.lock() = sanitize::sanitize(&tail);
+            classify(&tail)
+        };
         let command = self.diagnostic_command();
         let what = match status {
             Some(status) => format!("exited before initialize ({status})"),
@@ -256,6 +273,9 @@ impl StdioTransport {
         Error::Transport(format!("stdio backend {command} {what}: {cause}"))
     }
 }
+
+#[path = "stdio_stderr_sanitize.rs"]
+mod sanitize;
 
 // Unix-only (W-L5): the tests drive `sh -c` scripts as stdio backends.
 #[cfg(all(test, unix))]

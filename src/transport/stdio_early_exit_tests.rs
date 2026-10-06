@@ -273,3 +273,51 @@ async fn an_early_exit_logs_its_class_and_needle() {
     assert!(!line.contains("stderr="), "{line}");
     assert!(!text.contains("secret-path-7978"), "{text}");
 }
+
+/// MIK-7978 STDERR.3: the sanitized tail is kept for the doctor's accessor,
+/// with its credential masked, while the error and the log stay free of it.
+#[tokio::test]
+async fn an_early_exit_keeps_a_sanitized_tail_for_the_doctor_only() {
+    let (captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
+    let t = transport(
+        "echo \"Error: Cannot find module tail-7978\" >&2; echo \"Authorization: Bearer tok-7978\" >&2; exit 3",
+        &[],
+    );
+    let err = tokio::time::timeout(ROW_LIMIT, t.start())
+        .await
+        .expect("start must fail fast")
+        .expect_err("an early exit");
+    let shown = t.last_failure_stderr();
+    assert_eq!(
+        shown.first().map(String::as_str),
+        Some("Error: Cannot find module tail-7978"),
+        "{shown:?}"
+    );
+    assert!(shown.iter().all(|l| !l.contains("tok-7978")), "{shown:?}");
+    for text in [err.to_string(), format!("{err:?}"), captured.text()] {
+        assert!(!text.contains("tail-7978"), "stderr escaped: {text}");
+        assert!(!text.contains("tok-7978"), "stderr escaped: {text}");
+    }
+}
+
+/// STDERR.3: a later start clears the previous exit's tail.
+#[tokio::test]
+async fn a_new_start_clears_the_previous_tail() {
+    let dir = tempfile::tempdir().expect("dir");
+    let flag = dir.path().join("second");
+    let t = transport(
+        &format!(
+            "[ -e {f} ] && exit 4; touch {f}; echo \"first-run-7978\" >&2; exit 3",
+            f = flag.display()
+        ),
+        &[],
+    );
+    let _ = start_err(&t).await;
+    assert_eq!(t.last_failure_stderr(), vec!["first-run-7978".to_string()]);
+    let _ = start_err(&t).await;
+    assert!(
+        t.last_failure_stderr().is_empty(),
+        "{:?}",
+        t.last_failure_stderr()
+    );
+}
