@@ -117,10 +117,11 @@ pub(super) fn parse(
         );
         server.headers = string_map(source, name, config, "headers");
         if let Some(headers) = config.get("headers").and_then(Value::as_object) {
+            // A string the gateway cannot resolve; a non-string sends nothing.
             server.unresolved_header_names = headers
-                .keys()
-                .filter(|key| server.headers.keys().all(|kept| kept != key.as_str()))
-                .cloned()
+                .iter()
+                .filter(|(_, value)| value.as_str().is_some_and(|v| gateway_value(v).is_none()))
+                .map(|(key, _)| key.clone())
                 .collect();
         }
         return Some(server);

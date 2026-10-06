@@ -125,10 +125,13 @@ pub(super) fn classify_remediation(
         };
     }
 
-    if matches!(
-        ownership,
-        ShadowOwnership::ClientConfig | ShadowOwnership::Environment
-    ) || matches!(server.transport, TransportConfig::Stdio { .. })
+    // Adoption would drop a header only the client can resolve.
+    let lossless = server.unresolved_header_names.is_empty();
+    if lossless
+        && (matches!(
+            ownership,
+            ShadowOwnership::ClientConfig | ShadowOwnership::Environment
+        ) || matches!(server.transport, TransportConfig::Stdio { .. }))
     {
         return ShadowRemediation {
             action: ShadowRemediationAction::AdoptIntoGateway,
