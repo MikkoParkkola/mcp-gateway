@@ -225,7 +225,7 @@ fn signing_config_base(backend_url: &str, require_nonce: bool) -> Config {
         BackendConfig {
             transport: TransportConfig::Http {
                 http_url: backend_url.to_string(),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             enabled: true,

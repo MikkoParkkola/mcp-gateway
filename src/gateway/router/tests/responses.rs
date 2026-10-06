@@ -325,7 +325,7 @@ async fn backend_handler_required_mint_without_route_audit_fails_closed_generica
     let config = BackendConfig {
         transport: crate::config::TransportConfig::Http {
             http_url: "https://mem.internal/mcp".to_string(),
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         identity_propagation: Some(IdentityPropagationConfig {

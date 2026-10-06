@@ -539,10 +539,11 @@ pub(super) fn inspect_settled(
         .meta_mcp()
         .inspect_task_result(&targets, id, result)
         .is_err();
-    // A redaction changed what the task will deliver: its receipt is rebuilt from it.
+    // A redaction changed what the task will deliver: its receipt is rebuilt
+    // from it. A task holds the backend's native result, never a wrapper.
     state
         .meta_mcp()
-        .restage_if_changed(snapshot, Some(&*result));
+        .restage_if_changed(snapshot, Some(&*result), AnswerShape::Literal);
     // A task stores the backend's native result, never a `gateway_invoke`
     // wrapper, whatever tool started it.
     rebuild_task_receipt(

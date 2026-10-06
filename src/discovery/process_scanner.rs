@@ -192,7 +192,7 @@ impl ProcessScanner {
                     let transport = if let Some(port) = port {
                         TransportConfig::Http {
                             http_url: format!("http://127.0.0.1:{port}"),
-                            streamable_http: false,
+                            streamable_http: None,
                             protocol_version: None,
                         }
                     } else {
