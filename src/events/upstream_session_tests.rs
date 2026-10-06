@@ -22,7 +22,7 @@ fn shared_with(ineligible: crate::events::backend_source::Ineligible) -> Arc<Sha
         stop: CancellationToken::new(),
         gate: Arc::default(),
         ineligible,
-        tools_owed: std::sync::atomic::AtomicBool::default(),
+        tools: Mutex::default(),
     })
 }
 
@@ -392,6 +392,8 @@ async fn a_refill_in_flight_at_the_session_end_is_announced() {
     }));
     let shared = shared();
     let mut state = State::new(&shared, Era::Modern);
+    // The refill serves a notice the hub has not heard of.
+    state.refill_announces = true;
     let (release, released) = tokio::sync::oneshot::channel::<()>();
     let refill: Refill = Box::pin(async move {
         let _ = released.await;
@@ -463,28 +465,35 @@ async fn a_uri_watched_after_the_session_started_is_read_at_once() {
     );
 }
 
-/// MIK-8007: a refill that did not fill is retried once after the backend's
-/// list-fill cooldown, a failed retry is not, and the notice stays owed only
-/// while a refill is still due.
+/// MIK-8007: a refill that did not fill is retried once, no sooner than the
+/// backend's list-fill cooldown, and silently; a failed retry is not retried
+/// again; the debt outlives the session that took it on.
 #[test]
 fn a_failed_refill_is_retried_once_after_the_cooldown() {
     let shared = shared();
+    let due = || shared.tools.lock().due;
     let mut state = State::new(&shared, Era::Modern);
-    let owed = || shared.tools_owed.load(std::sync::atomic::Ordering::SeqCst);
-    state.refill_ended(false);
-    let due = state.tools_due.expect("the failed refill is retried");
-    assert!(due >= Instant::now() + REFILL_RETRY - Duration::from_secs(1));
-    assert!(owed(), "owed while the retry is due");
-    state.tools_due = None;
-    state.refill_ended(false);
-    assert_eq!(state.tools_due, None, "a failed retry is not retried again");
-    assert!(!owed(), "nothing owed once the retry ended");
+    // A notice the hub has not heard of, due now.
+    *shared.tools.lock() = ToolsDebt {
+        due: Some(Instant::now()),
+        retrying: false,
+        unannounced: true,
+    };
+    assert!(state.take_due_refill(), "the notice's refill is due");
     state.refill_ended(false);
     assert!(
-        state.tools_due.is_some(),
-        "a later notice's failure retries again"
+        state.tools_pending,
+        "a refill that did not fill still announces"
     );
-    state.tools_due = None;
-    state.refill_ended(true);
-    assert!(!owed(), "a filled refill owes nothing");
+    state.tools_pending = false;
+    let retry = due().expect("the failed refill is retried");
+    assert!(retry >= Instant::now() + REFILL_RETRY - Duration::from_secs(1));
+    // A new session keeps the retry and its time.
+    let mut state = State::new(&shared, Era::Modern);
+    assert!(!state.take_due_refill(), "no retry inside the cooldown");
+    shared.tools.lock().due = Some(Instant::now());
+    assert!(state.take_due_refill());
+    state.refill_ended(false);
+    assert!(!state.tools_pending, "the retry is silent");
+    assert_eq!(due(), None, "a failed retry is not retried again");
 }
