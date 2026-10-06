@@ -44,7 +44,7 @@ providers:
   primary:
     service: rest
     config:
-      base_url: https://schema-probe.invalid
+      base_url: https://127.0.0.1
       path: /items/{id}
       method: GET
 ",
