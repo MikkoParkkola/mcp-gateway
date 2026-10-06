@@ -167,6 +167,10 @@ pub(super) fn risk_reasons(
     ];
     match auth_exposure {
         ShadowAuthExposure::StdioProcess => reasons.push("local_stdio_process".to_string()),
+        ShadowAuthExposure::HttpAuthHeader => {
+            reasons.push("http_auth_header_configured".to_string());
+            reasons.push("server_auth_unverified".to_string());
+        }
         ShadowAuthExposure::LocalHttpNoAuthMetadata => {
             reasons.push("local_http_without_auth_metadata".to_string());
             reasons.push("unauthenticated_http_endpoint".to_string());

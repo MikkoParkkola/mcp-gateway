@@ -197,7 +197,7 @@ impl ShadowEnterpriseBoundary {
 impl ShadowAsset {
     fn from_server(server: &DiscoveredServer, gateway_config: Option<&str>) -> Self {
         let transport = ShadowTransport::from_transport(&server.transport);
-        let auth_exposure = ShadowAuthExposure::from_transport(&server.transport);
+        let auth_exposure = ShadowAuthExposure::from_server(server);
         let data_risk = classify_data_risk(server);
         let ownership = classify_ownership(server);
         let severity = classify_severity(&auth_exposure, &data_risk);
@@ -287,6 +287,10 @@ fn risk_detail(code: &str) -> &'static str {
         }
         "missing_trust_metadata" => "Gateway-owned trust metadata is absent.",
         "unauthenticated_http_endpoint" => "HTTP transport lacks passive authentication metadata.",
+        "http_auth_header_configured" => "Client configuration sends an authentication header.",
+        "server_auth_unverified" => {
+            "Passive evidence cannot verify the server enforces the header."
+        }
         "local_http_without_auth_metadata" => {
             "Loopback HTTP transport lacks passive authentication metadata."
         }
