@@ -16,7 +16,7 @@ use super::fanout::SourceEvent;
 use super::types::{SourceKind, Visibility};
 use super::upstream::Kind;
 use super::upstream_listener::Shared;
-use super::upstream_need::ledger::drive;
+use super::upstream_need::ledger::{drive, holder_of};
 use super::upstream_need::{Coalescer, Verdict, WINDOW};
 use crate::backend::{Backend, BackendRegistry};
 use crate::protocol::era::Era;
@@ -152,6 +152,7 @@ fn requested(shared: &Shared) -> Requested {
 
 /// One connection's life.
 async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<EventsHub>) -> Outcome {
+    shared.refresh_ledger();
     let _lease = backend.listen_lease();
     let target = match backend.listen_target().await {
         Ok(target) => target,
@@ -288,16 +289,6 @@ fn watched_by(shared: &Arc<Shared>) -> Watched {
             .upgrade()
             .is_some_and(|s| s.need.lock().emits(NoteKind::ResourceUpdated, Some(uri)))
     })
-}
-
-/// Who holds what this session asks a legacy peer for: the transport
-/// instance and, on HTTP, its session (D5 holder generation).
-fn holder_of(handle: &Weak<dyn UpstreamListen>) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    Weak::as_ptr(handle).cast::<()>().hash(&mut hasher);
-    handle.upgrade().map(|t| t.holder()).hash(&mut hasher);
-    hasher.finish()
 }
 
 fn failed() -> Outcome {
@@ -640,9 +631,12 @@ impl<'a> State<'a> {
         if self.era == Era::Modern || self.resource_interest_unsupported {
             return;
         }
-        let ledger = Arc::clone(&self.shared.ledger);
-        let holder = || holder_of(handle);
-        ledger.lock().observe(holder());
+        let ledger = self.shared.ledger();
+        if let Some(transport) = handle.upgrade() {
+            ledger
+                .lock()
+                .observe(holder_of(handle, transport.legacy_pin().holder));
+        }
         let mut due = ledger.lock().due(Instant::now());
         // Resume after the URI the last pass reached, so URIs that hang
         // cannot starve the ones ordered after them.
@@ -651,7 +645,7 @@ impl<'a> State<'a> {
         let pass = async {
             for (uri, subscribe) in due {
                 *cursor = Some(uri.clone());
-                if !drive(&ledger, backend, &uri, subscribe, OPEN_LIMIT, &holder).await {
+                if !drive(&ledger, &backend.name, handle, &uri, subscribe, OPEN_LIMIT).await {
                     return false;
                 }
             }
@@ -676,13 +670,14 @@ impl<'a> State<'a> {
         if self.era == Era::Modern {
             return;
         }
-        let ledger = Arc::clone(&self.shared.ledger);
+        let ledger = self.shared.ledger();
         let uris = ledger.lock().releasable();
-        let handle = self.handle.clone();
-        let holder = || handle.as_ref().map_or(0, holder_of);
+        let Some(handle) = self.handle.clone() else {
+            return;
+        };
         let walk = async {
             for uri in uris {
-                if !drive(&ledger, backend, &uri, false, OPEN_LIMIT, &holder).await {
+                if !drive(&ledger, &backend.name, &handle, &uri, false, OPEN_LIMIT).await {
                     return;
                 }
             }

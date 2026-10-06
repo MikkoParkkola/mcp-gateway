@@ -8,8 +8,6 @@ use std::collections::HashSet;
 use std::sync::Weak;
 use std::sync::atomic::Ordering;
 
-use serde_json::json;
-
 use super::Backend;
 use super::pool::{ActivityGuard, PoolKey};
 use crate::protocol::era::Era;
@@ -110,30 +108,6 @@ impl Backend {
         // Derived from the list just dropped; a stale set would keep
         // permitting a resend for a tool that is no longer read-only.
         entry.resend_permitted.write().clear();
-    }
-
-    /// `resources/subscribe` or `resources/unsubscribe` for `uri` on the
-    /// legacy channel. `Ok(false)` when the peer answers method-not-found:
-    /// that backend's resource interest is unsupported (§3).
-    ///
-    /// # Errors
-    /// The request failed or the peer answered another error.
-    pub(crate) async fn legacy_resource_interest(
-        &self,
-        uri: &str,
-        subscribe: bool,
-    ) -> Result<bool> {
-        let method = if subscribe {
-            "resources/subscribe"
-        } else {
-            "resources/unsubscribe"
-        };
-        let answer = self.request(method, Some(json!({ "uri": uri }))).await?;
-        match answer.error {
-            None => Ok(true),
-            Some(error) if error.code == -32601 => Ok(false),
-            Some(error) => Err(Error::json_rpc(error.code, error.message)),
-        }
     }
 }
 

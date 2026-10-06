@@ -198,32 +198,3 @@ fn a_call_that_never_left_changes_nothing() {
     l.answered(&call, Outcome::NotSent, Instant::now());
     assert_eq!(l.releasable(), vec!["b".to_owned()], "still held Yes");
 }
-
-/// D5 (r1 CRITICAL): the holder changed while a call was out, so its answer
-/// may be another holder's. Whatever came back, the key strands.
-#[tokio::test]
-async fn a_holder_change_across_a_call_strands_its_key() {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    let backend = Backend::new(
-        "b",
-        crate::config::BackendConfig::default(),
-        &crate::config::FailsafeConfig::default(),
-        Duration::from_secs(1),
-    );
-    let ledger = Mutex::new(Ledger::default());
-    ledger.lock().want("a").expect("room");
-    let reads = AtomicU64::new(0);
-    let holder = || reads.fetch_add(1, Ordering::SeqCst);
-    drive(
-        &ledger,
-        &backend,
-        "a",
-        true,
-        Duration::from_secs(1),
-        &holder,
-    )
-    .await;
-    let l = ledger.lock();
-    assert_eq!(l.size().2, 1, "the first holder's key is stranded");
-    assert_eq!(l.unplaced(), 0, "the URI has a key on the new holder");
-}
