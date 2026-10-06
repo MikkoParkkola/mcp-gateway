@@ -133,7 +133,9 @@ async fn a_redacted_task_plan_keeps_each_steps_delivered_text() {
         "step A's unredacted text kept its receipt: {relayed_a}; stored: {stored}"
     );
     assert!(
-        stored.contains("harbour committee") && !stored.contains(CANARY),
+        stored.contains("north slope")
+            && stored.contains("harbour committee")
+            && !stored.contains(CANARY),
         "base: settlement redacted the canary and kept both steps: {stored}"
     );
 }
