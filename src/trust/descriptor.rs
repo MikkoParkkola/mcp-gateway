@@ -145,6 +145,31 @@ fn card_memo() -> &'static Mutex<CardMemo> {
     MEMO.get_or_init(Mutex::default)
 }
 
+impl CardMemo {
+    /// The cards held for one server identity, made room for if the
+    /// `MEMO_SERVERS` bound on (id, name) pairs allows; `None` when it is
+    /// full and the identity is new. Looked up by `&str`, so a held identity
+    /// allocates no key.
+    fn cards_for(
+        &mut self,
+        server_id: &str,
+        server_name: &str,
+    ) -> Option<&mut HashMap<String, (Tool, Value)>> {
+        let held = self
+            .by_id
+            .get(server_id)
+            .is_some_and(|names| names.contains_key(server_name));
+        if !held {
+            if self.servers >= MEMO_SERVERS {
+                return None;
+            }
+            self.servers += 1;
+        }
+        let names = held_or_default(&mut self.by_id, server_id);
+        Some(held_or_default(names, server_name))
+    }
+}
+
 /// Project `TrustCard` references into a list of live MCP tool descriptors.
 ///
 /// Every `tools/list` lists the same catalog, so each descriptor is projected
@@ -156,24 +181,13 @@ pub fn project_tool_descriptors_trust_cards(
     server_name: &str,
     tools: &[Tool],
 ) -> Vec<Value> {
-    let mut guard = card_memo().lock().unwrap_or_else(PoisonError::into_inner);
-    let memo = &mut *guard;
-    // Looked up by `&str`, so a hit allocates no key.
-    let held = memo
-        .by_id
-        .get(server_id)
-        .is_some_and(|names| names.contains_key(server_name));
-    if !held {
-        if memo.servers >= MEMO_SERVERS {
-            return tools
-                .iter()
-                .map(|tool| project_tool_descriptor_trust_card(server_id, server_name, tool))
-                .collect();
-        }
-        memo.servers += 1;
-    }
-    let names = held_or_default(&mut memo.by_id, server_id);
-    let cards = held_or_default(names, server_name);
+    let mut memo = card_memo().lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(cards) = memo.cards_for(server_id, server_name) else {
+        return tools
+            .iter()
+            .map(|tool| project_tool_descriptor_trust_card(server_id, server_name, tool))
+            .collect();
+    };
     tools
         .iter()
         .map(|tool| match cards.get(&tool.name) {
@@ -423,6 +437,33 @@ mod tests {
                 "{field}: the listing must describe the changed tool"
             );
         }
+    }
+
+    /// MIK-7916 review: the server bound counts (id, name) pairs, not ids,
+    /// and a full memo still serves the pairs it holds. A local memo, so no
+    /// other test's identities share the count.
+    #[test]
+    fn the_server_bound_counts_identity_pairs() {
+        let mut memo = CardMemo::default();
+        for i in 0..MEMO_SERVERS {
+            assert!(
+                memo.cards_for("backend:shared", &format!("name-{i}"))
+                    .is_some(),
+                "pair {i} is under the bound"
+            );
+        }
+        assert!(
+            memo.cards_for("backend:shared", "one-more").is_none(),
+            "a new name under a held id is a new pair"
+        );
+        assert!(
+            memo.cards_for("backend:other", "name-0").is_none(),
+            "a new id is a new pair"
+        );
+        assert!(
+            memo.cards_for("backend:shared", "name-0").is_some(),
+            "a held pair is still served when full"
+        );
     }
 
     /// The same tool under another server identity is a different card.
