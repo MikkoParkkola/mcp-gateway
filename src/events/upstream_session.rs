@@ -5,7 +5,6 @@
 //! interest, coalesce what arrives, and emit through the hub only.
 
 use std::collections::BTreeSet;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
@@ -53,6 +52,17 @@ const BACKOFF_CAP: Duration = Duration::from_secs(300);
 /// list-fill cooldown (`LIST_FILL_COOLDOWN`), which fails every fill inside it
 /// without reaching the backend (MIK-8007).
 const REFILL_RETRY: Duration = Duration::from_secs(10);
+
+/// The backend tools notices a listener task has not yet served (MIK-8007).
+#[derive(Default)]
+pub(super) struct ToolsDebt {
+    /// The earliest the next refill may start (one per tick).
+    due: Option<Instant>,
+    /// That refill retries one that did not fill.
+    retrying: bool,
+    /// A notice the hub has not heard of yet.
+    unannounced: bool,
+}
 
 enum Outcome {
     Stopped,
@@ -130,6 +140,8 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         }
         let Some(backend) = registry.get(&shared.name) else {
             // Gone: park until the interest changes or the keys are deleted.
+            // A removed backend owes nothing; a re-added one starts afresh.
+            *shared.tools.lock() = ToolsDebt::default();
             let mut wake = shared.wake.subscribe();
             tokio::select! {
                 () = shared.stop.cancelled() => return,
@@ -243,15 +255,11 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         }
         // Not while a finished refill's change is still unannounced: invalidating
         // now would have the hub announce it over an emptied cache.
-        if refill.is_none()
-            && !state.tools_pending
-            && state.tools_due.is_some_and(|due| Instant::now() >= due)
-        {
+        if refill.is_none() && !state.tools_pending && state.take_due_refill() {
             // A notice arrived: drop the cached list and refill it before the
             // hub hears, so the subscriber's re-read is fresh and nothing sees
             // an emptied cache. At most once per tick however many notices
             // came; a notice during a refill waits for the next one.
-            state.tools_due = None;
             backend.invalidate_tools();
             refill = Some(start_refill(backend, &shared.name));
         }
@@ -402,10 +410,8 @@ struct State<'a> {
     reread: bool,
     /// A backend tools notice waits to be handed to the hub (§14).
     tools_pending: bool,
-    /// The earliest the next tools handoff may run (one per tick).
-    tools_due: Option<Instant>,
-    /// The pending refill is the one retry of a refill that did not fill.
-    tools_retrying: bool,
+    /// The refill in flight serves a notice the hub has not heard of yet.
+    refill_announces: bool,
     snapshot_due: Instant,
     /// A catalogue read is not retried before this.
     snapshot_retry_at: Instant,
@@ -428,9 +434,7 @@ impl<'a> State<'a> {
             resource_interest_unsupported: false,
             reread: false,
             tools_pending: false,
-            // A notice an earlier session ended owing (MIK-8007).
-            tools_due: shared.tools_owed.load(Ordering::SeqCst).then_some(now),
-            tools_retrying: false,
+            refill_announces: false,
             // Due at once: a session that starts with no URI watched reads
             // the catalogue as soon as one is, even when the shared snapshot
             // is known from an earlier session.
@@ -440,20 +444,30 @@ impl<'a> State<'a> {
         }
     }
 
-    /// A refill ended: the hub may hear now. One that did not fill (inside
-    /// the backend's list-fill cooldown it never reaches the backend) is
-    /// retried once after it, so the notice is served (MIK-8007). The notice
-    /// stays owed across a session end until a refill fills or its retry ends.
-    fn refill_ended(&mut self, filled: bool) {
-        self.tools_pending = true;
-        self.tools_retrying = !filled && !self.tools_retrying;
-        if self.tools_retrying {
-            let retry = Instant::now() + REFILL_RETRY;
-            self.tools_due = Some(self.tools_due.map_or(retry, |due| due.max(retry)));
+    /// Take the tools refill when one is due, with the notices it serves.
+    fn take_due_refill(&mut self) -> bool {
+        let mut debt = self.shared.tools.lock();
+        if !debt.due.is_some_and(|due| Instant::now() >= due) {
+            return false;
         }
-        self.shared
-            .tools_owed
-            .store(self.tools_due.is_some(), Ordering::SeqCst);
+        debt.due = None;
+        self.refill_announces = std::mem::take(&mut debt.unannounced);
+        true
+    }
+
+    /// A refill ended. One that did not fill (inside the backend's list-fill
+    /// cooldown it never reaches the backend) is retried once, no sooner than
+    /// the cooldown, so the notice is served (MIK-8007). The hub hears once
+    /// per notice: a failed refill still announces (MIK-7951), and its retry
+    /// only refreshes the list unless a newer notice joined it.
+    fn refill_ended(&mut self, filled: bool) {
+        let mut debt = self.shared.tools.lock();
+        debt.retrying = !filled && !debt.retrying;
+        if debt.retrying {
+            let retry = Instant::now() + REFILL_RETRY;
+            debt.due = Some(debt.due.map_or(retry, |due| due.max(retry)));
+        }
+        self.tools_pending |= std::mem::take(&mut self.refill_announces);
     }
 
     fn ended(&self, started: Instant) -> Outcome {
@@ -515,8 +529,9 @@ impl<'a> State<'a> {
                 if kind == NoteKind::ToolsChanged {
                     // Not coalesced here: the hub's own quiet window does it.
                     if self.shared.need.lock().emits(kind, None) {
-                        self.tools_due.get_or_insert(Instant::now() + TICK);
-                        self.shared.tools_owed.store(true, Ordering::SeqCst);
+                        let mut debt = self.shared.tools.lock();
+                        debt.due.get_or_insert(Instant::now() + TICK);
+                        debt.unannounced = true;
                     }
                 } else if self.shared.need.lock().emits(kind, uri.as_deref()) {
                     self.coalescer.offer(kind, uri, Instant::now());
