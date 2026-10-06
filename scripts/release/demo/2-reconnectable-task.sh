@@ -11,23 +11,17 @@
 # never being asked to do the work twice, and the task reaching a terminal
 # state on cancel.
 #
-# Scope note, verified at source: with auth ENABLED, task creation refuses with
-# -32600 "task creation requires a verified caller identity" unless the request
-# carries a VerifiedIdentity (src/gateway/router/handlers/tasks.rs:145). A plain
-# API key does not produce one -- the static-key branch of the auth middleware
-# inserts AuthenticatedClient and ApiKey into the request extensions and no
-# identity (src/gateway/auth.rs:991-1002); only key_server_credential does
-# (:1006-1014). That is the claim doing the work here.
+# Scope note: this driver runs with auth DISABLED, so the recording proves
+# cross-SESSION and cross-RESTART reconnect, and nothing about cross-ACCOUNT
+# isolation -- that is MIK-7311.LIFECYCLE.2's Rust ACs, not this criterion.
 #
-# An earlier draft of this header blamed OIDC's HTTPS requirement. That was
-# WRONG and is corrected rather than carried: a non-HTTPS issuer only logs a
-# warning (src/key_server/oidc.rs:377), and an explicit provider.jwks_uri
-# bypasses discovery and its HTTPS check entirely (:399), so a local issuer is
-# configurable. Minting a local JWKS and a signed JWT was simply not built in
-# this pass. The consequence is unchanged and stated plainly: this driver runs
-# with auth DISABLED, so the recording proves cross-SESSION and cross-RESTART
-# reconnect, and nothing about cross-ACCOUNT isolation -- that is
-# MIK-7311.LIFECYCLE.2's Rust ACs, not this criterion.
+# When it was recorded, an API-key caller could not create a task with auth on:
+# the guard demanded an OIDC identity, which the static-key path never inserts.
+# MIK-7967 (#3092) removed that limit. An API-key caller now owns its tasks as
+# credential:<principal>, and the guard refuses only an empty owner
+# (src/gateway/router/handlers/tasks.rs:164). tests/e2e_task_api_key_owner.rs
+# drives the built binary with auth on: key B gets key A's task back as a
+# missing task. The recording was not redone; it still runs auth-off.
 #
 # A broken build loses the record with the session or with the process
 # (tasks/get finds nothing), replays the side effect on recovery (the peer's
@@ -49,8 +43,8 @@ echo "gateway:  $("$BIN" --version)"
 echo "client:   protocol $CLIENT_VERSION"
 echo "run dir:  $RUN_DIR"
 echo "peer:     one tool call takes ${PEER_DELAY_SECS}s and appends to $SUBMISSIONS"
-echo "auth:     disabled (see script header -- task creation needs a"
-echo "          VerifiedIdentity that the static API-key path never inserts)"
+echo "auth:     disabled (see script header -- this run proves reconnect,"
+echo "          not cross-account isolation)"
 
 cat > "$CONFIG_PATH" <<YAML
 server:

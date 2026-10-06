@@ -512,7 +512,7 @@ pub enum Command {
         shadow_format: String,
 
         /// Start each stdio backend and complete `initialize`, reporting why one
-        /// that dies first died (its exit status and redacted stderr). Runs the
+        /// that dies first died (its exit status and stderr cause class). Runs the
         /// configured commands, with their side effects; off by default.
         #[arg(long)]
         start_stdio: bool,
