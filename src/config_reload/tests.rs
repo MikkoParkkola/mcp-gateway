@@ -18,7 +18,7 @@ fn http_backend(url: &str) -> BackendConfig {
     BackendConfig {
         transport: TransportConfig::Http {
             http_url: url.to_string(),
-            streamable_http: false,
+            streamable_http: Some(false),
             protocol_version: None,
         },
         enabled: true,
@@ -31,7 +31,7 @@ fn disabled_backend(url: &str) -> BackendConfig {
         enabled: false,
         transport: TransportConfig::Http {
             http_url: url.to_string(),
-            streamable_http: false,
+            streamable_http: Some(false),
             protocol_version: None,
         },
         ..BackendConfig::default()

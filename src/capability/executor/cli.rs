@@ -366,6 +366,38 @@ fn scrub(text: &str, needles: &[&str]) -> String {
             covered[start..end].fill(true);
         }
     }
+    // The first marker that leaves no needle in the output: a needle can be
+    // the marker's own text, or form where a marker meets its neighbours.
+    for marker in MARKERS {
+        let out = render(text, &covered, marker);
+        if !needles.iter().any(|n| !n.is_empty() && out.contains(n)) {
+            return out;
+        }
+    }
+    String::new()
+}
+
+/// Suffixed names tried for a renamed key before its entry is dropped.
+const MAX_RENAME_TRIES: usize = 1024;
+
+/// Markers tried in turn; each starts and ends with characters the others
+/// do not, so a needle formed at the edge of one is not formed by the next.
+const MARKERS: [&str; 3] = ["[redacted]", "<removed>", "{hidden}"];
+
+/// The first marker containing no needle, or nothing at all.
+fn marker_for(needles: &[&str]) -> &'static str {
+    MARKERS
+        .into_iter()
+        .find(|m| !needles.iter().any(|n| !n.is_empty() && m.contains(n)))
+        .unwrap_or("")
+}
+
+/// One `marker` per covered run. Output longer than twice the input plus one
+/// marker (many short matches) collapses everything from the first covered
+/// byte to the last into one marker: that removes more, never less. Ordinary
+/// redaction, a few markers in a line, stays under the cap and keeps the text
+/// between them.
+fn render(text: &str, covered: &[bool], marker: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
     while at < text.len() {
@@ -373,7 +405,7 @@ fn scrub(text: &str, needles: &[&str]) -> String {
             while at < text.len() && covered[at] {
                 at += 1;
             }
-            out.push_str("[redacted]");
+            out.push_str(marker);
         } else {
             let start = at;
             while at < text.len() && !covered[at] {
@@ -381,6 +413,15 @@ fn scrub(text: &str, needles: &[&str]) -> String {
             }
             out.push_str(&text[start..at]);
         }
+    }
+    if out.len() > 2 * text.len() + marker.len()
+        && let (Some(first), Some(last)) = (
+            covered.iter().position(|&c| c),
+            covered.iter().rposition(|&c| c),
+        )
+    {
+        // Covered runs start and end on character boundaries.
+        return format!("{}{marker}{}", &text[..first], &text[last + 1..]);
     }
     out
 }
@@ -513,7 +554,7 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
                 needle.len() >= MIN_REDACTED_CALLER_VALUE
                     && (digits.contains(needle) || same_value(needle))
             }) {
-                *value = Value::String("[redacted]".to_owned());
+                *value = Value::String(marker_for(needles).to_owned());
             }
         }
         Value::Array(items) => items.iter_mut().for_each(|v| scrub_value(v, needles)),
@@ -534,14 +575,24 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
             // Keys that collapse to the same marker all survive, `#2`, `#3`, ...
             let mut next: std::collections::HashMap<String, usize> =
                 std::collections::HashMap::new();
+            // A name that contains a needle is skipped too. Tries are bounded:
+            // an entry left with no safe name (needles that block every
+            // suffix) is dropped rather than emitted with one.
             for (base, item) in renamed {
+                let taken = |key: &str, map: &serde_json::Map<String, Value>| {
+                    map.contains_key(key) || needles.iter().any(|n| key.contains(n))
+                };
                 let mut key = base.clone();
-                while map.contains_key(&key) {
+                let mut tries = 0;
+                while taken(&key, &*map) && tries < MAX_RENAME_TRIES {
+                    tries += 1;
                     let n = next.entry(base.clone()).or_insert(1);
                     *n += 1;
                     key = format!("{base}#{n}");
                 }
-                map.insert(key, item);
+                if !taken(&key, &*map) {
+                    map.insert(key, item);
+                }
             }
         }
         _ => {}

@@ -232,7 +232,7 @@ fn limited_backend() -> crate::backend::Backend {
             // CI (run 36307786398), and with one token per second the bucket
             // refills during that wait and the next call is admitted.
             http_url: "http://127.0.0.1:0/mcp".to_string(),
-            streamable_http: false,
+            streamable_http: Some(false),
             protocol_version: None,
         },
         enabled: true,

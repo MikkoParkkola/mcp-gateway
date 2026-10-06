@@ -242,7 +242,7 @@ fn backend_for(name: &str, url: &str, arm: ForwardArm) -> Backend {
         enabled: true,
         transport: TransportConfig::Http {
             http_url: url.to_string(),
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         stop_when_idle_for: None,
