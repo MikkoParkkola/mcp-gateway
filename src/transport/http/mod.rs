@@ -302,8 +302,12 @@ pub struct HttpTransport {
     /// Request timeout (used in client builder)
     #[allow(dead_code)]
     timeout: Duration,
-    /// Use Streamable HTTP (direct POST, no SSE handshake)
-    streamable_http: bool,
+    /// `Some(true)`: Streamable HTTP (direct POST). `Some(false)`: the legacy
+    /// SSE handshake. `None`: not yet detected; the first handshake decides
+    /// and stores the answer here, so a reconnect does not probe again.
+    streamable_http: RwLock<Option<bool>>,
+    /// Whether this start already switched transport once (see `handshake`).
+    switched: AtomicBool,
     /// OAuth client for authenticated backends (Arc allows background refresh task to share it)
     oauth_client: Option<Arc<TokioMutex<OAuthClient>>>,
     /// Background token-refresh task handle, set during `initialize()`.
@@ -376,7 +380,7 @@ impl HttpTransport {
             url,
             headers,
             timeout,
-            streamable_http,
+            Some(streamable_http),
             oauth_client,
             protocol_version,
             configured,
@@ -385,11 +389,12 @@ impl HttpTransport {
 
     /// [`Self::new_with_oauth`] under a backend destination policy: `Public`
     /// refuses a private literal base before anything connects, and pins names.
+    /// A `None` flavour is detected at connect (see `TransportConfig::Http`).
     pub(crate) fn with_destination(
         url: &str,
         headers: HashMap<String, String>,
         timeout: Duration,
-        streamable_http: bool,
+        streamable_http: Option<bool>,
         oauth_client: Option<OAuthClient>,
         protocol_version: Option<String>,
         destination: DestinationPolicy,
@@ -428,7 +433,8 @@ impl HttpTransport {
             redirects_followed,
             connected: AtomicBool::new(false),
             timeout,
-            streamable_http,
+            streamable_http: RwLock::new(streamable_http),
+            switched: AtomicBool::new(false),
             oauth_client: oauth_client.map(|c| Arc::new(TokioMutex::new(c))),
             refresh_task: RwLock::new(None),
             protocol_version: RwLock::new(protocol_version),

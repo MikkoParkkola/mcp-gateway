@@ -1,8 +1,8 @@
-# MIK-7630 follow-up — event sources deferred to 4.0.1
+# MIK-7630 follow-up — three more event sources for 4.0.0
 
-Status: design and test plan; no product code. Deferred from 4.0.0 by the
-2026-10-01 scope split. Tracked by the 4.0.1 follow-up ticket related to
-MIK-7630.
+Status: design and test plan. The 2026-10-01 scope split deferred these
+sources to 4.0.1; the operator moved them back into 4.0.0 on 2026-10-06.
+Tracked by MIK-7720 (sources) and MIK-7811 (`lifecycle_key`).
 Parent design: `docs/design/2026-10-01-mik-7630-mcp-events.md` (the parent).
 Section numbers below prefixed "P" point into the parent.
 
@@ -135,7 +135,7 @@ per-delivery charge; otherwise exhausting a budget would emit an event whose
 delivery charges the exhausted budget again. This exemption lives in this
 source's descriptor (`charge: false`), which is the one field this design
 adds to `EventDescriptor`. The parent ships that field from 4.0.0 with
-default `true`, so the core is unchanged at 4.0.1.
+default `true`, so these sources leave the core unchanged.
 
 **Core changes needed:** none, given the `charge` field lands with the parent
 (added to P§4 for this reason).
@@ -202,9 +202,8 @@ while the gateway was down is not emitted late (emit-only).
 | descriptor `charge` | true | false for `budget.*` | true |
 
 All three `SourceKind` variants and `Visibility::Operator` are reserved in
-the parent at 4.0.0, so records and configs written by 4.0.1 need no
-migration and a 4.0.0 gateway reading them refuses only the source config it
-does not know, by name.
+the parent, so records and configs these sources write need no
+migration.
 
 ## 6. Security notes specific to these sources
 
@@ -237,7 +236,7 @@ criterion in the follow-up ticket.
 | U7 | `health_and_kill_switch_transitions_become_events` | killing and reviving a backend → two `kill_switch.changed` events; tripping a breaker → one `health_changed` | no operational source |
 | U8 | `schedule_ticks_fire_on_cron_and_respect_the_floor` | a test clock crossing `*/5 * * * *` fires one tick per boundary; `* * * * *` → `-32602`; restart within the same minute does not double-fire (the persisted last-fired value is read back; the receiver sees one POST) | no schedule source |
 | U9 | `schedule_label_is_capped_and_scanned` | a 65-character label → `-32602`; a label carrying a blocked injection pattern is dead-lettered `firewall_blocked` | no schedule source |
-| U10 | `deferred_sources_need_no_core_change` (structural guard, exempt from red-first) | a CI check that a PR adding a source touches no file under `src/events/` other than the source's own module and the registry line | lands as its own PR **before** the first 4.0.1 source and is shown to fail on a synthetic diff that edits a core file; it guards structure and has no behaviour to see red |
+| U10 | `deferred_sources_need_no_core_change` (structural guard, exempt from red-first) | a CI check that a PR adding a source touches no file under `src/events/` other than the source's own module and the registry line | lands as its own PR **before** the first of these sources and is shown to fail on a synthetic diff that edits a core file; it guards structure and has no behaviour to see red |
 | U11 | `watch_stops_when_its_capability_is_removed_or_reclassified` | reclassifying a watched capability as side-effecting on reload → poller stops (mock sees no further calls), subscription deleted, refresh answers `-32011` | no watch source |
 | U12 | `watch_ignores_default_volatile_fields_and_metadata` | a result whose only change is `timestamp` → no event; with `fields` naming `/timestamp` → an event; with provenance stamping on, ten unchanged polls → no event; a restarted poller's first transition gets an `eventId` different from every earlier one | no watch source |
 

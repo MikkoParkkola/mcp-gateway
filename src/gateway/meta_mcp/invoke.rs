@@ -493,7 +493,7 @@ impl MetaMcp {
         }
         let mut answered = mcp_backend && dispatch_result.is_ok();
         let mut result = match dispatch_result {
-            Ok(value) => attach_tool_error_recovery(value, tool, server),
+            Ok(value) => attach_tool_error_recovery(value, tool, server, self.hint_surface()),
             Err(e) => {
                 self.settle_dispatch_error(
                     e,

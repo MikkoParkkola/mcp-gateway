@@ -46,7 +46,7 @@ fn stdio_transport(cmd: &str) -> TransportConfig {
 fn http_transport(url: &str) -> TransportConfig {
     TransportConfig::Http {
         http_url: url.to_string(),
-        streamable_http: false,
+        streamable_http: Some(false),
         protocol_version: None,
     }
 }
@@ -455,7 +455,7 @@ mod stop_when_idle_ui_tests {
         BackendConfig {
             transport: TransportConfig::Http {
                 http_url: "http://127.0.0.1:39400/mcp".to_string(),
-                streamable_http: false,
+                streamable_http: Some(false),
                 protocol_version: None,
             },
             ..BackendConfig::default()

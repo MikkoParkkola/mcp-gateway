@@ -55,7 +55,7 @@ async fn direct_tool_call(passthrough: bool) -> (StatusCode, Value) {
         passthrough,
         transport: TransportConfig::Http {
             http_url: url,
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         ..BackendConfig::default()

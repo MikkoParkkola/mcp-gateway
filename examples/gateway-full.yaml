@@ -349,7 +349,7 @@ backends:
   # Repo-pinned routes expose tools named after the repo
   # (e.g. `fetch_mcp_gateway_documentation`, `search_mcp_gateway_code`).
   #
-  # Transport: SSE (http_url ends in /sse, streamable_http defaults to false).
+  # Transport: SSE (http_url ends in /sse, streamable_http unset: detected at connect).
   # Auth: none required for public repos.
   # gitmcp_docs:
   #   http_url: "https://gitmcp.io/docs/sse"
