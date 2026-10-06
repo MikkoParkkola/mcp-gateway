@@ -301,6 +301,7 @@ async fn a_cache_that_cannot_be_removed_is_not_retried() {
         cache.is_file(),
         "the caller's path must not be deleted out from under it"
     );
+    assert!(matches!(error, Error::Protocol(_)), "{error:?}");
     assert_last_attempt_said(&transport, "attempt 1");
 }
 
