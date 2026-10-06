@@ -616,3 +616,20 @@ fn wt27_long_path_reaches_every_win32_call() {
     assert!(failed.is_empty(), "WT-ASSERT W-T27: {failed:?}");
     assert_eq!(std::fs::read(&moved).unwrap(), b"{}", "WT-ASSERT W-T27");
 }
+
+// MIK-7866.TEXT.1: every refusal detail ends with a line break, so the grant
+// journal's appended "Check its entries ..." reads as its own sentence.
+#[test]
+fn every_refusal_detail_ends_with_a_line_break() {
+    use crate::config::Protects;
+    for found in [
+        [PrivacyRefusal::NotRegular],
+        [PrivacyRefusal::ReparsePoint],
+        [PrivacyRefusal::ForeignOwner("S-1-5-21-1".to_string())],
+    ] {
+        for what in [Protects::Secrecy, Protects::Integrity] {
+            let text = refusal_detail(r"C:\data\grants.journal", &found, what);
+            assert!(text.ends_with('\n'), "{found:?} {what:?}: {text:?}");
+        }
+    }
+}
