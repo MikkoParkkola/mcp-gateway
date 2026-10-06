@@ -75,6 +75,28 @@ fn repair_locks() -> &'static Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>
     LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// The longest one start can hold its backend's cache lock, from the backend's
+/// request timeout `t`. Both the hold and the wait are derived from here, so
+/// they cannot drift apart.
+///
+/// The sum of the steps the lock covers: a failed first attempt
+/// ([`attempt_bound`]), moving the cache aside ([`rename_bound`]), and the single
+/// retry (another attempt): 2 * (2t + 2s) + t = 5t + 4s.
+fn lock_hold_bound(t: std::time::Duration) -> std::time::Duration {
+    attempt_bound(t) * 2 + rename_bound(t)
+}
+
+/// One start attempt: `initialize` is at most two requests of `t` each (one
+/// version renegotiation), plus about 2 s of settling and draining the child.
+fn attempt_bound(t: std::time::Duration) -> std::time::Duration {
+    t * 2 + std::time::Duration::from_secs(2)
+}
+
+/// Moving the cache aside, which the repair gives up on after this.
+fn rename_bound(t: std::time::Duration) -> std::time::Duration {
+    t
+}
+
 /// A held cache lock, owned so it can travel into the blocking rename.
 type CacheGuard = tokio::sync::OwnedMutexGuard<()>;
 
@@ -140,26 +162,26 @@ async fn start_reporting_with(
     }
     // Held from the first spawn to the end of any retry: see `repair_lock`.
     // The cache is per backend (its name is hashed into the path), so only
-    // other starts of this same backend wait. Each `initialize` request is
-    // capped by the backend's request timeout T, and moving the damaged cache
-    // aside is given up on after T, so in the normal case a failed attempt, the
-    // rename and a failed retry hold it for about 5T + 4s. Deleting the moved
-    // tree holds nothing. Waiting for the lock gives up after T.
-    // Writes to the child's stdin and reaping it carry no timeout of their own.
+    // other starts of this same backend wait. In the normal case a start holds
+    // it for at most `lock_hold_bound` (5T + 4s, T being the request timeout);
+    // deleting the moved tree holds nothing. Writes to the child's stdin and
+    // reaping it carry no timeout of their own.
     let lock = transport.assigned_package_cache_dir().map(repair_lock);
-    // Waiting is bounded too: a rename stuck on a wedged filesystem keeps the
-    // lock (see `retire_cache_dir`), and a start must fail rather than queue
-    // behind it forever.
+    // A start waits out one full repair, the same bound, so a start arriving
+    // mid-repair succeeds after it instead of failing. Past that it fails as
+    // unavailable rather than queue forever behind, say, a rename stuck on a
+    // wedged filesystem, which keeps the lock (see `retire_cache_dir`).
     let held = match lock {
         Some(lock) => {
-            match tokio::time::timeout(transport.request_timeout(), lock.lock_owned()).await {
+            let wait = lock_hold_bound(transport.request_timeout());
+            match tokio::time::timeout(wait, lock.lock_owned()).await {
                 Ok(held) => Some(held),
                 Err(_) => {
                     let error = Error::BackendUnavailable(format!(
                         "stdio backend {}: its package cache is still locked by another start or \
                          a rename after {:?}",
                         transport.diagnostic_command(),
-                        transport.request_timeout()
+                        wait
                     ));
                     return (Err(error), Repair::NotRepaired);
                 }
@@ -221,7 +243,7 @@ async fn repair_while_locked(
     }
     // Kept to the end of the retry. If this future is dropped mid-rename, the
     // guard is still inside the blocking task, which Tokio cannot abort.
-    let limit = transport.request_timeout();
+    let limit = rename_bound(transport.request_timeout());
     let Ok((retired, _held)) = retire_within(dir, held, retire_now, discard, limit).await else {
         warn!(path = %dir.display(), "moving the package cache aside did not finish in time; abandoning the repair");
         let error = Error::BackendUnavailable(format!(

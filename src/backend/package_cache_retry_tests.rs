@@ -63,6 +63,9 @@ if [ -f "$MCP_GATEWAY_TEST_SPAWN_LOG" ]; then
 fi
 printf 'spawned\n' >> "$MCP_GATEWAY_TEST_SPAWN_LOG"
 count=$((count + 1))
+if [ "$count" -gt 1 ] && [ -n "${MCP_GATEWAY_TEST_RETRY_DELAY:-}" ]; then
+    sleep "$MCP_GATEWAY_TEST_RETRY_DELAY"
+fi
 
 while IFS= read -r request; do
     case "$request" in

@@ -7,6 +7,7 @@ use super::{
     Retired, TOMBSTONE_MARK, install_failure_needle, is_a_tree_to_walk, remove_now, retire_now,
     sweep_tombstones_once,
 };
+use super::{attempt_bound, lock_hold_bound, rename_bound};
 use crate::Error;
 
 // Verbatim texts Node and npm print when a package tree is missing, half
@@ -413,4 +414,20 @@ async fn the_startup_sweep_deletes_tombstones_and_nothing_else() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     assert!(live.join("_npx").is_dir(), "a live cache is never swept");
+}
+
+#[test]
+fn the_lock_hold_bound_is_its_steps_summed() {
+    let t = std::time::Duration::from_secs(1);
+    assert_eq!(
+        attempt_bound(t),
+        std::time::Duration::from_secs(4),
+        "2t + 2s"
+    );
+    assert_eq!(rename_bound(t), t);
+    assert_eq!(
+        lock_hold_bound(t),
+        std::time::Duration::from_secs(9),
+        "a failed attempt, the rename and the retry: 5t + 4s"
+    );
 }
