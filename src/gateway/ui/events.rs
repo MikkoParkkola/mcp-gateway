@@ -8,6 +8,7 @@
 //!
 //! Admin only. Never a meta-tool: the meta surface is pinned.
 
+use crate::gateway::routes;
 use std::sync::Arc;
 
 use axum::extract::{Extension, Path, Query, State};
@@ -29,9 +30,9 @@ use crate::security::audit::AuditWho;
 
 pub(super) fn events_router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/ui/api/events/dead-letters", get(list))
-        .route("/ui/api/events/dead-letters/replay", post(replay_all))
-        .route("/ui/api/events/dead-letters/{id}/replay", post(replay_one))
+        .route(routes::UI_DEAD_LETTERS, get(list))
+        .route(routes::UI_DEAD_LETTERS_REPLAY, post(replay_all))
+        .route(routes::UI_DEAD_LETTER_REPLAY, post(replay_one))
 }
 
 #[derive(Debug, Deserialize)]

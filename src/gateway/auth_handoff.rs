@@ -26,7 +26,7 @@ use super::{AuthState, DashboardBootstrap, Now, Redemption, bearer_unauthorized_
 
 /// Where the code is entered, on the public origin.
 #[cfg(feature = "webui")]
-pub(crate) const HANDOFF_PATH: &str = "/dashboard/handoff";
+pub(crate) const HANDOFF_PATH: &str = crate::gateway::routes::DASHBOARD_HANDOFF;
 
 /// The HTTPS origin browsers reach this gateway at, from the live
 /// `public_url`; `None` when there is none or it is not HTTPS.

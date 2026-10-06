@@ -12,6 +12,7 @@
 //! All mutation endpoints require admin auth and trigger a config write +
 //! hot-reload after a successful change.
 
+use crate::gateway::routes;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -162,12 +163,12 @@ impl From<&'static server_registry::RegistryEntry> for RegistryEntryJson {
 /// These routes are merged into the main `api_router()` in `mod.rs`.
 pub fn backends_router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/ui/api/backends", post(add_backend))
-        .route("/ui/api/backends/{name}", delete(remove_backend))
-        .route("/ui/api/backends/{name}", patch(update_backend))
-        .route("/ui/api/backends/{name}/revive", post(revive_backend))
-        .route("/ui/api/registry", get(list_registry))
-        .route("/ui/api/registry/search", get(search_registry))
+        .route(routes::UI_BACKENDS, post(add_backend))
+        .route(routes::UI_BACKEND, delete(remove_backend))
+        .route(routes::UI_BACKEND, patch(update_backend))
+        .route(routes::UI_BACKEND_REVIVE, post(revive_backend))
+        .route(routes::UI_REGISTRY, get(list_registry))
+        .route(routes::UI_REGISTRY_SEARCH, get(search_registry))
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────

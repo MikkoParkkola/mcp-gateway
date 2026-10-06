@@ -7,6 +7,7 @@
 //! an audit outage must never block a revocation. Re-entry is an ordinary
 //! audited admin route inside [`super::api_router`].
 
+use crate::gateway::routes;
 use std::sync::Arc;
 
 use axum::extract::{Extension, State};
@@ -25,7 +26,7 @@ use crate::gateway::router::AppState;
 use crate::security::audit::{AuditEnvelope, CredentialKind};
 
 /// Path of the logout route.
-pub const LOGOUT_PATH: &str = "/dashboard/logout";
+pub const LOGOUT_PATH: &str = routes::DASHBOARD_LOGOUT;
 
 /// `POST /dashboard/logout`, unauthenticated by design: holding a handle is
 /// the right to revoke it. POST only, so a link or an image cannot log anyone
@@ -39,12 +40,12 @@ pub fn logout_router() -> Router<Arc<AppState>> {
     // extractor 413, is neither cached nor sent onward as a `Referer`.
     let handoff = Router::new()
         .route(
-            crate::gateway::auth::HANDOFF_PATH,
+            routes::DASHBOARD_HANDOFF,
             get(handoff_form).post(handoff_code),
         )
         .layer(axum::middleware::map_response(handoff_private));
     Router::new()
-        .route(LOGOUT_PATH, post(logout))
+        .route(routes::DASHBOARD_LOGOUT, post(logout))
         .merge(handoff)
 }
 

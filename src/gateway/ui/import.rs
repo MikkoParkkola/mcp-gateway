@@ -10,6 +10,7 @@
 //!
 //! Both endpoints require admin authentication.
 
+use crate::gateway::routes;
 use std::sync::Arc;
 
 use axum::extract::{Extension, State};
@@ -80,8 +81,8 @@ pub struct ImportResponse {
 /// Build the `/ui/api/import/*` sub-router.
 pub fn import_router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/ui/api/import/openapi/preview", post(preview_handler))
-        .route("/ui/api/import/openapi", post(import_handler))
+        .route(routes::UI_IMPORT_PREVIEW, post(preview_handler))
+        .route(routes::UI_IMPORT, post(import_handler))
 }
 
 // ── Handlers ────────────────────────────────────────────────────────

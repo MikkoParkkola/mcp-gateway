@@ -9,6 +9,7 @@
 //! can only ever name their own account; nothing in the path or body can
 //! select another principal's entry.
 
+use crate::gateway::routes;
 use std::sync::Arc;
 
 use axum::Router;
@@ -46,8 +47,6 @@ mod start;
 pub(crate) use hosted::CALLBACK;
 pub(crate) use journeys::ConnectOffers;
 
-const ROUTE: &str = "/accounts/v1/connections/{account_id}";
-
 /// The gateway's custody as the handles the router holds.
 pub(crate) fn account_handles_of(custody: Option<&Arc<GatewayCustody>>) -> Option<AccountHandles> {
     custody.map(|custody| AccountHandles {
@@ -77,11 +76,11 @@ pub(super) fn router(
     let reading = Arc::clone(&journeys);
     let owner = Router::new()
         .route(
-            "/accounts/v1/journeys",
+            routes::ACCOUNTS_JOURNEYS,
             post(move |state, identity, body| journeys::create(create, state, identity, body)),
         )
         .route(
-            "/accounts/v1/journeys/{id}",
+            routes::ACCOUNTS_JOURNEY,
             get(move |state, identity, id| journeys::status(reading, state, identity, id)),
         );
     let api_delete = authenticate(connections::api_route(Arc::clone(&revocation)));
@@ -106,17 +105,19 @@ fn browser_routes(
         .map(Arc::new);
     let disconnect = connections::route(api_delete, Arc::clone(&revocation), bridge.clone());
     let completing = Arc::clone(&journeys);
-    let routes = Router::new().route(ROUTE, disconnect).route(
-        CALLBACK,
-        get(move |state, uri, headers| callback::callback(completing, state, uri, headers)),
-    );
+    let routes = Router::new()
+        .route(routes::ACCOUNTS_CONNECTION, disconnect)
+        .route(
+            routes::ACCOUNTS_CALLBACK,
+            get(move |state, uri, headers| callback::callback(completing, state, uri, headers)),
+        );
     let Some(bridge) = bridge else {
         return routes;
     };
     let starting = Arc::clone(&bridge);
     routes
         .route(
-            start::START,
+            routes::ACCOUNTS_JOURNEY_START,
             get(move |state, id, headers| start::start(journeys, starting, state, id, headers)),
         )
         .merge(complete::routes(revocation, bridge))

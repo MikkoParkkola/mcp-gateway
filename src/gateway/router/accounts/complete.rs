@@ -7,6 +7,7 @@
 //! Descriptor ids come from config and are still escaped. The script tag is
 //! emitted only when a button exists, since the button is its only use.
 
+use crate::gateway::routes;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -25,8 +26,8 @@ use crate::personal_accounts::AccountRevocation;
 use crate::personal_accounts::identity::{Principal, account_key};
 
 /// Where the callback page sends the user next, a same-origin navigation.
-pub(super) const COMPLETE: &str = "/accounts/v1/complete";
-const SCRIPT: &str = "/accounts/v1/assets/complete.js";
+pub(super) const COMPLETE: &str = routes::ACCOUNTS_COMPLETE;
+const SCRIPT: &str = routes::ACCOUNTS_COMPLETE_SCRIPT;
 const SCRIPT_BODY: &str = include_str!("complete.js");
 
 pub(super) fn routes(
@@ -35,11 +36,11 @@ pub(super) fn routes(
 ) -> Router<Arc<AppState>> {
     Router::new()
         .route(
-            COMPLETE,
+            routes::ACCOUNTS_COMPLETE,
             get(move |state, headers| complete(revocation, bridge, state, headers)),
         )
         .route(
-            SCRIPT,
+            routes::ACCOUNTS_COMPLETE_SCRIPT,
             get(|| async {
                 (
                     [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
