@@ -132,8 +132,11 @@ fn with_card(mut descriptor: Value, card: Value) -> Value {
 struct CardMemo {
     /// (server id, server name) pairs held, bounded by `MEMO_SERVERS`.
     servers: usize,
-    by_id: HashMap<String, HashMap<String, HashMap<String, (Tool, Value)>>>,
+    by_id: HashMap<String, HashMap<String, ToolCards>>,
 }
+
+/// One server identity's memo: tool name to (tool as projected, descriptor).
+type ToolCards = HashMap<String, (Tool, Value)>;
 
 // ponytail: a full map keeps its residents and computes newcomers uncached,
 // so a churning catalog can lose its saving; an LRU if that ever shows.
@@ -150,11 +153,7 @@ impl CardMemo {
     /// `MEMO_SERVERS` bound on (id, name) pairs allows; `None` when it is
     /// full and the identity is new. Looked up by `&str`, so a held identity
     /// allocates no key.
-    fn cards_for(
-        &mut self,
-        server_id: &str,
-        server_name: &str,
-    ) -> Option<&mut HashMap<String, (Tool, Value)>> {
+    fn cards_for(&mut self, server_id: &str, server_name: &str) -> Option<&mut ToolCards> {
         let held = self
             .by_id
             .get(server_id)
@@ -388,8 +387,10 @@ mod tests {
         use crate::protocol::ToolAnnotations;
 
         type Change = fn(&mut Tool);
-        let changes: [(&str, Change); 7] = [
-            ("title", |t| t.title = Some("Other title".to_string())),
+        let edits: [(&str, Change); 7] = [
+            ("title", |t| {
+                t.title = Some("Other title".to_string());
+            }),
             ("description count", |t| {
                 t.description = Some("Search local docs (3 servers)".to_string());
             }),
@@ -397,7 +398,7 @@ mod tests {
                 t.input_schema["properties"]["limit"] = json!({"type": "integer"});
             }),
             ("output schema", |t| {
-                t.output_schema = Some(json!({"type": "object"}))
+                t.output_schema = Some(json!({"type": "object"}));
             }),
             ("annotations hint", |t| {
                 t.annotations = Some(ToolAnnotations {
@@ -405,7 +406,9 @@ mod tests {
                     ..ToolAnnotations::default()
                 });
             }),
-            ("role", |t| t.role = Some(Role::Selector)),
+            ("role", |t| {
+                t.role = Some(Role::Selector);
+            }),
             ("projection", |t| {
                 t.projection = Some(ProjectionSpec {
                     actor: Some(ActorSpec::default()),
@@ -413,7 +416,7 @@ mod tests {
                 });
             }),
         ];
-        for (field, change) in changes {
+        for (field, change) in edits {
             let (id, name) = (
                 format!("backend:memo-field-{field}"),
                 format!("memo-field-{field}"),
