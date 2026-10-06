@@ -447,4 +447,48 @@ providers:
         .to_string();
         assert!(error.contains("required parameter is missing"), "{error}");
     }
+
+    /// A numeric path selector is refused, as a gateway call refuses it: the
+    /// schema check's coercion to a string does not reach the request.
+    #[tokio::test]
+    async fn a_cli_call_with_a_numeric_path_selector_is_refused() {
+        let cap = crate::capability::parse_capability(
+            "
+name: selector_probe
+description: probe
+schema:
+  input:
+    type: object
+    properties:
+      kind:
+        type: string
+        enum: [\"1\"]
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://selector-probe.invalid
+      path_selector:
+        parameter: kind
+        default: \"1\"
+        paths:
+          \"1\": /one
+      method: GET
+",
+        )
+        .expect("parses");
+        let cat = ToolCatalogue {
+            capabilities: vec![cap],
+        };
+        let error = execute_tool_with_context(
+            &cat,
+            "selector_probe",
+            json!({ "kind": 1 }),
+            CapabilityExecutionContext::default(),
+        )
+        .await
+        .expect_err("a numeric selector")
+        .to_string();
+        assert!(error.contains("must be a string"), "{error}");
+    }
 }

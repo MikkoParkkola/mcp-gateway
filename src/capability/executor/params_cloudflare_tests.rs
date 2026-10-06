@@ -234,3 +234,25 @@ fn every_url_template_gets_its_parameter_defaults() {
         assert_eq!(effective["region"], "eu", "{config}");
     }
 }
+
+/// A selector path the call does not pick names nothing it sends, so its
+/// placeholders get no default.
+#[test]
+fn an_unpicked_selector_path_gets_no_default() {
+    let schema = json!({ "properties": { "region": { "default": "eu" } } });
+    let rest: crate::capability::RestConfig = serde_json::from_value(json!({
+        "base_url": "https://api.invalid",
+        "path_selector": {
+            "parameter": "kind",
+            "default": "a",
+            "paths": { "a": "/items", "b": "/{region}/b" }
+        }
+    }))
+    .expect("a REST config");
+    let args = json!({});
+    let effective = super::with_path_defaults(&rest, &schema, &args);
+    assert!(effective.get("region").is_none(), "{effective}");
+    let args = json!({ "kind": "b" });
+    let effective = super::with_path_defaults(&rest, &schema, &args);
+    assert_eq!(effective["region"], "eu");
+}

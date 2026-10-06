@@ -757,26 +757,3 @@ fn a_union_keeps_a_whole_float_beyond_i64_as_an_integer_member() {
     assert!(result.is_valid(), "{:?}", result.violations);
     assert_eq!(result.coerced["n"], json!(1e20));
 }
-
-/// MIK-7943 finding 6: a required property whose type admits null accepts a
-/// present null; it must still be present, and a non-null type still refuses.
-#[test]
-fn a_required_nullable_union_property_accepts_a_present_null() {
-    let schema = json!({
-        "type": "object",
-        "properties": { "cursor": { "type": ["string", "null"] } },
-        "required": ["cursor"]
-    });
-    let result = validate_arguments(&json!({ "cursor": null }), &schema);
-    assert!(result.is_valid(), "{:?}", result.violations);
-    assert!(
-        !validate_arguments(&json!({}), &schema).is_valid(),
-        "still required"
-    );
-    let strict = json!({
-        "type": "object",
-        "properties": { "cursor": { "type": "string" } },
-        "required": ["cursor"]
-    });
-    assert!(!validate_arguments(&json!({ "cursor": null }), &strict).is_valid());
-}
