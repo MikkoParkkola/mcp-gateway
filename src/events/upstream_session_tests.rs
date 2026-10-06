@@ -411,11 +411,52 @@ async fn a_refill_in_flight_at_the_session_end_is_announced() {
         "the end waits for the refill"
     );
     release.send(()).expect("release");
-    let _ = ending.await;
+    tokio::time::timeout(Duration::from_secs(5), ending)
+        .await
+        .expect("the session end finished once the refill did");
     // Announced after the hub's own quiet period.
     let announced = tokio::time::timeout(Duration::from_secs(5), intake.recv()).await;
     assert!(
         matches!(announced, Ok(Some(_))),
         "the tools change was announced"
+    );
+}
+
+/// MIK-7950: a session that started with no URI watched, while the shared
+/// snapshot is known from an earlier session, reads the catalogue as soon as
+/// a URI is watched, not after a fixed 300 s.
+#[tokio::test]
+async fn a_uri_watched_after_the_session_started_is_read_at_once() {
+    let dir = tempfile::tempdir().expect("dir");
+    let reload = Reload::new(dir.path());
+    reload.to(true).await;
+    let backend = reload.registry.get("b").expect("b registered");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    shared
+        .snapshot
+        .lock()
+        .read(["file:///a".to_owned()].into(), true);
+    let mut state = State::new(&shared, Era::Modern);
+    let started = Instant::now();
+    shared
+        .need
+        .lock()
+        .add(&Interest::ResourceUpdated("file:///b".to_owned()))
+        .expect("room");
+    // No transport: only the catalogue read is of interest here.
+    let handle: Weak<dyn UpstreamListen> = Weak::<crate::transport::HttpTransport>::new();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        state.maintain(&backend, &weak, &handle, true),
+    )
+    .await
+    .expect("maintain finished");
+    // The backend is unreachable, so the read failed and set its retry time:
+    // proof that it ran.
+    assert!(
+        state.snapshot_retry_at > started,
+        "the newly watched URI's catalogue was not read"
     );
 }
