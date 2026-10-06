@@ -92,8 +92,8 @@ impl CallbackServer {
     pub(crate) async fn stop(self) {
         self.shutdown().await;
     }
-
-    /// Wait for the callback to be received
+    /// Tests only: every login waits through [`Self::wait_within`] (MIK-7982).
+    #[cfg(test)]
     pub async fn wait_for_callback(mut self) -> Result<(String, CallbackResult)> {
         let result = (&mut self.receiver)
             .await
@@ -103,7 +103,7 @@ impl CallbackServer {
         result.map(|r| (std::mem::take(&mut self.callback_url), r))
     }
 
-    /// [`Self::wait_for_callback`], ended without an answer when `window`
+    /// Wait for the callback to be received, ended without an answer when `window`
     /// passes or `cancel` fires (MIK-7982). On those ends the listeners are
     /// closed before this returns, so the port is free for the next login.
     pub(crate) async fn wait_within(
