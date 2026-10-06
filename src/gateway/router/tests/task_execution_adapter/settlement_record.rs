@@ -500,29 +500,27 @@ async fn r2_an_owner_read_names_the_admission_principal_not_the_reader() {
     );
 }
 
-/// R3, both paths: a recovered result an output policy refuses settles failed
-/// with the firewall's own -32600 refusal, as a native task does (MIK-7667),
-/// and its record keeps the raw response's tenants, that code and no response
-/// hash.
+/// R3, both paths: a recovered result an output policy refuses settles failed,
+/// and its record keeps the raw response's tenants, the refusal's code and no
+/// response hash. The firewall's refusal is the -32600 a native task reads
+/// (MIK-7667); anomaly screening, which runs first when armed, stays -32603.
 #[tokio::test]
 async fn r3_a_refused_recovered_result_is_recorded_with_its_tenants() {
     let note = format!("AWS_ACCESS_KEY_ID={}", example_access_key());
-    for path in BOTH {
+    for (path, screening) in BOTH.into_iter().flat_map(|p| [(p, false), (p, true)]) {
         let mut setup = Setup::answering(Terminal::Completed(result_naming_cust9(&note)));
-        setup.refusing = true;
+        setup.refusing = screening;
         let fx = fixture(setup, path).await;
         let (_, fetched) = fx.settle(path, |_| {}).await;
+        let code = json!(if screening { -32603 } else { -32600 });
         std::assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
-        std::assert_eq!(
-            fetched.pointer("/result/error/code"),
-            Some(&json!(-32600)),
+        let error = &fetched["result"]["error"];
+        std::assert_eq!(error["code"], code, "{path:?} {screening}: {fetched}");
+        std::assert!(
+            screening || error["message"] == "Response blocked by security firewall",
             "{path:?}: {fetched}"
         );
-        std::assert_eq!(
-            fetched.pointer("/result/error/message"),
-            Some(&json!("Response blocked by security firewall")),
-            "{path:?}: {fetched}"
-        );
+        std::assert!(!fetched.to_string().contains(&example_access_key()));
 
         let record = fx.only_settlement(path);
         std::assert!(
@@ -530,7 +528,7 @@ async fn r3_a_refused_recovered_result_is_recorded_with_its_tenants() {
             "{path:?}: {record}"
         );
         std::assert_ne!(record["outcome"], json!("ok"), "{path:?}: {record}");
-        std::assert_eq!(record["error_code"], json!(-32600), "{path:?}: {record}");
+        std::assert_eq!(record["error_code"], code, "{path:?}: {record}");
         std::assert!(record.get("response_hash").is_none(), "{path:?}: {record}");
     }
 }
