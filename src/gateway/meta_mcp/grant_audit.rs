@@ -570,11 +570,15 @@ impl super::MetaMcp {
         confirmed_in_band: bool,
     ) -> JsonRpcResponse {
         let Some(logger) = self.transparency_logger.as_ref() else {
-            // No log, no slot: nothing is recorded, so the dispatch is awaited
-            // as is rather than boxed twice for a slot that would return early.
-            return self
-                .dispatch_below_gate_shaped_in_slot(target, shape, confirmed_in_band)
-                .await;
+            // No log, no slot: nothing is recorded, so the dispatch skips the
+            // slot and its second box. This one box stays: awaited unerased,
+            // the dispatch type overflows the stdio spawn's auto-trait check
+            // (E0275, run 37440081083).
+            #[cfg(test)]
+            note_boxed();
+            let answer: Pin<Box<dyn Future<Output = JsonRpcResponse> + Send + '_>> =
+                Box::pin(self.dispatch_below_gate_shaped_in_slot(target, shape, confirmed_in_band));
+            return answer.await;
         };
         let id = target.id.clone();
         #[cfg(test)]
@@ -613,8 +617,8 @@ pub(super) fn allow_unslotted_check_for_test() -> UnslottedCheckAllowed {
 }
 
 /// Test-only: slots opened, notes taken, flush tasks spawned, and futures
-/// boxed for the dispatch tail's slot (`dispatch_below_gate_shaped` and
-/// `slot_rpc`) on this thread.
+/// boxed in the dispatch tail (`dispatch_below_gate_shaped` and `slot_rpc`)
+/// on this thread.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct GrantBookkeeping {

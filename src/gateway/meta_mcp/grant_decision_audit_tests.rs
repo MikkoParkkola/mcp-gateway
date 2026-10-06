@@ -358,10 +358,10 @@ async fn no_logger_changes_nothing() {
 }
 
 /// MIK-7917 item 2. With no logger, a `tools/call` through the dispatch tail
-/// awaits the dispatch directly: no slot future is boxed, and the answer is
-/// the one the slotted path gives.
+/// opens no slot and boxes once (the type erasure E0275 needs), not twice;
+/// the answer is the one the slotted path gives.
 #[tokio::test]
-async fn no_logger_dispatch_tail_boxes_nothing() {
+async fn no_logger_dispatch_tail_skips_the_slot() {
     let endpoint = Endpoint::start(false).await;
     let who = api_key("alice");
     let unlogged = gateway(
@@ -374,8 +374,11 @@ async fn no_logger_dispatch_tail_boxes_nothing() {
     assert!(answer.get("error").is_none(), "{answer}");
     assert_eq!(
         super::grant_audit::grant_bookkeeping_for_test(),
-        super::grant_audit::GrantBookkeeping::default(),
-        "no logger: the dispatch tail opens no slot and boxes no slot future"
+        super::grant_audit::GrantBookkeeping {
+            slot_futures_boxed: 1,
+            ..Default::default()
+        },
+        "no logger: the dispatch tail opens no slot and boxes once"
     );
 
     let dir = tempfile::tempdir().unwrap();
