@@ -123,6 +123,7 @@ src/gateway/router/handlers/tasks.rs	tasks_cancel	1	standard	borderline	tasks_ca
 src/gateway/router/handlers/tasks.rs	tasks_get	1	standard	borderline	tasks_get	Wires the recovery authz and refuse_stored_delivery checks into the read path
 src/gateway/router/handlers/tasks.rs	update_caller	1	standard	borderline	update_caller	Resume caller must be the live update requester, not the creator
 src/gateway/router/handlers/tasks.rs	with_policy_caller	1	standard	borderline	with_policy_caller	Builds the live policy context; carrying signing would skip the policy recheck
+src/gateway/router/handlers/tasks.rs	task_owner_key	1	critical	c	task_owner_key	Task owner key: a proven subject splits a shared credential; no credential owns nothing (MIK-7967)
 src/gateway/router/hardened_elicitation.rs	declares_elicitation	1	critical	a	declares_elicitation	Decides whether an initialize declares elicitation, the condition the hardened refusal rests on
 src/gateway/router/hardened_elicitation.rs	direct_refusal	1	critical	a,d	direct_refusal	Hardened posture: refuses on the direct route any legacy request but a declaring initialize
 src/gateway/router/hardened_elicitation.rs	is_hardened	1	standard	borderline	is_hardened	Reads the hardened posture; a wrong answer silently disables the elicitation refusal
@@ -137,6 +138,7 @@ src/gateway/router/identity.rs	caller_key	1	standard	borderline	caller_key	Firew
 src/gateway/router/identity.rs	grant_subject_from_cert_identity	1	standard	borderline	grant_subject_from_cert_identity	mTLS subject derivation, with a display-name fallback.
 src/gateway/router/identity.rs	grant_subject_from_oauth_agent	1	standard	borderline	grant_subject_from_oauth_agent	Agent JWT sub used verbatim as the subject.
 src/gateway/router/identity.rs	subject_key	1	standard	borderline	subject_key	Session-ownership and CallerKey encoding; a collision would merge principals.
+src/gateway/router/identity.rs	control_identity	1	standard	borderline	control_identity	Per-caller control key for session-less callers; mirrors direct_control_identity
 src/gateway/router/judged_answer.rs	record_delivery	1	critical	d	record_delivery	Replaces a judged answer with the audit-unavailable refusal when its delivery cannot be recorded (fail closed).
 src/gateway/router/meta_refusal_audit.rs	answer	1	critical	borderline	Refused::answer	Answers 503 when the refusal's audit write fails under FailClosed.
 src/gateway/router/mod.rs	authenticate	1	standard	borderline	authenticate	Layer order (agent auth, adapter, auth); swapping it lets unauthenticated callers assert identity.
