@@ -42,36 +42,38 @@ static SECRET_VALUE: LazyLock<Regex> = LazyLock::new(|| {
 static LONG_TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[A-Za-z0-9_-]{24,}").expect("valid"));
 /// A long base64 run that `+` and `/` would otherwise cut into pieces
-/// shorter than [`LONG_TOKEN`]'s floor. Masked when it holds a `+`, ends in
-/// `=` padding, or is the whole line, as a PEM body line is even after the
-/// 20-line capture dropped its `-----BEGIN`. A path inside a sentence, or
-/// one holding `.`, `_` or `-`, stays readable.
+/// shorter than [`LONG_TOKEN`]'s floor. Masked only when it holds a `+` or
+/// ends in `=` padding, so a slash-separated path stays readable; a key body
+/// line without either cue is dropped at capture by [`captured_line`].
 static BASE64_RUN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[A-Za-z0-9+/]{40,}={0,2}").expect("valid"));
 #[cfg(feature = "firewall")]
 static REDACTOR: LazyLock<crate::security::firewall::redactor::Redactor> =
     LazyLock::new(crate::security::firewall::redactor::Redactor::new);
 
+/// What the capture keeps of one raw stderr line: a line inside a
+/// `-----BEGIN`/`-----END` block becomes the mask before the tail can evict
+/// the `-----BEGIN` that marks it. A block left open masks the rest.
+pub(super) fn captured_line(in_block: &mut bool, line: &[u8]) -> Vec<u8> {
+    let has = |needle: &[u8]| line.windows(needle.len()).any(|w| w == needle);
+    let body = *in_block && !has(b"-----END");
+    if has(b"-----BEGIN") {
+        *in_block = !has(b"-----END");
+    } else if has(b"-----END") {
+        *in_block = false;
+    }
+    if body { MASK.as_bytes() } else { line }.to_vec()
+}
+
 /// The tail as shown: UTF-8 lines only, control characters as spaces,
-/// credentials masked, each line and the line count capped. A line inside a
-/// `-----BEGIN`/`-----END` block is masked whole.
+/// credentials masked, each line and the line count capped.
 pub(super) fn sanitize(tail: &VecDeque<Vec<u8>>) -> Vec<String> {
-    let mut in_block = false;
     let lines: Vec<String> = tail
         .iter()
         .filter_map(|raw| std::str::from_utf8(raw).ok())
         .map(|line| line.trim_end_matches(['\r', '\n']))
         .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            let body = in_block && !line.contains("-----END");
-            if line.contains("-----BEGIN") {
-                in_block = true;
-            } else if line.contains("-----END") {
-                in_block = false;
-            }
-            let shown = if body { MASK.to_string() } else { mask(line) };
-            shown.chars().take(SHOWN_CHARS).collect()
-        })
+        .map(|line| mask(line).chars().take(SHOWN_CHARS).collect())
         .collect();
     let skip = lines.len().saturating_sub(SHOWN_LINES);
     lines.into_iter().skip(skip).collect()
@@ -89,10 +91,9 @@ fn mask(line: &str) -> String {
     let line = URL_USERINFO.replace_all(&line, format!("${{1}}{MASK}@"));
     let line = AUTH_SCHEME.replace_all(&line, format!("${{1}} {MASK}"));
     let line = SECRET_VALUE.replace_all(&line, format!("${{1}}${{2}}{MASK}"));
-    let whole = line.trim();
     let line = BASE64_RUN.replace_all(&line, |run: &regex::Captures<'_>| {
         let run = &run[0];
-        let cue = run.contains('+') || run.ends_with('=') || run == whole;
+        let cue = run.contains('+') || run.ends_with('=');
         if cue {
             mask_mixed(run)
         } else {
@@ -248,36 +249,36 @@ mod tests {
         for path in [
             "/usr/lib/node/modules/server/filesystem/dist/index",
             "/usr/lib/python3/dist/packages/mcp/server/filesystem.py",
+            "/usr/lib/python3/dist/packages/mcp/server/filesystem",
         ] {
             assert_eq!(one(path), path, "a path stays readable");
         }
     }
 
     #[test]
-    fn a_block_body_without_base64_cues_is_masked() {
-        let body = "MIIEvQIBADANBg/kqhkiG9w0BAQEFAASCBKcwggSjAgEA/AoIBAQC7k9x2Q";
-        let out = shown(&[
-            b"-----BEGIN EXAMPLE BLOCK-----",
-            body.as_bytes(),
-            b"-----END EXAMPLE BLOCK-----",
-            b"after the block",
-        ]);
-        assert_eq!(
-            out,
-            [
-                "-----BEGIN EXAMPLE BLOCK-----",
-                MASK,
-                "-----END EXAMPLE BLOCK-----",
-                "after the block"
-            ]
-        );
-        // The capture dropped the BEGIN line: body lines still go.
-        let evicted = shown(&[
-            body.as_bytes(),
-            body.as_bytes(),
-            b"-----END EXAMPLE BLOCK-----",
-        ]);
-        assert_eq!(evicted, [MASK, MASK, "-----END EXAMPLE BLOCK-----"]);
+    fn the_capture_masks_a_block_body_whatever_its_shape() {
+        let lines: [&[u8]; 6] = [
+            b"-----BEGIN EXAMPLE BLOCK-----\n",
+            b"MIIEvQIBADANBg/kqhkiG9w0BAQEFAASCBKcwggSjAgEA/AoIBAQC7k9x2Q\n",
+            b"AQIDBAUGBwgJCgsMDQ4PEBE=\n",
+            b"-----END EXAMPLE BLOCK-----\n",
+            b"after the block\n",
+            b"one line -----BEGIN X----- abc -----END X----- done\n",
+        ];
+        let mut open = false;
+        let kept: Vec<Vec<u8>> = lines
+            .iter()
+            .map(|line| captured_line(&mut open, line))
+            .collect();
+        assert_eq!(kept[0], lines[0]);
+        assert_eq!(kept[1], MASK.as_bytes(), "a cue-less body line");
+        assert_eq!(kept[2], MASK.as_bytes(), "a short final body line");
+        assert_eq!(kept[3..], lines[3..], "the block closed at END");
+        assert!(!open, "a block opened and closed on one line stays closed");
+        // A block never closed masks to the end.
+        let mut open = false;
+        let _ = captured_line(&mut open, b"-----BEGIN EXAMPLE BLOCK-----");
+        assert_eq!(captured_line(&mut open, b"plain text"), MASK.as_bytes());
     }
 
     #[test]

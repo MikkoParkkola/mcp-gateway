@@ -47,6 +47,7 @@ pub(super) fn spawn_stderr_tail(
     let task = tokio::spawn(async move {
         let mut reader = BufReader::new(stderr);
         let mut buf = Vec::with_capacity(RAW_LINE_BYTES);
+        let mut in_block = false;
         loop {
             buf.clear();
             let limit = RAW_LINE_BYTES as u64;
@@ -59,7 +60,7 @@ pub(super) fn spawn_stderr_tail(
                         if tail.len() == TAIL_LINES {
                             tail.pop_front();
                         }
-                        tail.push_back(buf.clone());
+                        tail.push_back(sanitize::captured_line(&mut in_block, &buf));
                     }
                     // Published first, so a held pipe cannot lose the prefix.
                     if n == RAW_LINE_BYTES && !buf.ends_with(b"\n") {
