@@ -123,3 +123,18 @@ pub fn reported_port(log: &str) -> Option<u16> {
         .collect();
     digits.parse().ok()
 }
+
+/// Whether a gateway on `port` answers `GET /livez` with 200.
+pub fn answers_livez(port: u16) -> bool {
+    use std::io::{Read as _, Write as _};
+    let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let request =
+        format!("GET /livez HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    let mut answer = String::new();
+    stream.write_all(request.as_bytes()).is_ok()
+        && stream.read_to_string(&mut answer).is_ok()
+        && answer.starts_with("HTTP/1.1 200")
+}
