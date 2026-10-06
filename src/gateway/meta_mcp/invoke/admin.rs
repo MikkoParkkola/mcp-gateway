@@ -85,8 +85,23 @@ impl MetaMcp {
             json!(null)
         };
 
+        // A caller with no session reads its own session-less spend, keyed on
+        // its caller key (MIK-7653). A keyless caller has no key, so nothing:
+        // every keyless caller would otherwise read one shared breakdown.
+        let caller_report = if target_session_id.is_none_or(str::is_empty) {
+            caller
+                .caller_key
+                .and_then(|key| self.cost_tracker.caller_snapshot(key))
+                .map_or(json!(null), |s| {
+                    serde_json::to_value(s).unwrap_or(json!(null))
+                })
+        } else {
+            json!(null)
+        };
+
         Ok(json!({
             "session": session_report,
+            "caller": caller_report,
             "keys": key_report,
             "aggregate": aggregate,
         }))

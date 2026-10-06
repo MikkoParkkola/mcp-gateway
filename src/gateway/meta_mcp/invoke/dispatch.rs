@@ -167,6 +167,9 @@ impl MetaMcp {
                 session_id,
                 api_key_name,
                 trace_id,
+                // On a session-less call `arm_key` is the non-empty caller key or None
+                // (`experiment_key`): the key the caller's own report reads.
+                caller_key: arm_key,
             },
             dispatch_guards::DirectOutcome::of(&dispatch_result),
         );

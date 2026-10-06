@@ -3,8 +3,11 @@
 //! E4 (APIKEY.1): `mcp-gateway hash-key` turns a key read from stdin into the
 //! `sha256:<hex>` digest the config stores, and `--verify` checks one.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::io::Write;
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 use sha2::{Digest, Sha256};
 
@@ -13,7 +16,8 @@ fn digest_of(bytes: &[u8]) -> String {
 }
 
 fn hash_key(args: &[&str], stdin: &[u8]) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let home = tempfile::tempdir().expect("an isolated home");
+    let mut child = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
         .arg("hash-key")
         .args(args)
         .stdin(Stdio::piped())

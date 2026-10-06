@@ -55,7 +55,8 @@ KEPT = {
 }
 # Never run on an ordinary pull request (tag, dispatch or throwaway only).
 NOT_ON_PRS = {"test-throwaway-hosted", "test-trusted", "docker-build", "docker-manifest", "publish-mcp-registry",
-              "packaged-suite-rehearsal", "binary-signing-rehearsal", "binary-sbom-rehearsal"}  # dispatch-only
+              "packaged-suite-rehearsal", "binary-signing-rehearsal", "binary-sbom-rehearsal",
+              "helm-chart-publish"}  # dispatch-only, or a tag
 BINARY_STEPS = ("Build the shipped binary", "Verify pins with cap validate (real files accepted, tampered copy refused)")
 
 

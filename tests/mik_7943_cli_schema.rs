@@ -5,14 +5,13 @@
 //! schema before sending it, and `tool invoke` types `key=value` text by the
 //! schema, so `kind=12` for a string property is sent as the string `"12"`.
 
-use std::process::{Command, Output, Stdio};
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
+use std::process::{Output, Stdio};
 
 fn run(dir: &std::path::Path, args: &[&str]) -> (Output, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
-        .env("HOME", dir)
-        .env("USERPROFILE", dir)
-        .env("MCP_GATEWAY_TEST_HOME_DIR", dir)
-        .env_remove("MCP_GATEWAY_CAPABILITIES")
+    let out = gateway_bin::command(dir, gateway_bin::Inherit::Environment)
         .stdin(Stdio::null())
         .args(args)
         .output()

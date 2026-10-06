@@ -98,6 +98,35 @@ fn budget_outcome_classifies_only_unambiguous_rate_limits() {
     );
 }
 
+/// MIK-7677.GH1613.1a — a capacity failure worded as a throttle is a failure
+/// when it arrives as a dispatch error, and an answered call (the same sample
+/// as any other `isError` result) when it arrives in-band. Neither is
+/// excluded as a rate limit; the `429` control still is.
+#[test]
+fn a_bare_throttle_phrase_is_not_excluded_from_the_budget() {
+    let capacity = "request throttled: upstream out of capacity";
+    assert_eq!(
+        BudgetOutcome::of(&Err::<Value, _>(Error::Protocol(capacity.to_string()))),
+        BudgetOutcome::Failure,
+        "a dispatch error worded as a throttle counts as a failure"
+    );
+    let in_band = json!({
+        "isError": true,
+        "content": [{"type": "text", "text": capacity}],
+    });
+    assert_eq!(
+        BudgetOutcome::of(&Ok::<_, Error>(in_band)),
+        BudgetOutcome::Success,
+        "an in-band throttle phrase is an answered call, not a rate limit"
+    );
+    assert_eq!(
+        BudgetOutcome::of(&Err::<Value, _>(Error::Protocol(
+            "HTTP 429 Too Many Requests".to_string()
+        ))),
+        BudgetOutcome::IgnoredRateLimit
+    );
+}
+
 /// GH475.RL.14 — a backend that reports its 429 the MCP way, as a
 /// successful response carrying `isError: true`, is excluded too.
 ///
