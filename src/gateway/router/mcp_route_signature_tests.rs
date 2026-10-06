@@ -27,7 +27,7 @@ fn registered_in(table: &str) -> Result<Vec<String>, String> {
         ".nest_service(",
         ".route_service(",
         ".merge::<",
-        "::merge(",
+        "::merge",
     ] {
         if table.contains(form) {
             return Err(format!("unsupported router composition: {form}"));
@@ -219,6 +219,10 @@ fn only_a_declared_outbound_reply_passes() {
             false,
         ),
         (
+            "fn h<F>(f: F) -> OutboundReply\nwhere\n    F: Fn() -> Response,",
+            true,
+        ),
+        (
             "async fn h(s: State) -> Result<OutboundReply, Error>",
             false,
         ),
@@ -245,6 +249,7 @@ fn an_unreviewed_merged_router_fails_closed() {
         "\napp.merge(",
         "\napp = app.merge::<Router<()>>(mcp_router);",
         "\napp = Router::merge(app, mcp_router);",
+        "\napp = Router::merge::<Router<()>>(app, mcp_router);",
     ] {
         let table = format!("{route}{merge}");
         assert!(registered_in(&table).is_err(), "must not pass: {table}");
