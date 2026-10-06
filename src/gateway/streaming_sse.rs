@@ -57,7 +57,13 @@ pub fn create_sse_response(
                     if let Some(mark) = &item.mark
                         && !mark.written(multiplexer.reads.get()).await
                     {
+                        if let Some(watch) = &item.watch {
+                            watch.report(false);
+                        }
                         continue;
+                    }
+                    if let Some(watch) = &item.watch {
+                        watch.report(true);
                     }
                     let notification = &item.note;
                     // MCP-standard events (event_type == "message") send raw
