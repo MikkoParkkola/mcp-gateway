@@ -17,7 +17,7 @@ use crate::protocol::RequestId;
 use crate::security::audit::{
     AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationTarget,
 };
-use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
+use crate::security::transparency_log::CorrelationKey;
 
 use super::AppState;
 use super::helpers::build_error_response;
@@ -73,7 +73,7 @@ impl<'a> Refused<'a> {
         let trace_id =
             crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
         let envelope = AuditEnvelope {
-            trace_id: Some(trace_id),
+            trace_id: Some(trace_id.clone()),
             otel_trace_id: otel_trace_id.clone(),
             outcome: AuditOutcome::Denied(code),
             who: self.who,
@@ -88,21 +88,12 @@ impl<'a> Refused<'a> {
         let tenants = state.meta_mcp.request_tenants(target.arguments);
         let attribution = DispatchNotes::default().attribution(&state.meta_mcp, tenants, None);
         let session = self.session_id.to_string();
-        // The meta writer's correlation ladder: caller trace id, then session.
+        // The meta writer's correlation ladder; a modern call's session is
+        // `""`, so it falls to the minted trace id (MIK-7640).
         let written = log
             .append_bounded(move |log| {
-                // The handler always has a session id, as `invoke_tool` is
-                // handed one, so the trace-id rung is never reached here.
-                let key = match otel_trace_id.as_deref() {
-                    Some(otel) => CorrelationKey {
-                        id: otel,
-                        source: CorrelationSource::OtelTraceId,
-                    },
-                    None => CorrelationKey {
-                        id: &session,
-                        source: CorrelationSource::SessionId,
-                    },
-                };
+                let key =
+                    CorrelationKey::ladder(otel_trace_id.as_deref(), Some(&session), &trace_id);
                 log.log_invocation_attributed(
                     key,
                     &envelope,

@@ -25,6 +25,29 @@ const TASK_RECOVERY_ROUTE: &str = "task_recovery";
 /// Its `correlation_source`: the `session_id` field holds the gateway task id.
 const TASK_ID_CORRELATION: &str = "task_id";
 
+impl<'a> CorrelationKey<'a> {
+    /// MIK-7215.CONTROL.3/.3a: the caller's W3C trace id, then the session
+    /// id, then the id minted for this invocation. The modern HTTP route
+    /// carries "no session" as `""`; an empty id is no key, or every
+    /// stateless call would correlate as one (MIK-7640).
+    pub(crate) fn ladder(otel: Option<&'a str>, session: Option<&'a str>, minted: &'a str) -> Self {
+        match (otel, session.filter(|session| !session.is_empty())) {
+            (Some(id), _) => Self {
+                id,
+                source: CorrelationSource::OtelTraceId,
+            },
+            (None, Some(id)) => Self {
+                id,
+                source: CorrelationSource::SessionId,
+            },
+            (None, None) => Self {
+                id: minted,
+                source: CorrelationSource::TraceId,
+            },
+        }
+    }
+}
+
 /// What an invocation entry says about the call, beside the hashes.
 struct Record<'a> {
     route: &'a str,
