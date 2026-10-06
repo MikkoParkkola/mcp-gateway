@@ -592,6 +592,54 @@ class PlainFieldWhitelist(unittest.TestCase):
                 self.assertFalse(cfc.is_plain_field(shape))
 
 
+class RealTracingFixture(unittest.TestCase):
+    """MIK-7731: the attribution rules against a real llvm-cov report, not
+    synthetic DA records. scripts/release/fixtures/tracing_attribution holds a
+    crate with the gateway's tracing version and `log` feature, its lcov from
+    `cargo llvm-cov` and the toolchain that produced it (toolchain.txt)."""
+
+    ROOT = HERE / "fixtures" / "tracing_attribution"
+
+    def grade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inventory = pathlib.Path(tmp) / "inv.tsv"
+            inventory.write_text(HEADER + "".join(
+                f"src/lib.rs\t{name}\t1\tcritical\td\t{name}\tr\n"
+                for name in ("plain_fields", "head_call", "unreached")))
+            results = cfc.grade(self.ROOT, inventory, [self.ROOT / "fixture.lcov"])
+        return {r[1]["fn"]: r for r in results}
+
+    def test_a_head_line_count_does_not_show_its_call_ran(self):
+        # The report itself: the head line of `head_call` was reached, and
+        # `label`, the call on that line, never ran (no subscriber, so tracing
+        # never evaluated the field). The rule that grades such a line as
+        # missed is what keeps that call from counting as covered.
+        hits = cfc.read_lcov([self.ROOT / "fixture.lcov"], self.ROOT)["src/lib.rs"]
+        self.assertEqual(hits[25], 1, "the head line was reached")
+        self.assertEqual([hits[n] for n in (7, 8, 9)], [0, 0, 0], "label never ran")
+        result = self.grade()["head_call"]
+        self.assertEqual(result[0], "BELOW")
+        self.assertEqual(result[4], [25])
+        self.assertEqual(result[9], ["src/lib.rs:25 (head count 1)"])
+
+    def test_a_reached_plain_field_macro_is_fully_covered(self):
+        # This toolchain emits no record at all for the plain-field argument
+        # lines (17, 18), so the plain-field rule has nothing to exclude: it is
+        # inert here, and it can only ever drop a zero-count plain field of a
+        # reached macro, never pass an unrun line.
+        hits = cfc.read_lcov([self.ROOT / "fixture.lcov"], self.ROOT)["src/lib.rs"]
+        self.assertNotIn(17, hits)
+        self.assertNotIn(18, hits)
+        result = self.grade()["plain_fields"]
+        self.assertEqual((result[0], result[4], result[8]), ("ok", [], []))
+
+    def test_an_unreached_macro_is_still_missed(self):
+        result = self.grade()["unreached"]
+        self.assertEqual(result[0], "BELOW")
+        self.assertIn(33, result[4], "the unreached macro's head is missed")
+        self.assertEqual(result[5], 0)
+
+
 class InventoryResolves(unittest.TestCase):
     """Every row of the real inventory names a function that exists.
 
