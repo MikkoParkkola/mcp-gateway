@@ -559,9 +559,11 @@ impl CapabilityExecutor {
         let principal = principal(capability, context, self.multi_user.load(Ordering::Acquire))?;
         self.mcp_children.ensure_sweeper();
         let lookup = self.env_lookup();
+        // As `child_env`: a reserved name never reaches the child.
         let env_values: Vec<String> = config
             .env
             .iter()
+            .filter(|name| !is_reserved(name))
             .filter_map(|name| lookup(name))
             .map(|v| v.to_string_lossy().into_owned())
             .collect();
