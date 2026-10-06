@@ -157,3 +157,64 @@ fn an_invalid_config_is_refused_and_left_unwritten() {
         "# mine\nbackends: {}\n"
     );
 }
+
+/// The web UI and admin write through `backend_ops::write_config`.
+fn ui_write(path: &Path, change: impl FnOnce(&mut mcp_gateway::config::Config)) -> String {
+    use mcp_gateway::gateway::ui::backend_ops::{load_config_or_default, write_config};
+    let mut config = load_config_or_default(path);
+    change(&mut config);
+    write_config(path, &config).expect("write config");
+    std::fs::read_to_string(path).expect("read")
+}
+
+fn echo_backend() -> mcp_gateway::config::BackendConfig {
+    serde_yaml::from_str("command: echo\n").expect("backend")
+}
+
+const NOTED: &str = "# kept by hand\nbackends:\n  # why old exists\n  old:\n    command: x\n";
+
+#[test]
+fn a_single_backend_add_and_remove_through_the_ui_writer_keep_comments() {
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED).expect("write");
+
+    let added = ui_write(&path, |c| {
+        c.backends.insert("new".into(), echo_backend());
+    });
+    assert!(
+        added.contains("# kept by hand") && added.contains("# why old exists"),
+        "{added}"
+    );
+    assert!(added.contains("new:"), "{added}");
+
+    let removed = ui_write(&path, |c| {
+        c.backends.remove("new");
+    });
+    assert!(
+        removed.contains("# kept by hand") && removed.contains("# why old exists"),
+        "{removed}"
+    );
+    assert!(!removed.contains("new:"), "{removed}");
+}
+
+#[test]
+fn a_change_beyond_one_backend_takes_the_full_rewrite() {
+    for change in [
+        (|c: &mut mcp_gateway::config::Config| {
+            c.backends.insert("one".into(), echo_backend());
+            c.backends.insert("two".into(), echo_backend());
+        }) as fn(&mut mcp_gateway::config::Config),
+        |c| c.server.port += 1,
+    ] {
+        let home = tempfile::tempdir().expect("home");
+        let path = home.path().join("gateway.yaml");
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED).expect("write");
+        let written = ui_write(&path, change);
+        assert!(
+            !written.contains("# kept by hand"),
+            "only a one-backend change is spliced:\n{written}"
+        );
+        mcp_gateway::config::Config::load_literal(Some(&path)).expect("the rewrite loads");
+    }
+}
