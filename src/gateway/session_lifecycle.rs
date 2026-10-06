@@ -533,27 +533,51 @@ mod tests {
 
     /// A hold asked for while a sweep is freeing that key's state is granted
     /// only once the freeing is done, so the held call's writes come after it.
+    /// The handler does not finish until it is told to, so a hold granted
+    /// early is seen early, whatever the scheduler does.
     #[test]
     fn a_hold_waits_for_a_sweep_already_freeing_its_key() {
+        use std::sync::mpsc::{RecvTimeoutError, channel};
+        use std::time::Duration;
         let lifecycle = Arc::new(SessionLifecycle::new());
         let freed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (started_tx, started_rx) = channel();
+        let (go_tx, go_rx) = channel::<()>();
+        let go_rx = parking_lot::Mutex::new(go_rx);
         let done = Arc::clone(&freed);
         lifecycle.register("slow", move |_| {
             started_tx.send(()).expect("test alive");
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            let _ = go_rx.lock().recv_timeout(Duration::from_secs(10));
             done.store(true, Ordering::SeqCst);
         });
         lifecycle.track("caller", 0);
         let sweeper = Arc::clone(&lifecycle);
         let sweep = std::thread::spawn(move || sweeper.reap(1));
         started_rx.recv().expect("the sweep chose the key");
-        let hold = lifecycle.hold("caller");
+
+        let (held_tx, held_rx) = channel();
+        let (holder, seen) = (Arc::clone(&lifecycle), Arc::clone(&freed));
+        let hold = std::thread::spawn(move || {
+            let hold = holder.hold("caller");
+            held_tx
+                .send(seen.load(Ordering::SeqCst))
+                .expect("test alive");
+            drop(hold);
+        });
+        let freed_when_held = match held_rx.recv_timeout(Duration::from_millis(500)) {
+            Ok(freed_when_held) => freed_when_held,
+            Err(RecvTimeoutError::Timeout) => {
+                go_tx.send(()).expect("handler alive");
+                held_rx.recv().expect("the hold is granted after the sweep")
+            }
+            Err(RecvTimeoutError::Disconnected) => panic!("the holder died"),
+        };
+        let _ = go_tx.send(());
         assert!(
-            freed.load(Ordering::SeqCst),
+            freed_when_held,
             "a hold was granted while a sweep was still freeing its key"
         );
-        drop(hold);
+        hold.join().expect("holder");
         assert_eq!(sweep.join().expect("sweep"), 1);
     }
 }
