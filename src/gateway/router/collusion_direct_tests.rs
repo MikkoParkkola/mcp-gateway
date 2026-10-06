@@ -53,6 +53,9 @@ enum Read {
     /// [`PROSE`] plus an email address the gateway classifies as personal
     /// data, under a backend-forged `public` verdict.
     ForgedPublic,
+    /// This result, as is.
+    #[cfg(feature = "cost-governance")]
+    Raw(Value),
 }
 
 /// Backend `alpha`: `read` answers per [`Read`]; `send` counts deliveries.
@@ -141,6 +144,8 @@ impl Transport for Alpha {
                 id,
                 json!({"content": [{"type": "text", "text": PROSE}], "isError": true}),
             ),
+            #[cfg(feature = "cost-governance")]
+            Read::Raw(result) => JsonRpcResponse::success(id, result),
             Read::Failed(text) => JsonRpcResponse::success(
                 id,
                 json!({"content": [{"type": "text", "text": text}], "isError": true}),

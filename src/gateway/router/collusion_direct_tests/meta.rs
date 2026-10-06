@@ -466,21 +466,21 @@ async fn meta_replay_leaves_the_gateway_hint_out_of_the_receipt() {
 const CATEGORY: &str =
     "cellar inventory of pressed cider barrels sorted by vintage, cask size and orchard row";
 
-/// `read` costs 1.0 and `send`, in the same [`CATEGORY`], 0.1: every answer
-/// to `read` gets the gateway's `_cost_suggestion` naming the category.
+/// `dear` costs 1.0 and `cheap`, in the same [`CATEGORY`], 0.1: every answer
+/// to `dear` gets the gateway's `_cost_suggestion` naming the category.
 #[cfg(feature = "cost-governance")]
-fn suggest_send(fx: &mut Fixture) {
+fn suggest(fx: &mut Fixture, dear: &str, cheap: &str) {
     use crate::cost_accounting::config::CostGovernanceConfig;
     let mut cfg = CostGovernanceConfig {
         enabled: true,
         ..Default::default()
     };
-    cfg.tool_costs.insert("read".to_string(), 1.0);
-    cfg.tool_costs.insert("send".to_string(), 0.1);
+    cfg.tool_costs.insert(dear.to_string(), 1.0);
+    cfg.tool_costs.insert(cheap.to_string(), 0.1);
     cfg.alternatives = Some(
         [(
             CATEGORY.to_string(),
-            vec!["read".to_string(), "send".to_string()],
+            vec![dear.to_string(), cheap.to_string()],
         )]
         .into_iter()
         .collect(),
@@ -504,7 +504,7 @@ fn suggest_send(fx: &mut Fixture) {
 async fn meta_cache_hit_leaves_the_cost_suggestion_out_of_the_receipt() {
     let cache = Some(Arc::new(crate::cache::ResponseCache::new()));
     let mut fx = meta_fixture(Setup::default(), cache).await;
-    suggest_send(&mut fx);
+    suggest(&mut fx, "read", "send");
     let read = invoke("read", &json!({}));
     let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &json!({})).await;
     assert!(
@@ -530,7 +530,7 @@ async fn meta_cache_hit_leaves_the_cost_suggestion_out_of_the_receipt() {
 #[tokio::test]
 async fn meta_replay_leaves_the_cost_suggestion_out_of_the_receipt() {
     let mut fx = meta_fixture(Setup::default(), None).await;
-    suggest_send(&mut fx);
+    suggest(&mut fx, "read", "send");
     let read = invoke("read", &json!({}));
     let (_, first) = post(
         &fx,
@@ -561,4 +561,54 @@ async fn meta_replay_leaves_the_cost_suggestion_out_of_the_receipt() {
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 1);
     let relay = format!("{PROSE} ");
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
+}
+
+/// The `_cost_suggestion` a meta answer carries, read from the result or
+/// from the JSON text it is wrapped in.
+#[cfg(feature = "cost-governance")]
+fn cost_suggestion(body: &str) -> Value {
+    let result = &envelope(body)["result"];
+    let wrapped = result["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok());
+    let found = wrapped.as_ref().unwrap_or(result)["_cost_suggestion"].clone();
+    assert!(
+        found.to_string().contains(CATEGORY),
+        "base: no suggestion: {body}"
+    );
+    found
+}
+
+/// MIK-7991 (R4): a plan step's cache entry holds only that step's writes.
+/// Step A (`send`) gets the gateway's suggestion; step B (`read`) answers
+/// with a backend member equal to it. A later hit on B's entry keeps that
+/// backend member in the receipt, so relaying it is refused.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn meta_chain_step_entry_holds_only_its_own_writes() {
+    let cache = Some(Arc::new(crate::cache::ResponseCache::new()));
+    let mut fx = meta_fixture(Setup::default(), cache).await;
+    suggest(&mut fx, "send", "read");
+    let (_, sent) = meta_send(&fx, Some("a"), "hello").await;
+    let mut answer = json!({"content": [{"type": "text", "text": "seven rows"}], "isError": false});
+    answer["_cost_suggestion"] = cost_suggestion(&sent);
+    fx.answer_read(Read::Raw(answer));
+    let chain = json!({"chain": [
+        {"tool": "alpha:send", "arguments": {"text": "hello"}},
+        {"tool": "alpha:read", "arguments": {}}
+    ]});
+    let (_, body) = post(&fx, Some("a"), "gateway_execute", &chain, &json!({})).await;
+    assert!(
+        envelope(&body).get("error").is_none() && fx.sends() == 2,
+        "base: the chain runs: {body}"
+    );
+    let reads = fx.reads();
+    let read = invoke("read", &json!({}));
+    let (_, hit) = post(&fx, Some("a"), "gateway_invoke", &read, &json!({})).await;
+    assert_eq!(
+        fx.reads(),
+        reads,
+        "base: the read is a hit on B's entry: {hit}"
+    );
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 2);
 }
