@@ -191,8 +191,17 @@ fn a_backend_offer_with_a_guessed_seal_keeps_the_prefixed_text() {
 /// rejection carries no offer keys, so its text keeps today's prefix.
 #[test]
 fn a_sealed_upstream_rejection_keeps_the_prefixed_text() {
-    // GIVEN: the gateway's own rejection mark, sealed like an offer
-    let refused = Error::Config("backend 'drive' refused the account credential (HTTP 401)".into());
+    // GIVEN: the gateway's own rejection mark, sealed like an offer, over a
+    // backend error that itself carries offer-shaped keys
+    let refused = Error::JsonRpc {
+        code: -32001,
+        message: "backend 'drive' refused the account credential (HTTP 401)".into(),
+        data: Some(json!({
+            "schema_version": "accounts.v1",
+            "account_id": "work",
+            "connect_url": "https://backend.example.invalid/connect",
+        })),
+    };
     let rejection = crate::personal_accounts::refusal::mark_rejection(
         crate::personal_accounts::RejectionOutcome::Stale,
         &refused,
@@ -209,6 +218,8 @@ fn a_sealed_upstream_rejection_keeps_the_prefixed_text() {
         error.message
     );
     assert_eq!(error.message, rejection.to_string());
+    // and none of the backend's offer keys reach the client
+    assert_eq!(error.data, Some(json!({})));
 }
 
 #[test]
