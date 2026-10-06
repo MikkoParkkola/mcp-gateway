@@ -47,7 +47,14 @@ pub struct SessionLifecycle {
     /// Keys a running task call is writing under, with how many such calls.
     /// A sweep passes them over: a caller whose task is still running is not
     /// idle, however long ago its last request was (MIK-7828.FIX.2).
+    /// Lock order: `sweeping`, then `held`, then `tracked`; never the reverse.
     held: parking_lot::Mutex<std::collections::HashMap<String, usize>>,
+    /// Held by `reap` from choosing the expired keys until their handlers
+    /// have run, and by `hold` while it registers. A hold cannot start between
+    /// a key being chosen and its state being freed, so nothing a held call
+    /// writes is freed by a sweep that chose the key before the hold.
+    /// Handlers run under it and must not take a hold.
+    sweeping: parking_lot::Mutex<()>,
 }
 
 /// A running call's claim on its caller key; see [`SessionLifecycle::hold`].
@@ -59,19 +66,19 @@ pub(crate) struct KeyHold {
 
 impl Drop for KeyHold {
     /// The call is over: it was the caller's latest activity, so the key's
-    /// deadline runs one [`IDLE_TTL`] from now.
+    /// deadline runs one [`IDLE_TTL`] from now. Renewed BEFORE the hold is
+    /// released, so a sweep in between finds a fresh deadline, never the
+    /// expired one the hold was covering.
     fn drop(&mut self) {
-        {
-            let mut held = self.lifecycle.held.lock();
-            if let Some(count) = held.get_mut(&self.key) {
-                *count -= 1;
-                if *count == 0 {
-                    held.remove(&self.key);
-                }
-            }
-        }
         self.lifecycle
             .track(self.key.clone(), now_unix() + IDLE_TTL.as_secs());
+        let mut held = self.lifecycle.held.lock();
+        if let Some(count) = held.get_mut(&self.key) {
+            *count -= 1;
+            if *count == 0 {
+                held.remove(&self.key);
+            }
+        }
     }
 }
 
@@ -172,9 +179,9 @@ impl SessionLifecycle {
     ///
     /// **Residual, stated rather than implied**: a key re-tracked between
     /// reaping's removal and this call still has its handlers fired, because
-    /// nothing holds the two together. Closing that needs the ownership model
-    /// this module does not yet have — it is not reached from production at all
-    /// (MIK-7291), and the fix belongs with the decision to wire it.
+    /// nothing holds the two together. A key taken by [`Self::hold`] is not
+    /// exposed to it: a hold waits for a running sweep to finish (`sweeping`).
+    /// A plain [`Self::track`] still is, and the reaper does run in production.
     fn fire_cleanup(&self, session_id: &str) {
         let cbs = self.callbacks.read();
         if cbs.is_empty() {
@@ -207,8 +214,10 @@ impl SessionLifecycle {
 
     /// Keep `key` from being reclaimed until the returned guard drops, then
     /// renew its deadline. Taken around a task's backend call, which can run
-    /// far past [`IDLE_TTL`] with no request from its caller in between.
+    /// far past [`IDLE_TTL`] with no request from its caller in between. A
+    /// key not yet tracked is tracked from the moment the guard drops.
     pub(crate) fn hold(self: &Arc<Self>, key: &str) -> KeyHold {
+        let _sweeping = self.sweeping.lock();
         *self.held.lock().entry(key.to_owned()).or_default() += 1;
         KeyHold {
             lifecycle: Arc::clone(self),
@@ -242,6 +251,8 @@ impl SessionLifecycle {
         for id in due {
             self.fire_ended(&id);
         }
+        // Until the handlers below have run: see `sweeping`.
+        let _sweeping = self.sweeping.lock();
         let expired: Vec<String> = {
             let held = self.held.lock();
             let mut tracked = self.tracked.write();
@@ -518,5 +529,31 @@ mod tests {
         );
         assert_eq!(lifecycle.reap(now_unix() + IDLE_TTL.as_secs() + 1), 1);
         assert_eq!(fired.load(Ordering::SeqCst), 1);
+    }
+
+    /// A hold asked for while a sweep is freeing that key's state is granted
+    /// only once the freeing is done, so the held call's writes come after it.
+    #[test]
+    fn a_hold_waits_for_a_sweep_already_freeing_its_key() {
+        let lifecycle = Arc::new(SessionLifecycle::new());
+        let freed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let done = Arc::clone(&freed);
+        lifecycle.register("slow", move |_| {
+            started_tx.send(()).expect("test alive");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            done.store(true, Ordering::SeqCst);
+        });
+        lifecycle.track("caller", 0);
+        let sweeper = Arc::clone(&lifecycle);
+        let sweep = std::thread::spawn(move || sweeper.reap(1));
+        started_rx.recv().expect("the sweep chose the key");
+        let hold = lifecycle.hold("caller");
+        assert!(
+            freed.load(Ordering::SeqCst),
+            "a hold was granted while a sweep was still freeing its key"
+        );
+        drop(hold);
+        assert_eq!(sweep.join().expect("sweep"), 1);
     }
 }
