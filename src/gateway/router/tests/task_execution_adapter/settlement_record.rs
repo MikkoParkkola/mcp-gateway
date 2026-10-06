@@ -703,14 +703,20 @@ async fn r8_a_cancel_winning_after_the_record_leaves_one_record() {
         );
         tokio::task::yield_now().await;
     }
-    let cancelled = post(
-        &fx.state,
-        "key-a",
-        task_method(9_002, "tasks/cancel", json!({ "taskId": id })),
-    )
-    .await;
-    std::assert!(cancelled.get("error").is_none(), "{cancelled}");
+    // The cancel's audit append queues on the permit the held write owns, so
+    // release once it queued, not after it returns at the bound (MIK-7912).
+    let waits = fx.log.permit_waits_for_test();
+    let request = task_method(9_002, "tasks/cancel", json!({ "taskId": id }));
+    let state = Arc::clone(&fx.state);
+    let cancel = tokio::spawn(async move { post(&state, "key-a", request).await });
+    let deadline = Instant::now() + ARRIVAL_BOUND;
+    while fx.log.permit_waits_for_test() == waits {
+        std::assert!(Instant::now() < deadline, "the cancel never queued");
+        tokio::task::yield_now().await;
+    }
     stall.0.release();
+    let cancelled = cancel.await.expect("the cancel answers");
+    std::assert!(cancelled.get("error").is_none(), "{cancelled}");
     let _ = reader.await.expect("the owner's read answers");
 
     let fetched = get_task(&fx.state, "key-a", &id).await;
@@ -719,6 +725,11 @@ async fn r8_a_cancel_winning_after_the_record_leaves_one_record() {
         "cancelled",
         "the cancel's commit stands: {fetched}"
     );
+    // The released write lands on the blocking pool; nothing above awaits it.
+    let deadline = Instant::now() + ARRIVAL_BOUND;
+    while fx.settlement_records().is_empty() && Instant::now() < deadline {
+        tokio::task::yield_now().await;
+    }
     std::assert_eq!(fx.settlement_records().len(), 1, "{:?}", fx.records());
 }
 
