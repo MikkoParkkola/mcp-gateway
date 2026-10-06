@@ -77,6 +77,7 @@ fn event(name: &str, data: Value) -> SourceEvent {
         upstream_id: "u".into(),
         occurred_at: Utc::now(),
         data,
+        lifecycle_key: None,
     }
 }
 

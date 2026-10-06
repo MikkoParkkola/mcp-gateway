@@ -90,6 +90,7 @@ impl OperationalSource {
             upstream_id: hex::encode(rand::random::<[u8; 16]>()),
             occurred_at: Utc::now(),
             data,
+            lifecycle_key: None,
         });
     }
 }
