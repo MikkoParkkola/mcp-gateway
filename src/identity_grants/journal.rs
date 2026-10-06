@@ -115,10 +115,34 @@ fn resolved_within(grants: &Path, hops: u8) -> PathBuf {
 /// The journal beside the resolved grant file: its name plus `.journal.jsonl`.
 #[must_use]
 pub fn journal_path(grants: &Path) -> PathBuf {
-    let grants = resolved(grants);
+    journal_beside(&resolved(grants))
+}
+
+fn journal_beside(grants: &Path) -> PathBuf {
     let mut name = grants.file_name().unwrap_or_default().to_os_string();
     name.push(".journal.jsonl");
     grants.with_file_name(name)
+}
+
+/// A 4.0.0 pre-release kept the journal beside the grant path as spelled,
+/// so a path spelled through a symlink left it beside the link. Called under
+/// the lock: while the resolved journal does not exist yet, that one is moved
+/// to it, or copied when the move crosses filesystems, so its entries are
+/// still read (MIK-7715).
+async fn adopt_spelled_journal(spelled: &Path, grants: &Path) {
+    let (old, new) = (journal_beside(spelled), journal_path(grants));
+    if tokio::fs::symlink_metadata(&new).await.is_ok()
+        || !tokio::fs::symlink_metadata(&old)
+            .await
+            .is_ok_and(|meta| meta.is_file())
+    {
+        return;
+    }
+    if tokio::fs::rename(&old, &new).await.is_err()
+        && let Err(error) = tokio::fs::copy(&old, &new).await
+    {
+        tracing::warn!(%error, from = %old.display(), to = %new.display(), "grant journal from a pre-release path not adopted");
+    }
 }
 
 /// The lock file both the CLI and the gateway take around a grant change.
@@ -212,19 +236,33 @@ pub(crate) async fn apply_change_with(
             grants.display()
         )));
     }
-    if let Some(parent) = grants.parent().filter(|p| !p.as_os_str().is_empty()) {
+    // Resolved so the lock, the read, the write and the append all name one
+    // file. Writing the real file also keeps a symlinked grant path a
+    // symlink: the atomic replace would swap the link itself for a regular
+    // file.
+    let spelled = grants;
+    let mut target = resolved(grants);
+    if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|e| ChangeError::Refused(format!("could not lock the grant journal: {e}")))?;
+        // Again, now that a directory it named may exist.
+        target = resolved(&target);
     }
-    // Resolved once the directory exists, so the lock, the read, the write
-    // and the append all name one file. Writing the real file also keeps a
-    // symlinked grant path a symlink: the atomic replace would swap the link
-    // itself for a regular file.
-    let grants = &resolved(grants);
+    if tokio::fs::symlink_metadata(&target)
+        .await
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return Err(ChangeError::Refused(format!(
+            "identity grants file {} is a chain of symlinks that does not resolve",
+            spelled.display()
+        )));
+    }
+    let grants = &target;
     // Held until this function returns: from before the read to after the
     // append, so a gateway reload never sees the file without its entry.
     let _lock = acquire_lock(grants).await.map_err(ChangeError::Refused)?;
+    adopt_spelled_journal(spelled, grants).await;
     // Refuse before the grant file is touched: a journal other users can
     // write to never takes an entry (append_line re-checks), so the change
     // would land unjournalled.
@@ -527,6 +565,7 @@ pub(crate) struct LockedRead {
 /// `None` when the lock stayed busy for `wait`, or failed in any other way.
 pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Option<LockedRead> {
     use crate::config_reload::grant_audit::JournalRead;
+    let spelled = grants;
     let grants = &resolved(grants);
     let lock = lock_path(grants);
     let deadline = tokio::time::Instant::now() + wait;
@@ -579,6 +618,9 @@ pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Opt
             }
         }
     };
+    if guard.is_some() {
+        adopt_spelled_journal(spelled, grants).await;
+    }
     let file = super::read_identity_grants_file(grants).await;
     let journal = journal_path(grants);
     let read = tokio::task::spawn_blocking(move || {
