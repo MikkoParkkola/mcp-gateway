@@ -526,7 +526,7 @@ impl MetaMcp {
                     // so a replay under another surface is a different answer (MIK-7974).
                     let mut representation =
                         self.meta_representation(tool_name, full, session, arm_key);
-                    representation["surface"] = json!(format!("{:?}", self.hint_surface(caller)));
+                    representation["surface"] = json!(self.hint_surface(caller).key());
                     representation
                 },
                 id,

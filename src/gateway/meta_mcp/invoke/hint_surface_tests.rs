@@ -101,7 +101,10 @@ async fn a_stored_answer_is_not_replayed_under_another_surface() {
     let other = meta
         .invoke_tool(&args, None, &as_caller(SurfaceRequest::CodeMode))
         .await;
-    assert!(other.is_err(), "replayed under another surface: {other:?}");
+    assert!(
+        matches!(other, Err(crate::Error::JsonRpc { code: 409, .. })),
+        "replayed under another surface: {other:?}"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1, "re-executed: {other:?}");
 }
 

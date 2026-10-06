@@ -264,4 +264,14 @@ async fn a_codemode_param_caller_gets_code_mode_recovery_hints() {
         code_mode.contains("`gateway_search`") && !code_mode.contains("gateway_list_tools"),
         "URL.1: {code_mode}"
     );
+    // The tool the hint names is one this caller's own listing shows.
+    let list = json!({"jsonrpc": "2.0", "id": 6, "method": "tools/list"});
+    let listed = post_mcp(&state, "/mcp?codemode=search_and_execute", &list).await;
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(names.contains(&"gateway_search"), "{names:?}");
 }
