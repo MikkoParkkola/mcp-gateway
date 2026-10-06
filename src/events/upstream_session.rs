@@ -259,8 +259,13 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             // A notice arrived: drop the cached list and refill it before the
             // hub hears, so the subscriber's re-read is fresh and nothing sees
             // an emptied cache. At most once per tick however many notices
-            // came; a notice during a refill waits for the next one.
-            backend.invalidate_tools();
+            // came; a notice during a refill waits for the next one. A silent
+            // retry keeps the cache: the failed refill already emptied it, so
+            // what is there now was read after the notice, and invalidating
+            // again could void a reader's fill into a new cooldown (MIK-8007).
+            if state.refill_announces {
+                backend.invalidate_tools();
+            }
             refill = Some(start_refill(backend, &shared.name));
         }
         if !backend_still_current(backend, &target.handle) {
