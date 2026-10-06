@@ -28,6 +28,7 @@ const BACKEND_URL: &str = "https://mcp.example.test/v1/mcp";
 const DESCRIPTOR: &str = "workspace-personal";
 const ISSUER: &str = "https://auth.example.test";
 const ACCESS_TOKEN: &str = "legacy-access-token-e2e";
+const REFRESH_TOKEN: &str = "legacy-refresh-token-e2e";
 /// 32 raw bytes (all 0x51) in standard base64: a well-formed store key.
 const KEY_B64: &str = "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=";
 
@@ -35,7 +36,7 @@ const KEY_B64: &str = "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=";
 fn legacy_json() -> String {
     format!(
         "{{\n  \"access_token\": \"{ACCESS_TOKEN}\",\n  \"token_type\": \"Bearer\",\n  \
-         \"refresh_token\": \"legacy-refresh-token-e2e\",\n  \"expires_at\": 4102444800,\n  \
+         \"refresh_token\": \"{REFRESH_TOKEN}\",\n  \"expires_at\": 4102444800,\n  \
          \"scope\": \"read write\"\n}}"
     )
 }
@@ -156,11 +157,13 @@ fn assert_report(out: &Output, headline: &str) {
     for line in lines {
         assert!(stdout.contains(line), "missing {line:?}\n{}", show(out));
     }
-    assert!(
-        !stdout.contains(ACCESS_TOKEN),
-        "token printed\n{}",
-        show(out)
-    );
+    for secret in [ACCESS_TOKEN, REFRESH_TOKEN] {
+        assert!(
+            !stdout.contains(secret) && !String::from_utf8_lossy(&out.stderr).contains(secret),
+            "a token was printed\n{}",
+            show(out)
+        );
+    }
 }
 
 #[test]
@@ -208,10 +211,12 @@ fn migrate_credentials_moves_a_3x_token_into_the_store_and_leaves_the_source() {
     let records = install.store_records();
     assert_eq!(records.len(), 1, "one grant migrated: {records:?}");
     let record = fs::read_to_string(&records[0]).expect("record");
-    assert!(
-        !record.contains(ACCESS_TOKEN),
-        "the store holds the token in plain text"
-    );
+    for secret in [ACCESS_TOKEN, REFRESH_TOKEN] {
+        assert!(
+            !record.contains(secret),
+            "the store holds a token in plain text"
+        );
+    }
 
     let rerun = install.migrate(ISSUER);
     assert_report(&rerun, "Nothing to do: this account already holds a grant.");
