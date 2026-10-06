@@ -134,6 +134,39 @@ class KeylessReadOnly(unittest.TestCase):
             with self.assertRaises(mod.Unverifiable):
                 mod.env_override({}, [])
 
+    def test_a_capture_key_that_filters_tools_fails(self):  # T15: MIK-7851.CHECK.1
+        import hashlib
+        digest = "sha256:" + hashlib.sha256(b"cap-key").hexdigest()
+        def auth(**fields):
+            return {"auth": {"bearer_token": "static", "api_keys": [
+                {"name": "ops", "key_sha256": digest, "allowed_tools": None, **fields}]}}
+        self.assertEqual(mod.key_problems(auth(), None), [])
+        self.assertEqual(mod.key_problems(auth(), "static"), [])
+        self.assertEqual(mod.key_problems(auth(), "cap-key"), [])
+        self.assertEqual(len(mod.key_problems(auth(allowed_tools=["git_*"]), "cap-key")), 1)
+        self.assertEqual(len(mod.key_problems(auth(denied_tools=["rm"]), "cap-key")), 1)
+        with self.assertRaises(mod.Unverifiable):
+            mod.key_problems(auth(), "absent-key")
+
+    def test_auth_on_without_the_capture_key_fails_closed(self):  # T17: MIK-7851.CHECK.1
+        with self.assertRaises(mod.Unverifiable):
+            mod.key_problems({"auth": {"enabled": True}}, None)
+
+    def test_an_env_layer_setting_auth_fails_closed(self):  # T18: key filters can come from env
+        with tempfile.TemporaryDirectory() as tmp:
+            env = pathlib.Path(tmp) / "launcher.env"
+            env.write_text("MCP_GATEWAY_AUTH__API_KEYS='[]'\n")
+            with self.assertRaises(mod.Unverifiable):
+                mod.env_override({}, [env])
+        with mock.patch.dict("os.environ", {"MCP_GATEWAY_AUTH__ENABLED": "true"}):
+            with self.assertRaises(mod.Unverifiable):
+                mod.env_override({}, [])
+
+    def test_the_capability_state_limit_is_stated(self):  # T16: MIK-7851.CHECK.2
+        # The capture reads one capability state; the limit is documented, so a
+        # change that starts capturing other states must update this line.
+        self.assertIn("exposed only in another capability state are not", mod.__doc__)
+
     def test_cli_exit_codes(self):  # T10
         with tempfile.TemporaryDirectory() as tmp:
             d = pathlib.Path(tmp)

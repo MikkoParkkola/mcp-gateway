@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::direct_bridge::operator_key;
 use super::{
     Bind, Descriptors, Dispatches, SEEDED_REVISION, WORK, caller_as, custody_with,
-    expected_identity_key_for, external_cfg, gateway_in, grant,
+    descriptor_revision, expected_identity_key_for, external_cfg, gateway_in, grant,
 };
 use crate::config::{ApiKeyConfig, AuthConfig, api_key_digest_spec};
 use crate::gateway::meta_mcp::MetaMcp;
@@ -266,4 +266,75 @@ async fn list_servers_does_not_count_a_required_backend_for_an_operator_without_
         .expect("the required backend is still named");
     assert_eq!(row["tools_count"], 0, "no grant, no view: {row}");
     assert_eq!(row["tools_known"], false, "no grant, no view: {row}");
+}
+
+/// The `required` backend's server-list row for the sole operator whose grant
+/// is `stored`, with the shared snapshot filled, and the custody it read.
+async fn operator_row(stored: crate::personal_accounts::GrantRecord) -> (Value, super::Custody) {
+    let custody = custody_with(&[(operator_key(), stored)]);
+    let (meta, _dispatches) = gateway_in(
+        &[(REQUIRED, Bind::Account(WORK))],
+        &Descriptors::same(&[WORK]),
+        &custody.installed(),
+        &[expected_identity_key_for(&operator_key(), SEEDED_REVISION)],
+        ServeMode::Http,
+        single_user(),
+    );
+    let backend = meta.backends.get(REQUIRED).expect("registered");
+    let seeded = backend
+        .get_tools_for_binding(None, &[])
+        .await
+        .expect("the shared slot fills");
+    assert!(
+        !seeded.is_empty(),
+        "premise: the shared snapshot holds the tool"
+    );
+    let listing = meta
+        .list_servers(&caller_as(None, Some("operator")), None)
+        .await
+        .expect("list_servers answers");
+    let row = listing["servers"]
+        .as_array()
+        .and_then(|servers| servers.iter().find(|s| s["name"] == REQUIRED).cloned())
+        .expect("the required backend is still named");
+    (row, custody)
+}
+
+/// MIK-7877: listing reads a grant without refreshing it. An expired grant is
+/// still the operator's, so the view stays; refreshing it is for dispatch, and
+/// the read-only path neither refreshes nor releases.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn list_servers_keeps_the_view_of_an_expired_grant_without_refreshing() {
+    let (row, custody) = operator_row(grant(OPERATOR_TOKEN, 0)).await;
+    assert_eq!(
+        row["tools_known"], true,
+        "an expired grant is a view: {row}"
+    );
+    assert!(row["tools_count"].as_u64().is_some_and(|n| n > 0), "{row}");
+    assert_eq!(custody.refreshes(), 0, "listing refreshed the grant");
+    assert_eq!(custody.releases(), 0, "listing released a credential");
+}
+
+/// MIK-7877: a grant stored under another descriptor revision is fenced
+/// (#2249): the operator has no view until it reconnects, and listing still
+/// neither refreshes nor releases.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn list_servers_hides_a_required_backend_behind_a_stale_descriptor_revision() {
+    let stale = crate::personal_accounts::GrantRecord {
+        descriptor_revision: "0".repeat(64),
+        ..grant(OPERATOR_TOKEN, u64::MAX)
+    };
+    assert_ne!(
+        stale.descriptor_revision,
+        descriptor_revision(),
+        "premise: the stored revision is not the configured one"
+    );
+    let (row, custody) = operator_row(stale).await;
+    assert_eq!(row["tools_count"], 0, "a fenced grant is no view: {row}");
+    assert_eq!(
+        row["tools_known"], false,
+        "a fenced grant is no view: {row}"
+    );
+    assert_eq!(custody.refreshes(), 0, "listing refreshed the grant");
+    assert_eq!(custody.releases(), 0, "listing released a credential");
 }
