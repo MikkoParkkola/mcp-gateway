@@ -14,6 +14,9 @@ mod windows_env;
 #[path = "stdio_handle_response_tests.rs"]
 mod handle_response;
 
+#[path = "stdio_resource_update_tests.rs"]
+mod resource_update;
+
 #[cfg(unix)] // Unix-only child environment scenario: shared by the two env-isolation tests below.
 const CHILD_SCENARIO_ENV: &str = "MCP_GATEWAY_TEST_CHILD_ENV_SCENARIO";
 #[cfg(unix)] // Unix-only child environment scenario: shared by the two env-isolation tests below.
@@ -772,134 +775,5 @@ async fn stdio_drops_a_progress_notification_no_caller_asked_for() {
     assert!(
         !t.progress_destinations.contains_key("tok-stray"),
         "and it must not register itself on the way through"
-    );
-}
-
-/// MIK-7570.ATTEST.1 (owner ruling, option A): the gateway relays no backend
-/// `notifications/resources/updated` to any caller, even with a call open, so
-/// a `resources/subscribe` attested under enforce grants no data flow for the
-/// token's expiry to end. If this ever starts delivering, subscription expiry
-/// needs a design (an attested subscription must stop at the token's `exp`).
-#[tokio::test]
-async fn stdio_relays_no_resource_update_so_attestation_expiry_has_nothing_to_end() {
-    let t = make_transport("cat");
-    let update = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/resources/updated",
-        "params": { "uri": "file:///a" }
-    })
-    .to_string();
-
-    let ((), drained) = crate::transport::notification_sink::collect(async {
-        let _ = t.register_progress_token("tok-open-call");
-        t.handle_response(&update).unwrap();
-    })
-    .await;
-
-    assert!(
-        drained.is_empty(),
-        "a resource update must reach no caller: {drained:?}"
-    );
-}
-
-// A child that answers nothing and dies with a reason on stderr: the shape a
-// package manager produces when its install tree is unusable.
-const DYING_CHILD: &str = r#"printf 'Error: Cannot find module %s\n' "'/root/.npm/_npx/1/node_modules/zod'" >&2
-exit 3
-"#;
-
-fn dying_transport() -> Arc<StdioTransport> {
-    StdioTransport::new(
-        "sh dying.sh",
-        HashMap::new(),
-        Some(
-            std::env::temp_dir()
-                .join(format!("stdio-tail-{}", std::process::id()))
-                .to_string_lossy()
-                .into_owned(),
-        ),
-        std::time::Duration::from_secs(5),
-        None,
-    )
-}
-
-/// Writes the dying child where `dying_transport` runs it.
-fn write_dying_child() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("stdio-tail-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create the scratch directory");
-    let script = dir.join("dying.sh");
-    std::fs::write(&script, DYING_CHILD).expect("write the dying child");
-    script
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn a_failed_start_keeps_the_childs_stderr_for_classifying_it() {
-    write_dying_child();
-    let transport = dying_transport();
-
-    transport
-        .start()
-        .await
-        .expect_err("a child that dies before the handshake cannot start");
-
-    assert!(
-        transport.stderr_tail().contains("Cannot find module"),
-        "the tail is what tells a failed install from a backend that is merely dead, so a \
-         failed start must leave it readable: {:?}",
-        transport.stderr_tail()
-    );
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn a_failed_start_records_how_the_child_exited() {
-    write_dying_child();
-    let transport = dying_transport();
-
-    transport
-        .start()
-        .await
-        .expect_err("a child that dies before the handshake cannot start");
-
-    let status = transport
-        .exit_status()
-        .expect("a failed start leaves the child's exit status readable");
-    assert_eq!(
-        status.code(),
-        Some(3),
-        "the status is the child's own, so a caller reports what actually happened: {status}"
-    );
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn a_start_drops_what_the_previous_attempt_said() {
-    write_dying_child();
-    let transport = dying_transport();
-
-    transport.start().await.expect_err("the child dies");
-    assert!(
-        !transport.stderr_tail().is_empty(),
-        "the first attempt left a tail to drop"
-    );
-
-    // The command now fails before it spawns anything, so nothing overwrites
-    // the tail: only the clearing can empty it.
-    let silent = StdioTransport::new(
-        "/nonexistent/definitely-not-a-real-binary",
-        HashMap::new(),
-        None,
-        std::time::Duration::from_secs(1),
-        None,
-    );
-    silent
-        .start()
-        .await
-        .expect_err("a missing binary cannot start");
-    assert!(
-        silent.stderr_tail().is_empty(),
-        "a start that never spawned reads nothing from a child, so it must not report the \
-         previous attempt's words as its own"
     );
 }

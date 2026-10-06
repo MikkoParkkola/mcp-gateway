@@ -61,16 +61,44 @@ fn arm_again(dir: &Path) {
     }
 }
 
-/// One mutex per cache directory, held across a repair.
+/// One mutex per cache directory, held across a whole start of a backend that
+/// uses it: the first attempt, the repair and the retry.
 ///
 /// Two starts of one backend can both fail and both decide to repair, and the
 /// retry one of them runs installs into exactly the tree the other would
-/// delete. Entries are never removed: there is one per cache path, and the
+/// delete. A start that is not repairing installs into that tree too, so the
+/// lock covers every start of the cache, not only the repairing ones; starts of
+/// one backend's cache run one at a time. Entries are never removed: there is one per cache path, and the
 /// paths are the backends the configuration names.
 fn repair_locks() -> &'static Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>> {
     static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
     LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
 }
+
+/// The longest one start can hold its backend's cache lock, from the backend's
+/// request timeout `t`. Both the hold and the wait are derived from here, so
+/// they cannot drift apart.
+///
+/// The sum of the steps the lock covers: a failed first attempt
+/// ([`attempt_bound`]), moving the cache aside ([`rename_bound`]), and the single
+/// retry (another attempt): 2 * (2t + 2s) + t = 5t + 4s.
+fn lock_hold_bound(t: std::time::Duration) -> std::time::Duration {
+    attempt_bound(t) * 2 + rename_bound(t)
+}
+
+/// One start attempt: `initialize` is at most two requests of `t` each (one
+/// version renegotiation), plus about 2 s of settling and draining the child.
+fn attempt_bound(t: std::time::Duration) -> std::time::Duration {
+    t * 2 + std::time::Duration::from_secs(2)
+}
+
+/// Moving the cache aside, which the repair gives up on after this.
+fn rename_bound(t: std::time::Duration) -> std::time::Duration {
+    t
+}
+
+/// A held cache lock, owned so it can travel into the blocking rename.
+type CacheGuard = tokio::sync::OwnedMutexGuard<()>;
 
 fn repair_lock(dir: &Path) -> Arc<tokio::sync::Mutex<()>> {
     let mut locks = repair_locks()
@@ -117,6 +145,48 @@ pub(crate) enum Repair {
 pub(crate) async fn start_reporting(
     transport: &Arc<StdioTransport>,
 ) -> (crate::Result<()>, Repair) {
+    start_reporting_with(transport, discard_tombstone).await
+}
+
+/// [`start_reporting`], handing a moved-aside cache to `discard`, so a test can
+/// hold its deletion open and show that nothing waits on it.
+async fn start_reporting_with(
+    transport: &Arc<StdioTransport>,
+    discard: fn(PathBuf),
+) -> (crate::Result<()>, Repair) {
+    if let Some(root) = transport
+        .assigned_package_cache_dir()
+        .and_then(Path::parent)
+    {
+        sweep_tombstones_once(root);
+    }
+    // Held from the first spawn to the end of any retry: see `repair_lock`.
+    // The cache is per backend (its name is hashed into the path), so only
+    // other starts of this same backend wait. In the normal case a start holds
+    // it for at most `lock_hold_bound` (5T + 4s, T being the request timeout);
+    // deleting the moved tree holds nothing. Writes to the child's stdin and
+    // reaping it carry no timeout of their own.
+    let lock = transport.assigned_package_cache_dir().map(repair_lock);
+    // A start waits out one full repair, the same bound, so a start arriving
+    // mid-repair succeeds after it instead of failing. Past that it fails as
+    // unavailable rather than queue forever behind, say, a rename stuck on a
+    // wedged filesystem, which keeps the lock (see `retire_cache_dir`).
+    let held = match lock {
+        Some(lock) => {
+            let wait = lock_hold_bound(transport.request_timeout());
+            let Ok(held) = tokio::time::timeout(wait, lock.lock_owned()).await else {
+                let error = Error::BackendUnavailable(format!(
+                    "stdio backend {}: its package cache is still locked by another start or \
+                     a rename after {:?}",
+                    transport.diagnostic_command(),
+                    wait
+                ));
+                return (Err(error), Repair::NotRepaired);
+            };
+            Some(held)
+        }
+        None => None,
+    };
     let Err(error) = transport.start().await else {
         if let Some(dir) = transport.assigned_package_cache_dir() {
             arm_again(dir);
@@ -142,11 +212,12 @@ pub(crate) async fn start_reporting(
         return (Err(error), Repair::NotRepaired);
     };
 
-    // Held across the retry: the retry installs into the tree a second repair
-    // of this backend would otherwise delete underneath it.
-    let lock = repair_lock(&dir);
-    let _repairing = lock.lock().await;
-    repair_while_locked(transport, &dir, needle, error).await
+    // `dir` came from the same assignment the lock was taken for, so the lock
+    // is held here; without it there is no repair.
+    let Some(held) = held else {
+        return (Err(error), Repair::NotRepaired);
+    };
+    repair_while_locked(transport, &dir, needle, error, held, discard).await
 }
 
 /// The section the cache's lock guards: latch, remove, retry.
@@ -158,6 +229,8 @@ async fn repair_while_locked(
     dir: &Path,
     needle: &'static str,
     error: Error,
+    held: CacheGuard,
+    discard: fn(PathBuf),
 ) -> (crate::Result<()>, Repair) {
     if !mark_repaired(dir) {
         warn!(
@@ -166,10 +239,21 @@ async fn repair_while_locked(
         );
         return (Err(error), Repair::AlreadyRepaired);
     }
-    if !remove_cache_dir(dir).await {
-        // The start never got its repair, so the latch is not spent: a later
-        // start can try the same cache again.
-        arm_again(dir);
+    // Kept to the end of the retry. If this future is dropped mid-rename, the
+    // guard is still inside the blocking task, which Tokio cannot abort.
+    let limit = rename_bound(transport.request_timeout());
+    let Ok((retired, _held)) = retire_within(dir, held, retire_now, discard, limit).await else {
+        warn!(path = %dir.display(), "moving the package cache aside did not finish in time; abandoning the repair");
+        let error = Error::BackendUnavailable(format!(
+            "stdio backend {}: moving its package cache aside did not finish within {limit:?}; \
+             the backend cannot start until it does",
+            transport.diagnostic_command()
+        ));
+        return (Err(error), Repair::NotRepaired);
+    };
+    // The tombstone's deletion and the latch reset already happened inside
+    // the rename's task (see `retire_cache_dir`).
+    if retired == Retired::Refused {
         warn!(path = %dir.display(), "could not clear package cache");
         return (Err(error), Repair::NotRepaired);
     }
@@ -219,20 +303,140 @@ fn exit_status_text(status: Option<std::process::ExitStatus>) -> String {
     status.map_or_else(|| "running".to_string(), |status| status.to_string())
 }
 
-/// Removes a directory tree, treating "already gone" as success.
+/// What moving a cache aside did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Retired {
+    /// The cache now sits at this tombstone, to be deleted with no lock held.
+    Moved(PathBuf),
+    /// There was no cache to move.
+    AlreadyGone,
+    /// The path is not a tree this gateway may touch, or the rename failed.
+    Refused,
+}
+
+/// Marks a tombstone's name. A cache directory's own name never holds a `.`
+/// (see `cache_component`), so this cannot match a live cache.
+const TOMBSTONE_MARK: &str = ".tombstone-";
+
+/// [`retire_cache_dir`], given up on after `limit`.
 ///
-/// The tree is being removed because it is damaged, and it is the largest state
-/// a backend has, so the delete runs on the blocking pool rather than parking an
-/// async worker on it.
-async fn remove_cache_dir(dir: &Path) -> bool {
+/// Giving up drops only the wait. The blocking rename cannot be stopped, so its
+/// thread is orphaned until the filesystem answers, and it keeps the cache's
+/// lock until then: later starts fail fast as busy instead of installing into
+/// a tree that is still being moved.
+async fn retire_within<F>(
+    dir: &Path,
+    held: CacheGuard,
+    retire: F,
+    discard: fn(PathBuf),
+    limit: std::time::Duration,
+) -> Result<(Retired, Option<CacheGuard>), tokio::time::error::Elapsed>
+where
+    F: FnOnce(&Path) -> Retired + Send + 'static,
+{
+    tokio::time::timeout(limit, retire_cache_dir(dir, held, retire, discard)).await
+}
+
+/// Moves a cache aside to a tombstone on the blocking pool.
+///
+/// The cache's lock travels into the blocking task and comes back with the
+/// result. A started blocking task cannot be aborted, so if the start awaiting
+/// it is cancelled, the rename still finishes, and it keeps every other start
+/// of this backend out until it has.
+///
+/// What follows the rename happens in the same task, before the guard is let
+/// go, so it happens even when no caller is left to see the result: a moved
+/// tree is handed to `discard`, and a refused rename re-arms the latch, since
+/// that start never got its repair and a later start may try again.
+async fn retire_cache_dir<F>(
+    dir: &Path,
+    held: CacheGuard,
+    retire: F,
+    discard: fn(PathBuf),
+) -> (Retired, Option<CacheGuard>)
+where
+    F: FnOnce(&Path) -> Retired + Send + 'static,
+{
     let target = dir.to_path_buf();
-    match tokio::task::spawn_blocking(move || remove_now(&target)).await {
-        Ok(removed) => removed,
+    let renamed = tokio::task::spawn_blocking(move || {
+        let retired = retire(&target);
+        match &retired {
+            Retired::Moved(tombstone) => discard(tombstone.clone()),
+            Retired::Refused => arm_again(&target),
+            Retired::AlreadyGone => {}
+        }
+        (retired, held)
+    });
+    match renamed.await {
+        Ok((retired, held)) => (retired, Some(held)),
         Err(error) => {
-            warn!(%error, "package cache removal task failed");
-            false
+            warn!(%error, "package cache rename task failed");
+            (Retired::Refused, None)
         }
     }
+}
+
+/// Renames the cache to a sibling tombstone: one atomic step on one filesystem,
+/// however large the tree, so the next start installs into a fresh directory.
+fn retire_now(dir: &Path) -> Retired {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    if !is_a_tree_to_walk(dir) {
+        return Retired::Refused;
+    }
+    let (Some(parent), Some(leaf)) = (dir.parent(), dir.file_name()) else {
+        return Retired::Refused;
+    };
+    let tombstone = parent.join(format!(
+        "{}{TOMBSTONE_MARK}{}-{}",
+        leaf.to_string_lossy(),
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    match std::fs::rename(dir, &tombstone) {
+        Ok(()) => Retired::Moved(tombstone),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Retired::AlreadyGone,
+        Err(error) => {
+            warn!(%error, "could not move the package cache aside");
+            Retired::Refused
+        }
+    }
+}
+
+/// Deletes a tombstone in the background, holding no lock: how long a large or
+/// slow tree takes no longer blocks any start.
+fn discard_tombstone(tombstone: PathBuf) {
+    drop(tokio::task::spawn_blocking(move || {
+        if !remove_now(&tombstone) {
+            warn!(path = %tombstone.display(), "could not delete a package cache tombstone");
+        }
+    }));
+}
+
+/// Deletes tombstones a previous run left under `root`, once per root per
+/// process: the first repair-capable start of a backend is the sweep's startup.
+fn sweep_tombstones_once(root: &Path) {
+    static SWEPT: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    let first = SWEPT
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .is_ok_and(|mut swept| swept.insert(root.to_path_buf()));
+    if !first {
+        return;
+    }
+    let root = root.to_path_buf();
+    drop(tokio::task::spawn_blocking(move || {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if entry.file_name().to_string_lossy().contains(TOMBSTONE_MARK) && !remove_now(&path) {
+                warn!(path = %path.display(), "could not delete a package cache tombstone");
+            }
+        }
+    }));
 }
 
 fn remove_now(dir: &Path) -> bool {

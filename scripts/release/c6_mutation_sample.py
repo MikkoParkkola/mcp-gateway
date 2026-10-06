@@ -10,7 +10,7 @@ inventory: the draw must not move when the inventory is edited."""
 import sys, hashlib
 P = {"startup": ["src/gateway/server/"], "OAuth": ["src/oauth/"],
      "HTTP dispatch": ["src/transport/http/", "src/gateway/router/"],
-     "stdio dispatch": ["src/transport/stdio.rs", "src/gateway/server/stdio_channel.rs", "src/transport/command_split.rs"],
+     "stdio dispatch": ["src/transport/stdio.rs", "src/transport/stdio_env.rs", "src/gateway/server/stdio_channel.rs", "src/transport/command_split.rs"],
      "bridge": ["src/gateway/input_bridge.rs"],
      "tasks": ["src/gateway/task_service/", "src/gateway/router/handlers/tasks.rs", "src/gateway/meta_mcp/task_confirmation"],
      "account paths": ["src/personal_accounts/", "src/gateway/server/account_bindings.rs", "src/config/account_bindings.rs", "src/identity_propagation/"]}

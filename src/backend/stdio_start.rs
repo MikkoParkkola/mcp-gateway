@@ -17,10 +17,9 @@ impl Backend {
         protocol_version: Option<&String>,
     ) -> Result<Arc<StdioTransport>> {
         let launch = self.resolve_stdio_runtime_launch(command)?;
-        // Read before the environment is built: this is what says the
-        // cache is the gateway's to clear. A backend whose `env:`
-        // already names one gets `None`, and the repair leaves that
-        // path alone.
+        // Read before the environment is built: this is what says the cache is
+        // the gateway's to clear. A backend whose `env:` already names one gets
+        // `None`, and the repair leaves that path alone.
         let assigned_cache = assigned_package_cache_dir(&self.name, &launch.command, &launch.env);
         let transport = StdioTransport::new_with_assigned_cache(
             &launch.command,
