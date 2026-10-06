@@ -27,6 +27,10 @@ pub(crate) struct Caller {
     /// Of the backends the catalogue scopes to ([`EventsHub::scope_backends`]),
     /// the ones the caller may see: the predicate `tools/list` filters with.
     pub visible_backends: std::collections::HashSet<String>,
+    /// Admin standing, set only by the transport from the authenticated
+    /// caller; operator-scoped types are listed and subscribable with it.
+    #[allow(dead_code, reason = "red: read by the visibility check next commit")]
+    pub admin: bool,
 }
 
 impl Caller {
