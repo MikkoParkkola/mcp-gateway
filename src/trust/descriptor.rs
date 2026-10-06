@@ -272,9 +272,9 @@ mod tests {
                 ..tool()
             })
             .collect();
-        project_tool_descriptors_trust_cards(id, name, &tools);
+        let _ = project_tool_descriptors_trust_cards(id, name, &tools);
         let start = computations();
-        project_tool_descriptors_trust_cards(id, name, &tools);
+        let _ = project_tool_descriptors_trust_cards(id, name, &tools);
         assert_eq!(computations() - start, 1, "only the overflow tool");
     }
 
@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn identities_that_join_alike_do_not_share_a_card() {
         let tools = catalog("memo-nul");
-        project_tool_descriptors_trust_cards("backend:x\0y", "memo-nul", &tools);
+        let _ = project_tool_descriptors_trust_cards("backend:x\0y", "memo-nul", &tools);
         let other = project_tool_descriptors_trust_cards("backend:x", "y\0memo-nul", &tools);
         assert_eq!(
             other[0],

@@ -472,7 +472,7 @@ pub(crate) async fn slot_rpc<'a, X: Send + 'a>(
 }
 
 /// Record the id a failed slot write refuses this HTTP answer under.
-pub(crate) fn note_answer_id(_id: &RequestId) {}
+pub(crate) fn note_answer_id(_id: Option<&RequestId>) {}
 
 /// Largest replaced answer `slot_http` reads to recover its request id.
 const ID_RECOVERY_LIMIT: usize = 16 * 1024 * 1024;

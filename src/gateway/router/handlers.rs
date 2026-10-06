@@ -687,6 +687,7 @@ async fn meta_mcp_dispatch(
     };
 
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
+    crate::gateway::meta_mcp::grant_audit::note_answer_id(raw_id.as_ref());
     // Hardened signs every `tools/call` here, not only `gateway_invoke`
     // (GH1942.HARDEN.1 row 7).
     let mut signing_context = state.meta_mcp.signing_enabled().then(|| {
