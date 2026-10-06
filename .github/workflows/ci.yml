@@ -40,7 +40,7 @@ on:
         type: boolean
         default: true
       rehearse_chart_publish:
-        description: Publish and sign the Helm chart into the private charts-rehearsal package, from a pinned signed image
+        description: Publish and sign the Helm chart into the separate charts-rehearsal package, from a pinned signed image
         type: boolean
         default: false
 
@@ -1692,7 +1692,7 @@ jobs:
   # Runs after docker-manifest has signed the index, on the digest it verified,
   # and on a stable tag only: Chart.yaml carries a stable chart version, so a
   # prerelease would put a candidate image under it. The
-  # rehearsal dispatch publishes to the private `charts-rehearsal` package from
+  # rehearsal dispatch publishes to the separate `charts-rehearsal` package from
   # a pinned, already-signed image and never touches `charts`; it runs without
   # docker-manifest, so the condition reads that job's result only on a tag.
   # The first tag run's push creates `charts/mcp-gateway`, linked to this
