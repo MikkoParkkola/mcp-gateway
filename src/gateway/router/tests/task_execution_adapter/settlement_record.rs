@@ -500,9 +500,10 @@ async fn r2_an_owner_read_names_the_admission_principal_not_the_reader() {
     );
 }
 
-/// R3, both paths: a recovered result an output policy refuses settles failed,
-/// and its record keeps the raw response's tenants, the refusal's code and no
-/// response hash.
+/// R3, both paths: a recovered result an output policy refuses settles failed
+/// with the firewall's own -32600 refusal, as a native task does (MIK-7667),
+/// and its record keeps the raw response's tenants, that code and no response
+/// hash.
 #[tokio::test]
 async fn r3_a_refused_recovered_result_is_recorded_with_its_tenants() {
     let note = format!("AWS_ACCESS_KEY_ID={}", example_access_key());
@@ -512,6 +513,16 @@ async fn r3_a_refused_recovered_result_is_recorded_with_its_tenants() {
         let fx = fixture(setup, path).await;
         let (_, fetched) = fx.settle(path, |_| {}).await;
         std::assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
+        std::assert_eq!(
+            fetched.pointer("/result/error/code"),
+            Some(&json!(-32600)),
+            "{path:?}: {fetched}"
+        );
+        std::assert_eq!(
+            fetched.pointer("/result/error/message"),
+            Some(&json!("Response blocked by security firewall")),
+            "{path:?}: {fetched}"
+        );
 
         let record = fx.only_settlement(path);
         std::assert!(
@@ -519,7 +530,7 @@ async fn r3_a_refused_recovered_result_is_recorded_with_its_tenants() {
             "{path:?}: {record}"
         );
         std::assert_ne!(record["outcome"], json!("ok"), "{path:?}: {record}");
-        std::assert_eq!(record["error_code"], json!(-32603), "{path:?}: {record}");
+        std::assert_eq!(record["error_code"], json!(-32600), "{path:?}: {record}");
         std::assert!(record.get("response_hash").is_none(), "{path:?}: {record}");
     }
 }
