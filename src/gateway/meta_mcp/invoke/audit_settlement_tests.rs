@@ -264,3 +264,48 @@ async fn a_fail_closed_replacement_is_reported_as_not_kept() {
         "{committed:?}"
     );
 }
+
+/// MIK-7960. A recovered upstream task that failed with the peer's own
+/// `-32602` settles as `error`: the peer refused its own parameters, and no
+/// gateway gate judged the caller's input.
+#[tokio::test]
+async fn a_peer_invalid_params_code_settles_as_error_not_invalid() {
+    let record = settle_failure(-32602, &DispatchNotes::default()).await;
+    assert_eq!(record["outcome"], json!("error"), "{record}");
+    assert_eq!(record["error_code"], json!(-32602), "{record}");
+}
+
+/// MIK-7960 control. A refusal of class `invalid` the gateway noted keeps
+/// `invalid`.
+#[tokio::test]
+async fn a_gateway_invalid_refusal_still_settles_invalid() {
+    let notes = DispatchNotes {
+        refusal: Some(AuditOutcome::Invalid(-32602)),
+        ..DispatchNotes::default()
+    };
+    let record = settle_failure(-32602, &notes).await;
+    assert_eq!(record["outcome"], json!("invalid"), "{record}");
+    assert_eq!(record["error_code"], json!(-32602), "{record}");
+}
+
+/// Settle a recovered task that failed with `code` and return its record.
+async fn settle_failure(code: i32, notes: &DispatchNotes) -> serde_json::Value {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = meta_logging_to(&dir);
+    let proposed = TaskTransition::Fail(crate::protocol::JsonRpcError {
+        code,
+        message: "failed".to_string(),
+        data: None,
+    });
+    let task = SettledTask {
+        server: "srv",
+        tool: "read",
+        id: "task-1",
+    };
+    let _ = meta.audit_settlement(task, proposed, notes, "owner").await;
+    let text = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
+    text.lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .find(|entry: &serde_json::Value| entry["route"] == "task_recovery")
+        .unwrap_or_else(|| panic!("a settlement record: {text}"))
+}
