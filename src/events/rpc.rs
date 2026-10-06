@@ -427,11 +427,6 @@ impl EventsHub {
             None => return Err(RpcError::invalid("delivery.mode")),
         }
         let arguments = checked_arguments(&descriptor, params.get("arguments"))?;
-        if let Some(source) = self.source_offering(&descriptor.name) {
-            source
-                .authorize(&principal, &descriptor.name, &arguments)
-                .await?;
-        }
         let url = callback_url(delivery.get("url"))?;
         let secret = delivery
             .get("secret")
@@ -453,9 +448,15 @@ impl EventsHub {
                 .map_err(cap_refusal)?;
         }
 
-        // Last of the cheap refusals, before any callback traffic: it may
-        // start the backend.
+        // After the cheap refusals and before any callback traffic, since it
+        // may start the backend; and before the source's own check, which may
+        // read the backend's resource catalogue.
         self.resolve_upstream(&descriptor.name).await?;
+        if let Some(source) = self.source_offering(&descriptor.name) {
+            source
+                .authorize(&principal, &descriptor.name, &arguments)
+                .await?;
+        }
         let tail = super::tail_policy(&self.config);
         let mut verified = self.store.is_verified(&principal, url.as_str(), now, tail);
         let existing = self.store.get(&id).filter(|s| s.live(now));

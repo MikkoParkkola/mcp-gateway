@@ -295,4 +295,40 @@ async fn the_commit_admits_only_a_detected_or_unneeded_transport() {
         .await;
     assert_eq!(outcome.err().map(|e| e.code), Some(-32000));
     assert!(hub.store.subscriptions().is_empty(), "no row was committed");
+
+    // Refused between the commit check and the start: never a silent start.
+    let mut started = std::collections::HashSet::new();
+    let refused = hub
+        .start_key(&mut started, "p", "backend.s.resources_changed", &json!({}))
+        .await;
+    assert_eq!(
+        refused.err().map(|e| e.code),
+        Some(-32011),
+        "no source offers it"
+    );
+    let source = {
+        use super::super::EventSource as _;
+        hub.sources
+            .read()
+            .iter()
+            .find(|s| s.kind() == super::super::types::SourceKind::BackendNotification)
+            .cloned()
+            .expect("upstream source")
+    };
+    let first = |name: &'static str| {
+        let source = Arc::clone(&source);
+        async move { source.on_first_subscriber("k", "p", name, &json!({})).await }
+    };
+    assert_eq!(
+        first("backend.s.resources_changed")
+            .await
+            .err()
+            .map(|e| e.code),
+        Some(-32012),
+        "an ineligible backend gets no silent start"
+    );
+    assert!(
+        first("backend.s.tools_changed").await.is_ok(),
+        "tools_changed needs no listener"
+    );
 }

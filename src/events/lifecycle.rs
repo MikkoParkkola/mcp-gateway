@@ -43,7 +43,15 @@ impl EventsHub {
         arguments: &serde_json::Value,
     ) -> Result<Option<(SourceKind, String)>, RpcError> {
         let Some(source) = self.source_offering(name) else {
-            return Ok(None);
+            // An upstream-notification name no source offers any more (its
+            // backend was refused or removed since the subscribe judged it)
+            // would commit with no listener: refuse it (MIK-7969).
+            return match super::upstream::parse_name(name) {
+                Some((_, kind)) if kind != super::upstream::Kind::ToolsChanged => {
+                    Err(RpcError::not_found())
+                }
+                _ => Ok(None),
+            };
         };
         let key = (
             source.kind(),
