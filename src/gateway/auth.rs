@@ -102,7 +102,7 @@ pub(crate) fn refuse_shared_principals<'a>(
             return Err(crate::Error::ConfigValidation(format!(
                 "{first} and {label} resolve to the same credential principal (the first 48 \
                  bits of the SHA-256 digest), so the gateway could not tell their callers \
-                 apart; replace one of the two keys or remove the duplicate entry"
+                 apart; replace one of the two credentials or remove the duplicate entry"
             )));
         }
     }
