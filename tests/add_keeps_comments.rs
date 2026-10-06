@@ -102,3 +102,54 @@ fn remove_keeps_hand_written_comments() {
     let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
     assert!(config.backends.contains_key("keep") && !config.backends.contains_key("drop"));
 }
+
+#[test]
+fn a_file_another_writer_broke_is_not_spliced_into() {
+    use mcp_gateway::config::{BackendConfig, Config};
+    use mcp_gateway::config_persistence::{
+        load_existing_or_default, write_config_keeping_comments,
+    };
+
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, "backends: {}\n").expect("write");
+    let before = load_existing_or_default(&path).expect("load");
+    let mut config = before.clone();
+    let backend: BackendConfig = serde_yaml::from_str("command: echo\n").expect("backend");
+    config.backends.insert("new".into(), backend);
+    // Another writer adds a key the loader refuses after `add` loaded the file.
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &path,
+        "backends: {}\nnot_a_gateway_key: 1\n",
+    )
+    .expect("write");
+
+    write_config_keeping_comments(&path, &before, &config, "new").expect("write config");
+    let written = std::fs::read_to_string(&path).expect("read");
+    Config::load_literal(Some(&path))
+        .unwrap_or_else(|e| panic!("the written config must load: {e}\n{written}"));
+}
+
+#[test]
+fn an_invalid_config_is_refused_and_left_unwritten() {
+    use mcp_gateway::config::BackendConfig;
+    use mcp_gateway::config_persistence::{
+        load_existing_or_default, write_config_keeping_comments,
+    };
+
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, "# mine\nbackends: {}\n")
+        .expect("write");
+    let before = load_existing_or_default(&path).expect("load");
+    let mut config = before.clone();
+    let backend: BackendConfig =
+        serde_yaml::from_str("command: echo\nruntime_profile: nosuch\n").expect("backend");
+    config.backends.insert("new".into(), backend);
+
+    assert!(write_config_keeping_comments(&path, &before, &config, "new").is_err());
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read"),
+        "# mine\nbackends: {}\n"
+    );
+}

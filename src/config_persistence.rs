@@ -101,8 +101,7 @@ pub fn write_config_keeping_comments(
     config: &Config,
     name: &str,
 ) -> Result<(), String> {
-    let edited = std::fs::read_to_string(path)
-        .ok()
+    let edited = unchanged_since_load(path, before)
         .and_then(|original| splice::with_backend_edited(&original, before, config, name));
     let Some(edited) = edited else {
         return write_config(path, config);
@@ -111,6 +110,20 @@ pub fn write_config_keeping_comments(
         .validate_with_env(&config.env_overlay())
         .map_err(|e| format!("Failed to validate config: {e}"))?;
     write_yaml(path, &edited)
+}
+
+/// The text at `path` if the file still loads, through the strict loader, as
+/// `before`: a file another writer changed since `before` was loaded is never
+/// spliced into, and gets the full rewrite instead.
+///
+/// The file is read on both sides of the reload so the text is the one that
+/// loaded. An edit landing after the second read is overwritten by the rename,
+/// as the full rewrite overwrites it.
+fn unchanged_since_load(path: &Path, before: &Config) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let reloaded = serde_json::to_value(load_existing_or_default(path).ok()?).ok()?;
+    let same = reloaded == serde_json::to_value(before).ok()?;
+    (same && std::fs::read_to_string(path).ok()? == text).then_some(text)
 }
 
 /// How many times a rename is retried before the write is reported failed.
