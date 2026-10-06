@@ -589,7 +589,9 @@ impl HttpTransport {
 /// POST) or `SSE endpoint returned: <status>` (the SSE GET) text,
 /// when it says "wrong transport" rather than "wrong credential" or "not now":
 /// 401/403/407 are about the credential, and 408/429 invite a retry. Those
-/// keep their own error rather than becoming an SSE fault.
+/// keep their own error rather than becoming an SSE fault. A 4xx whose body
+/// is a JSON-RPC error for this request arrives as `Error::JsonRpc` and never
+/// matches: a peer that answers a POST in JSON-RPC speaks Streamable HTTP.
 fn refused_as_wrong_transport(error: &Error) -> Option<u16> {
     let Error::Transport(text) = error else {
         return None;
