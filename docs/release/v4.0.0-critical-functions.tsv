@@ -158,6 +158,8 @@ src/gateway/router/origin_guard_hosted.rs	from_config	1	standard	borderline	Host
 src/gateway/router/response_pass.rs	inspect_tools_call_response	1	critical	d	inspect_tools_call_response	Meta tools/call response firewall; fails closed with no policy target.
 src/gateway/router/well_known.rs	is_loopback_host	1	critical	borderline	is_loopback_host	Loopback classifier shared by the origin gate and the cleartext-OAuth guard.
 src/gateway/router/well_known.rs	sanitize_public_url	1	critical	b,d	sanitize_public_url	Refuses non-TLS, rewritten, userinfo-bearing or otherwise unsafe origins before publishing OAuth metadata
+src/gateway/router/well_known.rs	authorization_servers	1	critical	b,d	authorization_servers	Advertises no issuer unless delegated bearer auth would accept its tokens (not under agent auth), and only publishable ones (MIK-7941).
+src/gateway/router/well_known.rs	is_publishable_issuer	1	critical	b,d	is_publishable_issuer	Refuses to publish an issuer carrying credentials, whitespace, a query, a fragment or text the URL parser would rewrite (MIK-7941).
 src/gateway/server/account_bindings.rs	install_account_strategies	1	critical	d	install_account_strategies	Startup refusal when a bound managed or external account has no installed strategy
 src/gateway/server/account_bindings.rs	sole_operator_asserted	1	critical	a	sole_operator_asserted	Decides whether stored grants are served under the sole-operator principal (stdio, or HTTP single-user)
 src/gateway/server/account_bindings.rs	declare_account_descriptors	1	standard	borderline	declare_account_descriptors	Populates the declared registry the resolver checks against
