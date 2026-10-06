@@ -402,6 +402,10 @@ fn backend_admitted(
 
 /// The names of `server`'s known tools: an MCP backend's cache, or the
 /// capability backend's definitions. Empty for an unknown or cold backend.
+///
+/// Cache-only by design (MIK-7962): this is a per-request policy read, and a
+/// read that filled the cache would let any caller, admitted or not, send
+/// traffic to a backend. A cold backend is filled by discovery instead.
 fn backend_tool_names(state: &AppState, server: &str) -> Vec<String> {
     if let Some(backend) = state.backends.get(server) {
         return backend
