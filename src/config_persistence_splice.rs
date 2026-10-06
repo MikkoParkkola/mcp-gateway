@@ -49,7 +49,11 @@ pub(super) fn with_backend_edited(
         _ => return None,
     };
     let got: Value = serde_yaml::from_str(&edited).ok()?;
-    (got == want).then_some(edited)
+    // The text must also load as `config` itself: `original` is re-read at
+    // write time, and a file another writer changed since `before` was
+    // loaded would otherwise be written without `config`'s validation.
+    let loaded = serde_json::to_value(serde_yaml::from_str::<Config>(&edited).ok()?).ok()?;
+    (got == want && loaded == serde_json::to_value(config).ok()?).then_some(edited)
 }
 
 /// Whether `config` differs from `before` only by the backend `name`.
