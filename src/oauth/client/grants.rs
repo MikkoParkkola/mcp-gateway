@@ -380,6 +380,9 @@ impl OAuthClient {
         let Some(gate) = &self.login_gate else {
             return self.authorize().await;
         };
+        // A bounded caller's deadline must read this wait as a login's, even
+        // once a dropped lead has released the gate (MIK-7982 C3).
+        crate::oauth::login_gate::Provenance::mark_waited();
         match gate.begin() {
             Begin::Lead(lead) => {
                 let result = self.authorize_until(lead.cancel_token()).await;

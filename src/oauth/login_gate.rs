@@ -11,6 +11,7 @@
 //! its own; a caller that arrives later belongs to the fresh cohort and
 //! begins afresh. The lock is never held across an await.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
@@ -256,7 +257,12 @@ pub(crate) fn interactive() -> bool {
 pub(crate) struct Provenance {
     gate: Arc<LoginGate>,
     cohort: Arc<Cohort>,
-    dispatched: std::sync::atomic::AtomicBool,
+    /// The scope's start returned a transport.
+    started: AtomicBool,
+    /// A request of the started transport went past its token step.
+    dispatched: AtomicBool,
+    /// The scope itself led or joined a login (a request-time token step).
+    waited: AtomicBool,
 }
 
 impl Provenance {
@@ -266,28 +272,47 @@ impl Provenance {
         let provenance = Arc::new(Self {
             gate: Arc::clone(gate),
             cohort: gate.cohort(),
-            dispatched: std::sync::atomic::AtomicBool::new(false),
+            started: AtomicBool::new(false),
+            dispatched: AtomicBool::new(false),
+            waited: AtomicBool::new(false),
         });
         PROVENANCE.scope(provenance, work).await
     }
 
-    /// The scope's start returned a transport: from here a deadline is the
-    /// backend's, not the login's.
+    /// The scope's start returned a transport.
+    pub(crate) fn mark_started() {
+        let _ = PROVENANCE.try_with(|p| p.started.store(true, Ordering::SeqCst));
+    }
+
+    /// A request went past its token step. Counts only once the scope's own
+    /// start returned: a handshake request inside the start is not the
+    /// caller's request (MIK-7982 C3).
     pub(crate) fn mark_dispatched() {
         let _ = PROVENANCE.try_with(|p| {
-            p.dispatched
-                .store(true, std::sync::atomic::Ordering::SeqCst)
+            if p.started.load(Ordering::SeqCst) {
+                p.dispatched.store(true, Ordering::SeqCst);
+            }
         });
     }
 
+    /// The scope led or joined a login itself. Kept on the scope, because a
+    /// lead dropped by the deadline releases the gate before the deadline's
+    /// error is classified.
+    pub(crate) fn mark_waited() {
+        let _ = PROVENANCE.try_with(|p| p.waited.store(true, Ordering::SeqCst));
+    }
+
     /// The error a deadline that expired in this scope reports:
-    /// `AuthorizationPending` when nothing was dispatched and the captured
-    /// cohort's login is in flight or ended, else `otherwise`.
+    /// `AuthorizationPending` when nothing was dispatched and the scope
+    /// waited on a login, or the captured cohort's login is in flight or
+    /// ended; else `otherwise`.
     pub(crate) fn expired(backend: &str, otherwise: Error) -> Error {
         let waited_on_login = PROVENANCE
             .try_with(|p| {
-                !p.dispatched.load(std::sync::atomic::Ordering::SeqCst)
-                    && (p.gate.pending_in(&p.cohort) || p.cohort.outcome().is_some())
+                !p.dispatched.load(Ordering::SeqCst)
+                    && (p.waited.load(Ordering::SeqCst)
+                        || p.gate.pending_in(&p.cohort)
+                        || p.cohort.outcome().is_some())
             })
             .unwrap_or(false);
         if waited_on_login {
