@@ -87,7 +87,7 @@ jobs:
             fi
             exit 0
           fi
-          if [ "$SAME_REPO" = true ] && [[ $HEAD_REF == throwaway/* ]]; then
+          if [ "$SAME_REPO" = true ] && [[ $HEAD_REF == throwaway/* ]] && [ "$HEAD_REF" != throwaway/mik8009-image ]; then
             decide false "same-repo throwaway branch"; exit 0
           fi
           # Two-dot diff of the base tip and the head: it can list base-side
@@ -248,6 +248,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Check tag against manifest and classify the channel
         id: channel
