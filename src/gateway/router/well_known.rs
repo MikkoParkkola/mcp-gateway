@@ -206,39 +206,90 @@ fn resolve_resource_origin(config: &Config, bind_origin: Option<&str>) -> Option
 
 /// The authorization servers whose tokens this gateway accepts as bearers
 /// (RFC 9728 section 2): the OIDC issuers of an enabled key server with
-/// `delegated_bearer` on, in configured order, blank and repeated ones
-/// dropped. Empty otherwise, and then omitted from the document: an
-/// exchange-only key server accepts no issuer token on the MCP routes, and the
-/// gateway itself serves no authorization-server metadata.
-fn authorization_servers(config: &Config) -> Vec<String> {
-    let key_server = &config.key_server;
-    if !(key_server.enabled && key_server.delegated_bearer) {
+/// `delegated_bearer` on, behind enabled auth, in configured order, blank,
+/// repeated and unpublishable ones dropped. Empty otherwise, and then omitted
+/// from the document: an exchange-only key server accepts no issuer token on
+/// the MCP routes, auth off accepts no token at all, and the gateway itself
+/// serves no authorization-server metadata.
+///
+/// `running` is the configuration this process started with: `auth` and
+/// `key_server` apply only on restart, so a pending reload must not change
+/// which issuers are named.
+fn authorization_servers(running: &Config) -> Vec<String> {
+    let key_server = &running.key_server;
+    if !(running.auth.enabled && key_server.enabled && key_server.delegated_bearer) {
         return Vec::new();
     }
     let mut issuers: Vec<String> = Vec::new();
-    for provider in &key_server.oidc {
+    let mut skipped: Vec<usize> = Vec::new();
+    for (idx, provider) in key_server.oidc.iter().enumerate() {
         // Exactly as configured: the token check compares the `iss` claim to
         // this string, so a client must be sent the same identifier.
         let issuer = provider.issuer.as_str();
-        if !issuer.trim().is_empty() && !issuers.iter().any(|seen| seen == issuer) {
-            issuers.push(issuer.to_string());
+        if issuer.trim().is_empty() || issuers.iter().any(|seen| seen == issuer) {
+            continue;
         }
+        if is_publishable_issuer(issuer) {
+            issuers.push(issuer.to_string());
+        } else {
+            skipped.push(idx);
+        }
+    }
+    // Once per process: the running config never changes, and the endpoint
+    // needs no sign-in, so a per-request warning would let anyone flood the log.
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    if !skipped.is_empty() {
+        WARNED.call_once(|| {
+            for idx in &skipped {
+                // The issuer is not echoed: it may carry a credential.
+                tracing::warn!(
+                    "key_server.oidc[{idx}] issuer is not an http(s) URL free of userinfo, \
+                     query and fragment; not advertised in protected-resource metadata"
+                );
+            }
+        });
     }
     issuers
 }
 
+/// `true` when `issuer` may be published on the unauthenticated metadata
+/// endpoint: an http(s) URL with a host and no userinfo, query or fragment
+/// (the RFC 8414 issuer shape). Anything else either may leak a credential or
+/// names nothing a client can fetch metadata from, and redacting it would send
+/// clients an identifier the token check refuses.
+fn is_publishable_issuer(issuer: &str) -> bool {
+    // Published verbatim, so refuse what the parser would silently rewrite.
+    if issuer
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || c == '\\')
+    {
+        return false;
+    }
+    let Ok(parsed) = url::Url::parse(issuer) else {
+        return false;
+    };
+    matches!(parsed.scheme(), "https" | "http")
+        && parsed.host_str().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+}
+
 /// Build RFC 9728 protected-resource metadata, or `None` when no honest
-/// `resource` identifier is available (see module docs).
+/// `resource` identifier is available (see module docs). `config` is the live
+/// snapshot (`public_url` is re-read per request); `running` is the config
+/// the process started with, which decides the advertised issuers.
 #[must_use]
 pub fn build_protected_resource_metadata(
     config: &Config,
-    _running: &Config,
+    running: &Config,
     bind_origin: Option<&str>,
 ) -> Option<ProtectedResourceMetadata> {
     let resource = resolve_resource_origin(config, bind_origin)?;
     Some(ProtectedResourceMetadata {
         resource,
-        authorization_servers: authorization_servers(config),
+        authorization_servers: authorization_servers(running),
         bearer_methods_supported: vec!["header".to_string()],
         scopes_supported: Vec::new(),
     })
@@ -248,7 +299,7 @@ pub fn build_protected_resource_metadata(
 ///
 /// `bind_origin` is the startup loopback bind origin captured at router
 /// construction (`None` for a non-loopback bind); `public_url` is read live so
-/// a reload is reflected without a restart.
+/// a reload is reflected without a restart, the restart-only issuers are not.
 pub async fn oauth_protected_resource_handler(
     state: Arc<AppState>,
     bind_origin: Option<String>,
@@ -478,6 +529,7 @@ mod tests {
                 "https://idp.corp.internal/tenant?k=secret",
                 "https://idp.corp.internal/tenant#frag",
                 "mcp-gateway",
+                "https://idp.corp.internal/tenant\n",
                 "https://idp.corp.internal/tenant",
             ],
         );
