@@ -69,6 +69,9 @@ struct StartupBenchmark {
 struct TokenSavingsClaim {
     direct_tools: u64,
     direct_tokens_per_tool: u64,
+    /// Where `direct_tokens_per_tool` comes from. It is assumed, not measured,
+    /// and the README's savings figure is only honest while this says so.
+    direct_tokens_per_tool_basis: String,
     gateway_tools: u64,
     gateway_tokens_per_tool: u64,
     requests: u64,
@@ -208,14 +211,10 @@ const BANNED_PUBLIC_PHRASES: &[&str] = &[
     "95% savings",
 ];
 
-fn capability_yaml_exists(name: &str) -> bool {
-    WalkDir::new(repo_file("capabilities"))
-        .into_iter()
-        .filter_map(Result::ok)
-        .any(|entry| entry.file_name().to_str() == Some(&format!("{name}.yaml")))
-}
-
-fn count_capability_yaml_files() -> usize {
+/// The shipped capability YAMLs: every `.yaml` under `capabilities/` except
+/// the `examples/` templates. Every count and lookup below goes through this,
+/// so a template can neither be counted nor satisfy a held-name check.
+fn shipped_capability_yaml_files() -> impl Iterator<Item = walkdir::DirEntry> {
     WalkDir::new(repo_file("capabilities"))
         .into_iter()
         .filter_map(Result::ok)
@@ -227,24 +226,21 @@ fn count_capability_yaml_files() -> usize {
                 .components()
                 .any(|component| component.as_os_str() == "examples")
         })
-        .count()
+}
+
+fn capability_yaml_exists(name: &str) -> bool {
+    shipped_capability_yaml_files()
+        .any(|entry| entry.file_name().to_str() == Some(&format!("{name}.yaml")))
+}
+
+fn count_capability_yaml_files() -> usize {
+    shipped_capability_yaml_files().count()
 }
 
 fn count_capability_yaml_files_by_category() -> Vec<(String, usize)> {
     let mut counts = std::collections::BTreeMap::new();
 
-    for entry in WalkDir::new(repo_file("capabilities"))
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "yaml"))
-        .filter(|entry| {
-            !entry
-                .path()
-                .components()
-                .any(|component| component.as_os_str() == "examples")
-        })
-    {
+    for entry in shipped_capability_yaml_files() {
         let relative = entry
             .path()
             .strip_prefix(repo_file("capabilities"))
@@ -513,6 +509,14 @@ fn honest_model_constants_match_canonical_claims() {
         claims.readme_token_savings.gateway_tokens_per_tool
     );
     assert_eq!(README_META_TOOLS, claims.readme_token_savings.gateway_tools);
+    assert!(
+        !claims
+            .readme_token_savings
+            .direct_tokens_per_tool_basis
+            .trim()
+            .is_empty(),
+        "readme_token_savings.direct_tokens_per_tool_basis must say where the per-tool figure comes from"
+    );
     assert!(representative_discovery_response_tokens() > 0);
     assert!(repo_file("benchmarks/discovery_response_fixture.json").is_file());
 }
@@ -660,6 +664,16 @@ fn capability_inventory_claim_matches_current_repo_catalog() {
         claims.capability_count + claims.held_capabilities.len(),
         "public claims file should count the shipped YAML inventory minus the held capabilities"
     );
+    let held_names: std::collections::BTreeSet<&str> = claims
+        .held_capabilities
+        .iter()
+        .map(|held| held.name.as_str())
+        .collect();
+    assert_eq!(
+        held_names.len(),
+        claims.held_capabilities.len(),
+        "held_capabilities lists a capability twice, which would subtract it twice"
+    );
     for held in &claims.held_capabilities {
         assert!(
             !held.reason.is_empty() && capability_yaml_exists(&held.name),
@@ -731,6 +745,13 @@ fn capability_catalog_docs_match_current_inventory() {
         );
     }
 
+    assert!(
+        capabilities_readme.contains(&format!(
+            "raw inventory: all {} files, the held entries included",
+            claims.capability_count + claims.held_capabilities.len()
+        )),
+        "capabilities README should label its category table as the raw inventory"
+    );
     for (category, count) in count_capability_yaml_files_by_category() {
         assert!(
             capabilities_readme.contains(&format!("| **{category}/** | {count} |")),
