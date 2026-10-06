@@ -40,6 +40,8 @@ impl<A> Observer<A> {
     }
 
     /// Whether an observer is attached, so a caller can skip building a change.
+    /// Only the cost enforcer asks, so it compiles with that feature alone.
+    #[cfg(feature = "cost-governance")]
     pub(crate) fn is_set(&self) -> bool {
         self.0.get().is_some()
     }
