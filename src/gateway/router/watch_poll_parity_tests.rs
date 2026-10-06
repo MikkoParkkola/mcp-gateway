@@ -274,7 +274,9 @@ async fn the_watch_host_admits_only_a_live_granted_key() {
     assert!(!host.may_invoke(&live("k-gone"), &target), "an unknown key");
     let (state, _store) = super::super::tests::test_router_app_state().await;
     let gone = GatewayWatchHost::new(&state);
+    let owner = Arc::downgrade(&state);
     drop(state);
+    assert!(owner.upgrade().is_none(), "nothing else owns the state");
     assert!(
         !gone.may_invoke(&live("k-std"), &target),
         "the gateway is gone"

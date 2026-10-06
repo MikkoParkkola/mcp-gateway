@@ -668,17 +668,24 @@ mod tests {
     }
 
     /// An untrusted upstream's single answer is capped at `FRAME_CAP`: the
-    /// answer that reaches the session as `Unsupported` at its normal size
-    /// is dropped unread once it is over the cap.
+    /// answer that reaches the session as `Unsupported` at exactly the cap is
+    /// dropped unread one byte over it.
     #[tokio::test]
     async fn a_json_answer_over_the_frame_cap_is_not_classified() {
-        let note = note_for_json_answer(|id| {
-            json!({"jsonrpc": "2.0", "id": id,
-                "error": {"code": -32601, "message": "x".repeat(FRAME_CAP)}})
-            .to_string()
-        })
-        .await;
-        assert_eq!(note, None);
+        fn sized(id: &Value, size: usize) -> String {
+            let answer = |message: &str| {
+                json!({"jsonrpc": "2.0", "id": id,
+                    "error": {"code": -32601, "message": message}})
+                .to_string()
+            };
+            let body = answer(&"x".repeat(size - answer("").len()));
+            assert_eq!(body.len(), size);
+            body
+        }
+        let at_cap = note_for_json_answer(|id| sized(id, FRAME_CAP)).await;
+        assert_eq!(at_cap, Some(UpstreamNote::Unsupported));
+        let over = note_for_json_answer(|id| sized(id, FRAME_CAP + 1)).await;
+        assert_eq!(over, None);
     }
 
     /// A single answer carrying another request's id is not this listen's.
