@@ -795,3 +795,6 @@ async fn reload_stops_an_edited_capabilitys_children_and_keeps_an_unchanged_ones
     #[cfg(not(unix))]
     let _ = pid;
 }
+
+#[path = "mcp_env_tests.rs"]
+mod env_tests;
