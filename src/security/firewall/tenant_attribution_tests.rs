@@ -186,6 +186,18 @@ fn prose_and_plain_values_are_inspected() {
     }
 }
 
+/// MIK-7881.TENANT.1: a double-encoded document cut short (its outer quote
+/// never closes) is unread, as a cut-short document is. Quoted prose that does
+/// not open like a document stays inspected (above).
+#[test]
+fn a_truncated_double_encoded_document_is_uninspected() {
+    let g = guard(false, 1);
+    let full = serde_json::to_string(r#"{"customer_id":"cust-9","note":"long enough"}"#).unwrap();
+    for cut in [&full[..full.len() - 8], &format!(" {}", &full[..20])] {
+        assert!(g.response_uninspected(&text_block(cut)), "{cut}");
+    }
+}
+
 /// Review (gap 3): a byte-order mark before JSON does not hide it.
 #[test]
 fn bom_led_json_text_is_read() {

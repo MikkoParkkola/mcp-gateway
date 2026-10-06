@@ -626,3 +626,24 @@ fn earlier_sensitive_copy_survives_a_later_one_recorded_first() {
     d.record_delivery_at(T, A, true, &s, earlier);
     assert!(d.check_egress_at(B, U, &s, now).is_some());
 }
+
+/// MIK-7881.RELAY.1: B's copies from T are one from before the window and one
+/// stamped after the egress, recorded latest first. Neither is held in the
+/// window at the egress instant, so neither excuses it.
+#[test]
+fn stale_copy_and_future_redelivery_do_not_excuse() {
+    let d = detector();
+    let stale = Instant::now();
+    let now = stale + RelayParams::default().window + Duration::from_secs(1);
+    let s = secret();
+    d.record_delivery_at(T, B, false, &s, now + Duration::from_millis(1));
+    d.record_delivery_at(T, B, false, &s, stale);
+    d.record_delivery_at(T, A, true, &s, now);
+    assert!(
+        d.check_egress_at(B, U, &s, now).is_some(),
+        "a stale copy and a later one do not make a copy held in the window"
+    );
+    // Control: a copy inside the window, before the egress, still excuses.
+    d.record_delivery_at(T, B, false, &s, now);
+    assert!(d.check_egress_at(B, U, &s, now).is_none());
+}

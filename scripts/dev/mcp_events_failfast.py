@@ -467,6 +467,7 @@ def selftest(workdir):
     assert secret not in logged and secret[6:] not in logged and "/hook" not in logged, "log leaks secret or path"
     assert os.stat(store).st_mode & 0o077 == 0 and os.stat(log).st_mode & 0o077 == 0, "store/log not owner-only"
     for bad, status in (("x", 400), ("-1", 400), ("+5", 400), ("1_0", 400), ("", 400),
+                        ("\x0b5", 400), ("5\x0c", 400),
                         (str(MAX_BODY + 1), 413), ("9" * 5000, 413)):
         assert body_length({"Content-Length": bad}) == (0, status), f"Content-Length {bad!r} accepted"
     two = email.message.Message()
