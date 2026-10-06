@@ -71,6 +71,28 @@ fn the_append_refusal_prints_the_integrity_repair() {
     );
 }
 
+/// MIK-7881.JOURNAL.1: the refusal says to check the journal's entries
+/// before it prints the repair, so the repair is not run on a journal whose
+/// entries nobody checked.
+#[test]
+fn the_append_refusal_puts_the_check_before_the_repair() {
+    let row = "7881-W1";
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("j");
+    std::fs::write(&journal, "old\n").unwrap();
+    plant_file_with(row, &journal, EVERYONE_WRITE);
+
+    let text = append_line(&journal, b"new\n").unwrap_err().to_string();
+
+    let me = crate::private_fs::user_sid_string().expect("the runner's SID");
+    let check = text.find("Check its entries");
+    let repair = text.find(&me);
+    assert!(
+        matches!((check, repair), (Some(c), Some(r)) if c < r),
+        "WT-ASSERT {row}: the check must come before the repair in {text}"
+    );
+}
+
 #[test]
 fn an_existing_journal_others_can_only_read_is_appended_to() {
     let row = "1718-W6b";

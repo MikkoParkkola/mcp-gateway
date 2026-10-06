@@ -62,8 +62,33 @@ fi
 
 # 4. Homebrew — bare-binary formula can't embed a text file, so the caveats
 #    block users see on install must point to the commercial terms. Only the
-#    `def caveats` block counts: a comment elsewhere in the formula is not shown.
-caveats() { awk '/def caveats/{f=1} f{print} f&&/^[[:space:]]*end[[:space:]]*$/{exit}' "$1"; }
+#    text the method returns counts (MIK-7972). The method must be blank or
+#    comment lines, one heredoc and `end`: Ruby discards a heredoc that another
+#    value follows, so any other shape yields nothing and fails. A comment
+#    naming the method, or one inside it, is never printed.
+caveats() {
+  awk -v q="'" '
+    function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    !f && /^[ \t]*def caveats[ \t]*$/ { f = 1; next }
+    !f { next }
+    f != 2 && /^[ \t]*(#.*)?$/ { next }
+    f == 1 {
+      tag = trim($0)
+      if (tag !~ /^<<[~-]?/) exit
+      sub(/^<<[~-]?/, "", tag)
+      c = substr(tag, 1, 1)
+      if (c == q || c == "\"") {
+        if (length(tag) < 3 || substr(tag, length(tag), 1) != c) exit
+        tag = substr(tag, 2, length(tag) - 2)
+      }
+      if (tag !~ /^[A-Za-z_][A-Za-z0-9_]*$/) exit
+      f = 2; next
+    }
+    f == 2 { if (trim($0) == tag) { f = 3; next } body = body $0 "\n"; next }
+    f == 3 { if (trim($0) == "end") ok = 1; exit }
+    END { if (ok) printf "%s", body }
+  ' "$1"
+}
 caveat_rc=0
 for f in homebrew/mcp-gateway.rb .github/workflows/release.yml; do
   [ -f "$f" ] || continue

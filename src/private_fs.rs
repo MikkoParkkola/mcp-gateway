@@ -429,8 +429,10 @@ pub(crate) fn refusal_detail(
         .iter()
         .any(|r| matches!(r, PrivacyRefusal::ReparsePoint | PrivacyRefusal::NotRegular))
     {
+        // Ends in a line break, as every remediation branch does: a caller
+        // appends (MIK-7866).
         return format!(
-            " ({found:?}): it is not a regular file. Write the content, then replace the file."
+            " ({found:?}): it is not a regular file. Write the content, then replace the file.\n"
         );
     }
     let mut text = windows_remediation(shown, found, what);
