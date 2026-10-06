@@ -10,21 +10,28 @@
 
 use std::process::{Command, Stdio};
 
+/// A stdout whose reader is closed before the child starts, so its first
+/// write fails however quickly the command runs.
+fn gone_reader() -> Stdio {
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+    Stdio::from(writer)
+}
+
 /// Run the binary with its stdout's read end already closed, so the first
 /// write fails with a broken pipe whatever the output's size.
 fn run_with_reader_gone(args: &[&str]) -> (std::process::ExitStatus, String) {
     let home = tempfile::tempdir().expect("home");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let child = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
         .args(args)
         .current_dir(home.path())
         .env("HOME", home.path())
         .env("MCP_GATEWAY_TEST_HOME_DIR", home.path())
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(gone_reader())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn mcp-gateway");
-    drop(child.stdout.take());
     let output = child.wait_with_output().expect("wait for mcp-gateway");
     (
         output.status,
