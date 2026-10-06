@@ -392,6 +392,7 @@ async fn assert_invoke_matches_execute(mcp: &mut Session) {
         "{denied_execute}"
     );
     assert_eq!(denied_execute["_httpStatus"], 403, "{denied_execute}");
+    assert_eq!(denied_execute["error"]["code"], -32600, "{denied_execute}");
     assert_eq!(denied_invoke["_httpStatus"], 403, "{denied_invoke}");
     assert_eq!(
         denied_invoke["error"], denied_execute["error"],
