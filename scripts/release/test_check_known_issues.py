@@ -83,6 +83,35 @@ def test_a_differently_cased_heading_is_still_the_section():
     assert run(text, "--check") == 1
 
 
+def test_closing_hashes_and_indentation_still_mark_the_section():
+    for heading in ("## Known issues ##", "   ## Known issues", "##  Known issues"):
+        text = f"# Notes\n\n{heading}\n\n- Fixed in 4.0.1.\n"
+        assert run(text, "--check") == 1, heading
+
+
+def test_every_known_issues_section_is_checked():
+    text = notes("\n\n") + "\n## Known issues\n\n- Fixed in 4.0.1.\n"
+    assert run(text, "--check") == 1
+    assert run(notes("\n\n") + "\n## Known issues\n\n- Open.\n", "--release") == 1
+
+
+def test_a_top_level_heading_ends_the_section():
+    text = "# Notes\n\n## Known issues\n\n# Appendix\n\nFixed in 4.0.1.\n"
+    assert run(text, "--check") == 0
+
+
+def test_every_tag_publish_path_runs_the_release_gate():
+    # ci.yml's container publish and release.yml both fire on a v* tag; each
+    # must refuse a non-empty section before it publishes.
+    workflows = pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows"
+    ci = (workflows / "ci.yml").read_text(encoding="utf-8")
+    job = ci.split("\n  release-criteria:\n", 1)[1].split("\n  capability-pins:\n", 1)[0]
+    assert "check_known_issues.py --release" in job
+    assert "check_known_issues.py --release" in (workflows / "release.yml").read_text(
+        encoding="utf-8"
+    )
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
