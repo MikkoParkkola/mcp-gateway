@@ -432,6 +432,10 @@ mod start_failure_slot_tests;
 #[path = "era_stale_probe_tests.rs"]
 mod era_stale_probe_tests;
 
+#[cfg(all(test, unix))]
+#[path = "frame_limit_start_tests.rs"]
+mod frame_limit_start_tests;
+
 #[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]
 mod stateless_tools_slot_tests;

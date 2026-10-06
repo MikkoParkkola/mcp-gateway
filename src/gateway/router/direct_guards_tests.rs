@@ -204,6 +204,7 @@ async fn t3c_an_admission_holds_its_cost_until_it_is_dropped() {
         session_id: None,
         api_key_name: Some("k-budget"),
         trace_id: "",
+        caller_key: None,
     };
     let first = meta.admit_spend_for(&call).expect("the first call fits");
     assert!(

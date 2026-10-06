@@ -229,6 +229,57 @@ pub(super) async fn redirecting_listener(location: String) -> u16 {
     port
 }
 
+/// [`redirecting_listener`] that also hands back the first request it read,
+/// headers and body, so a test can learn what the client sent.
+async fn recording_redirecting_listener(
+    location: String,
+) -> (u16, tokio::sync::oneshot::Receiver<String>) {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let mut tx = Some(tx);
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let request = read_request(&mut stream).await;
+            if let Some(tx) = tx.take() {
+                let _ = tx.send(request);
+            }
+            let reply = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            let _ = stream.write_all(reply.as_bytes()).await;
+        }
+    });
+    (port, rx)
+}
+
+/// One read can return the headers alone: read until the body that
+/// `Content-Length` announces has arrived too.
+async fn read_request(stream: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut request = Vec::new();
+    let mut buf = [0u8; 4096];
+    while let Ok(n @ 1..) = stream.read(&mut buf).await {
+        request.extend_from_slice(&buf[..n]);
+        let text = String::from_utf8_lossy(&request);
+        if let Some(end) = text.find("\r\n\r\n") {
+            let length = text[..end]
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())?
+                })
+                .unwrap_or(0);
+            if request.len() >= end + 4 + length {
+                break;
+            }
+        }
+    }
+    String::from_utf8_lossy(&request).into_owned()
+}
+
 /// The redirect policy is wired into the production OAuth client: a hop to a
 /// private literal is never followed under `Public`. The first request uses a
 /// literal too, which never reaches the resolver, so the pinned client can
@@ -566,7 +617,8 @@ async fn get_token_surfaces_a_refused_refresh_without_authorizing() {
 /// callback listener it had already bound.
 #[tokio::test]
 async fn a_refused_registration_releases_the_callback_listener() {
-    let refused = redirecting_listener("http://169.254.169.254/latest".to_string()).await;
+    let (refused, registration) =
+        recording_redirecting_listener("http://169.254.169.254/latest".to_string()).await;
     let port = serve(&Advertised {
         authorization_server: REACHABLE,
         token: "http://localhost:{port}/token",
@@ -585,12 +637,11 @@ async fn a_refused_registration_releases_the_callback_listener() {
         OAuthClientConfig::default(),
     );
     client.initialize().await.expect("discovery is reachable");
-    let callback_port = {
-        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        probe.local_addr().unwrap().port()
-    };
+    // No fixed callback port: the client binds an ephemeral one and names it
+    // in the registration's redirect URI, so nothing reserves a port another
+    // test could take before the client binds it (MIK-7984).
     client.callback_host = Some("127.0.0.1".to_string());
-    client.callback_port = Some(callback_port);
+    client.callback_port = None;
     let opened = count_browsers(&mut client);
 
     let error = tokio::time::timeout(Duration::from_secs(10), client.authorize())
@@ -599,6 +650,18 @@ async fn a_refused_registration_releases_the_callback_listener() {
         .expect_err("a refused registration hop must surface");
     assert!(error.to_string().contains("SSRF blocked"), "{error}");
     assert_eq!(opened.load(Ordering::SeqCst), 0, "no browser is opened");
+
+    let registration = registration.await.expect("the registration was sent");
+    let (_, body) = registration
+        .split_once("\r\n\r\n")
+        .expect("a complete request");
+    let body: serde_json::Value = serde_json::from_str(body).expect("a JSON registration");
+    let redirect = body["redirect_uris"][0].as_str().expect("one redirect URI");
+    let callback_port = url::Url::parse(redirect)
+        .expect("a URL")
+        .port()
+        .expect("the callback URL names its port");
+    assert_ne!(callback_port, 0, "the bound port, not the requested one");
 
     // The aborted listener drops on its next poll; until then the port is held.
     let released = async {
