@@ -523,8 +523,8 @@ pub(super) fn shape_meta_result(
     let mut response = match result {
         Ok(content) => match shape {
             // MRTR.11a: an interim round must not be pretty-printed into
-            // `content[0].text`. `wrap_tool_success` states `is_error:
-            // false` and buries `resultType` inside a JSON string, where
+            // `content[0].text`. `wrap_tool_success` reads only a
+            // top-level `isError` and buries `resultType` inside a JSON string, where
             // neither a protocol client nor the firewall's
             // `PreserveInputRequired` policy can read it — a question
             // committed as an answer. The task worker already escapes via
