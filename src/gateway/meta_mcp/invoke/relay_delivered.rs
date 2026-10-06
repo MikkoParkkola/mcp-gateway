@@ -5,9 +5,9 @@
 
 use serde_json::Value;
 
-use super::RELAY_RECEIPTS;
 #[cfg(feature = "firewall")]
 use super::super::gateway_writes::Layer;
+use super::RELAY_RECEIPTS;
 use super::{MetaMcp, RelayKey};
 
 impl MetaMcp {
@@ -67,6 +67,8 @@ impl MetaMcp {
         let Some(before) = snapshot.filter(|before| Some(before) != result) else {
             return;
         };
+        #[cfg(feature = "firewall")]
+        let shape = result.map_or(shape, |answer| shape.as_built(answer));
         // MIK-7939: an in-place rewrite keeps the gateway's members its own.
         #[cfg(feature = "firewall")]
         if let Some(after) = result {
@@ -252,6 +254,17 @@ impl AnswerShape {
             _ => Self::Literal,
         }
     }
+
+    /// The shape `answer` was built in: a task envelope the gateway built
+    /// on this call (a task-augmented `tools/call`) whatever the method.
+    #[cfg(feature = "firewall")]
+    fn as_built(self, answer: &Value) -> Self {
+        if super::super::gateway_writes::built_task_envelope(answer) {
+            Self::TaskEnvelope
+        } else {
+            self
+        }
+    }
 }
 
 /// The backend text of a finally delivered `result`: the gateway's chain
@@ -260,6 +273,7 @@ impl AnswerShape {
 /// and a `gateway_invoke` wrapper read decoded.
 #[cfg(feature = "firewall")]
 fn receipt_copy(result: &Value, stamps: GatewayStamps, shape: AnswerShape) -> Option<Value> {
+    let shape = shape.as_built(result);
     let mut copy = result.clone();
     crate::security::signature_chain::strip_chain(&mut copy);
     // Clamped as the wire clamps it, so a backend's text in a scope, top

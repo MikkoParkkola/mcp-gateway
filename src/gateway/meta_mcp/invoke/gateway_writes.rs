@@ -62,14 +62,41 @@ pub(crate) fn note(layer: Layer, path: &'static [&'static str], value: &Value) {
     let Some(written) = member(value, path) else {
         return;
     };
-    let digest = digest(written);
     let _ = GATEWAY_WRITES.try_with(|writes| {
         writes.borrow_mut().push(Written {
             layer,
             path,
-            digest,
+            digest: digest(written),
         });
     });
+}
+
+/// The member a task envelope the gateway built is known by: the task id
+/// the gateway minted.
+const TASK_ID: &[&str] = &["taskId"];
+
+/// Note that `answer` is a task envelope the gateway built
+/// (`BeginOutcome::into_response`).
+pub(crate) fn note_task_envelope(answer: &Value) {
+    note(Layer::Answer, TASK_ID, answer);
+}
+
+/// Whether `answer` is a task envelope the gateway built on this call: a
+/// backend answer that merely looks like one is not.
+#[cfg(feature = "firewall")]
+pub(super) fn built_task_envelope(answer: &Value) -> bool {
+    let Some(id) = member(answer, TASK_ID) else {
+        return false;
+    };
+    GATEWAY_WRITES
+        .try_with(|writes| {
+            let digest = digest(id);
+            writes
+                .borrow()
+                .iter()
+                .any(|w| w.layer == Layer::Answer && w.path == TASK_ID && w.digest == digest)
+        })
+        .unwrap_or(false)
 }
 
 /// Remove from `value` each `layer` member the gateway wrote that still
