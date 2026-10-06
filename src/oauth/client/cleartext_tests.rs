@@ -302,14 +302,16 @@ async fn the_proxied_client_refuses_a_hop_to_cleartext_loopback() {
     assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
-/// The send-time backstop: the client a request goes through refuses a
-/// cleartext URL off this machine whatever checked it before, and still
-/// serves `https://` and `http://` loopback.
-#[test]
-fn the_send_client_refuses_cleartext_off_machine_on_its_own() {
+/// The send-time backstop, driven directly because every caller checks the
+/// destination first: whatever checked a URL before, `client_for` refuses
+/// cleartext off this machine. Under `Configured` a loopback `http://` URL
+/// takes the unproxied client, and with none it fails closed rather than
+/// falling back to the proxied one.
+#[tokio::test]
+async fn client_for_refuses_cleartext_and_never_proxies_loopback() {
     let dir = tempfile::tempdir().unwrap();
     let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
-    let client = OAuthClient::with_destination(
+    let mut client = OAuthClient::with_destination(
         DestinationPolicy::Configured,
         reqwest::Client::new(),
         "backstop-backend".to_string(),
@@ -318,11 +320,33 @@ fn the_send_client_refuses_cleartext_off_machine_on_its_own() {
         storage,
         OAuthClientConfig::default(),
     );
-    let refused = client
-        .client_for("http://auth.example/token")
-        .map(|_| ())
-        .expect_err("cleartext off this machine is refused at send time");
-    assert!(is_ssrf_refusal(&refused), "{refused:?}");
-    assert!(client.client_for("https://auth.example/token").is_ok());
-    assert!(client.client_for("http://127.0.0.1:9/token").is_ok());
+
+    let error = client
+        .client_for("http://off-machine.invalid/token")
+        .expect_err("cleartext off this machine");
+    assert!(is_ssrf_refusal(&error), "not a policy refusal: {error}");
+    let text = error.to_string();
+    assert!(text.contains("endpoint"), "{text}");
+    assert!(!text.contains("off-machine.invalid"), "URL echoed: {text}");
+
+    let tls = client.client_for("https://auth.example/token").unwrap();
+    assert!(
+        std::ptr::eq(tls, &raw const client.http_client),
+        "https uses the configured client"
+    );
+    let loopback = client.client_for("http://127.0.0.1:9/token").unwrap();
+    assert!(
+        !std::ptr::eq(loopback, &raw const client.http_client),
+        "loopback http must not take the proxied client"
+    );
+
+    client.loopback_client = None;
+    let error = client
+        .client_for("http://127.0.0.1:9/token")
+        .expect_err("no unproxied client: fail closed");
+    assert!(error.to_string().contains("unavailable"), "{error}");
+    assert!(
+        client.client_for("https://auth.example/token").is_ok(),
+        "control: https is unaffected"
+    );
 }

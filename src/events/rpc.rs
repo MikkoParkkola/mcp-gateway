@@ -27,6 +27,9 @@ pub(crate) struct Caller {
     /// Of the backends the catalogue scopes to ([`EventsHub::scope_backends`]),
     /// the ones the caller may see: the predicate `tools/list` filters with.
     pub visible_backends: std::collections::HashSet<String>,
+    /// Admin standing, set only by the transport from the authenticated
+    /// caller; operator-scoped types are listed and subscribable with it.
+    pub admin: bool,
 }
 
 impl Caller {
@@ -34,9 +37,10 @@ impl Caller {
         match &descriptor.scope {
             Visibility::Backend(backend) => self.sees_backend(hub, backend),
             // Owner-scoped types (task events, I4) are listed to anyone who
-            // can own a record; operator types land in 4.0.1.
+            // can own a record; operator types (gateway health, kill switch)
+            // to admins, whose standing their source re-checks at delivery.
             Visibility::Owner => self.principal.is_some(),
-            Visibility::Operator => false,
+            Visibility::Operator => self.admin,
         }
     }
 

@@ -143,7 +143,8 @@ pub(crate) use redirect::MAX_REDIRECT_HOPS;
 pub(crate) fn denied_address(addr: IpAddr) -> String {
     let v4 = match addr {
         IpAddr::V4(v4) => Some(v4),
-        IpAddr::V6(v6) => v6.to_ipv4_mapped(),
+        // Mapped and IPv4-compatible spellings both name the v4 host (MIK-7831).
+        IpAddr::V6(v6) => v6.to_ipv4(),
     };
     if v4 == Some(std::net::Ipv4Addr::new(169, 254, 169, 254))
         || destination::ALWAYS_DENIED.contains(&addr)

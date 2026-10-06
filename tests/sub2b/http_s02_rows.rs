@@ -10,19 +10,28 @@
 /// Returns the notification frame and the result frame, in the order the
 /// client actually saw them. The release is a second POST because the first
 /// connection is parked and cannot carry anything.
+///
+/// Each step has its own bound and PROBE label, so a timeout names the step
+/// that stalled. Only PROBE-B is the buffered arm: there the call is parked
+/// and nothing has released it. A stall at any other step is a slow POST, a
+/// release that was not serviced, or a result that never came.
 async fn notification_then_result(
     session: &HttpSession,
     received: &Received,
     arguments: Value,
     request_meta: Value,
 ) -> (Value, Value) {
-    let (status, content_type, mut reader) = SseReader::post(
-        &session.client,
-        &session.url,
-        &session.session,
-        invoke(2, SLOW_TOOL, &arguments, &request_meta),
+    let (status, content_type, mut reader) = timeout(
+        READ_TIMEOUT,
+        SseReader::post(
+            &session.client,
+            &session.url,
+            &session.session,
+            invoke(2, SLOW_TOOL, &arguments, &request_meta),
+        ),
     )
-    .await;
+    .await
+    .expect("PROBE-A: the slow call's POST never answered");
     assert!(
         status == 200,
         "the slow call was refused before it streamed: status={status} body={}",
@@ -37,14 +46,14 @@ async fn notification_then_result(
     // The first frame must arrive while the call is still parked at the
     // fixture. Nothing has released it, so a buffered consumer would deadlock
     // here and this read is what proves the gateway does not.
-    let mut notification = reader
-        .next_frame()
+    let mut notification = timeout(READ_TIMEOUT, reader.next_frame())
         .await
+        .expect("PROBE-B: no frame while the call is parked, the buffered arm")
         .expect("the body ended before any frame");
     while is_gateway_own(&notification) {
-        notification = reader
-            .next_frame()
+        notification = timeout(READ_TIMEOUT, reader.next_frame())
             .await
+            .expect("PROBE-B: no frame after the gateway's own audit line")
             .expect("the body ended after the gateway's own audit line");
     }
     assert!(
@@ -53,22 +62,30 @@ async fn notification_then_result(
          liveness: {notification}"
     );
 
-    let (release_status, _, release_body) = post_sse(
-        &session.client,
-        &session.url,
-        &session.session,
-        invoke(3, RELEASE_TOOL, &json!({}), &json!({})),
+    let (release_status, _, release_body) = timeout(
+        READ_TIMEOUT,
+        post_sse(
+            &session.client,
+            &session.url,
+            &session.session,
+            invoke(3, RELEASE_TOOL, &json!({}), &json!({})),
+        ),
     )
-    .await;
+    .await
+    .expect("PROBE-C: the release call never returned");
     assert_eq!(
         release_status, 200,
         "the release call failed, so the result below cannot arrive: \
          {release_body}"
     );
 
-    let mut result = reader.next_frame().await;
+    let mut result = timeout(READ_TIMEOUT, reader.next_frame())
+        .await
+        .expect("PROBE-D: no frame followed the release");
     while result.as_ref().is_some_and(|frame| !has_id(frame, 2)) {
-        result = reader.next_frame().await;
+        result = timeout(READ_TIMEOUT, reader.next_frame())
+            .await
+            .expect("PROBE-E: the stream stalled before the result frame");
     }
     let result = result.expect("the body ended before the result frame");
     (notification, result)
@@ -96,7 +113,7 @@ async fn s02_progress_http_reaches_its_own_call_before_the_result() {
 
     // WHEN
     let (notification, result) = timeout(
-        READ_TIMEOUT,
+        READ_TIMEOUT * 10,
         notification_then_result(
             &session,
             &received,
@@ -105,7 +122,7 @@ async fn s02_progress_http_reaches_its_own_call_before_the_result() {
         ),
     )
     .await
-    .expect("the row deadlocked, which is the buffered arm answering");
+    .expect("the row ran past its overall bound; each step answered in its own");
 
     // THEN
     assert!(
@@ -147,7 +164,7 @@ async fn s02_message_http_reaches_its_own_call_before_the_result() {
     // WHEN
     let marker = "sub2b-http-message-solo";
     let (notification, result) = timeout(
-        READ_TIMEOUT,
+        READ_TIMEOUT * 10,
         notification_then_result(
             &session,
             &received,
@@ -156,7 +173,7 @@ async fn s02_message_http_reaches_its_own_call_before_the_result() {
         ),
     )
     .await
-    .expect("the row deadlocked, which is the buffered arm answering");
+    .expect("the row ran past its overall bound; each step answered in its own");
 
     // THEN
     assert!(

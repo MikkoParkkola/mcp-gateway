@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Rows for the MCP events fail-fast harness: a signed delivery over https
 never negotiates below TLS 1.2, whatever the platform's OpenSSL default."""
+import base64
 import importlib.util
 import os
 import socket
 import ssl
+import tempfile
 import unittest
 from unittest import mock
 
@@ -43,6 +45,39 @@ class TlsFloor(unittest.TestCase):
         self.assertEqual((status, err), (None, "tls_error"))
         self.assertEqual(len(seen), 1, "the https path must wrap the socket once")
         self.assertGreaterEqual(seen[0], ssl.TLSVersion.TLSv1_2)
+
+
+class SubscribeAndServe(unittest.TestCase):
+    """MIK-7745: a malformed delivery port is an InvalidParams answer, not a
+    dropped connection; `serve` tightens only a directory it created."""
+
+    def subscribe(self, stub, url):
+        secret = "whsec_" + base64.b64encode(b"k" * 32).decode()
+        msg = {"jsonrpc": "2.0", "id": 1, "method": "events/subscribe",
+               "params": {"name": failfast.EVENT["name"], "arguments": {"topic": "a"},
+                          "delivery": {"mode": "webhook", "url": url, "secret": secret}}}
+        return stub.rpc(msg, {})
+
+    def test_a_malformed_delivery_port_is_invalid_params(self):
+        with tempfile.TemporaryDirectory() as d:
+            stub = failfast.Stub(os.path.join(d, "subs.json"), os.path.join(d, "log.jsonl"), None, allow_local=False)
+            for url in ("https://example.com:abc/hook", "https://example.com:99999/hook"):
+                with self.subTest(url=url):
+                    out = self.subscribe(stub, url)
+                    self.assertEqual(out["error"]["code"], -32602, out)
+                    self.assertEqual(out["error"]["data"], {"field": "delivery.url"}, out)
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits")
+    def test_serve_tightens_only_a_directory_it_creates(self):
+        with tempfile.TemporaryDirectory() as d:
+            existing = os.path.join(d, "checkout")
+            os.mkdir(existing)
+            os.chmod(existing, 0o755)
+            failfast.prepare_dir(existing)
+            self.assertEqual(os.stat(existing).st_mode & 0o777, 0o755, "an existing directory is left as it was")
+            fresh = os.path.join(d, "fresh")
+            failfast.prepare_dir(fresh)
+            self.assertEqual(os.stat(fresh).st_mode & 0o777, 0o700, "a created directory is owner-only")
 
 
 class ContentLength(unittest.TestCase):

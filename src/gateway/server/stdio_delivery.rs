@@ -136,6 +136,7 @@ async fn deliver(
         caller: "stdio",
         external_server: "gateway",
         external_tool: &settle.tool,
+        subject: None,
     };
     let (frame, stored) =
         crate::gateway::router::record_judged_delivery(meta, frame, &correlation, settle.stored)

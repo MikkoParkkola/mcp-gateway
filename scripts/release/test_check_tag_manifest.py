@@ -2657,7 +2657,11 @@ class WorkflowWiring(unittest.TestCase):
         # package manager, so it must say it will not.
         release = WORKFLOWS / "release.yml"
         called = re.findall(r"""(?m)^    uses:\s*["']?\./\.github/workflows/([^"'\s#]+)""", release.read_text(encoding="utf-8"))
-        self.assertEqual(sorted(called), ["packaged-suite.yml", "task-sdk-recovery.yml"], "the called-workflow inventory changed")
+        self.assertEqual(
+            sorted(called),
+            ["mrtr7b-full-burst.yml", "packaged-suite.yml", "task-sdk-recovery.yml"],
+            "the called-workflow inventory changed",
+        )
         found = []
         for wf in ["release.yml", *called]:
             for block in steps(wf):
@@ -2671,6 +2675,18 @@ class WorkflowWiring(unittest.TestCase):
                 if "actions/setup-node@" in uses and (not flags or set(flags) != {"false"}):
                     found.append(f"{label} leaves package-manager-cache on")
         self.assertEqual(found, [], "a release job restores a cache")
+
+    def test_the_release_runs_the_full_burst_every_pr_job_skips(self):
+        # MIK-7534/MIK-7479: every per-PR test job skips mik_7479_full_burst,
+        # so the release is where it must have passed on the tagged revision.
+        on = "\n".join(live_lines("mrtr7b-full-burst.yml"))
+        trigger = on[on.index("\non:") : on.index("\njobs:")]
+        self.assertRegex(trigger, r"(?m)^  workflow_call:", "the release cannot call the full burst")
+        ran = [c for b in steps("mrtr7b-full-burst.yml", "full-burst") for c in joined(b)]
+        self.assertTrue(any("mik_7479_full_burst" in c for c in ran), ran)
+        release_jobs = jobs("release.yml")
+        self.assertIn("uses: ./.github/workflows/mrtr7b-full-burst.yml", release_jobs.get("mrtr7b-full-burst", ""))
+        self.assertIn("mrtr7b-full-burst", needs_of(release_jobs["verify"]) or "", "verify must wait for the full burst")
 
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
         # An artifact a later job of the same run downloads is that job's only

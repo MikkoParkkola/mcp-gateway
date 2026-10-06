@@ -75,9 +75,47 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
     config
         .validate_with_env(&config.env_overlay())
         .map_err(|e| format!("Failed to validate config: {e}"))?;
+    if let Some(edited) = text_keeping_comments(path, config) {
+        return write_yaml(path, &edited);
+    }
     let yaml =
         serde_yaml::to_string(config).map_err(|e| format!("Failed to serialize config: {e}"))?;
     write_yaml(path, &yaml)
+}
+
+#[path = "config_persistence_splice.rs"]
+mod splice;
+
+/// The file at `path` with `config`'s one changed backend edited into its
+/// text, keeping the file's comments, when `config` differs from what the
+/// file loads as by exactly one backend added or removed. `None` sends
+/// [`write_config`] to the full re-serialisation.
+///
+/// The file is loaded through the strict loader from a single read, and that
+/// exact text is the one edited: a file that does not load, or that another
+/// writer changed into something more than one backend away, is rewritten in
+/// full instead. An edit landing after that read is overwritten by the rename,
+/// as the full rewrite overwrites it.
+fn text_keeping_comments(path: &Path, config: &Config) -> Option<String> {
+    let (before, text) = Config::load_literal_with_text(path).ok()?;
+    let name = sole_changed_backend(&before, config)?;
+    splice::with_backend_edited(&text, &before, config, &name)
+}
+
+/// The one backend name in exactly one of `before` and `config`.
+fn sole_changed_backend(before: &Config, config: &Config) -> Option<String> {
+    let mut changed = before
+        .backends
+        .keys()
+        .filter(|name| !config.backends.contains_key(*name))
+        .chain(
+            config
+                .backends
+                .keys()
+                .filter(|name| !before.backends.contains_key(*name)),
+        );
+    let name = changed.next()?.clone();
+    changed.next().is_none().then_some(name)
 }
 
 /// How many times a rename is retried before the write is reported failed.

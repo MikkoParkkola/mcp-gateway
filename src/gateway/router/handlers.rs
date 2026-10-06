@@ -567,8 +567,7 @@ async fn meta_mcp_dispatch(
     }
 
     // The caller as a grant subject, resolved once and before the body is
-    // read, so a refused identity header reaches no dispatch, cache or
-    // idempotency work.
+    // read, so a refused identity header reaches no dispatch, cache or idempotency work.
     let (grant_subject, caller_owner) =
         match request_session_owner(&state, &headers, http_request.extensions(), client.as_ref())
             .await
@@ -687,6 +686,8 @@ async fn meta_mcp_dispatch(
     };
 
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
+    // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).
+    crate::gateway::meta_mcp::grant_audit::note_answer_id(raw_id.as_ref());
     // Hardened signs every `tools/call` here, not only `gateway_invoke`
     // (GH1942.HARDEN.1 row 7).
     let mut signing_context = state.meta_mcp.signing_enabled().then(|| {
@@ -1188,6 +1189,7 @@ async fn meta_mcp_dispatch(
                     .into_iter()
                     .filter(|b| state.meta_mcp.admits_backend(b, invoke_scope, session))
                     .collect(),
+                admin: CallerStanding::of_client(client.as_ref()) == CallerStanding::Admin,
             };
             events::answer(&hub, id, &method, params, &caller).await
         }
@@ -1210,8 +1212,7 @@ async fn meta_mcp_dispatch(
         "tools/list" => {
             // NFR.OBS.2. The inputs that decide this surface, and the
             // cacheScope the response will carry — recorded before the list is
-            // built, so the record cannot be written from the answer it exists
-            // to check.
+            // built, so the record cannot be written from the answer it exists to check.
             //
             // Inputs, not applied filters. The branching lives behind a file
             // boundary this change does not cross, so a record naming filters
@@ -1618,7 +1619,7 @@ async fn meta_mcp_dispatch(
                 api_key_name,
                 agent_id,
                 agent_declared,
-                grant_subject,
+                grant_subject: grant_subject.clone(),
                 stdio_nonce: None,
                 caller_key: Some(caller_key.as_str()).filter(|key| !key.is_empty()),
                 verified_identity: verified_identity.as_ref(),
@@ -1768,6 +1769,7 @@ async fn meta_mcp_dispatch(
                         caller: client.as_ref().map_or("anonymous", |c| c.name.as_str()),
                         external_server: "gateway",
                         external_tool: &external_tool,
+                        subject: grant_subject.as_ref(),
                     },
                 );
                 // A redaction changed the delivery: its receipt is rebuilt from what goes out.
@@ -1937,6 +1939,7 @@ async fn meta_mcp_dispatch(
             caller,
             external_server: "gateway",
             external_tool: &external_tool,
+            subject: grant_subject.as_ref(),
         },
         mutation: crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
         signing: signing_context.as_ref(),

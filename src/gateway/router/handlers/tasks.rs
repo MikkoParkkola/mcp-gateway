@@ -421,10 +421,8 @@ async fn recover_from_upstream(
                 // dispatch applies, from the same implementation.
                 meta_mcp
                     .recover_task_result(&server, &tool, api_key_name.as_deref(), &trace, result)
-                    .map_err(|error| crate::protocol::JsonRpcError {
-                        code: -32603,
-                        message: error.to_string(),
-                        data: None,
+                    .map_err(|error| {
+                        crate::gateway::meta_mcp::response_security::recovered_result_error(&error)
                     })
             },
             error_policy,
@@ -512,6 +510,8 @@ pub(super) async fn tasks_cancel(
     route(state, &owner_text).cancel(id, params).await
 }
 
+#[cfg(test)]
+mod frame_subject_tests;
 #[cfg(test)]
 mod intent_tests;
 #[cfg(test)]
@@ -638,6 +638,7 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
                 pending,
                 caller: reader.name.clone(),
                 session_id: self.session_id.clone().unwrap_or_default(),
+                subject: self.grant_subject.clone(),
             }),
         })
     }
@@ -650,6 +651,7 @@ struct FrameDelivery {
     pending: crate::gateway::meta_mcp::task_notify::PendingTaskFrame,
     caller: String,
     session_id: String,
+    subject: Option<crate::identity_grants::GrantSubject>,
 }
 
 #[async_trait::async_trait]
@@ -660,10 +662,12 @@ impl crate::gateway::streaming::TaskFrameDelivery for FrameDelivery {
             pending,
             caller,
             session_id,
+            subject,
         } = *self;
         let who = crate::gateway::meta_mcp::task_notify::Reader {
             caller: &caller,
             session_id: &session_id,
+            subject: subject.as_ref(),
         };
         state.meta_mcp.finish_task_frame(pending, sent, &who).await
     }

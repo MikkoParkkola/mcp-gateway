@@ -80,7 +80,7 @@ A failed call comes back as a normal tool result whose payload has `"isError": t
 | Named a tool the backend does not have (`tidebook:no_such_tool`) | `isError: true`, "the backend does not list a tool named `no_such_tool`" |
 | Named a server that is not configured (`nosuch:tool`) | `isError: true`, "Backend not found: nosuch", `recovery.error_code: TOOL_NOT_FOUND` |
 | Passed a bare tool name (`tide_table`) | JSON-RPC error `-32602`: the reference is missing its server prefix; use `server:tool_name` from `gateway_search` |
-| Called a backend whose server will not start | `isError: true`, a transport error such as "stdio backend ... exited before initialize (exit status: 3); its stderr is in the gateway log", `recovery.error_code: BACKEND_ERROR`, `recovery.retry: true` |
+| Called a backend whose server will not start | `isError: true`, a transport error such as "stdio backend ... exited before initialize (exit status: 3): missing_module, stderr matched \"Cannot find module\"", `recovery.error_code: BACKEND_ERROR`, `recovery.retry: true` |
 | Called a tool `security.tool_policy` denies | HTTP 403 with JSON-RPC error `-32600`: "Tool '...' on server '...' is blocked by security policy" |
 
 A backend that fails does not take the gateway down: other backends keep answering.

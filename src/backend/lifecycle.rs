@@ -524,3 +524,19 @@ fn http_target(http_url: &str) -> Result<()> {
         "Invalid transport base URL: not an http:// or https:// URL with a host".into(),
     ))
 }
+
+/// A start that failed before the request was sent (MIK-7979). The transport
+/// reports a failed spawn, handshake or `initialize` as `Transport` or
+/// `BackendTimeout`, which on the dispatch path would read as a lost round and
+/// burn the caller's idempotency key for work that never ran. It is a pre-send
+/// refusal, so it becomes `BackendUnavailable`, which frees the key and stays
+/// retryable. `TransportPermanent` (a command that does not exist) and the
+/// gateway's own refusals pass through unchanged.
+pub(super) fn pre_send_start_error(backend: &str, error: Error) -> Error {
+    match error {
+        Error::Transport(_) | Error::BackendTimeout(_) => {
+            Error::BackendUnavailable(format!("{backend}: could not start: {error}"))
+        }
+        other => other,
+    }
+}

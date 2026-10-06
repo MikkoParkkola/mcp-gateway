@@ -61,6 +61,7 @@ fn correlation() -> ResponseCorrelation<'static> {
         caller: "caller-a",
         external_server: "gateway",
         external_tool: "gateway_execute",
+        subject: None,
     }
 }
 

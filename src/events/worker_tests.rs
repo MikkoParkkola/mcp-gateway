@@ -542,6 +542,8 @@ fn config_default() -> crate::config::EventsConfig {
 struct Flipping {
     admits: usize,
     asked: std::sync::atomic::AtomicUsize,
+    /// Event types the source exempts from the delivery charge.
+    free: &'static [&'static str],
 }
 
 #[async_trait::async_trait]
@@ -550,10 +552,9 @@ impl crate::events::EventSource for Flipping {
         crate::events::types::SourceKind::RestWatch
     }
     fn descriptors(&self) -> Vec<crate::events::types::EventDescriptor> {
-        vec![descriptor(
-            "probe.flip",
-            crate::events::types::SourceKind::RestWatch,
-        )]
+        ["probe.flip", "probe.free"]
+            .map(|name| descriptor(name, crate::events::types::SourceKind::RestWatch))
+            .into()
     }
     fn matches(
         &self,
@@ -562,6 +563,9 @@ impl crate::events::EventSource for Flipping {
         _event: &crate::events::fanout::SourceEvent,
     ) -> bool {
         true
+    }
+    fn charges(&self, name: &str) -> bool {
+        !self.free.contains(&name)
     }
     async fn authorize(
         &self,
@@ -597,6 +601,7 @@ async fn eligibility_lost_after_the_sending_record_is_not_sent_or_charged() {
         let source = Arc::new(Flipping {
             admits,
             asked: std::sync::atomic::AtomicUsize::new(0),
+            free: &[],
         });
         hub.register_source(Arc::clone(&source) as Arc<dyn crate::events::EventSource>);
         #[allow(unused_mut, reason = "set only with cost-governance")]
@@ -758,6 +763,10 @@ async fn a_type_no_source_offers_any_more_is_not_sent_or_charged() {
         );
     }
 }
+
+#[cfg(feature = "cost-governance")]
+#[path = "worker_charge_tests.rs"]
+mod charge;
 
 #[path = "worker_hold_tests.rs"]
 mod hold;

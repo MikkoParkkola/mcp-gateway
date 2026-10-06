@@ -218,6 +218,33 @@ impl MetaMcp {
         }
         apply_webhook_refresh(hub, &capabilities, &registry);
     }
+
+    /// Every REST capability as the events watch source sees it: its
+    /// read-only classification (data, MIK-7216.IDEM.1) and whose credential
+    /// a call needs. Empty without a capability backend.
+    pub(crate) fn watch_targets(&self) -> Vec<crate::events::watch_source::Target> {
+        use crate::events::watch_source::{CredentialUse, Target};
+        let Some(capabilities) = self.get_capabilities() else {
+            return Vec::new();
+        };
+        capabilities
+            .list_capabilities()
+            .into_iter()
+            .map(|definition| Target {
+                credential: if definition.auth.account.is_some() {
+                    CredentialUse::Account
+                } else if definition.auth.required || !definition.auth.key.is_empty() {
+                    CredentialUse::Keyed
+                } else {
+                    CredentialUse::Free
+                },
+                read_only: definition.metadata.read_only,
+                input_schema: definition.to_mcp_tool().input_schema,
+                backend: capabilities.name.clone(),
+                capability: definition.name,
+            })
+            .collect()
+    }
 }
 
 /// Re-register the webhook routes of `capabilities`, unless the reload

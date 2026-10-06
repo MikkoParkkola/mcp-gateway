@@ -755,7 +755,7 @@ memory pressure on the host, days later.
   expr: |
     increase(mcp_backend_idle_stop_close_failures[15m]) > 0
     or (mcp_backend_idle_stop_close_failures
-        unless mcp_backend_idle_stop_close_failures offset 15m) > 0
+        unless max_over_time(mcp_backend_idle_stop_close_failures[5m] offset 15m)) > 0
   labels: { severity: warning }
   annotations:
     summary: "Backend {{ $labels.backend }} did not stop cleanly when idle"
@@ -768,9 +768,11 @@ expression stays true for the whole 15-minute window after a single increment,
 so `for` would delay the notification without ever suppressing an isolated
 failure. That includes the first failure. The counter is created there, already
 at 1, and `increase` alone reads 0 for a series with no earlier sample, so the
-`unless ... offset` branch fires for a series new in the window. Warning rather
-than page — the damage is one leaked process,
-not an outage.
+`unless ... offset` branch fires for a series new in the window. That branch
+takes `max_over_time` over 5 minutes at the offset rather than one sample, so a
+single missed scrape a window back does not make an old series look new and fire
+again. That needs a successful scrape somewhere in those 5 minutes: at a scrape
+interval of 2.5 minutes or less, one missed scrape still leaves one. Warning rather than page — the damage is one leaked process, not an outage.
 
 When it fires: check for an orphaned child process of the gateway
 (`pgrep -P $(pgrep -f mcp-gateway)`) and kill what the gateway no longer tracks.
@@ -801,7 +803,7 @@ peaks at 65. Idle slots are reclaimed after 5 minutes, and the gauge drops with 
   expr: |
     increase(mcp_backend_identity_slots_refused_total[15m]) > 0
     or (mcp_backend_identity_slots_refused_total
-        unless mcp_backend_identity_slots_refused_total offset 15m) > 0
+        unless max_over_time(mcp_backend_identity_slots_refused_total[5m] offset 15m)) > 0
   labels: { severity: warning }
   annotations:
     summary: "Backend {{ $labels.backend }} refused callers at its {{ $labels.limit }} slot limit"
@@ -874,7 +876,7 @@ with their expectations in
     sum(increase(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}[5m]))
     > 0
     or sum(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}
-    unless mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"} offset 5m)
+    unless max_over_time(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}[5m] offset 5m))
     > 0
   labels: { severity: warning, category: security }
   annotations:

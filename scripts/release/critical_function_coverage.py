@@ -144,7 +144,28 @@ _KEYWORDS = frozenset({
     "if", "else", "while", "match", "return", "in", "let", "for", "loop", "move",
     "break", "continue", "as", "mut", "ref", "await", "async", "unsafe", "yield",
 })
-_ANY_MACRO = re.compile(r"(?<![\w])(?:r#)?(\w+)" + _GAP + r"!" + _GAP + r"[(\[{]", re.S)
+# The path before a macro's name is captured: `other::format!` is not the
+# built-in `format!` (MIK-7864), so only an unqualified name, or one qualified
+# by a standard crate, is looked up in the safe list. A single colon before
+# the path (`{"k":other::format!(..)}`) is punctuation, not part of it.
+_ANY_MACRO = re.compile(
+    r"(?<!\w)(?<!::)((?:::" + _GAP + r")?(?:(?:r#)?\w+" + _GAP + r"::" + _GAP + r")*)"
+    r"(?:r#)?(\w+)" + _GAP + r"!" + _GAP + r"[(\[{]",
+    re.S,
+)
+_STANDARD_PATHS = frozenset({"", "std::", "core::", "alloc::"})
+# Exact paths only. `telemetry_metrics` is the `metrics` crate under the name
+# Cargo.toml gives it; its `counter!` records a metric and does not log.
+_QUALIFIED_SAFE = frozenset({"serde_json::json", "telemetry_metrics::counter"})
+_GAP_TEXT = re.compile(r"\s|/\*.*?\*/|//[^\n]*\n", re.S)
+
+
+def is_safe_macro(prefix, name, safe):
+    """Whether `prefix` + `name` is a macro known not to log."""
+    path = _GAP_TEXT.sub("", prefix).removeprefix("::")
+    if path in _STANDARD_PATHS:
+        return name in safe
+    return path + name in _QUALIFIED_SAFE and name in safe
 
 
 def macro_names(root):
@@ -160,9 +181,31 @@ def head_has_call(raw, safe=SAFE_MACROS):
     """True when this raw source line invokes a macro outside `safe` (or names
     a tracing level) but is not, as a whole, a plain head line (see above)."""
     unsafe = TRACING_NAME.search(raw) or any(
-        name not in safe and name not in _KEYWORDS for name in _ANY_MACRO.findall(raw)
+        not is_safe_macro(prefix, name, safe) and not (prefix == "" and name in _KEYWORDS)
+        for prefix, name in _ANY_MACRO.findall(raw)
     )
     return bool(unsafe) and not PLAIN_HEAD.match(raw)
+
+
+def split_call_lines(lines, lo, hi, safe=SAFE_MACROS):
+    """Lines lo..hi spanned by a macro call (outside `safe`) or a tracing name
+    whose name and delimiter sit on different lines (MIK-7864): a per-line scan
+    never sees one. Every line of such a span is graded as unverifiable."""
+    text = "\n".join(lines[lo - 1:hi])
+    spans = [
+        m.span()
+        for m in _ANY_MACRO.finditer(text)
+        if not is_safe_macro(m.group(1), m.group(2), safe)
+        and not (m.group(1) == "" and m.group(2) in _KEYWORDS)
+    ]
+    spans += [m.span() for m in TRACING_NAME.finditer(text)]
+    found = set()
+    for start, end in spans:
+        first = lo + text.count("\n", 0, start)
+        last = lo + text.count("\n", 0, end)
+        if last > first:
+            found.update(range(first, last + 1))
+    return found
 
 
 def is_plain_field(code):
@@ -272,8 +315,9 @@ def grade(root, inventory, lcovs):
             results.append(("UNMEASURED", row, lo, hi, []))
             continue
         unverifiable = []
+        split = split_call_lines(lines, lo, hi, names)
         for n in range(lo, hi + 1):
-            if n in counts and head_has_call(lines[n - 1], names):
+            if n in counts and (n in split or head_has_call(lines[n - 1], names)):
                 unverifiable.append(f"{row['path']}:{n} (head count {counts[n]})")
                 counts[n] = 0
         excluded = []

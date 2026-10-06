@@ -17,7 +17,7 @@ use super::fanout::SourceEvent;
 use super::types::{SourceKind, Visibility};
 use super::upstream::Kind;
 use super::upstream_listener::Shared;
-use super::upstream_need::{Coalescer, Verdict};
+use super::upstream_need::{Coalescer, Verdict, WINDOW};
 use crate::backend::{Backend, BackendRegistry};
 use crate::protocol::era::Era;
 use crate::transport::upstream_tap::{
@@ -31,8 +31,17 @@ const TICK: Duration = Duration::from_millis(250);
 const OPEN_LIMIT: Duration = Duration::from_secs(30);
 /// A modern listen must be acknowledged within this (§3).
 const ACK_DEADLINE: Duration = Duration::from_secs(10);
-/// Re-read the catalogue at least this often while URIs are watched (§7).
-const SNAPSHOT_TTL: Duration = Duration::from_secs(300);
+/// The catalogue is re-read one backend cache TTL after each read (§7,
+/// MIK-7950), held between these: at most once a second, even with caching
+/// off (a zero TTL), and at least daily, which also keeps a huge configured
+/// TTL from overflowing the clock.
+const SNAPSHOT_FLOOR: Duration = Duration::from_secs(1);
+const SNAPSHOT_CEILING: Duration = Duration::from_secs(24 * 3600);
+
+/// The interval to the next catalogue re-read for a backend cache TTL.
+fn snapshot_interval(cache_ttl: Duration) -> Duration {
+    cache_ttl.clamp(SNAPSHOT_FLOOR, SNAPSHOT_CEILING)
+}
 /// A failed catalogue read is retried after this.
 const SNAPSHOT_RETRY: Duration = Duration::from_secs(5);
 /// A stream that stayed open this long resets the backoff (§9).
@@ -239,10 +248,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             // came; a notice during a refill waits for the next one.
             state.tools_due = None;
             backend.invalidate_tools();
-            let backend = Arc::clone(backend);
-            refill = Some(Box::pin(async move {
-                let _ = tokio::time::timeout(OPEN_LIMIT, backend.get_tools()).await;
-            }));
+            refill = Some(start_refill(backend, &shared.name));
         }
         if !backend_still_current(backend, &target.handle) {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
@@ -258,6 +264,24 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         }
         state.flush(hub);
     }
+}
+
+/// The tools refill a notice starts. The shared fetch, so a reader of the list
+/// meanwhile waits on this one. Each request is bounded by the backend's own
+/// `timeout`, the whole refill by `OPEN_LIMIT`. A refill that did not fill still
+/// announces the change: the notice said the list changed, and the
+/// subscriber's own re-read fetches it (MIK-7951).
+fn start_refill(backend: &Arc<Backend>, name: &str) -> Refill {
+    let (backend, name) = (Arc::clone(backend), name.to_owned());
+    Box::pin(async move {
+        let filled = matches!(
+            tokio::time::timeout(OPEN_LIMIT, backend.get_tools_shared()).await,
+            Ok(Ok(_))
+        );
+        if !filled {
+            warn!(backend = %name, "upstream listener: tools refill did not complete; announcing the change anyway");
+        }
+    })
 }
 
 fn failed() -> Outcome {
@@ -305,10 +329,10 @@ async fn finish_refill(
         state.tools_pending = true;
     }
     // Also a refill that finished this iteration, its change not yet
-    // announced when the transport was found replaced.
-    if state.tools_pending {
-        state.flush(hub);
-    }
+    // announced when the transport was found replaced, and every notice
+    // still inside its coalescing window: the session's state goes with it
+    // (MIK-7898).
+    state.flush_at(hub, Instant::now() + WINDOW);
     state.ended(started)
 }
 
@@ -359,12 +383,19 @@ struct Pending {
     since: Instant,
 }
 
+#[allow(clippy::struct_excessive_bools)] // Each flag is an independent fact about the current stream.
 struct State<'a> {
     shared: &'a Arc<Shared>,
     era: Era,
     current: Option<(FrameStream, Requested)>,
     pending: Option<Pending>,
     acked: Option<Instant>,
+    /// What the current stream's acknowledgement honoured; a notice outside
+    /// it is not delivered (MIK-7898). `None` before an acknowledgement and
+    /// on a legacy stream, which has none.
+    honoured: Option<(KindSet, Vec<String>)>,
+    /// The peer answered the listen with `-32601` (MIK-7899).
+    unsupported: bool,
     opened: Instant,
     coalescer: Coalescer,
     /// Legacy: the URIs `resources/subscribe` was sent for.
@@ -391,6 +422,8 @@ impl<'a> State<'a> {
             current: None,
             pending: None,
             acked: None,
+            honoured: None,
+            unsupported: false,
             opened: now,
             coalescer: Coalescer::default(),
             subscribed: BTreeSet::new(),
@@ -398,13 +431,19 @@ impl<'a> State<'a> {
             reread: false,
             tools_pending: false,
             tools_due: None,
-            snapshot_due: now + SNAPSHOT_TTL,
+            // Due at once: a session that starts with no URI watched reads
+            // the catalogue as soon as one is, even when the shared snapshot
+            // is known from an earlier session.
+            snapshot_due: now,
             snapshot_retry_at: now,
             retry_open_at: now,
         }
     }
 
     fn ended(&self, started: Instant) -> Outcome {
+        if self.unsupported {
+            return Outcome::Unsupported;
+        }
         Outcome::Ended {
             acked: self.acked.is_some(),
             lasted: started.elapsed(),
@@ -437,7 +476,10 @@ impl<'a> State<'a> {
                     hub.revoke_absent_uris(&self.shared.name, &listed).await;
                 }
                 self.reread = false;
-                self.snapshot_due = Instant::now() + SNAPSHOT_TTL;
+                // The catalogue cache's own TTL: a shorter configured one
+                // re-reads sooner, so a removal is seen as soon as the
+                // cache would (MIK-7950).
+                self.snapshot_due = Instant::now() + snapshot_interval(backend.cache_ttl());
             }
             Err(error) => {
                 debug!(backend = %self.shared.name, %error, "upstream listener: catalogue read failed");
@@ -454,6 +496,9 @@ impl<'a> State<'a> {
                 false
             }
             UpstreamNote::Notice { kind, uri } => {
+                if !self.honours(kind, uri.as_deref(), from_pending) {
+                    return false;
+                }
                 if kind == NoteKind::ResourcesChanged && !requested(self.shared).uris.is_empty() {
                     self.reread = true;
                 }
@@ -468,6 +513,31 @@ impl<'a> State<'a> {
                 false
             }
             UpstreamNote::End => !from_pending,
+            UpstreamNote::Unsupported => {
+                // A replacement the peer refuses ends nothing; it is dropped
+                // at its acknowledgement deadline like any unacknowledged one.
+                self.unsupported |= !from_pending;
+                !from_pending
+            }
+        }
+    }
+
+    /// Whether an acknowledgement covers a notice. A legacy stream has none
+    /// and is not gated; on a modern one, a notice before the stream's
+    /// acknowledgement (a replacement's, or the first listen's) is dropped:
+    /// the acknowledgement must be the first frame (§3).
+    fn honours(&self, kind: NoteKind, uri: Option<&str>, from_pending: bool) -> bool {
+        if self.era == Era::Legacy {
+            return true;
+        }
+        let (false, Some((kinds, uris))) = (from_pending, &self.honoured) else {
+            return false;
+        };
+        match kind {
+            NoteKind::ResourceUpdated => uri.is_some_and(|u| uris.iter().any(|w| w == u)),
+            NoteKind::ResourcesChanged => kinds.resources_changed,
+            NoteKind::PromptsChanged => kinds.prompts_changed,
+            NoteKind::ToolsChanged => kinds.tools_changed,
         }
     }
 
@@ -491,6 +561,7 @@ impl<'a> State<'a> {
                 self.current = Some((p.stream, p.requested));
             }
         }
+        self.honoured = Some((kinds, uris.to_vec()));
         self.acked = Some(Instant::now());
     }
 
@@ -586,10 +657,15 @@ impl<'a> State<'a> {
 
     /// Emit the coalescing windows that closed (§8), through the hub only.
     fn flush(&mut self, hub: &Weak<EventsHub>) {
+        self.flush_at(hub, Instant::now());
+    }
+
+    /// [`Self::flush`] of the windows closed by `at`.
+    fn flush_at(&mut self, hub: &Weak<EventsHub>, at: Instant) {
         // Re-checked at every delivery: a reload can make the backend
         // ineligible while its listener runs (MIK-7894). Nothing pending is
         // sent, the task ends, and the upstream subscriptions are withdrawn.
-        let due = self.coalescer.due(Instant::now());
+        let due = self.coalescer.due(at);
         if (self.tools_pending || !due.is_empty()) && self.shared.is_ineligible() {
             self.tools_pending = false;
             end_ineligible(self.shared, hub);

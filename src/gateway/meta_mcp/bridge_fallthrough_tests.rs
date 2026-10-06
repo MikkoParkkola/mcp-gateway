@@ -557,6 +557,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
                     caller: "known-caller",
                     external_server: "gateway",
                     external_tool: "gateway_list_tools",
+                    subject: None,
                 },
                 mutation: crate::security::response_policy::ResponseMutationPolicy::Redact,
                 signing: None,

@@ -147,6 +147,12 @@ jobs:
     needs: resolve
     uses: ./.github/workflows/task-sdk-recovery.yml
 
+  # MIK-7479's full burst is skipped by every per-PR test job, so the release
+  # is where it must have passed on this revision.
+  mrtr7b-full-burst:
+    needs: resolve
+    uses: ./.github/workflows/mrtr7b-full-burst.yml
+
   # The tests run from the packaged crate, as anyone installing it would. A
   # file the tests read that `include` leaves out passes the checkout-based
   # tests in `verify` and fails only here, so `release` waits on this, and
@@ -157,7 +163,7 @@ jobs:
     uses: ./.github/workflows/packaged-suite.yml
 
   verify:
-    needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery]
+    needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery, mrtr7b-full-burst]
     runs-on: ubuntu-latest
     # Every publishing job reads these to decide stable vs prerelease channel.
     # `needs` exposes only direct dependencies, so each consumer names `verify`
@@ -205,6 +211,8 @@ jobs:
       - name: Lint
         run: cargo clippy --all-features -- -D warnings
 
+      # The skip names the job that runs the test in full, and its ticket:
+      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       - name: Test
         run: cargo test --all-features -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
 

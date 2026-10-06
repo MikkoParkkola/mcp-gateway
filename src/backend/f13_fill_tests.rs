@@ -278,7 +278,7 @@ fn f13_t5_hanging_list_is_bounded_by_the_inner_timeout() {
             let out = tokio::time::timeout(limit, check(&backend, "edit", &undeclared()))
                 .await
                 .expect("the check was not bounded");
-            let timed_out = |e| matches!(e, crate::Error::BackendTimeout(_));
+            let timed_out = |e| matches!(e, crate::Error::BackendUnavailable(_));
             (out.map_err(timed_out), started.elapsed())
         });
         assert_eq!(out, expected);
@@ -303,12 +303,12 @@ fn f13_t5b_a_timed_out_fill_makes_the_next_call_fail_fast() {
         let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
         let first = check(&backend, "edit", &undeclared()).await;
         assert!(
-            matches!(first, Err(crate::Error::BackendTimeout(_))),
+            matches!(first, Err(crate::Error::BackendUnavailable(_))),
             "{first:?}"
         );
         let started = tokio::time::Instant::now();
         let second = check(&backend, "edit", &undeclared()).await;
-        let second = second.map_err(|e| matches!(e, crate::Error::BackendTimeout(_)));
+        let second = second.map_err(|e| matches!(e, crate::Error::BackendUnavailable(_)));
         (second, lister.lists(), started.elapsed())
     });
     assert_eq!(second, Err(true));

@@ -31,7 +31,9 @@ pub use capability::{CapabilityConfig, FileRoots, ProcessCommand, ProcessExecuti
 pub use code_mode::CodeModeConfig;
 pub use error_budget::{CapabilityErrorBudgetSection, ErrorBudgetSection};
 pub(crate) use events::parse_cidr;
-pub use events::{EventsConfig, EventsRateLimit, EventsSourcesConfig};
+pub use events::{
+    EventsConfig, EventsRateLimit, EventsScheduleConfig, EventsSourcesConfig, EventsWatchConfig,
+};
 pub use failsafe::{
     CircuitBreakerConfig, FailsafeConfig, HealthCheckConfig, RateLimitConfig, RetryConfig,
 };

@@ -59,6 +59,7 @@ fn correlation() -> ResponseCorrelation<'static> {
         caller: "known-caller",
         external_server: "gateway",
         external_tool: "gateway_invoke",
+        subject: None,
     }
 }
 

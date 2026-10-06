@@ -20,8 +20,9 @@
 //!    - `"true"` / `"false"` → `true` / `false` for `boolean` fields
 //! 4. **Enum values** – if a property declares `enum: [...]`, the value must
 //!    be one of the listed options (checked after coercion).
-//! 5. **String constraints** – `minLength`, `maxLength`, and numeric
-//!    `minimum` / `maximum` are checked where declared.
+//! 5. **Constraints** – string `minLength` / `maxLength`, numeric
+//!    `minimum` / `maximum`, and array `minItems` / `maxItems` are checked
+//!    where declared.
 
 use std::fmt::Write as _;
 

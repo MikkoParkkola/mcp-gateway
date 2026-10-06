@@ -415,3 +415,59 @@ async fn an_occurrence_with_a_lifecycle_key_reaches_only_its_holders() {
         .await;
     assert_eq!(outbox(dir.path()).len(), 3, "an unknown key reaches no one");
 }
+
+/// Operator events (gateway health, the kill switch) need no backend grant
+/// at delivery, as owner events do not: an admin whose key is scoped to some
+/// backends keeps every operator event it holds.
+#[tokio::test]
+async fn an_operator_record_asks_no_backend_grant() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let sub = stored("op", "gateway.kill_switch.changed");
+    let caps = super::super::store::Caps {
+        per_principal: 10,
+        global: 10,
+    };
+    hub.store
+        .admit(
+            sub.clone(),
+            true,
+            caps,
+            chrono::Duration::zero(),
+            Utc::now(),
+            super::super::tail_policy(&config),
+        )
+        .expect("io")
+        .expect("admitted");
+    let services = Services {
+        live: Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        audit: None,
+        provenance: None,
+        #[cfg(feature = "cost-governance")]
+        budget: None,
+        credentials: super::super::LiveCredentials::default(),
+    };
+    let event = SourceEvent {
+        kind: SourceKind::GatewayOperational,
+        name: "gateway.kill_switch.changed".into(),
+        backend: "alpha".into(),
+        scope: Visibility::Operator,
+        owner: None,
+        upstream_id: "u".into(),
+        occurred_at: Utc::now(),
+        data: json!({}),
+        lifecycle_key: None,
+    };
+    hub.offer(&services, &event, &sub).await;
+    let due = hub
+        .store
+        .due(Utc::now(), &std::collections::HashSet::new())
+        .expect("io");
+    assert_eq!(due.ready.len(), 1);
+    assert!(due.ready[0].owner_scoped, "no backend grant is asked");
+}

@@ -301,7 +301,7 @@ impl StdioTransport {
         // (Promptness only: the reader holds a `Weak`, so a drop would reap it.)
         if let Err(mut error) = self.initialize().await {
             if self.start.exited_early() {
-                error = self.early_exit_error(stderr_tail, &parts).await;
+                error = self.early_exit_error(stderr_tail).await;
             }
             if let Err(close_error) = self.close().await {
                 warn!(error = %close_error, "Failed to clean up stdio process after initialization error");
@@ -555,7 +555,9 @@ impl StdioTransport {
         };
 
         if let Some(ref id) = response.id
-            && self.taps.response_to(id, response.result.as_ref())
+            && self
+                .taps
+                .response_to(id, response.result.as_ref(), response.error.as_ref())
         {
             // A listen is never a pending request (design §4).
             return Ok(());
@@ -601,7 +603,7 @@ impl StdioTransport {
             debug!("Write complete and flushed");
             Ok(())
         } else {
-            Err(Error::Transport("Not connected".to_string()))
+            Err(Error::TransportConnect("Not connected".to_string()))
         }
     }
 

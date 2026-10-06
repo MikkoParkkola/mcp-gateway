@@ -67,10 +67,16 @@ async fn relay(state: &Arc<AppState>, id: i64) -> Value {
 }
 
 /// `key-a` starts one task, without reading it, once its dispatch has
-/// reached the backend's `calls`-th call.
-async fn start_task(state: &Arc<AppState>, mock: &MockBackend, id: i64, key: &str, calls: usize) {
+/// reached the backend's `calls`-th call; the task's id.
+async fn start_task(
+    state: &Arc<AppState>,
+    mock: &MockBackend,
+    id: i64,
+    key: &str,
+    calls: usize,
+) -> String {
     let created = post(state, "key-a", task_invoke(id, key, json!({}))).await;
-    let _ = task_id(&created);
+    let task = task_id(&created);
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     while mock.calls() < calls {
         assert!(
@@ -79,6 +85,7 @@ async fn start_task(state: &Arc<AppState>, mock: &MockBackend, id: i64, key: &st
         );
         tokio::task::yield_now().await;
     }
+    task
 }
 
 /// `key-b` relays until refused or out of time, never reading the task: a
@@ -158,6 +165,48 @@ async fn a_native_task_result_is_receipted_as_stored() {
     assert_eq!(
         answer["error"]["code"], -32002,
         "the delivered sibling text was not receipted: {answer}"
+    );
+}
+
+/// MIK-7939: the recovery hint the gateway attaches to a task's `isError`
+/// result is the gateway's text. The worker's delivery scope carries the
+/// write record, so the receipt committed at settlement keeps the backend's
+/// text and leaves the hint out.
+#[tokio::test]
+async fn a_hinted_task_failure_is_receipted_without_its_hint() {
+    use crate::gateway::meta_mcp::invoke::receipt_test_support::{backend_failure, own_hint_text};
+    use crate::gateway::recovery::{
+        ErrorCategory, MetaSurface, RecoveryContext, attach_recovery, recovery_for_surface,
+    };
+    let failure = backend_failure(PROSE);
+    let failed = json!({"content": [{"type": "text", "text": failure}], "isError": true});
+    // The hint's advice is fixed for its category, so it is known before the
+    // task runs and the task need not be read (a read renews the receipt).
+    let hint = recovery_for_surface(
+        ErrorCategory::BackendError,
+        RecoveryContext::default(),
+        MetaSurface::Standard,
+    );
+    let hint = own_hint_text(&attach_recovery(failed.clone(), hint), PROSE);
+    let mock = MockBackend::answering(Answer::Sequence(vec![failed, text("ok")]));
+    let (state, _store) = relay_state(&mock, 600).await;
+    // The worker takes the failure before any relay probe reaches the mock.
+    let task = start_task(&state, &mock, 1, "relay-7939", 1).await;
+    let answer = relay_until_refused(&state).await;
+    assert_eq!(
+        answer["error"]["code"], -32002,
+        "settlement recorded nothing: {answer}"
+    );
+    let answer = post(&state, "key-b", sync_invoke(500, json!({"text": hint}))).await;
+    assert!(
+        answer.get("error").is_none(),
+        "the gateway's hint was receipted: {answer}"
+    );
+    // Read last, as a read renews the receipt: the hint was delivered.
+    let settled = poll_until_terminal(&state, "key-a", &task).await;
+    assert!(
+        settled.to_string().contains(&hint),
+        "base: the task's result carries the gateway's hint: {settled}"
     );
 }
 
@@ -264,5 +313,36 @@ async fn parked_task_prompt_read_is_recorded() {
     assert_eq!(
         answer["error"]["code"], -32002,
         "prompt not recorded: {answer}"
+    );
+}
+
+/// MIK-7939 D6.RELAY.10: a backend's primitive result is stored as a text
+/// block holding its JSON print. The receipt is the stored text, so relaying
+/// that text is caught. Densely escaped: no fingerprint window of the raw
+/// string survives in its print, so a receipt of the raw value cannot match.
+#[tokio::test]
+async fn a_primitive_task_result_is_receipted_as_stored() {
+    use std::fmt::Write as _;
+    let raw = (0..120).fold(String::new(), |mut raw, n| {
+        let _ = write!(raw, "r{n}\"");
+        raw
+    });
+    let stored = Value::String(raw.clone()).to_string();
+    let mock = MockBackend::answering(Answer::Sequence(vec![json!(raw), text("ok")]));
+    let (state, _store) = relay_state(&mock, 600).await;
+    start_task(&state, &mock, 1, "relay-d10", 1).await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut id = 100;
+    let answer = loop {
+        let answer = post(&state, "key-b", sync_invoke(id, json!({"text": stored}))).await;
+        if answer["error"]["code"] == -32002 || tokio::time::Instant::now() >= deadline {
+            break answer;
+        }
+        id += 1;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        answer["error"]["code"], -32002,
+        "the stored text was not receipted: {answer}"
     );
 }

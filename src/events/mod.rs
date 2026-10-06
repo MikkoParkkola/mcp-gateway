@@ -24,12 +24,14 @@ mod fanout;
 mod governance;
 mod lifecycle;
 mod limiter;
+mod operational_source;
 mod outbox;
 mod rate;
 mod records;
 mod reload;
 mod rpc;
 mod runtime;
+mod schedule_source;
 mod services;
 mod store;
 mod task_source;
@@ -38,6 +40,7 @@ mod upstream;
 mod upstream_listener;
 mod upstream_need;
 mod upstream_session;
+pub(crate) mod watch_source;
 mod webhook_source;
 mod worker;
 
@@ -129,6 +132,12 @@ pub(crate) trait EventSource: Send + Sync {
     /// The last subscription for `key` went away (unsubscribe, expiry,
     /// revocation or withdrawal).
     async fn on_last_subscriber(&self, _key: &str) {}
+    /// Whether a delivery of event type `name` is charged to a budget. A
+    /// source reporting on budgets answers `false`, so exhausting a budget
+    /// does not charge the event that reports it (event-sources design §3).
+    fn charges(&self, _name: &str) -> bool {
+        true
+    }
 }
 
 /// Distinct callback hosts the verification limiter tracks before it sheds

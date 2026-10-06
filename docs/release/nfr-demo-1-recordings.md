@@ -167,15 +167,16 @@ driver used it, the 20-second job completed during shutdown, and the restarted
 process read an **already-terminal** record — proving only that a completed
 record survives, which is the weaker claim. The driver now uses its own SIGKILL.
 
-**Scope limitation, verified at source.** The driver runs with auth **disabled**,
-so it proves cross-session and cross-restart reconnect and **nothing** about
-cross-account isolation (that is MIK-7311.LIFECYCLE.2's Rust ACs). With auth on,
-task creation refuses with `-32600 task creation requires a verified caller
-identity` unless the request carries a `VerifiedIdentity`
-(`src/gateway/router/handlers/tasks.rs:145`), and the static API-key branch of
-the auth middleware inserts `AuthenticatedClient` and `ApiKey` but never an
-identity (`src/gateway/auth.rs:991-1002`); only `key_server_credential` does
-(`:1006-1014`).
+**Scope limitation.** The driver runs with auth **disabled**, so it proves
+cross-session and cross-restart reconnect and **nothing** about cross-account
+isolation (that is MIK-7311.LIFECYCLE.2's Rust ACs). When this was recorded,
+task creation with auth on refused any caller without an OIDC
+`VerifiedIdentity`, and the static API-key path never inserts one; the
+transcript's `auth:` banner still says so. MIK-7967 (#3092) removed that limit:
+an API-key caller now owns its tasks as `credential:<principal>`, and the guard
+refuses only an empty owner (`src/gateway/router/handlers/tasks.rs:164`).
+`tests/e2e_task_api_key_owner.rs` drives the built binary with auth on, and key
+B gets key A's task back as a missing task. The recording was not redone.
 
 An unreviewed draft of this driver blamed OIDC's HTTPS issuer requirement
 instead. That is **wrong** and was corrected rather than carried: a non-HTTPS

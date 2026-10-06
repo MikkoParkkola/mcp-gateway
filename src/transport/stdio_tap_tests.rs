@@ -55,3 +55,16 @@ fn progress_is_not_taken_by_an_open_legacy_tap() {
     t.handle_response(&line.to_string()).unwrap();
     assert!(legacy.try_recv().is_err());
 }
+
+/// MIK-7899 CLASS.1: a `-32601` answer to a stdio listen says the peer has
+/// no listen; it is not the listen's graceful end.
+#[test]
+fn a_method_not_found_answer_is_not_a_graceful_end() {
+    let t = transport();
+    let mut rx = t.taps.listen(&json!(42), Requested::default());
+    t.handle_response(
+        r#"{"jsonrpc":"2.0","id":42,"error":{"code":-32601,"message":"Method not found"}}"#,
+    )
+    .unwrap();
+    assert_eq!(rx.try_recv(), Ok(UpstreamNote::Unsupported));
+}

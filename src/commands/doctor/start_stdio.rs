@@ -11,9 +11,6 @@ use std::time::Duration;
 use mcp_gateway::config::{BackendConfig, TransportConfig};
 use mcp_gateway::transport::{StdioTransport, Transport as _, isolated_package_manager_env};
 
-use tracing::instrument::WithSubscriber as _;
-use tracing_subscriber::layer::SubscriberExt as _;
-
 use super::CheckResult;
 
 /// Longest a single start may take here, whatever the backend's own timeout.
@@ -80,25 +77,18 @@ pub(super) async fn start_stdio_backend(
     if let Some(bytes) = backend.max_frame_bytes {
         transport.set_max_frame_bytes(bytes);
     }
-    // The transport logs an early exit's redacted stderr tail as the `stderr`
-    // field of one record; doctor reads it from there rather than through a
-    // second API (#526).
-    let capture = ExcerptCapture::default();
-    let log = tracing::Dispatch::new(tracing_subscriber::registry().with(capture.clone()));
     // The backend's own timeout bounds each request inside `start`; the cap
-    // bounds the whole start, spawn and handshake included.
-    let started = tokio::time::timeout(START_CAP, transport.start().with_subscriber(log)).await;
+    // bounds the whole start, spawn and handshake included. An early exit's
+    // error names its status, class and matched needle, never the child's
+    // stderr text (MIK-7978).
+    let started = tokio::time::timeout(START_CAP, transport.start()).await;
     let _ = transport.close().await;
     Some(match started {
         Ok(Ok(())) => {
             CheckResult::pass(&label, "initialize completed").with_category("backend_stdio")
         }
         Ok(Err(error)) => {
-            let detail = match capture.0.lock().take() {
-                Some(excerpt) if !excerpt.is_empty() => format!("{error}\nstderr:\n{excerpt}"),
-                _ => error.to_string(),
-            };
-            CheckResult::fail(&label, detail).with_category("backend_stdio")
+            CheckResult::fail(&label, error.to_string()).with_category("backend_stdio")
         }
         Err(_) => CheckResult::fail(
             &label,
@@ -106,28 +96,6 @@ pub(super) async fn start_stdio_backend(
         )
         .with_category("backend_stdio"),
     })
-}
-
-/// Keeps the `stderr` field of the last log record that carries one.
-#[derive(Clone, Default)]
-struct ExcerptCapture(std::sync::Arc<parking_lot::Mutex<Option<String>>>);
-
-impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ExcerptCapture {
-    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
-        struct Stderr(Option<String>);
-        impl tracing::field::Visit for Stderr {
-            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-                if field.name() == "stderr" {
-                    self.0 = Some(format!("{value:?}"));
-                }
-            }
-        }
-        let mut stderr = Stderr(None);
-        event.record(&mut stderr);
-        if let Some(text) = stderr.0 {
-            *self.0.lock() = Some(text);
-        }
-    }
 }
 
 // Unix-only (W-L5): the probed backends are `sh -c` scripts, which Windows does not provide.
@@ -198,11 +166,28 @@ mod tests {
         );
     }
 
+    /// MIK-7978: the row names the early exit's class and needle, never the
+    /// child's stderr text. Test idea from #1759 (terafin).
+    #[tokio::test]
+    async fn an_early_exit_row_names_the_class_not_the_stderr() {
+        let sentinel = format!("ghp_{}", "q7".repeat(17));
+        let backend = stdio(
+            &format!("sh -c 'echo \"Error: Cannot find module x {sentinel}\" >&2; exit 3'"),
+            &[],
+        );
+        let row = start_stdio_backend("b", &backend)
+            .await
+            .expect("a stdio row");
+        assert!(!row.detail.contains(&sentinel), "{}", row.detail);
+        assert!(row.detail.contains("missing_module"), "{}", row.detail);
+        assert!(row.detail.contains("exit status: 3"), "{}", row.detail);
+    }
+
     /// T7: the same cause the gateway logs, through the backend's own env.
     #[tokio::test]
-    async fn t7_start_stdio_reports_the_exit_and_the_stderr_tail() {
+    async fn t7_start_stdio_reports_the_exit_and_its_class() {
         let backend = stdio(
-            r#"sh -c '[ "$NEEDS" = yes ] && { echo cause-canary >&2; exit 3; }; exit 9'"#,
+            r#"sh -c '[ "$NEEDS" = yes ] && { echo "x: command not found" >&2; exit 3; }; exit 9'"#,
             &[("NEEDS", "yes")],
         );
         let result = start_stdio_backend("b", &backend)
@@ -214,7 +199,7 @@ mod tests {
             "{}",
             result.detail
         );
-        assert!(result.detail.contains("cause-canary"), "{}", result.detail);
+        assert!(result.detail.contains("missing_file"), "{}", result.detail);
     }
 
     /// T7d: a profiled backend is reported as skipped, by name: a warning,

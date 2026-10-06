@@ -70,7 +70,9 @@ pub use features::{
     SignatureChainConfig, StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig,
     api_key_digest_spec,
 };
-pub use features::{EventsConfig, EventsRateLimit, EventsSourcesConfig};
+pub use features::{
+    EventsConfig, EventsRateLimit, EventsScheduleConfig, EventsSourcesConfig, EventsWatchConfig,
+};
 pub(crate) use features::{api_key_expired, parse_api_key_digest, parse_cidr};
 
 // Personal-account custody DTO only — not the rest of `personal_accounts`.

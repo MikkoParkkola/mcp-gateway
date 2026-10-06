@@ -38,6 +38,9 @@ use crate::protocol::{Content, Tool, ToolsCallResult};
 
 mod definition_access;
 mod initial_scan;
+mod path_selector;
+
+use path_selector::path_selector_type_error;
 
 /// Ordered capability store with an O(1) name-to-index lookup layer.
 ///
@@ -572,6 +575,7 @@ impl CapabilityBackend {
             .get_with_generation(name)
             .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
         context.mcp_generation = Some(generation);
+        super::read_only_call::refuse_unless_read_only(&capability)?;
         validate_personal_capability_identity(&capability, &context)?;
 
         let multi_user = self.multi_user.load(std::sync::atomic::Ordering::Relaxed);
@@ -722,33 +726,6 @@ impl CapabilityBackend {
     pub fn watched_directories(&self) -> Vec<String> {
         self.directories.read().clone()
     }
-}
-
-fn path_selector_type_error(
-    capability: &CapabilityDefinition,
-    arguments: &Value,
-) -> Option<ToolsCallResult> {
-    let selector = capability
-        .primary_provider()?
-        .config
-        .path_selector
-        .as_ref()?;
-    let value = arguments.get(&selector.parameter)?;
-    if value.is_null() || value.is_string() {
-        return None;
-    }
-
-    Some(ToolsCallResult {
-        content: vec![Content::Text {
-            text: format!(
-                "Tool call validation failed:\n- Parameter '{}' must be a string.",
-                selector.parameter
-            ),
-            annotations: None,
-        }],
-        structured_content: None,
-        is_error: true,
-    })
 }
 
 fn build_success_tool_result(capability: &CapabilityDefinition, result: Value) -> ToolsCallResult {

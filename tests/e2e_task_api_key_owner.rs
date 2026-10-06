@@ -12,6 +12,10 @@
 //! A proven subject outranks the credential, as it does for sessions: two
 //! people a trusted proxy names behind one shared key own separate tasks, and
 //! a subject header with no credential still owns nothing.
+//!
+//! MIK-7986: the other owner-scoped verbs, `tasks/cancel` and `tasks/update`,
+//! answer another key exactly as a missing task and leave the running task
+//! alone.
 
 #![cfg(unix)]
 
@@ -31,7 +35,10 @@ const SUBJECT_HEADER: &str = "x-gateway-identity-subject";
 const READY_BOUND: Duration = Duration::from_secs(60);
 const COMPLETION_BOUND: Duration = Duration::from_secs(30);
 
-/// A stdio MCP server with one tool; any other request gets an empty result.
+/// A stdio MCP server with two tools; any other request gets an empty result.
+/// `slow_tide` answers after 20 s from a background subshell, so its task
+/// stays `working` while the test acts on it and the loop keeps serving; the
+/// bound stays under the backend's 30 s request timeout.
 const PEER: &str = r#"
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
@@ -40,7 +47,9 @@ while IFS= read -r line; do
     *'"method":"initialize"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"tidebook","version":"0"}}}\n' "$id" ;;
     *'"method":"tools/list"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"tide_table","description":"Look up the tide table.","inputSchema":{"type":"object"}}]}}\n' "$id" ;;
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"tide_table","description":"Look up the tide table.","inputSchema":{"type":"object"}},{"name":"slow_tide","description":"Look up the tide table, slowly.","inputSchema":{"type":"object"}}]}}\n' "$id" ;;
+    *'"name":"slow_tide"'*)
+      ( sleep 20; printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"tidebook-answered"}]}}\n' "$id" ) & ;;
     *'"method":"tools/call"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"tidebook-answered"}]}}\n' "$id" ;;
     *)
@@ -219,7 +228,8 @@ impl Gateway {
     }
 
     async fn create_task(&self, key: Option<&str>, id: i64, idempotency: &str) -> Value {
-        self.create_task_as(key, None, id, idempotency).await
+        self.create_task_as(key, None, id, idempotency, "tide_table")
+            .await
     }
 
     async fn create_task_as(
@@ -228,6 +238,7 @@ impl Gateway {
         subject: Option<&str>,
         id: i64,
         idempotency: &str,
+        tool: &str,
     ) -> Value {
         self.post_as(
             key,
@@ -236,7 +247,7 @@ impl Gateway {
             "tools/call",
             json!({
                 "name": "gateway_invoke",
-                "arguments": { "server": "tidebook", "tool": "tide_table", "arguments": {} },
+                "arguments": { "server": "tidebook", "tool": tool, "arguments": {} },
                 "task": {},
                 "_meta": { "io.mcp-gateway/idempotency-key": idempotency }
             }),
@@ -348,7 +359,7 @@ async fn two_subjects_behind_one_key_own_separate_tasks() {
     // MIK-7967.SUBJECT.1: alice, named by the trusted proxy, creates a task
     // with the key she shares with bob.
     let created = gateway
-        .create_task_as(Some(ALPHA), Some("alice"), 1, "alice-1")
+        .create_task_as(Some(ALPHA), Some("alice"), 1, "alice-1", "tide_table")
         .await;
     let task_id = created
         .pointer("/result/taskId")
@@ -409,7 +420,7 @@ async fn two_subjects_behind_one_key_own_separate_tasks() {
     // MIK-7967.SUBJECT.2: a subject header is not a credential. Without a
     // key the caller is still refused as a missing task.
     let headless = gateway
-        .create_task_as(None, Some("alice"), 5, "alice-anon")
+        .create_task_as(None, Some("alice"), 5, "alice-anon", "tide_table")
         .await;
     assert_eq!(
         headless.pointer("/error/code"),
@@ -417,4 +428,98 @@ async fn two_subjects_behind_one_key_own_separate_tasks() {
         "a subject with no credential must be refused: {headless}"
     );
     assert!(headless.get("result").is_none(), "{headless}");
+}
+
+/// One owner-scoped task call: `tasks/cancel`, or `tasks/update` with the
+/// given `inputResponses` (empty is acknowledged; non-empty asks for a round).
+fn verb(method: &'static str, task_id: &str, answers: Option<Value>) -> (&'static str, Value) {
+    let mut params = json!({ "taskId": task_id });
+    if let Some(answers) = answers {
+        params["inputResponses"] = answers;
+    }
+    (method, params)
+}
+
+fn mutating_verbs(task_id: &str) -> [(&'static str, Value); 3] {
+    [
+        verb("tasks/cancel", task_id, None),
+        verb("tasks/update", task_id, Some(json!({}))),
+        verb(
+            "tasks/update",
+            task_id,
+            Some(json!({ "tide": { "ok": true } })),
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn another_key_cannot_cancel_or_update_a_running_task() {
+    let gateway = Gateway::start().await;
+    let created = gateway
+        .create_task_as(Some(ALPHA), None, 1, "alpha-slow", "slow_tide")
+        .await;
+    let task_id = created
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("no taskId: {created}\n{}", gateway.logs()))
+        .to_string();
+    let status = |got: &Value| got.pointer("/result/status").cloned();
+    let read = || gateway.post(Some(ALPHA), 2, "tasks/get", json!({ "taskId": task_id }));
+    // The checks below mean something only while the task is still running.
+    assert_eq!(
+        status(&read().await),
+        Some(json!("working")),
+        "the slow task must still be running\n{}",
+        gateway.logs()
+    );
+
+    // MIK-7986.XKEY.1 / XKEY.2: key B's cancel and updates on A's task each
+    // answer exactly as the same call on a task that does not exist.
+    let fake = made_up(&task_id);
+    for ((method, params), (_, missing_params)) in mutating_verbs(&task_id)
+        .into_iter()
+        .zip(mutating_verbs(&fake))
+    {
+        let other = gateway.post(Some(BRAVO), 3, method, params.clone()).await;
+        let missing = gateway.post(Some(BRAVO), 4, method, missing_params).await;
+        assert!(
+            other.get("result").is_none() && other.get("error").is_some(),
+            "{method} {params}: key B must not act on key A's task: {other}"
+        );
+        assert_eq!(
+            other.get("error"),
+            missing.get("error"),
+            "{method} {params}: key A's task must answer key B like a missing one"
+        );
+    }
+
+    // MIK-7986.XKEY.3: A's task is untouched, and each update from A answers
+    // differently from A's same update on a made-up id, so the comparisons
+    // above have teeth. Cancel's own control is A's cancel below.
+    assert_eq!(
+        status(&read().await),
+        Some(json!("working")),
+        "key B's attempts must leave key A's task running"
+    );
+    for ((method, params), (_, missing_params)) in mutating_verbs(&task_id)
+        .into_iter()
+        .zip(mutating_verbs(&fake))
+        .skip(1)
+    {
+        let missing = gateway.post(Some(ALPHA), 5, method, missing_params).await;
+        let own = gateway.post(Some(ALPHA), 6, method, params.clone()).await;
+        assert_ne!(
+            own.get("error"),
+            missing.get("error"),
+            "{method} {params}: key A must reach its own task: {own}"
+        );
+    }
+    let cancelled = gateway
+        .post(Some(ALPHA), 7, "tasks/cancel", json!({ "taskId": task_id }))
+        .await;
+    assert!(
+        cancelled.get("error").is_none() && cancelled.get("result").is_some(),
+        "key A must cancel its own task: {cancelled}"
+    );
+    assert_eq!(status(&read().await), Some(json!("cancelled")));
 }

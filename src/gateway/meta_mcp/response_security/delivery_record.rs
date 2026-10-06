@@ -183,9 +183,17 @@ async fn append_delivery_attempt(
             }
         }
     }
+    // Named as the invocation record names the same call (MIK-7938): a
+    // certificate or agent caller is the client `anonymous` or `public`, so
+    // only its verified grant subject says who it was.
+    let mut who = AuditWho::from_actor_id(correlation.caller);
+    if let Some(grant) = correlation.subject {
+        who.authority = Some(grant.authority.clone());
+        who.subject = Some(grant.subject.clone());
+    }
     let envelope = AuditEnvelope {
         outcome,
-        ..AuditEnvelope::ok(AuditWho::from_actor_id(correlation.caller))
+        ..AuditEnvelope::ok(who)
     };
     // F20: bounded on the blocking pool; a stalled disk withholds the
     // response (FailClosed) instead of pinning a runtime worker.

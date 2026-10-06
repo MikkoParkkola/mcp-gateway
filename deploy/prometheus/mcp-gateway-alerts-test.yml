@@ -242,7 +242,7 @@ tests:
         values: "_x5 1x20"
 
     alert_rule_test:
-      - eval_time: 7m
+      - eval_time: 5m
         alertname: McpBackendIdleStopCloseFailures
         exp_alerts:
           - exp_labels:
@@ -273,7 +273,7 @@ tests:
         values: "_x5 1x20"
 
     alert_rule_test:
-      - eval_time: 7m
+      - eval_time: 5m
         alertname: McpSigningNonceCapacityRefusal
         exp_alerts:
           - exp_labels:
@@ -294,7 +294,7 @@ tests:
         values: "_x5 1x20"
 
     alert_rule_test:
-      - eval_time: 7m
+      - eval_time: 5m
         alertname: McpBackendCallerSlotsRefused
         exp_alerts:
           - exp_labels:
@@ -344,3 +344,43 @@ tests:
               backend: ledger
             exp_annotations:
               summary: "Backend ledger holds 53 of its 65 pool slots"
+
+  # ── A missed scrape at the window edge (MIK-7988) ──────────────────────────
+  #
+  # A failed scrape leaves a staleness marker. When it lands exactly one window
+  # back, an instant `X offset w` returns nothing there, so `X unless X offset w`
+  # reads an old, unchanged series as new and the alert fires again with no new
+  # event. Each case puts the marker at t=16m and evaluates one window later.
+
+  # (r) Idle-stop: one failure at t=5m, stale at t=16m, quiet at t=31m.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_backend_idle_stop_close_failures{backend="stdio-a"}'
+        values: "_x5 1x10 stale 1x20"
+
+    alert_rule_test:
+      - eval_time: 31m
+        alertname: McpBackendIdleStopCloseFailures
+        exp_alerts: []
+
+  # (s) Nonce capacity: the 5m window, so quiet at t=21m.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_message_signing_nonce_rejections_total{reason="global_capacity"}'
+        values: "_x5 1x10 stale 1x20"
+
+    alert_rule_test:
+      - eval_time: 21m
+        alertname: McpSigningNonceCapacityRefusal
+        exp_alerts: []
+
+  # (t) Slot refusals: quiet at t=31m.
+  - interval: 1m
+    input_series:
+      - series: 'mcp_backend_identity_slots_refused_total{backend="ledger",limit="principal"}'
+        values: "_x5 1x10 stale 1x20"
+
+    alert_rule_test:
+      - eval_time: 31m
+        alertname: McpBackendCallerSlotsRefused
+        exp_alerts: []

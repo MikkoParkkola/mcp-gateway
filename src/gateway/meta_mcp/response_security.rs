@@ -345,6 +345,7 @@ impl super::MetaMcp {
                 caller: "task",
                 external_server: server,
                 external_tool: tool,
+                subject: None,
             };
             let verdict = firewall
                 .check_response_artifact(
@@ -613,6 +614,27 @@ impl super::MetaMcp {
     }
 }
 
+/// The error a recovered task result settles on when the gateway's own
+/// processing refuses it: a firewall refusal as a native task and the
+/// synchronous call report it (-32600, MIK-7667), anything else as internal.
+pub(crate) fn recovered_result_error(error: &crate::Error) -> crate::protocol::JsonRpcError {
+    if matches!(error, crate::Error::ResponseFirewallRefused)
+        && let Some(refusal) = crate::protocol::JsonRpcResponse::delivery_refusal_error(
+            None,
+            error.to_rpc_code(),
+            &error.to_string(),
+        )
+        .error
+    {
+        return refusal;
+    }
+    crate::protocol::JsonRpcError {
+        code: -32603,
+        message: error.to_string(),
+        data: None,
+    }
+}
+
 /// Turn a dispatch error into a JSON-RPC error response, keeping the HTTP
 /// status when the error is an authorization refusal.
 ///
@@ -681,8 +703,19 @@ pub(crate) fn error_response_preserving_status(
             _ => None,
         };
         // A connect offer only under the gateway's own seal (MIK-6745, ADR-008).
-        rpc_error.data =
-            crate::personal_accounts::refusal::offer_data(error).or(rpc_error.data.take());
+        // An offer's text is the gateway's own, so it goes out without the
+        // JSON-RPC prefix Display adds. Gated on the offer keys, not the seal:
+        // a sealed upstream rejection forwards `{}` and keeps its text, as does
+        // any unsealed error (MIK-7559).
+        let offer = crate::personal_accounts::refusal::offer_data(error);
+        let is_offer = offer
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|keys| !keys.is_empty());
+        if let (true, crate::Error::JsonRpc { message, .. }) = (is_offer, error) {
+            rpc_error.message.clone_from(message);
+        }
+        rpc_error.data = offer.or(rpc_error.data.take());
     }
     response
 }

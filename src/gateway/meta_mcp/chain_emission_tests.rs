@@ -54,6 +54,7 @@ async fn deliver(
                 caller: "caller",
                 external_server: "gateway",
                 external_tool: "gateway_invoke",
+                subject: None,
             },
             mutation: ResponseMutationPolicy::Redact,
             signing,

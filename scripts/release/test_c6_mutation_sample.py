@@ -66,6 +66,20 @@ class C6Sample(unittest.TestCase):
         self.assertEqual(counts, {"account paths": 16, "HTTP dispatch": 16, "startup": 8,
                                   "OAuth": 8, "stdio dispatch": 8, "tasks": 8, "bridge": 4})
 
+    def test_a_path_without_a_quota_refuses_to_draw(self):
+        # MIK-7852: every named path has an explicit quota; a missing one must
+        # not fall through to a default that a redrawn frame could exceed.
+        source = (ROOT / "scripts/release/c6_mutation_sample.py").read_text(encoding="utf-8")
+        self.assertIn('"bridge": 4,', source)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        script = pathlib.Path(tmp.name) / "c6_mutation_sample.py"
+        script.write_text(source.replace('"bridge": 4,', ""), encoding="utf-8")
+        run = subprocess.run([sys.executable, str(script), NONCE, str(FRAME)],
+                             cwd=ROOT, capture_output=True, text=True)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("bridge", run.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -39,6 +39,22 @@ impl ConfigFile {
     }
 }
 
+impl super::Config {
+    /// [`super::Config::load_literal`] of `path`, with the text it loaded: the
+    /// bytes the strict checks ran on, from one read, for a caller that edits
+    /// that text and must not edit any other.
+    pub(crate) fn load_literal_with_text(path: &Path) -> Result<(Self, String)> {
+        let file = ConfigFile::read(path.to_path_buf())?;
+        let evaluated = Self::evaluate(
+            Some(&file),
+            &super::SystemHome,
+            super::Tolerance::Warn,
+            super::Expansion::Literal,
+        )?;
+        Ok((evaluated.config, file.text))
+    }
+}
+
 /// Parses the bytes already read, but reports them as the file they came from,
 /// exactly as `Yaml::file` would, so a parse error still names the path.
 impl Provider for ConfigFile {

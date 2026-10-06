@@ -89,7 +89,7 @@ async fn s02_http_flushes_each_notification_rather_than_one_buffer() {
         )
     })
     .await
-    .expect("the row deadlocked, which is one buffered flush answering");
+    .expect("the row ran past its overall bound; each PROBE answered in its own");
 
     // THEN
     assert_eq!(

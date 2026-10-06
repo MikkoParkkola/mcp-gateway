@@ -108,10 +108,14 @@ def classify(entry: dict[str, str]) -> tuple[str, str, str] | str:
     return (kind, pinned[0], pinned[1])
 
 
-def fetch(url: str) -> tuple[int, bytes]:
+def fetch(url: str, body: bytes | None = None) -> tuple[int, bytes]:
+    """GET `url`, or POST `body` as JSON when one is given."""
     last: Exception | None = None
+    headers = {"User-Agent": "mcp-gateway-registry-check"}
+    if body is not None:
+        headers.update({"Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
     for attempt in range(3):
-        req = urllib.request.Request(url, headers={"User-Agent": "mcp-gateway-registry-check"})
+        req = urllib.request.Request(url, data=body, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
                 return resp.status, resp.read()
@@ -123,6 +127,19 @@ def fetch(url: str) -> tuple[int, bytes]:
             last = e
         time.sleep(2 * (attempt + 1))
     raise RuntimeError(f"unreachable after 3 attempts: {last}")
+
+
+# An MCP `initialize` with no credential, for a header entry whose GET is 405.
+UNAUTHENTICATED_INITIALIZE = json.dumps({
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "mcp-gateway-registry-check", "version": "1"},
+    },
+}).encode()
 
 
 def well_known(base: str, suffix: str) -> str:
@@ -178,6 +195,12 @@ def probe(kind: str, target: str, version: str) -> str | None:
         status, _ = fetch(target)
         if status in (404, 410):
             return f"{target}: HTTP {status}"
+        if kind == "http-header" and status == 405:
+            # A streamable endpoint need not serve GET, so a 405 says nothing
+            # about credentials: ask the way a client would (MIK-7817).
+            status, _ = fetch(target, UNAUTHENTICATED_INITIALIZE)
+            if status in (404, 405, 410):
+                return f"{target}: HTTP {status} to POST as well; it does not serve MCP at this URL"
         if kind == "http-header" and status not in (401, 403):
             return f"{target}: HTTP {status} without a credential (a header entry must refuse it)"
         if kind == "http-oauth" and not registration_endpoint(target):
