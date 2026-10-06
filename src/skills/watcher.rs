@@ -13,6 +13,9 @@
 //! [`CapabilityDefinition`] directly from the changed file, regenerating the
 //! single affected category bundle instead of all of them.
 //!
+//! [`CapabilityWatcher`]: crate::capability::CapabilityWatcher
+//! [`CapabilityDefinition`]: crate::capability::CapabilityDefinition
+//!
 //! # Usage
 //!
 //! ```no_run

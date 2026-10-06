@@ -9,6 +9,9 @@
 //! The override is stored in [`SandboxDescriptor::substrate_override`] and
 //! enforced by [`SandboxDescriptor::effective_substrate`].  This module
 //! provides the validation wrapper that logs and audits override decisions.
+//!
+//! [`SandboxDescriptor::substrate_override`]: super::SandboxDescriptor::substrate_override
+//! [`SandboxDescriptor::effective_substrate`]: super::SandboxDescriptor::effective_substrate
 
 use serde::{Deserialize, Serialize};
 

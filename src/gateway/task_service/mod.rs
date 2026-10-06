@@ -71,7 +71,7 @@ pub(crate) use {record::CONTINUATION_DEADLINE_MARGIN_SECS, store::TaskStore};
 ///
 /// A failed open is returned, never swapped for a volatile store.
 ///
-/// The directory is not created here. [`TaskStore`] already creates an absent
+/// The directory is not created here. `TaskStore` already creates an absent
 /// store path with owner-only permissions and refuses an existing one that any
 /// other user can reach, so a `create_dir_all` ahead of it would hand the store
 /// a directory made with the process umask — a directory the store is then right

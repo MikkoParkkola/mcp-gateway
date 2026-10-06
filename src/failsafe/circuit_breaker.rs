@@ -164,7 +164,7 @@ impl CircuitBreaker {
     ///
     /// When the circuit is `Open`, checks whether the reset timeout has elapsed
     /// since the last state change using wall-clock epoch milliseconds (the same
-    /// unit used by [`transition_to`]).  If the timeout has elapsed, the circuit
+    /// unit used by `transition_to`).  If the timeout has elapsed, the circuit
     /// moves to `HalfOpen` and returns `true`.
     #[tracing::instrument(skip(self), fields(backend = %self.name))]
     pub fn can_proceed(&self) -> bool {

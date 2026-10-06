@@ -157,11 +157,14 @@ impl Default for CompressionConfig {
 /// Per-session compressor that tracks tool usage and applies compression.
 ///
 /// One `SessionCompressor` should be created per proxied conversation session.
-/// Call [`compress`] before forwarding tool definitions to the model; call
-/// [`record_usage`] whenever the model invokes a tool.
+/// Call [`compress`](SessionCompressor::compress) before forwarding tool
+/// definitions to the model; call
+/// [`record_usage`](SessionCompressor::record_usage) whenever the model
+/// invokes a tool.
 pub struct SessionCompressor {
     config: CompressionConfig,
-    /// Number of times [`compress`] has been called for this session.
+    /// Number of times [`compress`](SessionCompressor::compress) has been
+    /// called for this session.
     request_count: u32,
     /// Tools observed to be used in this session.
     used_tools: HashSet<String>,
@@ -319,7 +322,7 @@ impl SessionCompressor {
     ///
     /// `original_count` is the number of tools before compression;
     /// `output_count` is the number of tools after compression (returned by
-    /// [`compress`]).
+    /// [`compress`](Self::compress)).
     #[must_use]
     pub fn stats(&self, original_count: usize, output_count: usize) -> CompressionStats {
         let alias_count = self.aliases.len();

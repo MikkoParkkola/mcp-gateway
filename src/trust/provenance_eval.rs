@@ -14,7 +14,7 @@
 //! of its own classifier (`expected_verdict = classify(input)`), so it measured
 //! nothing. Here the ground truth is the *receipt* — real observed data produced
 //! by a separate component — and the fixture labels are independent literals.
-//! [`tests::ground_truth_is_not_a_scorer_mirror`] proves the labels genuinely
+//! `tests::ground_truth_is_not_a_scorer_mirror` proves the labels genuinely
 //! discriminate rather than echoing the scorer.
 //!
 //! Design contract:

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// # Auto-detection
 ///
 /// [`Substrate::detect`] returns `GVisor` on Linux and `AppleVm` on macOS.
-/// This is the default when a [`SandboxDescriptor`] has no
+/// This is the default when a [`SandboxDescriptor`](super::SandboxDescriptor) has no
 /// `substrate_override` (AC.2, AC.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "snake_case")]

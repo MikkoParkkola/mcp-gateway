@@ -10,7 +10,7 @@
 //! - Whether violations should block (`action_mode = true`) or be observed only
 //!
 //! Default: no contract → pass-through (unless `fail_closed` is set on the
-//! [`crate::config::features::security::ResponseContractConfig`]).
+//! [`ResponseContractConfig`](crate::config::ResponseContractConfig)).
 
 use regex::RegexSet;
 

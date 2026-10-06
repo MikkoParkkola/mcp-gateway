@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Env-driven wiring of the gateway attestation validator (MIK-6163 rollout).
 //!
-//! The validator and the [`MetaMcp::with_attestation`] builder already exist
+//! The validator and the `MetaMcp::with_attestation` builder already exist
 //! (MIK-5223 / #259, #261); this module is the missing seam that decides — from
 //! operator config — *whether* to attach a validator on a live gateway and in
 //! which [`AttestationMode`].
@@ -19,7 +19,6 @@
 //!   plans carry no token and are refused under enforce.
 //! - Any other value is a load error, never a silent downgrade.
 //!
-//! [`MetaMcp::with_attestation`]: crate::gateway::meta_mcp::MetaMcp::with_attestation
 //! [`AttestationMode`]: super::validator::AttestationMode
 
 use std::sync::Arc;

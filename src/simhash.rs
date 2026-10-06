@@ -156,7 +156,7 @@ impl SimhashIndex {
     /// Store a fingerprint with the given identifier.
     ///
     /// Inserting the same `id` again adds a second entry; callers that want
-    /// upsert semantics should call [`remove`] first.
+    /// upsert semantics should call [`remove`](Self::remove) first.
     pub fn insert(&mut self, id: String, hash: u64) {
         self.entries.push((id, hash));
     }

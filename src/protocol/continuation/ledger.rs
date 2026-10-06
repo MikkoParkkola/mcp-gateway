@@ -384,7 +384,8 @@ impl ContinuationState {
     }
 
     /// Open a confirmation exchange on this replica and seal a
-    /// [`ContinuationPurpose::DestructiveConfirm`] continuation for it.
+    /// [`ContinuationPurpose::DestructiveConfirm`](super::ContinuationPurpose::DestructiveConfirm)
+    /// continuation for it.
     ///
     /// Same hold-then-mint pairing as [`Self::begin_exchange`]: the envelope
     /// names a slot this process is holding, and a full table declines rather
