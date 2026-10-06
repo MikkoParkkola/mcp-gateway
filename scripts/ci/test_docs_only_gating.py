@@ -38,7 +38,7 @@ SKIPPED = {
 # they need no gate. Gaining a pull_request trigger fails main() until gated.
 PUSH_ONLY_WORKFLOWS = ("codeql.yml", "feature-combos.yml", "packaged-suite.yml")
 # Every job that runs tests stays on docs-only PRs, except task-sdk-recovery
-# (its one test reads no docs): tests read docs files
+# and gws-dry-run (neither reads a docs file): tests read docs files
 # (include_str!, doc-claim tests), in the lib/bin suite as well as tests/.
 KEPT = {
     "scope", "public-repo-hygiene", "test", "windows-check", "macos-check",
