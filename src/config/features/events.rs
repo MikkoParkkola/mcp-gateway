@@ -108,7 +108,7 @@ pub struct EventsConfig {
     pub max_outbox: usize,
     /// Pending outbox records one subscription may hold.
     pub max_outbox_per_subscription: usize,
-    /// Inbound delivery ids remembered per webhook route.
+    /// Inbound delivery ids remembered per webhook route. Nonzero.
     pub seen_max_per_route: usize,
     /// Verification records kept after their last subscription ended.
     pub max_verified_tail: usize,
@@ -127,9 +127,9 @@ pub struct EventsConfig {
     /// Dead-letter retention.
     #[serde(with = "humantime_serde")]
     pub dead_letter_retention: Duration,
-    /// Dead-letter count cap.
+    /// Dead-letter count cap. Nonzero.
     pub dead_letter_max_records: usize,
-    /// Dead-letter byte cap.
+    /// Dead-letter byte cap. Nonzero.
     pub dead_letter_max_bytes: u64,
     /// Verification POSTs per destination host per minute, across principals.
     pub verification_per_host_per_minute: u32,

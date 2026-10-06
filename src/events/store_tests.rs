@@ -416,12 +416,17 @@ fn the_grant_is_fixed_at_the_commit_instant() {
         ttl: Some(chrono::Duration::hours(1)),
         until: None,
     };
-    store
+    let (_, answered) = store
         .admit_granted(s.clone(), grant, true, (CAPS, grace(), TAIL), asked)
         .expect("io")
         .expect("admitted");
     let row = store.get(&s.id).expect("row");
     let expires = row.expires_at.expect("an expiry");
+    assert_eq!(
+        answered,
+        Some(expires),
+        "the answer is the committed expiry"
+    );
     assert!(expires > Utc::now(), "live after the commit: {expires}");
     assert_eq!(expires - row.granted_at, chrono::Duration::hours(1));
 }

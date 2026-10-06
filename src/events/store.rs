@@ -56,6 +56,9 @@ impl Grant {
     }
 }
 
+/// An admission and the expiry it committed.
+pub(crate) type Admitted = (Admission, Option<DateTime<Utc>>);
+
 /// How an admitted subscription met the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Admission {
@@ -278,7 +281,8 @@ impl Store {
     /// both rotate from the same old row. A refresh of a live key is never
     /// capped. `verified_now` stamps a fresh opt-in. The verification is
     /// written before the subscription, so a failed commit never leaves a
-    /// subscription without a durable opt-in. The sweep, the tail cap, the
+    /// subscription without a durable opt-in. Answers the committed expiry
+    /// with the admission, read under the same lock. The sweep, the tail cap, the
     /// opt-in read and the expiry all use one instant, taken under the lock:
     /// the later of `now` and the clock, since the commit can wait on a
     /// challenge, the lifecycle lock and a blocking thread.
@@ -289,7 +293,7 @@ impl Store {
         verified_now: bool,
         (caps, grace, tail): (Caps, chrono::Duration, TailPolicy),
         now: DateTime<Utc>,
-    ) -> std::io::Result<Result<Admission, CapHit>> {
+    ) -> std::io::Result<Result<Admitted, CapHit>> {
         let mut state = self.state.lock();
         let at = Utc::now().max(now);
         self.sweep(&mut state, at)?;
@@ -373,14 +377,16 @@ impl Store {
         };
         // In place: memory follows the disk even when the directory sync
         // failed, and that failure is then reported.
+        let expires_at = sub.expires_at;
         state.subs.insert(sub.id.clone(), sub);
         placed.durable()?;
         self.trim_tails(&mut state, at, tail)?;
-        Ok(Ok(if refreshed {
+        let admission = if refreshed {
             Admission::Refreshed
         } else {
             Admission::Inserted
-        }))
+        };
+        Ok(Ok((admission, expires_at)))
     }
 
     /// [`Self::admit_granted`] with the expiry the row already carries.
@@ -399,6 +405,7 @@ impl Store {
             until: sub.expires_at,
         };
         self.admit_granted(sub, grant, verified_now, (caps, grace, tail), now)
+            .map(|admitted| admitted.map(|(admission, _)| admission))
     }
 
     /// Whether a new key for `principal` would pass the caps now. Advisory:

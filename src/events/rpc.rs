@@ -442,14 +442,13 @@ impl EventsHub {
                 .commit_started(&record, grant, !verified, (caps, grace, tail), now)
                 .await;
             match outcome? {
-                Ok(admission) => {
+                Ok((admission, expires_at)) => {
                     self.subscribed(caller, admission, &id, &descriptor.name, &url)
                         .await;
                     // A refresh may have reactivated a suspended row.
                     self.runtime.wake.notify_one();
                     let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())
                         && self.store.has_due(&id, Utc::now());
-                    let expires_at = self.store.get(&id).and_then(|s| s.expires_at);
                     return Ok(subscribe_answer(
                         &id,
                         expires_at,
@@ -475,7 +474,7 @@ impl EventsHub {
         fresh: bool,
         policy: (Caps, chrono::Duration, super::store::TailPolicy),
         now: DateTime<Utc>,
-    ) -> Result<Result<super::store::Admission, CapHit>, RpcError> {
+    ) -> Result<Result<super::store::Admitted, CapHit>, RpcError> {
         let attempt = record.clone();
         let mut started = self.lifecycle.lock().await;
         let begun = self
