@@ -70,6 +70,12 @@ fn a_failed_start_logs_the_classification_and_not_the_childs_text() {
     });
 
     let captured = events.lock().expect("collector lock");
+    let every_field = captured
+        .iter()
+        .flat_map(|fields| fields.values())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
     let classification = captured
         .iter()
         .find(|fields| {
@@ -88,9 +94,14 @@ fn a_failed_start_logs_the_classification_and_not_the_childs_text() {
             .is_some_and(|status| status.contains('3')),
         "and how the child ended, which is not text the child chose: {classification:?}"
     );
-    // That the child's stderr never reaches the log is pinned by MIK-7978: on
-    // this line the early-exit report logs a redacted excerpt (#526), and the
-    // redaction is a pattern list this stub's token passes through.
+    assert!(
+        !every_field.contains("ghp_SENTINELSENTINELSENTINELSENTINEL01"),
+        "the child's stderr never reaches the log, at any level: {every_field}"
+    );
+    assert!(
+        !every_field.contains("Authorization"),
+        "nor any other part of it: {every_field}"
+    );
     assert_eq!(
         spawns(&log).len(),
         2,
