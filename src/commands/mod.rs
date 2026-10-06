@@ -636,7 +636,9 @@ async fn tool_invoke(
             return ExitCode::FAILURE;
         }
     };
-    let resolved = match resolve_args(args.as_deref(), &kv_args, true) {
+    // `key=value` text is typed by the tool's own input schema (MIK-7943).
+    let kv_schema = catalogue.find(&tool).map(|cap| &cap.schema.input);
+    let resolved = match resolve_args(args.as_deref(), &kv_args, true, kv_schema) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("Error: {e}");
