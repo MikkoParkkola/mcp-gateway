@@ -603,7 +603,7 @@ impl StdioTransport {
             debug!("Write complete and flushed");
             Ok(())
         } else {
-            Err(Error::Transport("Not connected".to_string()))
+            Err(Error::TransportConnect("Not connected".to_string()))
         }
     }
 

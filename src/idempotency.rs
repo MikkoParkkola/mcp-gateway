@@ -690,6 +690,12 @@ impl IdempotencyReservation {
         &self.key
     }
 
+    /// Whether a settling call already stored or released the key.
+    #[must_use]
+    pub(crate) fn is_settled(&self) -> bool {
+        self.settled
+    }
+
     /// Settle by storing `result`. Returns whether it was cached — a non-final
     /// result is refused by [`IdempotencyCache::mark_completed`] and the key is
     /// released instead, so the call stays retryable.

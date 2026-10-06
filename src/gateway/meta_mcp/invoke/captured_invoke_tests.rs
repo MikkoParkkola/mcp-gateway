@@ -7,7 +7,7 @@
 //! apply, nor which backend the call is dispatched through.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -126,6 +126,35 @@ impl IdentityPropagation for SwapDuringMint {
     }
 }
 
+/// A reload's `old.stop()` landing in the mint await: stops the backend the
+/// call captured, registers its replacement, then fails the mint so the
+/// optional propagation carries on. Fires once; the retry's mint only fails.
+struct StopDuringMint {
+    registry: Arc<BackendRegistry>,
+    captured: Arc<Backend>,
+    replacement: Arc<Backend>,
+    fired: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl IdentityPropagation for StopDuringMint {
+    async fn propagate(
+        &self,
+        _identity: &VerifiedIdentity,
+        _backend: &BackendDescriptor,
+    ) -> Result<PropagatedCredential, PropagationError> {
+        if !self.fired.swap(true, Ordering::SeqCst) {
+            self.captured.stop().await.expect("stop never fails");
+            assert!(self.registry.remove("alpha"), "alpha was registered");
+            assert!(
+                self.registry.register(Arc::clone(&self.replacement)),
+                "the reload registers the replacement"
+            );
+        }
+        Err(PropagationError::Refuse("the mint failed".to_string()))
+    }
+}
+
 fn backend(config: BackendConfig, served: &Arc<AtomicUsize>) -> Arc<Backend> {
     let backend = Arc::new(Backend::new(
         "alpha",
@@ -169,7 +198,10 @@ fn shared_login() -> BackendConfig {
 }
 
 /// An authenticated OIDC caller invoking `alpha`'s `read` through the meta route.
-async fn call_alpha(meta: &MetaMcp) -> crate::Result<Value> {
+async fn call_alpha(
+    meta: &MetaMcp,
+    retry: &crate::protocol::mrtr::RetryFields,
+) -> crate::Result<Value> {
     let identity = VerifiedIdentity {
         subject: "alice".to_string(),
         email: "alice@example.invalid".to_string(),
@@ -201,7 +233,7 @@ async fn call_alpha(meta: &MetaMcp) -> crate::Result<Value> {
         verified_identity: Some(&identity),
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,
-        retry: &crate::protocol::mrtr::NO_RETRY,
+        retry,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         task: None,
         era: crate::protocol::meta::Era::Legacy,
@@ -239,7 +271,7 @@ async fn a_reload_during_the_mint_does_not_change_the_backend_a_call_is_judged_o
         not_connected: false,
     }));
 
-    let answer = call_alpha(&meta).await;
+    let answer = call_alpha(&meta, &crate::protocol::mrtr::NO_RETRY).await;
 
     assert!(
         answer.is_ok(),
@@ -253,6 +285,60 @@ async fn a_reload_during_the_mint_does_not_change_the_backend_a_call_is_judged_o
         (1, 0),
         "the call must be served by the backend it was judged on"
     );
+}
+
+/// MIK-7948 MINTRACE.1/.2, MIK-7900 RELOAD.2 (mid-mint): a reload stops the
+/// captured backend between capture and dispatch. The dispatch on the stopped
+/// instance is refused before anything is sent (`BackendNotFound`), so
+/// the key is released and the same-key retry runs once, on the replacement.
+/// Schema enforcement is off so no cold `tools/list` refuses first. Mutant: a
+/// stopped instance's refusal settled terminal serves the retry that refusal,
+/// and the replacement never runs.
+#[tokio::test]
+async fn a_reload_that_stops_the_captured_backend_mid_mint_frees_the_key() {
+    let (captured_calls, replacement_calls) =
+        (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let config = || BackendConfig {
+        input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
+        ..optional_propagation()
+    };
+    let captured = backend(config(), &captured_calls);
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(Arc::clone(&captured)), "registration");
+    let mut meta = MetaMcp::new(Arc::clone(&registry));
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        Duration::from_secs(300),
+    );
+    meta.set_multi_user(true);
+    meta.set_identity_propagation(Arc::new(StopDuringMint {
+        registry: Arc::clone(&registry),
+        captured,
+        replacement: backend(config(), &replacement_calls),
+        fired: AtomicBool::new(false),
+    }));
+    let keyed = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("mint-race".to_owned()),
+        ..Default::default()
+    };
+
+    let first = call_alpha(&meta, &keyed).await.expect("an answer");
+    assert_eq!(first["isError"], true, "{first}");
+    assert!(
+        first.to_string().contains("Backend not found: alpha"),
+        "refused before dispatch as the retired instance: {first}"
+    );
+    let retry = call_alpha(&meta, &keyed).await.expect("an answer");
+
+    assert_eq!(
+        (
+            captured_calls.load(Ordering::SeqCst),
+            replacement_calls.load(Ordering::SeqCst)
+        ),
+        (0, 1),
+        "the stopped instance sent nothing, and the retry ran once on the replacement: {retry}"
+    );
+    assert_eq!(retry["isError"], false, "{retry}");
 }
 
 /// The schema check lists a cold slot as the caller, with the caller's minted
