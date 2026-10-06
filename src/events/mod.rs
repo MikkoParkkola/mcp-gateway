@@ -136,7 +136,6 @@ pub(crate) trait EventSource: Send + Sync {
     /// Whether a delivery of event type `name` is charged to a budget. A
     /// source reporting on budgets answers `false`, so exhausting a budget
     /// does not charge the event that reports it (event-sources design §3).
-    #[allow(dead_code, reason = "red: the worker reads it in the next commit")]
     fn charges(&self, _name: &str) -> bool {
         true
     }
