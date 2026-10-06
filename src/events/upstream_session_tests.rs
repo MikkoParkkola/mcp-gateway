@@ -378,7 +378,7 @@ async fn a_coalesced_notice_is_delivered_when_the_session_ends() {
         .lock()
         .add(&Interest::ResourcesChanged)
         .expect("room");
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, Era::Legacy);
     state.note(changed(NoteKind::ResourcesChanged), false);
     let _ = finish_refill(&mut state, &shared, &backend, &weak, None, Instant::now()).await;
     assert!(
