@@ -656,6 +656,8 @@ These amend the r2 text above; where they disagree, r3 wins.
 - `mcp_gateway_collusion_relay_total{action}` (`observe` or `block`) counts every reported relay.
   `mcp_gateway_collusion_unkeyed_egress_total{action}` counts egress checks made without an
   authenticated caller (the §13.1 internal counter, now exported).
+  `mcp_gateway_collusion_plan_receipts_dropped_total` counts plans whose step receipts were
+  dropped because the answer was over the bound they are kept against (MIK-7934.PLANRCPT.2).
 - Tests: `allowed_flow_not_flagged` (detector, gate, direct, meta), `allowed_flow_globs_match`,
   `allowed_flows_are_checked_at_load`, `a_reported_relay_increments_the_metric`. Mutants: skip
   the flow mask in the witness search; drop the relay counter increment.

@@ -188,6 +188,9 @@ pub struct BackendRegistry {
     /// Where registered backends may connect; set once. See
     /// [`BackendRegistry::enforce_destinations`].
     destination: std::sync::OnceLock<Destinations>,
+    /// Handed to the shared slot's breaker of every backend registered, so
+    /// one observer hears each backend's health once (not per user slot).
+    breaker_observer: crate::observer::Observer<crate::failsafe::HealthChange>,
 }
 
 impl BackendRegistry {
@@ -200,6 +203,7 @@ impl BackendRegistry {
             stopping: parking_lot::Mutex::new(false),
             reload: tokio::sync::Mutex::new(()),
             reload_read: Arc::new(tokio::sync::Semaphore::new(1)),
+            breaker_observer: crate::observer::Observer::default(),
             destination: std::sync::OnceLock::new(),
         }
     }
@@ -281,10 +285,35 @@ impl BackendRegistry {
             backend.stamp_destination(destinations.for_backend(&backend.name));
         }
         let name = backend.name.clone();
+        let breaker = Arc::clone(&backend.shared_entry().failsafe.circuit_breaker);
+        if let Some(observer) = self.breaker_observer.get() {
+            breaker.observe(observer);
+        }
         self.backends.insert(name.clone(), backend);
         drop(stopping);
+        // Before the insert, so no transition escapes; again after it, so an
+        // observer attached meanwhile reaches it here or in the walk.
+        if let Some(observer) = self.breaker_observer.get() {
+            breaker.observe(observer);
+        }
         self.announce_change(&name);
         true
+    }
+
+    /// Attach `observer` to the shared slot's breaker of every backend held
+    /// now or registered later.
+    pub(crate) fn observe_breakers(
+        &self,
+        observer: crate::observer::ObserverFn<crate::failsafe::HealthChange>,
+    ) {
+        self.breaker_observer.set(observer);
+        let Some(observer) = self.breaker_observer.get() else {
+            return;
+        };
+        for backend in &self.backends {
+            let breaker = &backend.shared_entry().failsafe.circuit_breaker;
+            breaker.observe(Arc::clone(&observer));
+        }
     }
 
     /// Put `policy` on every backend this registry holds or will hold.
