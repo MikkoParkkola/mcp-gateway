@@ -138,8 +138,8 @@ async fn meta_refusal_record_correlates_by_trace_id_then_session() {
 }
 
 /// MIK-7660: a request-firewall refusal whose record cannot be appended
-/// answers 503/-32005 under FailClosed, and the original refusal under
-/// BestEffort.
+/// answers 503/-32005 under `FailClosed`, and the original refusal under
+/// `BestEffort`.
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn meta_firewall_refusal_append_failure_follows_the_policy() {
