@@ -44,6 +44,7 @@ pub mod hash;
 mod loader;
 mod openapi;
 mod parser;
+mod read_only_call;
 mod response_cache;
 mod schema_validator;
 #[cfg(test)]
@@ -70,6 +71,7 @@ pub use hash::{compute_capability_hash, rewrite_with_pin, strip_sha256_line};
 pub use loader::CapabilityLoader;
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
 pub use parser::{parse_capability, parse_capability_file, validate_capability};
+pub(crate) use read_only_call::read_only_call_as;
 pub(crate) use schema_validator::undeclared_key_refusal;
 pub use schema_validator::{
     SchemaValidationResult, ValidationViolation, validate_arguments, validate_output,
