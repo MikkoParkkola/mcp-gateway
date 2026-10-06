@@ -15,6 +15,10 @@
 //! (tracked under MIK-4486 follow-up) will add an end-to-end test that drives
 //! a mock OAuth authorization server through the full `OAuthClient::authorize`
 //! flow.
+//!
+//! The clock is paused (MIK-7912): it advances only when the runtime is idle,
+//! so the detached task's sleep always ends before the longer wait that checks
+//! it. On a real clock a starved runtime let the longer wait expire first.
 
 #![allow(clippy::missing_panics_doc)]
 
@@ -32,7 +36,7 @@ use tokio::sync::Notify;
 /// underlying connection drops the request handler future), the spawned
 /// OAuth task is decoupled from that future's lifetime and proceeds to
 /// completion — landing the token in `TokenStorage` on disk.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn spawned_task_survives_outer_future_cancellation() {
     let completed = Arc::new(AtomicBool::new(false));
     let completed_clone = Arc::clone(&completed);
@@ -75,7 +79,7 @@ async fn spawned_task_survives_outer_future_cancellation() {
 /// Production parallel: the OAuth task's "result" is the token persisted to
 /// disk via `TokenStorage`. Even if the spawn's `JoinHandle.await` is dropped
 /// by outer cancellation, the on-disk state remains for the next caller.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn spawn_side_effect_persists_after_outer_drop() {
     let shared = Arc::new(parking_lot::RwLock::new(None::<String>));
     let shared_clone = Arc::clone(&shared);
@@ -90,7 +94,8 @@ async fn spawn_side_effect_persists_after_outer_drop() {
     };
 
     // Outer races a short timeout it cannot meet.
-    let _ = tokio::time::timeout(Duration::from_millis(30), outer).await;
+    let outer_result = tokio::time::timeout(Duration::from_millis(30), outer).await;
+    assert!(outer_result.is_err(), "the outer future must be cancelled");
 
     // Wait long enough for the detached task to finish its work.
     tokio::time::sleep(Duration::from_millis(500)).await;

@@ -517,6 +517,7 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
                 caller: "anonymous",
                 external_server: "gateway",
                 external_tool: "gateway_execute",
+                subject: None,
             },
             ResponseArtifactKind::FinalResponse,
             ResponseMutationPolicy::Redact,

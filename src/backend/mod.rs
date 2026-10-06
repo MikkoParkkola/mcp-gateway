@@ -243,6 +243,11 @@ impl Backend {
         let _ = self.destination.set(policy);
     }
 
+    /// How long this backend's catalogue lists stay fresh (`meta_mcp.cache_ttl`).
+    pub(crate) fn cache_ttl(&self) -> Duration {
+        self.cache_ttl
+    }
+
     /// Whether a start began on this HTTP or WebSocket backend before any
     /// destination policy was stamped on it. What that start built was not
     /// pinned and cannot be re-pinned in place (closing it would itself send
