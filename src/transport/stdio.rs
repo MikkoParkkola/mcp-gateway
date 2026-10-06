@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use process_wrap::tokio::ChildWrapper;
 use serde_json::Value;
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
@@ -178,8 +178,8 @@ impl StdioTransport {
 
         *self.writer.lock().await = Some(stdin);
         *self.child.lock().await = Some(child);
-        let (eof_tx, eof_rx) = tokio::sync::watch::channel(false);
-        self.start.begin(eof_rx);
+        let eof_tx = Arc::new(tokio::sync::watch::channel(false).0);
+        self.start.begin(Arc::clone(&eof_tx));
 
         // Spawn reader task.
         //
@@ -233,7 +233,9 @@ impl StdioTransport {
                 }
             }
 
-            let _ = eof_tx.send(true);
+            // Before the clear: a request that registers after it sees the
+            // latch, and one that registered before it is dropped by it.
+            eof_tx.send_replace(true);
             if let Some(transport) = transport.upgrade() {
                 transport.connected.store(false, Ordering::Relaxed);
                 // The stream is over: wake every waiting call now (its receiver
@@ -550,34 +552,6 @@ impl StdioTransport {
         Ok(())
     }
 
-    /// Write a message to stdin
-    async fn write_message(&self, message: &str) -> Result<()> {
-        debug!(message_len = message.len(), "Writing to stdin");
-        let mut writer = self.writer.lock().await;
-        if let Some(ref mut stdin) = *writer {
-            stdin
-                .write_all(message.as_bytes())
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            stdin
-                .write_all(b"\n")
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            stdin
-                .flush()
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            // Drop the lock before yielding to allow concurrent reads
-            drop(writer);
-            // Yield to give the runtime a chance to process the I/O
-            tokio::task::yield_now().await;
-            debug!("Write complete and flushed");
-            Ok(())
-        } else {
-            Err(Error::Transport("Not connected".to_string()))
-        }
-    }
-
     /// Get next request ID
     #[allow(clippy::cast_possible_wrap)] // request IDs won't exceed i64::MAX
     fn next_id(&self) -> RequestId {
@@ -654,7 +628,7 @@ impl Transport for StdioTransport {
             .map(|token| ProgressRegistrationGuard::register(self, &token));
 
         let message = serde_json::to_string(&request)?;
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
         self.pending.insert(id.to_string(), tx);
         // Removing the entry is the guard's job on every path: on success the
         // reader task has already routed the response and the removal is a
@@ -664,16 +638,50 @@ impl Transport for StdioTransport {
         // stranded entry would leak here for the transport's lifetime.
         let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
 
+        // MIK-7871: stdout may have closed, and `pending` been cleared, before
+        // the insert above. The reader trips the latch before it clears, so
+        // either this sees it, or the clear comes after the insert and drops it.
+        let eof = self.start.eof_receiver();
+        if eof.as_ref().is_some_and(|eof| *eof.borrow()) {
+            return Err(Error::Transport("stdout closed".to_string()));
+        }
+        // One deadline for the write and the reply: a child that stopped
+        // reading stdin cannot hold the call past it.
+        let exchange = tokio::time::timeout(self.request_timeout, async {
+            self.write_message(&message).await?;
+            (&mut rx)
+                .await
+                .map_err(|_| Error::Transport("Response channel closed".to_string()))
+        });
+        let outcome = match eof {
+            None => Some(exchange.await),
+            Some(mut eof) => {
+                // Not `wait_for`: its future is not `Send`, and this one has
+                // to be. A dropped sender means this start's reader is gone.
+                let closed = async move {
+                    loop {
+                        // Separate statements: the borrow must end before
+                        // the await, or the read lock is held across it.
+                        if *eof.borrow_and_update() {
+                            break;
+                        }
+                        if eof.changed().await.is_err() {
+                            break;
+                        }
+                    }
+                };
+                early_exit::reply_or_eof(exchange, closed).await
+            }
+        };
         // Both guards drop after this value is produced, which is where the
         // pending entry and the progress registration are retired.
-        match self.write_message(&message).await {
-            Err(e) => Err(e),
-            // Wait for response with timeout
-            Ok(()) => match tokio::time::timeout(self.request_timeout, rx).await {
-                Ok(Ok(response)) => Ok(response),
-                Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
-                Err(_) => Err(Error::BackendTimeout("Request timed out".to_string())),
-            },
+        match outcome {
+            Some(Ok(reply)) => reply,
+            Some(Err(_)) => Err(Error::BackendTimeout("Request timed out".to_string())),
+            // A reply routed while the write was still yielding is the answer.
+            None => rx
+                .try_recv()
+                .map_err(|_| Error::Transport("stdout closed".to_string())),
         }
     }
 
@@ -741,6 +749,8 @@ mod progress;
 #[path = "stdio_start_failure.rs"]
 mod start_failure;
 use progress::{progress_token_string, request_progress_token};
+#[path = "stdio_write.rs"]
+mod write;
 
 #[cfg(test)]
 #[path = "stdio_tests.rs"]

@@ -9,12 +9,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::config::Config;
 
 /// Gateway state directory, honoring the existing operator override.
+///
+/// Always absolute when the working directory is readable: a relative override
+/// resolves against the gateway's own working directory, so a backend started
+/// in another `cwd` is handed the same directory (MIK-7964).
 #[must_use]
 pub fn gateway_data_dir() -> PathBuf {
-    resolve_gateway_data_dir(
+    absolutize(resolve_gateway_data_dir(
         std::env::var("MCP_GATEWAY_CONFIG_DIR").ok(),
         crate::home_dir::home_dir(),
-    )
+    ))
+}
+
+/// `path` made absolute against the working directory, or kept as given when
+/// that cannot be read; the cache repair refuses a relative path on its own.
+fn absolutize(path: PathBuf) -> PathBuf {
+    std::path::absolute(&path).unwrap_or(path)
 }
 
 fn resolve_gateway_data_dir(configured: Option<String>, home: Option<PathBuf>) -> PathBuf {
@@ -375,6 +385,24 @@ mod tests {
             super::resolve_gateway_data_dir(None, None),
             std::path::PathBuf::from("./.mcp-gateway")
         );
+    }
+
+    #[test]
+    fn a_relative_path_is_made_absolute() {
+        assert!(super::absolutize(PathBuf::from("isolated-state")).is_absolute());
+    }
+
+    // Drive-relative and rooted paths are relative on Windows, and `join`
+    // would replace the base with them rather than resolve them.
+    #[cfg(windows)]
+    #[test]
+    fn windows_drive_relative_and_rooted_paths_are_made_absolute() {
+        for path in [r"C:foo", r"\foo"] {
+            assert!(
+                super::absolutize(PathBuf::from(path)).is_absolute(),
+                "{path}"
+            );
+        }
     }
     use super::*;
 
