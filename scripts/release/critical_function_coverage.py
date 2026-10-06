@@ -146,9 +146,10 @@ _KEYWORDS = frozenset({
 })
 # The path before a macro's name is captured: `other::format!` is not the
 # built-in `format!` (MIK-7864), so only an unqualified name, or one qualified
-# by a standard crate, is looked up in the safe list.
+# by a standard crate, is looked up in the safe list. A single colon before
+# the path (`{"k":other::format!(..)}`) is punctuation, not part of it.
 _ANY_MACRO = re.compile(
-    r"(?<![\w:])((?:::" + _GAP + r")?(?:(?:r#)?\w+" + _GAP + r"::" + _GAP + r")*)"
+    r"(?<!\w)(?<!::)((?:::" + _GAP + r")?(?:(?:r#)?\w+" + _GAP + r"::" + _GAP + r")*)"
     r"(?:r#)?(\w+)" + _GAP + r"!" + _GAP + r"[(\[{]",
     re.S,
 )

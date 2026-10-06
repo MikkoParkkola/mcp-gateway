@@ -464,6 +464,9 @@ class HeadLineCalls(unittest.TestCase):
             '    let s = other::format!("{}", clean(x));\n',
             '    let s = ::other::format!("{}", clean(x));\n',
             '    let v = my_crate::json!({ "a": clean(x) });\n',
+            # After a single colon, as in a compact struct or map literal.
+            '    let v = json!({"field":other::format!("{}", clean(x))});\n',
+            '    let v = json!({"field":hidden!(clean(x))});\n',
         ]:
             with self.subTest(line=line):
                 self.assertEqual(self.graded_with("", line)[4], [2])
