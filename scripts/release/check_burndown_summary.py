@@ -51,8 +51,8 @@ def tracker_counts(text: str) -> dict:
     counts = {}
     # Count rows by their label, not by the strict pattern, so a malformed
     # duplicate cannot hide behind a valid row.
-    cores = re.findall(r"^\| Core release criteria \|", text, re.MULTILINE)
-    scopes = re.findall(r"^\| Scope-update criteria \|", text, re.MULTILINE)
+    cores = re.findall(r"^\|\s*Core release criteria\s*\|", text, re.MULTILINE)
+    scopes = re.findall(r"^\|\s*Scope-update criteria\s*\|", text, re.MULTILINE)
     if len(cores) > 1 or len(scopes) > 1:
         counts["duplicate_rows"] = f"{len(cores)} core and {len(scopes)} scope summary rows"
         return counts
