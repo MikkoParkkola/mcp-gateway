@@ -253,7 +253,10 @@ pub(crate) async fn plan_step<F: std::future::Future>(step: F) -> F::Output {
 /// what was staged; only a commit records.
 pub(crate) async fn collecting<F: std::future::Future>(delivery: F) -> F::Output {
     RELAY_RECEIPTS
-        .scope(RefCell::new(Vec::new()), delivery)
+        .scope(
+            RefCell::new(Vec::new()),
+            super::gateway_writes::scope(delivery),
+        )
         .await
 }
 
@@ -477,7 +480,7 @@ impl MetaMcp {
     ) -> (F::Output, StagedReceipts) {
         let (output, receipts) = RELAY_RECEIPTS
             .scope(RefCell::new(Vec::new()), async {
-                let output = delivery.await;
+                let output = super::gateway_writes::scope(delivery).await;
                 let staged = RELAY_RECEIPTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
                 (output, staged)
             })

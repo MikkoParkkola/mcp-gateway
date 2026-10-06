@@ -99,6 +99,7 @@ use super::support::{augment_with_predictions, augment_with_trace, idempotency_k
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
 mod output_shape;
 mod provenance_stamp;
+pub(crate) mod gateway_writes;
 pub(crate) mod relay;
 pub(super) use output_shape::enforce_output_schema;
 #[cfg(all(test, feature = "firewall"))]

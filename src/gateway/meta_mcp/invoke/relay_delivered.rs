@@ -6,6 +6,8 @@
 use serde_json::Value;
 
 use super::RELAY_RECEIPTS;
+#[cfg(feature = "firewall")]
+use super::super::gateway_writes::Layer;
 use super::{MetaMcp, RelayKey};
 
 impl MetaMcp {
@@ -62,9 +64,20 @@ impl MetaMcp {
         result: Option<&Value>,
         shape: AnswerShape,
     ) {
-        if !snapshot.is_some_and(|before| Some(&before) != result) {
+        let Some(before) = snapshot.filter(|before| Some(before) != result) else {
             return;
+        };
+        // MIK-7939: an in-place rewrite keeps the gateway's members its own.
+        #[cfg(feature = "firewall")]
+        if let Some(after) = result {
+            use super::super::gateway_writes::rebind;
+            rebind(Layer::Answer, &before, after);
+            if let (Some(b), Some(a)) = (tool_value(&before, shape), tool_value(after, shape)) {
+                rebind(Layer::Value, &b, &a);
+            }
         }
+        #[cfg(not(feature = "firewall"))]
+        drop(before);
         let _ = RELAY_RECEIPTS.try_with(|receipts| {
             let mut receipts = receipts.borrow_mut();
             let mut staged = std::mem::take(&mut *receipts);
@@ -257,15 +270,27 @@ fn receipt_copy(result: &Value, stamps: GatewayStamps, shape: AnswerShape) -> Op
     {
         meta.remove(crate::protocol::meta::KEY_SERVER_INFO);
     }
+    // MIK-7939: what the gateway itself wrote on this call is not backend
+    // text, at either layer, and nothing else is removed for its name.
+    super::super::gateway_writes::strip(&mut copy, Layer::Answer);
+    let mut value = tool_value(&copy, shape)?;
+    super::super::gateway_writes::strip(&mut value, Layer::Value);
+    Some(value)
+}
+
+/// The tool value an answer of `shape` carries: a wrapper read decoded, a
+/// task envelope's delivered slot, anything else as it stands.
+#[cfg(feature = "firewall")]
+fn tool_value(answer: &Value, shape: AnswerShape) -> Option<Value> {
     // An interim answer (`inputRequests`, `requestState`) is a promoted
     // native result, not a wrapper: its members are delivered as they stand.
-    let interim = copy.get("inputRequests").is_some() || copy.get("requestState").is_some();
+    let interim = answer.get("inputRequests").is_some() || answer.get("requestState").is_some();
     match shape {
         AnswerShape::InvokeWrapped if !interim => {
-            Some(super::super::audit::delivered_value(&copy).into_owned())
+            Some(super::super::audit::delivered_value(answer).into_owned())
         }
-        AnswerShape::InvokeWrapped | AnswerShape::Literal => Some(copy),
-        AnswerShape::TaskEnvelope => task_slot(&copy).cloned(),
+        AnswerShape::InvokeWrapped | AnswerShape::Literal => Some(answer.clone()),
+        AnswerShape::TaskEnvelope => task_slot(answer).cloned(),
     }
 }
 
