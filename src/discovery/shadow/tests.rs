@@ -482,6 +482,11 @@ fn a_client_resolved_auth_header_still_counts() {
     let authed = asset("weather");
     assert_eq!(authed.auth_exposure, ShadowAuthExposure::HttpAuthHeader);
     assert_eq!(authed.severity, ShadowRiskSeverity::Medium);
+    // The public shadow_radar.v1 spelling.
+    assert_eq!(
+        serde_json::to_value(authed).unwrap()["auth_exposure"],
+        "http_auth_header"
+    );
     for code in ["http_auth_header_configured", "server_auth_unverified"] {
         assert!(authed.risk_reasons.iter().any(|r| r == code), "{code}");
     }
