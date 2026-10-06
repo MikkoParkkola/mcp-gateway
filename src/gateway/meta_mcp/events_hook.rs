@@ -219,7 +219,7 @@ impl MetaMcp {
         apply_webhook_refresh(hub, &capabilities, &registry);
     }
 
-    /// Every REST capability as the events watch source sees it: its
+    /// Every REST-only capability as the events watch source sees it: its
     /// read-only classification (data, MIK-7216.IDEM.1) and whose credential
     /// a call needs. Empty without a capability backend.
     pub(crate) fn watch_targets(&self) -> Vec<crate::events::watch_source::Target> {
@@ -230,6 +230,7 @@ impl MetaMcp {
         capabilities
             .list_capabilities()
             .into_iter()
+            .filter(rest_only)
             .map(|definition| Target {
                 credential: if definition.auth.account.is_some() {
                     CredentialUse::Account
@@ -245,6 +246,18 @@ impl MetaMcp {
             })
             .collect()
     }
+}
+
+/// Whether every provider of `definition`, fallbacks included, is REST: the
+/// only kind the watch polls (MIK-7720 U1). Reads `service` itself, since
+/// `protocol_config` maps a process service to REST.
+fn rest_only(definition: &crate::capability::CapabilityDefinition) -> bool {
+    let providers = &definition.providers;
+    providers
+        .named
+        .values()
+        .chain(&providers.fallback)
+        .all(|p| matches!(p.service.as_str(), "rest" | ""))
 }
 
 /// Re-register the webhook routes of `capabilities`, unless the reload
