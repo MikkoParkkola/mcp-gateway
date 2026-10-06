@@ -5,9 +5,7 @@
 
 use serde_json::json;
 
-use super::{
-    CapabilityExecutor, call, caller, capability_yaml, executor_holding, parse_capability,
-};
+use super::{call, caller, capability_yaml, executor_holding, parse_capability};
 
 /// HOME in `env` is reserved and never taken from the list, so its value stays
 /// in the result; the declared name the child receives is scrubbed.
@@ -15,17 +13,8 @@ use super::{
 async fn a_reserved_env_name_is_not_scrubbed_from_the_result() {
     let home = "/home-7953-operator";
     let secret = "tok-7953-mcp-declared";
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join(".env");
-    crate::gateway::test_helpers::write_owner_only(
-        &file,
-        format!("CAP_EXEC_TEST_TOKEN={secret}\nHOME={home}\n"),
-    )
-    .unwrap();
-    let overlay = std::sync::Arc::new(crate::config::EnvOverlay::from_paths(&[file]));
-    let executor = CapabilityExecutor::new().with_env(std::sync::Arc::new(
-        crate::config::LiveEnv::new(overlay, crate::config::ResolvedEnvFiles::default()),
-    ));
+    // The helper writes one env-file line; HOME rides on a second.
+    let (_dir, executor) = executor_holding(&format!("{secret}\nHOME={home}"));
     let cap = parse_capability(&capability_yaml().replace(
         "transport: stdio",
         "transport: stdio\n      env: [HOME, CAP_EXEC_TEST_TOKEN]",
