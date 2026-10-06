@@ -314,3 +314,91 @@ fn admit_reports_inserted_then_refreshed() {
         Ok(Admission::Refreshed)
     );
 }
+
+/// MIK-7854.EVENTS.3: no build wrote a version 0 record, so one is skipped
+/// on load like any version this build does not know.
+#[test]
+fn a_version_zero_record_is_not_loaded() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let s = sub("p", "https://h/a", now);
+    store
+        .admit(s.clone(), true, CAPS, grace(), now, TAIL)
+        .expect("io")
+        .expect("admitted");
+    drop(store);
+    let (subs, name) = (dir.path().join("subs"), format!("{}.json", s.id));
+    let bytes = std::fs::read(subs.join(&name)).expect("record");
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    value["v"] = serde_json::json!(0);
+    write_record(&subs, &name, &value).expect("rewrite");
+    let store = Store::open(dir.path(), now, TAIL).expect("reopen");
+    assert!(store.get(&s.id).is_none(), "a version 0 record is skipped");
+}
+
+/// MIK-7854.EVENTS.4: a verification tail over the cap in force is trimmed
+/// before an admission may reuse it, on the same open store.
+#[test]
+fn an_over_cap_tail_is_trimmed_before_it_is_reused() {
+    let dir = tempfile::tempdir().expect("dir");
+    let t0 = Utc::now();
+    let store = Store::open(dir.path(), t0, TAIL).expect("open");
+    let urls = ["https://h/1", "https://h/22", "https://h/333"];
+    for (n, url) in urls.iter().enumerate() {
+        let at = t0 + chrono::Duration::seconds(i64::try_from(n).expect("small"));
+        let s = sub("q", url, at);
+        store
+            .admit(s.clone(), true, CAPS, grace(), at, TAIL)
+            .expect("io")
+            .expect("admitted");
+        store.remove(&s.id, at, TAIL).expect("remove");
+    }
+    let narrow = TailPolicy {
+        max: 1,
+        max_per_principal: 1,
+        ..TAIL
+    };
+    let now = t0 + chrono::Duration::seconds(10);
+    assert_eq!(
+        store
+            .admit(sub("q", urls[1], now), false, CAPS, grace(), now, narrow)
+            .expect("io"),
+        Err(CapHit::Unverified),
+        "the older tail is past the narrowed cap"
+    );
+}
+
+/// MIK-7854.EVENTS.4: subscriptions live at the request time but expired by
+/// the commit are swept at the commit instant, so their tails are capped
+/// before the opt-in is read.
+#[test]
+fn tails_of_rows_that_expire_before_the_commit_are_capped_first() {
+    let dir = tempfile::tempdir().expect("dir");
+    let real = Utc::now();
+    let asked = real - chrono::Duration::hours(2);
+    let long = TailPolicy {
+        ttl: Duration::from_secs(24 * 3600),
+        max: 1,
+        max_per_principal: 1,
+    };
+    let store = Store::open(dir.path(), asked, long).expect("open");
+    for (url, mins) in [("https://h/1", 10), ("https://h/22", 20)] {
+        let s = Subscription {
+            expires_at: Some(asked + chrono::Duration::minutes(mins)),
+            ..sub("q", url, asked)
+        };
+        store
+            .admit(s, true, CAPS, grace(), asked, long)
+            .expect("io")
+            .expect("admitted");
+    }
+    let again = sub("q", "https://h/1", asked);
+    assert_eq!(
+        store
+            .admit(again, false, CAPS, grace(), asked, long)
+            .expect("io"),
+        Err(CapHit::Unverified),
+        "both rows expired before the commit; the older tail is over the cap"
+    );
+}

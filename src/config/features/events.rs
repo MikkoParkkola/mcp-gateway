@@ -305,6 +305,38 @@ mod tests {
         assert_eq!(parse_cidr("10.0.0.0/8").map(|(_, l)| l), Some(8));
     }
 
+    /// MIK-7854.EVENTS.2: the route dedupe and dead-letter caps refuse zero.
+    #[test]
+    fn dedupe_and_dead_letter_caps_refuse_zero() {
+        let zeroed = [
+            (
+                "seen_max_per_route",
+                EventsConfig {
+                    seen_max_per_route: 0,
+                    ..EventsConfig::default()
+                },
+            ),
+            (
+                "dead_letter_max_records",
+                EventsConfig {
+                    dead_letter_max_records: 0,
+                    ..EventsConfig::default()
+                },
+            ),
+            (
+                "dead_letter_max_bytes",
+                EventsConfig {
+                    dead_letter_max_bytes: 0,
+                    ..EventsConfig::default()
+                },
+            ),
+        ];
+        for (name, config) in zeroed {
+            let error = config.validate().expect_err(name).to_string();
+            assert!(error.contains(name), "{name}: {error}");
+        }
+    }
+
     #[test]
     fn delivery_timing_keys_parse_and_refuse_zero() {
         let config: EventsConfig = serde_yaml::from_str(
