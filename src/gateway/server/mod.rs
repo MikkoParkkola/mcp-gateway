@@ -3055,8 +3055,7 @@ impl Gateway {
 
         // As `POST /mcp` does: shaped before signing, receipts stamped to match.
         let stamps = if request_shape.era() == crate::protocol::meta::Era::Modern {
-            super::router::shape_modern_response(&mut response, &method);
-            super::meta_mcp::invoke::relay::GatewayStamps::Modern
+            super::router::shape_modern_response(&mut response, &method)
         } else {
             super::meta_mcp::invoke::relay::GatewayStamps::Legacy
         };

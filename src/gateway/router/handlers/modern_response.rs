@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 #[cfg(test)]
 use axum::response::IntoResponse;
 
+use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
 use crate::protocol::cacheable::LIST_TTL_MS;
 
 /// Build a response for a request written against 2026-07-28.
@@ -44,7 +45,14 @@ pub(super) fn build_modern_response(
 ///
 /// Crate-visible because both transports answer modern requests: stdio
 /// skipping this sent results a 2026-07-28 client rejects (MIK-8009).
-pub(crate) fn shape_modern_response(response: &mut crate::protocol::JsonRpcResponse, method: &str) {
+///
+/// Returns the receipt stamps the shaped answer needs: the `serverInfo`
+/// written here is the gateway's, so a receipt must not digest it as backend
+/// text. A transport takes its stamps from here, never decides them apart.
+pub(crate) fn shape_modern_response(
+    response: &mut crate::protocol::JsonRpcResponse,
+    method: &str,
+) -> GatewayStamps {
     if let Some(ref mut result) = response.result
         && let Some(object) = result.as_object_mut()
     {
@@ -92,11 +100,12 @@ pub(crate) fn shape_modern_response(response: &mut crate::protocol::JsonRpcRespo
             );
         }
     }
+    GatewayStamps::Modern
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{LIST_TTL_MS, shape_modern_response};
+    use super::{GatewayStamps, LIST_TTL_MS, shape_modern_response};
     use crate::protocol::{JsonRpcResponse, RequestId};
 
     fn shaped_ttl(result: serde_json::Value) -> serde_json::Value {
@@ -125,6 +134,17 @@ mod tests {
         assert_eq!(
             shaped_ttl(serde_json::json!({"contents": [], "ttlMs": "soon"})),
             LIST_TTL_MS
+        );
+    }
+
+    /// MIK-8009: the answer carries the gateway's `serverInfo`, so its
+    /// receipt is stamped modern on every transport that shapes it.
+    #[test]
+    fn a_shaped_answer_asks_for_modern_receipt_stamps() {
+        let mut response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
+        assert_eq!(
+            shape_modern_response(&mut response, "tools/call"),
+            GatewayStamps::Modern
         );
     }
 }
