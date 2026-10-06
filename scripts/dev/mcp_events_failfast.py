@@ -244,6 +244,10 @@ class Stub:
             url = (params.get("delivery") or {}).get("url", "")
             if not (url.startswith("https://") or self.allow_local):
                 return err(-32602, "InvalidParams", {"field": "delivery.url"})
+            try:
+                urllib.parse.urlsplit(url).port  # a malformed port raises (MIK-7745)
+            except ValueError:
+                return err(-32602, "InvalidParams", {"field": "delivery.url"})
             sid = "sub_" + hashlib.sha256(canonical([who, url, EVENT["name"], args]).encode()).hexdigest()[:24]
             if method == "events/unsubscribe":
                 with self.lock:
@@ -354,7 +358,7 @@ def stub_handler(stub, emit_token):
 def body_length(headers):
     """(bytes to read, None) for a usable Content-Length, else (0, status):
     400 unless there is at most one header and it is ASCII digits only (HTTP's
-    1*DIGIT), 413 when it is over MAX_BODY. No header means no body."""
+    1*DIGIT) between spaces and tabs, 413 when it is over MAX_BODY. No header means no body."""
     values = headers.get_all("Content-Length") if hasattr(headers, "get_all") else (
         [headers["Content-Length"]] if "Content-Length" in headers else [])
     values = values or []
@@ -362,7 +366,7 @@ def body_length(headers):
         return 0, 400
     if not values:
         return 0, None
-    raw = values[0].strip()
+    raw = values[0].strip(" \t")  # HTTP OWS is SP/HTAB only; str.strip() also takes VT/FF
     if not (raw.isascii() and raw.isdigit()):
         return 0, 400
     digits = raw.lstrip("0") or "0"
@@ -467,6 +471,7 @@ def selftest(workdir):
     assert secret not in logged and secret[6:] not in logged and "/hook" not in logged, "log leaks secret or path"
     assert os.stat(store).st_mode & 0o077 == 0 and os.stat(log).st_mode & 0o077 == 0, "store/log not owner-only"
     for bad, status in (("x", 400), ("-1", 400), ("+5", 400), ("1_0", 400), ("", 400),
+                        ("\x0b5", 400), ("5\x0c", 400),
                         (str(MAX_BODY + 1), 413), ("9" * 5000, 413)):
         assert body_length({"Content-Length": bad}) == (0, status), f"Content-Length {bad!r} accepted"
     two = email.message.Message()
@@ -478,6 +483,16 @@ def selftest(workdir):
     rcv.shutdown()
     print("selftest PASS: discover, list, short-secret, verify, idempotent, persist, filter, sign, unsubscribe, redaction, length")
     return 0
+
+
+def prepare_dir(path):
+    """Create `path` owner-only. An existing directory is left as it is: it may
+    be a checkout or a home, and the store and log files are 0600 anyway (MIK-7745)."""
+    try:
+        os.makedirs(path, mode=0o700)
+    except FileExistsError:
+        return
+    os.chmod(path, 0o700)  # makedirs' mode is masked by the umask
 
 
 def main():
@@ -500,8 +515,7 @@ def main():
         print(f"receiver on 127.0.0.1:{a.port}")
         return srv.serve_forever()
     token = secrets.token_urlsafe(16)
-    os.makedirs(a.dir, mode=0o700, exist_ok=True)
-    os.chmod(a.dir, 0o700)
+    prepare_dir(a.dir)
     stub = Stub(os.path.join(a.dir, "subs.json"), os.path.join(a.dir, "log.jsonl"), a.bearer, allow_local=False)
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), stub_handler(stub, token))
     print(f"stub MCP endpoint: http://127.0.0.1:{a.port}/mcp")
