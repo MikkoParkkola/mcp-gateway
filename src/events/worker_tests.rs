@@ -134,11 +134,22 @@ fn queued(hub: &EventsHub, port: u16, event_id: &str) {
 
 /// [`queued`] for the event type `name`.
 fn queued_as(hub: &EventsHub, port: u16, event_id: &str, name: &str) {
+    queued_with(hub, port, event_id, name, |_| {});
+}
+
+/// [`queued_as`], with the subscription changed by `edit` before it is stored.
+fn queued_with(
+    hub: &EventsHub,
+    port: u16,
+    event_id: &str,
+    name: &str,
+    edit: impl FnOnce(&mut crate::events::records::Subscription),
+) {
     use crate::events::outbox::{Enqueued, OutboxCaps, OutboxState};
     use crate::events::records::Subscription;
     use crate::events::store::{Caps, TailPolicy};
     let now = Utc::now();
-    let sub = Subscription {
+    let mut sub = Subscription {
         v: 1,
         id: "sub_worker".into(),
         principal: "p".into(),
@@ -161,6 +172,7 @@ fn queued_as(hub: &EventsHub, port: u16, event_id: &str, name: &str) {
         last_delivery_at: None,
         last_error: None,
     };
+    edit(&mut sub);
     let tail = TailPolicy {
         ttl: Duration::from_secs(3600),
         max: 10,
@@ -761,3 +773,6 @@ async fn a_type_no_source_offers_any_more_is_not_sent_or_charged() {
 
 #[path = "worker_hold_tests.rs"]
 mod hold;
+
+#[path = "worker_recheck_tests.rs"]
+mod recheck;
