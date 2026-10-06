@@ -660,44 +660,6 @@ async fn a_successful_result_loses_the_injected_env_value() {
     );
 }
 
-/// MIK-7953: HOME in `env` is reserved and never reaches the child, so its
-/// value stays in the result; the declared name the child receives is scrubbed.
-#[tokio::test]
-async fn a_reserved_env_name_is_not_scrubbed_from_the_result() {
-    let home = "/home-7953-operator";
-    let secret = "tok-7953-mcp-declared";
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join(".env");
-    crate::gateway::test_helpers::write_owner_only(
-        &file,
-        format!("CAP_EXEC_TEST_TOKEN={secret}\nHOME={home}\n"),
-    )
-    .unwrap();
-    let overlay = std::sync::Arc::new(crate::config::EnvOverlay::from_paths(&[file]));
-    let executor = CapabilityExecutor::new().with_env(std::sync::Arc::new(
-        crate::config::LiveEnv::new(overlay, crate::config::ResolvedEnvFiles::default()),
-    ));
-    let cap = parse_capability(&capability_yaml().replace(
-        "transport: stdio",
-        "transport: stdio\n      env: [HOME, CAP_EXEC_TEST_TOKEN]",
-    ))
-    .expect("probe parses");
-    let out = call(
-        &executor,
-        &cap,
-        json!({"operation": "say", "text": home}),
-        &caller("a"),
-    )
-    .await
-    .unwrap();
-    assert_eq!(out["arguments"]["message"], home, "{out}");
-    assert_eq!(
-        out["test_values"]["CAP_EXEC_TEST_TOKEN"], "[redacted]",
-        "{out}"
-    );
-    assert!(!out.to_string().contains(secret), "{out}");
-}
-
 /// The child is started with the environment the call redacts against, not a
 /// second read of it: after a reload between the two, the value the child holds
 /// is still one the result is scrubbed of.
@@ -770,23 +732,69 @@ async fn a_call_that_read_the_pre_edit_definition_is_refused_after_reload() {
     call(&executor, &fresh_def, say, &fresh).await.unwrap();
 }
 
-/// MIK-7953: PATH in `env` is left out of the redaction list, yet the child
-/// receives it, so a reload that changes it still starts a new child.
+/// MIK-7925: a reload that edits an mcp capability stops its children at once,
+/// without another call, as `register_capability` does; a reload that leaves
+/// it unchanged keeps them.
 #[tokio::test]
-async fn a_reload_changing_a_declared_path_restarts_the_child() {
-    let cap = parse_capability(&capability_yaml().replace(
-        "transport: stdio",
-        "transport: stdio\n      env: [PATH, CAP_EXEC_TEST_TOKEN]",
-    ))
-    .expect("probe parses");
-    // The helper writes one env-file line; PATH rides on a second.
-    let (_a, executor) = executor_holding("tok-7953\nPATH=/path-7953-a");
-    let say = json!({"operation": "say", "text": "x"});
-    let first = call(&executor, &cap, say.clone(), &caller("a"))
+async fn reload_stops_an_edited_capabilitys_children_and_keeps_an_unchanged_ones() {
+    use crate::capability::CapabilityBackend;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let file = dir.path().join("probe.yaml");
+    std::fs::write(&file, capability_yaml()).unwrap();
+    let executor = std::sync::Arc::new(CapabilityExecutor::new());
+    let backend = CapabilityBackend::new("t", std::sync::Arc::clone(&executor));
+    backend
+        .load_from_directory(dir.path().to_str().unwrap())
         .await
         .unwrap();
-    let (_b, reloaded) = executor_holding("tok-7953\nPATH=/path-7953-b");
-    executor.env.set(reloaded.env.get());
-    let second = call(&executor, &cap, say, &caller("a")).await.unwrap();
-    assert_ne!(first["pid"], second["pid"], "a new PATH starts a new child");
+    let def = backend.get("mcp_probe").unwrap();
+    let ctx = ctx_with_generation(executor.mcp_generation("mcp_probe"));
+    let out = call(
+        &executor,
+        &def,
+        json!({"operation": "say", "text": "x"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    let pid = out["pid"].as_i64().expect("echo reports its pid");
+
+    backend.reload().await.unwrap();
+    assert_eq!(
+        executor.mcp_children.len(),
+        1,
+        "an unchanged reload keeps it"
+    );
+
+    std::fs::write(
+        &file,
+        capability_yaml().replace("MCP probe.", "MCP probe, edited."),
+    )
+    .unwrap();
+    backend.reload().await.unwrap();
+    assert_eq!(executor.mcp_children.len(), 0, "the edit stops it at once");
+
+    #[cfg(unix)]
+    {
+        let pid = pid.to_string();
+        let mut alive = true;
+        for _ in 0..50 {
+            let status = std::process::Command::new("kill")
+                .args(["-0", &pid])
+                .status()
+                .unwrap();
+            if !status.success() {
+                alive = false;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(!alive, "superseded child {pid} still running after 5 s");
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
 }
+
+#[path = "mcp_env_tests.rs"]
+mod env_tests;

@@ -599,9 +599,8 @@ jobs:
             # Required because the artifact basename ends in the architecture (arm64/x86_64),
             # which a clean Homebrew install can otherwise mis-detect as the version.
             version "${VERSION}"
-            # PolyForm-Noncommercial 1.0.0 has no plain SPDX short identifier,
-            # so Homebrew cannot name it. See LICENSES.md / COMMERCIAL.md.
-            license :cannot_represent
+            # See LICENSES.md / COMMERCIAL.md.
+            license "PolyForm-Noncommercial-1.0.0"
 
             on_macos do
               on_arm do
@@ -643,9 +642,8 @@ jobs:
 
             def caveats
               <<~CAVEATS
-                Licensing: mcp-gateway uses mixed, per-file licensing; the runnable
-                gateway is PolyForm Noncommercial 1.0.0. Commercial use requires a
-                license. See https://github.com/MikkoParkkola/mcp-gateway/blob/main/COMMERCIAL.md
+                Licensing: mcp-gateway is licensed under PolyForm Noncommercial 1.0.0.
+                Commercial use requires a license. See https://github.com/MikkoParkkola/mcp-gateway/blob/main/COMMERCIAL.md
               CAVEATS
             end
 
