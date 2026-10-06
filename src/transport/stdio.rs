@@ -770,3 +770,12 @@ mod start_refusal_tests;
 #[cfg(test)]
 #[path = "stdio_spawn_classification_tests.rs"]
 mod spawn_classification_tests;
+
+// Unix-only: the fake backend is a `sh` script.
+#[cfg(all(test, unix))]
+#[path = "stdio_eof_request_tests.rs"]
+mod eof_request_tests;
+
+#[cfg(test)]
+#[path = "stdio_cache_abs_tests.rs"]
+mod cache_abs_tests;
