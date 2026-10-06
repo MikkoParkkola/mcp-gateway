@@ -397,23 +397,25 @@ async fn a_non_message_event_is_judged_with_its_wrapper_fields() {
     );
 }
 
-/// MIK-7848.READS.2, the destructive-confirmation case: with every audit
-/// append failing under `FailClosed`, an item that names a tenant is withheld
-/// at write (the control), but the `elicitation/create` confirmation prompt
-/// names none, attempts no record, and reaches the stream. So a failing log
-/// cannot hide the prompt and time the gate out into a legacy proceed.
+/// A session whose stream is judged by an observing tenant guard and logged to
+/// a `FailClosed` audit log, with its SSE body open. The temp dir keeps the log
+/// alive; the caller decides when appends start failing.
 #[cfg(feature = "firewall")]
-#[tokio::test]
-async fn a_failing_audit_log_cannot_withhold_the_confirmation_prompt() {
+#[allow(clippy::type_complexity)]
+fn judged_sse() -> (
+    tempfile::TempDir,
+    Arc<crate::security::TransparencyLogger>,
+    Arc<NotificationMultiplexer>,
+    String,
+    axum::body::BodyDataStream,
+) {
     use crate::gateway::outbound::{RejectionAudit, SessionJudge};
-    use crate::gateway::proxy::ProxyManager;
     use crate::security::TransparencyLogger;
     use crate::security::audit::AuditFailurePolicy;
     use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
     use crate::security::firewall::{Firewall, FirewallConfig};
     use crate::security::transparency_log::TransparencyLogConfig;
     use axum::response::IntoResponse;
-    use futures::StreamExt;
 
     let dir = tempfile::tempdir().unwrap();
     let log = Arc::new(
@@ -460,7 +462,22 @@ async fn a_failing_audit_log_cannot_withhold_the_confirmation_prompt() {
         Duration::from_secs(3600),
     )
     .expect("the session exists");
-    let mut body = sse.into_response().into_body().into_data_stream();
+    let body = sse.into_response().into_body().into_data_stream();
+    (dir, log, multiplexer, id, body)
+}
+
+/// MIK-7848.READS.2, the destructive-confirmation case: with every audit
+/// append failing under `FailClosed`, an item that names a tenant is withheld
+/// at write (the control), but the `elicitation/create` confirmation prompt
+/// names none, attempts no record, and reaches the stream. So a failing log
+/// cannot hide the prompt and time the gate out into a legacy proceed.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_failing_audit_log_cannot_withhold_the_confirmation_prompt() {
+    use crate::gateway::proxy::ProxyManager;
+    use futures::StreamExt;
+
+    let (_dir, log, multiplexer, id, mut body) = judged_sse();
     log.set_append_failure_for_test(true);
 
     let control = TaggedNotification {
@@ -506,5 +523,40 @@ async fn a_failing_audit_log_cannot_withhold_the_confirmation_prompt() {
         log.append_attempts_for_test(),
         1,
         "only the control tried a record"
+    );
+}
+
+/// MIK-7975 WAIT.1: a server-to-client request whose stream item is withheld
+/// for a failed audit write fails its waiter at once, not at its timeout. The
+/// prompt's schema names a tenant, so it attempts a record, which fails closed.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_withheld_request_fails_its_waiter_at_once() {
+    use crate::gateway::proxy::ProxyManager;
+    use futures::StreamExt;
+
+    let (_dir, log, multiplexer, id, mut body) = judged_sse();
+    log.set_append_failure_for_test(true);
+    let proxy = ProxyManager::new(Arc::clone(&multiplexer));
+    let ask = crate::protocol::ElicitationCreateParams {
+        mode: None,
+        message: "Pick an account".to_string(),
+        requested_schema: Some(json!({"customer_id": "cust-b"})),
+        url: None,
+    };
+    let asked = proxy.forward_elicitation_with_response(&id, &ask, Duration::from_secs(30));
+    // The stream must be read for its loop to judge, record and withhold.
+    let read = async { while body.next().await.is_some() {} };
+    let answer = tokio::select! {
+        answer = tokio::time::timeout(Duration::from_secs(5), asked) => answer,
+        () = read => panic!("the stream ended"),
+    };
+    assert!(
+        matches!(answer, Ok(Err(_))),
+        "the waiter was not failed at once: {answer:?}"
+    );
+    assert!(
+        log.append_attempts_for_test() >= 1,
+        "no record was attempted"
     );
 }

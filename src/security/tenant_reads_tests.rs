@@ -174,3 +174,39 @@ fn a_tenant_committed_and_pending_counts_once() {
         "the 201st tenant was pushed to overflow by a double count"
     );
 }
+
+/// MIK-7975 CAP.1: the principal map never holds more than `MAX_PRINCIPALS`
+/// under concurrent first frames for distinct keys. One below the cap, with
+/// every principal live so nothing is idle to evict, 64 threads released
+/// together each bring a new key; at most one may be admitted.
+#[test]
+fn concurrent_new_principals_never_pass_the_cap() {
+    const RACERS: usize = 64;
+    for round in 0..4 {
+        let history = ReadHistory::shared();
+        let held: Vec<Reservation> = (0..MAX_PRINCIPALS - 1)
+            .map(|i| {
+                history
+                    .reserve(&format!("live-{i}"), &tenant("a"), WINDOW, false)
+                    .expect("room below the cap")
+            })
+            .collect();
+        let start = Arc::new(std::sync::Barrier::new(RACERS));
+        let racers: Vec<_> = (0..RACERS)
+            .map(|n| {
+                let (history, start) = (Arc::clone(&history), Arc::clone(&start));
+                std::thread::spawn(move || {
+                    start.wait();
+                    history.reserve(&format!("new-{n}"), &tenant("a"), WINDOW, false)
+                })
+            })
+            .collect();
+        let admitted: Vec<_> = racers.into_iter().map(|r| r.join().unwrap()).collect();
+        assert!(
+            history.principals.len() <= MAX_PRINCIPALS,
+            "round {round}: {} principals, cap {MAX_PRINCIPALS}",
+            history.principals.len()
+        );
+        drop((held, admitted));
+    }
+}
