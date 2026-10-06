@@ -211,6 +211,8 @@ jobs:
       - name: Lint
         run: cargo clippy --all-features -- -D warnings
 
+      # The skip names the job that runs the test in full, and its ticket:
+      #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       - name: Test
         run: cargo test --all-features -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
 
