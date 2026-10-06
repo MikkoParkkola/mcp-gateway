@@ -517,7 +517,7 @@ async fn test_stdio_notification_cancelled_has_no_id_and_would_be_skipped() {
 #[test]
 fn test_stdio_stdout_carries_only_jsonrpc() {
     use std::io::{BufRead, BufReader, Write};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
