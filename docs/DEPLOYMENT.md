@@ -731,6 +731,10 @@ prometheus-operator ServiceMonitor that sends it through `bearerTokenSecret`.
 - `mcp_jsonrpc_requests_total` -- JSON-RPC requests by method
 - `mcp_backend_idle_stop_close_failures` -- per backend, counts backends stopped
   for idleness that did not shut down cleanly (see below)
+- `mcp_backend_pool_slots` -- per backend, live pool slots: the shared slot plus one per
+  caller of a backend with `identity_propagation`. At most 65 (see below)
+- `mcp_backend_identity_slots_refused_total` -- per backend and `limit` (`backend` or
+  `principal`), callers refused a new slot (see below)
 - `mcp_message_signing_nonce_entries` -- live signing nonces held for replay
   protection, as one aggregate number with no labels (see below)
 - `mcp_message_signing_nonce_rejections_total` -- refused nonce admissions,
@@ -767,6 +771,36 @@ When it fires: check for an orphaned child process of the gateway
 Then look at that backend's shutdown path — a server ignoring SIGTERM is the
 usual cause. Setting a longer `stop_when_idle_for` does not help; removing the
 setting for that backend stops the leak at the cost of keeping it resident.
+
+#### Alerting on caller slots
+
+A backend with `identity_propagation` gives each caller its own connection, a pool
+slot. It admits at most 64 caller slots, and one caller at most 8; past either
+limit a new caller is refused, never served on the shared connection. Both limits
+are fixed in 4.0. `mcp_backend_pool_slots` counts the shared slot as well, so it
+peaks at 65. Idle slots are reclaimed after 5 minutes, and the gauge drops with them.
+
+```yaml
+# prometheus rules
+- alert: McpBackendCallerSlotsNearCap
+  expr: mcp_backend_pool_slots >= 53
+  for: 10m
+  labels: { severity: warning }
+  annotations:
+    summary: "Backend {{ $labels.backend }} holds {{ $value }} of its 65 pool slots"
+- alert: McpBackendCallerSlotsRefused
+  expr: increase(mcp_backend_identity_slots_refused_total[15m]) > 0
+  labels: { severity: warning }
+  annotations:
+    summary: "Backend {{ $labels.backend }} refused callers at its {{ $labels.limit }} slot limit"
+```
+
+53 is the shared slot plus 52 caller slots, about 80% of the cap, held for
+10 minutes: longer than the 5-minute reclaim, so a burst that drains on its own does
+not fire. A refusal fires at once, because each one is a caller that got no
+service. With `limit="principal"` and auth off, every caller shares one budget
+of 8; turning auth on gives each user their own (`docs/UPGRADING-4.0.md`). With
+`limit="backend"`, the backend has more distinct callers than 4.0 admits.
 
 #### Signing nonce telemetry and capacity alerting
 
