@@ -102,7 +102,7 @@ pub async fn run_add_command(
         #[cfg(feature = "a2a")]
         TransportConfig::A2a { .. } => "a2a",
     };
-    println!("Added '{name}' ({transport_label}).");
+    println!("Added backend '{name}' ({transport_label}).");
     for note in &notes {
         println!("  {note}");
     }
