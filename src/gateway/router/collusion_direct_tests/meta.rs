@@ -12,12 +12,23 @@ pub(super) async fn meta_fixture(
     setup: Setup,
     cache: Option<Arc<crate::cache::ResponseCache>>,
 ) -> Fixture {
+    meta_fixture_with(setup, cache, |_| {}).await
+}
+
+/// [`meta_fixture`] with `configure` applied to the Meta-MCP before it is
+/// installed.
+async fn meta_fixture_with(
+    setup: Setup,
+    cache: Option<Arc<crate::cache::ResponseCache>>,
+    configure: impl FnOnce(&mut MetaMcp),
+) -> Fixture {
     let mut fx = fixture(setup).await;
     let st = Arc::get_mut(&mut fx.state).expect("state is unique");
     let ttl = Duration::from_secs(600);
     let mut meta = MetaMcp::with_features(Arc::clone(&st.backends), cache, None, None, ttl);
     meta.set_firewall(st.firewall.clone());
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
+    configure(&mut meta);
     st.meta_mcp = Arc::new(meta);
     fx
 }
@@ -650,6 +661,16 @@ async fn meta_chain_step_entry_holds_only_its_own_writes() {
 const WITHHELD: &str = "Side effect executed; the response was withheld by a post-dispatch \
     gate. Retrying with the same idempotency key will not re-execute it.";
 
+/// Response signing on: an external `gateway_invoke` then waits for signing
+/// admission, so the sync admission leaves its key to the invoke path's own
+/// idempotency guard, whose replay arm the rows below drive (MIK-7991).
+fn signing(meta: &mut MetaMcp) {
+    use crate::security::message_signing::MessageSigner;
+    let key = b"collusion-meta-signing-key-0123456789abcdef".to_vec();
+    let signer = MessageSigner::new(key, None, "collusion-meta".into());
+    meta.enable_message_signing(signer, Duration::from_secs(300), false);
+}
+
 /// MIK-7991 (notice): a keyed read the response firewall refuses settles its
 /// key with the gateway's withheld notice. Replaying it serves that notice,
 /// the gateway's own text, so it puts nothing in the replay's receipt.
@@ -659,7 +680,7 @@ async fn meta_replayed_gateway_notice_is_not_receipted() {
         rules: "[{match: read, action: block}]",
         ..Setup::default()
     };
-    let fx = meta_fixture(setup, None).await;
+    let fx = meta_fixture_with(setup, None, signing).await;
     fx.answer_read(Read::Injected);
     let read = invoke("read", &json!({}));
     let key = keyed("key-7991-notice");
@@ -680,4 +701,33 @@ async fn meta_replayed_gateway_notice_is_not_receipted() {
         "base: the replay serves the notice: {replay}"
     );
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), WITHHELD).await, 1);
+}
+
+/// MIK-7991 (replay, invoke-path guard): with signing on, an idempotent
+/// replay of a successful read is served by the invoke path's own guard; its
+/// receipt leaves the stored suggestion out and keeps the backend's text.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn meta_signed_replay_leaves_the_cost_suggestion_out() {
+    let mut fx = meta_fixture_with(Setup::default(), None, signing).await;
+    suggest(&mut fx, "read", "send");
+    let read = invoke("read", &json!({}));
+    let key = keyed("key-7991-signed");
+    let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
+    let own = cost_suggestion(&first);
+    let reads = fx.reads();
+    let (_, replay) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
+    assert_eq!(
+        fx.reads(),
+        reads,
+        "base: the re-issue is a replay: {replay}"
+    );
+    assert_eq!(
+        cost_suggestion(&replay),
+        own,
+        "the replay serves it unchanged"
+    );
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 1);
+    let relay = format!("{PROSE} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
 }
