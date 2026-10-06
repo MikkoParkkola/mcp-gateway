@@ -303,6 +303,21 @@ impl ScheduleSource {
         }
     }
 
+    /// The principals holding the timer `key` in live subscriptions.
+    fn holders(&self, key: &str) -> std::collections::BTreeSet<String> {
+        let Some(hub) = self.hub.upgrade() else {
+            return std::collections::BTreeSet::new();
+        };
+        let now = Utc::now();
+        hub.store
+            .subscriptions()
+            .into_iter()
+            .filter(|s| s.name == NAME && s.live(now))
+            .filter(|s| parts(&s.arguments).is_ok_and(|p| p.key == key))
+            .map(|s| s.principal)
+            .collect()
+    }
+
     /// The distinct timer keys `principal` holds in live subscriptions, each
     /// with the earliest time one of them was granted.
     fn held_by(&self, principal: &str) -> HashMap<String, DateTime<Utc>> {
@@ -441,7 +456,12 @@ impl EventSource for ScheduleSource {
         // after a restart or a lowered cap the earliest timers still start.
         let held = self.held_by(principal);
         let within = if held.contains_key(key) {
-            within_cap(&held, key, self.max_per_principal)
+            // A held key (a replay, or one a refusal left unstarted) starts
+            // when any live holder ranks it within that holder's own cap:
+            // the replay asks for whichever row it read first.
+            self.holders(key)
+                .iter()
+                .any(|p| within_cap(&self.held_by(p), key, self.max_per_principal))
         } else {
             held.len() < self.max_per_principal
         };
