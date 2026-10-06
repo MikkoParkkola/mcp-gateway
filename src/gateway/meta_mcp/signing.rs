@@ -278,6 +278,9 @@ impl SigningInvocationContext {
         if self.scope != SigningScope::EveryToolCall {
             return Ok(());
         }
+        if self.scope != SigningScope::EveryToolCall {
+            self.refuse_malformed_nonce()?;
+        }
         Ok(())
     }
 
