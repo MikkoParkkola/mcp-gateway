@@ -432,3 +432,36 @@ fn each_runner_gets_the_variable_it_reads() {
     let out = isolated_package_manager_env("thing", "bunx pkg", env);
     assert_eq!(out["BUN_INSTALL_CACHE_DIR"], "/mine");
 }
+
+#[test]
+fn the_assigned_cache_is_the_one_the_child_receives() {
+    // The repair compares the two; a one-byte drift between them would leave
+    // every damaged cache in place without an error.
+    let env = isolated_package_manager_env("cache-glue", "npx -y some-server", HashMap::new());
+    assert_eq!(
+        assigned_package_cache_dir("cache-glue", "npx -y some-server", &HashMap::new()),
+        Some(std::path::PathBuf::from(&env["npm_config_cache"])),
+    );
+}
+
+#[test]
+fn only_an_npm_cache_the_gateway_set_is_reported_as_assigned() {
+    let operator = HashMap::from([("npm_config_cache".to_string(), "/opt/cache".to_string())]);
+    assert_eq!(
+        assigned_package_cache_dir("b", "npx -y some-server", &operator),
+        None,
+        "an operator's cache is not the gateway's to clear"
+    );
+    for command in [
+        "bunx some-server",
+        "yarn dlx some-server",
+        "pnpm dlx some-server",
+        "uvx x",
+    ] {
+        assert_eq!(
+            assigned_package_cache_dir("b", command, &HashMap::new()),
+            None,
+            "the repair covers npm's cache only: {command}"
+        );
+    }
+}
