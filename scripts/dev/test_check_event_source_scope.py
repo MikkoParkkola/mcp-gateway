@@ -90,6 +90,10 @@ class EventSourceScope(unittest.TestCase):
         impl = "impl EventSource for X {}\n"
         self.assertFalse(guard.adds_source([("src/events/a.rs", impl, ""), ("src/events/b.rs", "", impl)]))
 
+    def test_a_new_source_named_like_one_in_another_file_is_seen(self):
+        impl = "impl EventSource for X {}\n"
+        self.assertTrue(guard.adds_source([("src/events/a.rs", impl, impl), ("src/events/b.rs", "", impl)]))
+
     def test_an_alias_declared_in_another_file_is_followed(self):
         self.assertTrue(guard.adds_source([("src/events/a.rs", "", "impl Src for X {}\n")], {"Src"}))
         self.assertEqual(guard.aliases(["pub(crate) use super::EventSource as Src;"]), {"Src"})

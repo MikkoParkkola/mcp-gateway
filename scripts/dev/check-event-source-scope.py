@@ -23,6 +23,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from collections import Counter
 
 EVENTS = "src/events/"
 REGISTRY = "src/events/mod.rs"
@@ -64,10 +65,11 @@ def impl_count(text):
 def adds_source(files, names=()):
     """Whether the non-test `(path, before, after)` files together implement
     EventSource for a type they did not before. Swapping one impl for another
-    counts; moving one between files does not."""
+    counts; moving one between files does not. Counted per file, so a new
+    source named like one in another changed file is still seen."""
     kept = [f for f in files if not is_test_path(f[0])]
-    before = set().union(*(implemented(b, names) for _, b, _ in kept))
-    after = set().union(*(implemented(a, names) for _, _, a in kept))
+    before = Counter(t for _, b, _ in kept for t in implemented(b, names))
+    after = Counter(t for _, _, a in kept for t in implemented(a, names))
     return bool(after - before)
 
 
