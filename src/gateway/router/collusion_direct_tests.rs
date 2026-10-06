@@ -217,7 +217,7 @@ fn key(secret: &[u8], name: &str) -> ApiKeyConfig {
         expires_at: None,
         name: name.to_string(),
         rate_limit: 0,
-        backends: vec!["alpha".to_string()],
+        backends: vec!["alpha".to_string(), "personal_caps".to_string()],
         allowed_tools: None,
         denied_tools: None,
         admin: false,

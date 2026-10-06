@@ -431,3 +431,57 @@ async fn meta_read_record_failure_leaves_no_receipt() {
     let relay = format!("{text} ");
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
 }
+
+/// MIK-7830: as above for the grant-decision record. A personal capability
+/// read whose decision record the log refuses under `fail-closed` is
+/// withheld before the receipts commit: B sending its text is not refused;
+/// the next read is decided, delivered and recorded, and B relaying it is.
+#[tokio::test]
+async fn meta_grant_decision_failure_leaves_no_receipt() {
+    use crate::gateway::meta_mcp::grant_audit_fixture::{
+        CAPS, DECISION_KIND, PERSONAL, capability_backend, grant, grants, logger,
+    };
+    use crate::security::audit::AuditFailurePolicy;
+    const ALICE: (&str, &str) = ("api_key", "alice");
+    // The capability's endpoint answers the relayable prose.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let endpoint = axum::Router::new().route(
+        "/read",
+        axum::routing::get(|| async { axum::Json(json!({ "note": PROSE })) }),
+    );
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, endpoint).await;
+    });
+    let mut fx = meta_fixture(
+        Setup {
+            sources: vec![format!("{CAPS}:{PERSONAL}")],
+            ..Setup::default()
+        },
+        None,
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let log = logger(&dir, AuditFailurePolicy::FailClosed);
+    let state = Arc::get_mut(&mut fx.state).expect("state is unique");
+    let meta = Arc::get_mut(&mut state.meta_mcp).expect("meta is unique");
+    meta.enable_transparency_log(Arc::clone(&log));
+    meta.set_identity_grants(grants(vec![grant("g1", ALICE, ALICE)]));
+    meta.set_capabilities(capability_backend(port, ALICE));
+    let args = json!({"server": CAPS, "tool": PERSONAL, "arguments": {}});
+
+    log.fail_next_append_of_kind_for_test(DECISION_KIND);
+    let (_, body) = post(&fx, Some("a"), "gateway_invoke", &args, &json!({})).await;
+    assert_eq!(
+        envelope(&body)["error"]["code"],
+        -32005,
+        "base: the failed decision record withholds the read: {body}"
+    );
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
+    let (_, delivered) = post(&fx, Some("a"), "gateway_invoke", &args, &json!({})).await;
+    assert!(
+        envelope(&delivered).get("error").is_none() && delivered.contains(PROSE),
+        "control: the decided read is delivered: {delivered}"
+    );
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
+}
