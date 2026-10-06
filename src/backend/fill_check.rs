@@ -405,6 +405,17 @@ pub(crate) fn text_absent(tool: &str) -> String {
 mod tests {
     use super::{LIST_FILL_COOLDOWN, LIST_MAX_PAGES};
 
+    /// MIK-7979: a cold tools/list fill that runs out of time has not sent the
+    /// tools/call it was checking for, so it is a pre-send refusal.
+    #[test]
+    fn a_list_timeout_is_a_pre_send_refusal() {
+        let error = super::list_timeout("svc", std::time::Duration::from_millis(5));
+        assert!(
+            matches!(error, crate::Error::BackendUnavailable(_)),
+            "{error:?}"
+        );
+    }
+
     /// Design §6: the numbers UPGRADING §59 prints are the constants' values,
     /// so a changed constant fails the build until the text follows (M6e's
     /// second pin).

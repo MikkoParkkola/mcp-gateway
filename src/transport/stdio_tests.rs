@@ -753,3 +753,22 @@ async fn stdio_relays_no_resource_update_so_attestation_expiry_has_nothing_to_en
         "a resource update must reach no caller: {drained:?}"
     );
 }
+
+/// MIK-7979: a request on a transport with no stdin writer wrote nothing, so
+/// it is a proven pre-send failure: `TransportConnect`, which frees the key.
+#[tokio::test]
+async fn a_request_with_no_writer_is_a_pre_send_failure() {
+    let transport = StdioTransport::new(
+        "/nonexistent/never-started",
+        HashMap::new(),
+        None,
+        Duration::from_secs(1),
+        None,
+    );
+    let error = transport
+        .request("tools/call", None)
+        .await
+        .expect_err("an unstarted transport cannot send");
+    assert!(matches!(error, Error::TransportConnect(_)), "{error:?}");
+    assert!(error.is_pre_dispatch(), "{error:?}");
+}

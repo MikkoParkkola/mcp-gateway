@@ -419,6 +419,15 @@ pub mod rpc_codes {
 mod rpc_code_tests {
     use super::Error;
 
+    /// MIK-7979: every `BackendUnavailable` is raised before the request is
+    /// sent, so it frees an idempotency key; a lost round does not.
+    #[test]
+    fn backend_unavailable_is_pre_dispatch_and_a_lost_round_is_not() {
+        assert!(Error::BackendUnavailable("svc".to_string()).is_pre_dispatch());
+        assert!(!Error::Transport("reset".to_string()).is_pre_dispatch());
+        assert!(!Error::BackendTimeout("slow".to_string()).is_pre_dispatch());
+    }
+
     #[test]
     fn a_permanent_transport_failure_reports_as_a_backend_error() {
         // Omitting the variant here reported a missing backend command as an

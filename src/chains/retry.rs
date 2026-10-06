@@ -213,6 +213,14 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
 
+    /// MIK-7979: start failures and a cold tools/list timeout now surface as
+    /// `BackendUnavailable` (pre-send). They were `Transport`/`BackendTimeout`
+    /// and retried; the chain must keep retrying them.
+    #[test]
+    fn a_pre_send_backend_unavailable_is_retried() {
+        assert!(is_retryable(&Error::BackendUnavailable("svc".to_string())));
+    }
+
     #[test]
     fn a_permanent_transport_failure_is_not_retried() {
         // Both consumers must agree on the new variant, or a caller's retry

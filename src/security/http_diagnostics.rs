@@ -254,6 +254,32 @@ mod tests {
         }
     }
 
+    /// MIK-7979: a 4xx the server answered (other than the session-expiry,
+    /// timeout and rate-limit codes) is `TransportPermanent`, so its
+    /// settlement replays the answer; a 5xx and the transient or overloaded
+    /// codes stay `Transport`.
+    #[test]
+    fn a_4xx_answer_is_typed_as_answered() {
+        for status in [405_u16, 409, 410, 413, 415, 422] {
+            let code = StatusCode::from_u16(status).expect("valid status");
+            let error = status_refusal(typed(status), code, "refused");
+            assert!(
+                matches!(error, Error::TransportPermanent(_)),
+                "{status}: {error:?}"
+            );
+            let expired = status_refusal(typed(status), code, "session not found");
+            assert!(
+                matches!(expired, Error::Transport(_)),
+                "{status} with a session-expiry body stays re-initializable: {expired:?}"
+            );
+        }
+        for status in [400_u16, 404, 407, 408, 429, 500, 502, 503] {
+            let code = StatusCode::from_u16(status).expect("valid status");
+            let error = status_refusal(typed(status), code, "refused");
+            assert!(matches!(error, Error::Transport(_)), "{status}: {error:?}");
+        }
+    }
+
     #[test]
     fn oauth_and_status_drop_body_canary() {
         let body = format!("{{\"access_token\":\"{CANARY}\",\"client_secret\":\"{CANARY}\"}}");

@@ -634,4 +634,11 @@ mod wrong_transport_tests {
             None
         );
     }
+
+    /// MIK-7979: a 405 is now `TransportPermanent`; it still falls back.
+    #[test]
+    fn a_typed_4xx_still_falls_back() {
+        let typed = Error::TransportPermanent("HTTP 405 Method Not Allowed".into());
+        assert_eq!(refused_as_wrong_transport(&typed), Some(405));
+    }
 }
