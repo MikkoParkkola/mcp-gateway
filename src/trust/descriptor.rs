@@ -122,12 +122,18 @@ fn with_card(mut descriptor: Value, card: Value) -> Value {
     descriptor
 }
 
-/// Computed references by server identity, then tool name. A reference is a
-/// pure function of the server identity and the tool, and an entry is reused
-/// only while the tool serialises to exactly the descriptor it was computed
-/// from, so a tool changed under the same name is recomputed, never served
-/// stale (MIK-7916).
-type CardMemo = HashMap<(String, String), HashMap<String, (Value, Value)>>;
+/// Projected descriptors by server id, then server name, then tool name. A
+/// projection is a pure function of the server identity and the tool, and an
+/// entry is reused only while the tool equals, field for field through the
+/// derive, the one it was projected from. A tool changed under the same name
+/// is re-projected, never served stale (MIK-7916). The identity is the whole
+/// tool, not a hash: a collision would serve another tool's card.
+#[derive(Default)]
+struct CardMemo {
+    /// (server id, server name) pairs held, bounded by `MEMO_SERVERS`.
+    servers: usize,
+    by_id: HashMap<String, HashMap<String, HashMap<String, (Tool, Value)>>>,
+}
 
 // ponytail: a full map keeps its residents and computes newcomers uncached,
 // so a churning catalog can lose its saving; an LRU if that ever shows.
@@ -141,42 +147,88 @@ fn card_memo() -> &'static Mutex<CardMemo> {
 
 /// Project `TrustCard` references into a list of live MCP tool descriptors.
 ///
-/// Every `tools/list` lists the same catalog, so each reference is computed
-/// once per tool version rather than once per request.
+/// Every `tools/list` lists the same catalog, so each descriptor is projected
+/// once per tool version; a repeat list compares each tool and hands back a
+/// copy, with no serialisation.
 #[must_use]
 pub fn project_tool_descriptors_trust_cards(
     server_id: &str,
     server_name: &str,
     tools: &[Tool],
 ) -> Vec<Value> {
-    let mut memo = card_memo().lock().unwrap_or_else(PoisonError::into_inner);
-    let key = (server_id.to_string(), server_name.to_string());
-    if memo.len() >= MEMO_SERVERS && !memo.contains_key(&key) {
-        return tools
-            .iter()
-            .map(|tool| project_tool_descriptor_trust_card(server_id, server_name, tool))
-            .collect();
+    let mut guard = card_memo().lock().unwrap_or_else(PoisonError::into_inner);
+    let memo = &mut *guard;
+    // Looked up by `&str`, so a hit allocates no key.
+    let held = memo
+        .by_id
+        .get(server_id)
+        .is_some_and(|names| names.contains_key(server_name));
+    if !held {
+        if memo.servers >= MEMO_SERVERS {
+            return tools
+                .iter()
+                .map(|tool| project_tool_descriptor_trust_card(server_id, server_name, tool))
+                .collect();
+        }
+        memo.servers += 1;
     }
-    let cards = memo.entry(key).or_default();
+    let names = held_or_default(&mut memo.by_id, server_id);
+    let cards = held_or_default(names, server_name);
     tools
         .iter()
-        .map(|tool| {
-            let Ok(descriptor) = serde_json::to_value(tool) else {
-                return project_tool_descriptor_trust_card(server_id, server_name, tool);
-            };
-            let card = match cards.get(&tool.name) {
-                Some((seen, card)) if *seen == descriptor => card.clone(),
-                _ => {
-                    let card = computed_card(server_id, server_name, tool);
-                    if cards.len() < MEMO_TOOLS_PER_SERVER || cards.contains_key(&tool.name) {
-                        cards.insert(tool.name.clone(), (descriptor.clone(), card.clone()));
-                    }
-                    card
+        .map(|tool| match cards.get(&tool.name) {
+            Some((seen, projected)) if same_tool(seen, tool) => projected.clone(),
+            _ => {
+                let projected = project_tool_descriptor_trust_card(server_id, server_name, tool);
+                if cards.len() < MEMO_TOOLS_PER_SERVER || cards.contains_key(&tool.name) {
+                    cards.insert(tool.name.clone(), (tool.clone(), projected.clone()));
                 }
-            };
-            with_card(descriptor, card)
+                projected
+            }
         })
         .collect()
+}
+
+/// Whether a memoised projection of `seen` describes `tool`: the whole tool
+/// through the derive, then the two schemas again with the sign of zero
+/// compared, because `serde_json` holds `-0.0 == 0.0` while serialising and
+/// digesting them apart. Maps are `BTreeMap`s (no `preserve_order`), so equal
+/// maps serialise alike and need no further check.
+fn same_tool(seen: &Tool, tool: &Tool) -> bool {
+    seen == tool
+        && same_json(&seen.input_schema, &tool.input_schema)
+        && match (&seen.output_schema, &tool.output_schema) {
+            (Some(a), Some(b)) => same_json(a, b),
+            _ => true,
+        }
+}
+
+/// `==` that also tells `-0.0` from `0.0`.
+fn same_json(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => {
+            x == y && x.as_f64().map(f64::is_sign_negative) == y.as_f64().map(f64::is_sign_negative)
+        }
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same_json(x, y))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(key, x)| y.get(key).is_some_and(|y| same_json(x, y)))
+        }
+        _ => a == b,
+    }
+}
+
+/// `entry(key.to_owned()).or_default()` that allocates the key only when it
+/// is absent, so finding a held key costs no allocation.
+fn held_or_default<'a, V: Default>(map: &'a mut HashMap<String, V>, key: &str) -> &'a mut V {
+    if !map.contains_key(key) {
+        map.insert(key.to_owned(), V::default());
+    }
+    map.get_mut(key)
+        .expect("present: inserted above when absent")
 }
 
 /// Build a JSON-RPC `tools/list` result with projected `TrustCard` references.
