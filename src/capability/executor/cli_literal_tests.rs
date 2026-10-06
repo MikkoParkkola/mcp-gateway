@@ -52,3 +52,19 @@ fn a_short_secret_that_is_not_json_matches_no_scalar() {
     redact_value(&mut value, &["007".to_owned(), "TRUE".to_owned()]);
     assert_eq!(value, json!({"n": 7, "t": true}));
 }
+
+/// An integer-valued form is judged by its significant digits: zeros leading
+/// the fraction, or a zero coefficient under a large exponent, still match.
+#[test]
+fn integer_forms_with_fraction_zeros_or_a_zero_coefficient_match() {
+    let mut value: Value = serde_json::from_str(
+        r#"{"big": 1000000000000000000, "near": 999999999999999999, "zero": 0, "one": 1}"#,
+    )
+    .unwrap();
+    let secrets = ["0.00000000000000000000000000001e47", "0e99"].map(str::to_owned);
+    redact_value(&mut value, &secrets);
+    assert_eq!(value["big"], "[redacted]", "{value}");
+    assert_eq!(value["zero"], "[redacted]", "{value}");
+    assert_eq!(value["near"], 999_999_999_999_999_999_u64, "{value}");
+    assert_eq!(value["one"], 1, "{value}");
+}
