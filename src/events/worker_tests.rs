@@ -357,6 +357,8 @@ async fn a_backend_type_no_source_offers_is_not_sent() {
         hub.attempt(&services, "evt").await;
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(accepted.load(Ordering::SeqCst) >= 1, sent, "{name}");
+        // Refused, not held: the backend subscription goes (MIK-7976 WORKER.3).
+        assert_eq!(hub.store.subscriptions().is_empty(), !sent, "{name}");
     }
 }
 
