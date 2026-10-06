@@ -196,6 +196,21 @@ impl<T> CachedMetadata<T> {
             // welcome to replace it.
             return;
         }
+        Self::clear_locked(&mut state);
+    }
+
+    /// Forget the value whatever it holds, and run `on_cleared` under the
+    /// same write guard: state derived from the dropped value is cleared with
+    /// it, as [`Self::store_if_current`] publishes such state with a stored
+    /// one. A fill stored right after cannot have its own derived state
+    /// erased by a separate, later clear (MIK-7940).
+    pub(super) fn invalidate_then(&self, on_cleared: impl FnOnce()) {
+        let mut state = self.state.write();
+        Self::clear_locked(&mut state);
+        on_cleared();
+    }
+
+    fn clear_locked(state: &mut CachedMetadataState<T>) {
         state.value = None;
         state.cached_at = None;
         state.generation = state.generation.wrapping_add(1);
@@ -401,6 +416,19 @@ mod tests {
             calls.load(Ordering::SeqCst),
             3,
             "each invalidated round must actually ask the backend again"
+        );
+    }
+
+    /// MIK-7940 finding 5: the derived-state clear runs while the cache is
+    /// still write-locked, so no fill can store between the two.
+    #[test]
+    fn invalidate_then_clears_derived_state_under_the_guard() {
+        let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
+        let mut locked = false;
+        cache.invalidate_then(|| locked = cache.state.try_read().is_none());
+        assert!(
+            locked,
+            "the derived clear ran under the cache's write guard"
         );
     }
 

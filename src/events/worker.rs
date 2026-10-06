@@ -78,7 +78,7 @@ impl EventsHub {
             self.settle(services, &record, retry).await;
             return;
         }
-        let verdict = self.source_verdict(&sub).await;
+        let verdict = self.source_verdict(&sub, &record).await;
         if verdict == Verdict::Refuses {
             if !self
                 .recorded_or_retry(services, &ctx, "access_revoked")
@@ -137,9 +137,18 @@ impl EventsHub {
     /// failed withdrawal left behind is not sent. Any other name no source
     /// offers is held, not refused: a source installed after the worker
     /// started, or a partial capability scan (MIK-7772), says nothing about
-    /// the subscription, so it is kept (MIK-7976).
-    async fn source_verdict(&self, sub: &super::records::Subscription) -> Verdict {
+    /// the subscription, so it is kept (MIK-7976). An owner-scoped occurrence
+    /// of a non-backend type was authorized where it was made, as fan-out
+    /// treats it: the record it describes may be gone (an expired task), so
+    /// an offered type admits without asking (MIK-7940).
+    async fn source_verdict(
+        &self,
+        sub: &super::records::Subscription,
+        record: &OutboxRecord,
+    ) -> Verdict {
+        let backend = sub.name.starts_with(super::backend_source::NAME_PREFIX);
         match self.source_offering(&sub.name) {
+            Some(_) if record.owner_scoped && !backend => Verdict::Admits,
             Some(source) => match source.authorize_row(sub).await {
                 Err(e) if e.code == -32012 => Verdict::Refuses,
                 // Not found now (a catalogue that could not read the type,
@@ -147,7 +156,7 @@ impl EventsHub {
                 Err(e) if e.code == -32011 => Verdict::Unoffered,
                 _ => Verdict::Admits,
             },
-            None if sub.name.starts_with(super::backend_source::NAME_PREFIX) => Verdict::Refuses,
+            None if backend => Verdict::Refuses,
             None => Verdict::Unoffered,
         }
     }
@@ -207,7 +216,7 @@ impl EventsHub {
         // The same waits can span a reload that made the backend ineligible
         // (MIK-7894): the verdict is read again after them, before the row
         // that signs, so only sync steps sit between it and the send.
-        match self.source_verdict(sub).await {
+        match self.source_verdict(sub, record).await {
             // Access is read again after the verdict's own wait (MIK-7907):
             // a grant lost meanwhile is refused like one lost before. It must
             // not yield: a reload landing inside it would follow the verdict
