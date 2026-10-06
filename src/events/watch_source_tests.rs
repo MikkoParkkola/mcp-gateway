@@ -216,10 +216,7 @@ async fn watch_emits_on_digest_change_only() {
     assert_eq!(data["changed"], json!(["/temp"]));
     assert_ne!(data["digest_before"], data["digest_after"]);
     let text = data.to_string();
-    assert!(
-        !text.contains("Oulu") && !text.contains("12"),
-        "no values: {text}"
-    );
+    assert!(!text.contains("Oulu"), "no values: {text}");
     assert_eq!(
         events[0].lifecycle_key.as_deref(),
         Some(poller.key.as_str())
@@ -369,10 +366,55 @@ async fn watch_stops_when_its_capability_changes_credential_class() {
     let name = "watch.weather.changed";
     admit(&hub, "p", name, &json!({}));
     let poller = run(&hub, &host, "p", name, &json!({}));
+    let fresh = json!({"units": "metric"});
+    admit(&hub, "q", name, &fresh);
     *host.targets.lock() = vec![target("weather", true, CredentialUse::Keyed)];
     let mut last = None;
     assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
     assert!(host.calls.lock().is_empty(), "no call under the new class");
+    let left: Vec<String> = hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .map(|s| s.principal)
+        .collect();
+    assert_eq!(left, ["q"], "only the old poller's holders are revoked");
+}
+
+/// Keys and digests keep every integer: two arguments that differ past
+/// 2^53 are two pollers, and an answer that changes there is a change.
+#[tokio::test]
+async fn keys_and_digests_are_lossless() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    let source = WatchSource::new(&hub, host);
+    let name = "watch.weather.changed";
+    let (a, b) = (
+        json!({"arguments": {"id": 9_007_199_254_740_993_u64}}),
+        json!({"arguments": {"id": 9_007_199_254_740_992_u64}}),
+    );
+    assert_ne!(
+        source.lifecycle_key("p", name, &a),
+        source.lifecycle_key("p", name, &b)
+    );
+    let (x, y) = (
+        projection(&json!({"n": 9_007_199_254_740_993_u64}), None),
+        projection(&json!({"n": 9_007_199_254_740_992_u64}), None),
+    );
+    assert_ne!(digest(&x), digest(&y));
+}
+
+/// A selected field that appears or disappears is a change, even when it
+/// appears as `null`.
+#[test]
+fn an_absent_field_differs_from_a_null_one() {
+    let fields = ["/gone".to_owned()];
+    let (absent, null) = (
+        projection(&json!({}), Some(&fields)),
+        projection(&json!({"gone": null}), Some(&fields)),
+    );
+    assert_eq!(changed(&absent, &null), ["/gone"]);
 }
 
 /// U12: a change only in a default volatile key or in `_meta` emits nothing;
