@@ -290,11 +290,7 @@ fn resume_after(due: &mut [(String, bool)], last: Option<&str>) {
 /// The legacy URI filter of `shared`'s need, read at each update (D5).
 fn watched_by(shared: &Arc<Shared>) -> Watched {
     let shared = Arc::downgrade(shared);
-    Watched::by(move |uri| {
-        shared
-            .upgrade()
-            .is_some_and(|s| s.need.lock().emits(NoteKind::ResourceUpdated, Some(uri)))
-    })
+    Watched::by(move |uri| shared.upgrade().is_some_and(|s| s.need.lock().watches(uri)))
 }
 
 /// The tools refill a notice starts. The shared fetch, so a reader of the list

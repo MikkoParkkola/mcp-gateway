@@ -95,6 +95,14 @@ impl Ledger {
         self.insert(uri)
     }
 
+    /// Carry counted interest into this ledger. It fits: a need never holds
+    /// more URIs than one ledger admits.
+    pub(crate) fn want_all(&mut self, uris: Vec<String>) {
+        for uri in uris {
+            let _ = self.want(&uri);
+        }
+    }
+
     /// Stop watching `uri`; the key stays until it is confirmed released.
     pub(crate) fn unwant(&mut self, uri: &str) {
         self.unplaced.remove(uri);
@@ -107,7 +115,13 @@ impl Ledger {
         self.prune(&key);
     }
 
+    /// A key for `uri` on the current holder. An existing one is kept as it
+    /// is: overwriting it would forget what the holder may already hold.
     fn insert(&mut self, uri: &str) -> Result<(), Full> {
+        if self.keys.contains_key(&(self.generation, uri.to_owned())) {
+            self.unplaced.remove(uri);
+            return Ok(());
+        }
         let size = encoded(uri);
         if self.keys.len() >= MAX_URIS || self.bytes + size > MAX_URI_BUDGET_BYTES {
             return Err(Full);
@@ -125,6 +139,7 @@ impl Ledger {
                 backoff: RETRY_FIRST,
             },
         );
+        self.unplaced.remove(uri);
         Ok(())
     }
 
@@ -146,7 +161,6 @@ impl Ledger {
             if self.insert(&uri).is_err() {
                 return;
             }
-            self.unplaced.remove(&uri);
         }
     }
 
@@ -276,6 +290,8 @@ impl Ledger {
             if entry.held != Held::No || entry.in_flight > 0 {
                 entry.stranded = true;
                 entry.wanted = false;
+                // Its answers carry the old generation and are discarded.
+                entry.in_flight = 0;
             } else {
                 entry.wanted = false;
                 self.prune(&key);
@@ -295,7 +311,9 @@ impl Ledger {
 
     /// Whether any key can still be released by a cleanup pass.
     pub(crate) fn needs_cleanup(&self) -> bool {
-        !self.releasable().is_empty() || self.keys.values().any(|e| e.in_flight > 0)
+        self.keys.iter().any(|((g, _), e)| {
+            *g == self.generation && !e.stranded && (e.in_flight > 0 || e.held != Held::No)
+        })
     }
 
     /// Whether a capacity refusal should be logged: once per ledger, and
