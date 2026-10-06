@@ -3959,6 +3959,19 @@ The nested schema is given an `$id` of the form
 scopes references with `id` rather than `$id`, is not covered. A root with `properties` and no `type` is
 advertised with `type: "object"` added and is otherwise unchanged.
 
+## 149. A failed meta-tool call sets `isError` on the `tools/call` result
+
+**Startup:** no notice
+
+A meta-tool result whose payload says `isError: true` (a failed
+`gateway_invoke`, or a backend's own tool error) now carries `isError: true` on
+the outer `tools/call` result. It was always `false`, with the failure only in
+the text.
+
+A client that read failure from the text alone keeps working. One that treated
+`isError: true` as a protocol failure should read the text and its `recovery`
+hint instead.
+
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
