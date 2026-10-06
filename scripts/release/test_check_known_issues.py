@@ -1,0 +1,97 @@
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+"""The release notes' Known issues section names no later release, and is empty at a tag."""
+
+import importlib.util
+import pathlib
+import sys
+import tempfile
+import traceback
+
+_spec = importlib.util.spec_from_file_location(
+    "check_known_issues",
+    pathlib.Path(__file__).with_name("check_known_issues.py"),
+)
+check = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(check)
+
+
+def notes(known):
+    """Release notes whose Known issues section holds `known`, between two others."""
+    return (
+        "# mcp-gateway 4.0.0 release notes\n\n"
+        "## Breaking changes\n\n- Upgrading from 3.x to 4.0.1 later is fine.\n\n"
+        f"## Known issues\n{known}\n"
+        "## Performance\n\nThe 4.0.1 numbers come later.\n"
+    )
+
+
+ITEM = "\nThese ship in 4.0.0.\n\n- A replayed webhook can get through (MIK-7854).\n\n"
+
+
+def run(text, *args):
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp, "notes.md")
+        path.write_text(text, encoding="utf-8")
+        return check.main(["--notes", str(path), *args])
+
+
+def test_a_section_without_a_later_release_passes_the_check():
+    assert run(notes(ITEM), "--check") == 0
+
+
+def test_a_later_release_in_a_bullet_fails_the_check():
+    assert run(notes(ITEM + "- Fixed in 4.0.1 (MIK-7907).\n"), "--check") == 1
+
+
+def test_a_later_release_in_the_intro_fails_the_check():
+    intro = "\nThese ship in 4.0.0 and are fixed in 4.0.1.\n\n- One (MIK-7854).\n"
+    assert run(notes(intro), "--check") == 1
+
+
+def test_a_later_release_outside_the_section_is_not_its_business():
+    # notes() names 4.0.1 under Breaking changes and Performance.
+    assert "4.0.1" in notes(ITEM)
+    assert run(notes(ITEM), "--check") == 0
+
+
+def test_the_last_section_runs_to_the_end_of_the_file():
+    text = "# Notes\n\n## Known issues\n\n- Fixed in 4.0.1 (MIK-1).\n"
+    assert run(text, "--check") == 1
+
+
+def test_any_content_fails_the_release_gate():
+    assert run(notes(ITEM), "--release") == 1
+    assert run(notes("\nThese ship in 4.0.0.\n\n"), "--release") == 1
+
+
+def test_an_empty_or_absent_section_passes_the_release_gate():
+    assert run(notes("\n\n"), "--release") == 0
+    assert run("# Notes\n\n## Performance\n\nFast.\n", "--release") == 0
+
+
+def test_the_release_gate_also_refuses_a_later_release():
+    assert run(notes("\n- Fixed in 4.0.1.\n"), "--release") == 1
+
+
+def test_an_unreadable_file_fails_closed():
+    assert check.main(["--notes", "/nonexistent/notes.md", "--check"]) == 1
+
+
+def test_a_differently_cased_heading_is_still_the_section():
+    text = "# Notes\n\n## Known Issues\n\n- Fixed in 4.0.1.\n"
+    assert run(text, "--check") == 1
+
+
+if __name__ == "__main__":
+    failed = 0
+    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
+    for name, fn in tests:
+        try:
+            fn()
+        except Exception:
+            failed += 1
+            print(f"FAIL {name}")
+            traceback.print_exc()
+    print(f"{failed} failed of {len(tests)}")
+    sys.exit(1 if failed else 0)
