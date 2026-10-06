@@ -121,7 +121,7 @@ class OwaspCitations(unittest.TestCase):
         )
 
     def test_a_summary_row_the_rows_disagree_with_is_reported(self):
-        doc = self.MATRIX + "| COVERED | 2/3 | ASI01, ASI02 |\n| PARTIAL | 1/3 | ASI03 |\n"
+        doc = "**1/3 COVERED, 2/3 PARTIAL**\n" + self.MATRIX + "| COVERED | 2/3 | ASI01, ASI02 |\n| PARTIAL | 1/3 | ASI03 |\n"
         self.assertEqual(
             self.problems_in(doc),
             [
@@ -130,6 +130,41 @@ class OwaspCitations(unittest.TestCase):
             ],
         )
 
+
+    def test_counts_with_extra_spacing_are_still_checked(self):
+        doc = "**2/3 COVERED,  1 / 3 PARTIAL**\n" + self.MATRIX + "| COVERED | 2 / 3 | ASI01 |\n"
+        self.assertEqual(
+            self.problems_in(doc),
+            [
+                "header says 2/3 COVERED; the matrix rows give 1/3",
+                "header says 1/3 PARTIAL; the matrix rows give 2/3",
+                "summary COVERED says 2/3 ASI01; the matrix rows give 1/3 ASI01",
+            ],
+        )
+
+    def test_an_unreadable_count_is_reported(self):
+        doc = "**one COVERED, 2/3 PARTIAL**\n" + self.MATRIX + "| COVERED | one | ASI01 |\n"
+        self.assertEqual(
+            self.problems_in(doc),
+            [
+                "header count not readable: one COVERED, 2/3 PARTIAL",
+                "summary COVERED count not readable: one",
+            ],
+        )
+
+    def test_summary_risks_in_another_order_pass(self):
+        doc = (
+            "**1/3 COVERED, 2/3 PARTIAL**\n" + self.MATRIX
+            + "| COVERED | 1/3 | ASI01 |\n| PARTIAL | 2/3 | ASI03,ASI02 |\n"
+        )
+        self.assertEqual(self.problems_in(doc), [])
+
+    def test_counts_without_matrix_rows_are_reported(self):
+        doc = "**1/3 COVERED, 2/3 PARTIAL**\n| COVERED | 1/3 | ASI01 |\n"
+        self.assertEqual(self.problems_in(doc), ["counts are claimed but no matrix rows were found"])
+
+    def test_matrix_rows_without_a_header_count_are_reported(self):
+        self.assertEqual(self.problems_in(self.MATRIX), ["no header count found for the matrix rows"])
 
 if __name__ == "__main__":
     unittest.main()
