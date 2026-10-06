@@ -520,6 +520,9 @@ mod tests {
             "rate-limit exceeded",
             "ratelimit exceeded",
             "RESOURCE_EXHAUSTED",
+            // MIK-7677: throttle wording with a co-signal stays exempt
+            "request throttled: HTTP 429",
+            "request throttled: rate limit exceeded",
         ] {
             assert!(is_rate_limited(s), "expected rate-limited for {s:?}");
         }
