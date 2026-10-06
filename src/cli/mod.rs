@@ -296,14 +296,8 @@ pub enum Command {
 
         /// Include example capability definitions and backend stubs
         /// (on by default; `--with-examples=false` turns them off)
-        #[arg(
-            long,
-            default_value_t = true,
-            num_args = 0..=1,
-            require_equals = true,
-            default_missing_value = "true",
-            action = clap::ArgAction::Set
-        )]
+        #[arg(long, default_value_t = true, num_args = 0..=1, require_equals = true)]
+        #[arg(default_missing_value = "true", action = clap::ArgAction::Set)]
         with_examples: bool,
     },
 
