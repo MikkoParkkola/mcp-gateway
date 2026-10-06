@@ -284,6 +284,12 @@ fn stdio_judges_an_invoke_nonce_after_policy() {
         "policy answers first: {denied}"
     );
     assert!(!denied.to_string().contains(INVALID_REFUSAL), "{denied}");
+    assert!(
+        denied.to_string().contains(&format!(
+            "Tool '{DENIED}' on server '{BACKEND}' is blocked by security policy"
+        )),
+        "the policy's own refusal: {denied}"
+    );
     assert_no_rejections(&events);
     assert_eq!(count(&stdio.calls, DENIED), 0);
 

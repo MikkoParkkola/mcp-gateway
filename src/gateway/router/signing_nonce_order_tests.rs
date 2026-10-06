@@ -103,14 +103,20 @@ fn invoke_with_nonce(posture: SecurityPosture, server: &str, nonce: &Value) -> S
     request.to_string()
 }
 
-async fn post(state: Arc<AppState>, body: String) -> (StatusCode, Value) {
-    let request = axum::http::Request::builder()
+async fn post(state: Arc<AppState>, posture: SecurityPosture, body: String) -> (StatusCode, Value) {
+    let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
         .header("content-type", "application/json")
-        .header("authorization", "Bearer k")
-        .body(axum::body::Body::from(body))
-        .unwrap();
+        .header("authorization", "Bearer k");
+    // The headers a 2026-07-28 call carries; without them it reads as legacy.
+    if posture == SecurityPosture::Hardened {
+        builder = builder
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", "tools/call")
+            .header("mcp-name", "gateway_invoke");
+    }
+    let request = builder.body(axum::body::Body::from(body)).unwrap();
     let response = create_router(state).oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -140,8 +146,13 @@ fn observed(
         .build()
         .expect("runtime");
     let (state, _store) = runtime.block_on(signed_state(posture));
-    let ((_, body), events) =
-        observe(|| runtime.block_on(post(state, invoke_with_nonce(posture, server, nonce))));
+    let ((_, body), events) = observe(|| {
+        runtime.block_on(post(
+            state,
+            posture,
+            invoke_with_nonce(posture, server, nonce),
+        ))
+    });
     (body, events)
 }
 
