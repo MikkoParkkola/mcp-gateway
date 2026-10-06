@@ -15,8 +15,7 @@ use super::super::MetaMcp;
 use super::{ResponseCorrelation, ResponseDeliveryContext, ResponsePolicyTarget};
 use crate::backend::BackendRegistry;
 use crate::protocol::{JsonRpcResponse, RequestId};
-use crate::security::firewall::response_tests::audit::assert_v2_event;
-use crate::security::firewall::response_tests::audit::capture_warnings;
+use crate::security::firewall::response_tests::audit::{assert_v2_event, capture_warnings};
 use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
 use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
@@ -142,6 +141,7 @@ fn correlation() -> ResponseCorrelation<'static> {
         caller: "known-caller",
         external_server: "gateway",
         external_tool: "gateway_invoke",
+        subject: None,
     }
 }
 

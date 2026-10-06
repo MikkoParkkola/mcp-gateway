@@ -10,6 +10,9 @@
 
 use serde_json::{Value, json};
 
+use crate::Error;
+use crate::idempotency::IdempotencyReservation;
+
 /// The terminal state a dropped reservation stores once the backend has acted.
 ///
 /// Committed rather than completed: the call may still fail a post-dispatch
@@ -29,6 +32,16 @@ pub(super) fn withheld_side_effect() -> Value {
     })
 }
 
+/// What a same-key retry is told when the backend *may* have acted and nothing
+/// can establish whether it did. One sentence for both routes, so a client
+/// hears the same thing however it called (MIK-7979). "May have reached": a
+/// lost round is classified conservatively, and where the send cannot be
+/// proven either way the notice must not claim it happened.
+pub(crate) const UNCERTAIN_TEXT: &str = "The call may have reached the backend; its \
+     outcome is unknown: it may have executed. Retrying with the same idempotency key \
+     will not re-execute it and will return this same notice. Reconcile at the backend \
+     before assuming the effect either ran or did not.";
+
 /// The terminal state a dropped reservation stores when the backend *may* have
 /// acted and nothing can establish whether it did.
 ///
@@ -42,13 +55,57 @@ pub(super) fn uncertain_side_effect() -> Value {
     json!({
         "resultType": "complete",
         "isError": true,
-        "content": [{
-            "type": "text",
-            "text": "The call reached the backend and its outcome is unknown: \
-                     it may have executed. Retrying with the same idempotency \
-                     key will not re-execute it and will return this same \
-                     notice. Reconcile at the backend before assuming the \
-                     effect either ran or did not."
-        }],
+        "content": [{ "type": "text", "text": UNCERTAIN_TEXT }],
     })
+}
+
+/// How a route stores a lost round under its key.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum LostRoundRoute {
+    /// `gateway_invoke` replays a stored tool result.
+    Meta,
+    /// `POST /mcp/{backend}` replays a stored JSON-RPC error object; `code` is
+    /// the one its first caller was answered with.
+    Direct {
+        /// The first caller's JSON-RPC error code.
+        code: i32,
+    },
+}
+
+/// MIK-7979: settle a lost round (the request may have left the gateway and no
+/// answer came back) with the uncertainty notice, so a same-key retry is told
+/// the outcome is undetermined instead of being served this error as if the
+/// work had failed. The first caller's answer is not touched; the work still
+/// never runs twice. Shared by both settle points so they cannot drift.
+///
+/// Returns whether it settled the key. A reservation another path already
+/// settled is left alone, and logged, so a re-entry shows instead of
+/// overwriting what that path stored.
+pub(crate) fn settle_lost_round(
+    error: &Error,
+    reservation: Option<&mut IdempotencyReservation>,
+    route: LostRoundRoute,
+) -> bool {
+    if !error.is_lost_round() {
+        return false;
+    }
+    let Some(reservation) = reservation else {
+        return false;
+    };
+    if reservation.is_settled() {
+        tracing::debug!(
+            key = reservation.key(),
+            "lost round found its idempotency reservation already settled"
+        );
+        return false;
+    }
+    match route {
+        LostRoundRoute::Meta => {
+            reservation.complete(&uncertain_side_effect());
+        }
+        LostRoundRoute::Direct { code } => {
+            reservation.fail(&json!({ "code": code, "message": UNCERTAIN_TEXT }));
+        }
+    }
+    true
 }
