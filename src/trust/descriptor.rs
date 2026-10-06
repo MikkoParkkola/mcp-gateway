@@ -127,7 +127,7 @@ fn with_card(mut descriptor: Value, card: Value) -> Value {
 /// only while the tool serialises to exactly the descriptor it was computed
 /// from, so a tool changed under the same name is recomputed, never served
 /// stale (MIK-7916).
-type CardMemo = HashMap<String, HashMap<String, (Value, Value)>>;
+type CardMemo = HashMap<(String, String), HashMap<String, (Value, Value)>>;
 
 // ponytail: a full map keeps its residents and computes newcomers uncached,
 // so a churning catalog can lose its saving; an LRU if that ever shows.
@@ -150,7 +150,7 @@ pub fn project_tool_descriptors_trust_cards(
     tools: &[Tool],
 ) -> Vec<Value> {
     let mut memo = card_memo().lock().unwrap_or_else(PoisonError::into_inner);
-    let key = format!("{server_id}\0{server_name}");
+    let key = (server_id.to_string(), server_name.to_string());
     if memo.len() >= MEMO_SERVERS && !memo.contains_key(&key) {
         return tools
             .iter()
