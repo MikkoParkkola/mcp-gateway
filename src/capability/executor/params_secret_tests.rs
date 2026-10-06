@@ -342,3 +342,31 @@ fn an_unfilled_parameter_whose_name_holds_a_quote_is_omitted() {
         .unwrap();
     assert_eq!(pairs, vec![("k".to_owned(), "x".to_owned())]);
 }
+
+/// MIK-7970: a caller's explicit null that fills a pure placeholder reaches
+/// the JSON body; an absent value and the template's own null, at any depth,
+/// are still left out.
+#[test]
+fn a_callers_explicit_null_is_sent_in_the_body() {
+    let (_dir, executor) = executor_holding("");
+    let template = json!({
+        "cursor": "{cursor}",
+        "missing": "{absent}",
+        "fixed": null,
+        "outer": { "x": null, "y": "{cursor}" },
+    });
+    let body = executor
+        .substitute_value(&template, &json!({ "cursor": null }))
+        .unwrap();
+    assert_eq!(
+        body,
+        json!({ "cursor": null, "outer": { "y": null } }),
+        "{body}"
+    );
+    // A query string cannot carry a JSON null: it is still left out there.
+    let query = std::collections::HashMap::from([("cursor".to_owned(), "{cursor}".to_owned())]);
+    let pairs = executor
+        .substitute_params(&query, &json!({ "cursor": null }))
+        .unwrap();
+    assert!(pairs.is_empty(), "{pairs:?}");
+}
