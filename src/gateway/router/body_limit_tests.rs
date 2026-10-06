@@ -210,9 +210,8 @@ fn zero_max_body_size_is_refused_at_load() {
 
 /// Source scan: request bodies are capped in one place. A hard-coded
 /// `to_bytes(body, N)` or a second `DefaultBodyLimit` would bring back the
-/// per-route caps C8 removed. Response reads are either `usize::MAX` (an
-/// answer the gateway built itself) or `slot_http`'s `ID_RECOVERY_LIMIT`,
-/// which reads a replaced answer only to recover its id (MIK-7663).
+/// per-route caps C8 removed. `usize::MAX` reads are responses the gateway
+/// built itself.
 #[test]
 fn no_hard_coded_body_limit_outside_the_configured_layer() {
     const CONFIGURED: &str = "DefaultBodyLimit::max(startup_config.server.max_body_size)";
@@ -255,9 +254,7 @@ fn no_hard_coded_body_limit_outside_the_configured_layer() {
                 }
                 if let Some(comma) = comma {
                     let limit = args[comma + 1..end].trim().trim_end_matches(',').trim();
-                    let id_recovery = limit == "ID_RECOVERY_LIMIT"
-                        && path.ends_with("gateway/meta_mcp/grant_audit.rs");
-                    if limit != "usize::MAX" && !id_recovery {
+                    if limit != "usize::MAX" {
                         hits.push(format!("{}: to_bytes(.., {limit})", path.display()));
                     }
                 }

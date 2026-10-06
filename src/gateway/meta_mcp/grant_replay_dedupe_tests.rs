@@ -49,7 +49,7 @@ async fn poll_as(
     stored: &CommittedTask,
     caller: &MetaMcpCallerContext<'_>,
 ) -> Option<JsonRpcResponse> {
-    let (refusal, written) = with_grant_slot(meta.transparency_logger.as_ref(), async {
+    let (refusal, written, _) = with_grant_slot(meta.transparency_logger.as_ref(), async {
         meta.refuse_stored_delivery(
             &RequestId::Number(1),
             stored,
