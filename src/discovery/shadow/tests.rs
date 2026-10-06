@@ -446,3 +446,47 @@ fn an_auth_header_key_is_not_reported_as_unauthenticated() {
         );
     }
 }
+
+/// MIK-7716: a header whose value is a client-only variable (`${input:token}`)
+/// is dropped from adoption, but its name still marks the server as sending an
+/// auth header. A non-auth header changes nothing.
+#[test]
+fn a_client_resolved_auth_header_still_counts() {
+    let entry = |name: &str, headers: Value| {
+        crate::discovery::client_entry::parse(
+            name,
+            &serde_json::json!({ "url": "https://mcp.remote.internal/mcp", "headers": headers }),
+            &DiscoverySource::VsCode,
+            Path::new("mcp.json"),
+        )
+        .expect("an HTTP entry parses")
+    };
+    let report = report(
+        &[
+            entry(
+                "weather",
+                serde_json::json!({ "AUTHORIZATION": "Bearer ${input:token}" }),
+            ),
+            entry("maps", serde_json::json!({ "X-Trace": "${input:trace}" })),
+        ],
+        &[],
+    );
+    let asset = |name: &str| {
+        report
+            .assets
+            .iter()
+            .find(|asset| asset.name == name)
+            .expect("asset reported")
+    };
+
+    let authed = asset("weather");
+    assert_eq!(authed.auth_exposure, ShadowAuthExposure::HttpAuthHeader);
+    assert_eq!(authed.severity, ShadowRiskSeverity::Medium);
+    for code in ["http_auth_header_configured", "server_auth_unverified"] {
+        assert!(authed.risk_reasons.iter().any(|r| r == code), "{code}");
+    }
+    assert_eq!(
+        asset("maps").auth_exposure,
+        ShadowAuthExposure::NetworkHttpNoAuthMetadata
+    );
+}
