@@ -20,8 +20,13 @@ use tracing::warn;
 use super::MetaMcp;
 use crate::gateway::authz::{Emit, ToolAuthorizer, ToolTarget};
 use crate::gateway::meta_mcp_tool_total::ToolTotal;
-use crate::identity_grants::{GrantScope, GrantSubject, IdentityGrantRequest};
+use crate::identity_grants::{
+    GrantScope, GrantSubject, IdentityGrantEvaluation, IdentityGrantRequest,
+};
 use crate::{Error, Result};
+
+/// One identity-grant evaluation: the request judged and its verdict.
+type GrantVerdict = (IdentityGrantRequest, IdentityGrantEvaluation);
 
 /// What the chokepoint reads about a caller, as a `Copy` view.
 ///
@@ -55,6 +60,18 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> Result<()> {
+        self.may_invoke_before_grants(server, tool, scope, session_id)?;
+        self.identity_grant_rule(server, tool, scope, Emit::Silent)
+    }
+
+    /// The pieces of [`Self::may_invoke`] before identity grants.
+    fn may_invoke_before_grants(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> Result<()> {
         self.active_profile(session_id)
             .check(server, tool)
             .map_err(Error::Protocol)?;
@@ -75,8 +92,7 @@ impl MetaMcp {
                 status: e.status.as_u16(),
                 message: e.message,
             })?;
-        self.admin_capability_rule(server, tool, scope.is_admin)?;
-        self.identity_grant_rule(server, tool, scope, Emit::Silent)
+        self.admin_capability_rule(server, tool, scope.is_admin)
     }
 
     /// Whether a piece of `may_invoke` other than the authorizer refuses
@@ -107,16 +123,29 @@ impl MetaMcp {
         caller: &super::MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
     ) -> Option<Error> {
-        let refusal = self
-            .may_invoke(server, tool_name, caller.scope(), session_id)
-            .err()?;
+        let scope = caller.scope();
         // A direct-name call is a dispatch, not a listing: its grant decision
         // is recorded (D3-a); a failed note answers -32005, not -32601.
-        if let Err(error @ Error::AuditUnavailable) =
-            self.identity_grant_rule(server, tool_name, caller.scope(), Emit::Audit)
-        {
-            return Some(error);
-        }
+        let refusal = match self.may_invoke_before_grants(server, tool_name, scope, session_id) {
+            Err(refusal) => match self.identity_grant_rule(server, tool_name, scope, Emit::Audit) {
+                Err(error @ Error::AuditUnavailable) => return Some(error),
+                _ => refusal,
+            },
+            // MIK-7654: the one evaluation that refuses is the one recorded,
+            // so a grant reload cannot make the record disagree with it.
+            Ok(()) => match self.grant_evaluation(server, tool_name, scope) {
+                Ok(None) => return None,
+                Ok(Some(verdict)) if verdict.1.allowed => return None,
+                Ok(Some(verdict)) => {
+                    match self.settle_grant(server, tool_name, scope, &verdict, Emit::Audit) {
+                        Err(error @ Error::AuditUnavailable) => return Some(error),
+                        Err(refusal) => refusal,
+                        Ok(()) => return None,
+                    }
+                }
+                Err(refusal) => refusal,
+            },
+        };
         crate::gateway::authz::audit_refusal(
             caller.authorizer.transport(),
             caller.authorizer.caller_name(),
@@ -285,11 +314,25 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         emit: Emit,
     ) -> Result<()> {
+        self.grant_evaluation(server, tool, scope)?
+            .map_or(Ok(()), |verdict| {
+                self.settle_grant(server, tool, scope, &verdict, emit)
+            })
+    }
+
+    /// One evaluation of the identity grants for `(server, tool)`: `None`
+    /// when `server` is not the capability backend, so no grant applies.
+    fn grant_evaluation(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+    ) -> Result<Option<GrantVerdict>> {
         let Some(cap) = self.get_capabilities() else {
-            return Ok(());
+            return Ok(None);
         };
         if server != cap.name {
-            return Ok(());
+            return Ok(None);
         }
         // Borrowed, not cloned: this runs per tool on every listing (#2110).
         // One lookup, so a reload removing the tool reads as absent (#2236).
@@ -315,6 +358,19 @@ impl MetaMcp {
         let evaluation = self.identity_grants.read().evaluate(&request);
         #[cfg(test)]
         after_grant_evaluation::fire();
+        Ok(Some((request, evaluation)))
+    }
+
+    /// The answer one grant `verdict` gives, noted for its record under
+    /// [`Emit::Audit`].
+    fn settle_grant(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+        (request, evaluation): &GrantVerdict,
+        emit: Emit,
+    ) -> Result<()> {
         // D3-a: a dispatch decision is noted for its record; an unslotted
         // check fails closed here, whatever the grant said.
         if emit == Emit::Audit {
