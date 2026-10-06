@@ -4032,7 +4032,9 @@ archive mode.
   of the newest expired segment passes only for a signed log (a
   `shared_secret` set): without one, the expiry record that vouches for it
   can be forged. Take anchors more often than retention expires segments.
-- `verify_audit_log` gains a fourth parameter, `anchor: Option<&Path>`.
+- `verify_audit_log` gains a fourth parameter, `anchor: Option<&Path>`. With an
+  anchor, a log with no file left is a failed verdict (`ok == false` at the
+  anchor's counter) rather than a `NotFound` error.
 
 Independently, a log whose oldest surviving segment opens with a
 `prev_entry_hash` other than the `prev_segment_final_hash` it links to now

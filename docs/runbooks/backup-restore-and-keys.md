@@ -97,7 +97,9 @@ mcp-gateway audit verify --path <log> --anchor <copied .hwm>
 ```
 
 The log must still hold the record the copy names; a wiped, rolled-back or replaced log fails
-with exit 1. With a `shared_secret`, the copy carries a MAC: verify with the same secret, or the
+with exit 1. An anchor vouches for the log up to its own record only: records appended after it
+are covered by the next copy. A copy taken from a host that is already compromised vouches for
+the compromised log, and a rotated `shared_secret` makes older signed copies fail their MAC. With a `shared_secret`, the copy carries a MAC: verify with the same secret, or the
 anchor is refused. An anchor older than the retained segments fails with "predates the retained
 range" (for an unsigned log, so does one whose record has just expired); take anchors more often
 than retention expires segments. UPGRADING-4.0 item 151 has the details.

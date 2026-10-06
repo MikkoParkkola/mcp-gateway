@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::rotation_tests::{SECRET, append, cfg, event, lines, log_path};
+use super::rotation_tests::{SECRET, append, cfg, event, lines, log_path, rotate_n};
 use super::segments::{self, HighWater, list_segments, sibling};
 use super::*;
 
@@ -211,7 +211,8 @@ fn a_wiped_log_fails_at_its_anchor() {
     }
 }
 
-/// ANCHOR.OK: an older anchor and one at the tail both pass an intact log.
+/// ANCHOR.OK: an older anchor, now in a sealed segment, and one at the tail
+/// both pass an intact log.
 #[test]
 fn an_intact_log_passes_its_anchors() {
     for mode in MODES {
@@ -222,9 +223,8 @@ fn an_intact_log_passes_its_anchors() {
             append(&l, i);
         }
         let older = copy_anchor(&path, "older.hwm");
-        for i in 3..6 {
-            append(&l, i);
-        }
+        rotate_n(&l, &path, 1);
+        append(&l, 0);
         let tail = copy_anchor(&path, "tail.hwm");
         for anchor in [&older, &tail] {
             let r = check(&path, anchor, mode, false).unwrap();
@@ -388,5 +388,51 @@ fn a_signed_anchor_refuses_a_hash_only_verify() {
         passes_without_anchor(&path, mode);
         let e = refused(&path, &anchor, mode, false);
         assert!(e.to_string().contains("signed"), "{e}");
+    }
+}
+
+/// The forged-expiry attack on an unsigned log: wipe it, then write an open
+/// record and an expiry record that name the anchored counter and hash as
+/// the expired boundary, with a matching local `.hwm`.
+#[test]
+fn a_forged_expiry_boundary_does_not_satisfy_an_unsigned_anchor() {
+    for mode in MODES {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        fresh(&path, 5);
+        let anchor = copy_anchor(&path, "anchor.hwm");
+        let hw = segments::read_hwm(&path, b"", "test").unwrap();
+        let config = cfg(&path, 12, false);
+        let open = serde_json::json!({
+            "event": rotation::EV_OPENED,
+            "segment_seq": 1,
+            "prev_segment_seq": 0,
+            "prev_segment_final_hash": hw.entry_hash,
+        });
+        let expiry = serde_json::json!({
+            "event": rotation::EV_EXPIRED,
+            "segment_seq": 0,
+            "last_counter": hw.counter,
+            "final_hash": hw.entry_hash,
+        });
+        let (first, h1) = chain_line(
+            &config,
+            open.as_object().unwrap().clone(),
+            hw.counter + 1,
+            &hw.entry_hash,
+        )
+        .unwrap();
+        let (second, _) = chain_line(
+            &config,
+            expiry.as_object().unwrap().clone(),
+            hw.counter + 2,
+            &h1,
+        )
+        .unwrap();
+        std::fs::write(&path, format!("{first}\n{second}\n")).unwrap();
+        hwm_at_tail(&path);
+        passes_without_anchor(&path, mode);
+        let r = check(&path, &anchor, mode, false).unwrap();
+        assert_fails(&r, hw.counter, "unsigned");
     }
 }
