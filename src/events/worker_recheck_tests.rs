@@ -185,7 +185,6 @@ async fn silent_backend(hub: &Arc<EventsHub>) -> Arc<AtomicUsize> {
 /// The baseline is one direct authorize against the same kind of backend.
 #[tokio::test]
 async fn an_attempt_waits_on_a_silent_catalogue_once() {
-    use crate::events::EventSource as _;
     const NAME: &str = "backend.b.resource_updated";
     let uri = serde_json::json!({"uri": "file:///a"});
 
@@ -281,7 +280,6 @@ async fn a_refusal_after_the_tenant_read_record_releases_the_frame() {
 /// catalogue again, and outside any scope (subscribe, fan-out) every call reads.
 #[tokio::test]
 async fn the_lookup_budget_is_per_attempt() {
-    use crate::events::EventSource as _;
     use crate::events::upstream_listener::FAILED_LOOKUP;
     const NAME: &str = "backend.b.resource_updated";
     let uri = serde_json::json!({"uri": "file:///a"});
