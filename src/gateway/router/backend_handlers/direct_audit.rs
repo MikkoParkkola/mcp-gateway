@@ -107,14 +107,22 @@ pub(super) struct DirectReads {
     key: Option<String>,
     params: Option<Value>,
     caller: Option<String>,
+    /// The caller's verified grant subject, for the delivery record (MIK-7938).
+    subject: Option<GrantSubject>,
     tool: String,
 }
 
 impl DirectReads {
-    /// The resolved caller's name, kept as soon as it is known, so even an
-    /// answer refused before the body is read names its caller.
-    pub(super) fn name_caller(&mut self, client: Option<&AuthenticatedClient>) {
+    /// The resolved caller's name and verified subject, kept as soon as they
+    /// are known, so even an answer refused before the body is read names its
+    /// caller.
+    pub(super) fn name_caller(
+        &mut self,
+        client: Option<&AuthenticatedClient>,
+        subject: Option<&GrantSubject>,
+    ) {
         self.caller = client.map(|client| client.name.clone());
+        self.subject = subject.cloned();
     }
 
     /// Capture the caller (`key` forms it) and the request params, only when
@@ -213,6 +221,7 @@ async fn audited_call_judged(
         caller: reads.caller.as_deref().unwrap_or("anonymous"),
         external_server: &name,
         external_tool: &reads.tool,
+        subject: reads.subject.as_ref(),
     };
     // No log, nothing to record: the answer is not copied to be hashed.
     let document = state

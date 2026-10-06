@@ -511,6 +511,8 @@ pub(super) async fn tasks_cancel(
 }
 
 #[cfg(test)]
+mod frame_subject_tests;
+#[cfg(test)]
 mod intent_tests;
 #[cfg(test)]
 mod scope_tests;
@@ -636,6 +638,7 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
                 pending,
                 caller: reader.name.clone(),
                 session_id: self.session_id.clone().unwrap_or_default(),
+                subject: self.grant_subject.clone(),
             }),
         })
     }
@@ -648,6 +651,7 @@ struct FrameDelivery {
     pending: crate::gateway::meta_mcp::task_notify::PendingTaskFrame,
     caller: String,
     session_id: String,
+    subject: Option<crate::identity_grants::GrantSubject>,
 }
 
 #[async_trait::async_trait]
@@ -658,10 +662,12 @@ impl crate::gateway::streaming::TaskFrameDelivery for FrameDelivery {
             pending,
             caller,
             session_id,
+            subject,
         } = *self;
         let who = crate::gateway::meta_mcp::task_notify::Reader {
             caller: &caller,
             session_id: &session_id,
+            subject: subject.as_ref(),
         };
         state.meta_mcp.finish_task_frame(pending, sent, &who).await
     }
