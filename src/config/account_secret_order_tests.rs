@@ -46,3 +46,65 @@ fn a_disabled_accounts_block_reads_no_secret_file() {
         "a disabled accounts block had its secret files read: {read:?}"
     );
 }
+
+/// A disabled block with one OpenWebUI adapter, its store keys given verbatim.
+fn disabled_block_with_adapter(dir: &Path, keys: &str) -> std::path::PathBuf {
+    let config_path = dir.join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(
+        &config_path,
+        format!(
+            "accounts:\n  schema_version: accounts.v1\n  enabled: false\n  deployment: single_process\n  instance_id: gateway-a\n  store_dir: {store:?}\n  authority_dir: {authority:?}\n  current_key_id: current\n  keys:\n{keys}  adapters:\n    - kind: openwebui_signed_header\n      installation_id: owui-1\n      header: X-OpenWebUI-Assertion\n      issuer: open-webui\n      hmac_secret_ref: env:MIK_7714_ADAPTER_HMAC\n      allowed_api_key_names:\n        - owui-gateway-key\n",
+            store = dir.join("store"),
+            authority = dir.join("authority"),
+        ),
+    )
+    .unwrap();
+    config_path
+}
+
+/// MIK-7714: an adapter runs with the store disabled, so its block's `file:`
+/// keys are read at load; every key's shape is checked first.
+///
+/// GIVEN a disabled block with an adapter, one readable `file:` key and one
+/// literal (malformed) key
+/// WHEN the config is loaded
+/// THEN the load is refused naming the malformed key, before any file is read.
+#[test]
+fn a_disabled_block_with_an_adapter_refuses_a_malformed_key_before_reading() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("account.key");
+    write_secret(&key);
+    let keys = format!(
+        "    current: 'file:{key}'\n    legacy: not-a-reference\n",
+        key = key.display()
+    );
+    let config_path = disabled_block_with_adapter(dir.path(), &keys);
+
+    let refusal = Config::load_evaluated(Some(&config_path))
+        .err()
+        .expect("a malformed key in a block whose references are read must refuse the load")
+        .to_string();
+    assert!(
+        refusal.contains("accounts.keys[legacy]"),
+        "refusal names the malformed key: {refusal}"
+    );
+}
+
+/// Control for the test above: without the malformed key the same block loads
+/// and its `file:` key IS read, so the refusal above is what keeps it unread.
+#[test]
+fn a_disabled_block_with_an_adapter_records_its_file_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("account.key");
+    write_secret(&key);
+    let keys = format!("    current: 'file:{key}'\n", key = key.display());
+    let config_path = disabled_block_with_adapter(dir.path(), &keys);
+
+    let evaluated = Config::load_evaluated(Some(&config_path)).expect("a well-formed block loads");
+
+    let read = evaluated.overlay.rotated_secret_files(&EnvOverlay::none());
+    assert!(
+        !read.is_empty(),
+        "an adapter's block has its file: keys recorded"
+    );
+}
