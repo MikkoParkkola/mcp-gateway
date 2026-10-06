@@ -16,10 +16,13 @@
 // Unix-only: writes owner-only fixtures with POSIX mode bits.
 #![cfg(unix)]
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 use sha2::{Digest as _, Sha256};
 
@@ -100,15 +103,10 @@ impl Install {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-        for (key, _) in std::env::vars_os() {
-            if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-                command.env_remove(key);
-            }
-        }
+        let mut command =
+            gateway_bin::command(&self.root.join("home"), gateway_bin::Inherit::Environment);
         command
             .current_dir(&self.root)
-            .env("HOME", self.root.join("home"))
             .arg("--config")
             .arg(self.root.join("gateway.yaml"))
             .args(args)

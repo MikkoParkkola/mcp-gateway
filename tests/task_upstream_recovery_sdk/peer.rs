@@ -40,7 +40,6 @@ impl SdkPeer {
     /// base directories — rather than by repurposing `HOME`, and bytecode
     /// writing is off so the checked-in fixture directory stays clean.
     pub fn start(root: &Path, client: &reqwest::Client) -> Self {
-        let port = crate::helper::free_port();
         let gate = root.join("sdk-gate");
         let cache = root.join("sdk-xdg");
         std::fs::create_dir_all(&cache).expect("an owned XDG root");
@@ -51,7 +50,7 @@ impl SdkPeer {
         let child = std::process::Command::new(pinned_python())
             .arg(fixture_script())
             .arg("--port")
-            .arg(port.to_string())
+            .arg("0")
             .arg("--redis-url")
             .arg(redis_url())
             .arg("--gate-dir")
@@ -71,7 +70,7 @@ impl SdkPeer {
 
         Self {
             child,
-            port,
+            port: 0,
             log,
             client: client.clone(),
         }
@@ -128,8 +127,9 @@ impl SdkPeer {
         );
     }
 
+    /// Read the port the fixture bound (`--port 0`) from its log, then wait
+    /// until it answers on it (MIK-7984).
     pub async fn wait_until_ready(&mut self) {
-        let url = format!("http://127.0.0.1:{}/counters", self.port);
         let deadline = tokio::time::Instant::now() + PEER_BOUND;
         loop {
             if let Some(status) = self.child.try_wait().expect("owned child status") {
@@ -138,12 +138,19 @@ impl SdkPeer {
                     self.logs()
                 );
             }
-            if self.client.get(&url).send().await.is_ok() {
+            if self.port == 0 {
+                self.port = std::fs::read_to_string(&self.log)
+                    .ok()
+                    .and_then(|log| bound_port(&log))
+                    .unwrap_or(0);
+            }
+            let url = format!("http://127.0.0.1:{}/counters", self.port);
+            if self.port != 0 && self.client.get(&url).send().await.is_ok() {
                 return;
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
-                "the pinned SDK peer never listened on {url} within {PEER_BOUND:?}\n{}",
+                "the pinned SDK peer never listened within {PEER_BOUND:?}\n{}",
                 self.logs()
             );
             tokio::time::sleep(POLL_GAP).await;
@@ -189,4 +196,13 @@ impl SdkPeer {
             self.logs()
         );
     }
+}
+
+/// The port in the fixture's `listening port N` line, once that line is
+/// complete: a prefix still being written would parse as a wrong port.
+fn bound_port(log: &str) -> Option<u16> {
+    log.split_inclusive('\n')
+        .filter(|line| line.ends_with('\n'))
+        .find_map(|line| line.trim_end().strip_prefix("listening port "))
+        .and_then(|port| port.parse().ok())
 }

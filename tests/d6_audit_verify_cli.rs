@@ -4,8 +4,10 @@
 //! the CLI wiring the library tests cannot: the early exit when the active
 //! file is missing, the `--archive` flag, and `--anchor` (MIK-7713).
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::Path;
-use std::process::Command;
 use std::sync::Arc;
 
 use mcp_gateway::security::TransparencyLogger;
@@ -55,7 +57,7 @@ fn verify_with(dir: &Path, log: &Path, archive: bool, anchor: Option<&Path>) -> 
     let config = dir.join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(&config, "auth:\n  enabled: false\n")
         .unwrap();
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+    let mut cmd = gateway_bin::command(dir, gateway_bin::Inherit::Environment);
     cmd.arg("--config")
         .arg(&config)
         .args(["audit", "verify", "--path"])
