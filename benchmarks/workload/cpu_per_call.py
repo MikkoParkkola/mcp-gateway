@@ -84,15 +84,34 @@ def drive(port: int, calls: int, rate: float) -> list[str]:
     return errors
 
 
+def alloc_counts() -> list[int] | None:
+    """allocs, reallocs, bytes from an alloc_count_patch.py binary, or None
+    when ALLOC_COUNT_FILE is unset. The file is replaced by rename, so a read
+    is never partial; it is rewritten every 50 ms."""
+    path = os.environ.get("ALLOC_COUNT_FILE")
+    if not path:
+        return None
+    return [int(v) for v in Path(path).read_text().split()]
+
+
 def measure(port: str, pid: str, warmup: str, calls: str, rate: str, out: str) -> int:
     port_n, pid_n, rate_f = int(port), int(pid), float(rate)
     calls_n = int(calls) // THREADS * THREADS
     if errors := drive(port_n, int(warmup), rate_f):
         print(f"VOID: warm-up answer rejected: {errors[0]}")
         return 3
+    idle = None
+    if (before := alloc_counts()) is not None:
+        # Allocations with no traffic after warm-up (counter thread, timers), per second.
+        time.sleep(5)
+        idle = (alloc_counts()[0] - before[0]) / 5
+    time.sleep(0.2)  # two counter rewrites, so the start read is current
+    counts0 = alloc_counts()
     start, t0 = cpu_ticks(pid_n), time.monotonic()
     errors = drive(port_n, calls_n, rate_f)
     ticks, wall = cpu_ticks(pid_n) - start, time.monotonic() - t0
+    time.sleep(0.2)
+    counts1 = alloc_counts()
     if errors:
         print(f"VOID: answer rejected: {errors[0]}")
         return 3
@@ -101,6 +120,10 @@ def measure(port: str, pid: str, warmup: str, calls: str, rate: str, out: str) -
            "achieved_rps": round(calls_n / wall, 1),
            "load1": float(Path("/proc/loadavg").read_text().split()[0]),
            "us_per_call": ticks / clk * 1e6 / calls_n}
+    if counts0 is not None:
+        allocs, reallocs, nbytes = (b - a for a, b in zip(counts0, counts1))
+        row.update({"idle_allocs_per_s": idle, "allocs_per_call": allocs / calls_n,
+                    "reallocs_per_call": reallocs / calls_n, "bytes_per_call": nbytes / calls_n})
     Path(out).write_text(json.dumps(row))
     print(json.dumps(row))
     return 0

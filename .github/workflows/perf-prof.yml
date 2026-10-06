@@ -26,6 +26,12 @@ env:
   RATE: "400"
   PROFILE_SECONDS: "80"
   PORT: "39420"
+  # MODE profile: clean reps plus one perf rep per arm. MODE count: clean reps
+  # only, every arm built by alloc_count_patch.py (allocations per call; its
+  # CPU figures are on the System allocator and not comparable). TARGET empty
+  # builds the host default (glibc); a triple builds that target.
+  MODE: profile
+  TARGET: ""
 
 jobs:
   profile:
@@ -56,15 +62,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.98.0
+          targets: aarch64-unknown-linux-musl
       - name: Build arms
         shell: bash
         run: |
           set -euo pipefail
+          [[ -z "$TARGET" ]] || sudo apt-get install -y -qq musl-tools
           for arm in "B:$REF_B" "C:$REF_C" "T:$REF_T"; do
             name="${arm%%:*}"; ref="${arm#*:}"; dir="$RUNNER_TEMP/arms/$name"
             git worktree add --detach "$dir" "$ref^{commit}" > /dev/null
-            ( cd "$dir" && cargo build --release --locked --features "$FEATURES" )
-            echo "$name $(git -C "$dir" rev-parse HEAD)" | tee -a "$RUNNER_TEMP/out/arms.txt"
+            [[ "$MODE" != count ]] || python3 benchmarks/workload/alloc_count_patch.py "$dir"
+            ( cd "$dir" && cargo build --release --locked --features "$FEATURES" ${TARGET:+--target "$TARGET"} )
+            echo "$name $(git -C "$dir" rev-parse HEAD) mode=$MODE target=${TARGET:-host}" | tee -a "$RUNNER_TEMP/out/arms.txt"
+            file "$dir/target/${TARGET:+$TARGET/}release/mcp-gateway" | tee -a "$RUNNER_TEMP/out/arms.txt"
           done
           { echo "nproc $(nproc)"; uname -m; uname -r; echo "loadavg $(cat /proc/loadavg)"; } > "$RUNNER_TEMP/out/host.txt"
       - name: Profile
@@ -85,8 +95,8 @@ jobs:
             held="$(ss -Htan "( sport = :$PORT )")"
             [[ -z "$held" ]] || { echo "$held"; echo "VOID: port held before $2"; exit 3; }
             home="$RUNNER_TEMP/home-$2"; mkdir -p "$home"
-            HOME="$home" RUST_LOG=error WORKLOAD_FIXTURE="$fixture" \
-              "$RUNNER_TEMP/arms/$1/target/release/mcp-gateway" --config "$config" --port "$PORT" \
+            HOME="$home" RUST_LOG=error WORKLOAD_FIXTURE="$fixture" ALLOC_COUNT_FILE="$RUNNER_TEMP/alloc-$2.txt" \
+              "$RUNNER_TEMP/arms/$1/target/${TARGET:+$TARGET/}release/mcp-gateway" --config "$config" --port "$PORT" \
               > "$out/$2.stdout" 2> "$out/$2.stderr" &
             pid=$!
             for _ in $(seq 150); do
@@ -105,8 +115,8 @@ jobs:
               2> "$out/prof-$1.record.err" || { echo "VOID: perf record $1 did not finish"; exit 3; }
           }
           # Smoke: a short record and report per arm before any measured rep,
-          # so a profiler fault voids in minutes, not at the job timeout.
-          for arm in B C T; do
+          # so a profiler fault voids in minutes, not at the job timeout. Count mode records nothing.
+          for arm in $([[ "$MODE" == count ]] || echo B C T); do
             start "$arm" "smoke-$arm"
             python3 benchmarks/workload/cpu_per_call.py measure "$PORT" "$pid" 0 "$(( RATE * 6 ))" "$RATE" "$out/smoke-$arm.json" &
             driver=$!
@@ -125,10 +135,13 @@ jobs:
             n=$(( n + 1 ))
             for arm in $order; do
               start "$arm" "clean-$arm-$n"
-              python3 benchmarks/workload/cpu_per_call.py measure "$PORT" "$pid" "$WARMUP" "$CALLS" "$RATE" "$out/clean-$arm-$n.json"
+              # Count mode: the driver reads the file this rep's gateway writes.
+              counts=""; [[ "$MODE" != count ]] || counts="$RUNNER_TEMP/alloc-clean-$arm-$n.txt"
+              ALLOC_COUNT_FILE="$counts" python3 benchmarks/workload/cpu_per_call.py measure "$PORT" "$pid" "$WARMUP" "$CALLS" "$RATE" "$out/clean-$arm-$n.json"
               stop
             done
           done
+          [[ "$MODE" != count ]] || exit 0
           for arm in B C T; do
             start "$arm" "prof-$arm"
             python3 benchmarks/workload/cpu_per_call.py measure "$PORT" "$pid" "$WARMUP" "$CALLS" "$RATE" "$out/prof-$arm.json" &
@@ -142,13 +155,21 @@ jobs:
           failed=0
           # Reports after every arm is recorded, so a slow report cannot cost a
           # recording. --no-inline: inline resolution per dwarf sample ran past
-          # three hours in run 37461088507. Each report is time-boxed.
+          # three hours in run 37461088507. Each report is time-boxed. Self time
+          # has no cutoff, so its rows sum to every sample; children stops at
+          # 0.01%. perf.data and the binary it resolves against are kept.
+          keep="$RUNNER_TEMP/keep"; mkdir -p "$keep"
           for arm in B C T; do
-            timeout -k 10 1200 "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-inline --children --sort symbol -g none --percent-limit 0.1 --stdio \
+            timeout -k 10 1200 "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-inline --children --sort symbol -g none --percent-limit 0.01 --stdio \
               > "$out/prof-$arm.children.txt" 2> "$out/prof-$arm.report.err" || { echo "children report exit $?" >> "$out/prof-$arm.report.err"; failed=1; }
-            timeout -k 10 1200 "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-inline --no-children --sort symbol -g none --percent-limit 0.1 --stdio \
+            timeout -k 10 1200 "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-inline --no-children --sort symbol -g none --percent-limit 0 --stdio \
               > "$out/prof-$arm.self.txt" 2>> "$out/prof-$arm.report.err" || { echo "self report exit $?" >> "$out/prof-$arm.report.err"; failed=1; }
-            rm -f "$RUNNER_TEMP/$arm.data"
+            timeout -k 10 1200 "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-inline --no-children --sort dso -g none --percent-limit 0 --stdio \
+              > "$out/prof-$arm.dso.txt" 2>> "$out/prof-$arm.report.err" || { echo "dso report exit $?" >> "$out/prof-$arm.report.err"; failed=1; }
+            mkdir -p "$keep/$arm"
+            mv "$RUNNER_TEMP/$arm.data" "$keep/$arm/perf.data"
+            cp "$RUNNER_TEMP/arms/$arm/target/${TARGET:+$TARGET/}release/mcp-gateway" "$keep/$arm/"
+            echo "$RUNNER_TEMP/arms/$arm/target/${TARGET:+$TARGET/}release/mcp-gateway" > "$keep/$arm/recorded-path.txt"
           done
           # Every arm gets its reports first; then a failed one voids the run.
           [[ "$failed" == 0 ]] || { echo "VOID: a profile report failed"; exit 3; }
@@ -162,4 +183,12 @@ jobs:
         with:
           name: perf-prof-${{ github.run_id }}
           path: ${{ runner.temp }}/out/
+          retention-days: 30
+      - name: Upload perf.data and binaries
+        if: always() && env.MODE == 'profile'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-data-${{ github.run_id }}
+          path: ${{ runner.temp }}/keep/
+          if-no-files-found: warn
           retention-days: 30
