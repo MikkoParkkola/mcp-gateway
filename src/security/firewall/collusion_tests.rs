@@ -681,3 +681,20 @@ fn the_copy_cap_drops_the_oldest() {
     d.record_delivery_at(T, A, true, &s, now);
     assert!(d.check_egress_at(B, U, &s, now).is_none());
 }
+
+/// MIK-7881.RELAY.1: A's sensitive copies from T are one from before the
+/// window and one stamped after the egress. Neither is held at the egress
+/// instant, so neither is a witness.
+#[test]
+fn stale_and_future_sensitive_copies_are_no_witness() {
+    let d = detector();
+    let stale = Instant::now();
+    let now = stale + RelayParams::default().window + Duration::from_secs(1);
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, now + Duration::from_millis(1));
+    d.record_delivery_at(T, A, true, &s, stale);
+    assert!(d.check_egress_at(B, U, &s, now).is_none());
+    // Control: a sensitive copy inside the window, before the egress, is one.
+    d.record_delivery_at(T, A, true, &s, now);
+    assert!(d.check_egress_at(B, U, &s, now).is_some());
+}
