@@ -102,3 +102,58 @@ fn a_fractional_secret_leaves_the_integer_it_truncates_to() {
     assert_eq!(value["f"], "[redacted]", "{value}");
     assert_eq!(value["i"], 12345, "{value}");
 }
+
+/// Integer-valued needles in decimal or exponent form, against results the
+/// child prints as integers: compared exactly, so an integer one past f64
+/// precision is never taken for the needle. Crossed with sign and leading
+/// zeros, both exponent letters, and an independent result sign.
+#[test]
+fn integer_valued_number_forms_match_integers_exactly() {
+    // (needle body, own integer, adjacent integer)
+    let shapes = [
+        ("12345.0", "12345", "12346"),
+        ("1.2345e4", "12345", "12346"),
+        ("1.2345E4", "12345", "12346"),
+        ("123450e-1", "12345", "12346"),
+        ("9007199254740992.0", "9007199254740992", "9007199254740993"),
+        ("9007199254740993.0", "9007199254740993", "9007199254740992"),
+        (
+            "9.007199254740993e15",
+            "9007199254740993",
+            "9007199254740992",
+        ),
+        (
+            "18446744073709551615.0",
+            "18446744073709551615",
+            "18446744073709551614",
+        ),
+    ];
+    let mut failures = Vec::new();
+    for sign in ["", "+", "-"] {
+        for zeros in ["", "00"] {
+            for result_sign in ["", "-"] {
+                for (body, own, adjacent) in shapes {
+                    // A u64 past i64 cannot be negative in JSON integers.
+                    if result_sign == "-" && own.len() > 19 {
+                        continue;
+                    }
+                    let needle = format!("{sign}{zeros}{body}");
+                    let text = format!(
+                        r#"{{"own": {result_sign}{own}, "adjacent": {result_sign}{adjacent}}}"#
+                    );
+                    let mut value: Value = serde_json::from_str(&text).unwrap();
+                    redact_value(&mut value, std::slice::from_ref(&needle));
+                    if value["own"] != "[redacted]" || value["adjacent"] == "[redacted]" {
+                        failures.push(format!("{needle} vs {result_sign}{own}: {value}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} cases wrong:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
