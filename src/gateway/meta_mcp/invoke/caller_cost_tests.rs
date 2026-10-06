@@ -121,6 +121,11 @@ async fn an_unauthenticated_callers_repeated_spend_stays_bounded() {
         spend(&meta, &anonymous, None, "read").await;
     }
     // THEN: the key holds one hour bucket and one tool row, not one per call
+    let counted = meta
+        .cost_tracker
+        .key_snapshot("anonymous")
+        .expect("the key's spend");
+    assert_eq!(counted.by_tool[0].call_count, 50, "every call was counted");
     let held = meta.cost_tracker.key_retained("anonymous");
     assert!(
         held <= 2,

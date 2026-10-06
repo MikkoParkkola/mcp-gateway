@@ -224,7 +224,9 @@ impl KeyCost {
             budget,
             budgeted: false,
             spend: parking_lot::Mutex::default(),
-            last_spend: AtomicU64::new(0),
+            // A key is born active: a sweep between its creation and its
+            // first spend must not take it for a month-idle one.
+            last_spend: AtomicU64::new(now_secs()),
         }
     }
 
@@ -430,7 +432,12 @@ impl CostTracker {
                 // We can't mutate through Arc so we replace the entry.
                 let _ = kc; // suppress unused warning
             })
-            .or_insert_with(|| Arc::new(KeyCost::new(key_name, budget.clone())));
+            .or_insert_with(|| {
+                Arc::new(KeyCost {
+                    budgeted: true,
+                    ..KeyCost::new(key_name, budget.clone())
+                })
+            });
         // If the entry already existed we replace it entirely:
         if let Some(mut entry) = self.per_key.get_mut(key_name) {
             let existing = Arc::clone(&entry);
