@@ -202,10 +202,8 @@ async fn recover_committed(reply: Reply, meta: MetaMcp) -> (CommittedTask, tempf
             move |result| {
                 result_policy
                     .recover_task_result(BACKEND, TOOL, None, &trace, result)
-                    .map_err(|error| JsonRpcError {
-                        code: -32603,
-                        message: error.to_string(),
-                        data: None,
+                    .map_err(|error| {
+                        crate::gateway::meta_mcp::response_security::recovered_result_error(&error)
                     })
             },
             move |error| error_policy.recover_task_error_with(BACKEND, TOOL, None, "trace", error),
