@@ -179,6 +179,7 @@ backend" and "fails a capability file" first.**
 | 152 | A weekday step `*/n` in a cron expression matches only the days `n` divides; the old match also tried each day plus 7, so `*/2` matched every day and `*/3` to `*/13` (except `*/7`) matched extra days; `*/1`, `*/7` and `*/14` up are unchanged | Check each scheduled job and `schedule.tick` subscription whose weekday field uses `/`; one meant to run daily uses `*` |
 | 153 | Two credentials that resolve to one principal (the same key listed twice, or two digests sharing their first 48 bits) are refused at load, reload and startup | Remove the duplicate entry, or replace one of the two credentials |
 | 154 | A same-key retry after a lost round (a broken stream, a timeout, a reload stopping the backend mid-call, an HTTP 5xx, or a 400, 404, 407, 408, 429 or session-expiry answer) is served the uncertain-outcome notice instead of the original error; `BackendUnavailable` frees the key | A client that read a served error as "the work failed" treats the notice as "may have run" and checks before re-issuing under a new key |
+| 155 | A caller signed in through the key server (an `/auth/token` token or a delegated OIDC bearer) has a principal of the form `kst:<sha256 hex>` or `oidc:<sha256 hex>`, no longer 12 hex characters | Update any log or audit query that matched these callers' 12-hex principal |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4062,9 +4063,9 @@ with the same principal, such as one key listed twice under two names, were one 
 3.5.0 and 3.5.1 each could attach to the other's sessions, and in the 4.0.0 pre-releases each
 could also read and cancel the other's tasks. Config load, reload and startup now refuse such
 a configuration, naming the two credentials and never a secret or digest. The check covers
-the bearer token and API keys configured together. Identities issued at runtime, such as
-key-server tokens minted for an OIDC sign-in, are not checked, nor is a principal that a
-removed credential once held. The principal encoding is unchanged, so existing sessions,
+the bearer token and API keys configured together. Identities issued at runtime cannot
+collide with them (item 155). A principal that a removed credential once held is not
+checked. The encoding of configured principals is unchanged, so existing sessions,
 grants and tasks stay readable. Remove the duplicate entry, or replace one of the two
 credentials.
 
@@ -4093,6 +4094,20 @@ work twice. What the retry is served changed:
 Library users: `Error::is_pre_dispatch` is `true` for `BackendUnavailable`, and
 `security::safe_http_status_error` returns `TransportPermanent` for the 4xx
 refusals above. `chains` retries `BackendUnavailable`. See ADR-012.
+
+## 155. Key-server callers have their own principals
+
+**Startup:** no notice
+
+A caller signed in through the key server, with a token from `/auth/token` or a delegated
+OIDC bearer, used to get the same kind of principal as a configured credential: the first
+48 bits of a SHA-256 digest. An API key configured by digest could therefore share an OIDC
+user's principal. Sessions, tasks, event subscriptions and the response cache key these
+callers on their verified OIDC identity, so the shared principal showed where the
+principal itself is recorded, such as audit attribution. These callers now get
+`kst:<sha256 hex>` (token) or `oidc:<sha256 hex>` (bearer), which no configured principal
+can equal. Configured principals are unchanged. Update any log or audit query that matched
+these callers' old 12-hex principal.
 
 ## Upgrading from 3.5.x: a walkthrough
 

@@ -17,7 +17,7 @@ use super::fanout::SourceEvent;
 use super::types::{SourceKind, Visibility};
 use super::upstream::Kind;
 use super::upstream_listener::Shared;
-use super::upstream_need::{Coalescer, Verdict};
+use super::upstream_need::{Coalescer, Verdict, WINDOW};
 use crate::backend::{Backend, BackendRegistry};
 use crate::protocol::era::Era;
 use crate::transport::upstream_tap::{
@@ -347,10 +347,10 @@ async fn finish_refill(
         }
     }
     // Also a refill that finished this iteration, its change not yet
-    // announced when the transport was found replaced.
-    if state.tools_pending {
-        state.flush(hub);
-    }
+    // announced when the transport was found replaced, and every notice
+    // still inside its coalescing window: the session's state goes with it
+    // (MIK-7898).
+    state.flush_at(hub, Instant::now() + WINDOW);
     state.ended(started)
 }
 
@@ -401,12 +401,19 @@ struct Pending {
     since: Instant,
 }
 
+#[allow(clippy::struct_excessive_bools)] // Each flag is an independent fact about the current stream.
 struct State<'a> {
     shared: &'a Arc<Shared>,
     era: Era,
     current: Option<(FrameStream, Requested)>,
     pending: Option<Pending>,
     acked: Option<Instant>,
+    /// What the current stream's acknowledgement honoured; a notice outside
+    /// it is not delivered (MIK-7898). `None` before an acknowledgement and
+    /// on a legacy stream, which has none.
+    honoured: Option<(KindSet, Vec<String>)>,
+    /// The peer answered the listen with `-32601` (MIK-7899).
+    unsupported: bool,
     opened: Instant,
     coalescer: Coalescer,
     /// Legacy: the URIs `resources/subscribe` was sent for.
@@ -433,6 +440,8 @@ impl<'a> State<'a> {
             current: None,
             pending: None,
             acked: None,
+            honoured: None,
+            unsupported: false,
             opened: now,
             coalescer: Coalescer::default(),
             subscribed: BTreeSet::new(),
@@ -478,6 +487,9 @@ impl<'a> State<'a> {
     }
 
     fn ended(&self, started: Instant) -> Outcome {
+        if self.unsupported {
+            return Outcome::Unsupported;
+        }
         Outcome::Ended {
             acked: self.acked.is_some(),
             lasted: started.elapsed(),
@@ -530,6 +542,9 @@ impl<'a> State<'a> {
                 false
             }
             UpstreamNote::Notice { kind, uri } => {
+                if !self.honours(kind, uri.as_deref(), from_pending) {
+                    return false;
+                }
                 if kind == NoteKind::ResourcesChanged && !requested(self.shared).uris.is_empty() {
                     self.reread = true;
                 }
@@ -546,6 +561,31 @@ impl<'a> State<'a> {
                 false
             }
             UpstreamNote::End => !from_pending,
+            UpstreamNote::Unsupported => {
+                // A replacement the peer refuses ends nothing; it is dropped
+                // at its acknowledgement deadline like any unacknowledged one.
+                self.unsupported |= !from_pending;
+                !from_pending
+            }
+        }
+    }
+
+    /// Whether an acknowledgement covers a notice. A legacy stream has none
+    /// and is not gated; on a modern one, a notice before the stream's
+    /// acknowledgement (a replacement's, or the first listen's) is dropped:
+    /// the acknowledgement must be the first frame (§3).
+    fn honours(&self, kind: NoteKind, uri: Option<&str>, from_pending: bool) -> bool {
+        if self.era == Era::Legacy {
+            return true;
+        }
+        let (false, Some((kinds, uris))) = (from_pending, &self.honoured) else {
+            return false;
+        };
+        match kind {
+            NoteKind::ResourceUpdated => uri.is_some_and(|u| uris.iter().any(|w| w == u)),
+            NoteKind::ResourcesChanged => kinds.resources_changed,
+            NoteKind::PromptsChanged => kinds.prompts_changed,
+            NoteKind::ToolsChanged => kinds.tools_changed,
         }
     }
 
@@ -569,6 +609,7 @@ impl<'a> State<'a> {
                 self.current = Some((p.stream, p.requested));
             }
         }
+        self.honoured = Some((kinds, uris.to_vec()));
         self.acked = Some(Instant::now());
     }
 
@@ -664,10 +705,15 @@ impl<'a> State<'a> {
 
     /// Emit the coalescing windows that closed (§8), through the hub only.
     fn flush(&mut self, hub: &Weak<EventsHub>) {
+        self.flush_at(hub, Instant::now());
+    }
+
+    /// [`Self::flush`] of the windows closed by `at`.
+    fn flush_at(&mut self, hub: &Weak<EventsHub>, at: Instant) {
         // Re-checked at every delivery: a reload can make the backend
         // ineligible while its listener runs (MIK-7894). Nothing pending is
         // sent, the task ends, and the upstream subscriptions are withdrawn.
-        let due = self.coalescer.due(Instant::now());
+        let due = self.coalescer.due(at);
         if (self.tools_pending || !due.is_empty()) && self.shared.is_ineligible() {
             self.tools_pending = false;
             end_ineligible(self.shared, hub);
