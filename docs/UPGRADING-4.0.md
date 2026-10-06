@@ -4040,7 +4040,9 @@ under its own credential.
 If such clients are now refused, give them a credential (turn authentication on, or have them
 present a key on a public path), have them reuse their session, raise
 `anomaly_block_threshold`, or remove it to log without blocking. The 4.0 tenant guard
-(`tenant_guard`) and call budget (`budget`) count these clients the same way.
+(`tenant_guard`) and call budget (`budget`) count these clients the same way. With
+authentication off, budgets are best-effort; turn authentication on for per-caller
+enforcement.
 
 ## 152. A stepped weekday field in a cron expression matches only its own days
 
