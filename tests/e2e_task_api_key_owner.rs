@@ -182,6 +182,15 @@ impl Gateway {
             json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } });
         params["_meta"]["io.modelcontextprotocol/clientInfo"] =
             json!({ "name": "task-owner-journey", "version": "1" });
+        // `Mcp-Name` must repeat the body's name: the tool for a call, the
+        // task id for a task method (`protocol::headers`).
+        let name = match method {
+            "tools/call" => params["name"].as_str().map(str::to_owned),
+            "tasks/get" | "tasks/update" | "tasks/cancel" => {
+                params["taskId"].as_str().map(str::to_owned)
+            }
+            _ => None,
+        };
         let mut request = self
             .http
             .post(format!("{}/mcp", self.url))
@@ -190,8 +199,8 @@ impl Gateway {
             .header("mcp-protocol-version", PROTOCOL)
             .header("mcp-method", method)
             .json(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
-        if method == "tools/call" {
-            request = request.header("mcp-name", "gateway_invoke");
+        if let Some(name) = name {
+            request = request.header("mcp-name", name);
         }
         if let Some(key) = key {
             request = request.bearer_auth(key);
