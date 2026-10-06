@@ -55,6 +55,18 @@ pub(super) fn install(
             crate::events::upstream_live_ineligible(Arc::clone(live_config)),
         );
     }
+    if config.events.sources.operational {
+        let source = hub.install_operational_source(
+            &meta_mcp.kill_switch(),
+            &meta_mcp.events_backend_registry(),
+        );
+        #[cfg(feature = "cost-governance")]
+        if let Some(budget) = &meta_mcp.budget_enforcer {
+            source.report_budgets(budget);
+        }
+        #[cfg(not(feature = "cost-governance"))]
+        let _ = source;
+    }
     if config.events.sources.schedule {
         hub.install_schedule_source(&store_dir);
     }
