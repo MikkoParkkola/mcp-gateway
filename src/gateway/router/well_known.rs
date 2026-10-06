@@ -271,23 +271,21 @@ fn is_publishable_issuer(issuer: &str) -> bool {
     {
         return false;
     }
-    // The parser drops empty userinfo (`https://@host`), so look for `@` in
-    // the raw authority, which ends at the first `/`, `?` or `#`.
-    let authority = issuer.split_once("://").map_or("", |(_, rest)| {
-        rest.split(['/', '?', '#']).next().unwrap_or("")
-    });
-    if authority.contains('@') {
-        return false;
-    }
-    let Ok(parsed) = url::Url::parse(issuer) else {
+    // The parser repairs `https:host`, `https:///host` and empty userinfo
+    // (`https://@host`), so the raw text must already be `scheme://authority`
+    // with no `@` in the authority, which ends at the first `/`, `?` or `#`.
+    let Some(rest) = issuer
+        .strip_prefix("https://")
+        .or_else(|| issuer.strip_prefix("http://"))
+    else {
         return false;
     };
-    // An http(s) URL always has a host, or it does not parse.
-    matches!(parsed.scheme(), "https" | "http")
-        && parsed.username().is_empty()
-        && parsed.password().is_none()
-        && parsed.query().is_none()
-        && parsed.fragment().is_none()
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+    url::Url::parse(issuer)
+        .is_ok_and(|parsed| parsed.query().is_none() && parsed.fragment().is_none())
 }
 
 /// Build RFC 9728 protected-resource metadata, or `None` when no honest
