@@ -117,6 +117,7 @@ async fn unsubscribe_waits_out_a_claimed_attempt() {
             binding: None,
         },
         visible_backends: std::collections::HashSet::new(),
+        admin: false,
     };
     let url = "https://h.example/cb";
     let id = subscription_id("p", url, "e", &json!({}));
@@ -179,6 +180,40 @@ fn credentials_other_than_api_keys_bound_the_grant() {
         bounded_by(&key, &json!({"ttlMs": null}), None).expect("ok"),
         None,
         "an API key is re-checked live instead"
+    );
+}
+
+/// Operator-scoped types (backend health, the kill switch) are listed and
+/// subscribable with admin standing only, which the transport sets.
+#[test]
+fn operator_types_are_seen_by_admins_only() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let descriptor = EventDescriptor {
+        name: "gateway.kill_switch.changed".into(),
+        description: String::new(),
+        input_schema: json!({}),
+        payload_schema: json!({}),
+        scope: Visibility::Operator,
+        kind: crate::events::types::SourceKind::GatewayOperational,
+    };
+    let caller = |admin| Caller {
+        principal: Some("p".to_owned()),
+        read_key: None,
+        credential: Credential {
+            kind: crate::security::audit::CredentialKind::ApiKey,
+            principal: "p".to_owned(),
+            api_key: None,
+            expires_at: None,
+            binding: None,
+        },
+        visible_backends: std::collections::HashSet::new(),
+        admin,
+    };
+    assert!(caller(true).sees(&hub, &descriptor), "an admin sees it");
+    assert!(
+        !caller(false).sees(&hub, &descriptor),
+        "a non-admin does not"
     );
 }
 
