@@ -346,3 +346,13 @@ async fn a_native_pretty_printed_json_text_keeps_its_numbers() {
         "the numbers lost their receipt"
     );
 }
+
+/// MIK-7906: only a `gateway_invoke` answer is wrapped; a surfaced tool's
+/// answer, whatever its name, is read as delivered.
+#[test]
+fn only_a_gateway_invoke_answer_is_wrapped() {
+    assert_eq!(AnswerShape::of("gateway_invoke"), AnswerShape::InvokeWrapped);
+    for tool in ["send", "gateway_search", "alpha__send"] {
+        assert_eq!(AnswerShape::of(tool), AnswerShape::Literal, "{tool}");
+    }
+}
