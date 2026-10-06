@@ -62,7 +62,14 @@ pub(crate) fn shape_modern_response(response: &mut crate::protocol::JsonRpcRespo
             .or_insert_with(|| serde_json::Value::String("complete".to_string()));
 
         if CACHEABLE_METHODS.contains(&method) {
-            object.insert("ttlMs".to_string(), serde_json::json!(LIST_TTL_MS));
+            // A relayed `resources/read` may carry its backend's own hint. The
+            // gateway may shorten it, never lengthen it: raising a backend's
+            // `ttlMs: 0` would let a client serve changing contents stale.
+            let ttl = object
+                .get("ttlMs")
+                .and_then(serde_json::Value::as_u64)
+                .map_or(LIST_TTL_MS, |hint| hint.min(LIST_TTL_MS));
+            object.insert("ttlMs".to_string(), serde_json::json!(ttl));
             // Per method, from the table that records which ones were
             // assessed. Answering with one method's decision for all five
             // would make `resources/read` inherit `tools/list`'s reasoning.
@@ -84,5 +91,40 @@ pub(crate) fn shape_modern_response(response: &mut crate::protocol::JsonRpcRespo
                 crate::protocol::meta::server_info(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LIST_TTL_MS, shape_modern_response};
+    use crate::protocol::{JsonRpcResponse, RequestId};
+
+    fn shaped_ttl(result: serde_json::Value) -> serde_json::Value {
+        let mut response = JsonRpcResponse::success(RequestId::Number(1), result);
+        shape_modern_response(&mut response, "resources/read");
+        response.result.expect("a success keeps its result")["ttlMs"].clone()
+    }
+
+    /// MIK-8009 review: a backend hint is kept when shorter, capped when
+    /// longer, and the gateway's window applies only where none was sent.
+    #[test]
+    fn a_relayed_read_keeps_a_shorter_backend_hint() {
+        assert_eq!(
+            shaped_ttl(serde_json::json!({"contents": [], "ttlMs": 0})),
+            0
+        );
+        assert_eq!(
+            shaped_ttl(serde_json::json!({"contents": [], "ttlMs": 5})),
+            5
+        );
+        assert_eq!(
+            shaped_ttl(serde_json::json!({"contents": [], "ttlMs": u64::MAX})),
+            LIST_TTL_MS
+        );
+        assert_eq!(shaped_ttl(serde_json::json!({"contents": []})), LIST_TTL_MS);
+        assert_eq!(
+            shaped_ttl(serde_json::json!({"contents": [], "ttlMs": "soon"})),
+            LIST_TTL_MS
+        );
     }
 }

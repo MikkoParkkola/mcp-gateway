@@ -62,6 +62,11 @@ fn violations(result: &Value, required: &[&str]) -> Vec<String> {
         .filter(|field| result.get(**field).is_none())
         .map(|field| format!("missing {field}"))
         .collect();
+    if let Some(kind) = result.get("resultType")
+        && !kind.is_string()
+    {
+        missing.push(format!("resultType {kind} is not a string"));
+    }
     if let Some(scope) = result.get("cacheScope")
         && !matches!(scope.as_str(), Some("private" | "public"))
     {
