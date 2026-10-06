@@ -363,6 +363,39 @@ fn a_copied_seal_of_a_sealed_segment_does_not_replace_it() {
     }
 }
 
+/// MIK-7949: a copied seal appended to the active file is a finding even when
+/// every mark check passes: the mark lags behind the seal (a crash before it
+/// moved), so the tail is ahead of it, the record it names is intact in its
+/// sealed segment, and the active file opens the next segment as it should.
+#[test]
+fn a_copied_seal_behind_a_lagging_mark_is_a_finding() {
+    use super::rotation_tests::SECRET;
+    use super::segments::{HighWater, encode_hwm, sealed_path, write_hwm};
+    for signed in [false, true] {
+        let secret = if signed { SECRET.as_bytes() } else { b"" };
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        rotate_n(&l, &path, 1);
+        drop(l);
+        let sealed = lines(&sealed_path(&path, 0));
+        let seal = sealed[sealed.len() - 1].clone();
+        assert_eq!(event(&seal), Some("audit_segment_sealed"));
+        let before = &sealed[sealed.len() - 2];
+        let mark = HighWater {
+            counter: before["counter"].as_u64().unwrap(),
+            entry_hash: before["entry_hash"].as_str().unwrap().into(),
+            segment_seq: 0,
+        };
+        write_hwm(&path, &encode_hwm(&mark, secret, "test").unwrap(), true).unwrap();
+        let mut active = lines(&path);
+        active.push(seal);
+        write_lines(&path, &active);
+        drop(TransparencyLogger::open(cfg(&path, 12, signed)).unwrap());
+        assert!(!marks(&path).is_empty(), "no finding (signed: {signed})");
+    }
+}
+
 /// MIK-7949 (review): a sealed segment renamed to the last number makes the
 /// next number wrap (debug panic, release 0) or saturate onto that name, so a
 /// seal would replace a segment. The restart must refuse instead, active file
