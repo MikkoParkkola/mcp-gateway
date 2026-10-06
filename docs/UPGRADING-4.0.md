@@ -178,7 +178,7 @@ backend" and "fails a capability file" first.**
 | 151 | A legacy client that calls without a credential (authentication off, or on with the path in `auth.public_paths`, as `/mcp` is in the shipped presets) and does not resume a session the gateway issued is counted under one shared identity by the anomaly detector, the tenant guard and the call budget; in 3.x each such request was a new session and the first call in it | None unless these controls refuse such clients: give them a credential, have them keep the `mcp-session-id` from `initialize`, or raise the limit |
 | 152 | A weekday step `*/n` in a cron expression matches only the days `n` divides; the old match also tried each day plus 7, so `*/2` matched every day and `*/3` to `*/13` (except `*/7`) matched extra days; `*/1`, `*/7` and `*/14` up are unchanged | Check each scheduled job and `schedule.tick` subscription whose weekday field uses `/`; one meant to run daily uses `*` |
 | 153 | Two credentials that resolve to one principal (the same key listed twice, or two digests sharing their first 48 bits) are refused at load, reload and startup | Remove the duplicate entry, or replace one of the two credentials |
-| 154 | `webhooks.base_path` may not overlap a gateway route | Move the receiver to a path outside `/mcp`, `/ui`, `/dashboard`, `/accounts/v1`, `/auth`, `/.well-known` and the probe paths |
+| 155 | `webhooks.base_path` may not overlap a gateway route | Move the receiver to a path outside `/mcp`, `/ui`, `/dashboard`, `/accounts/v1`, `/auth`, `/.well-known` and the probe paths |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4068,7 +4068,7 @@ removed credential once held. The principal encoding is unchanged, so existing s
 grants and tasks stay readable. Remove the duplicate entry, or replace one of the two
 credentials.
 
-## 154. `webhooks.base_path` may not overlap a gateway route
+## 155. `webhooks.base_path` may not overlap a gateway route
 
 **Startup:** no notice, the start is refused with its own error, which names the path and the route; refuses to start
 
