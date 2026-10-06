@@ -19,20 +19,21 @@ import sys
 
 DEFAULT_NOTES = "docs/release/v4.0.0-release-notes-DRAFT.md"
 LATER_RELEASE = "4.0.1"
-HEADING = re.compile(r"^## known issues\s*$", re.IGNORECASE)
+# ATX headings: up to three spaces of indent, optional closing hashes.
+HEADING = re.compile(r"^ {0,3}##[ \t]+known issues(?:[ \t]+#*)?[ \t]*$", re.IGNORECASE)
+SECTION_END = re.compile(r"^ {0,3}#{1,2}(?:[ \t]|$)")
 
 
 def known_issues(text):
-    """The section's lines after its heading, up to the next "## " heading."""
-    lines = text.splitlines()
-    start = next((i for i, line in enumerate(lines) if HEADING.match(line)), None)
-    if start is None:
-        return []
-    body = []
-    for line in lines[start + 1 :]:
-        if line.startswith("## "):
-            break
-        body.append(line)
+    """Every Known issues section's lines, each up to the next level 1-2 heading."""
+    body, inside = [], False
+    for line in text.splitlines():
+        if HEADING.match(line):
+            inside = True
+        elif SECTION_END.match(line):
+            inside = False
+        elif inside:
+            body.append(line)
     return body
 
 
