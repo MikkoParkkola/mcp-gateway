@@ -147,6 +147,9 @@ struct Setup {
     meta_mode: MetaMode,
     /// The backends refuse every notification (L1254).
     notify_refused: bool,
+    /// The backends require a signature chain and the gateway has a chain
+    /// identity, so their unchained answers are refused unread (MIK-7636).
+    chained: bool,
 }
 
 /// One optional meta-layer switch a cell turns on (MIK-7116.MIN.1 cells).
@@ -188,7 +191,14 @@ async fn fixture(setup: Setup) -> Fixture {
     for name in ["alpha", "beta"] {
         let backend = Arc::new(Backend::new(
             name,
-            BackendConfig::default(),
+            BackendConfig {
+                signature_chain: if setup.chained {
+                    crate::config::ChainMode::Require
+                } else {
+                    crate::config::ChainMode::Off
+                },
+                ..BackendConfig::default()
+            },
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         ));
@@ -217,6 +227,13 @@ async fn fixture(setup: Setup) -> Fixture {
     }
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     meta.enable_transparency_log(Arc::clone(&log));
+    if setup.chained {
+        meta.set_chain_signer(
+            crate::security::signature_chain::ChainSigner::from_seed(&[7; 32], "gw-test")
+                .expect("signer"),
+            crate::config::ChainEmit::OnRequest,
+        );
+    }
     #[cfg(feature = "firewall")]
     if let Some(limit) = setup.tenant_limit {
         let config = crate::security::firewall::FirewallConfig {
