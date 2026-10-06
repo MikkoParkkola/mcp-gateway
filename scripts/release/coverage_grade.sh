@@ -49,8 +49,8 @@ case "${1:-}" in
     echo "pushed $branch = $probe (grading $rev)"
     run=""
     for _ in $(seq 60); do
-      run="$(gh run list -R "$REPO" --branch "$branch" -L 20 --json databaseId,headSha \
-        -q ".[] | select(.headSha == \"$probe\") | .databaseId" | head -n 1)"
+      run="$(gh run list -R "$REPO" --branch "$branch" --workflow "Coverage probe" -L 20 \
+        --json databaseId,headSha -q ".[] | select(.headSha == \"$probe\") | .databaseId" | head -n 1)"
       [[ -n "$run" ]] && break
       sleep 10
     done
@@ -59,10 +59,24 @@ case "${1:-}" in
     ;;
 esac
 
+# The run must be a coverage probe OF <rev>: its commit's parent is <rev> and it
+# changes nothing but a workflow file, so its artifacts measure <rev>'s code.
+[[ "$(gh run view "$run" -R "$REPO" --json workflowName -q .workflowName)" == "Coverage probe" ]] \
+  || { echo "run $run is not a Coverage probe run" >&2; exit 4; }
+head_sha="$(gh run view "$run" -R "$REPO" --json headSha -q .headSha)"
+git cat-file -e "$head_sha^{commit}" 2>/dev/null || git fetch -q origin "$head_sha"
+[[ "$(git rev-parse "$head_sha^")" == "$rev" ]] \
+  || { echo "run $run probed $head_sha, whose parent is not $rev" >&2; exit 4; }
+changed="$(git diff --name-only "$rev" "$head_sha")"
+while IFS= read -r path; do
+  [[ -z "$path" || "$path" == .github/workflows/* ]] && continue
+  echo "run $run probed $head_sha, which also changes $path" >&2; exit 4
+done <<< "$changed"
+
 until [[ "$(gh run view "$run" -R "$REPO" --json status -q .status)" == completed ]]; do sleep 120; done
 conclusion="$(gh run view "$run" -R "$REPO" --json conclusion -q .conclusion)"
 
-out="$(git rev-parse --git-common-dir)/coverage-grade/$run"
+out="$(git rev-parse --path-format=absolute --git-common-dir)/coverage-grade/$run"
 rm -rf "$out"; mkdir -p "$out/src"
 gh run download "$run" -R "$REPO" -D "$out/art"
 git archive "$rev" src docs/release scripts/release | tar -x -C "$out/src"

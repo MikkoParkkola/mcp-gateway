@@ -634,6 +634,10 @@ async fn stdio_gateway_built_refusal_is_sent_as_written() {
     )
     .await;
     assert!(!frame.delivers_result(), "a refusal delivers no result");
+    assert!(
+        frame.assessment().is_some(),
+        "the built answer must pass through the judge, not around it"
+    );
     assert_eq!(frame.answer_id(), Some(RequestId::Number(7)));
     let document = frame
         .answer_document()

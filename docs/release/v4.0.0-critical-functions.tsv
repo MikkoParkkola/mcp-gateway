@@ -243,6 +243,8 @@ src/gateway/task_service/store_input.rs	read_owned	1	critical	c	Shared::read_own
 src/gateway/task_service/store_input.rs	require_input_blocking	1	critical	c	Shared::require_input_blocking	Obtains the task through read_owned before installing an input round
 src/gateway/task_service/store_targets.rs	add_targets_blocking	1	critical	c	Shared::add_targets_blocking	Requires ownership before updating recorded policy targets
 src/gateway/task_service/store_targets.rs	settle_bounded_blocking	1	critical	c	Shared::settle_bounded_blocking	Transition for cancel/settle, scoped to the owner via `owned` with a revision check
+src/gateway/task_service/store_targets.rs	settle_attempt	1	critical	d	Shared::settle_attempt	Refuses a settlement whose record exceeds the per-record byte budget and records only the peer's authorship.
+src/gateway/task_service/store_targets.rs	keep_provenance	1	critical	borderline	keep_provenance	Leaves a legacy row's error unattributed when it has no stored call to keep (fail closed).
 src/gateway/task_service/store_windows.rs	judge_store_dir	1	critical	d	judge_store_dir	Windows: refuses a store directory whose DACL, reparse point or locality is not private
 src/gateway/task_service/store_windows.rs	open_record	1	critical	d	open_record	Windows: opens without following reparse points; refuses a record that is not private
 src/gateway/task_service/store_windows.rs	create_private_dir	1	standard	borderline	create_private_dir	Creates the store directory and its ancestors private on Windows
@@ -336,6 +338,7 @@ src/personal_accounts/config/journey.rs	validate_return_paths	1	critical	d	valid
 src/personal_accounts/config/journey.rs	validate_session	1	critical	d	validate_session	user_endpoint must be https or loopback http, with no userinfo
 src/personal_accounts/config/references.rs	resolve_key	1	critical	d	resolve_key	Refuses a literal store key or an unresolved key reference
 src/personal_accounts/config/references.rs	validate_key_references	1	critical	d	validate_key_references	Refuses an accounts.keys entry holding a literal key rather than an env: or file: reference.
+src/personal_accounts/config/references.rs	is_reference	1	critical	d	is_reference	Decides for validate_key_references whether an accounts.keys entry is an env: or file: reference.
 src/personal_accounts/consent.rs	commit_if_unchanged_locked	1	critical	d	commit_if_unchanged_locked	Fences a stale consent so it cannot overwrite a later grant or revoke
 src/personal_accounts/consent.rs	commit_grant_if_unchanged	1	standard	borderline	PersonalAccountStore::commit_grant_if_unchanged	Single lock acquisition around the CAS (TOCTOU guard)
 src/personal_accounts/identity.rs	account_key	1	critical	a/c	account_key	Refuses with no principal; binds the five-field owner key

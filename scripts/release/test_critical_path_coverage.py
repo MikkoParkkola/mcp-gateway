@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import pathlib
+import re
 import tempfile
 import unittest
 
@@ -41,6 +42,18 @@ def report(overrides=None):
 
 def failures(document):
     return {row[0]: row[5] for row in cpc.grade(document)}
+
+
+def table_rows(section):
+    """The body rows of the markdown tables in `section`, as stripped cells."""
+    rows = []
+    for line in section.splitlines():
+        if not line.startswith("|") or set(line) <= set("|-: "):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if cells[0] not in ("Named path", ""):
+            rows.append(cells)
+    return rows
 
 
 class CriticalPathCoverage(unittest.TestCase):
@@ -81,6 +94,27 @@ class CriticalPathCoverage(unittest.TestCase):
     def test_windows_and_relative_filenames_resolve(self):
         self.assertEqual("src/oauth/a.rs", cpc.relative("C:\\work\\repo\\src\\oauth\\a.rs"))
         self.assertEqual("src/oauth/a.rs", cpc.relative("src/oauth/a.rs"))
+
+    def test_paths_match_the_coverage_doc(self):
+        """The mapping and the baselines are the doc's, read from its two tables."""
+        doc = (HERE.parent.parent / "docs/release/v4.0.0-critical-path-coverage.md").read_text(
+            encoding="utf-8"
+        )
+        mapping_section = doc.split("## The mapping", 1)[1].split("\n## ", 1)[0]
+        mapping = {
+            cells[0]: re.findall(r"`([^`]+)`", cells[1])
+            for cells in table_rows(mapping_section)
+            if "`" in cells[1]
+        }
+        baseline_section = doc.split("## Measurement, all seven paths, 2026-10-01", 1)[1]
+        baseline_section = baseline_section.split("\n## ", 1)[0]
+        baselines = {
+            cells[0]: float(re.search(r"([\d.]+)%", cells[3]).group(1))
+            for cells in table_rows(baseline_section)
+            if "%" in cells[3]
+        }
+        self.assertEqual(mapping, {name: prefixes for name, prefixes, _ in cpc.PATHS})
+        self.assertEqual(baselines, {name: baseline for name, _, baseline in cpc.PATHS})
 
     def test_exit_status_follows_the_verdict(self):
         with tempfile.TemporaryDirectory() as directory:
