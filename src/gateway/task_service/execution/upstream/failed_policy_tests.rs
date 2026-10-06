@@ -345,6 +345,8 @@ async fn a_secret_bearing_recovered_result_is_refused_by_the_firewall() {
         Some("Response blocked by security firewall"),
         "{wire}"
     );
+    // MIK-7667: the native path's -32600 refusal, not an internal error.
+    assert_eq!(wire.pointer("/error/code"), Some(&json!(-32600)), "{wire}");
     assert!(wire.pointer("/result").is_none_or(Value::is_null), "{wire}");
     assert!(
         !wire.to_string().contains(MARKER) && !stored_bytes(&directory).contains(MARKER),
