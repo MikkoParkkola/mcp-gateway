@@ -12,6 +12,12 @@ use url::Url;
 
 use super::{OAuthClient, TokenResponse, generate_pkce, generate_state, validate_issuer};
 
+/// How long a login waits for the person at the browser (MIK-7982). Not the
+/// backend's request `timeout`: an interactive login with MFA routinely takes
+/// longer than one request may.
+pub(crate) const OAUTH_AUTHORIZATION_WINDOW: std::time::Duration =
+    std::time::Duration::from_secs(300);
+
 impl OAuthClient {
     /// Attempt client-credentials grant (headless re-auth, no browser required).
     ///
@@ -339,6 +345,22 @@ impl OAuthClient {
     /// Returns an error if any step of the OAuth authorization flow fails
     /// (callback server, client registration, browser auth, or code exchange).
     pub async fn authorize(&self) -> Result<String> {
+        self.authorize_until(&tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    /// [`Self::authorize`], ended early by `cancel` (a restart or shutdown of
+    /// the backend). The callback wait is bounded by
+    /// [`OAUTH_AUTHORIZATION_WINDOW`] either way (MIK-7982).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::authorize`], plus [`Error::AuthorizationIncomplete`] when
+    /// the window passes and [`Error::AuthorizationCancelled`] on `cancel`.
+    pub(crate) async fn authorize_until(
+        &self,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<String> {
         let auth_meta = self
             .auth_metadata
             .as_ref()
@@ -389,7 +411,19 @@ impl OAuthClient {
         }
 
         // Wait for callback
-        let (actual_callback_url, callback_result) = callback_server.wait_for_callback().await?;
+        let (actual_callback_url, callback_result) = callback_server
+            .wait_within(OAUTH_AUTHORIZATION_WINDOW, cancel)
+            .await
+            .map_err(|unanswered| {
+                let backend = self.backend_name().to_string();
+                match unanswered {
+                    callback::Unanswered::Window => Error::AuthorizationIncomplete {
+                        backend,
+                        window_secs: OAUTH_AUTHORIZATION_WINDOW.as_secs(),
+                    },
+                    callback::Unanswered::Cancelled => Error::AuthorizationCancelled { backend },
+                }
+            })??;
 
         // RFC 9207, before the code is redeemed: a code that came from another
         // authorization server must not be sent to this one's token endpoint.

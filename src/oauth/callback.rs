@@ -94,6 +94,49 @@ impl CallbackServer {
         // The listeners have done their job; dropping `self` aborts them.
         result.map(|r| (std::mem::take(&mut self.callback_url), r))
     }
+
+    /// [`Self::wait_for_callback`], ended without an answer when `window`
+    /// passes or `cancel` fires (MIK-7982). On those ends the listeners are
+    /// closed before this returns, so the port is free for the next login.
+    pub(crate) async fn wait_within(
+        mut self,
+        window: std::time::Duration,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> std::result::Result<Result<(String, CallbackResult)>, Unanswered> {
+        let unanswered = tokio::select! {
+            answer = &mut self.receiver => {
+                let result = answer
+                    .map_err(|_| Error::OAuth("Callback channel closed unexpectedly".to_string()))
+                    .and_then(|r| r);
+                return Ok(result.map(|r| (std::mem::take(&mut self.callback_url), r)));
+            }
+            () = tokio::time::sleep(window) => Unanswered::Window,
+            () = cancel.cancelled() => Unanswered::Cancelled,
+        };
+        self.shutdown().await;
+        Err(unanswered)
+    }
+
+    /// Abort every listener and wait until each has let go of its socket.
+    /// Dropping alone frees a port only on the listener's next poll.
+    async fn shutdown(mut self) {
+        let handles = std::mem::take(&mut self.server_handles);
+        for handle in &handles {
+            handle.abort();
+        }
+        for handle in handles {
+            let _ = handle.await;
+        }
+    }
+}
+
+/// How a bounded callback wait ended without an answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unanswered {
+    /// The authorization window passed.
+    Window,
+    /// The login was cancelled (restart or shutdown of its backend).
+    Cancelled,
 }
 
 impl Drop for CallbackServer {
