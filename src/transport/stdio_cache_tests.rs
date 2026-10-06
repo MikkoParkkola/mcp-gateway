@@ -490,3 +490,25 @@ fn only_an_absolute_cache_directory_is_repairable() {
     let absolute = std::env::temp_dir().join("pkg-cache").join("b");
     assert_eq!(cache::absolute(absolute.clone()), Some(absolute));
 }
+
+#[test]
+fn a_live_cache_name_never_holds_a_dot() {
+    // The startup sweep deletes entries whose name contains ".tombstone-", so a
+    // live cache name must never contain a "." whatever the backend is called.
+    for name in [
+        "a.b",
+        "team.alpha",
+        "..",
+        "x.tombstone-1-0",
+        "émoji.🙂",
+        "plain",
+    ] {
+        let env = isolated_package_manager_env(name, "npx -y some-server", HashMap::new());
+        let leaf = std::path::Path::new(&env["npm_config_cache"])
+            .file_name()
+            .expect("a cache directory has a name")
+            .to_string_lossy()
+            .into_owned();
+        assert!(!leaf.contains('.'), "{name:?} became {leaf:?}");
+    }
+}
