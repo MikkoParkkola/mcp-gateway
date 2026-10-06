@@ -54,7 +54,7 @@ fn sweep4_discovery_json_redacts_command_and_url() {
         DiscoverySource::Environment,
         TransportConfig::Http {
             http_url: format!("https://user:{CANARY}@api.example.com/mcp?t={CANARY}"),
-            streamable_http: false,
+            streamable_http: Some(false),
             protocol_version: None,
         },
         ServerMetadata::default(),

@@ -422,6 +422,9 @@ jobs:
 
   windows-check:
     name: Windows check
+    # Waits for the Linux suite: a red head never takes one of the account's
+    # few concurrent runner slots for a Windows run that cannot pass.
+    needs: test
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: windows-2025
     steps:
@@ -1043,6 +1046,25 @@ jobs:
         run: python3 scripts/dev/test_check_file_size.py
       - name: Check the 800-line ceiling
         run: python3 scripts/dev/check-file-size.py
+
+  event-source-scope:
+    name: Event source leaves the events core alone (MIK-7720 U10)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    # Each new event source is one EventSource implementation: a change that
+    # adds one may add files under src/events/ and module declarations in
+    # src/events/mod.rs, nothing else there. The guard has no behaviour of its
+    # own to see red, so its self-test runs first and must refuse a synthetic
+    # source change that edits a core file.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check the guard refuses what it claims to
+        run: python3 scripts/dev/test_check_event_source_scope.py
+      - name: Check this change against its base
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/dev/check-event-source-scope.py "origin/${{ github.base_ref }}"
 
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)

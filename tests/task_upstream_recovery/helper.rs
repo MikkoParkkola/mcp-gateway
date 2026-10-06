@@ -296,7 +296,7 @@ pub fn write_config(root: &Path, fixture: &Fixture<'_>) -> PathBuf {
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: fixture.backend_url.to_string(),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             timeout: Duration::from_secs(10),

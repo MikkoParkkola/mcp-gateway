@@ -404,7 +404,7 @@ pub(crate) async fn register(state: &Arc<AppState>, backend: &Arc<CountedBackend
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: format!("http://{addr}/mcp"),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             timeout: Duration::from_secs(10),
