@@ -79,7 +79,8 @@ impl Backend {
                 callback_path: oauth_config.callback_path.clone(),
                 token_refresh_buffer_secs: oauth_config.token_refresh_buffer_secs,
             },
-        );
+        )
+        .with_login_gate(Arc::clone(&self.login_gate));
 
         #[cfg(test)]
         let oauth = match seam {

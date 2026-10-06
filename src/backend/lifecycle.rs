@@ -95,6 +95,7 @@ impl Backend {
             budgets: super::ShutdownBudgets::default(),
             starts_in_flight: std::sync::atomic::AtomicUsize::new(0),
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
+            login_gate: Arc::default(),
             destination: std::sync::OnceLock::new(),
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),

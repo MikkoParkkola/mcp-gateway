@@ -220,6 +220,9 @@ pub struct Backend {
     /// that start built may still be alive somewhere (pooled, closing, held
     /// by a request), so a hardened pairing refuses this backend (MIK-7700).
     connected_unpinned: std::sync::atomic::AtomicBool,
+    /// The one interactive login at a time every start of this backend
+    /// shares (MIK-7982).
+    pub(crate) login_gate: Arc<crate::oauth::login_gate::LoginGate>,
     /// A test's pause point in an HTTP start, after it read the policy it
     /// builds under and before it builds anything from it or
     /// [`Backend::begin_connecting`] checks and marks.

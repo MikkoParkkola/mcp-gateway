@@ -75,7 +75,7 @@ impl HttpTransport {
                 // If we don't have a valid token, trigger authorization flow
                 if !oauth.has_valid_token() {
                     info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&base_url_for_task), "OAuth required - initiating authorization flow");
-                    oauth.authorize().await?;
+                    oauth.authorize_shared().await?;
                 }
 
                 Ok::<String, crate::Error>(oauth.backend_name().to_string())

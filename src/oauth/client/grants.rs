@@ -349,6 +349,53 @@ impl OAuthClient {
             .await
     }
 
+    /// This client sharing `gate` with every other client of its backend.
+    #[must_use]
+    pub(crate) fn with_login_gate(
+        mut self,
+        gate: std::sync::Arc<crate::oauth::login_gate::LoginGate>,
+    ) -> Self {
+        self.login_gate = Some(gate);
+        self
+    }
+
+    /// Authorize through the backend's login gate (MIK-7982): lead a login if
+    /// none is in flight, or wait on the one that is and share its end. The
+    /// leader records the end on the gate itself, so a caller that gave up
+    /// loses nothing: this runs inside the start's detached OAuth task.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::authorize_until`]; a joiner gets the led login's typed
+    /// outcome, or an OAuth error if the led login stored no token.
+    pub(crate) async fn authorize_shared(&self) -> Result<String> {
+        use crate::oauth::login_gate::Begin;
+        let Some(gate) = &self.login_gate else {
+            return self.authorize().await;
+        };
+        match gate.begin() {
+            Begin::Lead(attempt) => {
+                let result = self.authorize_until(attempt.cancel_token()).await;
+                gate.end(&attempt, result.as_ref().err());
+                result
+            }
+            Begin::Join(attempt) => {
+                if let Some(outcome) = attempt.finished().await {
+                    return Err(outcome.to_error(self.backend_name()));
+                }
+                let token = self
+                    .storage
+                    .load(&self.credential_key()?, &self.resource_url)
+                    .ok_or_else(|| {
+                        Error::OAuth("the shared login completed but stored no token".to_string())
+                    })?;
+                let access = token.access_token.clone();
+                *self.current_token.write() = Some(token);
+                Ok(access)
+            }
+        }
+    }
+
     /// [`Self::authorize`], ended early by `cancel` (a restart or shutdown of
     /// the backend). The callback wait is bounded by
     /// [`OAUTH_AUTHORIZATION_WINDOW`] either way (MIK-7982).

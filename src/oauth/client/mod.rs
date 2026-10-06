@@ -123,6 +123,10 @@ pub struct OAuthClient {
     /// Backend name (for storage key)
     backend_name: String,
 
+    /// The backend's one-login-at-a-time gate, shared by every client the
+    /// backend builds (MIK-7982). `None` authorizes ungated.
+    login_gate: Option<Arc<super::login_gate::LoginGate>>,
+
     /// Resource URL (MCP endpoint)
     resource_url: String,
 
@@ -282,6 +286,7 @@ impl OAuthClient {
             http_client,
             loopback_client: destination::loopback_client().ok(),
             backend_name,
+            login_gate: None,
             resource_url,
             oauth_base_url: None,
             auth_metadata: None,
@@ -482,7 +487,7 @@ impl OAuthClient {
         }
 
         // Need to authorize from scratch
-        let token = self.authorize().await?;
+        let token = self.authorize_shared().await?;
         Ok(token)
     }
 
