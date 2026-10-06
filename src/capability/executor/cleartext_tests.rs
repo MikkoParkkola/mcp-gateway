@@ -58,6 +58,44 @@ fn a_credential_bearing_cleartext_endpoint_is_refused_at_load() {
     );
 }
 
+/// A fallback provider sends the same credential as the primary, so a
+/// cleartext fallback is refused at load even behind an `https://` primary.
+#[test]
+fn a_credential_bearing_cleartext_fallback_is_refused_at_load() {
+    let error = validate_capability(
+        &parse_capability(
+            "
+name: cleartext_probe
+description: probe
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://api.example.com
+      path: /v1/items
+      method: GET
+  fallback:
+    - service: rest
+      config:
+        base_url: http://mirror.example.com
+        path: /v1/items
+        method: GET
+auth:
+  required: true
+  type: bearer
+  key: env:MCP_GW_CLEARTEXT_PROBE
+",
+        )
+        .expect("parses"),
+    )
+    .expect_err("a cleartext fallback is refused")
+    .to_string();
+    assert!(
+        error.contains("providers.fallback[0].config.base_url"),
+        "{error}"
+    );
+}
+
 #[test]
 fn loopback_https_templated_and_credential_free_urls_still_load() {
     for (url_line, auth_required) in [

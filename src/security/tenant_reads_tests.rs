@@ -174,3 +174,67 @@ fn a_tenant_committed_and_pending_counts_once() {
         "the 201st tenant was pushed to overflow by a double count"
     );
 }
+
+/// `n` live principals, each holding tenant "a" under a held ticket, so none
+/// is idle to evict.
+fn fill_live(history: &Arc<ReadHistory>, n: usize) -> Vec<Reservation> {
+    (0..n)
+        .map(|i| {
+            history
+                .reserve(&format!("live-{i}"), &tenant("a"), WINDOW, false)
+                .expect("room below the cap")
+        })
+        .collect()
+}
+
+/// MIK-7975 CAP.1: the principal map never holds more than `MAX_PRINCIPALS`
+/// under concurrent first frames for distinct keys. One below the cap, with
+/// every principal live so nothing is idle to evict, 64 threads released
+/// together each bring a new key; at most one may be admitted.
+#[test]
+fn concurrent_new_principals_never_pass_the_cap() {
+    const RACERS: usize = 64;
+    for round in 0..4 {
+        let history = ReadHistory::shared();
+        let held = fill_live(&history, MAX_PRINCIPALS - 1);
+        let start = Arc::new(std::sync::Barrier::new(RACERS));
+        let racers: Vec<_> = (0..RACERS)
+            .map(|n| {
+                let (history, start) = (Arc::clone(&history), Arc::clone(&start));
+                std::thread::spawn(move || {
+                    start.wait();
+                    history.reserve(&format!("new-{n}"), &tenant("a"), WINDOW, false)
+                })
+            })
+            .collect();
+        let admitted: Vec<_> = racers.into_iter().map(|r| r.join().unwrap()).collect();
+        assert!(
+            history.principals.len() <= MAX_PRINCIPALS,
+            "round {round}: {} principals, cap {MAX_PRINCIPALS}",
+            history.principals.len()
+        );
+        assert_eq!(
+            admitted.iter().filter(|a| a.is_some()).count(),
+            1,
+            "round {round}: the one free place is taken exactly once"
+        );
+        drop((held, admitted));
+    }
+}
+
+/// MIK-7975 CAP.1: a key another first frame admitted meanwhile is found, not
+/// counted again, when the map is full: the cap applies only to a new key.
+#[test]
+fn a_key_admitted_meanwhile_is_found_at_a_full_cap() {
+    let history = ReadHistory::shared();
+    let mut held = fill_live(&history, MAX_PRINCIPALS - 1);
+    let a = tenant("a");
+    held.push(reserve(&history, &a));
+    let hash = a.tenants.first().expect("one hashed tenant");
+    let found = history
+        .admit(KEY, history.now(), WINDOW)
+        .map(|principal| principal.holds(hash));
+    assert_eq!(found, Some(true), "KEY is present and live");
+    assert_eq!(history.principals.len(), MAX_PRINCIPALS);
+    drop(held);
+}

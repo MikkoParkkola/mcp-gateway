@@ -258,29 +258,17 @@ impl ProxyManager {
         // see another's prompt and answer on their behalf — including the
         // destructive-action confirmation, which made that gate a lottery
         // rather than a control on a gateway with more than one client.
-        if !self.multiplexer.send_to_session(session_id, notification) {
+        let Some(watch) = self
+            .multiplexer
+            .send_request_to_session(session_id, notification)
+        else {
             // The entry was registered before the send; an undeliverable
             // prompt has no responder, so nothing would ever remove it.
             self.cancel_pending(&id);
             return Err(SamplingError::NoSession);
-        }
+        };
         debug!(%id, session_id = %session_fp(session_id), "Sent sampling/createMessage to the originating session");
-
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(response)) => {
-                debug!(%id, "Received sampling response from client");
-                Ok(response)
-            }
-            Ok(Err(_recv_err)) => {
-                self.cancel_pending(&id);
-                Err(SamplingError::Cancelled)
-            }
-            Err(_timeout) => {
-                self.cancel_pending(&id);
-                warn!(%id, timeout = ?timeout, "Sampling request timed out");
-                Err(SamplingError::Timeout(timeout))
-            }
-        }
+        self.await_reply(&id, rx, &watch, timeout).await
     }
 
     // ========================================================================
@@ -323,29 +311,17 @@ impl ProxyManager {
 
         // To the originating session only, for the same reason as sampling: a
         // confirmation another client can answer is not a confirmation.
-        if !self.multiplexer.send_to_session(session_id, notification) {
+        let Some(watch) = self
+            .multiplexer
+            .send_request_to_session(session_id, notification)
+        else {
             // Same reason as sampling: registered before the send, and an
             // undeliverable prompt never reaches a responder that clears it.
             self.cancel_pending(&id);
             return Err(SamplingError::NoSession);
-        }
+        };
         debug!(%id, session_id = %session_fp(session_id), "Sent elicitation/create to the originating session");
-
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(response)) => {
-                debug!(%id, "Received elicitation response from client");
-                Ok(response)
-            }
-            Ok(Err(_recv_err)) => {
-                self.cancel_pending(&id);
-                Err(SamplingError::Cancelled)
-            }
-            Err(_timeout) => {
-                self.cancel_pending(&id);
-                warn!(%id, timeout = ?timeout, "Elicitation request timed out");
-                Err(SamplingError::Timeout(timeout))
-            }
-        }
+        self.await_reply(&id, rx, &watch, timeout).await
     }
 
     // ========================================================================
@@ -449,26 +425,47 @@ impl ProxyManager {
             event_id: Some(self.multiplexer.next_event_id()),
         };
 
-        if !self.multiplexer.send_to_session(session_id, notification) {
+        let Some(watch) = self
+            .multiplexer
+            .send_request_to_session(session_id, notification)
+        else {
             // Registered before the send; an undeliverable request has no
             // responder, so nothing would ever remove the entry.
             self.cancel_pending(&id);
             return Err(SamplingError::NoSession);
-        }
+        };
         debug!(%id, session_id = %session_fp(session_id), "Sent roots/list to the originating session");
+        self.await_reply(&id, rx, &watch, timeout).await
+    }
 
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(_recv_err)) => {
-                self.cancel_pending(&id);
-                Err(SamplingError::Cancelled)
+    /// `id`'s reply, its timeout, or every queued copy withheld at write
+    /// (a failed audit record), which ends the wait at once (MIK-7975 WAIT.1).
+    async fn await_reply(
+        &self,
+        id: &str,
+        rx: oneshot::Receiver<Value>,
+        watch: &crate::gateway::streaming::DeliveryWatch,
+        timeout: Duration,
+    ) -> Result<Value, SamplingError> {
+        let outcome = tokio::select! {
+            replied = tokio::time::timeout(timeout, rx) => match replied {
+                Ok(Ok(response)) => {
+                    debug!(%id, "Received a response from the client");
+                    return Ok(response);
+                }
+                Ok(Err(_recv_err)) => SamplingError::Cancelled,
+                Err(_timeout) => {
+                    warn!(%id, timeout = ?timeout, "Request to the client timed out");
+                    SamplingError::Timeout(timeout)
+                }
+            },
+            () = watch.failed() => {
+                warn!(%id, "Request withheld from the client's stream");
+                SamplingError::SendFailed
             }
-            Err(_timeout) => {
-                self.cancel_pending(&id);
-                warn!(%id, timeout = ?timeout, "roots/list request timed out");
-                Err(SamplingError::Timeout(timeout))
-            }
-        }
+        };
+        self.cancel_pending(id);
+        Err(outcome)
     }
 
     /// Tell the sessions whose caller may access `backend` that its tools changed.
@@ -568,9 +565,12 @@ impl ClientChannel for ProxyManager {
 
         // To the originating session only, for the same reason as sampling and
         // elicitation: a prompt another client can answer is not a prompt.
-        if !self.multiplexer.send_to_session(session_id, notification) {
+        let Some(watch) = self
+            .multiplexer
+            .send_request_to_session(session_id, notification)
+        else {
             return Err(DeliveryError::NoSession);
-        }
+        };
         // MIK-7887.RECEIPT.3: in the live session's stream is delivered as far
         // as this channel can tell (SSE has no write acknowledgement), and it
         // stays delivered if the wait below is cancelled.
@@ -580,8 +580,13 @@ impl ClientChannel for ProxyManager {
         debug!(%id, session_id = %session_fp(session_id), %method, "Sent bridged request to the originating session");
 
         // A dropped sender means the entry went away without an answer, which
-        // is what the bridge's own timeout arm means by `TimedOut`.
-        rx.await.map_err(|_| DeliveryError::TimedOut)
+        // is what the bridge's own timeout arm means by `TimedOut`. Every copy
+        // withheld at write means nothing will come back either (MIK-7975
+        // WAIT.1); `NoSession` would send the legacy bridge to re-ask round one.
+        tokio::select! {
+            replied = rx => replied.map_err(|_| DeliveryError::TimedOut),
+            () = watch.failed() => Err(DeliveryError::TimedOut),
+        }
     }
 }
 

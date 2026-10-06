@@ -254,6 +254,7 @@ impl Services {
             caller: subject.principal,
             external_server: subject.backend,
             external_tool: subject.name,
+            subject: None,
         };
         match firewall.check_response_artifact(
             data,

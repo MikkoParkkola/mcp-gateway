@@ -151,6 +151,49 @@ def main() -> int:
             check(f"the runner refuses a graded measure into a dir holding {leftover}",
                   done.returncode == 3 and "fresh run dir" in done.stderr, done.stderr[-200:])
 
+    # Release baselines (MIK-7675): cell A must be v3.5.0 and cell B v3.5.1, by
+    # commit, before a verdict reads as the release grade. The fixture SHAs
+    # above are placeholders, so every run built so far is a repurposed one.
+    release = {"A": ("3.5.0", "32f135a61fb50c20a044fb4c2347bc1cf8015d89"),
+               "B": ("3.5.1", "e138680a542b41fa156a94a1ffc9decd9692be77")}
+
+    def eval_both(run: Path) -> tuple[int, str, int, dict]:
+        plain = subprocess.run([sys.executable, str(HERE / "eval_workload.py"), str(run)],
+                               capture_output=True, text=True)
+        report = json.loads((run / "verdict.json").read_text())
+        graded_rc = subprocess.run([sys.executable, str(HERE / "eval_workload.py"), "--graded", str(run)],
+                                   capture_output=True, text=True).returncode
+        return plain.returncode, plain.stderr, graded_rc, report
+
+    def release_run(run: Path, cells: dict) -> tuple[int, str, int, dict]:
+        saved = dict(tev.CELLS)
+        tev.CELLS.update(cells)
+        try:
+            graded_run(run, planned)
+        finally:
+            tev.CELLS.clear()
+            tev.CELLS.update(saved)
+        return eval_both(run)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        rc, err, graded_rc, report = release_run(Path(tmp), release)
+        check("verdict.json records every cell's checkout and version",
+              report.get("cell_refs") == {c: {"checkout_sha": s, "health_version": v}
+                                          for c, (v, s) in {**tev.CELLS, **release}.items()},
+              str(report.get("cell_refs")))
+        check("release baselines on the plan grade PASS as before", rc == 0 and graded_rc == 0,
+              f"rc={rc} graded={graded_rc}")
+        check("release baselines read as a release grade",
+              report.get("release_grade") is True and "NOT A RELEASE GRADE" not in err, err[-200:])
+    for name, cells in (("cell A repurposed", {"B": release["B"]}),
+                        ("cell B repurposed", {"A": release["A"]})):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, err, graded_rc, report = release_run(Path(tmp), cells)
+            check(f"{name}: the verdict itself is unchanged", rc == 0, f"rc={rc}")
+            check(f"{name}: labelled not a release grade",
+                  report.get("release_grade") is False and "NOT A RELEASE GRADE" in err, err[-200:])
+            check(f"{name}: --graded refuses it as VOID", graded_rc == 3, f"graded={graded_rc}")
+
     print(f"\n{len(FAILURES)} failure(s)")
     return 1 if FAILURES else 0
 

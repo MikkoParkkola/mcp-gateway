@@ -194,6 +194,35 @@ class Check(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("changelog.d/1.fixed.md", errors[0])
 
+    def test_one_add_exempts_one_delete_of_its_number(self):
+        # MIK-7946 finding 2: two entries under one number retyped into one
+        # loses the other; a retype pairs one deletion with one addition.
+        changes = [
+            ("D", "changelog.d/2081.changed.md"),
+            ("D", "changelog.d/2081.fixed.md"),
+            ("A", "changelog.d/2081.security.md"),
+        ]
+        errors = cf.check(changes, set())
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("without folding", errors[0])
+        # Control: two retyped under two additions pass.
+        changes.append(("A", "changelog.d/2081.added.md"))
+        self.assertEqual(cf.check(changes, set()), [])
+
+    def test_a_retype_is_not_the_new_entry_a_shipped_change_needs(self):
+        # MIK-7946 finding 3: the add half of a retype replaces an old entry.
+        changes = [
+            ("M", "src/a.rs"),
+            ("D", "changelog.d/1.fixed.md"),
+            ("A", "changelog.d/1.security.md"),
+        ]
+        errors = cf.check(changes, set())
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("adds no changelog.d", errors[0])
+        # Control: a new fragment beside the retype satisfies it.
+        changes.append(("A", "changelog.d/3.fixed.md"))
+        self.assertEqual(cf.check(changes, set()), [])
+
 
 class CheckAgainstGit(unittest.TestCase):
     """`check` end to end: the git diff, the fragment listing and labels."""

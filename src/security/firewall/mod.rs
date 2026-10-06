@@ -339,6 +339,7 @@ impl Firewall {
                 caller,
                 external_server: server,
                 external_tool: tool,
+                subject: None,
             };
             let tenants = self.tenant_guard.request_tenants(args);
             audit.log_request_attributed(&labels, args, &verdict, &tenants);
@@ -459,8 +460,9 @@ impl Firewall {
             budget_guard::BudgetVerdict::Unattributable => {
                 // Same failure shape as an unobservable anomaly check: a
                 // budget with nothing to key on cannot protect, so it must
-                // say so rather than counting every anonymous caller into one
-                // shared bucket that reports success.
+                // say so rather than count it under a key nobody chose. The
+                // one deliberate shared key is the keyless session-less
+                // caller (MIK-7971), which arrives here as an identity.
                 findings.push(Finding {
                     scan_type: ScanType::BudgetExceeded,
                     severity: Severity::High,
@@ -499,6 +501,7 @@ impl Firewall {
             caller,
             external_server: server,
             external_tool: tool,
+            subject: None,
         };
         // The compatibility API always supplies one target. Keep the defensive
         // error branch fail-closed rather than panicking at an inspection boundary.

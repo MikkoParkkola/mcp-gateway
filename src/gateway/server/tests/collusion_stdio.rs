@@ -586,3 +586,67 @@ async fn stdio_catalogue_is_inside_relay_detection() {
         "the operator's catalogue read records a receipt"
     );
 }
+
+/// A refusal the gateway builds before dispatch (here, a request with no
+/// method) is judged and sent as the gateway wrote it: the client's id, the
+/// gateway's code and words, and no result, so it delivers nothing a receipt
+/// could describe.
+#[tokio::test]
+async fn stdio_gateway_built_refusal_is_sent_as_written() {
+    use crate::gateway::server::stdio_delivery::StdioAnswer;
+    use crate::gateway::server::{Gateway, StdioClient, StdioTelemetry};
+    let (meta, _firewall, _cell) = judged_stdio(None);
+    let reads = meta.stdio_reads();
+    let policy = Arc::new(crate::security::ToolPolicy::default());
+    let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
+        &crate::mtls::MtlsConfig::default(),
+    ));
+    let client = StdioClient {
+        session_id: SESSION,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
+        handshake_capabilities: crate::protocol::meta::Declared::NONE,
+        tasks: None,
+        modern: false,
+    };
+    let ((answer, staged), hidden) = crate::gateway::outbound::read_scoped(
+        reads.guard(),
+        Box::pin(Gateway::dispatch_single_staged(
+            &meta,
+            &policy,
+            &mtls,
+            json!({"jsonrpc": "2.0", "id": 7}),
+            client,
+            &StdioTelemetry::default(),
+        )),
+    )
+    .await;
+    let answer = answer.expect("a request with an id is answered");
+    assert!(
+        matches!(answer, StdioAnswer::Built(_)),
+        "a parse refusal is built before anything runs"
+    );
+    let frame = Gateway::judge_and_commit(
+        &meta,
+        &reads,
+        SESSION,
+        (answer, None, hidden.as_ref()),
+        staged,
+    )
+    .await;
+    assert!(!frame.delivers_result(), "a refusal delivers no result");
+    assert!(
+        frame.assessment().is_some(),
+        "the built answer must pass through the judge, not around it"
+    );
+    assert_eq!(frame.answer_id(), Some(RequestId::Number(7)));
+    let document = frame
+        .answer_document()
+        .expect("the frame answers the request")
+        .expect("the answer serializes");
+    assert_eq!(document.pointer("/error/code"), Some(&json!(-32600)));
+    assert_eq!(
+        document.pointer("/error/message"),
+        Some(&json!("Missing method"))
+    );
+    assert!(document.get("result").is_none(), "{document}");
+}

@@ -79,6 +79,16 @@ class CheckSecurityFragments(unittest.TestCase):
     def test_a_whitespace_or_emphasis_only_value_fails(self):
         self.assertEqual(len(run({"1.security.md": "- X. Affects: ** . Operator action: none.\n"})), 1)
 
+    def test_a_punctuation_only_value_fails(self):
+        # MIK-7946 finding 1: a value must say something, in letters or digits.
+        for value in ("--", "??", "-- ...", "(!)"):
+            text = f"- X. Affects: {value}. Operator action: none.\n"
+            out = run({"1.security.md": text})
+            self.assertEqual(len(out), 1, text)
+            self.assertIn("empty 'Affects'", out[0])
+        # Control: a short real value passes.
+        self.assertEqual(run({"1.security.md": "- X. Affects: 3.x. Operator action: none.\n"}), [])
+
     def test_unverified_anywhere_in_any_affects_clause_fails(self):
         for text in ("- X. Affects: **UNVERIFIED**. Operator action: none.\n",
                      "- X. Affects: 3.x. Affects: still unverified. Operator action: none.\n",

@@ -174,6 +174,10 @@ backend" and "fails a capability file" first.**
 | 147 | A capability whose declared output root is not object-shaped (an array, a string, a type list) advertises `outputSchema` as an object and publishes `structuredContent` under `items` | Read `structuredContent.items` for the nine shipped capabilities listed below, and for your own; the text content is unchanged |
 | 148 | An `http_url` backend with no `streamable_http` key POSTs `initialize` first and falls back to the legacy SSE `GET` only when that POST is refused with a 4xx that is not about the credential or a retry (any but 401, 403, 407, 408, 429); `add --url` no longer writes `streamable_http: false`. An explicit `true` or `false` is tried first, and when the server refuses it with such a 4xx the other transport is tried once, with a warning naming the backend and the value to set. `TransportConfig::Http::streamable_http` is now `Option<bool>` | None. A config the old `add --url` wrote keeps working; to skip the refused request, set the value the warning names or remove the key. A backend with the key unset is refused MCP Events even when it connects over Streamable HTTP, since eligibility is read from config: set `streamable_http: true` to offer them |
 | 149 | A meta-tool result whose payload says `isError: true` (a failed `gateway_invoke`, or a backend's own tool error) carries `isError: true` on the outer `tools/call` result; it was always `false`, with the failure only in the text | A client that read failure from the text alone keeps working; one that treated `isError: true` as a protocol failure should read the text and its `recovery` hint instead |
+| 150 | `mcp_gateway::cli::invoke::resolve_args` takes a fourth parameter, `kv_schema: Option<&Value>`: `key=value` text is typed by that input schema; `None` keeps the old behaviour | An embedder passes the tool's input schema, or `None` |
+| 151 | A legacy client that calls without a credential (authentication off, or on with the path in `auth.public_paths`, as `/mcp` is in the shipped presets) and does not resume a session the gateway issued is counted under one shared identity by the anomaly detector, the tenant guard and the call budget; in 3.x each such request was a new session and the first call in it | None unless these controls refuse such clients: give them a credential, have them keep the `mcp-session-id` from `initialize`, or raise the limit |
+| 152 | A weekday step `*/n` in a cron expression matches only the days `n` divides; the old match also tried each day plus 7, so `*/2` matched every day and `*/3` to `*/13` (except `*/7`) matched extra days; `*/1`, `*/7` and `*/14` up are unchanged | Check each scheduled job and `schedule.tick` subscription whose weekday field uses `/`; one meant to run daily uses `*` |
+| 153 | Two credentials that resolve to one principal (the same key listed twice, or two digests sharing their first 48 bits) are refused at load, reload and startup | Remove the duplicate entry, or replace one of the two credentials |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3999,6 +4003,69 @@ the text.
 A client that read failure from the text alone keeps working. One that treated
 `isError: true` as a protocol failure should read the text and its `recovery`
 hint instead.
+
+## 150. `resolve_args` takes the tool's input schema
+
+**Startup:** no notice
+
+`mcp_gateway::cli::invoke::resolve_args` gains a fourth parameter,
+`kv_schema: Option<&Value>`. With a schema, a `key=value` value is typed by it as a
+gateway call coerces it (`count=007` against an integer is `7`, `flag=TRUE` against a boolean is
+`true`, `zip=007` against a string stays `"007"`); JSON from `--args` or stdin is left as
+written. `None` keeps the old behaviour. `mcp-gateway invoke` passes the tool's schema.
+
+## 151. Keyless legacy clients without a session share one anomaly history
+
+**Startup:** no notice
+
+This applies when `security.firewall.anomaly_detection` is on, `anomaly_block_threshold` is
+set, and legacy clients call the gateway without a credential: either authentication is off,
+or it is on and the path they call is listed in `auth.public_paths` (the shipped presets list
+`/mcp`). In 3.x such a client that sent no `mcp-session-id` was given a new session on every
+request. Anomaly scoring followed that session, so each call was the first in its session: it
+scored 0.5 and built no history, and a block threshold above 0.5 never blocked it. In 4.0
+every keyless legacy request that does not resume a session the gateway issued is scored as
+one shared caller. The calls of all such clients form one sequence, and the block threshold
+applies to them together. A client that keeps the `mcp-session-id` its `initialize` returned
+keeps its own history, as before, and a client that presents an API key or token is scored
+under its own credential.
+
+If such clients are now refused, give them a credential (turn authentication on, or have them
+present a key on a public path), have them reuse their session, raise
+`anomaly_block_threshold`, or remove it to log without blocking. The 4.0 tenant guard
+(`tenant_guard`) and call budget (`budget`) count these clients the same way.
+
+## 152. A stepped weekday field in a cron expression matches only its own days
+
+**Startup:** no notice, scheduled jobs and `schedule.tick` timers with a weekday step from `*/2` to `*/13`, other than `*/7`, fire on fewer days
+
+A weekday step `*/n` matches a day when `n` divides its number (Sunday 0 to
+Saturday 6). The scheduler also tested each day's number plus 7, meant as
+Sunday's alias, so a step matched a day when `n` divided either number:
+`0 9 * * */2` ran every day, and `*/3` ran on five days instead of three. It
+now tests 7 for Sunday only, so `*/2` matches Sunday, Tuesday, Thursday and
+Saturday, as cron defines it. `*/8` to `*/13` each lose one day. `*/1`, `*/7`
+and `*/14` or more match the same days as before.
+3.x had the same behaviour.
+
+Check every scheduled job and `schedule.tick` subscription whose weekday field
+uses `/`. If it was meant to run every day, use `*` instead.
+
+## 153. Two credentials may not share one principal
+
+**Startup:** no notice, the start is refused with its own error, which names both credentials; refuses to start
+
+A configured bearer token or API key is identified by the first 48 bits of its SHA-256 digest,
+and sessions, grants, journals and task owners are keyed on that principal. Two credentials
+with the same principal, such as one key listed twice under two names, were one caller: in
+3.5.0 and 3.5.1 each could attach to the other's sessions, and in the 4.0.0 pre-releases each
+could also read and cancel the other's tasks. Config load, reload and startup now refuse such
+a configuration, naming the two credentials and never a secret or digest. The check covers
+the bearer token and API keys configured together. Identities issued at runtime, such as
+key-server tokens minted for an OIDC sign-in, are not checked, nor is a principal that a
+removed credential once held. The principal encoding is unchanged, so existing sessions,
+grants and tasks stay readable. Remove the duplicate entry, or replace one of the two
+credentials.
 
 ## Upgrading from 3.5.x: a walkthrough
 
