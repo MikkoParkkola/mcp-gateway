@@ -1717,6 +1717,19 @@ CASES += [
     ("full-burst-runs-another-test", "mrtr7b-full-burst.yml",
      "            mik_7479_full_burst_every_call_reaches_one_terminal_frame --nocapture",
      "            mik_7479_one_call_reaches_one_terminal_frame --nocapture", CAUGHT),
+    # MIK-7835: a source PR compiles on both declared toolchains, fatally.
+    ("release-compile-drops-the-dockerfile-row", "docker.yml",
+     "        source: [dockerfile, rust-version]\n", "        source: [rust-version]\n", CAUGHT),
+    ("release-compile-drops-the-rust-version-row", "docker.yml",
+     "        source: [dockerfile, rust-version]\n", "        source: [dockerfile]\n", CAUGHT),
+    ("release-compile-tolerated", "docker.yml",
+     "      - name: Compile as the image does (release, locked, default features)\n",
+     "      - name: Compile as the image does (release, locked, default features)\n"
+     "        continue-on-error: true\n", CAUGHT),
+    ("release-compile-not-selected-by-source", "docker.yml",
+     "            compile true \"source changed\"\n", "            echo \"source changed\"\n", CAUGHT),
+    ("release-compile-ungated-off", "docker.yml",
+     "    if: needs.scope.outputs.compile_check == 'true'\n", "    if: false\n", CAUGHT),
     # MIK-7678: the recursion margin runs in a required job, fatally.
     ("recursion-margin-dropped", "ci.yml", "        run: scripts/ci/check-recursion-margin.sh\n",
      "        run: echo skipped\n", CAUGHT),

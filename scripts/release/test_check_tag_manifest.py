@@ -1630,6 +1630,33 @@ class WorkflowWiring(unittest.TestCase):
             self.assertIn(setting, step, "the recipe smoke must run the image this job built")
         self.assertNotRegex(step, r"continue-on-error:\s*true", "the recipe smoke must be fatal")
 
+    def test_a_source_pull_request_compiles_on_both_declared_toolchains(self):
+        # MIK-7835: a source-only PR into the release line does not build the
+        # image before merge, so it must at least compile as the image does, on
+        # the Dockerfile's toolchain and on the declared rust-version.
+        body = jobs("docker.yml").get("release-compile", "")
+        self.assertTrue(body, "docker.yml: the release-compile job is gone")
+        self.assertRegex(body, r"(?m)^    needs: scope$")
+        self.assertRegex(body, r"(?m)^    if: needs\.scope\.outputs\.compile_check == 'true'$")
+        rows = re.search(r"(?m)^        source: \[([^\]]*)\]$", body)
+        self.assertTrue(rows, "release-compile has no source matrix")
+        self.assertEqual(
+            sorted(r.strip() for r in rows.group(1).split(",")),
+            ["dockerfile", "rust-version"],
+            "release-compile must compile on both the Dockerfile's toolchain and the rust-version",
+        )
+        self.assertIn("sed -n 's/^FROM rust:", body, "the Dockerfile row no longer reads the Dockerfile")
+        self.assertIn("sed -n 's/^rust-version = ", body, "the rust-version row no longer reads Cargo.toml")
+        self.assertRegex(body, r'(?m)^        run: cargo \+"\$TOOLCHAIN" check --release --locked$')
+        self.assertNotRegex(body, r"continue-on-error:\s*true", "the compile must be fatal")
+        scope = jobs("docker.yml")["scope"]
+        self.assertRegex(scope, r"compile_check: \$\{\{ steps\.decide\.outputs\.compile_check \}\}")
+        self.assertRegex(
+            scope,
+            r"grep -Eq '\^\(src/\|crates/[^']*' <<<\"\$files\"; then\s+compile true",
+            "a source change no longer selects the compile",
+        )
+
     def test_the_variant_index_is_composed_from_the_variant_legs(self):
         # Every gate downstream of this reads the index by digest and compares
         # it to itself, so an index composed from the base legs passes all of
