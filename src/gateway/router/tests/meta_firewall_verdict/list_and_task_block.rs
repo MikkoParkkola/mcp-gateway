@@ -141,6 +141,48 @@ async fn a_blocked_direct_tool_list_is_refused() {
     assert_eq!(inspections(&meta), 0);
 }
 
+/// #2349 (audit half): the direct route's refusal of a blocked tool list
+/// writes exactly one Block record to the firewall's audit log.
+#[tokio::test]
+async fn a_blocked_direct_tool_list_writes_one_block_record() {
+    let audit_dir = tempfile::tempdir().unwrap();
+    let audit_log = audit_dir.path().join("firewall-audit.jsonl");
+    let handler = Arc::new(Firewall::from_config(
+        crate::security::firewall::FirewallConfig {
+            enabled: true,
+            scan_responses: true,
+            scan_requests: false,
+            credential_redaction: true,
+            audit_log: Some(audit_log.clone()),
+            ..crate::security::firewall::FirewallConfig::default()
+        },
+        None,
+    ));
+    let meta = super::response_firewall(Vec::new());
+    let (state, _store) = super::state_with_firewalls(handler, meta).await;
+    state
+        .backends
+        .get("demo")
+        .expect("the fixture registers demo")
+        .set_transport_for_test(Arc::new(LeakyListTransport {
+            description: format!("echo; uses token {CANARY}"),
+        }) as Arc<dyn Transport>);
+    let body = json!({"jsonrpc": "2.0", "id": "d2", "method": "tools/list"});
+    let (_status, body) = post(&state, "/mcp/demo", &[], &body).await;
+    assert_refused(&body);
+    let blocks: Vec<Value> = std::fs::read_to_string(&audit_log)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["event"] == "response" && entry["action"] == "block")
+        .collect();
+    assert_eq!(
+        blocks.len(),
+        1,
+        "one Block record for the refusal: {blocks:?}"
+    );
+}
+
 /// #2350: `gateway_list_tools` (named server, then aggregate),
 /// `gateway_search_tools` and Code Mode `gateway_search` refuse a blocked
 /// listing at the canonical pass in the Meta-MCP; the refusal carries no
