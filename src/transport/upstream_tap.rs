@@ -471,11 +471,38 @@ pub(crate) trait UpstreamListen: Send + Sync {
         None
     }
 
-    /// Names the peer-side holder of legacy `resources/subscribe` state
-    /// beyond this transport instance (an HTTP session); `0` when the
-    /// instance is the holder.
-    fn holder(&self) -> u64 {
-        0
+    /// Where a legacy `resources/subscribe` sent now would land (D5).
+    /// The default names the transport instance alone as the holder.
+    fn legacy_pin(&self) -> LegacyPin {
+        LegacyPin::default()
+    }
+
+    /// `resources/subscribe` (or `unsubscribe`) of `uri` on exactly the
+    /// holder `pin` names, on this transport: never re-sent on a healed
+    /// session or another transport, so its answer is that holder's.
+    async fn legacy_interest(
+        self: std::sync::Arc<Self>,
+        pin: LegacyPin,
+        uri: &str,
+        subscribe: bool,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse>;
+}
+
+/// The holder a legacy call is pinned to: beyond the transport instance,
+/// an HTTP session, carried by the call and hashed for the ledger. The id
+/// itself (replayable) stays in memory and is never logged.
+#[derive(Clone, Default)]
+pub(crate) struct LegacyPin {
+    pub holder: u64,
+    pub session: Option<String>,
+}
+
+/// `resources/subscribe` or `resources/unsubscribe`.
+pub(crate) fn interest_method(subscribe: bool) -> &'static str {
+    if subscribe {
+        "resources/subscribe"
+    } else {
+        "resources/unsubscribe"
     }
 }
 

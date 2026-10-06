@@ -298,11 +298,11 @@ async fn a_replaced_backend_gets_a_fresh_ledger_carrying_its_interest() {
         Arc::new(std::collections::BTreeSet::new),
     );
     listeners.add("b", &watched("file:///a")).expect("room");
-    let first = Arc::clone(&listeners.backends.lock()["b"].ledger);
+    let first = listeners.backends.lock()["b"].ledger();
     assert!(registry.remove("b"));
     assert!(registry.register(offline("b")));
     listeners.add("b", &watched("file:///b")).expect("room");
-    let second = Arc::clone(&listeners.backends.lock()["b"].ledger);
+    let second = listeners.backends.lock()["b"].ledger();
     assert!(!Arc::ptr_eq(&first, &second), "fresh ledger");
     assert_eq!(second.lock().size().0, 2, "a carried, b admitted");
 }
@@ -318,9 +318,48 @@ async fn the_same_backend_keeps_its_ledger() {
         Arc::new(std::collections::BTreeSet::new),
     );
     listeners.add("b", &watched("file:///a")).expect("room");
-    let first = Arc::clone(&listeners.backends.lock()["b"].ledger);
+    let first = listeners.backends.lock()["b"].ledger();
     listeners.add("b", &watched("file:///b")).expect("room");
-    assert!(Arc::ptr_eq(&first, &listeners.backends.lock()["b"].ledger));
+    assert!(Arc::ptr_eq(
+        &first,
+        &listeners.backends.lock()["b"].ledger()
+    ));
+}
+
+/// D5 release point (d1 HIGH): a running task whose backend is replaced in
+/// the config moves to the replacement's ledger at its next session start,
+/// with no admission to trigger it; its counted interest moves along.
+#[tokio::test]
+async fn a_running_task_takes_the_replaced_backends_ledger_at_session_start() {
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(offline("b")));
+    let listeners = UpstreamListeners::new(
+        Arc::clone(&registry),
+        Weak::new(),
+        Arc::new(std::collections::BTreeSet::new),
+    );
+    listeners.add("b", &watched("file:///a")).expect("room");
+    let shared = Arc::clone(&listeners.backends.lock()["b"]);
+    let first = shared.ledger();
+    shared.refresh_ledger();
+    assert!(
+        Arc::ptr_eq(&first, &shared.ledger()),
+        "same backend, same ledger"
+    );
+    assert!(registry.remove("b"));
+    assert!(registry.register(offline("b")));
+    shared.refresh_ledger();
+    let second = shared.ledger();
+    assert!(!Arc::ptr_eq(&first, &second), "fresh ledger");
+    assert_eq!(
+        second.lock().size().0,
+        1,
+        "the watched URI took a key there"
+    );
+    assert!(
+        Arc::ptr_eq(&second, &listeners.ledger("b")),
+        "the map and the task agree"
+    );
 }
 
 #[path = "upstream_listener_revive_tests.rs"]

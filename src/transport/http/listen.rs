@@ -21,8 +21,9 @@ use super::{HeaderMode, HttpTransport, finalise_modern_headers, with_modern_meta
 use crate::protocol::{JsonRpcMessage, RequestId};
 use crate::security::http_diagnostics::safe_request_error;
 use crate::transport::upstream_tap::{
-    Dropped, FrameStream, Refused, Requested, TAP_CAPACITY, UpstreamListen, UpstreamNote, Watched,
-    classify_response, listen_filter, project, project_listen,
+    Dropped, FrameStream, LegacyPin, Refused, Requested, TAP_CAPACITY, UpstreamListen,
+    UpstreamNote, Watched, classify_response, interest_method, listen_filter, project,
+    project_listen,
 };
 use crate::{Error, Result};
 
@@ -228,16 +229,40 @@ impl HttpTransport {
 
 #[async_trait::async_trait]
 impl UpstreamListen for HttpTransport {
-    /// A hash of the shared-bucket session id: the peer keeps subscription
-    /// state per session, and the id itself (replayable) is not copied out.
-    fn holder(&self) -> u64 {
+    /// The shared-bucket session: the peer keeps subscription state per
+    /// session, so the call carries this one and the ledger its hash.
+    fn legacy_pin(&self) -> LegacyPin {
         use std::hash::{Hash, Hasher};
+        let session = self.sessions.read().get(Self::bucket_key(None)).cloned();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.sessions
-            .read()
-            .get(Self::bucket_key(None))
-            .hash(&mut hasher);
-        hasher.finish()
+        session.hash(&mut hasher);
+        LegacyPin {
+            holder: hasher.finish(),
+            session,
+        }
+    }
+
+    /// Sent without the request path's session heal (which would move the
+    /// call to a new session) and with the pinned session id, or none: a
+    /// header value that does not parse makes the merge remove the bucket's.
+    async fn legacy_interest(
+        self: std::sync::Arc<Self>,
+        pin: LegacyPin,
+        uri: &str,
+        subscribe: bool,
+    ) -> Result<crate::protocol::JsonRpcResponse> {
+        let request = crate::protocol::JsonRpcRequest {
+            jsonrpc: "2.0".to_owned(),
+            id: self.next_id(),
+            method: interest_method(subscribe).to_owned(),
+            params: Some(json!({ "uri": uri })),
+        };
+        let pinned = (
+            "mcp-session-id".to_owned(),
+            pin.session.unwrap_or_else(|| "\n".to_owned()),
+        );
+        self.send_request_with_headers(&request, &[pinned], None, None)
+            .await
     }
 
     async fn listen(
@@ -820,3 +845,6 @@ mod tests {
 #[cfg(test)]
 #[path = "session_heal_tests.rs"]
 mod session_heal_tests;
+
+#[path = "legacy_pin_tests.rs"]
+mod legacy_pin_tests;

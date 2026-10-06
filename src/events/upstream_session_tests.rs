@@ -17,7 +17,8 @@ fn shared_with(ineligible: crate::events::backend_source::Ineligible) -> Arc<Sha
     Arc::new(Shared {
         name: "b".to_owned(),
         need: Mutex::new(Need::default()),
-        ledger: Arc::default(),
+        ledger: Mutex::new(Arc::default()),
+        resolve: Box::new(|| None),
         recycle: RECYCLE,
         snapshot: Mutex::new(Snapshot::default()),
         wake: watch::channel(0).0,

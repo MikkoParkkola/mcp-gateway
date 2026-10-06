@@ -190,6 +190,7 @@ fn requested(shared: &Shared) -> Requested {
 
 /// One connection's life.
 async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<EventsHub>) -> Outcome {
+    shared.refresh_ledger();
     let _lease = backend.listen_lease();
     let target = match backend.listen_target().await {
         Ok(target) => target,
