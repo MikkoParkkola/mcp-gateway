@@ -292,6 +292,66 @@ mod tests {
         );
     }
 
+    /// MIK-7916 AC3: the memo is keyed on the whole tool. A change to any one
+    /// field, however small, misses and re-projects; a hand-picked subset of
+    /// fields would serve a card computed for other content.
+    #[test]
+    fn a_change_to_any_single_field_misses_the_memo() {
+        use crate::projection::{ActorSpec, ProjectionSpec, Role};
+        use crate::protocol::ToolAnnotations;
+
+        type Change = fn(&mut Tool);
+        let changes: [(&str, Change); 7] = [
+            ("title", |t| t.title = Some("Other title".to_string())),
+            ("description count", |t| {
+                t.description = Some("Search local docs (3 servers)".to_string());
+            }),
+            ("input schema", |t| {
+                t.input_schema["properties"]["limit"] = json!({"type": "integer"});
+            }),
+            ("output schema", |t| {
+                t.output_schema = Some(json!({"type": "object"}))
+            }),
+            ("annotations hint", |t| {
+                t.annotations = Some(ToolAnnotations {
+                    read_only_hint: Some(true),
+                    ..ToolAnnotations::default()
+                });
+            }),
+            ("role", |t| t.role = Some(Role::Selector)),
+            ("projection", |t| {
+                t.projection = Some(ProjectionSpec {
+                    actor: Some(ActorSpec::default()),
+                    ..ProjectionSpec::default()
+                });
+            }),
+        ];
+        for (field, change) in changes {
+            let (id, name) = (
+                format!("backend:memo-field-{field}"),
+                format!("memo-field-{field}"),
+            );
+            let original = tool();
+            let _ =
+                project_tool_descriptors_trust_cards(&id, &name, std::slice::from_ref(&original));
+            let mut changed = original.clone();
+            change(&mut changed);
+            let start = computations();
+            let listed =
+                project_tool_descriptors_trust_cards(&id, &name, std::slice::from_ref(&changed));
+            assert_eq!(
+                computations() - start,
+                1,
+                "{field}: a changed tool must re-project"
+            );
+            assert_eq!(
+                listed[0],
+                project_tool_descriptor_trust_card(id.as_str(), name.as_str(), &changed),
+                "{field}: the listing must describe the changed tool"
+            );
+        }
+    }
+
     /// The same tool under another server identity is a different card.
     #[test]
     fn server_identity_is_part_of_the_key() {
