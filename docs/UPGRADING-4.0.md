@@ -176,7 +176,7 @@ backend" and "fails a capability file" first.**
 | 149 | A meta-tool result whose payload says `isError: true` (a failed `gateway_invoke`, or a backend's own tool error) carries `isError: true` on the outer `tools/call` result; it was always `false`, with the failure only in the text | A client that read failure from the text alone keeps working; one that treated `isError: true` as a protocol failure should read the text and its `recovery` hint instead |
 | 150 | Reserved: lands with #3081 | None yet |
 | 151 | Reserved: lands with #3125 | None yet |
-| 152 | A weekday step `*/n` in a cron expression matches only the days `n` divides; the old match also tried each day plus 7, so `*/2` matched every day and `*/3` to `*/6` matched extra days (`*/1` and `*/7` are unchanged) | Check each scheduled job and `schedule.tick` subscription whose weekday field uses `/`; one meant to run daily uses `*` |
+| 152 | A weekday step `*/n` in a cron expression matches only the days `n` divides; the old match also tried each day plus 7, so `*/2` matched every day and `*/3` to `*/13` (except `*/7`) matched extra days; `*/1`, `*/7` and `*/14` up are unchanged | Check each scheduled job and `schedule.tick` subscription whose weekday field uses `/`; one meant to run daily uses `*` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4005,14 +4005,15 @@ hint instead.
 
 ## 152. A stepped weekday field in a cron expression matches only its own days
 
-**Startup:** no notice, scheduled jobs and `schedule.tick` timers with a weekday step from `*/2` to `*/6` fire on fewer days
+**Startup:** no notice, scheduled jobs and `schedule.tick` timers with a weekday step from `*/2` to `*/13`, other than `*/7`, fire on fewer days
 
 A weekday step `*/n` matches a day when `n` divides its number (Sunday 0 to
 Saturday 6). The scheduler also tested each day's number plus 7, meant as
 Sunday's alias, so a step matched a day when `n` divided either number:
 `0 9 * * */2` ran every day, and `*/3` ran on five days instead of three. It
 now tests 7 for Sunday only, so `*/2` matches Sunday, Tuesday, Thursday and
-Saturday, as cron defines it. `*/1` and `*/7` match the same days as before.
+Saturday, as cron defines it. `*/8` to `*/13` each lose one day. `*/1`, `*/7`
+and `*/14` or more match the same days as before.
 3.x had the same behaviour.
 
 Check every scheduled job and `schedule.tick` subscription whose weekday field
