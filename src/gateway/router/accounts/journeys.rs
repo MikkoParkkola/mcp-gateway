@@ -108,7 +108,7 @@ fn admissible(config: &Config, body: &Bytes) -> Option<(CreateRequest, String)> 
         return None;
     }
     let request: CreateRequest = serde_json::from_slice(body).ok()?;
-    if request.account_id.len() > ACCOUNT_ID_MAX || request.return_path.len() > RETURN_PATH_MAX {
+    if request.account_id.len() > ACCOUNT_ID_MAX || request.return_path.len() > RETURN_PATH_MAX + 1 {
         return None;
     }
     let hosted = config.accounts.as_ref()?.hosted.as_ref()?;

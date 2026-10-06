@@ -91,7 +91,7 @@ impl ConnectOffers {
                 JourneyRefusal::RateLimited { retry_after }
                 | JourneyRefusal::CapacityExceeded { retry_after },
             ))) => (
-                text.clone(),
+                format!("{text}; try again later"),
                 json!({"retryable": true, "retry_after": retry_after}),
             ),
             _ => return None,

@@ -138,7 +138,8 @@ impl OwuiSessionBridge {
 fn sole_cookie<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
     let mut found = None;
     for line in headers.get_all(header::COOKIE) {
-        for pair in line.to_str().ok()?.split(';') {
+        let Ok(line) = line.to_str() else { continue };
+        for pair in line.split(';') {
             let Some((key, value)) = pair.trim().split_once('=') else {
                 continue;
             };
