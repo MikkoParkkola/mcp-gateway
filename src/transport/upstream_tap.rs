@@ -47,7 +47,20 @@ pub(crate) enum UpstreamNote {
     Notice { kind: NoteKind, uri: Option<String> },
     /// A validated terminal response to the listen (graceful end).
     End,
+    /// The peer answered the listen with `-32601`: it offers no listen, so
+    /// the session backs off as for an HTTP 405 (MIK-7899).
+    Unsupported,
 }
+
+impl UpstreamNote {
+    /// The listen's last note: nothing of it follows.
+    pub(crate) fn ends(&self) -> bool {
+        matches!(self, Self::End | Self::Unsupported)
+    }
+}
+
+/// JSON-RPC "method not found": the peer has no `subscriptions/listen`.
+const METHOD_NOT_FOUND: i32 = -32601;
 
 /// Why a frame was not turned into a note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +71,8 @@ pub(crate) enum Dropped {
     Untagged,
     /// A `resources/updated` without a string `uri`, or one over the cap.
     Oversize,
+    /// An acknowledgement after the listen's first frame (MIK-7898).
+    Late,
 }
 
 /// The `notifications` filter a listen sends, from what it needs.
@@ -124,6 +139,26 @@ pub(crate) fn project(
     Ok(UpstreamNote::Notice { kind, uri })
 }
 
+/// [`project`] for frame `first` of a modern listen: the acknowledgement
+/// counts only as the first frame (§3); a later one is dropped.
+pub(crate) fn project_listen(
+    method: &str,
+    params: Option<&Value>,
+    listen_id: &Value,
+    requested: &Requested,
+    first: bool,
+) -> Result<UpstreamNote, Dropped> {
+    // The tag first: a frame of another listen, whatever its method, is not
+    // this listen's frame at all (the tap never routes it here).
+    if !tagged(params, listen_id) {
+        return Err(Dropped::Untagged);
+    }
+    if method == ACKNOWLEDGED && !first {
+        return Err(Dropped::Late);
+    }
+    project(method, params, Some((listen_id, requested)))
+}
+
 /// What a listen asked for, to intersect its acknowledgement with.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Requested {
@@ -174,13 +209,18 @@ impl Requested {
 /// A JSON-RPC response with the listen's id, seen as the stream's
 /// `first` frame or later. The compatible acknowledgement (§3) is only the
 /// first frame, with a result of exactly `{_meta: {SUBSCRIPTION_ID: id}}`
-/// and no `resultType: "complete"`; every other response is the end.
+/// and no `resultType: "complete"`; a `-32601` error (`error_code`) is
+/// `Unsupported`; every other response is the end.
 pub(crate) fn classify_response(
     first: bool,
     listen_id: &Value,
     result: Option<&Value>,
+    error_code: Option<i32>,
     requested: &Requested,
 ) -> UpstreamNote {
+    if error_code == Some(METHOD_NOT_FOUND) {
+        return UpstreamNote::Unsupported;
+    }
     let compatible = first
         && result.and_then(Value::as_object).is_some_and(|r| {
             r.len() == 1
@@ -267,9 +307,11 @@ impl Taps {
         if let Some(tag) = tag {
             let mut listens = self.listens.lock();
             if let Some(listen) = listens.get_mut(&tag.to_string()) {
-                listen.first = false;
-                let routed = project(method, params, Some((tag, &listen.requested)))
-                    .is_ok_and(|note| listen.tx.try_send(note).is_ok());
+                let first = std::mem::replace(&mut listen.first, false);
+                // The last slot stays free for the listen's terminal answer, so
+                // a full tap still reports `Unsupported` rather than `Closed`.
+                let routed = project_listen(method, params, tag, &listen.requested, first)
+                    .is_ok_and(|note| listen.tx.capacity() > 1 && listen.tx.try_send(note).is_ok());
                 if !routed {
                     self.drop_one();
                 }
@@ -295,28 +337,35 @@ impl Taps {
         }
     }
 
-    /// [`Self::response`] for a transport's typed id.
+    /// [`Self::response`] for a transport's typed response.
     pub(crate) fn response_to(
         &self,
         id: &crate::protocol::RequestId,
         result: Option<&Value>,
+        error: Option<&crate::protocol::JsonRpcError>,
     ) -> bool {
-        serde_json::to_value(id).is_ok_and(|id| self.response(&id, result))
+        serde_json::to_value(id).is_ok_and(|id| self.response(&id, result, error.map(|e| e.code)))
     }
 
-    /// Offer a response. `true` when its id is a registered listen: the
-    /// compatible first-frame acknowledgement is routed, anything else ends
-    /// the listen, whose sender is removed whether or not `End` fit, so a
-    /// full channel still reports the end as `Closed`.
-    pub(crate) fn response(&self, id: &Value, result: Option<&Value>) -> bool {
+    /// Offer a response (`result`, or an error's `error_code`). `true` when
+    /// its id is a registered listen: the compatible first-frame
+    /// acknowledgement is routed, anything else ends the listen, whose sender
+    /// is removed whether or not the last note fit, so a full channel still
+    /// reports the end as `Closed`.
+    pub(crate) fn response(
+        &self,
+        id: &Value,
+        result: Option<&Value>,
+        error_code: Option<i32>,
+    ) -> bool {
         let key = id.to_string();
         let mut listens = self.listens.lock();
         let Some(listen) = listens.get_mut(&key) else {
             return false;
         };
-        let note = classify_response(listen.first, id, result, &listen.requested);
+        let note = classify_response(listen.first, id, result, error_code, &listen.requested);
         listen.first = false;
-        let end = note == UpstreamNote::End;
+        let end = note.ends();
         if listen.tx.try_send(note).is_err() {
             self.drop_one();
         }

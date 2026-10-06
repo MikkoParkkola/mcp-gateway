@@ -176,19 +176,16 @@ impl StdioTransport {
     ///
     /// Returns an error if the command cannot be spawned or MCP initialization fails.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
+        self.start.forget_shown_stderr();
         let parts = crate::transport::split_command(&self.command).ok_or_else(|| {
             Error::Config(format!(
                 "Invalid stdio command quoting: {}",
                 crate::security::summarize_stdio_command(&self.command)
             ))
         })?;
-        if parts.is_empty() {
+        let Some((program, args)) = parts.split_first() else {
             return Err(Error::Config("Empty command".to_string()));
-        }
-
-        let program = parts[0].as_str();
-        let args = &parts[1..];
-
+        };
         let mut cmd = Command::new(program);
         cmd.args(args)
             .stdin(Stdio::piped())
@@ -555,7 +552,9 @@ impl StdioTransport {
         };
 
         if let Some(ref id) = response.id
-            && self.taps.response_to(id, response.result.as_ref())
+            && self
+                .taps
+                .response_to(id, response.result.as_ref(), response.error.as_ref())
         {
             // A listen is never a pending request (design §4).
             return Ok(());

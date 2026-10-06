@@ -26,6 +26,7 @@ use crate::transport::Transport;
 mod delivery;
 mod delivery_who;
 mod lost_round;
+mod meta_malformed_retry;
 mod meta_refusal;
 mod meta_replay;
 #[cfg(feature = "firewall")]
@@ -147,6 +148,8 @@ struct Setup {
     meta_mode: MetaMode,
     /// The backends refuse every notification (L1254).
     notify_refused: bool,
+    /// `security.caller_identity` (MIK-7938 ATTR.4).
+    caller_identity: Option<crate::security::caller_identity::CallerIdentityConfig>,
 }
 
 /// One optional meta-layer switch a cell turns on (MIK-7116.MIN.1 cells).
@@ -158,6 +161,29 @@ enum MetaMode {
     InspectionBlocks,
     /// The idempotency cache is on, so a re-issued key replays.
     Idempotent,
+    /// `alpha`'s tool `t` is surfaced, so it is called by name on `/mcp`.
+    SurfacedT,
+}
+
+impl MetaMode {
+    /// `meta` with this mode's switch turned on.
+    fn arm(&self, mut meta: MetaMcp) -> MetaMcp {
+        match self {
+            Self::Plain => {}
+            Self::InspectionBlocks => meta.enable_response_inspection_action_mode(),
+            Self::Idempotent => meta.enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                crate::idempotency::CLEANUP_INTERVAL,
+            ),
+            Self::SurfacedT => {
+                return meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+                    server: "alpha".to_string(),
+                    tool: "t".to_string(),
+                }]);
+            }
+        }
+        meta
+    }
 }
 
 /// Backends `alpha` and `beta`, one logger shared by both routes.
@@ -236,16 +262,10 @@ async fn fixture(setup: Setup) -> Fixture {
         state_mut.firewall = Some(firewall(config.clone()));
         meta.set_firewall(Some(firewall(config)));
     }
-    if setup.meta_mode == MetaMode::InspectionBlocks {
-        meta.enable_response_inspection_action_mode();
+    if let Some(config) = setup.caller_identity {
+        meta = meta.with_caller_identity(config);
     }
-    if setup.meta_mode == MetaMode::Idempotent {
-        meta.enable_idempotency(
-            Arc::new(crate::idempotency::IdempotencyCache::new()),
-            crate::idempotency::CLEANUP_INTERVAL,
-        );
-    }
-    state_mut.meta_mcp = Arc::new(meta);
+    state_mut.meta_mcp = Arc::new(setup.meta_mode.arm(meta));
     state_mut.transparency_log = Some(Arc::clone(&log));
     let router = create_router(Arc::clone(&state));
     Fixture {
@@ -289,6 +309,8 @@ enum Caller {
     Key,
     /// Anonymous, carrying an `mcp-session-id` header.
     Session,
+    /// Anonymous, declaring the modern era by header: no session at all.
+    Modern,
     /// Anonymous, with a verified client certificate (MIK-7938).
     Cert,
     /// Anonymous, with a verified OAuth agent token (MIK-7938).
@@ -336,6 +358,18 @@ async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (Statu
     }
     if matches!(caller, Caller::Session) {
         builder = builder.header("mcp-session-id", "sess-d2");
+    }
+    if matches!(caller, Caller::Modern) {
+        // The modern era also requires the method and name headers to echo
+        // the body, or the call is refused (-32020) before any audit path.
+        let parsed: Value = serde_json::from_str(body).unwrap();
+        builder = builder
+            .header(
+                "mcp-protocol-version",
+                crate::protocol::meta::MODERN_VERSIONS[0],
+            )
+            .header("mcp-method", parsed["method"].as_str().unwrap())
+            .header("mcp-name", parsed["params"]["name"].as_str().unwrap());
     }
     let mut request = builder
         .body(axum::body::Body::from(body.to_string()))
