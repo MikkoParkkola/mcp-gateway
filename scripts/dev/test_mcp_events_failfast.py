@@ -45,5 +45,14 @@ class TlsFloor(unittest.TestCase):
         self.assertGreaterEqual(seen[0], ssl.TLSVersion.TLSv1_2)
 
 
+class ContentLength(unittest.TestCase):
+    def test_only_space_and_tab_surround_the_digits(self):
+        # MIK-7881.STUB.1: HTTP allows SP/HTAB around a field value; str.strip()
+        # also takes vertical tab and form feed.
+        for bad in ("\x0b5", "5\x0c", "\x0c5\x0b"):
+            self.assertEqual(failfast.body_length({"Content-Length": bad}), (0, 400), repr(bad))
+        self.assertEqual(failfast.body_length({"Content-Length": " \t5\t "}), (5, None))
+
+
 if __name__ == "__main__":
     unittest.main()

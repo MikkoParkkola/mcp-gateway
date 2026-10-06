@@ -285,7 +285,9 @@ impl TenantGuard {
     /// Read the JSON a string carries. Prose is not JSON and holds no keyed
     /// tenant, so it is skipped. Text that opens like a document (`{`, `[`)
     /// must parse, or it is unread: fail closed, even for bracket-led prose. A
-    /// quoted text is decoded when it is exactly one JSON string.
+    /// quoted text is decoded when it is exactly one JSON string. One cut short
+    /// (its quote never closes) is decoded as far as it goes, so a
+    /// double-encoded document cut short is unread as well (MIK-7881).
     fn decode_response(&self, text: &str, decoded: usize, scan: &mut ResponseScan) {
         // A byte-order mark is not whitespace to `trim_start`, nor JSON to the
         // parser: strip marks and whitespace in any order so neither hides a
@@ -305,6 +307,10 @@ impl TenantGuard {
         }
         match serde_json::from_str::<Value>(text) {
             Ok(value) => self.walk_response(&value, decoded + 1, scan),
+            Err(e) if quoted && e.is_eof() => match cut_string(text) {
+                Some(head) => self.decode_response(&head, decoded + 1, scan),
+                None => scan.uninspected = true,
+            },
             Err(_) => scan.uninspected |= document,
         }
     }
@@ -348,6 +354,14 @@ impl TenantGuard {
             _ => None,
         }
     }
+}
+
+/// The text of a JSON string cut short: `text` closed with a quote, or, when
+/// the cut split an escape (`\u00`, half a surrogate pair), closed before it.
+/// `None` when it still does not decode.
+fn cut_string(text: &str) -> Option<String> {
+    let close = |head: &str| serde_json::from_str::<String>(&format!("{head}\"")).ok();
+    close(text).or_else(|| close(&text[..text.rfind('\\')?]))
 }
 
 #[cfg(test)]
