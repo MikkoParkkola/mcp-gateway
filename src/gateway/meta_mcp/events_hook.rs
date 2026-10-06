@@ -230,7 +230,7 @@ impl MetaMcp {
         capabilities
             .list_capabilities()
             .into_iter()
-            .filter(rest_only)
+            .filter(crate::capability::served_over_rest)
             .map(|definition| Target {
                 credential: if definition.auth.account.is_some() {
                     CredentialUse::Account
@@ -246,18 +246,6 @@ impl MetaMcp {
             })
             .collect()
     }
-}
-
-/// Whether every provider of `definition`, fallbacks included, is REST: the
-/// only kind the watch polls (MIK-7720 U1). Reads `service` itself, since
-/// `protocol_config` maps a process service to REST.
-fn rest_only(definition: &crate::capability::CapabilityDefinition) -> bool {
-    let providers = &definition.providers;
-    providers
-        .named
-        .values()
-        .chain(&providers.fallback)
-        .all(|p| matches!(p.service.as_str(), "rest" | ""))
 }
 
 /// Re-register the webhook routes of `capabilities`, unless the reload
