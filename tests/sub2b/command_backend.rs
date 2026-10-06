@@ -47,6 +47,15 @@ fn sh_path(path: &Path) -> String {
     path.display().to_string().replace('\\', "/")
 }
 
+/// A home whose path holds a space, so a path the peer script or the
+/// `command:` line leaves unquoted splits and the peer never runs (MIK-7665).
+fn spaced_home() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("home with space")
+        .tempdir()
+        .expect("temp home")
+}
+
 /// Write `gateway.yaml` pointing the backend at a `command:` peer, and return
 /// the release path the peer waits on.
 fn write_command_config(home: &Path) -> std::path::PathBuf {
@@ -92,7 +101,7 @@ fn frames_logged(home: &Path) -> String {
 #[tokio::test]
 async fn s02_progress_from_a_command_backend_reaches_the_client_before_the_result() {
     // GIVEN
-    let home = tempfile::tempdir().expect("temp home");
+    let home = spaced_home();
     let release = write_command_config(home.path());
     let mut session = stdio_session(home.path()).await;
 
@@ -144,7 +153,7 @@ async fn s02_progress_from_a_command_backend_reaches_the_client_before_the_resul
 #[tokio::test]
 async fn s02_a_numeric_progress_token_comes_back_numeric_from_a_command_backend() {
     // GIVEN
-    let home = tempfile::tempdir().expect("temp home");
+    let home = spaced_home();
     let release = write_command_config(home.path());
     let mut session = stdio_session(home.path()).await;
 
@@ -191,7 +200,7 @@ async fn s02_a_numeric_progress_token_comes_back_numeric_from_a_command_backend(
 #[tokio::test]
 async fn a_command_backend_notification_with_no_client_token_is_not_forwarded() {
     // GIVEN
-    let home = tempfile::tempdir().expect("temp home");
+    let home = spaced_home();
     let release = write_command_config(home.path());
     let mut session = stdio_session(home.path()).await;
 

@@ -66,6 +66,15 @@ fn sh_path(path: &std::path::Path) -> String {
     path.display().to_string().replace('\\', "/")
 }
 
+/// A home whose path holds a space, so a path the peer script or the
+/// command line leaves unquoted splits and the peer never runs (MIK-7665).
+fn spaced_home() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("home with space")
+        .tempdir()
+        .expect("temporary home")
+}
+
 fn register_command_backend(state: &Arc<AppState>, home: &std::path::Path) -> std::path::PathBuf {
     let log = home.join("calls.log");
     let script = home.join("peer.sh");
@@ -162,7 +171,7 @@ fn progress_of(frames: &[Value]) -> Vec<(Value, Value)> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_callers_sharing_a_progress_token_each_receive_only_their_own_progress() {
-    let home = tempfile::tempdir().expect("temporary home");
+    let home = spaced_home();
     let (state, _store_dir) = common::state(Fixture::default()).await;
     let log = register_command_backend(&state, home.path());
 
@@ -219,7 +228,7 @@ async fn two_callers_sharing_a_progress_token_each_receive_only_their_own_progre
 /// exactly its own progress.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_task_call_sharing_a_progress_token_cannot_reach_a_direct_caller() {
-    let home = tempfile::tempdir().expect("temporary home");
+    let home = spaced_home();
     let (state, _store_dir) = common::state(Fixture::default()).await;
     let log = register_command_backend(&state, home.path());
 
