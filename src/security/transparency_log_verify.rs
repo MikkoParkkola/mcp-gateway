@@ -452,54 +452,7 @@ impl Stream<'_> {
     ) -> Verdict {
         let opened = field_str(entry, "event") == Some(EV_OPENED);
         let Some((prev_seq, prev_file, prev_seal)) = before else {
-            // The oldest surviving file.
-            if !opened {
-                if expected != 0 {
-                    return Err((
-                        Some(counter),
-                        format!(
-                            "{} (segment {expected}) does not start with an open record",
-                            file.display()
-                        ),
-                    ));
-                }
-                return Ok(()); // a pre-D6 segment 0 starts at genesis
-            }
-            self.opened_oldest = true;
-            Self::check_open_seq(entry, counter, expected, file)?;
-            let prev_hash = field_str(entry, "prev_entry_hash")
-                .unwrap_or_default()
-                .to_string();
-            match field_u64(entry, "prev_segment_seq") {
-                Some(gone) => {
-                    let link = field_str(entry, "prev_segment_final_hash").unwrap_or_default();
-                    // The chain must continue from the boundary it links to,
-                    // as at every internal seam.
-                    if link != prev_hash {
-                        return Err((
-                            Some(counter),
-                            format!(
-                                "segment {expected} opens with prev_entry_hash {prev_hash} but \
-                                 links to final hash {link}"
-                            ),
-                        ));
-                    }
-                    self.anchor = Some((gone, link.to_string(), counter));
-                }
-                None if prev_hash != "genesis" => {
-                    return Err((
-                        Some(counter),
-                        format!(
-                            "counters 1..{} missing before {}: the active segment was deleted",
-                            counter.saturating_sub(1),
-                            file.display()
-                        ),
-                    ));
-                }
-                None => self.genesis_open = counter == 1,
-            }
-            self.prev = Some((counter.saturating_sub(1), prev_hash));
-            return Ok(());
+            return self.first_record_oldest(entry, counter, expected, file);
         };
         debug_assert!(index > 0);
         let Some(next) = prev_seal else {
@@ -557,6 +510,63 @@ impl Stream<'_> {
                 ),
             ));
         }
+        Ok(())
+    }
+
+    /// Seam checks on the oldest surviving file's first record.
+    fn first_record_oldest(
+        &mut self,
+        entry: &Value,
+        counter: u64,
+        expected: u64,
+        file: &Path,
+    ) -> Verdict {
+        if field_str(entry, "event") != Some(EV_OPENED) {
+            if expected != 0 {
+                return Err((
+                    Some(counter),
+                    format!(
+                        "{} (segment {expected}) does not start with an open record",
+                        file.display()
+                    ),
+                ));
+            }
+            return Ok(()); // a pre-D6 segment 0 starts at genesis
+        }
+        self.opened_oldest = true;
+        Self::check_open_seq(entry, counter, expected, file)?;
+        let prev_hash = field_str(entry, "prev_entry_hash")
+            .unwrap_or_default()
+            .to_string();
+        match field_u64(entry, "prev_segment_seq") {
+            Some(gone) => {
+                let link = field_str(entry, "prev_segment_final_hash").unwrap_or_default();
+                // The chain must continue from the boundary it links to,
+                // as at every internal seam.
+                if link != prev_hash {
+                    return Err((
+                        Some(counter),
+                        format!(
+                            "segment {expected} opens with prev_entry_hash {prev_hash} but \
+                             links to final hash {link}"
+                        ),
+                    ));
+                }
+                self.anchor = Some((gone, link.to_string(), counter));
+            }
+            None if prev_hash != "genesis" => {
+                return Err((
+                    Some(counter),
+                    format!(
+                        "counters 1..{} missing before {}: the active segment was deleted",
+                        counter.saturating_sub(1),
+                        file.display()
+                    ),
+                ));
+            }
+            None => self.genesis_open = counter == 1,
+        }
+        self.prev = Some((counter.saturating_sub(1), prev_hash));
         Ok(())
     }
 
