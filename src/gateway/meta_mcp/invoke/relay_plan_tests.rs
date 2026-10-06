@@ -72,7 +72,7 @@ async fn deliver_plan(
                 .await;
             }
             let snapshot = meta.relay_snapshot(answer);
-            meta.restage_if_changed(snapshot, Some(delivered));
+            meta.restage_if_changed(snapshot, Some(delivered), AnswerShape::Literal);
             meta.rebuild_receipt_from_final(
                 Some(delivered),
                 GatewayStamps::Legacy,
@@ -240,7 +240,11 @@ async fn a_kept_plan_receipt_stays_sensitive() {
             let answer = plan_answer(&json!({"x": marked(PROSE), "y": text_result(OTHER_PROSE)}));
             let delivered =
                 plan_answer(&json!({"x": text_result(PROSE), "y": text_result(OTHER_PROSE)}));
-            meta.restage_if_changed(meta.relay_snapshot(&answer), Some(&delivered));
+            meta.restage_if_changed(
+                meta.relay_snapshot(&answer),
+                Some(&delivered),
+                AnswerShape::Literal,
+            );
             meta.rebuild_receipt_from_final(
                 Some(&delivered),
                 GatewayStamps::Legacy,
@@ -321,7 +325,11 @@ async fn a_changed_plan_receipt_never_commits_unkept() {
             .await;
             let answer = plan_answer(&json!({"a": text_result(PROSE)}));
             let changed = plan_answer(&json!({"a": text_result(PROSE), "n": 1}));
-            meta.restage_if_changed(meta.relay_snapshot(&answer), Some(&changed));
+            meta.restage_if_changed(
+                meta.relay_snapshot(&answer),
+                Some(&changed),
+                AnswerShape::Literal,
+            );
         })
         .await;
     staged.commit(true);
@@ -347,7 +355,11 @@ async fn a_changed_plan_receipt_never_commits_unkept_from_a_dispatch() {
         .await;
         let answer = plan_answer(&json!({"a": text_result(PROSE)}));
         let changed = plan_answer(&json!({"a": text_result(PROSE), "n": 1}));
-        meta.restage_if_changed(meta.relay_snapshot(&answer), Some(&changed));
+        meta.restage_if_changed(
+            meta.relay_snapshot(&answer),
+            Some(&changed),
+            AnswerShape::Literal,
+        );
         meta.commit_staged_relay(true);
     })
     .await;
@@ -388,7 +400,11 @@ async fn removing_a_middle_leaf_keeps_its_neighbours_whole() {
                     })
                     .await;
                 }
-                meta.restage_if_changed(meta.relay_snapshot(&answer), Some(&redacted));
+                meta.restage_if_changed(
+                    meta.relay_snapshot(&answer),
+                    Some(&redacted),
+                    AnswerShape::Literal,
+                );
                 meta.rebuild_receipt_from_final(
                     Some(&redacted),
                     GatewayStamps::Legacy,
@@ -437,7 +453,11 @@ async fn a_short_field_step_keeps_its_receipt_through_its_run() {
                 })
                 .await;
             }
-            meta.restage_if_changed(meta.relay_snapshot(&answer), Some(&redacted));
+            meta.restage_if_changed(
+                meta.relay_snapshot(&answer),
+                Some(&redacted),
+                AnswerShape::Literal,
+            );
             meta.rebuild_receipt_from_final(
                 Some(&redacted),
                 GatewayStamps::Legacy,
