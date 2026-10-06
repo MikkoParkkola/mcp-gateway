@@ -359,6 +359,110 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     assert_eq!(left, ["backend.b.tools_changed"]);
 }
 
+/// MIK-7950 FIX.3: the default catalogue cache TTL, which the session now
+/// re-reads at, is the 300 s the fixed interval was; a zero TTL re-reads at
+/// most once a second and a huge one at least daily, without overflow.
+#[test]
+fn the_snapshot_interval_follows_the_cache_ttl_within_bounds() {
+    let default = crate::config::MetaMcpConfig::default().cache_ttl;
+    assert_eq!(snapshot_interval(default), Duration::from_secs(300));
+    assert_eq!(
+        snapshot_interval(Duration::from_secs(2)),
+        Duration::from_secs(2)
+    );
+    assert_eq!(snapshot_interval(Duration::ZERO), Duration::from_secs(1));
+    let huge = Duration::from_secs(10_000 * 365 * 24 * 3600);
+    assert_eq!(snapshot_interval(huge), Duration::from_secs(24 * 3600));
+    let _ = Instant::now() + snapshot_interval(huge);
+}
+
+/// MIK-7951 REFILLFU.6: the session's end path, which a replaced transport
+/// takes, waits for a refill in flight and announces the tools change.
+#[tokio::test]
+async fn a_refill_in_flight_at_the_session_end_is_announced() {
+    let dir = tempfile::tempdir().expect("dir");
+    let reload = Reload::new(dir.path());
+    reload.to(true).await;
+    let backend = reload.registry.get("b").expect("b registered");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    hub.register_source(Arc::new(crate::events::backend_source::BackendSource {
+        names: Arc::new(|| vec!["b".to_owned()]),
+        upstream: None,
+    }));
+    let shared = shared();
+    let mut state = State::new(&shared, Era::Modern);
+    let (release, released) = tokio::sync::oneshot::channel::<()>();
+    let refill: Refill = Box::pin(async move {
+        let _ = released.await;
+    });
+    let ending = finish_refill(
+        &mut state,
+        &shared,
+        &backend,
+        &weak,
+        Some(refill),
+        Instant::now(),
+    );
+    tokio::pin!(ending);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut ending)
+            .await
+            .is_err(),
+        "the end waits for the refill"
+    );
+    release.send(()).expect("release");
+    tokio::time::timeout(Duration::from_secs(5), ending)
+        .await
+        .expect("the session end finished once the refill did");
+    // Announced after the hub's own quiet period.
+    let announced = tokio::time::timeout(Duration::from_secs(5), intake.recv()).await;
+    assert!(
+        matches!(announced, Ok(Some(_))),
+        "the tools change was announced"
+    );
+}
+
+/// MIK-7950: a session that started with no URI watched, while the shared
+/// snapshot is known from an earlier session, reads the catalogue as soon as
+/// a URI is watched, not after a fixed 300 s.
+#[tokio::test]
+async fn a_uri_watched_after_the_session_started_is_read_at_once() {
+    let dir = tempfile::tempdir().expect("dir");
+    let reload = Reload::new(dir.path());
+    reload.to(true).await;
+    let backend = reload.registry.get("b").expect("b registered");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    shared
+        .snapshot
+        .lock()
+        .read(["file:///a".to_owned()].into(), true);
+    let mut state = State::new(&shared, Era::Modern);
+    let started = Instant::now();
+    shared
+        .need
+        .lock()
+        .add(&Interest::ResourceUpdated("file:///b".to_owned()))
+        .expect("room");
+    // No transport: only the catalogue read is of interest here.
+    let handle: Weak<dyn UpstreamListen> = Weak::<crate::transport::HttpTransport>::new();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        state.maintain(&backend, &weak, &handle, true),
+    )
+    .await
+    .expect("maintain finished");
+    // The backend is unreachable, so the read failed and set its retry time:
+    // proof that it ran.
+    assert!(
+        state.snapshot_retry_at > started,
+        "the newly watched URI's catalogue was not read"
+    );
+}
+
 fn changed(kind: NoteKind) -> UpstreamNote {
     UpstreamNote::Notice { kind, uri: None }
 }

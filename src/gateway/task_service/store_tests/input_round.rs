@@ -534,3 +534,85 @@ async fn a_closed_store_and_a_moved_revision_refuse_every_input_round_write() {
     store.close().await.unwrap();
     assert_rounds_unserved(&reader, &task, revision, far).await;
 }
+
+/// MIK-7738: the dispatch marker and every input-round write refuse a foreign
+/// owner as `NotFound` and leave the record's bytes as they were. The owner's
+/// own writes on the same row are the control: each refused write could land.
+/// Mutant: the owner check in the store's record lookup removed.
+#[tokio::test]
+async fn a_foreign_owner_cannot_write_the_dispatch_marker_or_a_round() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = TaskStore::open(&path, limits()).await.unwrap();
+    store.set_clock_for_test(Some(at(1)));
+    let task = task();
+    let created = store
+        .create(PreparedTask::for_test(&task, OWNER, 1))
+        .await
+        .unwrap();
+    let file = path.join(format!("{}.json", task.id()));
+    let bytes = || fs::read(&file).unwrap();
+
+    let before = bytes();
+    let refused = store
+        .mark_dispatched(OTHER, task.id(), created.revision)
+        .await;
+    assert!(matches!(refused, Err(StoreError::NotFound)), "{refused:?}");
+    let refused = store
+        .require_input(
+            OTHER,
+            task.id(),
+            created.revision,
+            question("confirm"),
+            round("sealed"),
+            at(1),
+        )
+        .await;
+    assert!(matches!(refused, Err(StoreError::NotFound)), "{refused:?}");
+    assert_eq!(bytes(), before, "a refused write changed the record");
+
+    store
+        .mark_dispatched(OWNER, task.id(), created.revision)
+        .await
+        .expect("control: the owner marks dispatch");
+    assert_ne!(bytes(), before, "control: the marker is written");
+    let revision = store
+        .require_input(
+            OWNER,
+            task.id(),
+            created.revision,
+            question("confirm"),
+            round("sealed"),
+            at(1),
+        )
+        .await
+        .expect("control: the owner opens a round")
+        .revision;
+
+    let before = bytes();
+    let refused = store
+        .provide_input(
+            OTHER,
+            task.id(),
+            answers(json!({ "confirm": { "ok": true } })),
+            || None,
+            at(2),
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(StoreError::NotFound)),
+        "{:?}",
+        refused.as_ref().err()
+    );
+    let refused = store
+        .close_round(OTHER, task.id(), revision, "closed".to_owned())
+        .await;
+    assert!(matches!(refused, Err(StoreError::NotFound)), "{refused:?}");
+    assert_eq!(bytes(), before, "a refused write changed the record");
+
+    store
+        .close_round(OWNER, task.id(), revision, "closed".to_owned())
+        .await
+        .expect("control: the owner closes its round");
+    assert_ne!(bytes(), before, "control: the round is closed on disk");
+}
