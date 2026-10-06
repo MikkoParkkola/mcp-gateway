@@ -115,6 +115,7 @@ impl KeyServer {
             name: actor,
             // A temporary token identifies one principal; its own key is the
             // stable identifier.
+            // MIK-6704.IDENT.1a: a tagged digest of the token (MIK-8006).
             principal: runtime_principal(RuntimeIssuer::KeyServerToken, &temp.token),
             rate_limit: temp.scopes.rate_limit,
             backends: temp.scopes.backends.clone(),
@@ -175,6 +176,7 @@ impl KeyServer {
             // above: one person's two credential mechanisms are one bucket.
             quota_principal: Some(QuotaPrincipal::oidc_identity(&actor)),
             // The verified subject identifies this principal.
+            // MIK-6704.IDENT.1a: a tagged digest of the verified subject (MIK-8006).
             principal: runtime_principal(RuntimeIssuer::OidcBearer, &actor),
             name: actor,
             rate_limit: scopes.rate_limit,
