@@ -3968,14 +3968,16 @@ advertised with `type: "object"` added and is otherwise unchanged.
 This applies when authentication is off, `security.firewall.anomaly_detection` is on and
 `anomaly_block_threshold` is set. In 3.x a legacy client that sent no `mcp-session-id` was
 given a new session on every request. Anomaly scoring followed that session, so each call was
-the first in its session and could never be blocked. In 4.0 every legacy request that does not
+the first in its session: it scored 0.5 and built no history, and a block threshold above 0.5
+never blocked it. In 4.0 every legacy request that does not
 resume a session the gateway issued is scored as one shared caller. The calls of all such
 clients form one sequence, and the block threshold applies to them together. A client that
 keeps the `mcp-session-id` its `initialize` returned keeps its own history, as before.
 
-If such clients are now refused, have them reuse their session, raise
-`anomaly_block_threshold`, or remove it to log without blocking. The 4.0 tenant guard
-(`tenant_guard`) and call budget (`budget`) count these clients the same way.
+If such clients are now refused, turn authentication on so each caller is scored under its
+own credential, have them reuse their session, raise `anomaly_block_threshold`, or remove it
+to log without blocking. The 4.0 tenant guard (`tenant_guard`) and call budget (`budget`)
+count these clients the same way.
 
 ## Upgrading from 3.5.x: a walkthrough
 
