@@ -61,6 +61,12 @@ async fn an_unoffered_type_is_held_then_sent_once_offered() {
             "{name}: {log}"
         );
         assert!(!log.contains("access_revoked"), "{name}: nothing revoked");
+        // What the client reads as `deliveryStatus.lastError`.
+        assert_eq!(
+            hub.store.subscriptions()[0].last_error.as_deref(),
+            Some("source_unavailable"),
+            "{name}"
+        );
 
         hub.register_source(Arc::new(Offering {
             kind,
@@ -86,8 +92,14 @@ async fn an_unoffered_record_is_held_until_exhausted_and_keeps_its_subscription(
     queued_as(&hub, port, "evt_old", "probe.late");
     for attempt in 1..=3 {
         hub.attempt(&services, "evt_old").await;
-        let buried = hub.store.dead_letter_by_id("evt_old").is_some();
-        assert_eq!(buried, attempt == 3, "attempt {attempt}");
+        let dead = hub.store.dead_letter_by_id("evt_old");
+        assert_eq!(dead.is_some(), attempt == 3, "attempt {attempt}");
+        if let Some(dead) = dead {
+            assert_eq!(dead.reason, "exhausted");
+        } else {
+            let sub = &hub.store.subscriptions()[0];
+            assert_eq!(sub.last_error.as_deref(), Some("source_unavailable"));
+        }
     }
     tokio::time::sleep(Duration::from_millis(300)).await;
 
