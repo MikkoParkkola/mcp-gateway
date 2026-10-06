@@ -945,6 +945,10 @@ jobs:
         run: python3 scripts/release/test_check_nfr_demo_1_recordings.py
       - name: Test the bot-review sweep (review-summary findings)
         run: python3 scripts/release/test_botreview_sweep.py
+      - name: Test the Known issues gate
+        run: python3 scripts/release/test_check_known_issues.py
+      - name: Known issues name no later release
+        run: python3 scripts/release/check_known_issues.py --check
       - name: Test the keyless read-only admission check (MIK-7752)
         run: python3 scripts/release/test_check_keyless_read_only.py
       - name: The published C6 mutation sample still reproduces
