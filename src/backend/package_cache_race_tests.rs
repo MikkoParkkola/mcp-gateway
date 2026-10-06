@@ -187,9 +187,11 @@ async fn a_cancelled_rename_keeps_the_cache_locked_until_it_ends() {
     );
 
     release_tx.send(()).expect("the rename is waiting");
-    tokio::time::timeout(Duration::from_secs(5), lock.lock())
-        .await
-        .expect("the lock is released once the rename ends");
+    drop(
+        tokio::time::timeout(Duration::from_secs(5), lock.lock())
+            .await
+            .expect("the lock is released once the rename ends"),
+    );
 }
 
 /// A start that cannot get its cache's lock within the request timeout fails
@@ -251,9 +253,11 @@ async fn a_rename_past_its_limit_is_abandoned_but_keeps_the_lock() {
         "the orphaned rename still holds the cache"
     );
     release_tx.send(()).expect("the rename is waiting");
-    tokio::time::timeout(Duration::from_secs(5), lock.lock())
-        .await
-        .expect("the lock is released once the rename ends");
+    drop(
+        tokio::time::timeout(Duration::from_secs(5), lock.lock())
+            .await
+            .expect("the lock is released once the rename ends"),
+    );
 }
 
 /// Where `park_discard` left the last tombstone it was handed.
