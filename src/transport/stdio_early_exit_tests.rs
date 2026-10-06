@@ -348,6 +348,47 @@ async fn a_block_longer_than_the_tail_stays_masked() {
     assert!(shown[..19].iter().all(|l| l == "[masked]"), "{shown:?}");
 }
 
+/// The tail after `pad` (zeros with no newline) and then a key block whose
+/// `-----BEGIN` lands on the same line, past what the capture stores.
+async fn tail_after_a_begin_behind(pad: &str) -> Vec<String> {
+    let t = transport(
+        &format!(
+            "{pad}; echo \"-----BEGIN EXAMPLE BLOCK-----\" >&2; \
+             echo \"MIIEvQIBADANBg/kqhkiG9w0BAQEFAASCBKcwggSjAgEA/AoIB\" >&2; \
+             echo \"-----END EXAMPLE BLOCK-----\" >&2; exit 3"
+        ),
+        &[],
+    );
+    let _ = start_err(&t).await;
+    t.last_failure_stderr()
+}
+
+/// STDERR.3: a `-----BEGIN` past the line limit is skipped unstored, and
+/// still opens the block, so the body line after it is masked.
+#[tokio::test]
+async fn a_begin_past_the_line_limit_still_masks_the_body() {
+    // 4,200 zeros, then the marker.
+    let shown = tail_after_a_begin_behind(
+        "i=0; while [ $i -lt 84 ]; do printf %050d 0 >&2; i=$((i+1)); done",
+    )
+    .await;
+    assert_eq!(shown.len(), 3, "{shown:?}");
+    assert_eq!(shown[1], "[masked]", "{shown:?}");
+}
+
+/// STDERR.3: a `-----BEGIN` cut in two by the line limit still opens the
+/// block.
+#[tokio::test]
+async fn a_begin_split_by_the_line_limit_still_masks_the_body() {
+    // 4,091 zeros: the limit (4,096) falls inside the marker.
+    let shown = tail_after_a_begin_behind(
+        "i=0; while [ $i -lt 81 ]; do printf %050d 0 >&2; i=$((i+1)); done; printf %041d 0 >&2",
+    )
+    .await;
+    assert_eq!(shown.len(), 3, "{shown:?}");
+    assert_eq!(shown[1], "[masked]", "{shown:?}");
+}
+
 /// STDERR.3: a start that cannot spawn shows no older exit's tail.
 #[tokio::test]
 async fn a_spawn_failure_clears_the_previous_tail() {

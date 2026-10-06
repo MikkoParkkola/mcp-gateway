@@ -282,6 +282,15 @@ mod tests {
     }
 
     #[test]
+    fn the_last_marker_on_a_line_decides_the_block() {
+        let mut open = false;
+        let _ = captured_line(&mut open, b"-----END A----- then -----BEGIN B-----");
+        assert!(open, "a BEGIN after an END opens the block");
+        let _ = captured_line(&mut open, b"-----BEGIN B----- x -----END B-----");
+        assert!(!open, "an END after a BEGIN closes it");
+    }
+
+    #[test]
     fn lines_and_line_length_are_capped() {
         let many: Vec<Vec<u8>> = (0..30).map(|i| format!("line-{i}").into_bytes()).collect();
         let out = sanitize(&many.into_iter().collect());
