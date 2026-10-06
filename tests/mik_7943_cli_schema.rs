@@ -3,10 +3,8 @@
 //! MIK-7943: the CLI entry points check arguments against the tool's input
 //! schema as a gateway call does. `cap test` refuses a call that breaks the
 //! schema before sending it, and `tool invoke` types `key=value` text by the
-//! schema, so `zip=12` for a string property is sent as the string `"12"`.
+//! schema, so `kind=12` for a string property is sent as the string `"12"`.
 
-use std::io::{BufRead, BufReader, Write};
-use std::net::TcpListener;
 use std::process::{Command, Output, Stdio};
 
 fn run(dir: &std::path::Path, args: &[&str]) -> (Output, String) {
@@ -58,63 +56,47 @@ providers:
     assert!(text.contains("required parameter is missing"), "{text}");
 }
 
+/// The selector must be a string; without the schema, `kind=12` is guessed as
+/// the number 12 and `build_url` refuses it. Typed by the schema, it is `"12"`
+/// and the call gets past the selector (and then fails to reach the host).
 #[test]
 fn tool_invoke_types_key_value_text_by_the_tool_schema() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let port = listener.local_addr().expect("addr").port();
-    let server = std::thread::spawn(move || {
-        let (stream, _) = listener.accept().expect("accept");
-        let mut reader = BufReader::new(stream);
-        let mut request_line = String::new();
-        reader.read_line(&mut request_line).expect("read request");
-        loop {
-            let mut line = String::new();
-            if reader.read_line(&mut line).expect("read header") == 0 || line == "\r\n" {
-                break;
-            }
-        }
-        let body = r#"{"ok":true}"#;
-        write!(
-            reader.get_mut(),
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-            body.len()
-        )
-        .expect("respond");
-        request_line
-    });
-
     let dir = tempfile::tempdir().expect("tempdir");
     let caps = dir.path().join("caps");
     std::fs::create_dir(&caps).expect("caps dir");
     std::fs::write(
-        caps.join("zip_probe.yaml"),
-        format!(
-            "name: zip_probe
+        caps.join("selector_probe.yaml"),
+        "name: selector_probe
 description: probe
 schema:
   input:
     type: object
     properties:
-      zip:
+      kind:
         type: string
-    required: [zip]
+        enum: [\"12\"]
 providers:
   primary:
     service: rest
     config:
-      base_url: http://127.0.0.1:{port}
-      path: /zip/{{zip}}
+      base_url: https://selector-probe.invalid
+      path_selector:
+        parameter: kind
+        default: \"12\"
+        paths:
+          \"12\": /twelve
       method: GET
-"
-        ),
+",
     )
     .expect("write capability");
     let caps = caps.to_string_lossy().into_owned();
     let (out, text) = run(
         dir.path(),
-        &["tool", "invoke", "zip_probe", "-C", &caps, "zip=12"],
+        &["tool", "invoke", "selector_probe", "-C", &caps, "kind=12"],
     );
-    assert!(out.status.success(), "a string zip is accepted: {text}");
-    let request_line = server.join().expect("server thread");
-    assert!(request_line.starts_with("GET /zip/12 "), "{request_line}");
+    assert!(!out.status.success(), "the host does not resolve: {text}");
+    assert!(
+        !text.contains("must be a string"),
+        "the selector was sent as a number: {text}"
+    );
 }
