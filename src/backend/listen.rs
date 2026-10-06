@@ -38,7 +38,7 @@ pub(crate) struct ListenLease(#[allow(dead_code, reason = "held for its Drop")] 
 /// count a restart waits on; the listener upgrades it per call only.
 pub(crate) struct ListenTarget {
     pub handle: Weak<dyn UpstreamListen>,
-    pub era: Option<Era>,
+    pub era: Era,
 }
 
 /// The admitted start a subscribe runs to learn the HTTP transport, shared
@@ -71,10 +71,14 @@ impl Backend {
             .read()
             .clone()
             .ok_or_else(|| Error::Transport("transport has no event stream".to_owned()))?;
-        Ok(ListenTarget {
-            handle,
-            era: self.cached_era().await,
-        })
+        // An unresolved era is not read as legacy: a modern peer mid
+        // re-probe would be sent a legacy GET (MIK-7899 CLASS.3).
+        let era = self
+            .era
+            .settled()
+            .await
+            .ok_or_else(|| Error::Transport("era not resolved".to_owned()))?;
+        Ok(ListenTarget { handle, era })
     }
 
     /// Whether `handle` still names the shared slot's current transport.

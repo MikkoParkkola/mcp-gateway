@@ -190,7 +190,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         }
     };
     let started = Instant::now();
-    let modern = target.era == Some(Era::Modern);
+    let modern = target.era == Era::Modern;
     let mut state = State::new(shared, if modern { Era::Modern } else { Era::Legacy });
     // The first catalogue read doubles as the legacy HTTP session's first
     // request on the shared bucket (§3).

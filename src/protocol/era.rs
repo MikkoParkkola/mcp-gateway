@@ -186,6 +186,20 @@ impl EraCache {
         (observation.source == EraSource::Probed).then_some(observation.era)
     }
 
+    /// The era an upstream listener may act on, read without emitting the
+    /// `era_cache` record (one read per listen attempt): a determined era,
+    /// `Legacy` once a probe ran and the peer stayed silent, and `None` while
+    /// unresolved, before the first probe or after a discard whose re-probe
+    /// is in flight (MIK-7899 CLASS.3).
+    pub(crate) async fn settled(&self) -> Option<Era> {
+        let observation = *self.observation.lock().await;
+        match (observation.source, observation.evidence) {
+            (EraSource::Probed, _) => Some(observation.era),
+            (_, EraEvidence::NoAnswer) => Some(Era::Legacy),
+            _ => None,
+        }
+    }
+
     /// Everything an operator can see about this backend's era.
     ///
     /// Emits the `era_cache` record: a read of a determined era is a hit, a
