@@ -643,3 +643,40 @@ async fn meta_chain_step_entry_holds_only_its_own_writes() {
     );
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 2);
 }
+
+/// The notice the gateway settles a key with when a post-dispatch gate
+/// withheld the answer (`side_effect_markers::withheld_side_effect`).
+const WITHHELD: &str = "Side effect executed; the response was withheld by a post-dispatch \
+    gate. Retrying with the same idempotency key will not re-execute it.";
+
+/// MIK-7991 (notice): a keyed read the response firewall refuses settles its
+/// key with the gateway's withheld notice. Replaying it serves that notice,
+/// the gateway's own text, so it puts nothing in the replay's receipt.
+#[tokio::test]
+async fn meta_replayed_gateway_notice_is_not_receipted() {
+    let setup = Setup {
+        rules: "[{match: read, action: block}]",
+        ..Setup::default()
+    };
+    let fx = meta_fixture(setup, None).await;
+    fx.answer_read(Read::Injected);
+    let read = invoke("read", &json!({}));
+    let key = keyed("key-7991-notice");
+    let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
+    assert!(
+        envelope(&first).get("error").is_some(),
+        "base: the read is refused: {first}"
+    );
+    let reads = fx.reads();
+    let (_, replay) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
+    assert_eq!(
+        fx.reads(),
+        reads,
+        "base: the re-issue is a replay: {replay}"
+    );
+    assert!(
+        replay.contains(WITHHELD),
+        "base: the replay serves the notice: {replay}"
+    );
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), WITHHELD).await, 1);
+}
