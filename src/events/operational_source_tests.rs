@@ -108,23 +108,38 @@ async fn operational_events_are_operator_only_except_own_budget() {
         let refused = source.authorize(&dev, name, &none).await;
         assert_eq!(refused.expect_err("non-admin").code, -32012, "{name}");
     }
+    // A budget subscription names its scope; without one it covers every
+    // scope, which needs admin standing, re-checked at every delivery.
+    let (own, other) = (json!({"scope": "key:dev"}), json!({"scope": "key:ops"}));
     for name in [BUDGET_THRESHOLD, BUDGET_EXHAUSTED] {
+        source.authorize(&dev, name, &own).await.expect("own key");
         source
-            .authorize(&dev, name, &none)
+            .authorize(&ops, name, &none)
             .await
-            .expect("key holder");
-        let refused = source.authorize(&stranger, name, &none).await;
-        assert_eq!(refused.expect_err("no key").code, -32012, "{name}");
+            .expect("admin, all");
+        source
+            .authorize(&ops, name, &own)
+            .await
+            .expect("admin, any");
+        for (who, args) in [(&dev, &none), (&dev, &other), (&stranger, &own)] {
+            let refused = source.authorize(who, name, args).await;
+            assert_eq!(refused.expect_err("refused").code, -32012, "{name} {args}");
+        }
     }
     let budget = |scope: &str| event(BUDGET_THRESHOLD, json!({"scope": scope, "percent": 50}));
-    assert!(source.matches(&dev, &none, &budget("key:dev")));
-    assert!(!source.matches(&dev, &none, &budget("key:ops")));
-    assert!(!source.matches(&dev, &none, &budget("global")));
+    assert!(source.matches(&dev, &own, &budget("key:dev")));
+    assert!(!source.matches(&dev, &own, &budget("key:ops")));
+    assert!(!source.matches(&dev, &own, &budget("global")));
     assert!(source.matches(&ops, &none, &budget("global")));
     live.set(config(keys(false)));
-    let refused = source.authorize(&ops, KILL_SWITCH_CHANGED, &none).await;
-    assert_eq!(refused.expect_err("demoted").code, -32012);
-    assert!(!source.matches(&ops, &none, &budget("global")));
+    for (name, args) in [
+        (KILL_SWITCH_CHANGED, &none),
+        (BUDGET_THRESHOLD, &none),
+        (BUDGET_THRESHOLD, &own),
+    ] {
+        let refused = source.authorize(&ops, name, args).await;
+        assert_eq!(refused.expect_err("demoted").code, -32012, "{name} {args}");
+    }
 }
 
 /// U6: budget deliveries are exempt from the delivery charge; the rest are
