@@ -458,7 +458,15 @@ fn exact_integer(text: &str) -> Option<String> {
         None => (text, 0),
     };
     let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let mut digits = format!("{whole}{fraction}");
+    // Only significant digits count toward the width bound below: zeros
+    // leading the fraction ("0.0001e8") are not, and a zero coefficient is 0
+    // whatever its exponent ("0e99").
+    let mut digits = format!("{whole}{fraction}")
+        .trim_start_matches('0')
+        .to_owned();
+    if digits.is_empty() {
+        return Some("0".to_owned());
+    }
     let shift = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?;
     if shift >= 0 {
         // u128 holds at most 39 digits; anything wider cannot equal a result.
@@ -474,8 +482,7 @@ fn exact_integer(text: &str) -> Option<String> {
         }
         digits.truncate(keep);
     }
-    let digits = digits.trim_start_matches('0');
-    Some(if digits.is_empty() { "0" } else { digits }.to_owned())
+    Some(digits)
 }
 
 fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
