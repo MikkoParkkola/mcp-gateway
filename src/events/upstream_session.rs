@@ -282,7 +282,7 @@ fn on_tick(live: Option<bool>, refused: impl FnOnce() -> bool) -> OnTick {
 fn start_due_refill(state: &mut State<'_>, backend: &Arc<Backend>, refill: &mut Option<Refill>) {
     if refill.is_some()
         || state.tools_pending
-        || !state.tools_due.is_some_and(|due| Instant::now() >= due)
+        || state.tools_due.is_none_or(|due| Instant::now() < due)
     {
         return;
     }

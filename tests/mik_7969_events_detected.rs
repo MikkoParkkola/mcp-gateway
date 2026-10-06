@@ -365,10 +365,12 @@ async fn a_recovery_onto_sse_ends_a_quiet_listener() {
     );
     assert!(
         wait_until(DEADLINE, || peer.open_gets() == 0).await,
-        "the listener outlived the switch to SSE"
+        "the listener outlived the switch to SSE: {}",
+        gw.stall_report()
     );
     assert!(
         wait_until(DEADLINE, || records(dir.path(), "subs").is_empty()).await,
-        "the listener-only subscription outlived the switch to SSE"
+        "the listener-only subscription outlived the switch to SSE: {}",
+        gw.stall_report()
     );
 }
