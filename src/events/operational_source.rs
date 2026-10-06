@@ -95,7 +95,12 @@ impl OperationalSource {
     }
 }
 
-fn descriptor(name: &str, description: &str, payload: Value, scope: Visibility) -> EventDescriptor {
+fn descriptor(
+    name: &str,
+    description: &str,
+    payload: &Value,
+    scope: Visibility,
+) -> EventDescriptor {
     let arguments = if name.starts_with(BUDGET_PREFIX) {
         json!({"scope": {"type": "string"}})
     } else {
@@ -126,25 +131,25 @@ impl EventSource for OperationalSource {
                  or `key:<API key name>`. Subscribe with `scope` to receive one budget; \
                  without it you receive every scope, which needs admin standing. Without \
                  admin standing, name your own key's.",
-                json!({"scope": text(), "percent": {"type": "integer"}}),
+                &json!({"scope": text(), "percent": {"type": "integer"}}),
                 Visibility::Owner,
             ),
             descriptor(
                 BUDGET_EXHAUSTED,
                 "A daily budget was used up. Same scopes and audience as the threshold event.",
-                json!({"scope": text()}),
+                &json!({"scope": text()}),
                 Visibility::Owner,
             ),
             descriptor(
                 HEALTH_CHANGED,
                 "A backend's circuit breaker changed state (closed, open, half_open). Admins only.",
-                json!({"backend": text(), "from": text(), "to": text()}),
+                &json!({"backend": text(), "from": text(), "to": text()}),
                 Visibility::Operator,
             ),
             descriptor(
                 KILL_SWITCH_CHANGED,
                 "A backend was killed or revived. Admins only.",
-                json!({"backend": text(), "state": {"enum": ["killed", "live"]}}),
+                &json!({"backend": text(), "state": {"enum": ["killed", "live"]}}),
                 Visibility::Operator,
             ),
         ]

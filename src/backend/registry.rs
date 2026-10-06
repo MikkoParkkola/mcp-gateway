@@ -310,7 +310,7 @@ impl BackendRegistry {
         let Some(observer) = self.breaker_observer.get() else {
             return;
         };
-        for backend in self.backends.iter() {
+        for backend in &self.backends {
             let breaker = &backend.shared_entry().failsafe.circuit_breaker;
             breaker.observe(Arc::clone(&observer));
         }
