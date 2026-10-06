@@ -37,6 +37,8 @@ use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targe
 /// MIK-7570.ATTEST.1: enforce on the direct route and on surfaced tools.
 mod attestation_routes;
 mod chain_direct;
+/// MIK-7962.COLD.1: admission reads the tool cache only.
+mod cold_admission;
 mod descriptor_withholding;
 mod f24_resource_subscribe;
 /// MIK-7215.CONTROL.5 G4: arm and hints key on the caller.
