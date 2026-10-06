@@ -48,6 +48,8 @@ pub struct SessionLifecycle {
     /// A sweep passes them over: a caller whose task is still running is not
     /// idle, however long ago its last request was (MIK-7828.FIX.2).
     /// Lock order: `sweeping`, then `held`, then `tracked`; never the reverse.
+    /// [`KeyHold`]'s drop takes `tracked` and then `held` one after the
+    /// other, never both at once, so it is outside this order.
     held: parking_lot::Mutex<std::collections::HashMap<String, usize>>,
     /// Held by `reap` from choosing the expired keys until their handlers
     /// have run, and by `hold` while it registers. A hold cannot start between
@@ -177,9 +179,10 @@ impl SessionLifecycle {
     /// delete is a deadline some other caller re-registered in between, taking
     /// a live caller's state with it.
     ///
-    /// **Residual, stated rather than implied**: a key re-tracked between
-    /// reaping's removal and this call still has its handlers fired, because
-    /// nothing holds the two together. A key taken by [`Self::hold`] is not
+    /// **Residual, stated rather than implied**: `reap` skips a key re-tracked
+    /// after it was chosen, but one re-tracked while its handlers are already
+    /// running still loses that state, because [`Self::track`] does not wait
+    /// for a sweep (it runs on every request). A key taken by [`Self::hold`] is not
     /// exposed to it: a hold waits for a running sweep to finish (`sweeping`).
     /// A plain [`Self::track`] still is, and the reaper does run in production.
     fn fire_cleanup(&self, session_id: &str) {
@@ -216,6 +219,8 @@ impl SessionLifecycle {
     /// renew its deadline. Taken around a task's backend call, which can run
     /// far past [`IDLE_TTL`] with no request from its caller in between. A
     /// key not yet tracked is tracked from the moment the guard drops.
+    /// Registering waits for a sweep that is running its handlers, which is
+    /// why handlers must stay in-memory and short.
     pub(crate) fn hold(self: &Arc<Self>, key: &str) -> KeyHold {
         let _sweeping = self.sweeping.lock();
         *self.held.lock().entry(key.to_owned()).or_default() += 1;
@@ -266,11 +271,17 @@ impl SessionLifecycle {
             }
             expired
         };
-        let reclaimed = expired.len();
+        let mut reclaimed = 0;
         for key in expired {
             // Already removed above. `on_disconnect` would remove it again, and
             // a second removal can only take an entry someone re-registered.
+            // A key a request re-tracked since it was chosen belongs to a live
+            // caller again: its state stays, and its new deadline decides.
+            if self.tracked.read().contains_key(&key) {
+                continue;
+            }
             self.fire_cleanup(&key);
+            reclaimed += 1;
         }
         reclaimed
     }
@@ -579,5 +590,26 @@ mod tests {
         );
         hold.join().expect("holder");
         assert_eq!(sweep.join().expect("sweep"), 1);
+    }
+
+    /// A key a request re-tracks after the sweep chose it is not reclaimed:
+    /// the first handler to run re-tracks the other expired key.
+    #[test]
+    fn a_key_retracked_after_the_sweep_chose_it_keeps_its_state() {
+        let lifecycle = Arc::new(SessionLifecycle::new());
+        let fired = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let (seen, renew) = (Arc::clone(&fired), Arc::downgrade(&lifecycle));
+        lifecycle.register("renews-the-other", move |key| {
+            seen.lock().expect("seen").push(key.to_owned());
+            let other = if key == "a" { "b" } else { "a" };
+            if let Some(lifecycle) = renew.upgrade() {
+                lifecycle.track(other, u64::MAX);
+            }
+        });
+        lifecycle.track("a", 0);
+        lifecycle.track("b", 0);
+        assert_eq!(lifecycle.reap(1), 1, "both keys reclaimed: {fired:?}");
+        assert_eq!(fired.lock().expect("seen").len(), 1);
+        assert_eq!(lifecycle.tracked_count(), 1);
     }
 }
