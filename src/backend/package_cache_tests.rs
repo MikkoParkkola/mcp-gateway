@@ -5,6 +5,7 @@
 
 use super::{
     Retired, TOMBSTONE_MARK, install_failure_needle, is_a_tree_to_walk, remove_now, retire_now,
+    sweep_tombstones_once,
 };
 use crate::Error;
 

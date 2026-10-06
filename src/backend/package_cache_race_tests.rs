@@ -161,11 +161,16 @@ async fn a_cancelled_rename_keeps_the_cache_locked_until_it_ends() {
     let rename = tokio::spawn({
         let dir = dir.clone();
         async move {
-            retire_cache_dir(&dir, held, move |_| {
-                started_tx.send(()).expect("the test is listening");
-                release_rx.recv().expect("the test releases the rename");
-                Retired::AlreadyGone
-            })
+            retire_cache_dir(
+                &dir,
+                held,
+                move |_| {
+                    started_tx.send(()).expect("the test is listening");
+                    release_rx.recv().expect("the test releases the rename");
+                    Retired::AlreadyGone
+                },
+                |_| {},
+            )
             .await
         }
     });
@@ -235,6 +240,7 @@ async fn a_rename_past_its_limit_is_abandoned_but_keeps_the_lock() {
             release_rx.recv().expect("the test releases the rename");
             Retired::AlreadyGone
         },
+        |_| {},
         Duration::from_millis(200),
     )
     .await;
@@ -304,5 +310,73 @@ async fn a_start_after_a_repair_does_not_wait_for_the_old_tree_to_go() {
     assert!(
         remove_now(&tombstone),
         "the parked deletion can still finish"
+    );
+}
+
+/// Where `record_orphan_discard` left the tombstone an orphaned rename handed on.
+static ORPHAN_DISCARDED: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+fn record_orphan_discard(tombstone: PathBuf) {
+    *ORPHAN_DISCARDED.lock().expect("orphan lock") = Some(tombstone);
+}
+
+/// Runs `retire` as a rename that outlives its caller's limit, then waits for
+/// the orphaned task to finish and let go of the cache.
+async fn orphaned_rename(dir: &Path, retire: Retired) {
+    let lock = repair_lock(dir);
+    let held = Arc::clone(&lock).lock_owned().await;
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let outcome = retire_within(
+        dir,
+        held,
+        move |_| {
+            release_rx.recv().expect("the test releases the rename");
+            retire
+        },
+        record_orphan_discard,
+        Duration::from_millis(100),
+    )
+    .await;
+    assert!(outcome.is_err(), "the caller gave up on the rename");
+    release_tx.send(()).expect("the rename is waiting");
+    drop(
+        tokio::time::timeout(Duration::from_secs(5), lock.lock())
+            .await
+            .expect("the orphaned rename ends"),
+    );
+}
+
+/// A refused rename nobody waited for still re-arms the repair, so the backend
+/// is not left marked as repaired with nothing cleared.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_orphaned_refused_rename_re_arms_the_repair() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let dir = temp_root(workspace.path()).join(unique_leaf());
+    assert!(
+        mark_repaired(&dir),
+        "the repair is taken, as a failed start does"
+    );
+
+    orphaned_rename(&dir, Retired::Refused).await;
+
+    assert!(
+        mark_repaired(&dir),
+        "the refused rename re-armed the latch, so a later start can repair"
+    );
+}
+
+/// A moved tree nobody waited for is still handed on for deletion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_orphaned_moved_rename_still_discards_its_tombstone() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let dir = temp_root(workspace.path()).join(unique_leaf());
+    let tombstone = temp_root(workspace.path()).join(format!("{}.tombstone-x", unique_leaf()));
+
+    orphaned_rename(&dir, Retired::Moved(tombstone.clone())).await;
+
+    assert_eq!(
+        ORPHAN_DISCARDED.lock().expect("orphan lock").take(),
+        Some(tombstone),
+        "the tombstone was handed on although the caller had gone"
     );
 }

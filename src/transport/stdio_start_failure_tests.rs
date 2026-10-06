@@ -109,3 +109,36 @@ async fn a_start_drops_what_the_previous_attempt_said() {
          previous attempt's words as its own"
     );
 }
+
+// A child that answers `initialize` with an error and stays alive: the late
+// failure path, where the gateway itself has to kill it.
+const REFUSING_CHILD: &str = r#"read -r request
+id=${request#*'"id":'}
+id=${id%%,*}
+printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"no"}}\n' "$id"
+while read -r _; do :; done
+"#;
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_late_failure_records_the_ending_of_the_child_it_killed() {
+    let dir = tempfile::tempdir().expect("scratch");
+    std::fs::write(dir.path().join("refusing.sh"), REFUSING_CHILD).expect("write the child");
+    let transport = StdioTransport::new(
+        "sh refusing.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(5),
+        None,
+    );
+
+    transport
+        .start()
+        .await
+        .expect_err("a refused handshake cannot start");
+
+    assert!(
+        transport.exit_status().is_some(),
+        "the child the failure killed has an ending to report, not \"running\""
+    );
+}

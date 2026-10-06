@@ -222,7 +222,7 @@ async fn repair_while_locked(
     // Kept to the end of the retry. If this future is dropped mid-rename, the
     // guard is still inside the blocking task, which Tokio cannot abort.
     let limit = transport.request_timeout();
-    let Ok((retired, _held)) = retire_within(dir, held, retire_now, limit).await else {
+    let Ok((retired, _held)) = retire_within(dir, held, retire_now, discard, limit).await else {
         warn!(path = %dir.display(), "moving the package cache aside did not finish in time; abandoning the repair");
         let error = Error::BackendUnavailable(format!(
             "stdio backend {}: moving its package cache aside did not finish within {limit:?}; \
@@ -231,16 +231,11 @@ async fn repair_while_locked(
         ));
         return (Err(error), Repair::NotRepaired);
     };
-    match retired {
-        Retired::Moved(tombstone) => discard(tombstone),
-        Retired::AlreadyGone => {}
-        Retired::Refused => {
-            // The start never got its repair, so the latch is not spent: a
-            // later start can try the same cache again.
-            arm_again(dir);
-            warn!(path = %dir.display(), "could not clear package cache");
-            return (Err(error), Repair::NotRepaired);
-        }
+    // The tombstone's deletion and the latch reset already happened inside
+    // the rename's task (see `retire_cache_dir`).
+    if retired == Retired::Refused {
+        warn!(path = %dir.display(), "could not clear package cache");
+        return (Err(error), Repair::NotRepaired);
     }
     warn!(
         command = %transport.diagnostic_command(),
@@ -313,12 +308,13 @@ async fn retire_within<F>(
     dir: &Path,
     held: CacheGuard,
     retire: F,
+    discard: fn(PathBuf),
     limit: std::time::Duration,
 ) -> Result<(Retired, Option<CacheGuard>), tokio::time::error::Elapsed>
 where
     F: FnOnce(&Path) -> Retired + Send + 'static,
 {
-    tokio::time::timeout(limit, retire_cache_dir(dir, held, retire)).await
+    tokio::time::timeout(limit, retire_cache_dir(dir, held, retire, discard)).await
 }
 
 /// Moves a cache aside to a tombstone on the blocking pool.
@@ -327,16 +323,31 @@ where
 /// result. A started blocking task cannot be aborted, so if the start awaiting
 /// it is cancelled, the rename still finishes, and it keeps every other start
 /// of this backend out until it has.
+///
+/// What follows the rename happens in the same task, before the guard is let
+/// go, so it happens even when no caller is left to see the result: a moved
+/// tree is handed to `discard`, and a refused rename re-arms the latch, since
+/// that start never got its repair and a later start may try again.
 async fn retire_cache_dir<F>(
     dir: &Path,
     held: CacheGuard,
     retire: F,
+    discard: fn(PathBuf),
 ) -> (Retired, Option<CacheGuard>)
 where
     F: FnOnce(&Path) -> Retired + Send + 'static,
 {
     let target = dir.to_path_buf();
-    match tokio::task::spawn_blocking(move || (retire(&target), held)).await {
+    let renamed = tokio::task::spawn_blocking(move || {
+        let retired = retire(&target);
+        match &retired {
+            Retired::Moved(tombstone) => discard(tombstone.clone()),
+            Retired::Refused => arm_again(&target),
+            Retired::AlreadyGone => {}
+        }
+        (retired, held)
+    });
+    match renamed.await {
         Ok((retired, held)) => (retired, Some(held)),
         Err(error) => {
             warn!(%error, "package cache rename task failed");
