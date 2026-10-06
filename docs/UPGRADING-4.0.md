@@ -1621,7 +1621,7 @@ Forward audit records off-host: `control_plane.export` writes a local NDJSON fil
 protection holds only once an agent running as another account ships that file to a store (a
 SIEM, for example) where the gateway account cannot delete or alter records already landed. To
 detect a wipe or rollback, keep a copy of `<log>.hwm` off the host and verify with
-`audit verify --anchor` (item 155).
+`audit verify --anchor` (item 156).
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
