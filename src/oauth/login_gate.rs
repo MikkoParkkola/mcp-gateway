@@ -235,7 +235,7 @@ pub(crate) async fn non_interactive<F: std::future::Future>(work: F) -> F::Outpu
 /// Whether the current task may begin or wait on a login. Read before any
 /// `tokio::spawn`: a spawned task does not inherit the scope.
 pub(crate) fn interactive() -> bool {
-    NON_INTERACTIVE.try_with(|()| ()).is_err()
+    NON_INTERACTIVE.try_get().is_err()
 }
 
 /// Whose deadline it is (MIK-7982 C3): the cohort a bounded caller captured
