@@ -72,12 +72,15 @@ impl HttpTransport {
             let interactive = crate::oauth::login_gate::interactive();
             let oauth_task = tokio::spawn(async move {
                 let mut oauth = oauth_arc_for_task.lock().await;
+                // Before discovery: a restart or stop that cancels logins
+                // while this start is still discovering refuses its login.
+                let since = oauth.login_epoch();
                 oauth.initialize().await?;
 
                 // If we don't have a valid token, trigger authorization flow
                 if !oauth.has_valid_token() {
                     info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&base_url_for_task), "OAuth required - initiating authorization flow");
-                    oauth.authorize_shared(interactive).await?;
+                    oauth.authorize_shared(interactive, since).await?;
                 }
 
                 Ok::<String, crate::Error>(oauth.backend_name().to_string())

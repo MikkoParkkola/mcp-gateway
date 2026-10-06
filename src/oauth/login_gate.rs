@@ -101,6 +101,9 @@ pub(crate) enum Begin {
     Lead(Lead),
     /// A login is in flight: wait on it.
     Join(Arc<Attempt>),
+    /// A restart or shutdown cancelled logins since this caller set out, or
+    /// the backend is stopped: it begins nothing.
+    Refused,
 }
 
 /// The caller leading a login, which ends it with [`Lead::end`]. Dropped
@@ -139,6 +142,11 @@ impl Drop for Lead {
 struct State {
     cohort: Arc<Cohort>,
     attempt: Option<Arc<Attempt>>,
+    /// Bumped by every cancel, so a start that set out before one (and was
+    /// still discovering when it came) cannot open a login after it.
+    epoch: u64,
+    /// The backend stopped: no login begins again.
+    closed: bool,
 }
 
 /// A backend's one login at a time. See the module docs.
@@ -167,9 +175,18 @@ impl LoginGate {
             .is_some_and(|attempt| Arc::ptr_eq(&attempt.cohort, cohort))
     }
 
-    /// Lead a new login, or join the one in flight.
-    pub(crate) fn begin(self: &Arc<Self>) -> Begin {
+    /// The cancel epoch a start captures before it discovers anything.
+    pub(crate) fn epoch(&self) -> u64 {
+        self.state.lock().epoch
+    }
+
+    /// Lead a new login, or join the one in flight. `since` is the epoch
+    /// the caller captured when it set out, if it is a start.
+    pub(crate) fn begin(self: &Arc<Self>, since: Option<u64>) -> Begin {
         let mut state = self.state.lock();
+        if state.closed || since.is_some_and(|epoch| epoch != state.epoch) {
+            return Begin::Refused;
+        }
         if let Some(attempt) = &state.attempt {
             return Begin::Join(Arc::clone(attempt));
         }
@@ -224,11 +241,22 @@ impl LoginGate {
     /// End the login in flight, if any, and wait until it has closed its
     /// callback listener: a restart or shutdown of the backend.
     pub(crate) async fn cancel_and_join(&self) {
-        let attempt = self.state.lock().attempt.clone();
+        let attempt = {
+            let mut state = self.state.lock();
+            state.epoch += 1;
+            state.attempt.clone()
+        };
         if let Some(attempt) = attempt {
             attempt.cancel.cancel();
             attempt.finished().await;
         }
+    }
+
+    /// The backend stopped: refuse every later login, then end the one in
+    /// flight as [`Self::cancel_and_join`] does.
+    pub(crate) async fn close(&self) {
+        self.state.lock().closed = true;
+        self.cancel_and_join().await;
     }
 }
 
@@ -333,11 +361,11 @@ mod tests {
     fn an_unfinished_login_ends_its_cohort_and_the_next_caller_begins_afresh() {
         let gate = Arc::new(LoginGate::default());
         let queued = gate.cohort();
-        let Begin::Lead(lead) = gate.begin() else {
+        let Begin::Lead(lead) = gate.begin(None) else {
             panic!("no login in flight, so the first caller leads");
         };
         assert!(gate.pending_in(&queued));
-        assert!(matches!(gate.begin(), Begin::Join(_)));
+        assert!(matches!(gate.begin(None), Begin::Join(_)));
 
         lead.end(Some(&Error::AuthorizationCancelled {
             backend: "b".into(),
@@ -346,14 +374,14 @@ mod tests {
         assert_eq!(queued.outcome(), Some(&LoginOutcome::Cancelled));
         assert!(!gate.pending_in(&queued));
         assert!(gate.cohort().outcome().is_none(), "a fresh cohort");
-        assert!(matches!(gate.begin(), Begin::Lead(_)));
+        assert!(matches!(gate.begin(None), Begin::Lead(_)));
     }
 
     #[test]
     fn a_login_that_got_a_token_sets_no_outcome() {
         let gate = Arc::new(LoginGate::default());
         let cohort = gate.cohort();
-        let Begin::Lead(lead) = gate.begin() else {
+        let Begin::Lead(lead) = gate.begin(None) else {
             panic!("leads");
         };
         lead.end(None);
@@ -365,10 +393,10 @@ mod tests {
     async fn an_abandoned_lead_frees_the_gate_and_cancels_its_joiners() {
         let gate = Arc::new(LoginGate::default());
         let cohort = gate.cohort();
-        let Begin::Lead(lead) = gate.begin() else {
+        let Begin::Lead(lead) = gate.begin(None) else {
             panic!("leads");
         };
-        let Begin::Join(joined) = gate.begin() else {
+        let Begin::Join(joined) = gate.begin(None) else {
             panic!("joins the lead's login");
         };
 
@@ -380,8 +408,22 @@ mod tests {
             "an abandoned login sets no outcome"
         );
         assert!(
-            matches!(gate.begin(), Begin::Lead(_)),
+            matches!(gate.begin(None), Begin::Lead(_)),
             "the next caller leads"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_start_that_set_out_before_a_cancel_begins_nothing() {
+        let gate = Arc::new(LoginGate::default());
+        let set_out = gate.epoch();
+        gate.cancel_and_join().await;
+        assert!(matches!(gate.begin(Some(set_out)), Begin::Refused));
+        assert!(matches!(gate.begin(Some(gate.epoch())), Begin::Lead(_)));
+        gate.close().await;
+        assert!(
+            matches!(gate.begin(None), Begin::Refused),
+            "a stopped backend logs in no more"
         );
     }
 

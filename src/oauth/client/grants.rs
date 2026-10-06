@@ -370,7 +370,11 @@ impl OAuthClient {
     /// As [`Self::authorize_until`]; a joiner gets the led login's typed
     /// outcome, or an OAuth error if the led login stored no token;
     /// [`Error::AuthorizationRequired`] when not `interactive`.
-    pub(crate) async fn authorize_shared(&self, interactive: bool) -> Result<String> {
+    pub(crate) async fn authorize_shared(
+        &self,
+        interactive: bool,
+        since: Option<u64>,
+    ) -> Result<String> {
         use crate::oauth::login_gate::Begin;
         if !interactive {
             return Err(Error::AuthorizationRequired {
@@ -383,7 +387,10 @@ impl OAuthClient {
         // A bounded caller's deadline must read this wait as a login's, even
         // once a dropped lead has released the gate (MIK-7982 C3).
         crate::oauth::login_gate::Provenance::mark_waited();
-        match gate.begin() {
+        match gate.begin(since) {
+            Begin::Refused => Err(Error::AuthorizationCancelled {
+                backend: self.backend_name().to_string(),
+            }),
             Begin::Lead(lead) => {
                 // A login that ended while this client was being built may
                 // already have stored a token: use it, open no second login.
@@ -404,6 +411,12 @@ impl OAuthClient {
                 })
             }
         }
+    }
+
+    /// The gate's cancel epoch, captured by a start before it discovers
+    /// anything (`None` when ungated).
+    pub(crate) fn login_epoch(&self) -> Option<u64> {
+        self.login_gate.as_ref().map(|gate| gate.epoch())
     }
 
     /// Take up a live token another client of this backend stored, with the

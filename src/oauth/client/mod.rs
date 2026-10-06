@@ -488,7 +488,7 @@ impl OAuthClient {
 
         // Need to authorize from scratch
         let token = self
-            .authorize_shared(super::login_gate::interactive())
+            .authorize_shared(super::login_gate::interactive(), None)
             .await?;
         Ok(token)
     }
