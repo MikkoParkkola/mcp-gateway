@@ -26,6 +26,7 @@ use crate::transport::Transport;
 mod delivery;
 mod delivery_who;
 mod lost_round;
+mod meta_malformed_retry;
 mod meta_refusal;
 mod meta_replay;
 #[cfg(feature = "firewall")]
@@ -308,6 +309,8 @@ enum Caller {
     Key,
     /// Anonymous, carrying an `mcp-session-id` header.
     Session,
+    /// Anonymous, declaring the modern era by header: no session at all.
+    Modern,
     /// Anonymous, with a verified client certificate (MIK-7938).
     Cert,
     /// Anonymous, with a verified OAuth agent token (MIK-7938).
@@ -355,6 +358,18 @@ async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (Statu
     }
     if matches!(caller, Caller::Session) {
         builder = builder.header("mcp-session-id", "sess-d2");
+    }
+    if matches!(caller, Caller::Modern) {
+        // The modern era also requires the method and name headers to echo
+        // the body, or the call is refused (-32020) before any audit path.
+        let parsed: Value = serde_json::from_str(body).unwrap();
+        builder = builder
+            .header(
+                "mcp-protocol-version",
+                crate::protocol::meta::MODERN_VERSIONS[0],
+            )
+            .header("mcp-method", parsed["method"].as_str().unwrap())
+            .header("mcp-name", parsed["params"]["name"].as_str().unwrap());
     }
     let mut request = builder
         .body(axum::body::Body::from(body.to_string()))
