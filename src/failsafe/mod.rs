@@ -7,6 +7,7 @@ mod health;
 mod rate_limiter;
 mod retry;
 
+pub(crate) use circuit_breaker::HealthChange;
 pub use circuit_breaker::{
     CircuitBreaker, CircuitBreakerStats, CircuitState, build_circuit_breaker_error,
 };

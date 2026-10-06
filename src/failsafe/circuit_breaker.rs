@@ -122,6 +122,16 @@ pub struct CircuitBreaker {
     last_trip_ms: AtomicU64,
     /// Structured record of the most recent Open transition (MIK-6119).
     last_open_event: RwLock<Option<BreakerOpenEvent>>,
+    /// Told of every transition (the operational events source).
+    observer: crate::observer::Observer<HealthChange>,
+}
+
+/// A breaker moved from one state to another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HealthChange {
+    pub backend: String,
+    pub from: CircuitState,
+    pub to: CircuitState,
 }
 
 impl CircuitBreaker {
@@ -141,7 +151,13 @@ impl CircuitBreaker {
             trips_count: AtomicU64::new(0),
             last_trip_ms: AtomicU64::new(0),
             last_open_event: RwLock::new(None),
+            observer: crate::observer::Observer::default(),
         }
+    }
+
+    /// Attach the observer told of every transition.
+    pub(crate) fn observe(&self, observer: crate::observer::ObserverFn<HealthChange>) {
+        self.observer.set(observer);
     }
 
     /// Check if requests can proceed.
@@ -391,6 +407,12 @@ impl CircuitBreaker {
                 debug!(backend = %self.name, "Circuit breaker half-open");
             }
         }
+        drop(state);
+        self.observer.call(HealthChange {
+            backend: self.name.clone(),
+            from: old_state,
+            to: new_state,
+        });
     }
 }
 

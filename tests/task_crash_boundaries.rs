@@ -280,6 +280,12 @@ async fn a_create_with_a_discarded_ack_is_recovered_by_its_owner_only() {
 /// Create boundary, pinned (#2298): the child is held at `Published`, after
 /// the durable create and before the ack, and killed there. So the kill lands
 /// between commit and ack by construction, and the recovery must still hold.
+///
+/// Debug only, as the pause hook is (`execution.rs` gates `pause_hook` on
+/// `debug_assertions`): this test and the binary it spawns share one profile,
+/// so a release-profile run compiles the row out instead of failing on a hook
+/// that is not there (MIK-7655).
+#[cfg(debug_assertions)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_create_killed_between_commit_and_ack_is_recovered_by_its_owner_only() {
     let root = temp_root("crash-create-published");

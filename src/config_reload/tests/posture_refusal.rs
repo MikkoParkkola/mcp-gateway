@@ -85,9 +85,10 @@ async fn a_reload_publishing_the_gateway_over_open_tools_is_refused() {
     // `Config::load` applying the candidate's env files to the process, read
     // back per call through `std::env::var`. That mechanism is GONE: env files
     // build an `EnvOverlay` published only by a reload that got that far
-    // (`src/config_reload/mod.rs:1696`), and `env::var` no longer appears
-    // anywhere under `src/capability/`. The assertion outlived its rationale;
-    // the rationale above is the one that holds today.
+    // (`ReloadContext::publish_overlay`, `src/config_reload/reload_context.rs`),
+    // and `env::var` no longer appears anywhere under `src/capability/`. The
+    // assertion outlived its rationale; the rationale above is the one that
+    // holds today.
     //
     // Every phrasing that has appeared here, not only the last one. An earlier
     // version of this case listed the two the body had just been corrected of,

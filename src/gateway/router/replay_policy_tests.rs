@@ -122,8 +122,9 @@ async fn fixture(answer: Answer) -> Fixture {
     fixture_with(answer, false).await
 }
 
-/// `passthrough`: the trusted-internal mode, which skips the direct route's
-/// security gate.
+/// `passthrough`: the trusted-internal mode. The direct route's security gate
+/// still runs (firewall, relay and key checks); only input sanitization is
+/// skipped for it.
 async fn fixture_with(answer: Answer, passthrough: bool) -> Fixture {
     let auth = AuthConfig {
         enabled: true,

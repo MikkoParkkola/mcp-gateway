@@ -144,7 +144,7 @@ async fn emission_waits_for_the_snapshot_to_list_the_uri() {
         .lock()
         .add(&Interest::ResourceUpdated("file:///a".to_owned()))
         .expect("room");
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, Era::Legacy);
     let changed = || UpstreamNote::Notice {
         kind: NoteKind::ResourceUpdated,
         uri: Some("file:///a".to_owned()),
@@ -196,7 +196,7 @@ async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
     // The backend's listener-only subscription and the one the gateway also
     // announces itself.
     admit_both(&hub);
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, Era::Legacy);
     let changed = || UpstreamNote::Notice {
         kind: NoteKind::ResourcesChanged,
         uri: None,
@@ -309,7 +309,7 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     tokio::time::sleep(Duration::from_millis(2600)).await;
     assert!(!task.is_finished(), "control: an eligible listener ended");
     assert!(!shared.stop.is_cancelled());
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, Era::Legacy);
     let changed = || UpstreamNote::Notice {
         kind: NoteKind::ResourcesChanged,
         uri: None,
@@ -355,4 +355,282 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
 
     let left = after_withdrawal(&hub).await;
     assert_eq!(left, ["backend.b.tools_changed"]);
+}
+
+/// MIK-7950 FIX.3: the default catalogue cache TTL, which the session now
+/// re-reads at, is the 300 s the fixed interval was; a zero TTL re-reads at
+/// most once a second and a huge one at least daily, without overflow.
+#[test]
+fn the_snapshot_interval_follows_the_cache_ttl_within_bounds() {
+    let default = crate::config::MetaMcpConfig::default().cache_ttl;
+    assert_eq!(snapshot_interval(default), Duration::from_secs(300));
+    assert_eq!(
+        snapshot_interval(Duration::from_secs(2)),
+        Duration::from_secs(2)
+    );
+    assert_eq!(snapshot_interval(Duration::ZERO), Duration::from_secs(1));
+    let huge = Duration::from_secs(10_000 * 365 * 24 * 3600);
+    assert_eq!(snapshot_interval(huge), Duration::from_secs(24 * 3600));
+    let _ = Instant::now() + snapshot_interval(huge);
+}
+
+/// MIK-7951 REFILLFU.6: the session's end path, which a replaced transport
+/// takes, waits for a refill in flight and announces the tools change.
+#[tokio::test]
+async fn a_refill_in_flight_at_the_session_end_is_announced() {
+    let dir = tempfile::tempdir().expect("dir");
+    let reload = Reload::new(dir.path());
+    reload.to(true).await;
+    let backend = reload.registry.get("b").expect("b registered");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    hub.register_source(Arc::new(crate::events::backend_source::BackendSource {
+        names: Arc::new(|| vec!["b".to_owned()]),
+        upstream: None,
+    }));
+    let shared = shared();
+    let mut state = State::new(&shared, Era::Modern);
+    let (release, released) = tokio::sync::oneshot::channel::<()>();
+    let refill: Refill = Box::pin(async move {
+        let _ = released.await;
+    });
+    let ending = finish_refill(
+        &mut state,
+        &shared,
+        &backend,
+        &weak,
+        Some(refill),
+        Instant::now(),
+    );
+    tokio::pin!(ending);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut ending)
+            .await
+            .is_err(),
+        "the end waits for the refill"
+    );
+    release.send(()).expect("release");
+    tokio::time::timeout(Duration::from_secs(5), ending)
+        .await
+        .expect("the session end finished once the refill did");
+    // Announced after the hub's own quiet period.
+    let announced = tokio::time::timeout(Duration::from_secs(5), intake.recv()).await;
+    assert!(
+        matches!(announced, Ok(Some(_))),
+        "the tools change was announced"
+    );
+}
+
+/// MIK-7950: a session that started with no URI watched, while the shared
+/// snapshot is known from an earlier session, reads the catalogue as soon as
+/// a URI is watched, not after a fixed 300 s.
+#[tokio::test]
+async fn a_uri_watched_after_the_session_started_is_read_at_once() {
+    let dir = tempfile::tempdir().expect("dir");
+    let reload = Reload::new(dir.path());
+    reload.to(true).await;
+    let backend = reload.registry.get("b").expect("b registered");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    shared
+        .snapshot
+        .lock()
+        .read(["file:///a".to_owned()].into(), true);
+    let mut state = State::new(&shared, Era::Modern);
+    let started = Instant::now();
+    shared
+        .need
+        .lock()
+        .add(&Interest::ResourceUpdated("file:///b".to_owned()))
+        .expect("room");
+    // No transport: only the catalogue read is of interest here.
+    let handle: Weak<dyn UpstreamListen> = Weak::<crate::transport::HttpTransport>::new();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        state.maintain(&backend, &weak, &handle, true),
+    )
+    .await
+    .expect("maintain finished");
+    // The backend is unreachable, so the read failed and set its retry time:
+    // proof that it ran.
+    assert!(
+        state.snapshot_retry_at > started,
+        "the newly watched URI's catalogue was not read"
+    );
+}
+
+fn changed(kind: NoteKind) -> UpstreamNote {
+    UpstreamNote::Notice { kind, uri: None }
+}
+
+/// MIK-7898 SESS.1: a notice still inside its coalescing window when the
+/// session ends is delivered, not dropped with the session's state.
+#[tokio::test]
+async fn a_coalesced_notice_is_delivered_when_the_session_ends() {
+    let dir = tempfile::tempdir().expect("dir");
+    let reload = Reload::new(dir.path());
+    reload.to(true).await;
+    let backend = reload.registry.get("b").expect("b registered");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    shared
+        .need
+        .lock()
+        .add(&Interest::ResourcesChanged)
+        .expect("room");
+    let mut state = State::new(&shared, Era::Legacy);
+    state.note(changed(NoteKind::ResourcesChanged), false);
+    let _ = finish_refill(&mut state, &shared, &backend, &weak, None, Instant::now()).await;
+    assert!(
+        intake.try_recv().is_ok(),
+        "the notice in its window was dropped with the session"
+    );
+}
+
+/// MIK-7898 SESS.3: a notice of a kind the peer's acknowledgement did not
+/// honour is not delivered. Control: the honoured kind is.
+#[tokio::test]
+async fn a_kind_the_acknowledgement_did_not_honour_is_not_delivered() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    for interest in [Interest::ResourcesChanged, Interest::PromptsChanged] {
+        shared.need.lock().add(&interest).expect("room");
+    }
+    let mut state = State::new(&shared, Era::Modern);
+    let honoured = KindSet {
+        resources_changed: true,
+        ..KindSet::default()
+    };
+    state.note(
+        UpstreamNote::Ack {
+            kinds: honoured,
+            uris: Vec::new(),
+        },
+        false,
+    );
+    state.note(changed(NoteKind::PromptsChanged), false);
+    state.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(
+        intake.try_recv().is_err(),
+        "a kind the peer did not acknowledge was delivered"
+    );
+    state.note(changed(NoteKind::ResourcesChanged), false);
+    state.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(intake.try_recv().is_ok(), "control: the honoured kind");
+}
+
+/// MIK-7899 CLASS.1: a listen the peer answers with `-32601` ends the session
+/// as `Unsupported` (the long backoff); a refused replacement ends nothing.
+#[test]
+fn a_refused_listen_ends_the_session_as_unsupported() {
+    let shared = shared();
+    let mut state = State::new(&shared, Era::Modern);
+    assert!(!state.note(UpstreamNote::Unsupported, true));
+    assert!(matches!(state.ended(Instant::now()), Outcome::Ended { .. }));
+    assert!(state.note(UpstreamNote::Unsupported, false));
+    assert!(matches!(state.ended(Instant::now()), Outcome::Unsupported));
+}
+
+/// MIK-7898 SESS.3: a `resources/updated` for a URI the acknowledgement did
+/// not list is not delivered. Control: a listed URI is.
+#[tokio::test]
+async fn a_uri_the_acknowledgement_did_not_list_is_not_delivered() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    let (a, b) = ("file:///a".to_owned(), "file:///b".to_owned());
+    for uri in [&a, &b] {
+        shared
+            .need
+            .lock()
+            .add(&Interest::ResourceUpdated(uri.clone()))
+            .expect("room");
+    }
+    shared
+        .snapshot
+        .lock()
+        .read([a.clone(), b.clone()].into(), true);
+    let mut state = State::new(&shared, Era::Modern);
+    state.note(
+        UpstreamNote::Ack {
+            kinds: KindSet::default(),
+            uris: vec![a.clone()],
+        },
+        false,
+    );
+    let updated = |uri: &str| UpstreamNote::Notice {
+        kind: NoteKind::ResourceUpdated,
+        uri: Some(uri.to_owned()),
+    };
+    state.note(updated(&b), false);
+    state.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(intake.try_recv().is_err(), "an unlisted URI was delivered");
+    state.note(updated(&a), false);
+    state.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(intake.try_recv().is_ok(), "control: the listed URI");
+}
+
+/// MIK-7898 SESS.3: on a modern stream a notice before the acknowledgement,
+/// the first listen's or a replacement's, is not delivered; a legacy stream,
+/// which has none, is not gated.
+#[tokio::test]
+async fn a_notice_before_the_acknowledgement_is_not_delivered() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    shared
+        .need
+        .lock()
+        .add(&Interest::ResourcesChanged)
+        .expect("room");
+    let mut modern = State::new(&shared, Era::Modern);
+    modern.note(changed(NoteKind::ResourcesChanged), false);
+    modern.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(
+        intake.try_recv().is_err(),
+        "before the first acknowledgement"
+    );
+    let all = KindSet {
+        resources_changed: true,
+        ..KindSet::default()
+    };
+    modern.note(
+        UpstreamNote::Ack {
+            kinds: all,
+            uris: Vec::new(),
+        },
+        false,
+    );
+    modern.note(changed(NoteKind::ResourcesChanged), true);
+    modern.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(
+        intake.try_recv().is_err(),
+        "a replacement before its acknowledgement"
+    );
+    // Its acknowledgement makes the replacement current: its notices count.
+    modern.note(
+        UpstreamNote::Ack {
+            kinds: all,
+            uris: Vec::new(),
+        },
+        true,
+    );
+    modern.note(changed(NoteKind::ResourcesChanged), false);
+    modern.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(intake.try_recv().is_ok(), "the promoted replacement");
+    let mut legacy = State::new(&shared, Era::Legacy);
+    legacy.note(changed(NoteKind::ResourcesChanged), false);
+    legacy.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(intake.try_recv().is_ok(), "control: a legacy stream");
 }

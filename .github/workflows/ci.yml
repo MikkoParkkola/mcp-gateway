@@ -939,7 +939,7 @@ jobs:
         run: python3 scripts/release/test_check_tag_manifest.py
       - name: Test the burndown summary drift check
         run: python3 scripts/release/test_check_burndown_summary.py
-      - name: Burndown summary matches both ledger checks (MIK-7730)
+      - name: Burndown summary and publish gate match the ledger checks (MIK-7730, MIK-7932)
         run: python3 scripts/release/check_burndown_summary.py
       - name: Test the NFR.DEMO.1 recording gate
         run: python3 scripts/release/test_check_nfr_demo_1_recordings.py

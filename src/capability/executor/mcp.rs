@@ -565,8 +565,9 @@ impl CapabilityExecutor {
             .filter_map(|name| lookup(name).map(|v| (name, v.to_string_lossy().into_owned())))
             .collect();
         // As `child_env`: the gateway sets a reserved name itself, never from
-        // this list, so its value is no injected secret. A changed one still
-        // restarts the child below (PATH reaches it).
+        // this list, so its value is no injected secret. The fingerprint below
+        // still hashes every declared pair: the child's PATH is the gateway's
+        // own, so a changed declared PATH must restart the child.
         let env_values: Vec<String> = declared
             .iter()
             .filter(|(name, _)| !is_reserved(name))

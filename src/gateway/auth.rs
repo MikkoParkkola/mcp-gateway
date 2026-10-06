@@ -68,6 +68,48 @@ fn bearer_token_fingerprint(token: &str) -> String {
     crate::hashing::sha256_hex(token.as_bytes())[..12].to_string()
 }
 
+/// A configured API key's principal: the first 48 bits of its digest, as hex.
+///
+/// Persisted as the key of sessions, grants, journals and task owners, so it
+/// is never lengthened; two credentials that share one are refused instead
+/// ([`refuse_shared_principals`], MIK-7973).
+pub(crate) fn principal_of_digest(digest: &[u8; 32]) -> String {
+    hex::encode(&digest[..6])
+}
+
+/// MIK-7973: refuse a configuration where two credentials resolve to one
+/// principal, since each would then own the other's sessions, grants and tasks.
+///
+/// Covers the bearer and API keys configured together. Identities issued at
+/// runtime (key-server tokens, delegated OIDC bearers) need no check: their
+/// principals are tagged and cannot fall in this space (MIK-8006). A principal
+/// that a removed credential once held is not checked either.
+///
+/// The error names the two credentials, never a secret, digest or principal.
+pub(crate) fn refuse_shared_principals<'a>(
+    bearer: Option<&str>,
+    keys: impl IntoIterator<Item = (&'a str, &'a [u8; 32])>,
+) -> crate::Result<()> {
+    let bearer = bearer.map(|token| ("auth.bearer_token".to_owned(), principal_of(token)));
+    let keys = keys.into_iter().map(|(name, digest)| {
+        (
+            format!("auth.api_keys['{name}']"),
+            principal_of_digest(digest),
+        )
+    });
+    let mut seen = std::collections::HashMap::new();
+    for (label, principal) in bearer.into_iter().chain(keys) {
+        if let Some(first) = seen.insert(principal, label.clone()) {
+            return Err(crate::Error::ConfigValidation(format!(
+                "{first} and {label} resolve to the same credential principal (the first 48 \
+                 bits of the SHA-256 digest), so the gateway could not tell their callers \
+                 apart; replace one of the two credentials or remove the duplicate entry"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Resolved authentication configuration (tokens expanded)
 pub struct ResolvedAuthConfig {
     /// Whether auth is enabled

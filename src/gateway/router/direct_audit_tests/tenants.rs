@@ -23,33 +23,6 @@ fn reply_naming(tenant: &str, note: &str) -> Value {
     json!({"content": [{"type": "text", "text": rows.to_string()}], "isError": false})
 }
 
-/// A direct `tools/call` of `t` naming `customer_id`, optionally keyed.
-fn direct_call(tenant: &str, idempotency_key: Option<&str>) -> String {
-    let mut params = json!({"name": "t", "arguments": {"customer_id": tenant}});
-    if let Some(key) = idempotency_key {
-        params["_meta"] = json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key});
-    }
-    json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": params}).to_string()
-}
-
-/// POST as a modern, anonymous client: the era that carries an idempotency key.
-async fn post_modern(fx: &Fixture, uri: &str, body: &str) -> (StatusCode, Value) {
-    let request = axum::http::Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", "2026-07-28")
-        .body(axum::body::Body::from(body.to_string()))
-        .unwrap();
-    let response = fx.router.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
-}
-
 /// T12. The direct record names request and response tenants, hashed and
 /// sorted, with the kernel's data classes: the direct route runs the same
 /// response gates as the meta route.

@@ -62,6 +62,7 @@ pub mod kubernetes;
 pub mod metrics;
 pub mod mtls;
 pub mod oauth;
+mod observer;
 pub(crate) mod personal_accounts;
 pub mod playbook;
 pub mod projection;

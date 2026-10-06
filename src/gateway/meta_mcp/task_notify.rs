@@ -22,6 +22,8 @@ use crate::protocol::subscriptions::SubscriptionId;
 pub(crate) struct Reader<'a> {
     pub caller: &'a str,
     pub session_id: &'a str,
+    /// The reader's verified grant subject, when one resolved (MIK-7938).
+    pub subject: Option<&'a crate::identity_grants::GrantSubject>,
 }
 
 /// A frame built for one reader, not yet delivered. Nothing about its delivery
@@ -108,6 +110,7 @@ impl MetaMcp {
             caller: reader.caller,
             external_server: "gateway",
             external_tool: "notifications/tasks",
+            subject: reader.subject,
         };
         let delivered = self
             .record_notification_delivery_attempt(sent, &correlation)

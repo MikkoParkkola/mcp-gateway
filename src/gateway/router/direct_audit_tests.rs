@@ -24,6 +24,8 @@ use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
 mod delivery;
+mod delivery_who;
+mod lost_round;
 mod meta_refusal;
 mod meta_replay;
 #[cfg(feature = "firewall")]
@@ -36,6 +38,8 @@ mod tenants;
 struct Scripted {
     calls: Arc<AtomicUsize>,
     error: Option<i32>,
+    /// MIK-7979: the call is counted, then the transport fails with this.
+    fail: Option<fn() -> crate::Error>,
     reply: Option<Value>,
     /// Every notification is refused for want of a caller slot (a 429).
     notify_refused: bool,
@@ -56,6 +60,9 @@ impl Transport for Scripted {
             return Ok(JsonRpcResponse::success(id, json!({ "tools": [tool] })));
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(fail) = self.fail {
+            return Err(fail());
+        }
         Ok(match (method, self.error) {
             (_, Some(code)) => JsonRpcResponse::error(Some(id), code, "backend says no"),
             _ => JsonRpcResponse::success(
@@ -92,12 +99,41 @@ struct Fixture {
     _dirs: (tempfile::TempDir, tempfile::TempDir),
 }
 
+/// A direct `tools/call` of `t` naming `customer_id`, optionally keyed.
+fn direct_call(tenant: &str, idempotency_key: Option<&str>) -> String {
+    let mut params = json!({"name": "t", "arguments": {"customer_id": tenant}});
+    if let Some(key) = idempotency_key {
+        params["_meta"] = json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key});
+    }
+    json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": params}).to_string()
+}
+
+/// POST as a modern, anonymous client: the era that carries an idempotency key.
+async fn post_modern(fx: &Fixture, uri: &str, body: &str) -> (StatusCode, Value) {
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
 /// Knobs a cell varies; everything else is the plain auth-off gateway.
 #[derive(Default)]
 struct Setup {
     auth: Option<AuthConfig>,
     fail_closed: bool,
     backend_error: Option<i32>,
+    /// MIK-7979: the backends' transport fails after counting each call.
+    backend_fail: Option<fn() -> crate::Error>,
     agent_identity: Option<crate::config::AgentIdentityConfig>,
     /// The router's request firewall, scanning arguments (#2420).
     #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
@@ -125,6 +161,29 @@ enum MetaMode {
     InspectionBlocks,
     /// The idempotency cache is on, so a re-issued key replays.
     Idempotent,
+    /// `alpha`'s tool `t` is surfaced, so it is called by name on `/mcp`.
+    SurfacedT,
+}
+
+impl MetaMode {
+    /// `meta` with this mode's switch turned on.
+    fn arm(&self, mut meta: MetaMcp) -> MetaMcp {
+        match self {
+            Self::Plain => {}
+            Self::InspectionBlocks => meta.enable_response_inspection_action_mode(),
+            Self::Idempotent => meta.enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                crate::idempotency::CLEANUP_INTERVAL,
+            ),
+            Self::SurfacedT => {
+                return meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+                    server: "alpha".to_string(),
+                    tool: "t".to_string(),
+                }]);
+            }
+        }
+        meta
+    }
 }
 
 /// Backends `alpha` and `beta`, one logger shared by both routes.
@@ -169,6 +228,7 @@ async fn fixture(setup: Setup) -> Fixture {
         backend.set_transport_for_test(Arc::new(Scripted {
             calls: Arc::clone(&calls),
             error: setup.backend_error,
+            fail: setup.backend_fail,
             reply: setup.reply.clone(),
             notify_refused: setup.notify_refused,
         }));
@@ -216,16 +276,7 @@ async fn fixture(setup: Setup) -> Fixture {
         state_mut.firewall = Some(firewall(config.clone()));
         meta.set_firewall(Some(firewall(config)));
     }
-    if setup.meta_mode == MetaMode::InspectionBlocks {
-        meta.enable_response_inspection_action_mode();
-    }
-    if setup.meta_mode == MetaMode::Idempotent {
-        meta.enable_idempotency(
-            Arc::new(crate::idempotency::IdempotencyCache::new()),
-            crate::idempotency::CLEANUP_INTERVAL,
-        );
-    }
-    state_mut.meta_mcp = Arc::new(meta);
+    state_mut.meta_mcp = Arc::new(setup.meta_mode.arm(meta));
     state_mut.transparency_log = Some(Arc::clone(&log));
     let router = create_router(Arc::clone(&state));
     Fixture {
@@ -269,6 +320,37 @@ enum Caller {
     Key,
     /// Anonymous, carrying an `mcp-session-id` header.
     Session,
+    /// Anonymous, with a verified client certificate (MIK-7938).
+    Cert,
+    /// Anonymous, with a verified OAuth agent token (MIK-7938).
+    Agent,
+}
+
+/// Put the verified identity a `Caller` stands for on `request`.
+fn insert_identity(request: &mut axum::http::Request<axum::body::Body>, caller: &Caller) {
+    let extensions = request.extensions_mut();
+    match caller {
+        Caller::Cert => {
+            extensions.insert(crate::mtls::CertIdentity {
+                common_name: Some("cert-7938".to_string()),
+                organizational_unit: None,
+                san_uris: vec!["spiffe://example.invalid/cert-7938".to_string()],
+                san_dns_names: vec![],
+                display_name: "cert-7938".to_string(),
+                quota_principal: None,
+            });
+        }
+        Caller::Agent => {
+            extensions.insert(crate::gateway::oauth::AgentIdentity {
+                client_id: "agent-7938".to_string(),
+                agent_name: "Agent 7938".to_string(),
+                scopes: vec![],
+                raw_scopes: vec![],
+                quota_principal: None,
+            });
+        }
+        _ => {}
+    }
 }
 
 async fn post(fx: &Fixture, backend: &str, body: &str, caller: &Caller) -> (StatusCode, Value) {
@@ -299,6 +381,7 @@ async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (Statu
             issuer: "https://a.example.invalid".to_string(),
         });
     }
+    insert_identity(&mut request, caller);
     let response = fx.router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
