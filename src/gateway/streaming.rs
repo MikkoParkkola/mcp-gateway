@@ -69,6 +69,9 @@ pub(crate) struct DeliveryWatch {
     outstanding: std::sync::atomic::AtomicIsize,
     written: std::sync::atomic::AtomicBool,
     failed: tokio::sync::Notify,
+    /// A bridged prompt's relay receipt (MIK-7939): committed by the first
+    /// copy written, never for a copy withheld, skipped or dropped.
+    commit: parking_lot::Mutex<Option<crate::gateway::input_bridge::DeliveryCommit>>,
 }
 
 impl DeliveryWatch {
@@ -87,6 +90,11 @@ impl DeliveryWatch {
         use std::sync::atomic::Ordering::{AcqRel, Release};
         if written {
             self.written.store(true, Release);
+            // Taken before it runs, so the lock is not held across the work.
+            let commit = self.commit.lock().take();
+            if let Some(commit) = commit {
+                commit.commit();
+            }
         }
         self.settle(self.outstanding.fetch_sub(1, AcqRel).saturating_sub(1));
     }
@@ -637,19 +645,23 @@ impl NotificationMultiplexer {
     }
 
     /// [`Self::send_to_session`] for a server-to-client request: the watch
-    /// reports whether any queued copy is written (MIK-7975 WAIT.1). `None`
-    /// when nothing was queued.
+    /// reports whether any queued copy is written (MIK-7975 WAIT.1), and runs
+    /// `commit` when one is (MIK-7939). `None` when nothing was queued.
     pub(crate) fn send_request_to_session(
         &self,
         session_id: &str,
         notification: TaggedNotification,
+        commit: Option<crate::gateway::input_bridge::DeliveryCommit>,
     ) -> Option<Arc<DeliveryWatch>> {
         if session_id.is_empty() {
             return None;
         }
         let sessions = self.sessions.read();
         let session = sessions.get(session_id)?;
-        let watch = Arc::new(DeliveryWatch::default());
+        let watch = Arc::new(DeliveryWatch {
+            commit: parking_lot::Mutex::new(commit),
+            ..DeliveryWatch::default()
+        });
         self.enqueue(session, notification, None, Some(Arc::clone(&watch)))
             .ok()
             .map(|_| watch)
