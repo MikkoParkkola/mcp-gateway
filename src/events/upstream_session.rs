@@ -31,11 +31,17 @@ const TICK: Duration = Duration::from_millis(250);
 const OPEN_LIMIT: Duration = Duration::from_secs(30);
 /// A modern listen must be acknowledged within this (§3).
 const ACK_DEADLINE: Duration = Duration::from_secs(10);
-/// The first catalogue re-read is due this long after a session starts;
-/// after a read, the next is due one backend cache TTL later (§7, MIK-7950).
-const SNAPSHOT_TTL: Duration = Duration::from_secs(300);
-/// The shortest interval between two catalogue re-reads.
+/// The catalogue is re-read one backend cache TTL after each read (§7,
+/// MIK-7950), held between these: at most once a second, even with caching
+/// off (a zero TTL), and at least daily, which also keeps a huge configured
+/// TTL from overflowing the clock.
 const SNAPSHOT_FLOOR: Duration = Duration::from_secs(1);
+const SNAPSHOT_CEILING: Duration = Duration::from_secs(24 * 3600);
+
+/// The interval to the next catalogue re-read for a backend cache TTL.
+fn snapshot_interval(cache_ttl: Duration) -> Duration {
+    cache_ttl.clamp(SNAPSHOT_FLOOR, SNAPSHOT_CEILING)
+}
 /// A failed catalogue read is retried after this.
 const SNAPSHOT_RETRY: Duration = Duration::from_secs(5);
 /// A stream that stayed open this long resets the backoff (§9).
@@ -245,8 +251,9 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             let (backend, name) = (Arc::clone(backend), shared.name.clone());
             refill = Some(Box::pin(async move {
                 // The shared fetch, so a reader of the list meanwhile waits on
-                // this one; bounded by the backend's own `timeout` and by
-                // OPEN_LIMIT. A refill that did not fill still announces the
+                // this one. Each request is bounded by the backend's own
+                // `timeout`, the whole refill by OPEN_LIMIT. A refill that did
+                // not fill still announces the
                 // change: the notice said the list changed, and the
                 // subscriber's own re-read fetches it (MIK-7951).
                 let filled = matches!(
@@ -412,7 +419,10 @@ impl<'a> State<'a> {
             reread: false,
             tools_pending: false,
             tools_due: None,
-            snapshot_due: now + SNAPSHOT_TTL,
+            // Due at once: a session that starts with no URI watched reads
+            // the catalogue as soon as one is, even when the shared snapshot
+            // is known from an earlier session.
+            snapshot_due: now,
             snapshot_retry_at: now,
             retry_open_at: now,
         }
@@ -453,9 +463,8 @@ impl<'a> State<'a> {
                 self.reread = false;
                 // The catalogue cache's own TTL: a shorter configured one
                 // re-reads sooner, so a removal is seen as soon as the
-                // cache would (MIK-7950). Never more than once a second,
-                // even with caching off (a zero TTL).
-                self.snapshot_due = Instant::now() + backend.cache_ttl().max(SNAPSHOT_FLOOR);
+                // cache would (MIK-7950).
+                self.snapshot_due = Instant::now() + snapshot_interval(backend.cache_ttl());
             }
             Err(error) => {
                 debug!(backend = %self.shared.name, %error, "upstream listener: catalogue read failed");

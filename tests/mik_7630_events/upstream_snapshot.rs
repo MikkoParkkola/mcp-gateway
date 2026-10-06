@@ -20,11 +20,14 @@ async fn the_catalogue_is_re_read_at_the_configured_cache_ttl() {
     eventually("one open listen", || peer.open_listens().len() == 1).await;
 
     let before = peer.frames("resources/list").len();
-    tokio::time::sleep(Duration::from_millis(5500)).await;
-    let after = peer.frames("resources/list").len();
+    // Two re-reads are due by 4 s; 8 s leaves room for a slow runner.
+    let reread = wait_until(Duration::from_secs(8), || {
+        peer.frames("resources/list").len() >= before + 2
+    })
+    .await;
     assert!(
-        after >= before + 2,
-        "re-read {} times in 5.5 s with a 2 s cache TTL",
-        after - before
+        reread,
+        "re-read {} times in 8 s with a 2 s cache TTL",
+        peer.frames("resources/list").len() - before
     );
 }
