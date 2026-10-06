@@ -825,7 +825,7 @@ fn a_legacy_pass_resumes_after_the_last_uri_reached() {
     };
     let order = |last: Option<&str>| {
         let mut due = sorted();
-        resume_after(&mut due, last);
+        legacy::resume_after(&mut due, last);
         due.into_iter().map(|(u, _)| u).collect::<Vec<_>>()
     };
     assert_eq!(order(Some("a")), ["b", "c", "a"]);

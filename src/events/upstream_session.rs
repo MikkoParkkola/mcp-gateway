@@ -797,7 +797,7 @@ impl<'a> State<'a> {
 
 #[path = "upstream_session_legacy.rs"]
 mod legacy;
-use legacy::{resume_after, watched_by};
+use legacy::watched_by;
 
 #[cfg(test)]
 #[path = "upstream_session_tests.rs"]
