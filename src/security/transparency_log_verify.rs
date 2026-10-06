@@ -207,7 +207,9 @@ pub fn verify_audit_log(
     path: &Path,
     config: &TransparencyLogConfig,
     mode: VerifyMode,
+    anchor: Option<&Path>,
 ) -> io::Result<VerifyResult> {
+    let _ = anchor;
     verify_segments(path, config, mode)
 }
 

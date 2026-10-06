@@ -707,6 +707,10 @@ pub enum AuditCommand {
         /// A copied set: a missing `.hwm` only warns (tail completeness unchecked)
         #[arg(long)]
         archive: bool,
+        /// An off-host copy of `<log>.hwm`: the log must still hold the
+        /// record it names (a wiped, rolled-back or replaced log fails)
+        #[arg(long)]
+        anchor: Option<PathBuf>,
     },
 
     /// Show log entries for a specific session

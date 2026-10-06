@@ -730,6 +730,9 @@ fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "transparency_log_anchor_tests.rs"]
+mod anchor_tests;
+#[cfg(test)]
 #[path = "transparency_log_attributed_tests.rs"]
 mod attributed_tests;
 #[cfg(test)]
@@ -747,6 +750,9 @@ mod hwm_missing_tests;
 #[cfg(test)]
 #[path = "transparency_log_lease_tests.rs"]
 mod lease_tests;
+#[cfg(test)]
+#[path = "transparency_log_overflow_tests.rs"]
+mod overflow_tests;
 #[cfg(test)]
 #[path = "transparency_log_reader_tests.rs"]
 mod reader_tests;
