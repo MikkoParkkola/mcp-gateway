@@ -60,10 +60,15 @@ helm package "$work/b/deploy/helm/mcp-gateway" -d "$work/again" >/dev/null
 cmp -s "$work/out/mcp-gateway-$version.tgz" "$work/again/mcp-gateway-$version.tgz" \
   || { echo "the chart archive is not reproducible; a rerun would publish a new digest" >&2; exit 1; }
 # A published version is never replaced: a rerun pushes the same bytes, and
-# anything else needs a new version in Chart.yaml.
-if helm pull "$repo/mcp-gateway" --version "$version" -d "$work/existing" >/dev/null 2>&1; then
+# anything else needs a new version in Chart.yaml. Only an explicit "not found"
+# reads as unpublished; any other lookup failure stops the run.
+mkdir -p "$work/existing"
+if existing_out=$(helm pull "$repo/mcp-gateway" --version "$version" -d "$work/existing" 2>&1); then
   cmp -s "$work/existing/mcp-gateway-$version.tgz" "$work/out/mcp-gateway-$version.tgz" \
     || { echo "chart $version is already published with other contents; bump the version in Chart.yaml" >&2; exit 1; }
+elif ! grep -qi 'not found' <<<"$existing_out"; then
+  printf 'could not tell whether chart %s is published:\n%s\n' "$version" "$existing_out" >&2
+  exit 1
 fi
 push_out=$(helm push "$work/out/mcp-gateway-$version.tgz" "$repo" 2>&1) \
   || { printf '%s\n' "$push_out" >&2; exit 1; }

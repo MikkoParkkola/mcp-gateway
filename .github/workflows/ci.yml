@@ -708,6 +708,8 @@ jobs:
         run: python3 scripts/release/test_sign_release_assets.py
       - name: Test that an upload onto a published release is refused
         run: python3 scripts/release/test_refuse_published_release.py
+      - name: Test that a published chart version is never replaced
+        run: python3 scripts/release/test_publish_pinned_chart.py
 
   # The release.yml signing path, rehearsed without a tag: one binary built
   # with cargo auditable, signed keylessly as this workflow, uploaded to a
@@ -1706,6 +1708,11 @@ jobs:
       && (inputs.rehearse_chart_publish == true || inputs.rehearse_chart_publish == 'true')))
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # One publisher per package at a time, queued, never cancelled: the lookup
+    # that refuses to replace a version and the push must not interleave.
+    concurrency:
+      group: helm-chart-publish-${{ github.event_name == 'workflow_dispatch' && 'rehearsal' || 'release' }}
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
