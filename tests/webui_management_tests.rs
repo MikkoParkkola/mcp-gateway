@@ -51,6 +51,8 @@ use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 
 #[path = "webui_management_tests/access_posture.rs"]
 mod access_posture;
+#[path = "webui_management_tests/backend_edit_comments.rs"]
+mod backend_edit_comments;
 #[path = "webui_management_tests/backend_mutation.rs"]
 mod backend_mutation;
 #[path = "webui_management_tests/capabilities.rs"]
