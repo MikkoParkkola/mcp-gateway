@@ -417,7 +417,7 @@ pub(super) fn note_grant_decision(
             slot.notes
                 .lock()
                 .expect("grant slot lock")
-                .push(note.clone())
+                .push(note.clone());
         })
         .is_err();
     if !unslotted {
