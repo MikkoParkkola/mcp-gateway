@@ -273,6 +273,7 @@ GATE_SCRIPT = re.compile(r"(?:python3?|uv run)\s+scripts/release/")
 # ending at a shell argument boundary, or `smoke-image.sh.bak` (a different
 # script, or none) satisfies every assertion below.
 SMOKE_GATE = re.compile(r"(?:(?:ba)?sh\s+)?scripts/ci/smoke-image\.sh(?=\s|$)")
+RECIPE_SMOKE = re.compile(r"(?:(?:ba)?sh\s+)?scripts/dev/docker-smoke\.sh(?=\s|$)")
 # Separate from SMOKE_GATE: an alternation would read the variant as the base.
 SMOKE_FULL_GATE = re.compile(r"(?:(?:ba)?sh\s+)?scripts/ci/smoke-full-image\.sh(?=\s|$)")
 # A step key that turns a failure into a log line, or a condition that is false
@@ -1562,6 +1563,30 @@ class WorkflowWiring(unittest.TestCase):
                         f"{shell(command)}",
                     )
 
+    def test_the_documented_recipe_serves_a_call_before_the_handoff(self):
+        # MIK-7484: smoke-image.sh proves the image starts; only
+        # scripts/dev/docker-smoke.sh runs the documented recipe (127.0.0.1
+        # publish, 0.0.0.0 bind, the unauthenticated-bind opt-in) through to a
+        # routed tool call. It must run on the image this job built, with no
+        # host build, fatally, and before the digest leaves the job.
+        blocks = steps("docker.yml", "build")
+        recipe = [i for i, b in enumerate(blocks) if any(runs(c, RECIPE_SMOKE) for c in joined(b))]
+        self.assertTrue(recipe, "docker.yml: build never runs scripts/dev/docker-smoke.sh")
+        handoffs = [
+            i for i, b in enumerate(blocks)
+            if any(re.match(r"^\s*uses:\s*actions/upload-artifact@", line) for line in b)
+        ]
+        self.assertTrue(handoffs, "docker.yml: build no longer uploads its digest")
+        self.assertLess(min(recipe), min(handoffs), "the recipe smoke runs after the digest is handed on")
+        step = "\n".join(blocks[min(recipe)])
+        for setting in (
+            'MCP_GATEWAY_DOCKER_BUILD: "0"',
+            'MCP_GATEWAY_INIT_IN_IMAGE: "1"',
+            "MCP_GATEWAY_DOCKER_IMAGE: ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan",
+        ):
+            self.assertIn(setting, step, "the recipe smoke must run the image this job built")
+        self.assertNotRegex(step, r"continue-on-error:\s*true", "the recipe smoke must be fatal")
+
     def test_the_variant_index_is_composed_from_the_variant_legs(self):
         # Every gate downstream of this reads the index by digest and compares
         # it to itself, so an index composed from the base legs passes all of
@@ -2687,6 +2712,23 @@ class WorkflowWiring(unittest.TestCase):
         release_jobs = jobs("release.yml")
         self.assertIn("uses: ./.github/workflows/mrtr7b-full-burst.yml", release_jobs.get("mrtr7b-full-burst", ""))
         self.assertIn("mrtr7b-full-burst", needs_of(release_jobs["verify"]) or "", "verify must wait for the full burst")
+
+    def test_windows_skips_the_full_burst_and_keeps_its_property(self):
+        # MIK-7644: 1,026 calls miss the full burst's deadline on the Windows
+        # runner, so the Windows suite skips it by name as `test` does. The
+        # property it checks still runs there at the per-PR size: `--skip`
+        # matches substrings, so no Windows skip may occur in that test's name.
+        suite = [
+            c for b in steps("ci.yml", "windows-check") for c in joined(b)
+            if re.search(r"\bcargo test --all-features --tests\b", c)
+        ]
+        self.assertEqual(len(suite), 1, suite)
+        skips = re.findall(r"--skip\s+(\S+)", suite[0])
+        self.assertIn("mik_7479_full_burst", skips, "Windows must skip the full burst by name")
+        per_pr = "ac_mrtr_7b_every_call_reaches_one_terminal_frame"
+        self.assertFalse([s for s in skips if s in per_pr], f"a Windows skip also drops {per_pr}")
+        ledger = (pathlib.Path(__file__).parents[2] / "tests" / "mik_7479_mrtr7b_ledger.rs").read_text(encoding="utf-8")
+        self.assertIn(f"async fn {per_pr}()", ledger)
 
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
         # An artifact a later job of the same run downloads is that job's only

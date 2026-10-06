@@ -101,7 +101,7 @@ jobs:
           fi
           # A here-string, not a pipe: `grep -q` exiting early would make the
           # producer's SIGPIPE fail the pipeline under pipefail.
-          if grep -Eq '^(Dockerfile|\.dockerignore|\.trivyignore|Cargo\.toml|Cargo\.lock|\.github/workflows/docker\.yml|\.github/osv-scanner\.toml|docker/|scripts/ci/smoke-[^/]*\.sh|scripts/dev/helm-kind-real-image\.sh|deploy/helm/)' <<<"$files"; then
+          if grep -Eq '^(Dockerfile|\.dockerignore|\.trivyignore|Cargo\.toml|Cargo\.lock|\.github/workflows/docker\.yml|\.github/osv-scanner\.toml|docker/|scripts/ci/smoke-[^/]*\.sh|scripts/dev/helm-kind-real-image\.sh|deploy/|README\.md|docs/QUICKSTART\.md|docs/DEPLOYMENT\.md|scripts/dev/(docker-smoke\.sh|smoke_fixture_server\.py|smoke-fixture-capability\.sh|assert_capability_response\.py))' <<<"$files"; then
             decide true "image inputs changed"
           else
             decide false "no image inputs changed; the image builds after merge"
@@ -298,6 +298,18 @@ jobs:
       # be blocked from here, so it gates itself.
       - name: Smoke test the image (it must start and report healthy)
         run: scripts/ci/smoke-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan"
+
+      # The documented run recipe (README, QUICKSTART, DEPLOYMENT: publish on
+      # 127.0.0.1, bind 0.0.0.0, the unauthenticated-bind opt-in), held in
+      # scripts/dev/docker-smoke.sh, must serve a routed tool call, not only
+      # start (MIK-7484). One leg: the recipe is arch-independent.
+      - name: Smoke the documented container recipe (it must serve a tool call)
+        if: matrix.arch == 'amd64'
+        env:
+          MCP_GATEWAY_DOCKER_BUILD: "0"
+          MCP_GATEWAY_INIT_IN_IMAGE: "1"
+          MCP_GATEWAY_DOCKER_IMAGE: ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan
+        run: scripts/dev/docker-smoke.sh
 
       # The smoke above runs the image with its own config and a writable root.
       # The chart runs it read-only, as a numeric non-root user, with rendered

@@ -39,8 +39,14 @@ BUILDS = (
     "Cargo.lock",
     "deploy/helm/mcp-gateway/values.yaml",
     "scripts/dev/helm-kind-real-image.sh",
+    # The documented container recipes and the script that runs them (MIK-7484).
+    "README.md",
+    "docs/QUICKSTART.md",
+    "docs/DEPLOYMENT.md",
+    "deploy/single-node/docker-compose.yaml",
+    "scripts/dev/docker-smoke.sh",
 )
-SKIPS = ("docs/DEPLOYMENT.md", "scripts/ci/changed-scope.sh")
+SKIPS = ("docs/BENCHMARKS.md", "scripts/ci/changed-scope.sh")
 SMOKES = ("scripts/ci/smoke-image.sh", "scripts/ci/smoke-full-image.sh")
 
 

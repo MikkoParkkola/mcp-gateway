@@ -1717,6 +1717,22 @@ CASES += [
     ("full-burst-runs-another-test", "mrtr7b-full-burst.yml",
      "            mik_7479_full_burst_every_call_reaches_one_terminal_frame --nocapture",
      "            mik_7479_one_call_reaches_one_terminal_frame --nocapture", CAUGHT),
+    # MIK-7484: the documented recipe serves a call, on the built image, fatally.
+    ("recipe-smoke-dropped", "docker.yml", "        run: scripts/dev/docker-smoke.sh\n",
+     "        run: echo skipped\n", CAUGHT),
+    ("recipe-smoke-tolerated", "docker.yml", "        run: scripts/dev/docker-smoke.sh\n",
+     "        continue-on-error: true\n        run: scripts/dev/docker-smoke.sh\n", CAUGHT),
+    ("recipe-smoke-builds-on-the-host", "docker.yml", '          MCP_GATEWAY_INIT_IN_IMAGE: "1"\n',
+     '          MCP_GATEWAY_INIT_IN_IMAGE: "0"\n', CAUGHT),
+    ("recipe-smoke-rebuilds-the-image", "docker.yml", '          MCP_GATEWAY_DOCKER_BUILD: "0"\n',
+     '          MCP_GATEWAY_DOCKER_BUILD: "1"\n', CAUGHT),
+    # MIK-7644: the Windows suite skips the full burst, and only the full burst.
+    ("windows-runs-the-full-burst", "ci.yml",
+     "--no-fail-fast -- --show-output --skip mik_7479_full_burst\n",
+     "--no-fail-fast -- --show-output\n", CAUGHT),
+    ("windows-skip-also-drops-the-per-pr-burst", "ci.yml",
+     "--no-fail-fast -- --show-output --skip mik_7479_full_burst\n",
+     "--no-fail-fast -- --show-output --skip mik_7479_full_burst --skip ac_mrtr_7b_every\n", CAUGHT),
 ]
 
 # Throwaway runs carry the release tooling's Python suites. The hosted job is
