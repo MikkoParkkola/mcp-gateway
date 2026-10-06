@@ -215,7 +215,8 @@ or a `BackendTimeout`), is served the uncertain-outcome notice with the first
 caller's error code: serving the error would tell the client the work failed
 when it may have run. `Transport` covers a broken stream, a reload stopping the
 backend mid-call, any HTTP 5xx, and the HTTP statuses kept re-initializable or
-retryable: 400, 401, 403, 404, 407, 408, 429 and a session-expiry body.
+retryable: 400, 404, 407, 408, 429 and a session-expiry body. A 401 or 403
+without that body is typed `Error::Http` and served as before.
 `BackendUnavailable` is raised only before send and joins `is_pre_dispatch`, so
 it releases the key. Acceptance rows 2b and 2c assert the notice; their earlier
 assertion is kept beside them as a comment.
