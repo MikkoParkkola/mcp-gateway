@@ -216,6 +216,9 @@ fn resolve_resource_origin(config: &Config, bind_origin: Option<&str>) -> Option
 /// `key_server` apply only on restart, so a pending reload must not change
 /// which issuers are named.
 fn authorization_servers(running: &Config) -> Vec<String> {
+    // Once per process: the running config never changes, and the endpoint
+    // needs no sign-in, so a per-request warning would let anyone flood the log.
+    static WARNED: std::sync::Once = std::sync::Once::new();
     let key_server = &running.key_server;
     // Agent auth refuses every bearer that is not a registered agent's token,
     // an OIDC ID token included.
@@ -241,9 +244,6 @@ fn authorization_servers(running: &Config) -> Vec<String> {
             skipped.push(idx);
         }
     }
-    // Once per process: the running config never changes, and the endpoint
-    // needs no sign-in, so a per-request warning would let anyone flood the log.
-    static WARNED: std::sync::Once = std::sync::Once::new();
     if !skipped.is_empty() {
         WARNED.call_once(|| {
             for idx in &skipped {
