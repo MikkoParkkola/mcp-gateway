@@ -421,6 +421,11 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       - run: cargo clippy --all-targets --all-features -- -D warnings
+      # Here because this job is a required Linux check: the futures' depth
+      # margin below rustc's recursion limit, which Windows and Kani exceed
+      # first (MIK-7678).
+      - name: Trait-recursion margin
+        run: scripts/ci/check-recursion-margin.sh
 
   # Feature combinations run post-merge only: see feature-combos.yml.
 

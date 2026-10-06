@@ -1717,6 +1717,11 @@ CASES += [
     ("full-burst-runs-another-test", "mrtr7b-full-burst.yml",
      "            mik_7479_full_burst_every_call_reaches_one_terminal_frame --nocapture",
      "            mik_7479_one_call_reaches_one_terminal_frame --nocapture", CAUGHT),
+    # MIK-7678: the recursion margin runs in a required job, fatally.
+    ("recursion-margin-dropped", "ci.yml", "        run: scripts/ci/check-recursion-margin.sh\n",
+     "        run: echo skipped\n", CAUGHT),
+    ("recursion-margin-tolerated", "ci.yml", "        run: scripts/ci/check-recursion-margin.sh\n",
+     "        continue-on-error: true\n        run: scripts/ci/check-recursion-margin.sh\n", CAUGHT),
     # MIK-7952: the chart is published over the signed image, by this workflow's identity.
     ("chart-publish-stops-waiting-for-the-image", "ci.yml",
      "    name: Publish and sign the Helm chart\n    needs: docker-manifest\n",

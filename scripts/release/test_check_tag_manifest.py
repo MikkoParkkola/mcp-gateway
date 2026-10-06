@@ -273,6 +273,7 @@ GATE_SCRIPT = re.compile(r"(?:python3?|uv run)\s+scripts/release/")
 # ending at a shell argument boundary, or `smoke-image.sh.bak` (a different
 # script, or none) satisfies every assertion below.
 SMOKE_GATE = re.compile(r"(?:(?:ba)?sh\s+)?scripts/ci/smoke-image\.sh(?=\s|$)")
+RECURSION_MARGIN = re.compile(r"(?:(?:ba)?sh\s+)?scripts/ci/check-recursion-margin\.sh(?=\s|$)")
 RECIPE_SMOKE = re.compile(r"(?:(?:ba)?sh\s+)?scripts/dev/docker-smoke\.sh(?=\s|$)")
 # Separate from SMOKE_GATE: an alternation would read the variant as the base.
 SMOKE_FULL_GATE = re.compile(r"(?:(?:ba)?sh\s+)?scripts/ci/smoke-full-image\.sh(?=\s|$)")
@@ -1562,6 +1563,20 @@ class WorkflowWiring(unittest.TestCase):
                         f"{workflow}: the smoke gate is handed no image: "
                         f"{shell(command)}",
                     )
+
+    def test_a_required_linux_job_holds_the_recursion_margin(self):
+        # MIK-7678: Clippy is a required Linux check, so it carries the depth
+        # margin Windows and Kani would otherwise be first to break, fatally.
+        blocks = steps("ci.yml", "check")  # "Clippy (pedantic)"
+        margin = [
+            "\n".join(b) for b in blocks
+            if any(runs(c, RECURSION_MARGIN) for c in joined(b))
+        ]
+        self.assertEqual(len(margin), 1, "Clippy (pedantic) no longer runs scripts/ci/check-recursion-margin.sh")
+        self.assertNotRegex(margin[0], r"(?m)continue-on-error:\s*true|^\s+if:", "the margin check must be unconditional and fatal")
+        script = (pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "check-recursion-margin.sh").read_text(encoding="utf-8")
+        self.assertRegex(script, r"(?m)^LIMIT=\d+$")
+        self.assertIn("Pin<Box<dyn Future + Send>>", script, "the failure must say to erase the future's type")
 
     def test_the_chart_is_published_and_signed_by_this_workflow(self):
         # MIK-7952: the chart is signed by ci.yml at the tag, the image's own
