@@ -22,7 +22,7 @@ use crate::protocol::{JsonRpcMessage, RequestId};
 use crate::security::http_diagnostics::safe_request_error;
 use crate::transport::upstream_tap::{
     FrameStream, Refused, Requested, TAP_CAPACITY, UpstreamListen, UpstreamNote, classify_response,
-    listen_filter, project,
+    listen_filter, project, project_listen,
 };
 use crate::{Error, Result};
 
@@ -39,12 +39,14 @@ impl HttpTransport {
     /// Notes arrive on the receiver until the stream ends, which the
     /// receiver sees as `Closed` (after an `End` for a graceful end).
     ///
+    /// `Ok(Err(status))` is the peer's refusal, as for the session GET.
+    ///
     /// # Errors
-    /// The request could not be built or sent, or the peer refused it.
+    /// The request could not be built or sent.
     pub(crate) async fn open_listen(
         &self,
         requested: Requested,
-    ) -> Result<mpsc::Receiver<UpstreamNote>> {
+    ) -> Result<std::result::Result<mpsc::Receiver<UpstreamNote>, u16>> {
         let id = self.next_id();
         let id_value = serde_json::to_value(&id).map_err(|e| Error::Protocol(e.to_string()))?;
         let params = with_modern_meta(
@@ -70,21 +72,31 @@ impl HttpTransport {
             .await
             .map_err(|e| safe_request_error("listen", &e))?;
         if !response.status().is_success() {
-            return Err(Error::Transport(format!(
-                "listen refused: HTTP {}",
-                response.status().as_u16()
-            )));
+            return Ok(Err(response.status().as_u16()));
         }
+        // A peer may answer the POST with one JSON response instead of a
+        // stream: the end, the compatible acknowledgement or a `-32601`.
+        let single = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .is_some_and(|v| v.as_bytes().starts_with(b"application/json"));
         let (tx, rx) = mpsc::channel(TAP_CAPACITY);
         let cancel = self.listen_cancel.clone();
         tokio::spawn(async move {
+            let read = async {
+                if single {
+                    read_single(response, &id, &id_value, &requested, &tx).await;
+                } else {
+                    read_stream(response, &id, &id_value, &requested, &tx).await;
+                }
+            };
             tokio::select! {
-                () = read_stream(response, &id, &id_value, &requested, &tx) => {}
+                () = read => {}
                 () = cancel.cancelled() => {}
                 () = tx.closed() => {}
             }
         });
-        Ok(rx)
+        Ok(Ok(rx))
     }
 }
 
@@ -121,8 +133,9 @@ impl HttpTransport {
         tokio::spawn(async move {
             let read = async {
                 let mut decoder = SseDecoder::new(FRAME_CAP);
-                while let Ok(Some(chunk)) = response.chunk().await {
-                    let Ok(events) = decoder.push(&chunk) else {
+                loop {
+                    let (events, eof) = next_events(&mut response, &mut decoder).await;
+                    let Some(events) = events else {
                         return;
                     };
                     for event in events {
@@ -131,6 +144,9 @@ impl HttpTransport {
                         {
                             return;
                         }
+                    }
+                    if eof {
+                        return;
                     }
                 }
             };
@@ -150,18 +166,44 @@ impl UpstreamListen for HttpTransport {
         self: std::sync::Arc<Self>,
         requested: Requested,
     ) -> std::result::Result<FrameStream, Refused> {
-        Ok(FrameStream::new(self.open_listen(requested).await?))
+        let opened = self.open_listen(requested).await?;
+        refused_as("listen", opened.map(FrameStream::new))
     }
 
     async fn unsolicited(self: std::sync::Arc<Self>) -> std::result::Result<FrameStream, Refused> {
-        match self.open_session_stream().await? {
-            Ok(rx) => Ok(FrameStream::new(rx)),
-            Err(405) => Err(Refused::Unsupported),
-            Err(404) => Err(Refused::Expired),
-            Err(status) => Err(Refused::Failed(Error::Transport(format!(
-                "session stream refused: HTTP {status}"
-            )))),
-        }
+        let opened = self.open_session_stream().await?;
+        refused_as("session stream", opened.map(FrameStream::new))
+    }
+}
+
+/// A refused open by its status: 405 means the backend offers no such
+/// stream, 404 that the session expired (MIK-7899).
+fn refused_as(
+    what: &str,
+    opened: std::result::Result<FrameStream, u16>,
+) -> std::result::Result<FrameStream, Refused> {
+    match opened {
+        Ok(stream) => Ok(stream),
+        Err(405) => Err(Refused::Unsupported),
+        Err(404) => Err(Refused::Expired),
+        Err(status) => Err(Refused::Failed(Error::Transport(format!(
+            "{what} refused: HTTP {status}"
+        )))),
+    }
+}
+
+/// The next decoded events of `response`, and whether its body ended. At
+/// the end the decoder is flushed, so a last frame without its closing
+/// blank line still counts (MIK-7899). `None`: a frame over the cap or a
+/// read error, which end the stream.
+async fn next_events(
+    response: &mut reqwest::Response,
+    decoder: &mut SseDecoder,
+) -> (Option<Vec<super::sse_decoder::SseEvent>>, bool) {
+    match response.chunk().await {
+        Ok(Some(chunk)) => (decoder.push(&chunk).ok(), false),
+        Ok(None) => (decoder.finish().ok(), true),
+        Err(_) => (None, true),
     }
 }
 
@@ -185,18 +227,16 @@ async fn read_stream(
     let mut decoder = SseDecoder::new(FRAME_CAP);
     let mut first = true;
     loop {
-        let Ok(Some(chunk)) = response.chunk().await else {
-            return;
-        };
-        let Ok(events) = decoder.push(&chunk) else {
-            debug!("listen frame over the cap; ending the stream");
+        let (events, eof) = next_events(&mut response, &mut decoder).await;
+        let Some(events) = events else {
+            debug!("listen frame over the cap or unreadable; ending the stream");
             return;
         };
         for event in events {
             match frame(&event.data, id, id_value, requested, first) {
                 Frame::Note(note) => {
                     first = false;
-                    let end = note == UpstreamNote::End;
+                    let end = note.ends();
                     // Waiting here only stops reading the socket: TCP flow
                     // control pushes back on the backend (§8).
                     if tx.send(note).await.is_err() || end {
@@ -207,6 +247,37 @@ async fn read_stream(
                 Frame::Ignore => {}
             }
         }
+        if eof {
+            return;
+        }
+    }
+}
+
+/// A listen answered with one JSON body (at most a frame's size): its single
+/// response, as the stream's first frame.
+async fn read_single(
+    mut response: reqwest::Response,
+    id: &RequestId,
+    id_value: &Value,
+    requested: &Requested,
+    tx: &mpsc::Sender<UpstreamNote>,
+) {
+    let mut body = Vec::new();
+    while let Ok(Some(chunk)) = response.chunk().await {
+        body.extend_from_slice(&chunk);
+        if body.len() > FRAME_CAP {
+            debug!("listen answer over the cap; ending the stream");
+            return;
+        }
+    }
+    if let Frame::Note(note) = frame(
+        &String::from_utf8_lossy(&body),
+        id,
+        id_value,
+        requested,
+        true,
+    ) {
+        let _ = tx.send(note).await;
     }
 }
 
@@ -228,12 +299,18 @@ fn frame(
 ) -> Frame {
     match serde_json::from_str::<JsonRpcMessage>(data) {
         Ok(JsonRpcMessage::Notification(n)) => {
-            project(&n.method, n.params.as_ref(), Some((id_value, requested)))
+            project_listen(&n.method, n.params.as_ref(), id_value, requested, first)
                 .map_or(Frame::Skip, Frame::Note)
         }
-        Ok(JsonRpcMessage::Response(r)) if r.id.as_ref() == Some(id) => Frame::Note(
-            classify_response(first, id_value, r.result.as_ref(), requested),
-        ),
+        Ok(JsonRpcMessage::Response(r)) if r.id.as_ref() == Some(id) => {
+            Frame::Note(classify_response(
+                first,
+                id_value,
+                r.result.as_ref(),
+                r.error.as_ref().map(|e| e.code),
+                requested,
+            ))
+        }
         Ok(_) => Frame::Skip,
         Err(_) => Frame::Ignore,
     }
@@ -348,7 +425,7 @@ mod tests {
         let Frame::Note(note) = frame(&refused.to_string(), &id, &v, &r, true) else {
             panic!("the listen's own answer is a note");
         };
-        assert_ne!(note, UpstreamNote::End);
+        assert_eq!(note, UpstreamNote::Unsupported);
     }
 
     /// MIK-7899 CLASS.2: an acknowledgement counts only as the listen's first
@@ -447,10 +524,7 @@ mod tests {
         let note = tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
             .await
             .expect("the stream ends");
-        assert!(
-            note.as_ref().is_some_and(|n| *n != UpstreamNote::End),
-            "{note:?}"
-        );
+        assert_eq!(note, Some(UpstreamNote::Unsupported));
     }
 
     /// MIK-7899 CLASS.2: a frame the body ends on without its closing blank

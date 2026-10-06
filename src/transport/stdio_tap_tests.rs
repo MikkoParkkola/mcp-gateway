@@ -66,7 +66,5 @@ fn a_method_not_found_answer_is_not_a_graceful_end() {
         r#"{"jsonrpc":"2.0","id":42,"error":{"code":-32601,"message":"Method not found"}}"#,
     )
     .unwrap();
-    let note = rx.try_recv();
-    assert!(note.is_ok(), "the listen hears its answer");
-    assert_ne!(note, Ok(UpstreamNote::End));
+    assert_eq!(rx.try_recv(), Ok(UpstreamNote::Unsupported));
 }

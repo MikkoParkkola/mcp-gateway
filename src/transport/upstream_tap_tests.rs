@@ -134,11 +134,11 @@ fn only_the_exact_first_frame_response_is_an_ack() {
     let r = requested();
     let shape = json!({"_meta": { SUBSCRIPTION_ID: 7 }});
     assert_eq!(
-        classify_response(true, &id, Some(&shape), &r),
+        classify_response(true, &id, Some(&shape), None, &r),
         r.as_full_ack()
     );
     assert_eq!(
-        classify_response(false, &id, Some(&shape), &r),
+        classify_response(false, &id, Some(&shape), None, &r),
         UpstreamNote::End
     );
     for other in [
@@ -149,12 +149,15 @@ fn only_the_exact_first_frame_response_is_an_ack() {
         json!(null),
     ] {
         assert_eq!(
-            classify_response(true, &id, Some(&other), &r),
+            classify_response(true, &id, Some(&other), None, &r),
             UpstreamNote::End,
             "{other}"
         );
     }
-    assert_eq!(classify_response(true, &id, None, &r), UpstreamNote::End);
+    assert_eq!(
+        classify_response(true, &id, None, None, &r),
+        UpstreamNote::End
+    );
 }
 
 #[test]
@@ -207,7 +210,7 @@ fn a_tagged_frame_goes_to_its_listen_only() {
 fn without_a_tap_nothing_is_consumed() {
     let taps = Taps::default();
     assert!(!taps.notification(RESOURCES_CHANGED, None));
-    assert!(!taps.response(&json!(1), None));
+    assert!(!taps.response(&json!(1), None, None));
 }
 
 #[test]
@@ -229,7 +232,7 @@ fn an_end_on_a_full_channel_still_closes_it() {
     for _ in 0..TAP_CAPACITY {
         taps.notification(RESOURCES_CHANGED, Some(&p));
     }
-    assert!(taps.response(&id, Some(&json!({"resultType": "complete"}))));
+    assert!(taps.response(&id, Some(&json!({"resultType": "complete"})), None));
     for _ in 0..TAP_CAPACITY {
         assert!(rx.try_recv().is_ok());
     }
@@ -238,7 +241,7 @@ fn an_end_on_a_full_channel_still_closes_it() {
         Err(tokio::sync::mpsc::error::TryRecvError::Disconnected),
         "the end is reported as Closed"
     );
-    assert!(!taps.response(&id, None), "the listen is gone");
+    assert!(!taps.response(&id, None, None), "the listen is gone");
 }
 
 #[test]
@@ -248,9 +251,12 @@ fn the_first_frame_compatible_response_acks_and_keeps_the_listen() {
     let r = requested();
     let mut rx = taps.listen(&id, r.clone());
     let shape = json!({"_meta": { SUBSCRIPTION_ID: 3 }});
-    assert!(taps.response(&id, Some(&shape)));
+    assert!(taps.response(&id, Some(&shape), None));
     assert_eq!(rx.try_recv(), Ok(r.as_full_ack()));
-    assert!(taps.response(&id, Some(&shape)), "a later one is the end");
+    assert!(
+        taps.response(&id, Some(&shape), None),
+        "a later one is the end"
+    );
     assert_eq!(rx.try_recv(), Ok(UpstreamNote::End));
     assert!(rx.try_recv().is_err());
 }
@@ -289,4 +295,27 @@ fn an_acknowledgement_after_the_first_frame_is_dropped() {
     );
     assert!(taps.notification(ACKNOWLEDGED, Some(&ack)));
     assert!(rx.try_recv().is_err(), "a late acknowledgement was routed");
+}
+
+/// MIK-7899 CLASS.1: a `-32601` answer is `Unsupported` at any position, and
+/// ends the listen like the graceful end.
+#[test]
+fn a_method_not_found_answer_is_unsupported() {
+    let (id, r) = (json!(7), requested());
+    for first in [true, false] {
+        assert_eq!(
+            classify_response(first, &id, None, Some(-32601), &r),
+            UpstreamNote::Unsupported
+        );
+    }
+    assert_eq!(
+        classify_response(true, &id, None, Some(-32600), &r),
+        UpstreamNote::End,
+        "another error is the end"
+    );
+    let taps = Taps::default();
+    let mut rx = taps.listen(&id, r);
+    assert!(taps.response(&id, None, Some(-32601)));
+    assert_eq!(rx.try_recv(), Ok(UpstreamNote::Unsupported));
+    assert!(!taps.response(&id, None, None), "the listen is gone");
 }

@@ -423,3 +423,58 @@ async fn a_kind_the_acknowledgement_did_not_honour_is_not_delivered() {
     state.flush(&weak);
     assert!(intake.try_recv().is_ok(), "control: the honoured kind");
 }
+
+/// MIK-7899 CLASS.1: a listen the peer answers with `-32601` ends the session
+/// as `Unsupported` (the long backoff); a refused replacement ends nothing.
+#[test]
+fn a_refused_listen_ends_the_session_as_unsupported() {
+    let shared = shared();
+    let mut state = State::new(&shared, Era::Modern);
+    assert!(!state.note(UpstreamNote::Unsupported, true));
+    assert!(matches!(state.ended(Instant::now()), Outcome::Ended { .. }));
+    assert!(state.note(UpstreamNote::Unsupported, false));
+    assert!(matches!(state.ended(Instant::now()), Outcome::Unsupported));
+}
+
+/// MIK-7898 SESS.3: a `resources/updated` for a URI the acknowledgement did
+/// not list is not delivered. Control: a listed URI is.
+#[tokio::test]
+async fn a_uri_the_acknowledgement_did_not_list_is_not_delivered() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    let (a, b) = ("file:///a".to_owned(), "file:///b".to_owned());
+    for uri in [&a, &b] {
+        shared
+            .need
+            .lock()
+            .add(&Interest::ResourceUpdated(uri.clone()))
+            .expect("room");
+    }
+    shared
+        .snapshot
+        .lock()
+        .read([a.clone(), b.clone()].into(), true);
+    let mut state = State::new(&shared, Era::Modern);
+    state.note(
+        UpstreamNote::Ack {
+            kinds: KindSet::default(),
+            uris: vec![a.clone()],
+        },
+        false,
+    );
+    let updated = |uri: &str| UpstreamNote::Notice {
+        kind: NoteKind::ResourceUpdated,
+        uri: Some(uri.to_owned()),
+    };
+    state.note(updated(&b), false);
+    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
+    state.flush(&weak);
+    assert!(intake.try_recv().is_err(), "an unlisted URI was delivered");
+    state.note(updated(&a), false);
+    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
+    state.flush(&weak);
+    assert!(intake.try_recv().is_ok(), "control: the listed URI");
+}
