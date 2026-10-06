@@ -44,13 +44,16 @@ pub(super) fn dispatch_error_result(
         rejection.error_code.clone_into(&mut hint.error_code);
         hint.retry = rejection.retry;
     }
-    attach_recovery(
+    let answer = attach_recovery(
         json!({
             "isError": true,
             "content": [{"type": "text", "text": e.to_string()}],
         }),
         hint,
-    )
+    );
+    // MIK-7939: the hint is the gateway's text, never a receipt's.
+    super::gateway_writes::note(super::gateway_writes::Layer::Value, &["recovery"], &answer);
+    answer
 }
 
 impl super::MetaMcp {

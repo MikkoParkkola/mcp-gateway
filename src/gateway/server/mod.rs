@@ -3078,11 +3078,7 @@ impl Gateway {
         // answer, and a replaced answer commits no receipt.
         {
             use super::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
-            let shape = if external_tool == "gateway_invoke" {
-                AnswerShape::InvokeWrapped
-            } else {
-                AnswerShape::Literal
-            };
+            let shape = AnswerShape::of(&external_tool);
             meta_mcp.rebuild_receipt_from_final(
                 response.result.as_ref(),
                 GatewayStamps::Legacy,

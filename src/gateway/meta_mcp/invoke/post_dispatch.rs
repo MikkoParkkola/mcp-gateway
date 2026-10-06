@@ -60,7 +60,10 @@ pub(super) fn attach_tool_error_recovery(
             },
             surface,
         );
-        attach_recovery(value, hint)
+        let value = attach_recovery(value, hint);
+        // MIK-7939: the hint is the gateway's text, never a receipt's.
+        super::gateway_writes::note(super::gateway_writes::Layer::Value, &["recovery"], &value);
+        value
     } else {
         value
     }
@@ -151,6 +154,11 @@ impl MetaMcp {
                 "_cost_warnings".to_string(),
                 serde_json::json!(cost_warnings),
             );
+            super::gateway_writes::note(
+                super::gateway_writes::Layer::Value,
+                &["_cost_warnings"],
+                result,
+            );
         }
 
         if let Some(ref enforcer) = self.budget_enforcer {
@@ -172,6 +180,11 @@ impl MetaMcp {
                             "savings_per_call": suggestion.savings_per_call,
                             "alternative_cost": suggestion.alternative_cost,
                         }),
+                    );
+                    super::gateway_writes::note(
+                        super::gateway_writes::Layer::Value,
+                        &["_cost_suggestion"],
+                        result,
                     );
                 }
             }
