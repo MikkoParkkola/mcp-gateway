@@ -120,6 +120,8 @@ enum MetaMode {
     InspectionBlocks,
     /// The idempotency cache is on, so a re-issued key replays.
     Idempotent,
+    /// `alpha`'s tool `t` is surfaced, so it is called by name on `/mcp`.
+    SurfacedT,
 }
 
 /// Backends `alpha` and `beta`, one logger shared by both routes.
@@ -205,6 +207,12 @@ async fn fixture(setup: Setup) -> Fixture {
             Arc::new(crate::idempotency::IdempotencyCache::new()),
             crate::idempotency::CLEANUP_INTERVAL,
         );
+    }
+    if setup.meta_mode == MetaMode::SurfacedT {
+        meta = meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+            server: "alpha".to_string(),
+            tool: "t".to_string(),
+        }]);
     }
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.transparency_log = Some(Arc::clone(&log));
