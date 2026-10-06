@@ -47,7 +47,7 @@ fn a_disabled_accounts_block_reads_no_secret_file() {
     );
 }
 
-/// A disabled block with one OpenWebUI adapter, its store keys given verbatim.
+/// A disabled block with one `OpenWebUI` adapter, its store keys given verbatim.
 fn disabled_block_with_adapter(dir: &Path, keys: &str) -> std::path::PathBuf {
     let config_path = dir.join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(
@@ -80,10 +80,10 @@ fn a_disabled_block_with_an_adapter_refuses_a_malformed_key_before_reading() {
     );
     let config_path = disabled_block_with_adapter(dir.path(), &keys);
 
-    let refusal = Config::load_evaluated(Some(&config_path))
-        .err()
-        .expect("a malformed key in a block whose references are read must refuse the load")
-        .to_string();
+    let Err(refusal) = Config::load_evaluated(Some(&config_path)) else {
+        panic!("a malformed key in a block whose references are read must refuse the load");
+    };
+    let refusal = refusal.to_string();
     assert!(
         refusal.contains("accounts.keys[legacy]"),
         "refusal names the malformed key: {refusal}"
