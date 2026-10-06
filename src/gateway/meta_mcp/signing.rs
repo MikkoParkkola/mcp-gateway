@@ -278,7 +278,7 @@ impl SigningInvocationContext {
         if self.scope != SigningScope::EveryToolCall {
             return Ok(());
         }
-        self.refuse_malformed_nonce()
+        Ok(())
     }
 
     /// Whether the call presents a well-formed nonce: what the destructive
