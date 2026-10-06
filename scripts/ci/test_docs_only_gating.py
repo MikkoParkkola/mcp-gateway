@@ -111,6 +111,13 @@ def main() -> int:
     for must in ("test", "windows-check", "macos-check"):
         if must in SKIPPED:
             errors.append(f"test job {must} is in the skipped set")
+    # A red Linux suite must not start a Windows run: Windows slots are the
+    # scarce part of the account's concurrent-job pool.
+    for outcome in ("failure", "cancelled", "skipped"):
+        c = dict(ctx("pull_request", "success", "false"))
+        c["needs"] = dict(c["needs"], test={"result": outcome, "outputs": {}})
+        if runs(jobs["windows-check"], c):
+            errors.append(f"windows-check runs after a {outcome} Tests job")
     for name, c in cases.items():
         ran = {k for k, j in jobs.items() if k not in NOT_ON_PRS and runs(j, c)}
         want = (SKIPPED | KEPT) - (SKIPPED if name == "docs-only PR" else set())
