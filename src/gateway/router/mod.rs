@@ -50,6 +50,8 @@ pub(crate) mod helpers;
 mod origin_guard;
 #[cfg(feature = "firewall")]
 mod response_pass;
+mod watch_poll;
+pub(crate) use watch_poll::GatewayWatchHost;
 
 /// `true` when `host` names the loopback interface.
 ///

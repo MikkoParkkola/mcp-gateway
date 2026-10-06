@@ -643,3 +643,16 @@ fn a_restricted_api_key_does_not_open_the_dashboard() {
         "a restricted key is not an admin credential"
     );
 }
+
+/// A watch poll runs as the key its subscription stored. A key re-issued
+/// under the same name has another secret, so it does not inherit the poll.
+#[test]
+fn a_key_reissued_under_the_same_name_is_another_caller() {
+    let stored = principal_of("key-value");
+    let (state, _) = bootstrap_state(None, vec![admin_key(false)]);
+    assert!(state.auth_config.client_for_key("ops", &stored).is_some());
+    let mut reissued = admin_key(false);
+    reissued.digest = test_digest("new-value");
+    let (state, _) = bootstrap_state(None, vec![reissued]);
+    assert!(state.auth_config.client_for_key("ops", &stored).is_none());
+}

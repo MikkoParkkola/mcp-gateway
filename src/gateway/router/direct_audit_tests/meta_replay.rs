@@ -23,6 +23,11 @@ fn keyed_invoke(id: u32) -> (String, Value) {
 
 /// POST as key `k` on the 2026-07-28 revision.
 async fn post_modern(fx: &Fixture, body: &str) -> (StatusCode, String) {
+    post_modern_named(fx, "gateway_invoke", body).await
+}
+
+/// [`post_modern`] for a `tools/call` of `name`.
+async fn post_modern_named(fx: &Fixture, name: &str, body: &str) -> (StatusCode, String) {
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -31,7 +36,7 @@ async fn post_modern(fx: &Fixture, body: &str) -> (StatusCode, String) {
         .header("mcp-protocol-version", "2026-07-28")
         .header("authorization", "Bearer k")
         .header("mcp-method", "tools/call")
-        .header("mcp-name", "gateway_invoke")
+        .header("mcp-name", name)
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
     let response = fx.router.clone().oneshot(request).await.unwrap();
@@ -267,4 +272,43 @@ async fn meta_replay_after_a_refused_delivery_record_stays_withheld() {
         second.contains("-32005"),
         "the replay must not deliver the withheld value: {second}"
     );
+}
+
+/// MIK-7645 AC1: a surfaced tool called by its own name replays through the
+/// same record as `gateway_invoke`: the re-issued key writes a record with
+/// the original's request hash, response hash and outcome.
+#[tokio::test]
+async fn meta_replay_of_a_surfaced_tool_writes_an_invocation_record() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        meta_mode: MetaMode::SurfacedT,
+        ..Setup::default()
+    })
+    .await;
+    let body = |id: u32| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+               "params": {"name": "t", "arguments": {"q": 1},
+                          "_meta": {IDEMPOTENCY_KEY_META: "key-2488",
+                                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                                    "io.modelcontextprotocol/clientCapabilities": {}}}})
+        .to_string()
+    };
+    let (status, first) = post_modern_named(&fx, "t", &body(1)).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let (status, second) = post_modern_named(&fx, "t", &body(2)).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "the second call must be a replay: {second}"
+    );
+
+    let all = invocations(&fx);
+    assert_eq!(all.len(), 2, "one record per delivered call: {all:?}");
+    let (original, replay) = (&all[0], &all[1]);
+    assert_eq!(replay["server"], "alpha", "{replay}");
+    assert_eq!(replay["tool"], "t", "{replay}");
+    for field in ["request_hash", "response_hash", "outcome"] {
+        assert_eq!(replay[field], original[field], "{field}: {replay}");
+    }
 }
