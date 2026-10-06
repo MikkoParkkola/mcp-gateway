@@ -168,7 +168,12 @@ async fn a_cancelled_wait_leaves_the_start_to_settle() {
         let backend = Arc::clone(&backend);
         async move { backend.resolve_for_events().await }
     });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while resolutions(&backend) == 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the start never spawned"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     waiter.abort();

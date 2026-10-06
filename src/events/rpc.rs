@@ -182,16 +182,21 @@ impl EventsHub {
         let Some((backend, kind)) = upstream::parse_name(name) else {
             return Ok(());
         };
-        if kind == Kind::ToolsChanged
-            || self.judged_backends().get(backend) != Some(&Judged::Unresolved)
-        {
+        if kind == Kind::ToolsChanged {
             return Ok(());
         }
-        let Some(handle) = self.runtime.backends.get().and_then(|r| r.get(backend)) else {
-            return Err(RpcError::not_found());
-        };
-        if !handle.resolve_for_events().await {
-            return Err(RpcError::backend_unavailable());
+        match self.judged_backends().get(backend) {
+            None => return Ok(()),
+            // Refused already: answer it before anything reads the backend.
+            Some(Judged::Refused(_)) => {}
+            Some(Judged::Unresolved) => {
+                let Some(handle) = self.runtime.backends.get().and_then(|r| r.get(backend)) else {
+                    return Err(RpcError::not_found());
+                };
+                if !handle.resolve_for_events().await {
+                    return Err(RpcError::backend_unavailable());
+                }
+            }
         }
         self.upstream_admits(name)
     }
