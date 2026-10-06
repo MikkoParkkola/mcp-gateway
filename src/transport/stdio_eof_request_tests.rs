@@ -80,27 +80,27 @@ async fn a_request_after_stdout_closed_fails_at_once() {
 /// child never reads. The call ends at EOF, not at a write that never returns.
 #[tokio::test]
 async fn eof_during_a_blocked_write_ends_the_call() {
-    let (_w, t) = started("sleep 1\nexec 1>&-\nsleep 60").await;
-    let began = std::time::Instant::now();
+    // The child closes stdout only once the request's first byte arrives, so
+    // the EOF lands while the write is in flight, never before the call.
+    let (_w, t) = started("head -c 1 >/dev/null\nexec 1>&-\nsleep 60").await;
     let err = fails_fast(&t, big_params()).await;
     assert!(
         matches!(&err, Error::Transport(message) if message.contains("stdout closed")),
         "{err:?}"
     );
-    // EOF came a second after the handshake; a call that ended sooner went
-    // through the already-closed check, not the in-flight race.
-    assert!(
-        began.elapsed() >= Duration::from_millis(500),
-        "ended before EOF: {:?}",
-        began.elapsed()
-    );
     // The race dropped the write mid-frame, so stdin is retired.
-    let err = tokio::time::timeout(ROW_LIMIT, t.notify("notifications/progress", None))
+    stdin_retired(&t).await;
+    let _ = t.close().await;
+}
+
+/// The next write fails at once with "Not connected": stdin was retired
+/// rather than left holding half a frame.
+async fn stdin_retired(transport: &StdioTransport) {
+    let err = tokio::time::timeout(ROW_LIMIT, transport.notify("notifications/progress", None))
         .await
-        .expect("a retired stdin fails at once")
+        .expect("a retired stdin fails at once, not behind a full pipe")
         .expect_err("half a frame is on stdin");
     assert!(err.to_string().contains("Not connected"), "{err}");
-    let _ = t.close().await;
 }
 
 /// Larger than any pipe buffer, so its write cannot complete on a child that
@@ -120,11 +120,7 @@ async fn a_cancelled_write_retires_stdin() {
     )
     .await;
     assert!(cut.is_err(), "the write cannot complete: {cut:?}");
-    let err = tokio::time::timeout(ROW_LIMIT, t.notify("notifications/progress", None))
-        .await
-        .expect("a retired stdin fails at once, not behind a full pipe")
-        .expect_err("half a frame is on stdin");
-    assert!(err.to_string().contains("Not connected"), "{err}");
+    stdin_retired(&t).await;
     assert!(!t.is_connected());
     let _ = t.close().await;
 }
@@ -158,5 +154,7 @@ async fn a_write_the_child_never_reads_ends_at_the_request_timeout() {
         .expect("the request timeout bounds the write")
         .expect_err("nothing reads the request");
     assert!(matches!(err, Error::BackendTimeout(_)), "{err:?}");
+    // The deadline cut the write off mid-frame, so stdin is retired.
+    stdin_retired(&t).await;
     let _ = t.close().await;
 }
