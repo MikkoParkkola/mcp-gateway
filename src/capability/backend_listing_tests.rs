@@ -101,7 +101,7 @@ fn one_transition_is_announced_once() {
 }
 
 /// A capability loaded after the watch started (the initial scan, a reload)
-/// is planned for too: its expiry is announced (r1 review).
+/// is planned for too: its expiry is announced.
 #[tokio::test]
 async fn a_capability_loaded_later_has_its_expiry_announced() {
     let executor = Arc::new(CapabilityExecutor::new());
@@ -109,6 +109,9 @@ async fn a_capability_loaded_later_has_its_expiry_announced() {
     let (registry, mut feed) = registry_feed();
     let (shutdown, rx) = tokio::sync::broadcast::channel(1);
     backend.spawn_listing_watch(Arc::clone(&registry), rx);
+    // The watch parks on its empty catalogue first: only the wake plans the
+    // later entry's expiry.
+    tokio::task::yield_now().await;
     let mut token: crate::oauth::TokenInfo =
         serde_json::from_value(serde_json::json!({"access_token": "t"})).unwrap();
     token.expires_at = Some(now() + 63);
@@ -123,4 +126,29 @@ async fn a_capability_loaded_later_has_its_expiry_announced() {
         .expect("the later capability's expiry was announced");
     assert_eq!(announced.as_deref(), Some("caps"));
     let _ = shutdown.send(());
+}
+
+/// The startup scan's loads have no reload to announce them: finishing a scan
+/// that lists something announces once, and marks it complete.
+#[test]
+fn a_finished_scan_that_lists_something_is_announced_once() {
+    let backend = backend(3600);
+    backend.begin_initial_scan();
+    let (registry, mut feed) = registry_feed();
+    backend.finish_initial_scan(&registry);
+    assert!(backend.initial_scan_complete());
+    assert_eq!(feed.try_recv().as_deref(), Ok("caps"));
+    assert!(feed.try_recv().is_err(), "once");
+}
+
+/// A scan whose every capability is hidden (no credential) changed nothing a
+/// client sees: no announcement.
+#[test]
+fn a_finished_scan_that_lists_nothing_is_not_announced() {
+    let backend = backend(3600);
+    backend.executor.oauth_tokens.read().remove(PROVIDER);
+    assert!(backend.listed_names().is_empty());
+    let (registry, mut feed) = registry_feed();
+    backend.finish_initial_scan(&registry);
+    assert!(feed.try_recv().is_err());
 }
