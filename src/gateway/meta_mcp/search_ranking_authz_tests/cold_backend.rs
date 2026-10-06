@@ -69,18 +69,34 @@ fn meta_over(backend: &Arc<crate::backend::Backend>) -> MetaMcp {
     .with_profile_registry(registry)
 }
 
-#[tokio::test]
-async fn a_cold_backend_becomes_discoverable_after_a_search_fills_it() {
+/// A cold backend whose `tools/list` answers with [`COLD_TOOLS`].
+fn listing_backend() -> Arc<crate::backend::Backend> {
     let payload: Vec<Value> = COLD_TOOLS
         .iter()
         .map(|(n, d)| json!({ "name": n, "description": d, "inputSchema": { "type": "object" } }))
         .collect();
-    let backend = cold_backend(
+    cold_backend(
         COLD_BACKEND,
         Arc::new(ToolsListTestTransport {
             tools: json!(payload),
         }),
-    );
+    )
+}
+
+/// Whether `backend`'s shared cache fills within 5 s.
+async fn fills(backend: &crate::backend::Backend) -> bool {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while backend.get_cached_tools_snapshot().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+#[tokio::test]
+async fn a_cold_backend_becomes_discoverable_after_a_search_fills_it() {
+    let backend = listing_backend();
     let meta = meta_over(&backend);
 
     // First query: the cache is empty, so nothing can be returned yet, and
@@ -94,14 +110,8 @@ async fn a_cold_backend_becomes_discoverable_after_a_search_fills_it() {
         "a cold cache yields no match on the first query"
     );
 
-    let filled = tokio::time::timeout(Duration::from_secs(5), async {
-        while backend.get_cached_tools_snapshot().is_empty() {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await;
     assert!(
-        filled.is_ok(),
+        fills(&backend).await,
         "search must fill a cold backend's tool cache in the background; \
          without the fix nothing ever fills it and the backend stays unsearchable"
     );
@@ -114,6 +124,45 @@ async fn a_cold_backend_becomes_discoverable_after_a_search_fills_it() {
         tool_names(&second),
         vec![COLD_QUERY.to_string()],
         "a cold backend must be discoverable once its cache is filled"
+    );
+}
+
+/// MIK-7962.COLD.1: the SEP-1821 filtered `tools/list` reads the cache
+/// directly. A cold backend it skips must be filled behind the read, as
+/// discovery does, or a client that only ever lists never sees its tools.
+#[cfg(feature = "spec-preview")]
+#[tokio::test]
+async fn a_filtered_tools_list_fills_a_cold_backend() {
+    let backend = listing_backend();
+    let meta = meta_over(&backend);
+    let _ = meta.handle_tools_list_filtered(
+        crate::protocol::RequestId::Number(1),
+        COLD_QUERY,
+        None,
+        crate::gateway::meta_mcp::InvokeScope::allow_all(
+            crate::gateway::router::CallerStanding::Admin,
+        ),
+    );
+    assert!(
+        fills(&backend).await,
+        "a filtered tools/list must ask for a cold backend's tools"
+    );
+}
+
+/// MIK-7962.COLD.1: `gateway_list_servers` counts the cache directly; a cold
+/// backend it reports with `tools_known: false` must be filled behind it.
+#[tokio::test]
+async fn list_servers_fills_a_cold_backend() {
+    let backend = listing_backend();
+    let meta = meta_over(&backend);
+    let listed = meta
+        .list_servers(&crate::gateway::meta_mcp::anonymous_caller(), None)
+        .await
+        .expect("list_servers succeeds");
+    assert_eq!(listed["servers"][0]["tools_known"], false, "{listed}");
+    assert!(
+        fills(&backend).await,
+        "list_servers must ask for a cold backend's tools"
     );
 }
 
