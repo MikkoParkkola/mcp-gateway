@@ -585,6 +585,23 @@ mod tests {
         );
     }
 
+    /// Second review follow-up to MIK-7941: an issuer without exactly
+    /// `scheme://authority` is refused; the parser repairs both of these.
+    #[test]
+    fn issuers_without_a_plain_authority_are_not_advertised() {
+        let config = config_with_issuers(
+            true,
+            true,
+            &[
+                "https:@idp.corp.internal",
+                "https:///@idp.corp.internal",
+                "https://idp.corp.internal",
+            ],
+        );
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
+        assert_eq!(meta.authorization_servers, ["https://idp.corp.internal"]);
+    }
+
     /// Agent auth refuses every bearer that is not a registered agent's
     /// token, an OIDC ID token included, so no issuer is named while it is on.
     #[test]
