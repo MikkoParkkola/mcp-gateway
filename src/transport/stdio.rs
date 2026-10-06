@@ -34,7 +34,8 @@ use crate::{Error, Result};
 
 #[path = "stdio_cache.rs"]
 mod cache;
-pub use cache::{assigned_package_cache_dir, isolated_package_manager_env};
+pub(crate) use cache::assigned_package_cache_dir;
+pub use cache::isolated_package_manager_env;
 
 #[path = "stdio_env.rs"]
 mod env;

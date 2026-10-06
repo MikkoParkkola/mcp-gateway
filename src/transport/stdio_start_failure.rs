@@ -65,7 +65,7 @@ impl StdioTransport {
     /// the repair reads it rather than the environment: a path the operator
     /// configured has the same shape as one the gateway assigned.
     #[must_use]
-    pub fn new_with_assigned_cache(
+    pub(crate) fn new_with_assigned_cache(
         command: &str,
         env: HashMap<String, String>,
         cwd: Option<String>,

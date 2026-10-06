@@ -45,7 +45,7 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
 /// Only npm's cache is answered for: the repair was reviewed against npm's
 /// install failures, and the other runners' trees are left to their own tools.
 #[must_use]
-pub fn assigned_package_cache_dir<S: std::hash::BuildHasher>(
+pub(crate) fn assigned_package_cache_dir<S: std::hash::BuildHasher>(
     backend_name: &str,
     command: &str,
     backend_env: &HashMap<String, String, S>,
