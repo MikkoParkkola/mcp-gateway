@@ -222,3 +222,46 @@ async fn tools_list_static_code_mode_unaffected_by_absent_param() {
     assert!(names.contains(&"gateway_search"));
     assert!(names.contains(&"gateway_execute"));
 }
+
+async fn post_mcp(state: &Arc<AppState>, uri: &str, body: &Value) -> Value {
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = create_router(Arc::clone(state))
+        .oneshot(request)
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+/// MIK-7974.URL.1: a caller that turned Code Mode on with the URL parameter
+/// sees only `gateway_search` and `gateway_execute`, so a failed
+/// `gateway_execute` names `gateway_search`, not `gateway_list_tools`.
+#[tokio::test]
+async fn a_codemode_param_caller_gets_code_mode_recovery_hints() {
+    let (state, _store) = test_router_app_state_with_code_mode(false).await;
+    let call = json!({
+        "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "gateway_execute",
+                   "arguments": {"tool": "absent:missing", "arguments": {}}}
+    });
+    let hint = |answer: &Value| {
+        answer["result"]["recovery"]["suggest"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no recovery hint in {answer}"))
+            .to_owned()
+    };
+    // Control: without the parameter the caller is on the standard surface.
+    let standard = hint(&post_mcp(&state, "/mcp", &call).await);
+    assert!(standard.contains("`gateway_list_tools`"), "{standard}");
+
+    let code_mode = hint(&post_mcp(&state, "/mcp?codemode=search_and_execute", &call).await);
+    assert!(
+        code_mode.contains("`gateway_search`") && !code_mode.contains("gateway_list_tools"),
+        "URL.1: {code_mode}"
+    );
+}
