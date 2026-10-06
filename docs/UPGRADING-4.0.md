@@ -4064,7 +4064,7 @@ could also read and cancel the other's tasks. Config load, reload and startup no
 a configuration, naming the two credentials and never a secret or digest. The check covers
 the bearer token and API keys configured together. Identities issued at runtime cannot
 collide with them (item 154). A principal that a removed credential once held is not
-checked. The principal encoding is unchanged, so existing sessions,
+checked. The encoding of configured principals is unchanged, so existing sessions,
 grants and tasks stay readable. Remove the duplicate entry, or replace one of the two
 credentials.
 
