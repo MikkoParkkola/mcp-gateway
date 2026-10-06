@@ -4000,6 +4000,19 @@ A client that read failure from the text alone keeps working. One that treated
 `isError: true` as a protocol failure should read the text and its `recovery`
 hint instead.
 
+## 152. A stepped weekday field in a cron expression matches only its own days
+
+**Startup:** no notice; scheduled jobs and `schedule.tick` timers with a stepped weekday field fire on fewer days
+
+A cron expression whose weekday field uses a step, such as `0 9 * * */2`,
+used to match every day of the week: the scheduler also tested each weekday
+plus 7 as Sunday's alias, and a step field matches one of the two for every
+day. It now treats 7 as Sunday only, so `*/2` matches Sunday, Tuesday,
+Thursday and Saturday, as cron defines it. 3.x had the same behaviour.
+
+Check every scheduled job and `schedule.tick` subscription whose weekday field
+uses `/`. If it was meant to run every day, use `*` instead.
+
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
