@@ -208,15 +208,14 @@ impl EventsHub {
         if kind == Kind::ToolsChanged || !self.config.sources.backend_notifications {
             return Ok(());
         }
-        if self.source_offering(name).is_none() {
-            return Err(RpcError::not_found());
-        }
         match self.judged_backends().remove(backend) {
-            None => Ok(()),
             Some(Judged::Refused(reason)) => {
                 Err(RpcError::unsupported_backend_events(name, reason.as_str()))
             }
             Some(Judged::Unresolved) => Err(RpcError::backend_unavailable()),
+            // Removed since the subscribe saw it.
+            None if self.source_offering(name).is_none() => Err(RpcError::not_found()),
+            None => Ok(()),
         }
     }
 }
