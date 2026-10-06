@@ -129,8 +129,8 @@ fn with_card(mut descriptor: Value, card: Value) -> Value {
 /// stale (MIK-7916).
 type CardMemo = HashMap<String, HashMap<String, (Value, Value)>>;
 
-// ponytail: a full map is cleared, not evicted entry by entry; an LRU if
-// catalogs ever outgrow these bounds.
+// ponytail: a full map keeps its residents and computes newcomers uncached,
+// so a churning catalog can lose its saving; an LRU if that ever shows.
 const MEMO_SERVERS: usize = 1024;
 const MEMO_TOOLS_PER_SERVER: usize = 8192;
 
@@ -150,12 +150,14 @@ pub fn project_tool_descriptors_trust_cards(
     tools: &[Tool],
 ) -> Vec<Value> {
     let mut memo = card_memo().lock().unwrap_or_else(PoisonError::into_inner);
-    if memo.len() >= MEMO_SERVERS {
-        memo.clear();
+    let key = format!("{server_id}\0{server_name}");
+    if memo.len() >= MEMO_SERVERS && !memo.contains_key(&key) {
+        return tools
+            .iter()
+            .map(|tool| project_tool_descriptor_trust_card(server_id, server_name, tool))
+            .collect();
     }
-    let cards = memo
-        .entry(format!("{server_id}\0{server_name}"))
-        .or_default();
+    let cards = memo.entry(key).or_default();
     tools
         .iter()
         .map(|tool| {
@@ -166,10 +168,9 @@ pub fn project_tool_descriptors_trust_cards(
                 Some((seen, card)) if *seen == descriptor => card.clone(),
                 _ => {
                     let card = computed_card(server_id, server_name, tool);
-                    if cards.len() >= MEMO_TOOLS_PER_SERVER {
-                        cards.clear();
+                    if cards.len() < MEMO_TOOLS_PER_SERVER || cards.contains_key(&tool.name) {
+                        cards.insert(tool.name.clone(), (descriptor.clone(), card.clone()));
                     }
-                    cards.insert(tool.name.clone(), (descriptor.clone(), card.clone()));
                     card
                 }
             };
