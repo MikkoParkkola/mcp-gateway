@@ -143,14 +143,14 @@ async fn a_start_waits_for_its_caches_lock_before_spawning() {
     assert_eq!(spawns(&log).len(), 1);
 }
 
-/// A start cancelled while its removal runs keeps the cache locked until the
-/// tree is really gone.
+/// A start cancelled while its rename runs keeps the cache locked until the
+/// rename ends.
 ///
-/// Tokio cannot abort a started blocking task, so the removal outlives the
+/// Tokio cannot abort a started blocking task, so the rename outlives the
 /// cancelled start. If the lock were released with the start, another start of
-/// the backend could install into the tree the removal is still deleting.
+/// the backend could install into the tree the rename is still moving.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_cancelled_removal_keeps_the_cache_locked_until_it_ends() {
+async fn a_cancelled_rename_keeps_the_cache_locked_until_it_ends() {
     let workspace = tempfile::tempdir().expect("workspace");
     let dir = temp_root(workspace.path()).join(unique_leaf());
     let lock = repair_lock(&dir);
@@ -158,13 +158,13 @@ async fn a_cancelled_removal_keeps_the_cache_locked_until_it_ends() {
 
     let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
     let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-    let removal = tokio::spawn({
+    let rename = tokio::spawn({
         let dir = dir.clone();
         async move {
-            remove_cache_dir(&dir, held, move |_| {
+            retire_cache_dir(&dir, held, move |_| {
                 started_tx.send(()).expect("the test is listening");
-                release_rx.recv().expect("the test releases the removal");
-                true
+                release_rx.recv().expect("the test releases the rename");
+                Retired::AlreadyGone
             })
             .await
         }
@@ -172,19 +172,19 @@ async fn a_cancelled_removal_keeps_the_cache_locked_until_it_ends() {
     tokio::task::spawn_blocking(move || started_rx.recv())
         .await
         .expect("the wait does not panic")
-        .expect("the removal starts");
+        .expect("the rename starts");
 
-    removal.abort();
-    let _ = removal.await;
+    rename.abort();
+    let _ = rename.await;
     assert!(
         lock.try_lock().is_err(),
-        "the start that held the lock is gone, but its removal is still running"
+        "the start that held the lock is gone, but its rename is still running"
     );
 
-    release_tx.send(()).expect("the removal is waiting");
+    release_tx.send(()).expect("the rename is waiting");
     tokio::time::timeout(Duration::from_secs(5), lock.lock())
         .await
-        .expect("the lock is released once the removal ends");
+        .expect("the lock is released once the rename ends");
 }
 
 /// A start that cannot get its cache's lock within the request timeout fails
@@ -218,34 +218,91 @@ async fn a_start_gives_up_waiting_for_a_held_cache() {
     assert!(spawns(&log).is_empty(), "nothing spawned without the lock");
 }
 
-/// A removal that does not finish in time is given up on, and the cache stays
-/// locked until the orphaned removal really ends.
+/// A rename that does not finish in time is given up on, and the cache stays
+/// locked until the orphaned rename really ends.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_removal_past_its_limit_is_abandoned_but_keeps_the_lock() {
+async fn a_rename_past_its_limit_is_abandoned_but_keeps_the_lock() {
     let workspace = tempfile::tempdir().expect("workspace");
     let dir = temp_root(workspace.path()).join(unique_leaf());
     let lock = repair_lock(&dir);
     let held = Arc::clone(&lock).lock_owned().await;
 
     let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-    let outcome = remove_within(
+    let outcome = retire_within(
         &dir,
         held,
         move |_| {
-            release_rx.recv().expect("the test releases the removal");
-            true
+            release_rx.recv().expect("the test releases the rename");
+            Retired::AlreadyGone
         },
         Duration::from_millis(200),
     )
     .await;
 
-    assert!(outcome.is_err(), "the removal is given up on at its limit");
+    assert!(outcome.is_err(), "the rename is given up on at its limit");
     assert!(
         lock.try_lock().is_err(),
-        "the orphaned removal still holds the cache"
+        "the orphaned rename still holds the cache"
     );
-    release_tx.send(()).expect("the removal is waiting");
+    release_tx.send(()).expect("the rename is waiting");
     tokio::time::timeout(Duration::from_secs(5), lock.lock())
         .await
-        .expect("the lock is released once the removal ends");
+        .expect("the lock is released once the rename ends");
+}
+
+/// Where `park_discard` left the last tombstone it was handed.
+static PARKED: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// A tombstone deletion that never runs on its own: the test finishes it.
+fn park_discard(tombstone: PathBuf) {
+    *PARKED.lock().expect("parked lock") = Some(tombstone);
+}
+
+/// A start right after a repair proceeds while the moved-aside tree is still
+/// waiting to be deleted: deleting it holds no lock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_after_a_repair_does_not_wait_for_the_old_tree_to_go() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    write_stub(workspace.path(), STUB);
+    let cache = seed_cache(workspace.path());
+    let log = workspace.path().join("spawns.log");
+    let repairing = transport(
+        workspace.path(),
+        env_with_cache(&log, "fail-once", CACHE_SHAPED, &cache.root),
+        Duration::from_secs(5),
+        Some(&cache.root),
+    );
+
+    let (result, repair) = start_reporting_with(&repairing, park_discard).await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(repair, Repair::Cleared);
+    let tombstone = PARKED
+        .lock()
+        .expect("parked lock")
+        .take()
+        .expect("the repair moved the cache aside");
+    assert!(
+        !cache.root.exists(),
+        "the cache path is free for a fresh install"
+    );
+    assert!(tombstone.exists(), "and the old tree waits, undeleted");
+
+    let next = transport(
+        workspace.path(),
+        env_with_cache(&log, "succeed", CACHE_SHAPED, &cache.root),
+        Duration::from_secs(5),
+        Some(&cache.root),
+    );
+    let (result, _) = tokio::time::timeout(Duration::from_secs(5), start_reporting(&next))
+        .await
+        .expect("nothing waits on the old tree's deletion");
+    assert!(result.is_ok(), "{result:?}");
+    assert!(
+        tombstone.exists(),
+        "the old tree was still there throughout"
+    );
+    assert!(
+        remove_now(&tombstone),
+        "the parked deletion can still finish"
+    );
 }
