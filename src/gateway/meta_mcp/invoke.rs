@@ -500,7 +500,7 @@ impl MetaMcp {
                 self.settle_dispatch_error(
                     e,
                     caller_credential.managed.as_ref(),
-                    &mut idem_reservation,
+                    (&mut idem_reservation, caller.execution),
                     verified_identity,
                     (server, tool, surface),
                 )

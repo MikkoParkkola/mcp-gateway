@@ -37,6 +37,7 @@ fn request<'a>(
         input_capabilities: Declared::default(),
         session_id: None,
         protocol_revision: None,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
     }
 }
 

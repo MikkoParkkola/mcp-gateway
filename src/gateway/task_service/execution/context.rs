@@ -122,6 +122,10 @@ impl OwnedCallerContext {
     }
 
     /// The request's meta-tool surface, so the task's hints follow it.
+    ///
+    /// Intended: a retry under the same idempotency key gets the task its key
+    /// already created, with hints for the creating request's surface, as every
+    /// idempotent replay returns the stored answer unchanged (MIK-7974).
     pub(crate) fn with_surface_request(
         mut self,
         surface_request: crate::gateway::recovery::SurfaceRequest,

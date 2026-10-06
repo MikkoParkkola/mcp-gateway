@@ -56,3 +56,32 @@ async fn a_codemode_task_keeps_code_mode_hints() {
         "{code_mode}"
     );
 }
+
+/// MIK-7974: a refusal the backend never saw is not stored under the call's
+/// key, so once the breaker closes the same key reaches the backend instead
+/// of replaying the refusal and the hint it was given.
+#[tokio::test]
+async fn a_keyed_breaker_refusal_is_not_replayed() {
+    let (state, _store) = fixture_state(&admin_auth()).await;
+    let mock = MockBackend::answering(Answer::ok());
+    register(&state, BACKEND, &mock);
+    let backend = state
+        .backends
+        .get(BACKEND)
+        .expect("the backend is registered");
+    backend.trip_circuit_breaker("mik-7974");
+    let call = keyed(sync_invoke(1, json!({})), "mik-7974-sync");
+    let refused = post(&state, "key-admin", call.clone()).await;
+    assert!(
+        refused.to_string().contains("gateway_revive_server"),
+        "{refused}"
+    );
+
+    backend.reset_circuit_breaker();
+    let answered = post(&state, "key-admin", call).await;
+    assert_eq!(
+        mock.calls(),
+        1,
+        "the retry replayed the refusal: {answered}"
+    );
+}
