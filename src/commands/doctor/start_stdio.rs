@@ -198,6 +198,23 @@ mod tests {
         );
     }
 
+    /// MIK-7978: the row names the early exit's class and needle, never the
+    /// child's stderr text. Test idea from #1759 (terafin).
+    #[tokio::test]
+    async fn an_early_exit_row_names_the_class_not_the_stderr() {
+        let sentinel = format!("ghp_{}", "q7".repeat(17));
+        let backend = stdio(
+            &format!("sh -c 'echo \"Error: Cannot find module x {sentinel}\" >&2; exit 3'"),
+            &[],
+        );
+        let row = start_stdio_backend("b", &backend)
+            .await
+            .expect("a stdio row");
+        assert!(!row.detail.contains(&sentinel), "{}", row.detail);
+        assert!(row.detail.contains("missing_module"), "{}", row.detail);
+        assert!(row.detail.contains("exit status: 3"), "{}", row.detail);
+    }
+
     /// T7: the same cause the gateway logs, through the backend's own env.
     #[tokio::test]
     async fn t7_start_stdio_reports_the_exit_and_the_stderr_tail() {

@@ -345,3 +345,27 @@ async fn non_utf8_stdout_fails_start_without_waiting_for_the_timeout() {
     start_err(&t).await;
     assert!(!t.is_connected());
 }
+
+/// MIK-7978: no log record carries the child's stderr, not even a credential
+/// the redactor's patterns miss. Test idea from #1759 (terafin).
+#[tokio::test]
+async fn an_early_exit_logs_no_child_stderr() {
+    // One character short of the 36 the GitHub token pattern needs.
+    let sentinel = format!("ghp_{}", "q7".repeat(17));
+    let (captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
+    let t = transport(
+        &format!("echo \"Authorization: token {sentinel}\" >&2; exit 3"),
+        &[],
+    );
+    let err = start_err(&t).await;
+    assert!(err.contains("exit status: 3"), "{err}");
+    let text = captured.text();
+    assert!(
+        text.lines().any(|l| l.contains("exited before initialize")),
+        "the early exit is logged:\n{text}"
+    );
+    assert!(
+        !text.contains(&sentinel),
+        "child stderr reached the log:\n{text}"
+    );
+}
