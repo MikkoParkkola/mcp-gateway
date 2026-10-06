@@ -769,3 +769,24 @@ async fn a_call_that_read_the_pre_edit_definition_is_refused_after_reload() {
     let fresh = ctx_with_generation(executor.mcp_generation("mcp_probe"));
     call(&executor, &fresh_def, say, &fresh).await.unwrap();
 }
+
+/// MIK-7953: PATH in `env` is left out of the redaction list, yet the child
+/// receives it, so a reload that changes it still starts a new child.
+#[tokio::test]
+async fn a_reload_changing_a_declared_path_restarts_the_child() {
+    let cap = parse_capability(&capability_yaml().replace(
+        "transport: stdio",
+        "transport: stdio\n      env: [PATH, CAP_EXEC_TEST_TOKEN]",
+    ))
+    .expect("probe parses");
+    // The helper writes one env-file line; PATH rides on a second.
+    let (_a, executor) = executor_holding("tok-7953\nPATH=/path-7953-a");
+    let say = json!({"operation": "say", "text": "x"});
+    let first = call(&executor, &cap, say.clone(), &caller("a"))
+        .await
+        .unwrap();
+    let (_b, reloaded) = executor_holding("tok-7953\nPATH=/path-7953-b");
+    executor.env.set(reloaded.env.get());
+    let second = call(&executor, &cap, say, &caller("a")).await.unwrap();
+    assert_ne!(first["pid"], second["pid"], "a new PATH starts a new child");
+}
