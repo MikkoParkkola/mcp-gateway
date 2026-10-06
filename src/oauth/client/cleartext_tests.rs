@@ -301,3 +301,52 @@ async fn the_proxied_client_refuses_a_hop_to_cleartext_loopback() {
     );
     assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
+
+/// The send-time backstop, driven directly because every caller checks the
+/// destination first: whatever checked a URL before, `client_for` refuses
+/// cleartext off this machine. Under `Configured` a loopback `http://` URL
+/// takes the unproxied client, and with none it fails closed rather than
+/// falling back to the proxied one.
+#[tokio::test]
+async fn client_for_refuses_cleartext_and_never_proxies_loopback() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let mut client = OAuthClient::with_destination(
+        DestinationPolicy::Configured,
+        reqwest::Client::new(),
+        "backstop-backend".to_string(),
+        "https://resource.example/mcp".to_string(),
+        vec![],
+        storage,
+        OAuthClientConfig::default(),
+    );
+
+    let error = client
+        .client_for("http://off-machine.invalid/token")
+        .expect_err("cleartext off this machine");
+    assert!(is_ssrf_refusal(&error), "not a policy refusal: {error}");
+    let text = error.to_string();
+    assert!(text.contains("endpoint"), "{text}");
+    assert!(!text.contains("off-machine.invalid"), "URL echoed: {text}");
+
+    let tls = client.client_for("https://auth.example/token").unwrap();
+    assert!(
+        std::ptr::eq(tls, &client.http_client),
+        "https uses the configured client"
+    );
+    let loopback = client.client_for("http://127.0.0.1:9/token").unwrap();
+    assert!(
+        !std::ptr::eq(loopback, &client.http_client),
+        "loopback http must not take the proxied client"
+    );
+
+    client.loopback_client = None;
+    let error = client
+        .client_for("http://127.0.0.1:9/token")
+        .expect_err("no unproxied client: fail closed");
+    assert!(error.to_string().contains("unavailable"), "{error}");
+    assert!(
+        client.client_for("https://auth.example/token").is_ok(),
+        "control: https is unaffected"
+    );
+}
