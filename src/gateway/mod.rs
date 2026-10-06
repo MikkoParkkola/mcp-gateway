@@ -35,6 +35,8 @@ pub mod proxy;
 mod proxy_scope_tests;
 #[cfg(test)]
 mod proxy_session_tests;
+#[cfg(test)]
+mod routes_tests;
 pub mod recovery;
 mod router;
 /// The one constructor that turns a verified identity into a grant subject,
