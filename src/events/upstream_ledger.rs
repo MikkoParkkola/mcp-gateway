@@ -335,14 +335,19 @@ impl Drop for InFlight<'_> {
 }
 
 /// Send one due call and record how it ended. `false` when the peer has no
-/// resource interest (`-32601`).
+/// resource interest (`-32601`). `holder` names who the call reaches; read
+/// before the send and after the answer, a change means the answer may be
+/// another holder's, so it counts as uncertain.
 pub(crate) async fn drive(
     ledger: &Mutex<Ledger>,
     backend: &Backend,
     uri: &str,
     subscribe: bool,
     limit: Duration,
+    holder: &(dyn Fn() -> u64 + Sync),
 ) -> bool {
+    let before = holder();
+    ledger.lock().observe(before);
     let Some(call) = ledger.lock().sent(uri, subscribe) else {
         return true;
     };
@@ -360,9 +365,17 @@ pub(crate) async fn drive(
         Ok(Err(e)) if e.is_pre_dispatch() => Outcome::NotSent,
         Ok(Err(_)) | Err(_) => Outcome::Uncertain,
     };
+    let after = holder();
+    let outcome = if after == before {
+        outcome
+    } else {
+        Outcome::Uncertain
+    };
     if in_flight.end(outcome) {
         warn!(backend = %backend.name, "upstream listener: unsubscribe refused three times");
     }
+    // Applied to the old key first (it strands), then the new holder.
+    ledger.lock().observe(after);
     !matches!(result, Ok(Ok(false)))
 }
 

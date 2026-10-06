@@ -190,7 +190,15 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             return failed();
         }
     }
-    state.sync_legacy(backend, &target.handle).await;
+    state.handle = Some(target.handle.clone());
+    let synced = tokio::select! {
+        () = shared.stop.cancelled() => false,
+        () = state.sync_legacy(backend, &target.handle) => true,
+    };
+    if !synced {
+        state.release(backend).await;
+        return Outcome::Stopped;
+    }
     let mut tick = tokio::time::interval(TICK);
     let mut wake = shared.wake.subscribe();
     // The tools refill a notice starts. Polled as one arm of the loop's select,
@@ -258,11 +266,17 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             state.release(backend).await;
             return Outcome::Stopped;
         }
-        if shared.is_idle() {
-            // Kept only to release keys (D5 cleanup), and nothing is left.
-            shared.stop.cancel();
-        }
+        // Kept only to release keys (D5 cleanup), and nothing is left.
+        shared.cancel_if_idle();
         state.flush(hub);
+    }
+}
+
+/// Order `due` (sorted by URI) to start after `last`, wrapping around.
+fn resume_after(due: &mut [(String, bool)], last: Option<&str>) {
+    if let Some(last) = last {
+        let next = due.partition_point(|(uri, _)| uri.as_str() <= last);
+        due.rotate_left(next);
     }
 }
 
@@ -412,6 +426,11 @@ struct State<'a> {
     snapshot_retry_at: Instant,
     /// A modern replacement listen is not retried before this.
     retry_open_at: Instant,
+    /// The session's transport, which the legacy release walk names as the
+    /// holder of its calls (D5).
+    handle: Option<Weak<dyn UpstreamListen>>,
+    /// The last URI a legacy pass reached; the next resumes after it.
+    legacy_cursor: Option<String>,
 }
 
 impl<'a> State<'a> {
@@ -434,6 +453,8 @@ impl<'a> State<'a> {
             snapshot_due: now + SNAPSHOT_TTL,
             snapshot_retry_at: now,
             retry_open_at: now,
+            handle: None,
+            legacy_cursor: None,
         }
     }
 
@@ -620,11 +641,17 @@ impl<'a> State<'a> {
             return;
         }
         let ledger = Arc::clone(&self.shared.ledger);
-        ledger.lock().observe(holder_of(handle));
-        let due = ledger.lock().due(Instant::now());
+        let holder = || holder_of(handle);
+        ledger.lock().observe(holder());
+        let mut due = ledger.lock().due(Instant::now());
+        // Resume after the URI the last pass reached, so URIs that hang
+        // cannot starve the ones ordered after them.
+        resume_after(&mut due, self.legacy_cursor.as_deref());
+        let cursor = &mut self.legacy_cursor;
         let pass = async {
             for (uri, subscribe) in due {
-                if !drive(&ledger, backend, &uri, subscribe, OPEN_LIMIT).await {
+                *cursor = Some(uri.clone());
+                if !drive(&ledger, backend, &uri, subscribe, OPEN_LIMIT, &holder).await {
                     return false;
                 }
             }
@@ -632,6 +659,12 @@ impl<'a> State<'a> {
         };
         if !tokio::time::timeout(OPEN_LIMIT, pass).await.unwrap_or(true) {
             self.resource_interest_unsupported = true;
+        }
+        if ledger.lock().unplaced() > 0 && ledger.lock().warn_cap() {
+            warn!(
+                backend = %self.shared.name,
+                "upstream listener: watched URIs not subscribed on the new session; the URI cap is held by stranded keys until config removal or restart"
+            );
         }
     }
 
@@ -645,9 +678,11 @@ impl<'a> State<'a> {
         }
         let ledger = Arc::clone(&self.shared.ledger);
         let uris = ledger.lock().releasable();
+        let handle = self.handle.clone();
+        let holder = || handle.as_ref().map_or(0, holder_of);
         let walk = async {
             for uri in uris {
-                if !drive(&ledger, backend, &uri, false, OPEN_LIMIT).await {
+                if !drive(&ledger, backend, &uri, false, OPEN_LIMIT, &holder).await {
                     return;
                 }
             }
