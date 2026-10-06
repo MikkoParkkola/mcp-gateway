@@ -8,6 +8,7 @@
 set -euo pipefail
 
 source_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$source_repo" # FILES globs resolve against the repo, whatever the caller's cwd
 tmp_root="$(mktemp -d)"
 trap 'rm -rf "$tmp_root"' EXIT
 
@@ -73,7 +74,7 @@ assert_fail() {
 assert_pass "unchanged-tree"
 
 assert_fail "formula-without-caveats" homebrew/mcp-gateway.rb \
-  's/\n  def caveats\n.*?\n  end\n//s' \
+  's/\n *def caveats\n.*?\n *end\n//s' \
   "homebrew/mcp-gateway.rb: formula caveats must point to COMMERCIAL.md"
 
 # The caveat loses its pointer; the formula's `# See LICENSES.md /
@@ -81,6 +82,10 @@ assert_fail "formula-without-caveats" homebrew/mcp-gateway.rb \
 assert_fail "formula-commercial-only-in-comment" homebrew/mcp-gateway.rb \
   's/ See https:\S*COMMERCIAL\.md//' \
   "homebrew/mcp-gateway.rb: formula caveats must point to COMMERCIAL.md"
+
+assert_fail "generated-formula-without-caveats" .github/workflows/release.yml \
+  's/\n *def caveats\n.*?\n *end\n//s' \
+  ".github/workflows/release.yml: formula caveats must point to COMMERCIAL.md"
 
 assert_fail "generated-formula-caveat-drops-commercial" .github/workflows/release.yml \
   's/ See https:\S*COMMERCIAL\.md//' \

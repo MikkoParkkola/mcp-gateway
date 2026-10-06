@@ -37,7 +37,7 @@ with source files, is in the [OWASP Agentic AI self-assessment](OWASP_AGENTIC_AI
 | mTLS | `mtls.enabled: true` ([Deployment Guide](DEPLOYMENT.md)) | Callers without a valid client certificate |
 | Identity headers from a proxy | `security.caller_identity` | Spoofed identity headers. They count only from listed proxy addresses or Cloudflare Access |
 | Remote backend provenance | `security.remote_server_signing` | A remote backend whose URL or identity was swapped |
-| Boundary-call attestation | `GATEWAY_ATTESTATION_MODE=enforce`, plus `GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_AUDIENCE`: without either, the gateway refuses to start ([upgrade item 46](UPGRADING-4.0.md#46-attestation-enforce-enforces-on-every-route)) | Calls outside their signed task scope |
+| Boundary-call attestation | `GATEWAY_ATTESTATION_MODE=enforce`, plus non-blank `GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_AUDIENCE`: without either, the gateway refuses to start ([upgrade item 46](UPGRADING-4.0.md#46-attestation-enforce-enforces-on-every-route)) | Calls outside their signed task scope |
 | Capability pinning | `mcp-gateway cap pin <file>` | Edits to a capability file you have pinned. Unpinned files still load |
 
 To turn CLI capabilities off entirely, set `capabilities.process_execution: disabled`.
