@@ -51,6 +51,12 @@ impl Backend {
             return Ok(RestartOutcome::SkippedStopping);
         }
 
+        // A start stalled on an interactive login holds the start lock for
+        // up to the whole authorization window, and its callback listener
+        // holds the port this restart's own login binds: end that login
+        // first. Starts queued behind it share its Cancelled end (MIK-7982).
+        self.login_gate.cancel_and_join().await;
+
         let entry = self.shared_entry();
         let _guard = entry.start_lock.lock().await;
 
