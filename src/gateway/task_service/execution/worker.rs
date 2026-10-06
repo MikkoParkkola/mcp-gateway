@@ -195,6 +195,9 @@ async fn run_dispatched(
     }
 
     let authorizer = state.authorizer(intent.owned.authorizer());
+    // Held through the call and an upstream job's follow, released before
+    // settling: a parked round ends this worker, and its caller is idle then.
+    let key_hold = intent.owned.hold_caller_key(&state);
     let caller = intent.owned.dispatch_context(&state, &authorizer);
     let session_id = intent.owned.session_id().map(str::to_owned);
 
@@ -261,6 +264,7 @@ async fn run_dispatched(
         )
         .await;
     } else {
+        drop(key_hold);
         let response = inspect_settled(&state, &call, &id, response);
         Settling::new(
             &executor,

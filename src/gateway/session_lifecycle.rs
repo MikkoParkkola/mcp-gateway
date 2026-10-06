@@ -44,6 +44,35 @@ pub struct SessionLifecycle {
     /// So the trigger becomes a deadline. The handlers are unchanged; what
     /// changes is that something still fires them.
     tracked: RwLock<std::collections::HashMap<String, u64>>,
+    /// Keys a running task call is writing under, with how many such calls.
+    /// A sweep passes them over: a caller whose task is still running is not
+    /// idle, however long ago its last request was (MIK-7828.FIX.2).
+    held: parking_lot::Mutex<std::collections::HashMap<String, usize>>,
+}
+
+/// A running call's claim on its caller key; see [`SessionLifecycle::hold`].
+#[must_use = "the key is held only while this guard lives"]
+pub(crate) struct KeyHold {
+    lifecycle: Arc<SessionLifecycle>,
+    key: String,
+}
+
+impl Drop for KeyHold {
+    /// The call is over: it was the caller's latest activity, so the key's
+    /// deadline runs one [`IDLE_TTL`] from now.
+    fn drop(&mut self) {
+        {
+            let mut held = self.lifecycle.held.lock();
+            if let Some(count) = held.get_mut(&self.key) {
+                *count -= 1;
+                if *count == 0 {
+                    held.remove(&self.key);
+                }
+            }
+        }
+        self.lifecycle
+            .track(self.key.clone(), now_unix() + IDLE_TTL.as_secs());
+    }
 }
 
 /// How long after a session ends its in-flight calls may still write state
@@ -176,6 +205,17 @@ impl SessionLifecycle {
         self.tracked.write().insert(key.into(), expires_at);
     }
 
+    /// Keep `key` from being reclaimed until the returned guard drops, then
+    /// renew its deadline. Taken around a task's backend call, which can run
+    /// far past [`IDLE_TTL`] with no request from its caller in between.
+    pub(crate) fn hold(self: &Arc<Self>, key: &str) -> KeyHold {
+        *self.held.lock().entry(key.to_owned()).or_default() += 1;
+        KeyHold {
+            lifecycle: Arc::clone(self),
+            key: key.to_owned(),
+        }
+    }
+
     /// Stop tracking a key that has already been reclaimed.
     ///
     /// Without this a disconnect leaves the deadline behind, and the next reap
@@ -203,10 +243,11 @@ impl SessionLifecycle {
             self.fire_ended(&id);
         }
         let expired: Vec<String> = {
+            let held = self.held.lock();
             let mut tracked = self.tracked.write();
             let expired: Vec<String> = tracked
                 .iter()
-                .filter(|(_, expires_at)| now > **expires_at)
+                .filter(|(key, expires_at)| now > **expires_at && !held.contains_key(*key))
                 .map(|(key, _)| key.clone())
                 .collect();
             for key in &expired {
@@ -440,5 +481,42 @@ mod tests {
         let lifecycle = SessionLifecycle::new();
         lifecycle.on_disconnect("no-handlers"); // should not panic
         assert_eq!(lifecycle.handler_count(), 0);
+    }
+
+    /// MIK-7828.FIX.2: a held key survives a sweep past its deadline, stays
+    /// held until its last holder lets go, and is then due one `IDLE_TTL`
+    /// from that moment, not on the deadline it had before.
+    #[test]
+    fn a_held_key_is_reclaimed_only_an_idle_ttl_after_its_last_hold() {
+        let lifecycle = Arc::new(SessionLifecycle::new());
+        let fired = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&fired);
+        lifecycle.register("count", move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+        lifecycle.track("caller", 10);
+        let first = lifecycle.hold("caller");
+        let second = lifecycle.hold("caller");
+        assert_eq!(lifecycle.reap(20), 0, "reclaimed while held");
+        drop(first);
+        assert_eq!(
+            lifecycle.reap(20),
+            0,
+            "reclaimed while one call still holds it"
+        );
+        drop(second);
+        let released = now_unix();
+        assert_eq!(
+            lifecycle.reap(20),
+            0,
+            "reclaimed on the deadline before the hold"
+        );
+        assert_eq!(
+            lifecycle.reap(released + IDLE_TTL.as_secs() - 1),
+            0,
+            "reclaimed before an idle TTL had passed since the call ended"
+        );
+        assert_eq!(lifecycle.reap(now_unix() + IDLE_TTL.as_secs() + 1), 1);
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
     }
 }
