@@ -15,8 +15,13 @@ use stdio_session::StdioSession;
 
 /// The text of the failed call's result, recovery hint included.
 async fn failed_call(code_mode: bool, call: Value) -> String {
+    failed_call_with(&format!("code_mode:\n  enabled: {code_mode}\n"), call).await
+}
+
+/// [`failed_call`] on a gateway configured by `settings` (YAML, no `backends`).
+async fn failed_call_with(settings: &str, call: Value) -> String {
     let home = tempfile::tempdir().expect("home");
-    let yaml = format!("code_mode:\n  enabled: {code_mode}\nbackends: {{}}\n");
+    let yaml = format!("{settings}backends: {{}}\n");
     mcp_gateway::gateway::test_helpers::write_owner_only(home.path().join("gateway.yaml"), yaml)
         .expect("write gateway.yaml");
 
@@ -79,4 +84,21 @@ async fn standard_mode_hints_name_gateway_list_tools() {
         "a recovery hint is expected: {text}"
     );
     assert!(text.contains("gateway_list_tools"), "{text}");
+}
+
+#[tokio::test]
+async fn a_hidden_discovery_tool_is_not_named() {
+    let text = failed_call_with(
+        "code_mode:\n  enabled: true\nmeta_mcp:\n  exposed_meta_tools:\n    - gateway_execute\n",
+        json!({"name": "gateway_execute", "arguments": {"tool": "nosuch:anything", "arguments": {}}}),
+    )
+    .await;
+    assert!(
+        text.contains("recovery"),
+        "a recovery hint is expected: {text}"
+    );
+    assert!(
+        !text.contains("gateway_search"),
+        "exposed_meta_tools hides gateway_search; the hint must not name it: {text}"
+    );
 }
