@@ -258,7 +258,6 @@ impl crate::transport::Transport for CountedPeerError {
         method: &str,
         params: Option<Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
-        use crate::transport::Transport as _;
         if method == "tools/call" {
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
@@ -286,7 +285,6 @@ impl crate::transport::Transport for CountedReply {
         method: &str,
         params: Option<Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
-        use crate::transport::Transport as _;
         if method == "tools/call" {
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
