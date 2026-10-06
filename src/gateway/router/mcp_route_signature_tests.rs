@@ -27,6 +27,16 @@ fn registered_in(table: &str) -> Result<Vec<String>, String> {
             return Err(format!("unsupported router composition: {form}"));
         }
     }
+    // A merged router is scanned nowhere, so each one is a reviewed entry.
+    let mut rest = table;
+    while let Some(at) = rest.find(".merge(") {
+        let tail = &rest[at + ".merge(".len()..];
+        let arg = merged_argument(tail).ok_or("an unclosed .merge(")?;
+        if !MERGED_WITHOUT_MCP_ROUTES.contains(&arg) {
+            return Err(format!("unreviewed merged router: {arg}"));
+        }
+        rest = tail;
+    }
     let methods = [
         "post(", "get(", "delete(", "put(", "patch(", "any(", "on(", "head(", "options(", "trace(",
         "connect(",
@@ -76,8 +86,46 @@ fn registered_in(table: &str) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+/// Routers merged into the application router in `router/mod.rs`, each
+/// reviewed as registering no `/mcp` path. `extra` is the webhook receiver
+/// (`WebhookRegistry::create_dynamic_routes`), mounted under
+/// `webhooks.base_path`.
+const MERGED_WITHOUT_MCP_ROUTES: &[&str] = &[
+    "super::ui::admin_audit::audited_api_router(&state)",
+    "unauthenticated_routes()",
+    "ks_routes",
+    "jwks_route",
+    "protected_resource_route",
+    "metrics_route(&startup_config)",
+    "super::ui::html_router()",
+    "extra",
+    "accounts_router",
+];
+
+/// The argument of a `.merge(` call, given the text after the parenthesis.
+fn merged_argument(tail: &str) -> Option<&str> {
+    let mut depth = 0usize;
+    for (i, c) in tail.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' if depth == 0 => return Some(tail[..i].trim()),
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
 fn registered_mcp_handlers() -> Vec<String> {
     registered_in(&read("src/gateway/router/mod.rs")).expect("the MCP routes are resolvable")
+}
+
+/// The declared return type in a signature: the text after its last `->`,
+/// without a trailing `where` clause, or `None` when nothing is declared.
+fn return_type(sig: &str) -> Option<&str> {
+    let (_, after) = sig.rsplit_once("->")?;
+    let declared = after.split("where").next().unwrap_or(after);
+    Some(declared.trim())
 }
 
 /// The text of `fn name`'s signature, up to its body.
@@ -115,8 +163,10 @@ fn every_mcp_handler_returns_an_outbound_reply() {
     for name in registered_mcp_handlers() {
         let sig = signature(&name);
         assert!(
-            sig.contains("-> crate::gateway::outbound::OutboundReply")
-                || sig.contains("-> OutboundReply"),
+            matches!(
+                return_type(&sig),
+                Some("OutboundReply" | "crate::gateway::outbound::OutboundReply")
+            ),
             "{name} must return OutboundReply, found: {sig}"
         );
     }
@@ -137,4 +187,51 @@ fn an_unresolvable_mcp_registration_fails_closed() {
     }
     let ok = ".route(\"/mcp\", post(handlers::meta_mcp_handler))";
     assert_eq!(registered_in(ok), Ok(vec!["meta_mcp_handler".to_owned()]));
+}
+
+/// MIK-7827: the return type is compared whole, so a type that only
+/// mentions `OutboundReply` does not pass.
+#[test]
+fn only_a_declared_outbound_reply_passes() {
+    for (sig, ok) in [
+        ("async fn h(s: State) -> OutboundReply", true),
+        (
+            "async fn h(s: State) -> crate::gateway::outbound::OutboundReply",
+            true,
+        ),
+        ("fn h<T>(t: T) -> OutboundReply where T: Send", true),
+        (
+            "async fn h(s: State) -> Result<OutboundReply, Error>",
+            false,
+        ),
+        ("async fn h(s: State) -> OutboundReplyRaw", false),
+        ("async fn h(f: fn() -> OutboundReply) -> Response", false),
+        ("async fn h(s: State)", false),
+    ] {
+        let passes = matches!(
+            return_type(sig),
+            Some("OutboundReply" | "crate::gateway::outbound::OutboundReply")
+        );
+        assert_eq!(passes, ok, "{sig}");
+    }
+}
+
+/// MIK-7827: a router merged in without review fails closed, as a nested one
+/// does; the reviewed merges in `router/mod.rs` resolve.
+#[test]
+fn an_unreviewed_merged_router_fails_closed() {
+    let route = ".route(\"/mcp\", post(handlers::meta_mcp_handler))";
+    for merge in [
+        "\n.merge(mcp_router)",
+        "\napp = app.merge(build(\"/mcp\"))",
+        "\napp.merge(",
+    ] {
+        let table = format!("{route}{merge}");
+        assert!(registered_in(&table).is_err(), "must not pass: {table}");
+    }
+    let reviewed = format!("{route}\napp = app.merge(extra);");
+    assert_eq!(
+        registered_in(&reviewed),
+        Ok(vec!["meta_mcp_handler".to_owned()])
+    );
 }
