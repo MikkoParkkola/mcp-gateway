@@ -559,11 +559,18 @@ impl CapabilityExecutor {
         let principal = principal(capability, context, self.multi_user.load(Ordering::Acquire))?;
         self.mcp_children.ensure_sweeper();
         let lookup = self.env_lookup();
-        let env_values: Vec<String> = config
+        let declared: Vec<(&String, String)> = config
             .env
             .iter()
-            .filter_map(|name| lookup(name))
-            .map(|v| v.to_string_lossy().into_owned())
+            .filter_map(|name| lookup(name).map(|v| (name, v.to_string_lossy().into_owned())))
+            .collect();
+        // As `child_env`: the gateway sets a reserved name itself, never from
+        // this list, so its value is no injected secret. A changed one still
+        // restarts the child below (PATH reaches it).
+        let env_values: Vec<String> = declared
+            .iter()
+            .filter(|(name, _)| !is_reserved(name))
+            .map(|(_, value)| value.clone())
             .collect();
         // A root is no secret, so it stays out of `env_values` (which results
         // are scrubbed of), but a changed one restarts the child.
@@ -571,7 +578,7 @@ impl CapabilityExecutor {
         let env_fp = {
             use std::hash::{Hash as _, Hasher as _};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            env_values.hash(&mut hasher);
+            declared.hash(&mut hasher);
             roots.hash(&mut hasher);
             hasher.finish()
         };

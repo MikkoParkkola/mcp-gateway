@@ -422,8 +422,12 @@ async fn h10_that_certificate_with_an_api_key_keys_on_the_credential() {
     assert_eq!(got, [Delivered, BudgetSpent]);
 }
 
+/// MIK-7971: an auth-off legacy caller is keyed on the session it RESUMES; a
+/// call resuming none (no header, so the gateway mints one) keys on the one
+/// shared session-less identity. A fresh session no longer buys a fresh
+/// bucket: that was a new budget per request.
 #[tokio::test]
-async fn h11_an_auth_off_legacy_caller_is_still_keyed_on_its_session() {
+async fn h11_an_auth_off_legacy_caller_is_keyed_on_its_resumed_session() {
     let fw = firewall(false);
     let (state, _store) =
         state_with_firewalls_and_auth(Arc::clone(&fw), fw, &AuthConfig::default()).await;
@@ -432,13 +436,18 @@ async fn h11_an_auth_off_legacy_caller_is_still_keyed_on_its_session() {
     let (first, session, body) = send(&router, call(&anon, false, None, 0)).await;
     assert_eq!(first, Delivered, "{body}");
     let session = session.expect("a legacy call is given a session");
-    let (again, _, body) = send(&router, call(&anon, false, Some(&session), 1)).await;
-    assert_eq!(again, BudgetSpent, "same session, same bucket: {body}");
-    let (fresh, _, body) = send(&router, call(&anon, false, None, 2)).await;
+    let (fresh, _, body) = send(&router, call(&anon, false, None, 1)).await;
     assert_eq!(
-        fresh, Delivered,
-        "a new session is a new anonymous bucket: {body}"
+        fresh, BudgetSpent,
+        "no session resumed: the shared session-less bucket: {body}"
     );
+    let (resumed, _, body) = send(&router, call(&anon, false, Some(&session), 2)).await;
+    assert_eq!(
+        resumed, Delivered,
+        "a resumed session is its own bucket: {body}"
+    );
+    let (again, _, body) = send(&router, call(&anon, false, Some(&session), 3)).await;
+    assert_eq!(again, BudgetSpent, "same session, same bucket: {body}");
 }
 
 // ── #1785 in this PR: one caller, one key, on both routes ─────────────────────
