@@ -322,15 +322,11 @@ pub fn attach_recovery(mut value: Value, hint: RecoveryHint) -> Value {
 /// only status-shaped or unambiguous phrases.
 ///
 /// Deliberately not matched: a digit run inside a larger token (`4291a` in a
-/// `500`), and `throttling`, which appears in its own negation ("throttling
-/// disabled"). `throttled` — the past participle, which reports what happened
-/// rather than naming the feature — is matched, because "request throttled by
-/// upstream" is a shape this gateway has actually seen, unless negated
-/// ("not throttled", "unthrottled"): those report an ordinary failure, and a
-/// wrong exclusion there is the worse of the two mistakes above. The negated
-/// forms are stripped before the match runs, per-occurrence rather than as a
-/// whole-payload veto, so a negated phrase never suppresses a separate,
-/// genuine "throttled" elsewhere in the same text (GH475.RL.5 review fix).
+/// `500`), and any form of `throttle` on its own. A throttle phrase is prose,
+/// not a status: "request throttled: upstream out of capacity" is a capacity
+/// failure, and exempting it kept a failing backend in rotation (MIK-7677).
+/// A real throttle carries a `429` token or a rate-limit phrase
+/// (`too many requests`, `rate limit`, `resource_exhausted`).
 #[must_use]
 pub fn is_rate_limited(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
@@ -340,10 +336,6 @@ pub fn is_rate_limited(text: &str) -> bool {
         || lower.contains("rate-limit")
         || lower.contains("ratelimit")
         || lower.contains("resource_exhausted")
-        || lower
-            .replace("not throttled", "")
-            .replace("unthrottled", "")
-            .contains("throttled")
     {
         return true;
     }
