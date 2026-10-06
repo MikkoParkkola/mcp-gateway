@@ -4075,13 +4075,12 @@ credentials.
 A caller signed in through the key server, with a token from `/auth/token` or a delegated
 OIDC bearer, used to get the same kind of principal as a configured credential: the first
 48 bits of a SHA-256 digest. An API key configured by digest could therefore share an OIDC
-user's principal, and with it what is keyed on the principal alone: event subscriptions and
-audit attribution. Sessions, tasks and the response cache key on the verified OIDC identity
-and were not affected. These callers now get `kst:<sha256 hex>` (token) or
-`oidc:<sha256 hex>` (bearer), which no configured principal can equal. Configured
-principals are unchanged. An event subscription such a caller made on a 4.0.0
-pre-release is stored under the old principal; that caller subscribes again. Update any log or
-audit query that matched these callers' old 12-hex principal.
+user's principal. Sessions, tasks, event subscriptions and the response cache key these
+callers on their verified OIDC identity, so the shared principal showed where the
+principal itself is recorded, such as audit attribution. These callers now get
+`kst:<sha256 hex>` (token) or `oidc:<sha256 hex>` (bearer), which no configured principal
+can equal. Configured principals are unchanged. Update any log or audit query that matched
+these callers' old 12-hex principal.
 
 ## Upgrading from 3.5.x: a walkthrough
 
