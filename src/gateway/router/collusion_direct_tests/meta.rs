@@ -563,9 +563,10 @@ async fn meta_replay_leaves_the_cost_suggestion_out_of_the_receipt() {
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
 }
 
-/// MIK-7991 (R5): a keyed read, an unkeyed response-cache hit on it and a
-/// keyed replay all serve the first call's suggestion unchanged, and after
-/// each hit the receipt still leaves it out and keeps the backend's text.
+/// MIK-7991 (R5): an unkeyed read, a keyed response-cache hit on it (which
+/// settles the key with the cached answer) and a keyed replay of that key
+/// all serve the first call's suggestion unchanged, and after each hit the
+/// receipt still leaves it out and keeps the backend's text.
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn meta_cache_hit_then_replay_leave_the_suggestion_out() {
@@ -574,15 +575,11 @@ async fn meta_cache_hit_then_replay_leave_the_suggestion_out() {
     suggest(&mut fx, "read", "send");
     let read = invoke("read", &json!({}));
     let key = keyed("key-7991-r5");
-    let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
+    let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &json!({})).await;
     let own = cost_suggestion(&first);
     let reads = fx.reads();
-    let (_, hit) = post(&fx, Some("a"), "gateway_invoke", &read, &json!({})).await;
-    assert_eq!(
-        fx.reads(),
-        reads,
-        "base: the unkeyed re-read is a hit: {hit}"
-    );
+    let (_, hit) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
+    assert_eq!(fx.reads(), reads, "base: the keyed re-read is a hit: {hit}");
     assert_eq!(cost_suggestion(&hit), own, "the hit serves it unchanged");
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 1);
     let (_, replay) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
