@@ -82,24 +82,28 @@ impl CallbackServer {
     /// Stop listening without waiting for a callback, for an authorization
     /// abandoned before the browser was sent anywhere.
     pub(crate) fn stop(self) {
-        for handle in self.server_handles {
-            handle.abort();
-        }
+        drop(self);
     }
 
     /// Wait for the callback to be received
-    pub async fn wait_for_callback(self) -> Result<(String, CallbackResult)> {
-        let result = self
-            .receiver
+    pub async fn wait_for_callback(mut self) -> Result<(String, CallbackResult)> {
+        let result = (&mut self.receiver)
             .await
             .map_err(|_| Error::OAuth("Callback channel closed unexpectedly".to_string()))?;
 
-        // Abort all listener tasks — they have all done their job.
-        for handle in self.server_handles {
+        // The listeners have done their job; dropping `self` aborts them.
+        result.map(|r| (std::mem::take(&mut self.callback_url), r))
+    }
+}
+
+impl Drop for CallbackServer {
+    /// Every way a server ends closes its listeners, a wait dropped mid-way
+    /// (a cancelled or timed-out caller) included: dropping a `JoinHandle`
+    /// alone would detach the listener and keep its port (MIK-7982 F2).
+    fn drop(&mut self) {
+        for handle in &self.server_handles {
             handle.abort();
         }
-
-        result.map(|r| (self.callback_url, r))
     }
 }
 
@@ -464,9 +468,7 @@ pub(in crate::oauth) mod tests {
         assert!(server.callback_url.starts_with("http://localhost:"));
         assert!(server.callback_url.ends_with("/oauth/callback"));
         // Clean up
-        for h in server.server_handles {
-            h.abort();
-        }
+        server.stop();
     }
 
     /// #2578: the redirect URI names the configured callback host, as
@@ -543,9 +545,7 @@ pub(in crate::oauth) mod tests {
             .await
             .unwrap();
         assert!(server.callback_url.starts_with("http://localhost:"));
-        for h in server.server_handles {
-            h.abort();
-        }
+        server.stop();
     }
 
     #[tokio::test]
@@ -554,9 +554,7 @@ pub(in crate::oauth) mod tests {
             .await
             .unwrap();
         assert!(server.callback_url.ends_with("/auth/cb"));
-        for h in server.server_handles {
-            h.abort();
-        }
+        server.stop();
     }
 
     // =========================================================================
