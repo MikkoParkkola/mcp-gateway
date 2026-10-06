@@ -176,8 +176,8 @@ impl Store {
         }
         // The same occurrence offered twice keeps the record already
         // retrying or on the wire, attempt count and all. So does a later
-        // occurrence re-admitted under the id while the first is held (only a
-        // suspended subscription holds one past the inbound dedupe window):
+        // occurrence re-admitted under the id while the first is held (past
+        // the inbound dedupe window, as a suspension or an outage can hold it):
         // receivers dedupe on the event id, so it is coalesced, not sent.
         if state.outbox.contains_key(&record.event_id) {
             return Ok(Enqueued::Written);
