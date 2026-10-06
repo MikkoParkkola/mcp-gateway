@@ -5,9 +5,11 @@
 
 use serde_json::json;
 
-use super::{TaskIntentRequest, task_intent_for_call};
+use super::{TaskIntentRequest, task_intent_for_call, task_owner_key};
 use crate::config::AuthConfig;
+use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::tests::test_router_app_state_with_auth;
+use crate::identity_grants::GrantSubject;
 use crate::protocol::RequestId;
 use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::RetryFields;
@@ -120,7 +122,10 @@ async fn auth_on_with_a_credential_owner_and_no_identity_is_not_refused() {
         ..request(&args, &retry, true)
     };
     let outcome = task_intent_for_call(&state, RequestId::Number(4), api_key_caller);
-    assert_eq!(refusal(outcome), None, "an owned caller is not refused");
+    assert!(
+        matches!(outcome, Ok(Some(_))),
+        "an owned caller gets a task intent"
+    );
 }
 
 #[tokio::test]
@@ -129,4 +134,53 @@ async fn auth_off_builds_a_task_for_a_keyed_call() {
     let (args, retry) = (json!({}), keyed());
     let outcome = task_intent_for_call(&state, RequestId::Number(4), request(&args, &retry, true));
     assert!(matches!(outcome, Ok(Some(_))));
+}
+
+fn key_holder(principal: &str) -> AuthenticatedClient {
+    AuthenticatedClient {
+        quota_principal: None,
+        name: principal.to_string(),
+        rate_limit: 0,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+        principal: principal.to_string(),
+        authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+    }
+}
+
+fn named(subject: &str) -> GrantSubject {
+    GrantSubject {
+        authority: "corp-sso".to_string(),
+        subject: subject.to_string(),
+        label: None,
+    }
+}
+
+/// MIK-7967: distinct keys own apart, a proven subject splits one shared key,
+/// and a subject with no credential owns nothing.
+#[test]
+fn task_owner_key_separates_keys_and_subjects_but_never_stands_in_for_a_key() {
+    let (alpha, bravo) = (key_holder("alpha"), key_holder("bravo"));
+    let (alice, bob) = (named("alice"), named("bob"));
+    assert_eq!(task_owner_key(None, None, Some(&alpha)), "credential:alpha");
+    assert_ne!(
+        task_owner_key(None, None, Some(&alpha)),
+        task_owner_key(None, None, Some(&bravo)),
+        "two keys own apart"
+    );
+    let alices = task_owner_key(Some(&alice), None, Some(&alpha));
+    assert!(alices.starts_with("subject:"), "{alices}");
+    assert_ne!(
+        alices,
+        task_owner_key(Some(&bob), None, Some(&alpha)),
+        "two subjects behind one key own apart"
+    );
+    assert_eq!(
+        task_owner_key(Some(&alice), None, None),
+        "",
+        "no key, no owner"
+    );
 }

@@ -53,6 +53,27 @@ pub(super) fn session_owner_key(
     })
 }
 
+/// The owner key a task records when the caller has no OIDC identity: the
+/// proven subject when one resolved, else the credential.
+///
+/// A subject outranks the credential as it does for sessions
+/// (`handlers::owner::owner_of`), so two people a trusted proxy, Cloudflare
+/// Access or a client certificate names behind one shared key never own one
+/// task (MIK-7967). A subject only SPLITS a credential's bucket: with no
+/// credential the key stays empty, so a subject header alone owns nothing and
+/// the unattributed gate still refuses it.
+pub(super) fn task_owner_key(
+    subject: Option<&crate::identity_grants::GrantSubject>,
+    cert: Option<&CertIdentity>,
+    client: Option<&AuthenticatedClient>,
+) -> String {
+    let credential = session_owner_key(client);
+    if credential.is_empty() {
+        return credential;
+    }
+    super::super::identity::subject_key(subject, cert).unwrap_or(credential)
+}
+
 /// The ONE owner every task-touching arm of a request uses.
 ///
 /// Resolved once per request and then reused for create, get, update, cancel,
@@ -67,8 +88,9 @@ pub(super) fn route_task_owner(
         Some(identity) => identity.stable_actor_id(),
         // No identity exists to be kept apart when authentication is off, and
         // pooling those callers is the operator's own configuration choice.
-        // With authentication ON the session key decides, and an empty one is
-        // refused upstream rather than pooled here.
+        // With authentication ON the owner key decides (`task_owner_key`:
+        // proven subject, else credential), and an empty one is refused
+        // upstream rather than pooled here.
         None if !state.auth_config.enabled => AUTH_DISABLED_TASK_OWNER.to_owned(),
         None => task_principal(None, owner_key),
     }
