@@ -108,3 +108,41 @@ fn any_other_stdout_error_still_fails() {
         "the failure must be reported:\n{stderr}"
     );
 }
+
+/// Commands whose output the library prints (`tool list` through
+/// `cli::output`, `validate` through the validator) take the same macros:
+/// a closed stdout leaves their exit status as it is with a reader, and
+/// nothing panics.
+#[test]
+fn library_printed_output_exits_as_with_a_reader() {
+    let capabilities = concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities");
+    let capability = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/capabilities/automation/agent_search.yaml"
+    );
+    for args in [
+        &["tool", "list", "-C", capabilities][..],
+        &["validate", capability][..],
+    ] {
+        let home = tempfile::tempdir().expect("home");
+        let read = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+            .args(args)
+            .current_dir(home.path())
+            .env("HOME", home.path())
+            .env("MCP_GATEWAY_TEST_HOME_DIR", home.path())
+            .stdin(Stdio::null())
+            .output()
+            .expect("run mcp-gateway");
+        assert!(!read.stdout.is_empty(), "{args:?} printed nothing");
+        let (status, stderr) = run_with_reader_gone(args);
+        assert!(
+            !stderr.contains("panicked") && !stderr.contains("Broken pipe"),
+            "{args:?} panicked on a closed stdout:\n{stderr}"
+        );
+        assert_eq!(
+            status.code(),
+            read.status.code(),
+            "{args:?} exited differently without a reader:\n{stderr}"
+        );
+    }
+}
