@@ -503,6 +503,30 @@ impl Run {
         poll_key(alone, &row.name, &row.arguments)
     }
 
+    /// The live rows that hold this poller's key.
+    fn holders(&self, hub: &EventsHub) -> Vec<Subscription> {
+        let now = Utc::now();
+        hub.store
+            .subscriptions()
+            .into_iter()
+            .filter(|s| s.live(now) && s.name == self.name && self.key_of(s) == self.key)
+            .collect()
+    }
+
+    /// No holder is left: retire the key under the lock a subscribe commits
+    /// under, so the next subscribe starts a fresh poller instead of finding
+    /// the key started with nothing polling. A holder that committed while
+    /// this poll read the store joined the key: the poller goes on.
+    async fn retire(&self, hub: &EventsHub) -> Step {
+        let mut started = hub.lifecycle.lock().await;
+        if !self.holders(hub).is_empty() {
+            return Step::Polled;
+        }
+        started.remove(&(SourceKind::RestWatch, self.key.clone()));
+        self.stop.store(true, Ordering::Release);
+        Step::Stop
+    }
+
     async fn once(
         &self,
         hub: &Arc<EventsHub>,
@@ -537,12 +561,7 @@ impl Run {
             }
         };
         let now = Utc::now();
-        let rows: Vec<Subscription> = hub
-            .store
-            .subscriptions()
-            .into_iter()
-            .filter(|s| s.live(now) && s.name == self.name && self.key_of(s) == self.key)
-            .collect();
+        let rows = self.holders(hub);
         let Some(services) = hub.runtime.services.get().cloned() else {
             return Step::Failed;
         };
@@ -572,7 +591,7 @@ impl Run {
             }
         }
         let Some(holder) = chosen else {
-            return Step::Stop;
+            return self.retire(hub).await;
         };
         let Ok(value) = self
             .host
