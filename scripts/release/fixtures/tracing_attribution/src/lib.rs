@@ -9,6 +9,8 @@ fn label(x: u8) -> u8 {
 }
 
 /// Reached; a multi-line macro whose argument lines are plain fields.
+// Kept multi-line on purpose: the argument lines are what is graded.
+#[rustfmt::skip]
 pub fn plain_fields(x: u8) -> bool {
     let doubled = x.wrapping_mul(2);
     tracing::debug!(
@@ -25,6 +27,8 @@ pub fn head_call(x: u8) -> bool {
 }
 
 /// Never reached.
+// Kept multi-line on purpose: the argument lines are what is graded.
+#[rustfmt::skip]
 pub fn unreached(x: u8) -> bool {
     tracing::debug!(
         value = x,
