@@ -345,6 +345,7 @@ impl super::MetaMcp {
                 caller: "task",
                 external_server: server,
                 external_tool: tool,
+                subject: None,
             };
             let verdict = firewall
                 .check_response_artifact(
@@ -610,6 +611,27 @@ impl super::MetaMcp {
     /// The transparency log, if enabled.
     pub(crate) fn transparency_log(&self) -> Option<&Arc<crate::security::TransparencyLogger>> {
         self.transparency_logger.as_ref()
+    }
+}
+
+/// The error a recovered task result settles on when the gateway's own
+/// processing refuses it: a firewall refusal as a native task and the
+/// synchronous call report it (-32600, MIK-7667), anything else as internal.
+pub(crate) fn recovered_result_error(error: &crate::Error) -> crate::protocol::JsonRpcError {
+    if matches!(error, crate::Error::ResponseFirewallRefused)
+        && let Some(refusal) = crate::protocol::JsonRpcResponse::delivery_refusal_error(
+            None,
+            error.to_rpc_code(),
+            &error.to_string(),
+        )
+        .error
+    {
+        return refusal;
+    }
+    crate::protocol::JsonRpcError {
+        code: -32603,
+        message: error.to_string(),
+        data: None,
     }
 }
 

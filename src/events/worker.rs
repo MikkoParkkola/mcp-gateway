@@ -159,7 +159,8 @@ impl EventsHub {
             self.settle(services, &record, retry).await;
             return;
         }
-        if self.source_refuses(&sub).await {
+        let verdict = self.source_verdict(&sub).await;
+        if verdict == Verdict::Refuses {
             if !self
                 .recorded_or_retry(services, &ctx, "access_revoked")
                 .await
@@ -167,11 +168,8 @@ impl EventsHub {
                 return;
             }
             self.revoke(&sub).await;
-            let retry = Settle::Retry {
-                next: Utc::now() + REFUSAL_RETRY,
-                status: "access_revoked",
-            };
-            self.settle(services, &record, retry).await;
+            self.settle(services, &record, refusal_retry("access_revoked"))
+                .await;
             return;
         }
         // A record a crash or a long suspension carried past its bounds is
@@ -186,6 +184,14 @@ impl EventsHub {
             }
             self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
                 .await;
+            return;
+        }
+        // Held, unsent and uncharged, until a source offers the type again
+        // or the record runs past its bounds above (MIK-7976).
+        if verdict == Verdict::Unoffered {
+            if self.recorded_or_retry(services, &ctx, HELD).await {
+                self.settle(services, &record, refusal_retry(HELD)).await;
+            }
             return;
         }
         // An unsubscribe that waited past its bound has removed the
@@ -206,14 +212,25 @@ impl EventsHub {
     /// resource that left the backend's catalogue is not delivered. A backend
     /// name no source offers any more (the backend left the config or a
     /// reload made it ineligible, MIK-7894) is refused too, so a record a
-    /// failed withdrawal left behind is not sent.
-    async fn source_refuses(&self, sub: &super::records::Subscription) -> bool {
+    /// failed withdrawal left behind is not sent. Any other name no source
+    /// offers is held, not refused: a source installed after the worker
+    /// started, or a partial capability scan (MIK-7772), says nothing about
+    /// the subscription, so it is kept (MIK-7976).
+    async fn source_verdict(&self, sub: &super::records::Subscription) -> Verdict {
         match self.source_offering(&sub.name) {
-            Some(source) => source
-                .authorize(&sub.principal, &sub.name, &sub.arguments)
-                .await
-                .is_err_and(|e| e.code == -32012),
-            None => sub.name.starts_with(super::backend_source::NAME_PREFIX),
+            Some(source) => {
+                let refused = source
+                    .authorize(&sub.principal, &sub.name, &sub.arguments)
+                    .await
+                    .is_err_and(|e| e.code == -32012);
+                if refused {
+                    Verdict::Refuses
+                } else {
+                    Verdict::Admits
+                }
+            }
+            None if sub.name.starts_with(super::backend_source::NAME_PREFIX) => Verdict::Refuses,
+            None => Verdict::Unoffered,
         }
     }
 
@@ -281,15 +298,20 @@ impl EventsHub {
         // The same waits can span a reload that made the backend ineligible
         // (MIK-7894): the verdict is read again after them, before the row
         // that signs, so only sync steps sit between it and the send.
-        if self.source_refuses(sub).await {
-            services.audit_outcome(&ended("access_revoked")).await;
-            self.revoke(sub).await;
-            let retry = Settle::Retry {
-                next: Utc::now() + REFUSAL_RETRY,
-                status: "access_revoked",
-            };
-            self.settle(services, record, retry).await;
-            return;
+        match self.source_verdict(sub).await {
+            Verdict::Admits => {}
+            Verdict::Refuses => {
+                services.audit_outcome(&ended("access_revoked")).await;
+                self.revoke(sub).await;
+                self.settle(services, record, refusal_retry("access_revoked"))
+                    .await;
+                return;
+            }
+            Verdict::Unoffered => {
+                services.audit_outcome(&ended(HELD)).await;
+                self.settle(services, record, refusal_retry(HELD)).await;
+                return;
+            }
         }
         // The wait for the record can span a rotation or an unsubscribe: the
         // row that signs is read after it, never before.
@@ -306,9 +328,13 @@ impl EventsHub {
             return;
         }
         // Charged once the attempt is on record, so a retry after an audit
-        // outage is not charged for an attempt that never left.
+        // outage is not charged for an attempt that never left. A type its
+        // source exempts (a budget event) is never charged.
         let key = sub.api_key.as_ref().map(|k| k.name.as_str());
-        if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
+        let charged = self
+            .source_offering(&record.name)
+            .is_none_or(|source| source.charges(&record.name));
+        if charged && !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
             services.audit_outcome(&ended("budget")).await;
             self.settle(services, record, quiet_dead(DeadReason::Budget))
                 .await;
@@ -657,6 +683,29 @@ mod wire_tests {
     #[test]
     fn a_body_that_is_not_json_has_no_wire_form() {
         assert!(wire_body(b"not json").is_none());
+    }
+}
+
+/// What a subscription's source says of its event type at an attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    Admits,
+    /// Refused: the subscription is revoked.
+    Refuses,
+    /// No source offers the type: the record waits, the subscription stays.
+    Unoffered,
+}
+
+/// The status of an attempt held because no source offers its type: nothing
+/// was revoked, the type is only unavailable for now.
+const HELD: &str = "source_unavailable";
+
+/// Back to pending after a refusal before the POST, ending `status`: a
+/// revoked subscription's record goes with it, a held one waits.
+fn refusal_retry(status: &'static str) -> Settle {
+    Settle::Retry {
+        next: Utc::now() + REFUSAL_RETRY,
+        status,
     }
 }
 
