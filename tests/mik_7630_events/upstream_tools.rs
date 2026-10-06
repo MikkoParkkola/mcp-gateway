@@ -221,3 +221,56 @@ async fn a_notice_during_a_refill_is_served_by_the_next_one() {
     .await;
     expect_events(&receiver, &tools, &name, 1).await;
 }
+
+/// MIK-8007 red (throwaway): the refill row, 20 rounds, reporting the first miss.
+#[tokio::test]
+async fn refill_race_probe() {
+    let mut misses = Vec::new();
+    for round in 0..20 {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let receiver = Receiver::start(dir.path()).await;
+        let peer = HttpPeer::start(Era::Modern).await;
+        let cfg = upstream_config(dir.path(), http_backend(&peer), &[]);
+        let gw = super::delivery::start_cfg_env(
+            dir.path(),
+            &receiver,
+            cfg,
+            &[("RUST_LOG", "mcp_gateway=debug")],
+        )
+        .await;
+        let name = event("tools_changed");
+        let tools = sub(&gw, ALICE, &name, &receiver, json!({})).await;
+        eventually("the listen asks for tools", || {
+            peer.open_listens()
+                .iter()
+                .any(|f| f["notifications"]["toolsListChanged"] == true)
+        })
+        .await;
+        let before = tools_lists(&peer);
+        peer.hang_tools_list();
+        peer.push(TOOLS_CHANGED, json!({}));
+        eventually("first refill", || tools_lists(&peer) > before).await;
+        peer.push(TOOLS_CHANGED, json!({}));
+        tokio::time::sleep(QUIET).await;
+        let at_quiet = tools_lists(&peer);
+        peer.release_tools_list();
+        let ok = wait_until(DEADLINE, || tools_lists(&peer) > before + 1).await;
+        let events = delivered(&receiver, &tools, &name).len();
+        eprintln!("round {round}: ok={ok} before={before} at_quiet={at_quiet} events={events}");
+        if !ok && misses.is_empty() {
+            misses.push(format!(
+                "round {round}\nPEER {:#?}\nGATEWAY\n{}",
+                peer.seen(),
+                gw.stall_report()
+            ));
+        } else if !ok {
+            misses.push(format!("round {round}"));
+        }
+    }
+    assert!(
+        misses.is_empty(),
+        "{} misses\n{}",
+        misses.len(),
+        misses.join("\n")
+    );
+}
