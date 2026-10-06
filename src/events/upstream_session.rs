@@ -16,7 +16,6 @@ use super::fanout::SourceEvent;
 use super::types::{SourceKind, Visibility};
 use super::upstream::Kind;
 use super::upstream_listener::Shared;
-use super::upstream_need::ledger::drive;
 use super::upstream_need::{Coalescer, Verdict, WINDOW};
 use crate::backend::{Backend, BackendRegistry};
 use crate::protocol::era::Era;
@@ -290,34 +289,6 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             return Outcome::Stopped;
         }
     }
-}
-
-/// Order `due` (sorted by URI) to start after `last`, wrapping around.
-fn resume_after(due: &mut [(String, bool)], last: Option<&str>) {
-    if let Some(last) = last {
-        let next = due.partition_point(|(uri, _)| uri.as_str() <= last);
-        due.rotate_left(next);
-    }
-}
-
-/// The legacy URI filter of `shared`'s need, read at each update (D5).
-fn watched_by(shared: &Arc<Shared>) -> Watched {
-    let shared = Arc::downgrade(shared);
-    Watched::by(move |uri| {
-        shared
-            .upgrade()
-            .is_some_and(|s| s.need.lock().emits(NoteKind::ResourceUpdated, Some(uri)))
-    })
-}
-
-/// Who holds what this session asks a legacy peer for: the transport
-/// instance and, on HTTP, its session (D5 holder generation).
-fn holder_of(handle: &Weak<dyn UpstreamListen>) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    Weak::as_ptr(handle).cast::<()>().hash(&mut hasher);
-    handle.upgrade().map(|t| t.holder()).hash(&mut hasher);
-    hasher.finish()
 }
 
 /// What a tick does about the backend's live transport (MIK-7969 H2).
@@ -771,63 +742,6 @@ impl<'a> State<'a> {
         }
     }
 
-    /// Legacy: send the calls the backend's ledger has due (D5), one per
-    /// URI, the whole pass bounded by `OPEN_LIMIT`; a URI the deadline cut
-    /// is uncertain and the rest wait for the next pass.
-    async fn sync_legacy(&mut self, backend: &Backend, handle: &Weak<dyn UpstreamListen>) {
-        if self.era == Era::Modern || self.resource_interest_unsupported {
-            return;
-        }
-        let ledger = Arc::clone(&self.shared.ledger);
-        let holder = || holder_of(handle);
-        ledger.lock().observe(holder());
-        let mut due = ledger.lock().due(Instant::now());
-        // Resume after the URI the last pass reached, so URIs that hang
-        // cannot starve the ones ordered after them.
-        resume_after(&mut due, self.legacy_cursor.as_deref());
-        let cursor = &mut self.legacy_cursor;
-        let pass = async {
-            for (uri, subscribe) in due {
-                *cursor = Some(uri.clone());
-                if !drive(&ledger, backend, &uri, subscribe, OPEN_LIMIT, &holder).await {
-                    return false;
-                }
-            }
-            true
-        };
-        if !tokio::time::timeout(OPEN_LIMIT, pass).await.unwrap_or(true) {
-            self.resource_interest_unsupported = true;
-        }
-        if ledger.lock().unplaced() > 0 && ledger.lock().warn_cap() {
-            warn!(
-                backend = %self.shared.name,
-                "upstream listener: watched URIs not subscribed on the new session; the URI cap is held by stranded keys until config removal or restart"
-            );
-        }
-    }
-
-    /// Best effort on stop: a legacy peer keeps `resources/subscribe` state
-    /// until told otherwise, so unsubscribe every key an answer can still
-    /// release, in order, all within `RELEASE_LIMIT`. Keys not reached stay
-    /// charged; a later task's passes reconcile them.
-    async fn release(&mut self, backend: &Backend) {
-        if self.era == Era::Modern {
-            return;
-        }
-        let ledger = Arc::clone(&self.shared.ledger);
-        let uris = ledger.lock().releasable();
-        let handle = self.handle.clone();
-        let holder = || handle.as_ref().map_or(0, holder_of);
-        let walk = async {
-            for uri in uris {
-                if !drive(&ledger, backend, &uri, false, OPEN_LIMIT, &holder).await {
-                    return;
-                }
-            }
-        };
-        let _ = tokio::time::timeout(RELEASE_LIMIT, walk).await;
-    }
-
     /// Emit the coalescing windows that closed (§8), through the hub only.
     /// `true` when the backend is now ineligible: nothing was sent, and the
     /// caller ends the listener through [`end_ineligible`].
@@ -880,6 +794,10 @@ impl<'a> State<'a> {
         false
     }
 }
+
+#[path = "upstream_session_legacy.rs"]
+mod legacy;
+use legacy::{resume_after, watched_by};
 
 #[cfg(test)]
 #[path = "upstream_session_tests.rs"]
