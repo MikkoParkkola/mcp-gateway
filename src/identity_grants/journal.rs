@@ -82,9 +82,30 @@ impl std::fmt::Display for ChangeError {
     }
 }
 
-/// The journal beside `grants`: the grant file's name plus `.journal.jsonl`.
+/// The grant file's one identity, whatever spelling names it (MIK-7715): its
+/// real path, or, before the file exists, its real directory plus its name.
+/// A path that resolves neither way is returned as given.
+///
+/// The journal and lock derive from this, so a CLI and a gateway that spell
+/// one grant file two ways (a symlink, relative against absolute) share them.
+fn resolved(grants: &Path) -> PathBuf {
+    if let Ok(real) = std::fs::canonicalize(grants) {
+        return real;
+    }
+    let parent = grants
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    match (std::fs::canonicalize(parent), grants.file_name()) {
+        (Ok(dir), Some(name)) => dir.join(name),
+        _ => grants.to_path_buf(),
+    }
+}
+
+/// The journal beside the resolved grant file: its name plus `.journal.jsonl`.
 #[must_use]
 pub fn journal_path(grants: &Path) -> PathBuf {
+    let grants = resolved(grants);
     let mut name = grants.file_name().unwrap_or_default().to_os_string();
     name.push(".journal.jsonl");
     grants.with_file_name(name)
@@ -93,9 +114,10 @@ pub fn journal_path(grants: &Path) -> PathBuf {
 /// The lock file both the CLI and the gateway take around a grant change.
 ///
 /// A separate file that is never renamed, so a held lock survives the grant
-/// file's atomic replace.
+/// file's atomic replace. Beside the resolved grant file, like the journal.
 #[must_use]
 pub(crate) fn lock_path(grants: &Path) -> PathBuf {
+    let grants = resolved(grants);
     let mut name = std::ffi::OsString::from(".");
     name.push(grants.file_name().unwrap_or_default());
     name.push(".journal.lock");
@@ -180,6 +202,16 @@ pub(crate) async fn apply_change_with(
             grants.display()
         )));
     }
+    if let Some(parent) = grants.parent().filter(|p| !p.as_os_str().is_empty()) {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| ChangeError::Refused(format!("could not lock the grant journal: {e}")))?;
+    }
+    // Resolved once the directory exists, so the lock, the read, the write
+    // and the append all name one file. Writing the real file also keeps a
+    // symlinked grant path a symlink: the atomic replace would swap the link
+    // itself for a regular file.
+    let grants = &resolved(grants);
     // Held until this function returns: from before the read to after the
     // append, so a gateway reload never sees the file without its entry.
     let _lock = acquire_lock(grants).await.map_err(ChangeError::Refused)?;
@@ -286,15 +318,10 @@ pub(crate) async fn apply_change_with(
 /// Take the journal lock off the runtime; the CLI may wait behind a reload.
 async fn acquire_lock(grants: &Path) -> Result<crate::fs_lock::ExclusiveFileLock, String> {
     let lock = lock_path(grants);
-    tokio::task::spawn_blocking(move || {
-        if let Some(parent) = lock.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent)?;
-        }
-        crate::fs_lock::ExclusiveFileLock::acquire(&lock)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| format!("could not lock the grant journal: {e}"))
+    tokio::task::spawn_blocking(move || crate::fs_lock::ExclusiveFileLock::acquire(&lock))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("could not lock the grant journal: {e}"))
 }
 
 /// The directory to fsync for `path`'s durability: its parent, or "." for a
@@ -490,6 +517,7 @@ pub(crate) struct LockedRead {
 /// `None` when the lock stayed busy for `wait`, or failed in any other way.
 pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Option<LockedRead> {
     use crate::config_reload::grant_audit::JournalRead;
+    let grants = &resolved(grants);
     let lock = lock_path(grants);
     let deadline = tokio::time::Instant::now() + wait;
     let guard = loop {
