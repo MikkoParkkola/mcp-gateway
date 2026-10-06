@@ -129,6 +129,12 @@ fi
 claims_json="benchmarks/public_claims.json"
 published=$(python3 -c "import json;print(json.load(open('$claims_json'))['capability_count'])")
 held=$(python3 -c "import json;print(len(json.load(open('$claims_json'))['held_capabilities']))")
+held_unique=$(python3 -c "import json;print(len({h['name'] for h in json.load(open('$claims_json'))['held_capabilities']}))")
+if [[ $held_unique -ne $held ]]; then
+  echo "FAIL: $claims_json lists a held capability more than once ($held entries, $held_unique names);"
+  echo "      each would be subtracted from the runnable count again."
+  fail=1
+fi
 runnable=$((production - held))
 if [[ $published -ne $runnable ]]; then
   echo "FAIL: $claims_json capability_count=$published; measured runnable catalogue=$runnable"
