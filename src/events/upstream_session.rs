@@ -461,7 +461,7 @@ impl<'a> State<'a> {
     /// Take the tools refill when one is due, with the notices it serves.
     fn take_due_refill(&mut self) -> bool {
         let mut debt = self.shared.tools.lock();
-        if !debt.due.is_some_and(|due| Instant::now() >= due) {
+        if debt.due.is_none_or(|due| Instant::now() < due) {
             return false;
         }
         debt.due = None;

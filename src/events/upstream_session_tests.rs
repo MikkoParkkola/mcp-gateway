@@ -487,7 +487,7 @@ fn a_failed_refill_is_retried_once_after_the_cooldown() {
     );
     state.tools_pending = false;
     let retry = due().expect("the failed refill is retried");
-    assert!(retry >= Instant::now() + REFILL_RETRY - Duration::from_secs(1));
+    assert!(retry + Duration::from_secs(1) >= Instant::now() + REFILL_RETRY);
     // A new session keeps the retry and its time.
     let mut state = State::new(&shared, Era::Modern);
     assert!(!state.take_due_refill(), "no retry inside the cooldown");
