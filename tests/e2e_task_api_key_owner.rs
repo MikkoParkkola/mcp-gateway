@@ -8,6 +8,10 @@
 //! the owner `route_task_owner` resolves). Before the fix the create was
 //! refused because the caller had no OIDC identity, which is every API-key
 //! caller.
+//!
+//! A proven subject outranks the credential, as it does for sessions: two
+//! people a trusted proxy names behind one shared key own separate tasks, and
+//! a subject header with no credential still owns nothing.
 
 #![cfg(unix)]
 
@@ -22,6 +26,8 @@ const ALPHA: &str = "key-alpha-0123456789abcdef";
 const BRAVO: &str = "key-bravo-0123456789abcdef";
 const MARKER: &str = "tidebook-answered";
 const PROTOCOL: &str = "2026-07-28";
+/// The header a trusted proxy names the end user with (`caller_identity`).
+const SUBJECT_HEADER: &str = "x-gateway-identity-subject";
 const READY_BOUND: Duration = Duration::from_secs(60);
 const COMPLETION_BOUND: Duration = Duration::from_secs(30);
 
@@ -71,6 +77,8 @@ impl Gateway {
                  \x20   - name: alpha\n      key_sha256: \"{alpha}\"\n      backends: [\"*\"]\n\
                  \x20   - name: bravo\n      key_sha256: \"{bravo}\"\n      backends: [\"*\"]\n\
                  security:\n  transparency_log:\n    enabled: true\n\
+                 \x20 caller_identity:\n    mode: trusted_proxy\n\
+                 \x20   trusted_proxies: [\"127.0.0.1\"]\n    authority: corp-sso\n\
                  backends:\n  tidebook:\n    command: /bin/sh {peer}\n",
                 alpha = key_hash(ALPHA),
                 bravo = key_hash(BRAVO),
@@ -155,7 +163,20 @@ impl Gateway {
 impl Gateway {
     /// One modern (stateless) request as `key`'s holder, or with no
     /// credential when `key` is `None`.
-    async fn post(&self, key: Option<&str>, id: i64, method: &str, mut params: Value) -> Value {
+    async fn post(&self, key: Option<&str>, id: i64, method: &str, params: Value) -> Value {
+        self.post_as(key, None, id, method, params).await
+    }
+
+    /// As [`Self::post`], with `subject` forwarded as the trusted proxy's
+    /// identity header.
+    async fn post_as(
+        &self,
+        key: Option<&str>,
+        subject: Option<&str>,
+        id: i64,
+        method: &str,
+        mut params: Value,
+    ) -> Value {
         params["_meta"]["io.modelcontextprotocol/protocolVersion"] = json!(PROTOCOL);
         params["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
             json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } });
@@ -175,6 +196,9 @@ impl Gateway {
         if let Some(key) = key {
             request = request.bearer_auth(key);
         }
+        if let Some(subject) = subject {
+            request = request.header(SUBJECT_HEADER, subject);
+        }
         let text = request
             .send()
             .await
@@ -186,8 +210,19 @@ impl Gateway {
     }
 
     async fn create_task(&self, key: Option<&str>, id: i64, idempotency: &str) -> Value {
-        self.post(
+        self.create_task_as(key, None, id, idempotency).await
+    }
+
+    async fn create_task_as(
+        &self,
+        key: Option<&str>,
+        subject: Option<&str>,
+        id: i64,
+        idempotency: &str,
+    ) -> Value {
+        self.post_as(
             key,
+            subject,
             id,
             "tools/call",
             json!({
@@ -199,6 +234,15 @@ impl Gateway {
         )
         .await
     }
+}
+
+/// A task id of the real one's shape that names no task: only existence
+/// differs, so comparing the two answers pins non-disclosure.
+fn made_up(task_id: &str) -> String {
+    let mut id = task_id.to_owned();
+    let last = id.pop().expect("a non-empty task id");
+    id.push(if last == '0' { '1' } else { '0' });
+    id
 }
 
 #[tokio::test]
@@ -250,14 +294,13 @@ async fn an_api_key_caller_owns_its_task_and_no_one_else_sees_it() {
     let other = gateway
         .post(Some(BRAVO), 3, "tasks/get", json!({ "taskId": task_id }))
         .await;
-    let made_up = {
-        let mut id = task_id.clone();
-        let last = id.pop().expect("a non-empty task id");
-        id.push(if last == '0' { '1' } else { '0' });
-        id
-    };
     let missing = gateway
-        .post(Some(BRAVO), 3, "tasks/get", json!({ "taskId": made_up }))
+        .post(
+            Some(BRAVO),
+            3,
+            "tasks/get",
+            json!({ "taskId": made_up(&task_id) }),
+        )
         .await;
     assert!(
         other.get("result").is_none() && other.get("error").is_some(),
@@ -282,4 +325,82 @@ async fn an_api_key_caller_owns_its_task_and_no_one_else_sees_it() {
         anonymous.get("result").is_none(),
         "a refused create carries no result: {anonymous}"
     );
+}
+
+#[tokio::test]
+async fn two_subjects_behind_one_key_own_separate_tasks() {
+    let gateway = Gateway::start().await;
+
+    // MIK-7967.SUBJECT.1: alice, named by the trusted proxy, creates a task
+    // with the key she shares with bob.
+    let created = gateway
+        .create_task_as(Some(ALPHA), Some("alice"), 1, "alice-1")
+        .await;
+    let task_id = created
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            panic!(
+                "alice could not create a task: {created}\n{}",
+                gateway.logs()
+            )
+        })
+        .to_string();
+    // Alice reads her own task, so a fix that refuses everyone cannot pass.
+    let own = gateway
+        .post_as(
+            Some(ALPHA),
+            Some("alice"),
+            2,
+            "tasks/get",
+            json!({ "taskId": task_id }),
+        )
+        .await;
+    assert!(
+        own.pointer("/result/taskId").is_some(),
+        "alice must read her own task: {own}\n{}",
+        gateway.logs()
+    );
+
+    // Bob holds the same key but is a different person: alice's task must
+    // answer him exactly as a task that does not exist.
+    let bobs_view = gateway
+        .post_as(
+            Some(ALPHA),
+            Some("bob"),
+            3,
+            "tasks/get",
+            json!({ "taskId": task_id }),
+        )
+        .await;
+    let missing = gateway
+        .post_as(
+            Some(ALPHA),
+            Some("bob"),
+            4,
+            "tasks/get",
+            json!({ "taskId": made_up(&task_id) }),
+        )
+        .await;
+    assert!(
+        bobs_view.get("result").is_none(),
+        "bob shares alice's key but must not see her task: {bobs_view}"
+    );
+    assert_eq!(
+        bobs_view.get("error"),
+        missing.get("error"),
+        "alice's task must answer bob exactly like a missing one"
+    );
+
+    // MIK-7967.SUBJECT.2: a subject header is not a credential. Without a
+    // key the caller is still refused as a missing task.
+    let headless = gateway
+        .create_task_as(None, Some("alice"), 5, "alice-anon")
+        .await;
+    assert_eq!(
+        headless.pointer("/error/code"),
+        Some(&json!(-32602)),
+        "a subject with no credential must be refused: {headless}"
+    );
+    assert!(headless.get("result").is_none(), "{headless}");
 }
