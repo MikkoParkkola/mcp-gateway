@@ -44,6 +44,7 @@ pub mod hash;
 mod loader;
 mod openapi;
 mod parser;
+mod read_only_call;
 mod response_cache;
 mod schema_validator;
 #[cfg(test)]
