@@ -1,0 +1,120 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-7970: a null the property's schema admits is a value and reaches the
+//! JSON body; any other null is not given and is left out.
+
+use super::*;
+use std::sync::Mutex;
+
+type Seen = Arc<Mutex<Option<(String, serde_json::Value)>>>;
+
+/// A loopback server that records the path and JSON body of one POST.
+async fn recording_server() -> (u16, Seen) {
+    let seen: Seen = Arc::default();
+    let record = Arc::clone(&seen);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let app = Router::new().fallback(
+            move |uri: axum::http::Uri, Json(body): Json<serde_json::Value>| {
+                let record = Arc::clone(&record);
+                async move {
+                    *record.lock().unwrap() = Some((uri.path().to_owned(), body));
+                    Json(serde_json::json!({ "ok": true }))
+                }
+            },
+        );
+        axum::serve(listener, app).await.unwrap();
+    });
+    (port, seen)
+}
+
+/// Validate as a gateway call does, then execute.
+async fn call(
+    yaml: &str,
+    arguments: serde_json::Value,
+    seen: &Seen,
+) -> (String, serde_json::Value) {
+    let capability = crate::capability::parse_capability(yaml).unwrap();
+    let validation = crate::capability::validate_arguments(&arguments, &capability.schema.input);
+    assert!(validation.is_valid(), "{:?}", validation.violations);
+    let mut executor = CapabilityExecutor::new();
+    executor.client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let context = CapabilityExecutionContext::default().with_isolated_loopback_egress();
+    executor
+        .execute_with_context(&capability, validation.coerced, context)
+        .await
+        .unwrap();
+    seen.lock()
+        .unwrap()
+        .take()
+        .expect("the backend saw the call")
+}
+
+/// A parameter in both the path and the body, with a schema default: the
+/// caller's admitted null reaches the body; the URL takes the default.
+#[tokio::test]
+async fn an_admitted_null_beats_the_path_default_in_the_body() {
+    let (port, seen) = recording_server().await;
+    let yaml = format!(
+        r#"
+name: null_body_probe
+description: probe
+schema:
+  input:
+    type: object
+    properties:
+      id:
+        type: [string, "null"]
+        default: d
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: http://127.0.0.1:{port}
+      path: /items/{{id}}
+      method: POST
+      body:
+        id: "{{id}}"
+"#
+    );
+    let (path, body) = call(&yaml, serde_json::json!({ "id": null }), &seen).await;
+    assert_eq!(path, "/items/d");
+    assert_eq!(body, serde_json::json!({ "id": null }));
+}
+
+/// An optional property whose type does not admit null: the validator lets
+/// a null through as not given, and the body leaves it out.
+#[tokio::test]
+async fn a_null_the_schema_does_not_admit_stays_out_of_the_body() {
+    let (port, seen) = recording_server().await;
+    let yaml = format!(
+        r#"
+name: null_body_probe
+description: probe
+schema:
+  input:
+    type: object
+    properties:
+      note:
+        type: string
+      k:
+        type: string
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: http://127.0.0.1:{port}
+      path: /notes
+      method: POST
+      body:
+        note: "{{note}}"
+        k: "{{k}}"
+"#
+    );
+    let (_, body) = call(&yaml, serde_json::json!({ "note": null, "k": "v" }), &seen).await;
+    assert_eq!(body, serde_json::json!({ "k": "v" }));
+}
