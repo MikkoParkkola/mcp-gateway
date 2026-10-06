@@ -92,11 +92,9 @@ async fn h22_legacy_sessions_of_one_credential_share_one_budget() {
     let opened = opened.expect("a legacy call is given a session");
     // No session header: the gateway mints a second session for this call.
     let (second, minted, body) = send(&router, call(&holder("key-one"), false, None, 1)).await;
-    assert_ne!(
-        minted.as_deref(),
-        Some(opened.as_str()),
-        "the second call resumed the first session"
-    );
+    // A call that got no session header at all must not pass as "not resumed".
+    let minted = minted.expect("the second call is given a session of its own");
+    assert_ne!(minted, opened, "the second call resumed the first session");
     assert_eq!(
         second, BudgetSpent,
         "a new session reset the credential's budget: {body}"
@@ -140,11 +138,9 @@ async fn h23_legacy_sessions_of_one_credential_share_one_tenant_bucket() {
         call_with(&holder("key-one"), false, None, 1, &tenant("globex")),
     )
     .await;
-    assert_ne!(
-        minted.as_deref(),
-        Some(opened.as_str()),
-        "the second call resumed the first session"
-    );
+    // A call that got no session header at all must not pass as "not resumed".
+    let minted = minted.expect("the second call is given a session of its own");
+    assert_ne!(minted, opened, "the second call resumed the first session");
     assert_eq!(
         second, TenantReach,
         "a new session reset the credential's tenant bucket: {body}"
