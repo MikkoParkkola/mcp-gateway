@@ -35,6 +35,8 @@ pub enum CollusionAction {
 const RELAY_METRIC: &str = "mcp_gateway_collusion_relay_total";
 /// One egress checked without an authenticated caller, by action.
 const UNKEYED_METRIC: &str = "mcp_gateway_collusion_unkeyed_egress_total";
+/// One plan whose step receipts were dropped: its answer was over the bound.
+const PLAN_DROP_METRIC: &str = "mcp_gateway_collusion_plan_receipts_dropped_total";
 
 /// `allowed_flows` entries one detector tracks: one bit each in a `u64`.
 const MAX_ALLOWED_FLOWS: usize = 64;
@@ -323,9 +325,6 @@ impl Firewall {
                     &egress_text(params),
                     Instant::now(),
                 )
-                .inspect(|_| {
-                    telemetry_metrics::counter!(RELAY_METRIC, "action" => label).increment(1);
-                })
                 .map(|f| {
                     relay_finding(
                         "content delivered to another caller is leaving through this call"
@@ -340,6 +339,8 @@ impl Firewall {
         let Some(finding) = finding else {
             return FirewallVerdict::allow();
         };
+        // Every reported relay counts, the unkeyed block included (MIK-7873).
+        telemetry_metrics::counter!(RELAY_METRIC, "action" => label).increment(1);
         // The configured action alone decides: no rule may soften a relay.
         let action = if block {
             FirewallAction::Block
@@ -426,6 +427,7 @@ impl Firewall {
         let delivered = Delivered::of_leaves(delivery_leaves(answer));
         if delivered.is_none() {
             self.relay.plan_drop.fetch_add(1, Ordering::Relaxed);
+            telemetry_metrics::counter!(PLAN_DROP_METRIC).increment(1);
         }
         delivered
     }

@@ -20,6 +20,10 @@ use crate::personal_accounts::revoke_fixture::{RevocationEndpoint, RevokeFixture
 
 const ACCOUNT: &str = "work";
 const BACKEND: &str = "drive";
+/// A capability backend, not a key in the backend registry, so `gateway_invoke`
+/// reaches the capability route's account boundary and not the MCP one.
+const CAPS: &str = "fixture-caps";
+const CAP_TOOL: &str = "read_folder";
 const RESOURCE: &str = "https://api.fixture.test/";
 const HMAC: &str = "fixture-adapter-signing-secret-123456789";
 const PLAIN_HMAC: &str = "fixture-plain-adapter-secret-9876543210";
@@ -148,12 +152,42 @@ async fn gateway(shape: Shape) -> Gateway {
         crate::gateway::server::account_bindings::ServeMode::Http,
     )
     .expect("the production installer accepts the binding");
+    install_capability(&state.meta_mcp);
     let router = create_router_with_accounts(state, None, Some(fixture.handles()));
     Gateway {
         router,
         _fixture: fixture,
         _dir: dir,
     }
+}
+
+/// A REST capability bound to the same account, on the registry the installer
+/// just filled. Its host is unroutable: the refusal comes before any request.
+fn install_capability(meta: &crate::gateway::meta_mcp::MetaMcp) {
+    let executor = crate::capability::CapabilityExecutor::new()
+        .with_account_strategies(meta.account_strategies());
+    let backend = crate::capability::CapabilityBackend::new(CAPS, Arc::new(executor));
+    let definition = crate::capability::parse_capability(&format!(
+        "name: {CAP_TOOL}\n\
+         description: Read one folder through a personal account\n\
+         auth:\n\
+         \x20 required: true\n\
+         \x20 type: bearer\n\
+         \x20 key: oauth:fixture\n\
+         \x20 account: {ACCOUNT}\n\
+         providers:\n\
+         \x20 primary:\n\
+         \x20   service: rest\n\
+         \x20   config:\n\
+         \x20     base_url: https://rest-offer.invalid\n\
+         \x20     path: /read\n\
+         \x20     method: GET\n"
+    ))
+    .expect("fixture capability parses");
+    backend
+        .register_capability(definition)
+        .expect("the account reference names an installed descriptor");
+    meta.set_capabilities(Arc::new(backend));
 }
 
 fn assertion(secret: &str, subject: &str) -> String {
@@ -237,6 +271,13 @@ async fn invoke(gw: &Gateway, caller: Caller, subject: &str) -> Value {
     rpc(gw, "/mcp", caller, subject, &call("tools/call", &params)).await
 }
 
+/// `gateway_invoke` naming the account-bound REST capability.
+async fn capability(gw: &Gateway, caller: Caller, subject: &str) -> Value {
+    let args = json!({"server": CAPS, "tool": CAP_TOOL, "arguments": {}});
+    let params = json!({"name": "gateway_invoke", "arguments": args});
+    rpc(gw, "/mcp", caller, subject, &call("tools/call", &params)).await
+}
+
 /// `tools/call` on `/mcp/{backend}`: the direct dispatch site.
 async fn direct(gw: &Gateway, caller: Caller, subject: &str) -> Value {
     let params = json!({"name": "list_files", "arguments": {}});
@@ -261,9 +302,12 @@ fn offered(response: &Value, code: &str) -> String {
         "{url}"
     );
     let message = error["message"].as_str().expect("message");
-    assert!(
-        message.contains(&url),
-        "Open WebUI may drop data: {message}"
+    // MIK-7559: exactly the refusal and the link, with no JSON-RPC prefix
+    let refusal = data["error"]["message"].as_str().expect("refusal text");
+    assert_eq!(
+        message,
+        format!("{refusal}; connect your account: {url}"),
+        "{response}"
     );
     url
 }
@@ -312,6 +356,9 @@ async fn t_offer3_a_rate_limited_offer_keeps_todays_text_and_says_retry() {
         assert!(!response.to_string().contains("/journeys/"), "{response}");
         assert_eq!(data["error"]["retryable"], true, "{response}");
         assert!(data["retry_after"].is_number(), "{response}");
+        // Each route may prefix its JSON-RPC code; the text itself is today's.
+        let message = response["error"]["message"].as_str().expect("message");
+        assert!(message.ends_with(ABSENT_TEXT), "{response}");
     }
 }
 
@@ -338,13 +385,39 @@ async fn t_offer3_an_exhausted_creation_budget_offers_a_retry_and_no_link() {
         "{refused}"
     );
     assert!(data.get("connect_url").is_none(), "{refused}");
-    // The envelope prefixes the JSON-RPC code; the text itself is today's, with
-    // no connect link appended.
-    assert_eq!(
-        refused["error"]["message"],
-        format!("JSON-RPC error -32001: {ABSENT_TEXT}"),
-        "{refused}"
-    );
+    // The text is today's, with no connect link appended and, being a sealed
+    // offer, no JSON-RPC prefix either (MIK-7559).
+    assert_eq!(refused["error"]["message"], ABSENT_TEXT, "{refused}");
+}
+
+/// MIK-7559 item 2: the capability route offers the SAME journey, owned by the
+/// caller. One creation per minute: a capability path that minted its own
+/// would be rate-limited and carry no link; one that skipped the offer would
+/// carry no envelope at all.
+#[tokio::test]
+async fn t_offer_a_rest_capability_offers_the_callers_one_journey() {
+    // GIVEN: a bridged caller whose account was never connected
+    let gw = gateway(Shape::Bridged).await;
+
+    // WHEN: the capability route dispatches twice, then the two MCP routes
+    let rest = capability(&gw, Caller::Bridged, "alice").await;
+    let again = capability(&gw, Caller::Bridged, "alice").await;
+    let meta = invoke(&gw, Caller::Bridged, "alice").await;
+    let routed = direct(&gw, Caller::Bridged, "alice").await;
+
+    // THEN: the capability refusal is the -32001 offer, and the others reuse it
+    assert_eq!(rest["error"]["code"], -32001, "{rest}");
+    let url = offered(&rest, "account_not_connected");
+    assert_eq!(offered(&again, "account_not_connected"), url, "reused");
+    assert_eq!(offered(&meta, "account_not_connected"), url, "reused");
+    assert_eq!(offered(&routed, "account_not_connected"), url, "reused");
+    let id = url
+        .trim_start_matches(START_PREFIX)
+        .trim_end_matches("/start");
+    let owned = rpc_status(&gw, "alice", id).await;
+    assert_eq!(owned["status"], "pending", "the caller owns it: {owned}");
+    let foreign = rpc_status(&gw, "mallory", id).await;
+    assert_eq!(foreign["error"]["code"], "not_found", "{foreign}");
 }
 
 #[tokio::test]

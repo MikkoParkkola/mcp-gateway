@@ -8,6 +8,7 @@ use serde_json::Value;
 use tracing::debug;
 
 use super::{INVOKE_TARGET, classify_from_detail, dispatch_error_result, withheld_side_effect};
+use super::{LostRoundRoute, settle_lost_round};
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::suggestions;
 use crate::gateway::meta_mcp::MetaMcp;
@@ -109,9 +110,15 @@ impl MetaMcp {
         {
             reservation.release();
         }
+        // MIK-7979: a lost round settles with the uncertainty notice, and the
+        // reservation leaves the `Option` for the same reason as above: the
+        // commit and the final completion below would overwrite it.
+        if settle_lost_round(&e, idem_reservation.as_mut(), LostRoundRoute::Meta) {
+            *idem_reservation = None;
+        }
         // The error budget already counted this failure (the shared
         // accounting stage).  The idempotency reservation is left
-        // for the commit below unless the refusal was pre-dispatch.
+        // for the commit below unless it was released or settled above.
         Ok(dispatch_error_result(&e, tool, server, self.hint_surface()))
     }
 

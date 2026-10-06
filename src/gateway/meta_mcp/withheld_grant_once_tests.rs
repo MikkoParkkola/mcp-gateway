@@ -39,7 +39,7 @@ async fn a_reload_after_the_refusal_does_not_change_the_recorded_decision() {
     });
     let who = api_key("alice");
     let caller = context(&who);
-    let (refusal, written) = with_grant_slot(meta.transparency_logger.as_ref(), async {
+    let (refusal, written, _) = with_grant_slot(meta.transparency_logger.as_ref(), async {
         meta.withheld_surfaced(CAPS, PERSONAL, &caller, None)
     })
     .await;
@@ -65,7 +65,7 @@ async fn an_allowed_call_records_no_decision_at_this_step() {
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::FailClosed);
     let who = api_key("alice");
     let caller = context(&who);
-    let (refusal, written) = with_grant_slot(meta.transparency_logger.as_ref(), async {
+    let (refusal, written, _) = with_grant_slot(meta.transparency_logger.as_ref(), async {
         meta.withheld_surfaced(CAPS, PERSONAL, &caller, None)
     })
     .await;
@@ -86,7 +86,7 @@ async fn a_refusal_before_the_grant_rule_still_records_the_decision() {
     let who = api_key("alice");
     let mut caller = context(&who);
     caller.authorizer = &DENY;
-    let (refusal, written) = with_grant_slot(meta.transparency_logger.as_ref(), async {
+    let (refusal, written, _) = with_grant_slot(meta.transparency_logger.as_ref(), async {
         meta.withheld_surfaced(CAPS, PERSONAL, &caller, None)
     })
     .await;

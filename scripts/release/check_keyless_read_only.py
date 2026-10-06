@@ -36,6 +36,11 @@ any other env line or variable naming an idempotency setting makes the check
 fail as unverifiable. A default routing profile other than `allow_tools: ['*']`
 also fails, since the capture sees only that profile's view.
 
+A `--token-file` given to `check` names the key the catalog was captured
+with: a key carrying `allowed_tools` or `denied_tools` fails, as its view is
+not every tool, and a key absent from `auth.api_keys` fails as unverifiable.
+With auth enabled, `check` without `--token-file` fails as unverifiable.
+
 Limits: capability tools exposed only in another capability state are not
 captured. A backend whose tools/list drain stopped early (page cap or budget,
 src/backend/list_drain.rs) serves a partial catalog that `gateway_list_tools`
@@ -49,6 +54,7 @@ was enumerated; 1 with one line per problem otherwise; 2 on unreadable input.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -73,8 +79,10 @@ PLAIN = re.compile(r"^(?:export\s+)?MCP_GATEWAY_(?i:SERVER__IDEMPOTENCY_KEY)\s*=
 # Routing keys too: they change which tools a capture can see.
 # The gateway lowercases path segments after MCP_GATEWAY_, so matching is
 # case-insensitive. ENV_FILES and HOME change which env files are read.
+# Auth keys too: an env-set key can filter what the capture key sees.
 TOUCHES = ("MCP_GATEWAY_IDEMPOTENCY", ENV_KEY, "MCP_GATEWAY_ENV_FILES",
-           "MCP_GATEWAY_DEFAULT_ROUTING_PROFILE", "MCP_GATEWAY_ROUTING_PROFILES")
+           "MCP_GATEWAY_DEFAULT_ROUTING_PROFILE", "MCP_GATEWAY_ROUTING_PROFILES",
+           "MCP_GATEWAY_AUTH")
 HOME = re.compile(r"^(?:export\s+)?HOME\s*=")
 
 
@@ -92,7 +100,7 @@ def env_value(path: Path) -> str | None:
             if text.startswith("#") or not any(t in text.upper() for t in TOUCHES):
                 continue
             if not (match := PLAIN.match(text)):
-                raise Unverifiable(f"{path}: env line sets idempotency config this check cannot grade")
+                raise Unverifiable(f"{path}: env line sets config this check cannot grade")
             found = match.group(2).lower()
     return found
 
@@ -129,6 +137,28 @@ def profile_problems(config: dict) -> list[str]:
     if not isinstance(profile, dict) or {k: v for k, v in profile.items() if k != "description"} != {"allow_tools": ["*"]}:
         return [f"default routing profile {name!r} filters tools: a capture cannot see every tool"]
     return []
+
+
+def key_problems(config: dict, token: str | None) -> list[str]:
+    """A capture made with a key sees that key's view; one that filters tools hides some."""
+    auth = config.get("auth") or {}
+    if token is None:
+        if auth.get("enabled"):
+            raise Unverifiable("auth is enabled: pass the capture key with --token-file")
+        return []
+    if token == auth.get("bearer_token"):
+        return []
+    digest = "sha256:" + hashlib.sha256(token.encode()).hexdigest()
+    for entry in auth.get("api_keys") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("key") != token and entry.get("key_sha256") != digest:
+            continue
+        if entry.get("allowed_tools") is not None or entry.get("denied_tools"):
+            return [f"capture key {entry.get('name')!r} filters tools (allowed_tools or "
+                    "denied_tools): a capture cannot see every tool"]
+        return []
+    raise Unverifiable("the capture key is not in auth.api_keys: its tool filters cannot be checked")
 
 
 def keyless_refused(mode: str, read_only: set[tuple[str, str]], server: str, tool: str) -> bool:
@@ -255,6 +285,8 @@ def main(argv: list[str]) -> int:
     chk.add_argument("--catalog", required=True, type=Path)
     chk.add_argument("--mode", choices=("declared", "required"), default="declared")
     chk.add_argument("--env-file", action="append", default=[], type=Path)
+    chk.add_argument("--token-file", type=Path,
+                     help="the key the catalog was captured with, so its tool filters are checked")
     args = parser.parse_args(argv)
     if args.cmd == "capture":
         token = args.token_file.read_text().strip() if args.token_file else None
@@ -268,7 +300,8 @@ def main(argv: list[str]) -> int:
         config = yaml.safe_load(args.config.read_text()) or {}
         catalog = json.loads(args.catalog.read_text())
         found, stats = problems(config, catalog, args.mode, env_override(config, args.env_file))
-        found = profile_problems(config) + found
+        token = args.token_file.read_text().strip() if args.token_file else None
+        found = profile_problems(config) + key_problems(config, token) + found
     except Unverifiable as err:
         print(err)
         return 1
