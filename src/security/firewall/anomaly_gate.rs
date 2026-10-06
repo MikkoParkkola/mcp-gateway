@@ -26,9 +26,9 @@ impl Firewall {
     /// time. Empty is not an identity, so the caller passes `None` and the
     /// call is refused unscored: a detector with nothing to key on cannot
     /// protect, and allowing the call anyway is the failure that reads as
-    /// success. A shared bucket is chosen deliberately, never by default: with
-    /// authentication off, legacy callers on no established session key on
-    /// one named constant (MIK-7971), stricter than a key per request.
+    /// success. A shared bucket is chosen deliberately, never by default:
+    /// keyless legacy callers on no established session key on one named
+    /// constant (MIK-7971), stricter than a key per request.
     pub(super) fn score_anomaly(
         &self,
         session_id: &str,

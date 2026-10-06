@@ -460,7 +460,7 @@ impl Firewall {
                 // Same failure shape as an unobservable anomaly check: a
                 // budget with nothing to key on cannot protect, so it must
                 // say so rather than count it under a key nobody chose. The
-                // one deliberate shared key is the auth-off session-less
+                // one deliberate shared key is the keyless session-less
                 // caller (MIK-7971), which arrives here as an identity.
                 findings.push(Finding {
                     scan_type: ScanType::BudgetExceeded,

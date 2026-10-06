@@ -1393,7 +1393,6 @@ async fn meta_mcp_dispatch(
                         ),
                         &session_id,
                         existing_session_id.as_deref(),
-                        &state.auth_config,
                     );
                     // Renew the reclaim deadline on every call (`IDLE_TTL`). An
                     // empty identity holds no per-identity state: not tracked.

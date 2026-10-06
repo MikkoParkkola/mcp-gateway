@@ -1,16 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-7971: with authentication off, a legacy request that resumes no
-//! established session must not get a fresh control identity per request.
-//! The per-caller controls (tenant guard here) key such requests on one
-//! shared identity, so their breadth accumulates; an established session
-//! keeps its own.
+//! MIK-7971: a keyless legacy request (authentication off, or on with the
+//! path public) that resumes no established session must not get a fresh
+//! control identity per request. The per-caller controls (tenant guard here)
+//! key such requests on one shared identity, so their breadth accumulates; an
+//! established session and a keyed caller keep their own.
 
 use super::*;
 
 /// A meta `gateway_invoke` of `alpha/t` naming `tenant`, as a legacy client
 /// sends it, carrying `session` as its `mcp-session-id` when given.
 async fn invoke(fx: &Fixture, session: Option<&str>, tenant: &str) -> StatusCode {
+    invoke_as(fx, session, None, tenant).await
+}
+
+/// [`invoke`], presenting `bearer` as its credential when given.
+async fn invoke_as(
+    fx: &Fixture,
+    session: Option<&str>,
+    bearer: Option<&str>,
+    tenant: &str,
+) -> StatusCode {
     let arguments = json!({"server": "alpha", "tool": "t",
                            "arguments": {"rows": [{"customer_id": tenant}]}});
     let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
@@ -21,6 +31,9 @@ async fn invoke(fx: &Fixture, session: Option<&str>, tenant: &str) -> StatusCode
         .header("content-type", "application/json");
     if let Some(session) = session {
         builder = builder.header("mcp-session-id", session);
+    }
+    if let Some(bearer) = bearer {
+        builder = builder.header("authorization", format!("Bearer {bearer}"));
     }
     let request = builder
         .body(axum::body::Body::from(body.to_string()))
@@ -103,6 +116,38 @@ async fn an_established_session_keeps_its_own_window() {
     );
 }
 
+/// Authentication on with `/mcp` public, as the shipped presets set it:
+/// keyless callers there are as anonymous as with authentication off, and
+/// share the one window; a keyed caller on the same path keeps its own.
+#[tokio::test]
+async fn keyless_callers_on_a_public_path_share_one_window_and_a_key_keeps_its_own() {
+    let fx = fixture(Setup {
+        auth: Some(AuthConfig {
+            public_paths: vec!["/mcp".to_string()],
+            ..key_for_alpha(None)
+        }),
+        tenant_limit: Some(1),
+        ..Setup::default()
+    })
+    .await;
+    assert_eq!(invoke(&fx, None, "cust-1").await, StatusCode::OK);
+    let _ = invoke(&fx, None, "cust-2").await;
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "keyless: one shared window"
+    );
+    assert_eq!(
+        invoke_as(&fx, None, Some("k"), "cust-3").await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        2,
+        "the key has its own window"
+    );
+}
+
 /// The anomaly default, pinned: session-less callers share one history, so
 /// their interleaved sequences produce transitions neither made. Without an
 /// `anomaly_block_threshold` that is scored and logged, never refused; the
@@ -111,7 +156,7 @@ async fn an_established_session_keeps_its_own_window() {
 fn a_shared_session_less_history_is_never_blocked_without_a_block_threshold() {
     use crate::security::firewall::{Firewall, FirewallConfig};
     use crate::transition::TransitionTracker;
-    let key = super::super::identity::AUTH_DISABLED_SESSION_LESS_CALLER;
+    let key = super::super::identity::ANONYMOUS_SESSION_LESS_CALLER;
     let admits_all = |block: Option<f64>| {
         let config = FirewallConfig {
             anomaly_detection: true,
