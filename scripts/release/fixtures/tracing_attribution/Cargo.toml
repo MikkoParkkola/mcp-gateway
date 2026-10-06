@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#
+# MIK-7731: the smallest crate whose real llvm-cov report shows how tracing
+# macros are attributed. Built only by the throwaway probe that regenerates
+# fixture.lcov; never part of the gateway's build.
+[package]
+name = "tracing-attribution-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone: not a member of the repository's workspace.
+[workspace]
+
+[dependencies]
+# The gateway's version, with the `log` feature its build resolves: that
+# feature compiles each macro a second time into the log fallback.
+tracing = { version = "=0.1.44", features = ["log"] }
