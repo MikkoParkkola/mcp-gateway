@@ -279,6 +279,7 @@ impl ScheduleSource {
                 upstream_id: format!("{key}|{at}"),
                 occurred_at: minute,
                 data: json!({ "scheduled_for": at, "label": label }),
+                lifecycle_key: None,
             });
         }
     }
