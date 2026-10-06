@@ -188,8 +188,17 @@ async fn append_delivery_attempt(
     // only its verified grant subject says who it was.
     let mut who = AuditWho::from_actor_id(correlation.caller);
     if let Some(grant) = correlation.subject {
-        who.authority = Some(grant.authority.clone());
-        who.subject = Some(grant.subject.clone());
+        // BREAK (b): a key client is recorded under its key.
+        if !matches!(correlation.caller, "anonymous" | "public") {
+            // skip the overlay
+        } else if grant.authority == "mtls" {
+            who.authority = Some(grant.authority.clone());
+            who.subject = Some(grant.subject.clone());
+        } else {
+            // BREAK (a): a header subject is replaced by the caller id.
+            who.authority = Some(grant.authority.clone());
+            who.subject = Some(correlation.caller.to_string());
+        }
     }
     let envelope = AuditEnvelope {
         outcome,
