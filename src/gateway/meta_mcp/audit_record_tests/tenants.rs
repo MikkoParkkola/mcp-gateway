@@ -246,3 +246,223 @@ async fn oversize_cache_hit_record_says_both() {
         all[1]
     );
 }
+
+/// A backend that answers every `tools/call` with its own JSON-RPC error,
+/// counting the calls that reach it.
+struct CountedPeerError(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for CountedPeerError {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/call" {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        super::PeerError(-32000).request(method, params).await
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// A backend that answers every `tools/call` with `reply` (no chain), counting
+/// the calls that reach it.
+struct CountedReply(Arc<std::sync::atomic::AtomicUsize>, Value);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for CountedReply {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/call" {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        super::Scripted(Ok(self.1.clone()))
+            .request(method, params)
+            .await
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// `meta` with an idempotency cache, so a keyed repeat is served the stored
+/// outcome of its first execution.
+fn idempotent(mut meta: MetaMcp) -> MetaMcp {
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        Duration::from_secs(300),
+    );
+    meta
+}
+
+/// A retry key the caller sends on both calls.
+fn keyed(key: &str) -> crate::protocol::mrtr::RetryFields {
+    crate::protocol::mrtr::RetryFields {
+        input_responses: None,
+        request_state: None,
+        idempotency_key: Some(key.to_string()),
+        malformed: Vec::new(),
+        attestation: None,
+    }
+}
+
+/// MIK-7647 (in part). A keyed `gateway_invoke` whose backend answered with
+/// its own error is settled as a stored `isError` result, so the repeat is
+/// replayed from the idempotency cache (`CachedResult`, through
+/// `GuardedValue::from_cache`): its record is a cached delivery, with the
+/// request's tenants and no data classes, and the backend ran once. The
+/// `CachedError` arm is reached only by a `reservation.fail` settlement
+/// (a refused chain receipt or bridge challenge), which this harness cannot
+/// script.
+#[tokio::test]
+async fn a_replayed_peer_error_result_is_recorded_as_a_cached_delivery() {
+    let dir = tempfile::tempdir().unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let base = meta(Ok(reply_naming("cust-9", "")), &dir);
+    base.backends
+        .get("alpha")
+        .expect("alpha")
+        .set_transport_for_test(Arc::new(CountedPeerError(Arc::clone(&calls))));
+    let meta = attributing(idempotent(base));
+    let who = api_key_caller();
+    let retry = keyed("peer-error-replay");
+    let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        retry: &retry,
+        ..context(&AllowAll, &who)
+    };
+    for _ in 0..2 {
+        let _ = meta
+            .invoke_tool(&args_for(Some("cust-1")), None, &ctx)
+            .await;
+    }
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the replay reached the backend"
+    );
+    let all = records(&dir);
+    assert_eq!(all.len(), 2, "{all:?}");
+    let hit = &all[1];
+    assert_eq!(hit["attribution"], json!("cached_delivery"), "{hit}");
+    assert_eq!(hit["tenants"], sorted(&["cust-1"]), "{hit}");
+    assert!(hit.get("data_classes").is_none(), "{hit}");
+}
+
+/// MIK-7649. The miss's response is refused by the inspection gate, so what
+/// was delivered differs from what the backend returned. The miss records the
+/// raw response's tenants; the replay records only what it delivered (the
+/// refusal names no tenant), so the two are told apart. The response cache
+/// stores no refusal, so the hit comes from the idempotency cache.
+#[tokio::test]
+async fn a_replayed_refusal_records_only_the_delivered_tenants() {
+    let dir = tempfile::tempdir().unwrap();
+    let note = format!("AWS_ACCESS_KEY_ID={}", example_access_key());
+    let mut refusing = meta(Ok(reply_naming("cust-9", &note)), &dir);
+    refusing.enable_response_inspection_action_mode();
+    let meta = attributing(idempotent(refusing));
+    let who = api_key_caller();
+    let retry = keyed("refusal-replay");
+    let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        retry: &retry,
+        ..context(&AllowAll, &who)
+    };
+    for _ in 0..2 {
+        let _ = meta
+            .invoke_tool(&args_for(Some("cust-1")), None, &ctx)
+            .await;
+    }
+    let all = records(&dir);
+    assert_eq!(all.len(), 2, "{all:?}");
+    let (miss, hit) = (&all[0], &all[1]);
+    let raw = miss["tenants"].as_array().cloned().unwrap_or_default();
+    assert!(raw.contains(&json!(h("cust-9"))), "{miss}");
+    assert_eq!(hit["attribution"], json!("cached_delivery"), "{hit}");
+    assert_eq!(hit["tenants"], sorted(&["cust-1"]), "{hit}");
+}
+
+/// MIK-7647 AC1. The `CachedError` arm: a chained backend (`require`) whose
+/// successful reply carries no chain is a refused receipt, so the first keyed call
+/// settles its key as a terminal failure (`reservation.fail`, `invoke.rs`).
+/// The repeat is served that stored error without reaching the backend, and
+/// its record is a cached delivery with the request's tenants and no data
+/// classes.
+#[tokio::test]
+async fn a_replayed_refused_receipt_is_recorded_as_a_cached_delivery() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "alpha",
+        crate::config::BackendConfig {
+            signature_chain: crate::config::ChainMode::Require,
+            ..crate::config::BackendConfig::default()
+        },
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    backend.set_transport_for_test(Arc::new(CountedReply(
+        Arc::clone(&calls),
+        reply_naming("cust-9", ""),
+    )));
+    let _ = registry.register(Arc::clone(&backend));
+    let logger = crate::security::TransparencyLogger::open(Arc::new(
+        crate::security::transparency_log::TransparencyLogConfig {
+            enabled: true,
+            path: dir
+                .path()
+                .join("audit.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+            key_id: "d1".to_string(),
+            ..Default::default()
+        },
+    ))
+    .expect("open log");
+    let mut chained = MetaMcp::new(registry);
+    chained.enable_transparency_log(Arc::new(logger));
+    chained.set_chain_signer(
+        crate::gateway::chain_test_support::signer(),
+        crate::config::ChainEmit::OnRequest,
+    );
+    let meta = attributing(idempotent(chained));
+    let who = api_key_caller();
+    let retry = keyed("refused-receipt-replay");
+    let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        retry: &retry,
+        ..context(&AllowAll, &who)
+    };
+    for _ in 0..2 {
+        let _ = meta
+            .invoke_tool(&args_for(Some("cust-1")), None, &ctx)
+            .await;
+    }
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the replay reached the backend"
+    );
+    let all = records(&dir);
+    assert_eq!(all.len(), 2, "{all:?}");
+    let hit = &all[1];
+    assert_eq!(hit["attribution"], json!("cached_delivery"), "{hit}");
+    assert_eq!(hit["tenants"], sorted(&["cust-1"]), "{hit}");
+    assert!(hit.get("data_classes").is_none(), "{hit}");
+}
