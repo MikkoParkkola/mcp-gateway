@@ -36,8 +36,7 @@ fn a_revived_record_keeps_its_dead_letters_stamp() {
     store
         .dead_letter(record("e1", "s1", now), DeadReason::Gone, now, ROOMY)
         .expect("io");
-    let dead_file = dir.path().join("dead/e1.json");
-    let saved = std::fs::read(&dead_file).expect("dead letter on disk");
+    let saved = store.dead_letter_by_id("e1").expect("dead letter");
     let replay = OutboxRecord {
         created_at: now + chrono::Duration::seconds(5),
         ..record("e1", "s1", now)
@@ -53,7 +52,8 @@ fn a_revived_record_keeps_its_dead_letters_stamp() {
         "the replay keeps the occurrence's fan-out stamp"
     );
     // A crash after the replay was placed and before its dead letter left.
-    std::fs::write(&dead_file, saved).expect("restore the dead letter");
+    crate::events::records::write_record(&dir.path().join("dead"), "e1.json", &saved)
+        .expect("restore the dead letter");
     drop(store);
     let reopened = Store::open(dir.path(), now, TAIL).expect("reopen");
     assert!(
@@ -101,6 +101,13 @@ fn a_replay_into_a_suspended_subscription_is_refused() {
             .ready
             .is_empty(),
         "no replay waits in the outbox"
+    );
+    assert_eq!(
+        store
+            .revive("e1", now, record("e1", "s1", now), OUTBOX, || now)
+            .expect("io"),
+        Revived::Written,
+        "the kept dead letter replays once refreshed"
     );
 }
 
