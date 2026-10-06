@@ -189,6 +189,12 @@ mod tests {
         let words =
             "node_modules/@modelcontextprotocol/server-filesystem abcdefghijklmnopqrstuvwxyz";
         assert_eq!(one(words), words);
+        // The threshold: 23 token characters stay, 24 are masked.
+        assert_eq!(
+            one("id x1234567890abcdefghijkl."),
+            "id x1234567890abcdefghijkl."
+        );
+        assert_eq!(one("id x1234567890abcdefghijklm."), "id [masked].");
     }
 
     #[test]
