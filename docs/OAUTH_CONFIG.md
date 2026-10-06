@@ -223,9 +223,10 @@ bounded at 30 s, a start's whole OAuth phase takes at most about 420 s.
   never counted by the circuit breaker, and a call whose own deadline passes
   while it waits on the login reports `authorization ... is still in progress`
   rather than a timeout.
-- **Restart and shutdown end it.** `gateway_revive_server`, a forced restart
-  and a config reload that retires the backend cancel the open login and free
-  its callback port before anything else.
+- **Restart and shutdown end it.** A forced restart (the web UI's revive
+  action, or the health loop's rebuild) and a config reload that retires the
+  backend cancel the open login and free its callback port before anything
+  else.
 - **Health checks never log in.** A health probe that would need a login, or
   that finds a start in flight, skips its tick instead of opening a browser or
   restarting the backend.
