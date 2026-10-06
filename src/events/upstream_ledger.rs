@@ -29,6 +29,8 @@ pub(crate) enum Outcome {
     Done,
     /// Answered with a JSON-RPC error: the peer refused it.
     Refused,
+    /// Proven never to have left the gateway: nothing changed upstream.
+    NotSent,
     /// Timed out, cancelled, or failed in transport: it may still run.
     Uncertain,
 }
@@ -213,6 +215,11 @@ impl Ledger {
             (Outcome::Refused, false) => {
                 entry.errors = entry.errors.saturating_add(1);
                 warn = entry.errors == 3;
+            }
+            (Outcome::NotSent, _) => {
+                if idle && !entry.stranded {
+                    entry.held = call.before;
+                }
             }
             (Outcome::Uncertain, _) => {
                 entry.held = Held::Maybe;
