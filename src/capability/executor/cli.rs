@@ -392,9 +392,11 @@ fn marker_for(needles: &[&str]) -> &'static str {
         .unwrap_or("")
 }
 
-/// One `marker` per covered run. Output longer than the input plus one marker
-/// (many short matches) collapses everything from the first covered byte to
-/// the last into one marker: that removes more, never less.
+/// One `marker` per covered run. Output longer than twice the input plus one
+/// marker (many short matches) collapses everything from the first covered
+/// byte to the last into one marker: that removes more, never less. Ordinary
+/// redaction, a few markers in a line, stays under the cap and keeps the text
+/// between them.
 fn render(text: &str, covered: &[bool], marker: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
@@ -412,7 +414,7 @@ fn render(text: &str, covered: &[bool], marker: &str) -> String {
             out.push_str(&text[start..at]);
         }
     }
-    if out.len() > text.len() + marker.len()
+    if out.len() > 2 * text.len() + marker.len()
         && let (Some(first), Some(last)) = (
             covered.iter().position(|&c| c),
             covered.iter().rposition(|&c| c),
