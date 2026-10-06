@@ -43,6 +43,18 @@ const RESOURCES_CHANGED: &str = "backend.x.resources_changed";
 const PROMPTS_CHANGED: &str = "backend.x.prompts_changed";
 const RES_CHANGED: &str = "notifications/resources/list_changed";
 
+/// `upstream_config` with no backend warm-started at boot (an empty
+/// `warm_start` starts them all), so a connect is the subscribe's own.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "call sites build the value inline with json!"
+)]
+fn cold_config(root: &std::path::Path, backend: Value, extra: &[(&str, Value)]) -> Value {
+    let mut cfg = upstream_config(root, backend, extra);
+    cfg["meta_mcp"]["warm_start"] = json!(["hooks"]);
+    cfg
+}
+
 /// A port with no listener.
 const DEAD: &str = "http://127.0.0.1:9/mcp";
 
@@ -68,7 +80,7 @@ async fn an_unset_key_on_a_streamable_backend_is_offered_the_events() {
     let dir = tempfile::tempdir().expect("tempdir");
     let receiver = Receiver::start(dir.path()).await;
     let peer = HttpPeer::start(Era::Legacy).await;
-    let cfg = upstream_config(dir.path(), json!({"http_url": peer.url}), &[]);
+    let cfg = cold_config(dir.path(), json!({"http_url": peer.url}), &[]);
     let gw = start_cfg(dir.path(), &receiver, cfg).await;
     let id = sub(&gw, ALICE, RESOURCES_CHANGED, &receiver, json!({})).await;
     // Accepted is not enough: a listener must attach and deliver.
@@ -89,7 +101,7 @@ async fn an_explicit_true_that_falls_back_to_sse_is_refused() {
     let receiver = Receiver::start(dir.path()).await;
     let hits = Hits::default();
     let url = sse_server(&hits).await;
-    let cfg = upstream_config(
+    let cfg = cold_config(
         dir.path(),
         json!({"http_url": url, "streamable_http": true}),
         &[],
@@ -107,7 +119,7 @@ async fn an_explicit_true_that_falls_back_to_sse_is_refused() {
 async fn an_unreachable_backend_is_not_reported_as_sse() {
     let dir = tempfile::tempdir().expect("tempdir");
     let receiver = Receiver::start(dir.path()).await;
-    let cfg = upstream_config(dir.path(), json!({"http_url": DEAD}), &[]);
+    let cfg = cold_config(dir.path(), json!({"http_url": DEAD}), &[]);
     let gw = start_cfg(dir.path(), &receiver, cfg).await;
     let answer = subscribe(&gw, &receiver).await;
     let err = error(&answer);
@@ -129,7 +141,7 @@ async fn an_explicit_false_that_switched_to_streamable_is_offered() {
     let receiver = Receiver::start(dir.path()).await;
     let hits = Hits::default();
     let url = streamable_server(&hits).await;
-    let cfg = upstream_config(
+    let cfg = cold_config(
         dir.path(),
         json!({"http_url": url, "streamable_http": false}),
         &[],
@@ -161,7 +173,7 @@ async fn an_unset_key_on_an_sse_server_is_refused_after_connecting() {
     let receiver = Receiver::start(dir.path()).await;
     let hits = Hits::default();
     let url = sse_server(&hits).await;
-    let cfg = upstream_config(dir.path(), json!({"http_url": url}), &[]);
+    let cfg = cold_config(dir.path(), json!({"http_url": url}), &[]);
     let gw = start_cfg(dir.path(), &receiver, cfg).await;
     let answer = subscribe(&gw, &receiver).await;
     let err = error(&answer);
@@ -191,12 +203,7 @@ async fn an_identity_backend_is_refused_without_a_connect() {
         "identity_propagation": {"strategy": "passthrough",
             "audience": "https://idp.example", "session_mode": "per_user"},
     });
-    let gw = start_cfg(
-        dir.path(),
-        &receiver,
-        upstream_config(dir.path(), backend, &[]),
-    )
-    .await;
+    let gw = start_cfg(dir.path(), &receiver, cold_config(dir.path(), backend, &[])).await;
     let answer = subscribe(&gw, &receiver).await;
     assert_eq!(
         error(&answer)["data"]["reason"],
@@ -214,12 +221,7 @@ async fn an_explicit_true_on_a_streamable_server_subscribes() {
     let receiver = Receiver::start(dir.path()).await;
     let peer = HttpPeer::start(Era::Legacy).await;
     let backend = json!({"http_url": peer.url, "streamable_http": true});
-    let gw = start_cfg(
-        dir.path(),
-        &receiver,
-        upstream_config(dir.path(), backend, &[]),
-    )
-    .await;
+    let gw = start_cfg(dir.path(), &receiver, cold_config(dir.path(), backend, &[])).await;
     sub(&gw, ALICE, RESOURCES_CHANGED, &receiver, json!({})).await;
 }
 
@@ -230,7 +232,7 @@ async fn an_unset_key_is_listed_without_a_connect() {
     let dir = tempfile::tempdir().expect("tempdir");
     let receiver = Receiver::start(dir.path()).await;
     let peer = HttpPeer::start(Era::Legacy).await;
-    let cfg = upstream_config(dir.path(), json!({"http_url": peer.url}), &[]);
+    let cfg = cold_config(dir.path(), json!({"http_url": peer.url}), &[]);
     let gw = start_cfg(dir.path(), &receiver, cfg).await;
     let names = gw.event_names(Some(ALICE), Some(RESOURCES_CHANGED)).await;
     assert!(
@@ -247,7 +249,7 @@ async fn concurrent_subscribes_share_one_start() {
     let dir = tempfile::tempdir().expect("tempdir");
     let receiver = Receiver::start(dir.path()).await;
     let peer = HttpPeer::start(Era::Legacy).await;
-    let cfg = upstream_config(dir.path(), json!({"http_url": peer.url}), &[]);
+    let cfg = cold_config(dir.path(), json!({"http_url": peer.url}), &[]);
     let gw = start_cfg(dir.path(), &receiver, cfg).await;
     tokio::join!(
         sub(&gw, ALICE, RESOURCES_CHANGED, &receiver, json!({})),
@@ -281,12 +283,7 @@ async fn a_start_that_never_completes_is_bounded_by_the_backend_timeout() {
     let dir = tempfile::tempdir().expect("tempdir");
     let receiver = Receiver::start(dir.path()).await;
     let backend = json!({"http_url": silent_server().await, "timeout": "2s"});
-    let gw = start_cfg(
-        dir.path(),
-        &receiver,
-        upstream_config(dir.path(), backend, &[]),
-    )
-    .await;
+    let gw = start_cfg(dir.path(), &receiver, cold_config(dir.path(), backend, &[])).await;
     let began = Instant::now();
     let answer = subscribe(&gw, &receiver).await;
     let took = began.elapsed();
@@ -317,7 +314,7 @@ async fn an_open_circuit_refuses_the_subscribe_without_a_connect() {
         }
     });
     let url = format!("{}/mcp", serve(app).await);
-    let mut cfg = upstream_config(dir.path(), json!({"http_url": url}), &[]);
+    let mut cfg = cold_config(dir.path(), json!({"http_url": url}), &[]);
     cfg["failsafe"] = json!({"circuit_breaker":
         {"failure_threshold": 1, "reset_timeout": "10m"}});
     let gw = start_cfg(dir.path(), &receiver, cfg).await;
