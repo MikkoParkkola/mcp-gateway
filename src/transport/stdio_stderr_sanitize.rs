@@ -28,10 +28,11 @@ static URL_USERINFO: LazyLock<Regex> =
 static AUTH_SCHEME: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?i)\b(bearer|basic)\s+[^\s"',;]+"#).expect("valid"));
 /// A secret-named key's value, in env (`K=v`), YAML (`k: v`) and JSON
-/// (`"k": "v"`) forms. A quoted value runs to its unescaped closing quote.
+/// (`"k": "v"`, `{'k': 'v'}`) forms. A quoted value runs to its unescaped
+/// closing quote.
 static SECRET_VALUE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?i)([a-z0-9_.-]*(?:key|secret|token|passw(?:or)?d|pwd|credential|auth)[a-z0-9_.-]*)("?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;}&]+)"#,
+        r#"(?i)([a-z0-9_.-]*(?:key|secret|token|passw(?:or)?d|passphrase|pwd|credential|auth)[a-z0-9_.-]*)(["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;}&]+)"#,
     )
     .expect("valid")
 });
@@ -40,6 +41,11 @@ static SECRET_VALUE: LazyLock<Regex> = LazyLock::new(|| {
 /// and plain numbers stay readable.
 static LONG_TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[A-Za-z0-9_-]{24,}").expect("valid"));
+/// A long base64 run, such as a PEM key body line, which `+` and `/` would
+/// otherwise cut into pieces shorter than [`LONG_TOKEN`]'s floor. Longer
+/// than that floor so a slash-separated path is rarely caught.
+static BASE64_RUN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[A-Za-z0-9+/]{40,}={0,2}").expect("valid"));
 #[cfg(feature = "firewall")]
 static REDACTOR: LazyLock<crate::security::firewall::redactor::Redactor> =
     LazyLock::new(crate::security::firewall::redactor::Redactor::new);
@@ -70,14 +76,16 @@ fn mask(line: &str) -> String {
     let line = URL_USERINFO.replace_all(&line, format!("${{1}}{MASK}@"));
     let line = AUTH_SCHEME.replace_all(&line, format!("${{1}} {MASK}"));
     let line = SECRET_VALUE.replace_all(&line, format!("${{1}}${{2}}{MASK}"));
-    LONG_TOKEN
-        .replace_all(&line, |run: &regex::Captures<'_>| {
-            let run = &run[0];
-            let mixed = run.bytes().any(|b| b.is_ascii_alphabetic())
-                && run.bytes().any(|b| b.is_ascii_digit());
-            if mixed { MASK } else { run }.to_string()
-        })
-        .into_owned()
+    let line = BASE64_RUN.replace_all(&line, mask_mixed);
+    LONG_TOKEN.replace_all(&line, mask_mixed).into_owned()
+}
+
+/// Only a run holding both a letter and a digit is masked.
+fn mask_mixed(run: &regex::Captures<'_>) -> String {
+    let run = &run[0];
+    let mixed =
+        run.bytes().any(|b| b.is_ascii_alphabetic()) && run.bytes().any(|b| b.is_ascii_digit());
+    if mixed { MASK } else { run }.to_string()
 }
 
 #[cfg(feature = "firewall")]
