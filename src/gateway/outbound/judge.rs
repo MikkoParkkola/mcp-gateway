@@ -327,3 +327,44 @@ pub(crate) fn admit_stream_item(
         delivery: None,
     })
 }
+
+#[cfg(test)]
+mod emitted_document_tests {
+    use serde_json::{Value, json};
+
+    use super::{Payload, emitted_document};
+    use crate::protocol::{JsonRpcResponse, RequestId};
+
+    /// The member names of `doc` and of its `error` object.
+    fn key_set(doc: &Value) -> Vec<String> {
+        let mut keys: Vec<String> = doc
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, _)| k.clone())
+            .collect();
+        if let Some(error) = doc.get("error").and_then(Value::as_object) {
+            keys.extend(error.keys().map(|k| format!("error.{k}")));
+        }
+        keys.sort();
+        keys
+    }
+
+    /// MIK-7942 D6.CATALOGUE.8 (pin b): the placeholder view serializes every
+    /// envelope member the sink writes for the same response.
+    #[test]
+    fn the_view_keeps_every_envelope_member() {
+        let mut success = JsonRpcResponse::success(RequestId::Number(1), json!({"a": 1}));
+        success.confirmation_refusal = true;
+        success.delivery_refusal = true;
+        success.discovery_inspected = true;
+        let failure =
+            JsonRpcResponse::error_with_data(Some(RequestId::Number(2)), -32000, "no", json!([1]));
+        let bare = JsonRpcResponse::error(None, -32601, "missing");
+        for response in [success, failure, bare] {
+            let written = serde_json::to_value(&response).expect("serializes");
+            let view = emitted_document(&Payload::Response(response)).expect("a document");
+            assert_eq!(key_set(&view), key_set(&written), "{written}");
+        }
+    }
+}
