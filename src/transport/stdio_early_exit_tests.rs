@@ -294,6 +294,12 @@ async fn an_early_exit_keeps_a_sanitized_tail_for_the_doctor_only() {
         "{shown:?}"
     );
     assert!(shown.iter().all(|l| !l.contains("tok-7978")), "{shown:?}");
+    // The capture saw the exit's record, so its silence below means something.
+    assert!(
+        captured.text().contains("missing_module"),
+        "{}",
+        captured.text()
+    );
     for text in [err.to_string(), format!("{err:?}"), captured.text()] {
         assert!(!text.contains("tail-7978"), "stderr escaped: {text}");
         assert!(!text.contains("tok-7978"), "stderr escaped: {text}");
@@ -315,6 +321,31 @@ async fn a_new_start_clears_the_previous_tail() {
     let _ = start_err(&t).await;
     assert_eq!(t.last_failure_stderr(), vec!["first-run-7978".to_string()]);
     let _ = start_err(&t).await;
+    assert!(
+        t.last_failure_stderr().is_empty(),
+        "{:?}",
+        t.last_failure_stderr()
+    );
+}
+
+/// STDERR.3: a start that cannot spawn shows no older exit's tail.
+#[tokio::test]
+async fn a_spawn_failure_clears_the_previous_tail() {
+    let dir = tempfile::tempdir().expect("dir");
+    let cwd = dir.path().join("cwd");
+    std::fs::create_dir(&cwd).expect("cwd");
+    let t = StdioTransport::new(
+        "sh -c 'echo \"first-run-7980\" >&2; exit 3'",
+        HashMap::new(),
+        Some(cwd.display().to_string()),
+        REQUEST_TIMEOUT,
+        None,
+    );
+    let _ = start_err(&t).await;
+    assert_eq!(t.last_failure_stderr(), vec!["first-run-7980".to_string()]);
+    std::fs::remove_dir(&cwd).expect("remove cwd");
+    let spawn = tokio::time::timeout(ROW_LIMIT, t.start()).await;
+    assert!(matches!(spawn, Ok(Err(_))), "the spawn must fail");
     assert!(
         t.last_failure_stderr().is_empty(),
         "{:?}",

@@ -147,9 +147,14 @@ pub(super) struct StartState {
 }
 
 impl StartState {
+    /// Forget the last start's shown stderr, before anything can fail: a
+    /// start that cannot even spawn must not show an older exit's tail.
+    pub(super) fn forget_shown_stderr(&self) {
+        self.shown_stderr.lock().clear();
+    }
+
     pub(super) fn begin(&self, eof: tokio::sync::watch::Receiver<bool>) {
         *self.eof.lock() = Some(eof);
-        self.shown_stderr.lock().clear();
         // A class describes the last start only.
         // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
         #[cfg(all(test, unix))]

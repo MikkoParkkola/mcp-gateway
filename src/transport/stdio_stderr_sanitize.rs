@@ -28,13 +28,18 @@ static URL_USERINFO: LazyLock<Regex> =
 static AUTH_SCHEME: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?i)\b(bearer|basic)\s+[^\s"',;]+"#).expect("valid"));
 /// A secret-named key's value, in env (`K=v`), YAML (`k: v`) and JSON
-/// (`"k": "v"`) forms.
+/// (`"k": "v"`) forms. A quoted value runs to its unescaped closing quote.
 static SECRET_VALUE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?i)([a-z0-9_.-]*(?:key|secret|token|passw(?:or)?d|pwd|credential|auth)[a-z0-9_.-]*)("?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&]+)"#,
+        r#"(?i)([a-z0-9_.-]*(?:key|secret|token|passw(?:or)?d|pwd|credential|auth)[a-z0-9_.-]*)("?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;}&]+)"#,
     )
     .expect("valid")
 });
+/// A long run of token characters: most generated credentials, in every
+/// build. Only a run holding both a letter and a digit is masked, so words
+/// and plain numbers stay readable.
+static LONG_TOKEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[A-Za-z0-9_-]{24,}").expect("valid"));
 #[cfg(feature = "firewall")]
 static REDACTOR: LazyLock<crate::security::firewall::redactor::Redactor> =
     LazyLock::new(crate::security::firewall::redactor::Redactor::new);
@@ -64,8 +69,14 @@ fn mask(line: &str) -> String {
     let line = mask_spans(&line, &REDACTOR.credential_spans(&line));
     let line = URL_USERINFO.replace_all(&line, format!("${{1}}{MASK}@"));
     let line = AUTH_SCHEME.replace_all(&line, format!("${{1}} {MASK}"));
-    SECRET_VALUE
-        .replace_all(&line, format!("${{1}}${{2}}{MASK}"))
+    let line = SECRET_VALUE.replace_all(&line, format!("${{1}}${{2}}{MASK}"));
+    LONG_TOKEN
+        .replace_all(&line, |run: &regex::Captures<'_>| {
+            let run = &run[0];
+            let mixed = run.bytes().any(|b| b.is_ascii_alphabetic())
+                && run.bytes().any(|b| b.is_ascii_digit());
+            if mixed { MASK } else { run }.to_string()
+        })
         .into_owned()
 }
 
@@ -130,6 +141,8 @@ mod tests {
             ("password = hunter7978", "hunter7978"),
             (r#"{"api_key": "k-7978-two", "port": 3}"#, "k-7978-two"),
             ("client_secret: 'k-7978-three'", "k-7978-three"),
+            (r#"{"password":"alpha\"rest-7978"}"#, "rest-7978"),
+            (r"TOKEN='a\'rest-7979'", "rest-7979"),
         ] {
             let out = one(line);
             assert!(!out.contains(secret), "{out}");
@@ -160,12 +173,22 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "firewall")]
+    // Every build, firewall feature or not.
     #[test]
-    fn a_credential_the_firewall_knows_is_masked() {
+    fn a_long_generated_token_is_masked() {
         let token = format!("ghp_{}", "a1".repeat(18));
-        let out = one(&format!("using {token} to clone"));
-        assert!(!out.contains(&token), "{out}");
+        for line in [
+            format!("using {token} to clone"),
+            "key sk-live-0123456789abcdefghijklmn rejected".to_string(),
+        ] {
+            let out = one(&line);
+            assert!(out.contains(MASK), "{line} -> {out}");
+            assert!(!out.contains("0123456789abc"), "{out}");
+            assert!(!out.contains(&token), "{out}");
+        }
+        let words =
+            "node_modules/@modelcontextprotocol/server-filesystem abcdefghijklmnopqrstuvwxyz";
+        assert_eq!(one(words), words);
     }
 
     #[test]
