@@ -340,6 +340,34 @@ async fn the_per_principal_timer_cap_counts_held_timers() {
         .expect("another principal");
 }
 
+/// After a restart, a principal over the per-principal cap (a lowered cap,
+/// or joins that raced) keeps its earliest timers rather than none.
+#[tokio::test]
+async fn a_restart_over_the_cap_keeps_the_earliest_timers() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut config = crate::config::EventsConfig::default();
+    config.schedule.max_timers_per_principal = 2;
+    let hub = hub(dir.path(), &config);
+    let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
+    let rows = [
+        json!({"cron": "0 1 * * *"}),
+        json!({"cron": "0 2 * * *"}),
+        json!({"cron": "0 3 * * *"}),
+    ];
+    for (n, arguments) in rows.iter().enumerate() {
+        admit(&hub, &format!("sub_{n}"), "p", arguments);
+    }
+    for arguments in &rows[..2] {
+        start(&source, arguments).await;
+    }
+    let key = source.lifecycle_key("p", NAME, &rows[2]);
+    let error = source
+        .on_first_subscriber(&key, "p", NAME, &rows[2])
+        .await
+        .expect_err("the latest timer is past the cap");
+    assert_eq!(error.code, -32013);
+}
+
 /// U9: a label the response firewall blocks is dead-lettered
 /// `firewall_blocked` at fan-out, never queued for delivery.
 #[cfg(feature = "firewall")]
