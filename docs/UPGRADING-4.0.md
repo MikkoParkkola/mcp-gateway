@@ -178,6 +178,7 @@ backend" and "fails a capability file" first.**
 | 151 | A legacy client that calls without a credential (authentication off, or on with the path in `auth.public_paths`, as `/mcp` is in the shipped presets) and does not resume a session the gateway issued is counted under one shared identity by the anomaly detector, the tenant guard and the call budget; in 3.x each such request was a new session and the first call in it | None unless these controls refuse such clients: give them a credential, have them keep the `mcp-session-id` from `initialize`, or raise the limit |
 | 152 | A weekday step `*/n` in a cron expression matches only the days `n` divides; the old match also tried each day plus 7, so `*/2` matched every day and `*/3` to `*/13` (except `*/7`) matched extra days; `*/1`, `*/7` and `*/14` up are unchanged | Check each scheduled job and `schedule.tick` subscription whose weekday field uses `/`; one meant to run daily uses `*` |
 | 153 | Two credentials that resolve to one principal (the same key listed twice, or two digests sharing their first 48 bits) are refused at load, reload and startup | Remove the duplicate entry, or replace one of the two credentials |
+| 154 | A same-key retry after a lost round (a broken stream, a timeout, a reload stopping the backend mid-call, an HTTP 5xx, or a 400, 404, 407, 408, 429 or session-expiry answer) is served the uncertain-outcome notice instead of the original error; `BackendUnavailable` frees the key | A client that read a served error as "the work failed" treats the notice as "may have run" and checks before re-issuing under a new key |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4073,6 +4074,32 @@ key-server tokens minted for an OIDC sign-in, are not checked, nor is a principa
 removed credential once held. The principal encoding is unchanged, so existing sessions,
 grants and tasks stay readable. Remove the duplicate entry, or replace one of the two
 credentials.
+
+## 154. A retry after a lost round is told the outcome is uncertain
+
+**Startup:** no notice
+
+A call that carries an idempotency key and fails after its request may have
+reached the backend keeps its key settled, so a same-key retry never runs the
+work twice. What the retry is served changed:
+
+- When nothing that came back shows whether the work ran (a broken stream, a
+  timeout, a config reload stopping the backend mid-call, an HTTP 5xx, or an
+  HTTP 400, 404, 407, 408, 429 or session-expiry answer), the retry
+  gets the uncertain-outcome notice under the first caller's error code. It
+  used to get the original error, which read as "the work failed".
+- An answer that shows the outcome (a JSON-RPC error, a 401 or 403 credential
+  refusal, or any other HTTP 4xx refusal) is served as before.
+- A backend that could not take the request (`BackendUnavailable`, a cold
+  `tools/list` timeout, a stdio backend with no writer) frees the key, and the
+  retry runs. Freeing it is safe because the request never left the gateway: a
+  cold `tools/list` timeout sent only the read-only `tools/list`, never the
+  `tools/call`. That timeout is now reported as `BackendUnavailable`, not
+  `BackendTimeout`.
+
+Library users: `Error::is_pre_dispatch` is `true` for `BackendUnavailable`, and
+`security::safe_http_status_error` returns `TransportPermanent` for the 4xx
+refusals above. `chains` retries `BackendUnavailable`. See ADR-012.
 
 ## Upgrading from 3.5.x: a walkthrough
 
