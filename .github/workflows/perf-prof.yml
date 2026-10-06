@@ -1,8 +1,8 @@
 name: Perf profile per call
 
 # Throwaway branch only (never merged). Where the 4.0 per-call CPU over
-# v3.5.1 sits, on the grading host type: B = v3.5.1, C = the release head
-# the rehearsal graded, T = the B14 head. Each arm gets a clean rep (CPU per
+# v3.5.1 sits, on the grading host type: B = v3.5.1, C = the release-line
+# commit the final B14 head last merged, T = that head. Each arm gets a clean rep (CPU per
 # call, no profiler attached) and a profiled rep (perf, dwarf unwind) under
 # the same driver, fixture, config and rate as the CPU-per-call runs.
 # Symbols are kept by env override only; codegen is the release profile's.
@@ -15,8 +15,8 @@ permissions:
 
 env:
   REF_B: v3.5.1
-  REF_C: 1f13e90f84384f6cae71b5336d06b3c019e98bf5
-  REF_T: e3797636b268f808275428ae8c887d51fcc31772
+  REF_C: 0edeff8815e781344d410f3c5e937faecb4b0cd2
+  REF_T: b6b336206197b910741965df97711b18344ab3fe
   FEATURES: a2a,webui,config-export,cost-governance,firewall,discovery,semantic-search,tool-profiles,metrics
   CARGO_PROFILE_RELEASE_STRIP: none
   CARGO_PROFILE_RELEASE_DEBUG: "1"
@@ -116,10 +116,15 @@ jobs:
             "$PERF" record -F 1999 --call-graph dwarf,16384 -p "$pid" -o "$RUNNER_TEMP/$arm.data" -- sleep "$PROFILE_SECONDS" 2> "$out/prof-$arm.record.err"
             wait "$driver"
             stop
-            "$PERF" report -i "$RUNNER_TEMP/$arm.data" --children --sort symbol -g none --percent-limit 0.1 --stdio \
-              > "$out/prof-$arm.children.txt" 2> "$out/prof-$arm.report.err"
-            "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-children --sort symbol -g none --percent-limit 0.1 --stdio \
-              > "$out/prof-$arm.self.txt" 2>> "$out/prof-$arm.report.err"
+          done
+          # Reports after every arm is recorded, so a slow report cannot cost a
+          # recording. --no-inline: inline resolution per dwarf sample ran past
+          # three hours in run 37461088507. Each report is time-boxed.
+          for arm in B C T; do
+            timeout 1200 "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-inline --children --sort symbol -g none --percent-limit 0.1 --stdio \
+              > "$out/prof-$arm.children.txt" 2> "$out/prof-$arm.report.err" || echo "children report exit $?" >> "$out/prof-$arm.report.err"
+            timeout 1200 "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-inline --no-children --sort symbol -g none --percent-limit 0.1 --stdio \
+              > "$out/prof-$arm.self.txt" 2>> "$out/prof-$arm.report.err" || echo "self report exit $?" >> "$out/prof-$arm.report.err"
             rm -f "$RUNNER_TEMP/$arm.data"
           done
       - name: Socket table on failure
