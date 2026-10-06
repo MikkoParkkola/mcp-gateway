@@ -501,3 +501,46 @@ fn a_client_resolved_auth_header_still_counts() {
         ShadowAuthExposure::NetworkHttpNoAuthMetadata
     );
 }
+
+/// MIK-7716: adopting a server would drop a header only the client can
+/// resolve, so the scan asks the owner instead of offering an apply command.
+#[test]
+fn a_dropped_header_is_not_proposed_for_adoption() {
+    let server = crate::discovery::client_entry::parse(
+        "weather",
+        &serde_json::json!({
+            "url": "https://mcp.remote.internal/mcp",
+            "headers": { "Authorization": "Bearer ${input:token}" },
+        }),
+        &DiscoverySource::VsCode,
+        Path::new("mcp.json"),
+    )
+    .expect("an HTTP entry parses");
+    let report = report(&[server], &[]);
+    let remediation = &report.assets[0].remediation;
+
+    assert_eq!(remediation.action, ShadowRemediationAction::RequestOwner);
+    assert!(remediation.apply_command.is_none());
+}
+
+/// MIK-7716: a header whose value is not a string sends nothing, so it is no
+/// auth signal.
+#[test]
+fn a_non_string_auth_header_is_no_auth_signal() {
+    let server = crate::discovery::client_entry::parse(
+        "weather",
+        &serde_json::json!({
+            "url": "https://mcp.remote.internal/mcp",
+            "headers": { "Authorization": null },
+        }),
+        &DiscoverySource::VsCode,
+        Path::new("mcp.json"),
+    )
+    .expect("an HTTP entry parses");
+    let report = report(&[server], &[]);
+
+    assert_eq!(
+        report.assets[0].auth_exposure,
+        ShadowAuthExposure::NetworkHttpNoAuthMetadata
+    );
+}
