@@ -70,5 +70,6 @@ Rules:
   timer. A principal holding `max_timers_per_principal` distinct timers is
   refused a new one with `-32013`, and so is any subscribe past `max_timers`.
 - **Missed ticks are not sent late.** A tick due while the gateway was down
-  is skipped. A restart within the same minute does not repeat a tick: the
+  is skipped, and so is one the gateway could not check in its own minute
+  while running (a stalled runtime or a clock step): there is no catch-up. A restart within the same minute does not repeat a tick: the
   last tick sent per timer is kept under `<store_dir>/schedule/`.
