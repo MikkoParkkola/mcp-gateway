@@ -206,12 +206,13 @@ fn canonical_is_the_libraries_jcs_within_2_pow_53() {
     }
 }
 
-/// T16 (MIK-7969 H1/G2): the commit, under the lifecycle lock, admits an
-/// upstream event only over a transport a live connection detected or one
-/// that needs none. Unresolved (stopped, or never connected) answers the
-/// backend error; a refusal names its reason; a removed backend is unknown.
-#[tokio::test]
-async fn the_commit_admits_only_a_detected_or_unneeded_transport() {
+/// The T16 hub: upstream events on `u` (unset key, never connected), `s`
+/// (explicit SSE) and `c` (stdio), with the live services a commit reads.
+async fn t16_hub() -> (
+    Arc<EventsHub>,
+    crate::config::EventsConfig,
+    tempfile::TempDir,
+) {
     use crate::backend::{Backend, BackendRegistry};
     use crate::config::{Config, EventsConfig, FailsafeConfig};
 
@@ -251,7 +252,16 @@ async fn the_commit_admits_only_a_detected_or_unneeded_transport() {
         credentials: super::super::LiveCredentials::default(),
     };
     assert!(hub.runtime.services.set(Arc::new(services)).is_ok());
+    (hub, events, dir)
+}
 
+/// T16 (MIK-7969 H1/G2): the commit, under the lifecycle lock, admits an
+/// upstream event only over a transport a live connection detected or one
+/// that needs none. Unresolved (stopped, or never connected) answers the
+/// backend error; a refusal names its reason; a removed backend is unknown.
+#[tokio::test]
+async fn the_commit_admits_only_a_detected_or_unneeded_transport() {
+    let (hub, events, _dir) = t16_hub().await;
     let code = |name: &str| hub.upstream_admits(name).err().map(|e| e.code);
     assert_eq!(
         code("backend.u.resources_changed"),
@@ -295,8 +305,12 @@ async fn the_commit_admits_only_a_detected_or_unneeded_transport() {
         .await;
     assert_eq!(outcome.err().map(|e| e.code), Some(-32000));
     assert!(hub.store.subscriptions().is_empty(), "no row was committed");
+}
 
-    // Refused between the commit check and the start: never a silent start.
+/// T16: refused between the commit check and the start is never a silent start.
+#[tokio::test]
+async fn the_commit_admits_no_silent_start_after_its_check() {
+    let (hub, _events, _dir) = t16_hub().await;
     let mut started = std::collections::HashSet::new();
     let refused = hub
         .start_key(&mut started, "p", "backend.s.resources_changed", &json!({}))

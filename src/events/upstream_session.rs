@@ -230,23 +230,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             }
             Ev::Wake | Ev::Tick => {}
         }
-        // Not while a finished refill's change is still unannounced: invalidating
-        // now would have the hub announce it over an emptied cache.
-        if refill.is_none()
-            && !state.tools_pending
-            && state.tools_due.is_some_and(|due| Instant::now() >= due)
-        {
-            // A notice arrived: drop the cached list and refill it before the
-            // hub hears, so the subscriber's re-read is fresh and nothing sees
-            // an emptied cache. At most once per tick however many notices
-            // came; a notice during a refill waits for the next one.
-            state.tools_due = None;
-            backend.invalidate_tools();
-            let backend = Arc::clone(backend);
-            refill = Some(Box::pin(async move {
-                let _ = tokio::time::timeout(OPEN_LIMIT, backend.get_tools()).await;
-            }));
-        }
+        start_due_refill(&mut state, backend, &mut refill);
         if !backend_still_current(backend, &target.handle) {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
             return finish_refill(&mut state, shared, backend, hub, refill, started).await;
@@ -287,6 +271,27 @@ fn on_tick(live: Option<bool>, refused: impl FnOnce() -> bool) -> OnTick {
     } else {
         OnTick::Keep
     }
+}
+
+/// A notice arrived: drop the cached tool list and refill it before the hub
+/// hears, so the subscriber's re-read is fresh and nothing sees an emptied
+/// cache. At most once per tick however many notices came; a notice during a
+/// refill waits for the next one. Not while a finished refill's change is
+/// still unannounced: invalidating then would have the hub announce it over
+/// an emptied cache.
+fn start_due_refill(state: &mut State<'_>, backend: &Arc<Backend>, refill: &mut Option<Refill>) {
+    if refill.is_some()
+        || state.tools_pending
+        || !state.tools_due.is_some_and(|due| Instant::now() >= due)
+    {
+        return;
+    }
+    state.tools_due = None;
+    backend.invalidate_tools();
+    let backend = Arc::clone(backend);
+    *refill = Some(Box::pin(async move {
+        let _ = tokio::time::timeout(OPEN_LIMIT, backend.get_tools()).await;
+    }));
 }
 
 fn failed() -> Outcome {
