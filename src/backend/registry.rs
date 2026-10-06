@@ -286,10 +286,13 @@ impl BackendRegistry {
         }
         let name = backend.name.clone();
         let breaker = Arc::clone(&backend.shared_entry().failsafe.circuit_breaker);
+        if let Some(observer) = self.breaker_observer.get() {
+            breaker.observe(observer);
+        }
         self.backends.insert(name.clone(), backend);
         drop(stopping);
-        // After the insert: an observer attached meanwhile reaches it either
-        // here or in `observe_breakers`' walk.
+        // Before the insert, so no transition escapes; again after it, so an
+        // observer attached meanwhile reaches it here or in the walk.
         if let Some(observer) = self.breaker_observer.get() {
             breaker.observe(observer);
         }

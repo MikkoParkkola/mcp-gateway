@@ -95,10 +95,15 @@ impl OperationalSource {
 }
 
 fn descriptor(name: &str, description: &str, payload: Value, scope: Visibility) -> EventDescriptor {
+    let arguments = if name.starts_with(BUDGET_PREFIX) {
+        json!({"scope": {"type": "string"}})
+    } else {
+        json!({})
+    };
     EventDescriptor {
         name: name.into(),
         description: description.into(),
-        input_schema: json!({"type": "object", "additionalProperties": false}),
+        input_schema: json!({"type": "object", "properties": arguments, "additionalProperties": false}),
         payload_schema: json!({"type": "object", "properties": payload, "additionalProperties": false}),
         scope,
         kind: SourceKind::GatewayOperational,
@@ -117,7 +122,9 @@ impl EventSource for OperationalSource {
             descriptor(
                 BUDGET_THRESHOLD,
                 "A daily budget crossed 50, 80 or 100 %. `scope` is `global`, `tool:<name>` \
-                 or `key:<API key name>`; without admin standing you receive only your own key's.",
+                 or `key:<API key name>`. Subscribe with `scope` to receive one budget; \
+                 without it you receive every scope, which needs admin standing. Without \
+                 admin standing, name your own key's.",
                 json!({"scope": text(), "percent": {"type": "integer"}}),
                 Visibility::Owner,
             ),
@@ -142,33 +149,46 @@ impl EventSource for OperationalSource {
         ]
     }
 
-    /// Admins hold any of the four; an API-key holder holds the budget
-    /// events. Read live at subscribe, at every fan-out and before every
-    /// delivery, so a refusal (`-32012`) ends the subscription.
+    /// Admins hold any of the four. An API-key holder holds the budget
+    /// events for its own key's scope, named in the arguments. Read live at
+    /// subscribe, at every fan-out and before every delivery, so a refusal
+    /// (`-32012`) ends the subscription; the scope travels with it, so a
+    /// demoted admin's every-scope subscription ends before a queued event
+    /// of another key's budget is sent.
     async fn authorize(
         &self,
         principal: &str,
         name: &str,
-        _arguments: &Value,
+        arguments: &Value,
     ) -> Result<(), RpcError> {
-        match self.standing(principal) {
-            Some(s) if s.admin || (name.starts_with(BUDGET_PREFIX) && s.key.is_some()) => Ok(()),
-            _ => Err(RpcError::forbidden()),
+        let Some(standing) = self.standing(principal) else {
+            return Err(RpcError::forbidden());
+        };
+        let own = |key: &str| {
+            arguments["scope"]
+                .as_str()
+                .and_then(|scope| scope.strip_prefix("key:"))
+                == Some(key)
+        };
+        if standing.admin
+            || (name.starts_with(BUDGET_PREFIX) && standing.key.as_deref().is_some_and(own))
+        {
+            Ok(())
+        } else {
+            Err(RpcError::forbidden())
         }
     }
 
-    /// A budget event reaches a non-admin only for its own key's budget.
-    fn matches(&self, principal: &str, _arguments: &Value, event: &SourceEvent) -> bool {
+    /// A budget event reaches the subscriptions to its scope, or to every
+    /// scope; `authorize` decides who may hold either.
+    fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
         if !event.name.starts_with(BUDGET_PREFIX) {
             return true;
         }
-        let Some(standing) = self.standing(principal) else {
-            return false;
-        };
-        let own = event.data["scope"]
-            .as_str()
-            .and_then(|scope| scope.strip_prefix("key:"));
-        standing.admin || (standing.key.is_some() && standing.key.as_deref() == own)
+        arguments
+            .get("scope")
+            .and_then(Value::as_str)
+            .is_none_or(|scope| event.data["scope"].as_str() == Some(scope))
     }
 
     fn charges(&self, name: &str) -> bool {
