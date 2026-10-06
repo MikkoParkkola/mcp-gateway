@@ -529,7 +529,7 @@ fn exact_integer(text: &str) -> Option<String> {
 
 fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
     if literals.contains(value) {
-        *value = Value::String("[redacted]".to_owned());
+        *value = Value::String(marker_for(needles).to_owned());
         return;
     }
     match value {
