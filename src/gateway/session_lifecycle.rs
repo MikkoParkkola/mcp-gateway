@@ -620,4 +620,48 @@ mod tests {
         assert_eq!(fired.lock().expect("seen").len(), 1);
         assert_eq!(lifecycle.tracked_count(), 1);
     }
+
+    /// A caller that renews while its old deadline's handler is running and
+    /// then writes fresh state keeps that state (MIK-7746). The handler waits
+    /// up to 500 ms for the renewer to have written before it wipes. If a
+    /// renewal can land during the handler, the write is wiped; if the renewal
+    /// waits for the handler, the wait times out and the write comes after
+    /// the wipe. A runner slower than the wait can hide the defect, never
+    /// fail a correct registry.
+    #[test]
+    fn a_renewal_during_the_reap_keeps_the_state_it_writes() {
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+        let lifecycle = Arc::new(SessionLifecycle::new());
+        let store = Arc::new(parking_lot::Mutex::new(Vec::<&str>::new()));
+        let (entered_tx, entered_rx) = channel::<()>();
+        let (written_tx, written_rx) = channel::<()>();
+        let written_rx = parking_lot::Mutex::new(written_rx);
+        let wiped = Arc::clone(&store);
+        lifecycle.register("hints", move |_key| {
+            let _ = entered_tx.send(());
+            let _ = written_rx.lock().recv_timeout(Duration::from_millis(500));
+            wiped.lock().clear();
+        });
+        lifecycle.track("caller", 0);
+
+        let renewer = std::thread::spawn({
+            let (lifecycle, store) = (Arc::clone(&lifecycle), Arc::clone(&store));
+            move || {
+                entered_rx.recv().expect("the handler started");
+                lifecycle.track("caller", u64::MAX);
+                store.lock().push("fresh");
+                let _ = written_tx.send(());
+            }
+        });
+        assert_eq!(lifecycle.reap(1), 1);
+        renewer.join().expect("renewer");
+
+        assert_eq!(
+            *store.lock(),
+            ["fresh"],
+            "a caller renewed while its old deadline was reaped lost its fresh state"
+        );
+        assert_eq!(lifecycle.tracked_count(), 1, "and its new deadline stays");
+    }
 }
