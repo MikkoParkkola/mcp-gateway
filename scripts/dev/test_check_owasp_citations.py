@@ -97,6 +97,39 @@ class OwaspCitations(unittest.TestCase):
         guard = load()
         self.assertEqual(guard.problems(guard.DOC, guard.ROOT), [])
 
+    MATRIX = (
+        "| ASI01 | Goal | COVERED | a | b |\n"
+        "| ASI02 | Tools | PARTIAL | a | b |\n"
+        "| ASI03 | Identity | PARTIAL | a | b |\n"
+    )
+
+    def test_counts_that_match_the_rows_pass(self):
+        doc = (
+            "Current mapping: **1/3 COVERED, 2/3 PARTIAL** here.\n" + self.MATRIX
+            + "| COVERED | 1/3 | ASI01 |\n| PARTIAL | 2/3 | ASI02, ASI03 |\n| GAP | 0/3 | - |\n"
+        )
+        self.assertEqual(self.problems_in(doc), [])
+
+    def test_a_header_count_the_rows_disagree_with_is_reported(self):
+        doc = "Current mapping: **2/3 COVERED, 1/3 PARTIAL** here.\n" + self.MATRIX
+        self.assertEqual(
+            self.problems_in(doc),
+            [
+                "header says 2/3 COVERED; the matrix rows give 1/3",
+                "header says 1/3 PARTIAL; the matrix rows give 2/3",
+            ],
+        )
+
+    def test_a_summary_row_the_rows_disagree_with_is_reported(self):
+        doc = self.MATRIX + "| COVERED | 2/3 | ASI01, ASI02 |\n| PARTIAL | 1/3 | ASI03 |\n"
+        self.assertEqual(
+            self.problems_in(doc),
+            [
+                "summary COVERED says 2/3 ASI01, ASI02; the matrix rows give 1/3 ASI01",
+                "summary PARTIAL says 1/3 ASI03; the matrix rows give 2/3 ASI02, ASI03",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
