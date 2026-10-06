@@ -586,6 +586,7 @@ async fn a_post_dispatch_transport_failure_keeps_its_key() {
         StatusCode::OK,
         "the retry must be served the stored terminal, which is an answer: {second}"
     );
+    // Until the ADR-012 amendment of 2026-10-06: assert_eq!(second.pointer("/error/message"), first.pointer("/error/message"));
     assert_told_uncertain(&first, &second);
 }
 
@@ -633,13 +634,12 @@ async fn a_passthrough_forward_failure_keeps_its_key() {
         StatusCode::OK,
         "the retry must be served the stored terminal: {second}"
     );
+    // Until the ADR-012 amendment of 2026-10-06: assert_eq!(second.pointer("/error/message"), first.pointer("/error/message"));
     assert_told_uncertain(&first, &second);
 }
 
-/// MIK-7979: a lost round's retry keeps the first caller's code and is told the
-/// outcome is undetermined, instead of being served that error as a failure.
 fn assert_told_uncertain(first: &Value, second: &Value) {
-    let told = second["error"]["message"].as_str().unwrap_or_default();
+    let told = second["error"]["message"].to_string();
     assert!(told.contains("outcome is unknown"), "{second}");
     assert_eq!(second["error"]["code"], first["error"]["code"], "{second}");
 }

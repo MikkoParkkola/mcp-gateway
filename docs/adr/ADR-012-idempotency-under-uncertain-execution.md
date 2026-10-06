@@ -61,7 +61,7 @@ releases the key.**
 |---|---|---|
 | `Complete(result)` | the side effect committed and its result is known | settled; retries served the cached result |
 | `Release` | the request never left for the backend | freed; a retry is a first attempt |
-| `Failed(error)` | the request was dispatched and the backend has not said whether it acted | settled as a terminal error; retries served that error |
+| `Failed(error)` | the request was dispatched and the backend has not said whether it acted | settled as a terminal error; retries served that error, or the uncertain-outcome notice when no answer came back (amended 2026-10-06) |
 
 The discriminator is not "did the request leave" but "did the backend say it
 acted". Three cases, in order:
@@ -204,6 +204,19 @@ as legacy. Rejected: minting a key from the request id (a re-issue has a new id)
 and deriving one from the argument hash (it silently collapses two intended
 identical writes, which this ADR already rejects).
 
+## Amendment: a lost round serves the uncertainty notice (2026-10-06, MIK-7979)
+
+A `Failed` key stays settled and the work still never runs twice. What a retry
+is served now depends on whether the backend answered. An answer (a JSON-RPC
+error, or a 4xx the server refused with) is served as before. A lost round, where
+the request may have left and no answer came back (`Error::is_lost_round`: a
+`Transport` failure, including a reload stopping the backend mid-call, or a
+`BackendTimeout`), is served the uncertain-outcome notice with the first
+caller's error code: serving the error would tell the client the work failed
+when it may have run. `BackendUnavailable` is raised only before send and joins
+`is_pre_dispatch`, so it releases the key. Acceptance rows 2b and 2c assert the
+notice; their earlier assertion is kept beside them as a comment.
+
 ## Consequences
 
 **What the client sees.** A retry after an uncertain failure gets the recorded
@@ -233,6 +246,8 @@ One test per defect, each failing against the current tree:
 
 - a dispatched direct-route call that returns a backend error keeps its key, and
   the retry is served that error rather than reaching the backend a second time;
+  where no answer came back (a lost round, amendment of 2026-10-06), the retry
+  is served the uncertain-outcome notice under the first caller's error code;
 - a pre-dispatch failure (backend unreachable) releases its key, and the retry
   is a first attempt;
 - an unannotated `tools/call` failing with `BackendTimeout` reaches the backend
