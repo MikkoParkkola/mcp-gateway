@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::{
-    EventsHub, audit_actions, counting_callback, descriptor, logged_services, queued_with,
+    EventsHub, Flipping, audit_actions, counting_callback, descriptor, logged_services, queued_with,
 };
 use crate::config::{ApiKeyConfig, ApiKeyKind, Config, api_key_digest_spec};
 use crate::events::records::ApiKeyRef;
@@ -93,7 +93,7 @@ async fn access_lost_during_the_second_verdict_is_not_sent() {
         let services = logged_services(dir.path());
         services.live.set(keyed());
         let (port, accepted) = counting_callback().await;
-        queued_with(&hub, port, "evt_key", "probe.park", |sub| {
+        queued_with(&hub, port, "evt_key", "probe.park", |sub, _| {
             sub.credential_kind = Some(crate::security::audit::CredentialKind::ApiKey);
             sub.api_key = Some(ApiKeyRef {
                 name: "k".to_owned(),
@@ -202,7 +202,7 @@ async fn an_attempt_waits_on_a_silent_catalogue_once() {
     let connections = silent_backend(&hub).await;
     let services = logged_services(dir.path());
     let (port, _accepted) = counting_callback().await;
-    queued_with(&hub, port, "evt_silent", NAME, |sub| {
+    queued_with(&hub, port, "evt_silent", NAME, |sub, _| {
         sub.arguments = uri.clone();
     });
     tokio::time::timeout(
@@ -215,5 +215,63 @@ async fn an_attempt_waits_on_a_silent_catalogue_once() {
         connections.load(Ordering::SeqCst),
         one_lookup,
         "one catalogue lookup per attempt"
+    );
+}
+
+/// MIK-7922: with the tenant-read guard on, admit_delivery writes its
+/// `tenant_read` record before the second verdict; a source that refuses after
+/// that record gets no POST, the attempt ends `access_revoked`, and the dropped
+/// frame releases its read reservation.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_refusal_after_the_tenant_read_record_releases_the_frame() {
+    use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
+    use crate::security::firewall::{Firewall, FirewallConfig};
+
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = open_hub(dir.path());
+    let source = Arc::new(Flipping {
+        admits: 1,
+        asked: AtomicUsize::new(0),
+    });
+    hub.register_source(Arc::clone(&source) as Arc<dyn crate::events::EventSource>);
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            tenant_guard: TenantGuardConfig {
+                arg_keys: vec!["repo".to_owned()],
+                cross_tenant_reads: CrossTenantReads::Observe,
+                ..TenantGuardConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let reads = Arc::clone(firewall.reads());
+    let mut services = logged_services(dir.path());
+    services.firewall = Some(firewall);
+    let (port, accepted) = counting_callback().await;
+    queued_with(&hub, port, "evt_tenant", "probe.flip", |sub, record| {
+        sub.read_key = Some("k".to_owned());
+        // {"data":{"repo":"t1"}}: a read the guard attributes to tenant t1.
+        record.body_b64 = "eyJkYXRhIjp7InJlcG8iOiJ0MSJ9fQ==".to_owned();
+    });
+    let held_before = reads.tenants_held("k");
+    hub.attempt(&services, "evt_tenant").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert_eq!(source.asked.load(Ordering::SeqCst), 2, "asked again");
+    let log = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap_or_default();
+    assert!(
+        log.contains("\"event\":\"tenant_read\""),
+        "the tenant-read record was written before the refusal: {log}"
+    );
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "no POST");
+    let ended = audit_actions(dir.path(), "events.delivery_outcome");
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert_eq!(ended[0]["status"], "access_revoked");
+    assert_eq!(
+        reads.tenants_held("k").1,
+        held_before.1,
+        "the refused frame released its reservation"
     );
 }
