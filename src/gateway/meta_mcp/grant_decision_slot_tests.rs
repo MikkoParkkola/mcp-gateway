@@ -285,13 +285,16 @@ fn stalled_log_bounds_the_decision_write() {
 }
 
 /// MIK-7663.GH2409.3. A failed decision write replaces an HTTP answer with
-/// -32005 under the answer's id, recovered by a BOUNDED read of the replaced
-/// body: within 16 MiB the id is kept; past it the refusal carries a null id
-/// rather than the whole body being buffered to recover one field.
+/// -32005 under the id the request recorded in its slot, so the replaced
+/// answer is never read back, however large; with no id recorded the
+/// refusal carries a null id, even when the answer names one.
 #[tokio::test]
-async fn http_refusal_recovers_the_id_with_a_bounded_read() {
-    const BOUND: usize = 16 * 1024 * 1024;
-    for (padding, expected_id) in [(16, json!(7)), (BOUND + 1, Value::Null)] {
+async fn http_refusal_carries_the_recorded_id_without_reading_the_answer() {
+    const PAST_ANY_READ: usize = 16 * 1024 * 1024 + 1;
+    for (recorded, padding, expected_id) in [
+        (Some(RequestId::Number(7)), PAST_ANY_READ, json!(7)),
+        (None, 16, Value::Null),
+    ] {
         let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
         let log = logger(&dir, AuditFailurePolicy::FailClosed);
         let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
@@ -303,6 +306,9 @@ async fn http_refusal_recovers_the_id_with_a_bounded_read() {
         let answer = json!({ "jsonrpc": "2.0", "id": 7, "result": { "pad": "x".repeat(padding) } });
 
         let response = super::grant_audit::slot_http(Some(Arc::clone(&log)), async {
+            if let Some(id) = &recorded {
+                super::grant_audit::note_answer_id(id);
+            }
             meta.check_invocation_policy(&invoke_args(), Some("d3a-session"), &context(&who))
                 .expect("alice holds the grant");
             axum::Json(answer)
@@ -318,6 +324,9 @@ async fn http_refusal_recovers_the_id_with_a_bounded_read() {
             .unwrap();
         let refusal: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(refusal["error"]["code"], json!(-32005), "{refusal}");
-        assert_eq!(refusal["id"], expected_id, "padding {padding}: {refusal}");
+        assert_eq!(
+            refusal["id"], expected_id,
+            "recorded {recorded:?}: {refusal}"
+        );
     }
 }
