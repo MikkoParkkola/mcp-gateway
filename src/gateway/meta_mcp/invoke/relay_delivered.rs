@@ -93,6 +93,14 @@ impl MetaMcp {
                 *receipts = staged;
                 return;
             }
+            // No slot: the receipt came from the stored slot, never from the
+            // envelope's fields, and stays (as `rebuild_receipt_from_final`).
+            #[cfg(feature = "firewall")]
+            if shape == AnswerShape::TaskEnvelope && result.is_some_and(|d| task_slot(d).is_none())
+            {
+                *receipts = staged;
+                return;
+            }
             #[cfg(feature = "firewall")]
             if let ([one], Some(delivered), Some(fw)) = (staged.as_slice(), result, &self.firewall)
                 && let Some(digest) = fw.delivery_digest(
@@ -103,7 +111,7 @@ impl MetaMcp {
                             super::super::audit::delivered_value(delivered)
                         }
                         AnswerShape::Literal => std::borrow::Cow::Borrowed(delivered),
-                        // No slot: nothing the backend said is in this answer.
+                        // A slotless envelope kept its receipt above.
                         AnswerShape::TaskEnvelope => std::borrow::Cow::Borrowed(
                             task_slot(delivered).unwrap_or(&serde_json::Value::Null),
                         ),
