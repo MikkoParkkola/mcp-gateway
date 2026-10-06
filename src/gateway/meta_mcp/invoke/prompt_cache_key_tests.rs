@@ -85,7 +85,8 @@ async fn a_sessionless_call_forwards_no_derived_prompt_cache_key() {
     );
 }
 
-/// A caller's own `_meta.prompt_cache_key` is forwarded as sent, with or
+/// A caller's own `_meta.prompt_cache_key` is forwarded as sent (within the
+/// 64-character limit `CacheKeyDeriver::from_header` truncates to), with or
 /// without a session.
 #[tokio::test]
 async fn an_explicit_prompt_cache_key_is_forwarded() {

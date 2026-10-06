@@ -296,12 +296,16 @@ fn keyed(key: &str) -> crate::protocol::mrtr::RetryFields {
     }
 }
 
-/// MIK-7647. A keyed `gateway_invoke` whose backend answered with its own
-/// error is replayed from the idempotency cache as a terminal error: the
-/// replay's record is a cached delivery, with the request's tenants and no
-/// data classes, and the backend ran once.
+/// MIK-7647 (in part). A keyed `gateway_invoke` whose backend answered with
+/// its own error is settled as a stored `isError` result, so the repeat is
+/// replayed from the idempotency cache (`CachedResult`, through
+/// `GuardedValue::from_cache`): its record is a cached delivery, with the
+/// request's tenants and no data classes, and the backend ran once. The
+/// `CachedError` arm is reached only by a `reservation.fail` settlement
+/// (a refused chain receipt or bridge challenge), which this harness cannot
+/// script.
 #[tokio::test]
-async fn a_replayed_peer_error_is_recorded_as_a_cached_delivery() {
+async fn a_replayed_peer_error_result_is_recorded_as_a_cached_delivery() {
     let dir = tempfile::tempdir().unwrap();
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let base = meta(Ok(reply_naming("cust-9", "")), &dir);
