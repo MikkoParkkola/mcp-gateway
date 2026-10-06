@@ -752,7 +752,10 @@ memory pressure on the host, days later.
 ```yaml
 # prometheus rules
 - alert: McpBackendIdleStopCloseFailures
-  expr: increase(mcp_backend_idle_stop_close_failures[15m]) > 0
+  expr: |
+    increase(mcp_backend_idle_stop_close_failures[15m]) > 0
+    or (mcp_backend_idle_stop_close_failures
+        unless mcp_backend_idle_stop_close_failures offset 15m) > 0
   labels: { severity: warning }
   annotations:
     summary: "Backend {{ $labels.backend }} did not stop cleanly when idle"
@@ -762,8 +765,11 @@ Every occurrence is worth knowing about, because each one may be a process that
 outlives the gateway's tracking and never comes back on its own. So the
 threshold is zero rather than a rate, and there is no `for` clause: the
 expression stays true for the whole 15-minute window after a single increment,
-which means `for` would delay the notification without ever suppressing an
-isolated failure. Warning rather than page — the damage is one leaked process,
+so `for` would delay the notification without ever suppressing an isolated
+failure. That includes the first failure. The counter is created there, already
+at 1, and `increase` alone reads 0 for a series with no earlier sample, so the
+`unless ... offset` branch fires for a series new in the window. Warning rather
+than page — the damage is one leaked process,
 not an outage.
 
 When it fires: check for an orphaned child process of the gateway
@@ -790,11 +796,12 @@ peaks at 65. Idle slots are reclaimed after 5 minutes, and the gauge drops with 
     summary: "Backend {{ $labels.backend }} holds {{ $value }} of its 65 pool slots"
 - alert: McpBackendCallerSlotsRefused
   # The series appears at its first refusal, already at 1, so `increase` alone
-  # would read 0 for it; the `unless ... offset` branch catches a new series.
+  # would read 0 for it; the `unless ... offset` branch catches a series new in
+  # the window, and `> 0` keeps a series that exists at 0 quiet.
   expr: |
     increase(mcp_backend_identity_slots_refused_total[15m]) > 0
     or (mcp_backend_identity_slots_refused_total
-        unless mcp_backend_identity_slots_refused_total offset 15m)
+        unless mcp_backend_identity_slots_refused_total offset 15m) > 0
   labels: { severity: warning }
   annotations:
     summary: "Backend {{ $labels.backend }} refused callers at its {{ $labels.limit }} slot limit"
@@ -866,6 +873,9 @@ with their expectations in
   expr: >-
     sum(increase(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}[5m]))
     > 0
+    or sum(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}
+    unless mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"} offset 5m)
+    > 0
   labels: { severity: warning, category: security }
   annotations:
     summary: "Signing nonce admissions are being refused for capacity"
@@ -877,7 +887,9 @@ capacity refusal is the store declining to take on more while keeping every
 entry it already holds, so replay protection is preserved rather than given up;
 what it signals is that legitimate traffic is now being turned away, which is
 worth knowing at once. That rule therefore has no `for` clause and fires as soon
-as the increase is visible. The `sum` collapses
+as the increase is visible, including the first refusal of a reason: that series
+is created at 1, so the `unless ... offset` branch catches what `increase` alone
+reads as 0. The `sum` collapses
 both capacity reasons into a single series, so one condition pages once instead of
 once per reason and the alert carries no `reason` label of its own; increments are
 non-negative, so the sum is positive exactly when at least one capacity reason
