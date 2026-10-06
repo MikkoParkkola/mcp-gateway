@@ -143,6 +143,8 @@ mod tests {
             ("client_secret: 'k-7978-three'", "k-7978-three"),
             (r#"{"password":"alpha\"rest-7978"}"#, "rest-7978"),
             (r"TOKEN='a\'rest-7979'", "rest-7979"),
+            ("{'api_key': 'k-7978-four', 'port': 3}", "k-7978-four"),
+            ("ssh passphrase: k-7978-five", "k-7978-five"),
         ] {
             let out = one(line);
             assert!(!out.contains(secret), "{out}");
@@ -195,6 +197,19 @@ mod tests {
             "id x1234567890abcdefghijkl."
         );
         assert_eq!(one("id x1234567890abcdefghijklm."), "id [masked].");
+    }
+
+    #[test]
+    fn a_base64_key_body_is_masked_whole() {
+        let body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcw+ggSjAgEAAoIB/AQC7k9x2Q==";
+        for line in [body.to_string(), format!("stderr: {body} end")] {
+            let out = one(&line);
+            assert!(out.contains(MASK), "{line} -> {out}");
+            assert!(!out.contains("BADANBgkqhkiG9w0B"), "{out}");
+            assert!(!out.contains("AoIB/AQC7k9x2Q"), "{out}");
+        }
+        let path = "/usr/lib/node/modules/server/filesystem/dist/index";
+        assert_eq!(one(path), path, "a path without digits stays");
     }
 
     #[test]
