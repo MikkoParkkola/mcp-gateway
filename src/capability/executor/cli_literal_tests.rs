@@ -68,3 +68,17 @@ fn integer_forms_with_fraction_zeros_or_a_zero_coefficient_match() {
     assert_eq!(value["near"], 999_999_999_999_999_999_u64, "{value}");
     assert_eq!(value["one"], 1, "{value}");
 }
+
+/// What serde_json accepts as a number is matched as one: whitespace around
+/// the text, and a zero coefficient under an exponent past i64.
+#[test]
+fn padded_and_overflowing_zero_forms_match_their_integer() {
+    let mut value: Value =
+        serde_json::from_str(r#"{"a": 12345, "near": 12346, "zero": 0, "one": 1}"#).unwrap();
+    let secrets = ["12345.0\n", "0e9223372036854775808"].map(str::to_owned);
+    redact_value(&mut value, &secrets);
+    assert_eq!(value["a"], "[redacted]", "{value}");
+    assert_eq!(value["zero"], "[redacted]", "{value}");
+    assert_eq!(value["near"], 12346, "{value}");
+    assert_eq!(value["one"], 1, "{value}");
+}
