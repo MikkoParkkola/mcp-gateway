@@ -23,16 +23,18 @@ pub(crate) async fn read_only_call_as<F: std::future::Future>(
     READ_ONLY_CALL.scope(credential_free, call).await
 }
 
-/// Whether every provider of `capability`, fallbacks included, is REST: the
-/// only kind a read-only call runs (MIK-7720 U1). Reads `service` itself,
-/// since `protocol_config` maps an unknown service to REST.
+/// Whether `capability` has a provider and every one, fallbacks included, is
+/// REST: the only kind a read-only call runs (MIK-7720 U1). A webhook-only
+/// capability has none, so nothing to poll. Reads `service` itself, since
+/// `protocol_config` maps an unknown service to REST.
 pub(crate) fn served_over_rest(capability: &CapabilityDefinition) -> bool {
     let providers = &capability.providers;
-    providers
-        .named
-        .values()
-        .chain(&providers.fallback)
-        .all(|p| p.service == "rest")
+    !providers.is_empty()
+        && providers
+            .named
+            .values()
+            .chain(&providers.fallback)
+            .all(|p| p.service == "rest")
 }
 
 /// Inside a read-only call, refuse `capability` unless it is read-only,
