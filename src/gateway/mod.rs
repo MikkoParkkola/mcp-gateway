@@ -16,7 +16,7 @@ mod meta_mcp;
 /// Same shape as `STDIO_CREDENTIAL_PRINCIPAL`. A second copy of those four
 /// lines is how the `Release` ordering gets dropped in a later edit.
 pub(crate) use meta_mcp::publish_identity_grants;
-pub(crate) use meta_mcp::invoke::gateway_writes::WriteRecord;
+pub(crate) use meta_mcp::invoke::gateway_writes;
 mod meta_mcp_helpers;
 mod meta_mcp_helpers_text;
 mod meta_mcp_search_schema;

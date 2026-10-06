@@ -70,7 +70,7 @@ mod tests {
 
     use super::*;
     use crate::cache::ResponseCache;
-    use crate::gateway::WriteRecord;
+    use crate::gateway::gateway_writes::WriteRecord;
     use crate::security::firewall::tenant_guard::TenantGuardConfig;
     use crate::security::firewall::{Firewall, FirewallConfig};
     use crate::security::hash_argument;

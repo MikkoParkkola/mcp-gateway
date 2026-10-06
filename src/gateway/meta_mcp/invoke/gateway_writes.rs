@@ -9,6 +9,7 @@
 //! removes a member only while the member still hashes to the note's digest,
 //! so a note left over from a value replaced wholesale removes nothing.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 
@@ -177,11 +178,18 @@ pub(super) fn strip(value: &mut Value, layer: Layer) {
     let _ = GATEWAY_WRITES.try_with(|writes| remove_owned(value, &writes.borrow().list, layer));
 }
 
-/// [`strip`] by `record` alone: a cached answer's receipt leaves out what
-/// its own call wrote, never what another step of the delivery wrote.
-#[cfg(feature = "firewall")]
-pub(crate) fn strip_record(value: &mut Value, record: &WriteRecord) {
-    remove_owned(value, &record.0, Layer::Value);
+/// `value` without what `record` wrote, for a cache or replay hit's receipt:
+/// stripped by that entry's own record, never by another step's notes.
+/// Borrowed when there is nothing to remove, so a plain hit copies nothing.
+#[cfg_attr(not(feature = "firewall"), allow(unused_variables))]
+pub(crate) fn without<'v>(value: &'v Value, record: &WriteRecord) -> Cow<'v, Value> {
+    #[cfg(feature = "firewall")]
+    if !record.0.is_empty() {
+        let mut copy = value.clone();
+        remove_owned(&mut copy, &record.0, Layer::Value);
+        return Cow::Owned(copy);
+    }
+    Cow::Borrowed(value)
 }
 
 #[cfg(feature = "firewall")]
@@ -296,10 +304,13 @@ mod tests {
         .await;
         assert_eq!(record.0.len(), 1, "{record:?}");
         let both = json!({"trace_id": "t-1", "_cost_suggestion": {"message": "cheaper"}});
-        let mut cached = both.clone();
-        strip_record(&mut cached, &record);
+        let cached = without(&both, &record);
         assert!(cached.get("trace_id").is_none(), "{cached}");
         assert!(cached.get("_cost_suggestion").is_some(), "{cached}");
+        assert!(
+            matches!(without(&both, &WriteRecord::default()), Cow::Borrowed(_)),
+            "an empty record copies the value"
+        );
         scope(async {
             restore(&record);
             let mut delivered = both.clone();

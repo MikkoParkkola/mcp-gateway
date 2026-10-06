@@ -13,7 +13,9 @@ use dashmap::DashMap;
 use serde_json::Value;
 use tracing::debug;
 
+use crate::gateway::gateway_writes::WriteRecord;
 use crate::hashing::canonical_json_sha256;
+use crate::security::tenant_reads::ReadAttribution;
 
 /// Thread-safe response cache with TTL expiry and max-size eviction
 pub struct ResponseCache {
@@ -31,10 +33,10 @@ struct CachedResponse {
     value: Value,
     /// MIK-7116.MIN.2: what the dispatch that produced `value` read before
     /// any transform; `None` when stored with attribution off.
-    read: Option<crate::security::tenant_reads::ReadAttribution>,
+    read: Option<ReadAttribution>,
     /// MIK-7991: what the gateway wrote into `value` on the call that
     /// stored it, restored on a hit so the hit's receipt leaves it out.
-    writes: crate::gateway::WriteRecord,
+    writes: WriteRecord,
     /// When this entry was cached
     cached_at: Instant,
     /// Time-to-live duration
@@ -164,11 +166,7 @@ impl ResponseCache {
     pub(crate) fn get_read(
         &self,
         key: &str,
-    ) -> Option<(
-        Value,
-        Option<crate::security::tenant_reads::ReadAttribution>,
-        crate::gateway::WriteRecord,
-    )> {
+    ) -> Option<(Value, Option<ReadAttribution>, WriteRecord)> {
         if let Some(entry) = self.entries.get(key) {
             if entry.is_expired() {
                 // Entry expired - evict it
@@ -212,12 +210,7 @@ impl ResponseCache {
     /// Returns whether the value was stored, so a caller cannot log a write
     /// that a refusal silently skipped.
     pub fn set(&self, key: &str, value: Value, ttl: Duration) -> bool {
-        self.set_read(
-            key,
-            value,
-            (None, crate::gateway::WriteRecord::default()),
-            ttl,
-        )
+        self.set_read(key, value, (None, WriteRecord::default()), ttl)
     }
 
     /// [`Self::set`] with the reading of the dispatch that produced `value`
@@ -227,10 +220,7 @@ impl ResponseCache {
         &self,
         key: &str,
         value: Value,
-        (read, writes): (
-            Option<crate::security::tenant_reads::ReadAttribution>,
-            crate::gateway::WriteRecord,
-        ),
+        (read, writes): (Option<ReadAttribution>, WriteRecord),
         ttl: Duration,
     ) -> bool {
         // A result the backend has not finished producing is not stored:

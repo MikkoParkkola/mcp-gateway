@@ -23,7 +23,9 @@ use dashmap::mapref::entry::Entry as MapEntry;
 use serde_json::Value;
 use tracing::debug;
 
+use crate::gateway::gateway_writes::WriteRecord;
 use crate::hashing::{canonical_json, sha256_hex_chunks};
+use crate::security::tenant_reads::ReadAttribution;
 use crate::{Error, Result};
 
 #[path = "idempotency/admission.rs"]
@@ -187,10 +189,10 @@ struct Entry {
     owner: Weak<OwnerToken>,
     /// MIK-7116.MIN.2: what the dispatch behind a completed result read
     /// before any transform, kept in the same entry as the result.
-    read: Option<crate::security::tenant_reads::ReadAttribution>,
+    read: Option<ReadAttribution>,
     /// MIK-7991: what the gateway wrote into a completed result on the call
     /// that stored it, restored on a replay so its receipt leaves it out.
-    writes: crate::gateway::WriteRecord,
+    writes: WriteRecord,
 }
 
 impl Entry {
@@ -200,7 +202,7 @@ impl Entry {
             fingerprint: fingerprint.to_string(),
             owner: Weak::new(),
             read: None,
-            writes: crate::gateway::WriteRecord::default(),
+            writes: WriteRecord::default(),
         }
     }
 
@@ -211,7 +213,7 @@ impl Entry {
             fingerprint: fingerprint.to_string(),
             owner: Arc::downgrade(owner),
             read: None,
-            writes: crate::gateway::WriteRecord::default(),
+            writes: WriteRecord::default(),
         }
     }
 
@@ -293,11 +295,7 @@ pub(crate) enum AdmitOutcome {
     /// A completed entry exists — return the cached result, with the
     /// reading (MIK-7116.MIN.2) and the gateway's write record (MIK-7991)
     /// kept beside it, read under the same lock.
-    Completed(
-        Value,
-        Option<crate::security::tenant_reads::ReadAttribution>,
-        crate::gateway::WriteRecord,
-    ),
+    Completed(Value, Option<ReadAttribution>, WriteRecord),
     /// A failed entry exists — return the cached JSON-RPC error object.
     Failed(Value),
     /// The cache is at [`MAX_ENTRIES`] and this key is not tracked yet.
@@ -517,12 +515,7 @@ impl IdempotencyCache {
     /// fingerprint matches every later request, so a result stored that way
     /// would answer any call reusing the key.
     pub(crate) fn mark_completed_bound(&self, key: &str, result: Value, fingerprint: &str) -> bool {
-        self.mark_completed_read(
-            key,
-            result,
-            fingerprint,
-            (None, crate::gateway::WriteRecord::default()),
-        )
+        self.mark_completed_read(key, result, fingerprint, (None, WriteRecord::default()))
     }
 
     /// [`Self::mark_completed_bound`] with the dispatch's reading kept in the
@@ -532,10 +525,7 @@ impl IdempotencyCache {
         key: &str,
         result: Value,
         fingerprint: &str,
-        (read, writes): (
-            Option<crate::security::tenant_reads::ReadAttribution>,
-            crate::gateway::WriteRecord,
-        ),
+        (read, writes): (Option<ReadAttribution>, WriteRecord),
     ) -> bool {
         if !crate::protocol::cacheable::is_final(&result) {
             self.entries.remove(key);
@@ -724,7 +714,7 @@ impl IdempotencyReservation {
     /// key first and may still store a structured error result afterwards, which
     /// is the behaviour the invoke path already relied on.
     pub fn complete(&mut self, result: &Value) -> bool {
-        self.complete_read(result, (None, crate::gateway::WriteRecord::default()))
+        self.complete_read(result, (None, WriteRecord::default()))
     }
 
     /// [`Self::complete`] with the dispatch's reading (MIN.2) and the
@@ -732,10 +722,7 @@ impl IdempotencyReservation {
     pub(crate) fn complete_read(
         &mut self,
         result: &Value,
-        read: (
-            Option<crate::security::tenant_reads::ReadAttribution>,
-            crate::gateway::WriteRecord,
-        ),
+        read: (Option<ReadAttribution>, WriteRecord),
     ) -> bool {
         self.settled = true;
         self.cache
