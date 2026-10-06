@@ -266,4 +266,31 @@ mod tests {
             .expect("token is live");
         assert!(!client.can_access_backend("x"));
     }
+
+    /// MIK-8006 RTPRIN.1: configured credentials own the 12-lowercase-hex
+    /// principals; a key-server token's principal is outside that space, so
+    /// a static bearer configured with the same text is another caller.
+    #[tokio::test]
+    async fn key_server_token_principal_is_outside_the_configured_space() {
+        let ks = KeyServer::new(KeyServerConfig::default());
+        let text = "mcpgw_runtime_principal";
+        ks.store
+            .insert(TemporaryToken {
+                jti: "jti-runtime".to_string(),
+                token: text.to_string(),
+                identity: identity("sub", "u@corp.invalid", "https://issuer.invalid"),
+                scopes: store::TokenScopes::default(),
+                iat: 0,
+                exp: u64::MAX,
+                client_ip: None,
+            })
+            .await;
+        let (client, _) = ks.validate_token(text).await.expect("token is live");
+        let p = &client.principal;
+        assert_ne!(*p, crate::gateway::auth::principal_of(text));
+        assert!(
+            !(p.len() == 12 && p.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))),
+            "{p} is in the configured principal space"
+        );
+    }
 }
