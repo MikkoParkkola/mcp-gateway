@@ -164,6 +164,16 @@ fn default_identity_grants_file_schema_version() -> String {
     IDENTITY_GRANTS_FILE_SCHEMA_VERSION.to_string()
 }
 
+/// Run a blocking file read off the async workers.
+async fn read_off_runtime(
+    read: impl FnOnce() -> std::io::Result<String> + Send + 'static,
+) -> std::io::Result<String> {
+    tokio::task::spawn_blocking(read)
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|r| r)
+}
+
 /// Read a local identity-grants file as persisted rows.
 ///
 /// # Errors
@@ -176,11 +186,8 @@ pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile,
         path.to_path_buf(),
         crate::config::CheckedFile::IdentityGrants,
     );
-    let read = tokio::task::spawn_blocking(move || crate::config::read_checked_file(&owned, what));
-    let content = read
+    let content = read_off_runtime(move || crate::config::read_checked_file(&owned, what))
         .await
-        .map_err(std::io::Error::other)
-        .and_then(|r| r)
         .map_err(|e| {
             format!(
                 "failed to read identity grants file {}: {e}",
