@@ -142,8 +142,10 @@ impl ProcessScanner {
     async fn powershell_listing(class: &str) -> Result<String> {
         use tokio::process::Command;
 
+        // CIM reports a failed query as a non-terminating error, after which
+        // PowerShell still exits 0; `Stop` makes it terminate the script.
         let script = format!(
-            "'PID COMMAND'; Get-CimInstance {class} | Where-Object {{ $_.CommandLine }} | ForEach-Object {{ '{{0}} {{1}}' -f $_.ProcessId, $_.CommandLine }}"
+            "$ErrorActionPreference = 'Stop'; 'PID COMMAND'; Get-CimInstance {class} | Where-Object {{ $_.CommandLine }} | ForEach-Object {{ '{{0}} {{1}}' -f $_.ProcessId, $_.CommandLine }}"
         );
         let output = Command::new("powershell")
             // A PowerShell 7 parent leaks a module path Windows PowerShell cannot load.
