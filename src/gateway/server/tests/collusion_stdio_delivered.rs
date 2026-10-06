@@ -36,8 +36,8 @@ fn stuffing() -> String {
     })
 }
 
-/// Backend `alpha`: `read` answers [`PROSE`] with `cacheScope` stuffed.
-struct Alpha(String);
+/// Backend `alpha`: `read` answers this result.
+struct Alpha(Value);
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Alpha {
@@ -51,10 +51,7 @@ impl crate::transport::Transport for Alpha {
             let tool = json!({"name": "read", "description": "A tool.", "inputSchema": {"type": "object"}});
             return Ok(JsonRpcResponse::success(id, json!({ "tools": [tool] })));
         }
-        Ok(JsonRpcResponse::success(
-            id,
-            json!({"content": [{"type": "text", "text": PROSE}], "isError": false, "cacheScope": self.0}),
-        ))
+        Ok(JsonRpcResponse::success(id, self.0.clone()))
     }
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
         Ok(())
@@ -81,9 +78,9 @@ fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
         .allowed
 }
 
-#[tokio::test]
-async fn a_stdio_answer_is_receipted_as_delivered() {
-    let stuffing = stuffing();
+/// A meta with `alpha` answering `answer`, `read` surfaced, and a `block`
+/// relay detector over `alpha:*`; and that detector's firewall.
+fn stdio_meta(answer: Value) -> (Arc<MetaMcp>, Arc<Firewall>) {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "alpha",
@@ -91,7 +88,7 @@ async fn a_stdio_answer_is_receipted_as_delivered() {
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
-    backend.set_transport_for_test(Arc::new(Alpha(stuffing.clone())));
+    backend.set_transport_for_test(Arc::new(Alpha(answer)));
     assert!(registry.register(backend));
     let firewall = Arc::new(Firewall::from_config(
         FirewallConfig {
@@ -110,17 +107,29 @@ async fn a_stdio_answer_is_receipted_as_delivered() {
         tool: "read".to_string(),
     }]);
     meta.set_firewall(Some(Arc::clone(&firewall)));
-    let meta = Arc::new(meta);
+    (Arc::new(meta), firewall)
+}
 
+/// `request` over stdio, answered.
+async fn dispatch(meta: &Arc<MetaMcp>, request: &Value) -> Value {
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
+    super::super::Gateway::dispatch_single(meta, &policy, &mtls, request, "stdio-r4")
+        .await
+        .expect("a request is answered")
+}
+
+#[tokio::test]
+async fn a_stdio_answer_is_receipted_as_delivered() {
+    let stuffing = stuffing();
+    let (meta, firewall) = stdio_meta(
+        json!({"content": [{"type": "text", "text": PROSE}], "isError": false, "cacheScope": stuffing}),
+    );
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
                          "params": {"name": "read", "arguments": {}}});
-    let read = super::super::Gateway::dispatch_single(&meta, &policy, &mtls, &request, "stdio-r4")
-        .await
-        .expect("a request is answered");
+    let read = dispatch(&meta, &request).await;
     assert!(
         read.get("error").is_none(),
         "base: the read is delivered: {read}"
@@ -138,5 +147,32 @@ async fn a_stdio_answer_is_receipted_as_delivered() {
     assert!(
         !relayed_by_bob(&firewall, &piece),
         "undelivered cacheScope text was receipted"
+    );
+}
+
+/// MIK-7939 over stdio: the recovery hint the gateway attaches to a
+/// backend's `isError` answer through `gateway_invoke` is the gateway's
+/// text; the receipt keeps the backend's text and leaves the hint out.
+#[tokio::test]
+async fn a_stdio_hinted_failure_is_receipted_without_its_hint() {
+    let failed = crate::gateway::meta_mcp::invoke::receipt_test_support::backend_failure(PROSE);
+    let (meta, firewall) =
+        stdio_meta(json!({"content": [{"type": "text", "text": failed}], "isError": true}));
+    let request = json!({"jsonrpc": "2.0", "id": 8, "method": "tools/call",
+                         "params": {"name": "gateway_invoke",
+                                    "arguments": {"server": "alpha", "tool": "read", "arguments": {}}}});
+    let read = dispatch(&meta, &request).await;
+    let own = crate::gateway::meta_mcp::invoke::receipt_test_support::own_hint_text(
+        &read["result"],
+        PROSE,
+    );
+
+    assert!(
+        relayed_by_bob(&firewall, PROSE),
+        "the backend's text lost its receipt"
+    );
+    assert!(
+        !relayed_by_bob(&firewall, &own),
+        "the gateway's hint was receipted: {own}"
     );
 }
