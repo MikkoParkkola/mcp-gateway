@@ -328,9 +328,13 @@ impl EventsHub {
             return;
         }
         // Charged once the attempt is on record, so a retry after an audit
-        // outage is not charged for an attempt that never left.
+        // outage is not charged for an attempt that never left. A type its
+        // source exempts (a budget event) is never charged.
         let key = sub.api_key.as_ref().map(|k| k.name.as_str());
-        if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
+        let charged = self
+            .source_offering(&record.name)
+            .is_none_or(|source| source.charges(&record.name));
+        if charged && !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
             services.audit_outcome(&ended("budget")).await;
             self.settle(services, record, quiet_dead(DeadReason::Budget))
                 .await;
