@@ -5,8 +5,12 @@
     "minimum": 9,
     "readme_benchmark": 11
   },
-  "capability_count": 136,
+  "capability_count": 135,
   "held_capabilities": [
+    {
+      "name": "trawl_extract",
+      "reason": "loads but refuses to run: the tool cannot refuse private addresses at connect time, so the gateway cannot confine its network access (MIK-7788)"
+    },
     {
       "name": "trawl_extract",
       "reason": "loads but refuses to run: the tool cannot refuse private addresses at connect time, so the gateway cannot confine its network access (MIK-7788)"

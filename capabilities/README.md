@@ -1,6 +1,6 @@
 # MCP Gateway Built-in Capabilities
 
-mcp-gateway currently ships **136 built-in capabilities** (marketed publicly as **130+**): the tracked YAML inventory under `capabilities/` excluding `examples/` (137 files) minus the held capability below. Only capabilities that run are counted.
+mcp-gateway currently ships **135 built-in capabilities** (marketed publicly as **130+**): the tracked YAML inventory under `capabilities/` excluding `examples/` (137 files) minus the held capability below. Only capabilities that run are counted.
 
 ## Held
 
