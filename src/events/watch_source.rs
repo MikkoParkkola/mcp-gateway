@@ -206,13 +206,14 @@ fn changed(before: &BTreeMap<String, Value>, after: &BTreeMap<String, Value>) ->
         .collect()
 }
 
-/// A running poller and whose credential it runs under, if only one.
-/// Stopped by its flag, not aborted: the stop can come from inside the
-/// poller's own task (it revoked its last holder), and an abort there would
-/// cut short the core's lifecycle bookkeeping it is running.
+/// A running poller and the principal that opened it, against whose cap it
+/// counts (shared or not). Stopped by its flag, not aborted: the stop can
+/// come from inside the poller's own task (it revoked its last holder), and
+/// an abort there would cut short the core's lifecycle bookkeeping it is
+/// running. A poller that ends on its own sets the flag too.
 struct Poller {
     stop: Arc<AtomicBool>,
-    alone: Option<String>,
+    owner: String,
 }
 
 /// The REST capability watch source.
@@ -381,21 +382,17 @@ impl EventSource for WatchSource {
     ) -> Result<(), RpcError> {
         let target = self.target(name).ok_or_else(RpcError::forbidden)?;
         let options = options(arguments)?;
-        let alone = (target.credential != CredentialUse::Free).then(|| principal.to_owned());
+        let shared = target.credential == CredentialUse::Free;
         let mut pollers = self.pollers.lock();
+        // An entry whose poller ended on its own is replaced, not joined.
+        pollers.retain(|_, p| !p.stop.load(Ordering::Acquire));
         if pollers.contains_key(key) {
             return Ok(());
         }
         if pollers.len() >= self.max_pollers {
             return Err(RpcError::exhausted("watch_pollers", Some(self.max_pollers)));
         }
-        if let Some(owner) = &alone
-            && pollers
-                .values()
-                .filter(|p| p.alone.as_ref() == Some(owner))
-                .count()
-                >= self.max_per_principal
-        {
+        if pollers.values().filter(|p| p.owner == principal).count() >= self.max_per_principal {
             return Err(RpcError::exhausted(
                 "watch_pollers_per_principal",
                 Some(self.max_per_principal),
@@ -409,10 +406,10 @@ impl EventSource for WatchSource {
             key: key.to_owned(),
             name: name.to_owned(),
             options,
-            charge: if alone.is_some() {
-                Charge::Holder
-            } else {
+            charge: if shared {
                 Charge::Global
+            } else {
+                Charge::Holder
             },
         };
         pollers.insert(
@@ -422,7 +419,7 @@ impl EventSource for WatchSource {
                     tokio::spawn(run.forever());
                     stop
                 },
-                alone,
+                owner: principal.to_owned(),
             },
         );
         Ok(())
@@ -463,6 +460,11 @@ fn jitter(base: Duration) -> Duration {
 
 impl Run {
     async fn forever(self) {
+        self.poll_until_stopped().await;
+        self.stop.store(true, Ordering::Release);
+    }
+
+    async fn poll_until_stopped(&self) {
         let mut wait = jitter(Duration::from_secs(2));
         let mut last = None;
         let mut failures = 0_u32;
