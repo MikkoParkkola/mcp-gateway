@@ -762,7 +762,7 @@ async fn a_request_with_no_writer_is_a_pre_send_failure() {
         "/nonexistent/never-started",
         HashMap::new(),
         None,
-        Duration::from_secs(1),
+        std::time::Duration::from_secs(1),
         None,
     );
     let error = transport
