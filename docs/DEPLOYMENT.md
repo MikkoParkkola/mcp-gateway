@@ -789,13 +789,19 @@ peaks at 65. Idle slots are reclaimed after 5 minutes, and the gauge drops with 
   annotations:
     summary: "Backend {{ $labels.backend }} holds {{ $value }} of its 65 pool slots"
 - alert: McpBackendCallerSlotsRefused
-  expr: increase(mcp_backend_identity_slots_refused_total[15m]) > 0
+  # The series appears at its first refusal, already at 1, so `increase` alone
+  # would read 0 for it; the `unless ... offset` branch catches a new series.
+  expr: |
+    increase(mcp_backend_identity_slots_refused_total[15m]) > 0
+    or (mcp_backend_identity_slots_refused_total
+        unless mcp_backend_identity_slots_refused_total offset 15m)
   labels: { severity: warning }
   annotations:
     summary: "Backend {{ $labels.backend }} refused callers at its {{ $labels.limit }} slot limit"
 ```
 
-53 is the shared slot plus 52 caller slots, about 80% of the cap, held for
+53 is a recommended starting point, not a fixed rule; tune it to your traffic. It is
+the shared slot plus 52 caller slots, about 80% of the caller ceiling, held for
 10 minutes: longer than the 5-minute reclaim, so a burst that drains on its own does
 not fire. A refusal fires at once, because each one is a caller that got no
 service. With `limit="principal"` and auth off, every caller shares one budget
