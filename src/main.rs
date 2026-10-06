@@ -4,6 +4,11 @@
 //!
 //! Single-port multiplexing with a compact Meta-MCP tool surface.
 
+// First, so every module below prints through the broken-pipe-safe macros.
+#[macro_use]
+#[path = "cli/stdout.rs"]
+mod stdout;
+
 mod allocator;
 mod commands;
 mod home_dir;

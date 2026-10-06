@@ -351,9 +351,7 @@ impl Backend {
         // Clearing here rather than in `ensure_entry_started` is deliberate:
         // `force_restart` calls this directly, and clearing only in the former
         // left a restarted backend flagged dormant while actually running.
-        entry
-            .stopped_when_idle
-            .store(false, std::sync::atomic::Ordering::SeqCst);
+        entry.stopped_when_idle.store(false, Ordering::SeqCst);
 
         let listen: Option<super::listen::ListenHandle>;
         let transport: Arc<dyn Transport> = match &self.config.transport {
@@ -425,6 +423,7 @@ impl Backend {
                     .await
                     .unwrap_or(crate::protocol::era::Era::Legacy);
                 transport.finish_startup(era).await?;
+                warn_if_configured_transport_refused(&self.name, *streamable_http, &transport);
                 listen = Some(super::listen::handle_of(&transport));
                 transport
             }
@@ -491,6 +490,24 @@ impl Backend {
         // would create infinite async recursion
 
         Ok(transport)
+    }
+}
+
+/// The configured transport was refused and the other one answered; say which
+/// value would skip the refused try.
+fn warn_if_configured_transport_refused(
+    backend: &str,
+    configured: Option<bool>,
+    transport: &HttpTransport,
+) {
+    if let Some(configured) = configured
+        && transport.streamable() == Some(!configured)
+    {
+        warn!(
+            backend = %backend,
+            "`streamable_http: {configured}` was refused with a 4xx and the other HTTP transport answered; set `streamable_http: {}` for this backend, or remove the key to detect it",
+            !configured
+        );
     }
 }
 

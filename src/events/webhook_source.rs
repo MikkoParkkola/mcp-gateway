@@ -107,6 +107,7 @@ impl EventsHub {
             data: json!({ "event_type": inbound.event_type, "fields": inbound.fields }),
             scope: Visibility::Backend(inbound.backend.to_owned()),
             owner: None,
+            lifecycle_key: None,
         });
     }
 }

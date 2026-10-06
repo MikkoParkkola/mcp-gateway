@@ -413,7 +413,8 @@ impl MetaMcp {
             attribution.insert("task_id".into(), id.into());
         }
         let facts =
-            super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of));
+            super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of))
+                .with_request_hash(sha256_of(args));
         let written = self
             .write_invocation(log, args, session_id, caller, trace_id, &facts, attribution)
             .await;
@@ -482,7 +483,12 @@ impl MetaMcp {
         // F20: on the blocking pool, bounded; a stalled disk answers 503
         // instead of pinning a runtime worker.
         let (key_id, key_source) = (key.id.to_string(), key.source);
-        let (srv, tl, request_hash) = (server.to_string(), tool.to_string(), sha256_of(args));
+        // MIK-7641: a replay records the hash its first execution's record
+        // carried; only facts with none are hashed from `args` here.
+        let request_hash = facts
+            .request_hash()
+            .map_or_else(|| sha256_of(args), str::to_owned);
+        let (srv, tl) = (server.to_string(), tool.to_string());
         let written = log
             .append_bounded(move |log| {
                 log.log_invocation_attributed(

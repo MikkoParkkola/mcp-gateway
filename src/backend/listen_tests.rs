@@ -13,7 +13,7 @@ fn backend() -> Backend {
     let cfg = BackendConfig {
         transport: TransportConfig::Http {
             http_url: "https://mem.internal/mcp".to_owned(),
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         ..BackendConfig::default()

@@ -49,7 +49,7 @@ fn http_server(
         source,
         TransportConfig::Http {
             http_url: url.to_string(),
-            streamable_http: false,
+            streamable_http: Some(false),
             protocol_version: None,
         },
         ServerMetadata {
@@ -374,7 +374,7 @@ fn a_bracketed_ipv6_loopback_literal_is_loopback() {
 fn a_dns_name_beginning_127_is_reported_network_exposed() {
     let transport = TransportConfig::Http {
         http_url: "http://127.attacker.example.com/mcp".to_string(),
-        streamable_http: false,
+        streamable_http: Some(false),
         protocol_version: None,
     };
 

@@ -360,6 +360,8 @@ code_mode:
   enabled: true
 ```
 
+The [Code Mode guide](docs/CODE_MODE.md) walks through a session and the errors you can get back.
+
 
 ## Security
 
@@ -551,6 +553,7 @@ Free for personal and noncommercial use under PolyForm Noncommercial 1.0.0. Comm
 |----------|----------|
 | [Quick Start](docs/QUICKSTART.md) | Zero to running in 2 minutes |
 | [Annotated config example](examples/gateway-full.yaml) | Commented `gateway.yaml` covering the most-used config sections |
+| [Code Mode](docs/CODE_MODE.md) | Two tools instead of the meta-tool set: turning it on, searching, executing, reading its errors |
 | [OAuth Configuration](docs/OAUTH_CONFIG.md) | OAuth 2.0 setup with Slack and Figma examples |
 | [Upgrading to 4.0](docs/UPGRADING-4.0.md) | Per-issuer OAuth storage, strict `env_files` parsing, protocol floor, and the single-license change |
 | [Upgrading to 3.0](docs/UPGRADING-3.0.md) | Per-user OAuth isolation and identity-propagation upgrade path |
@@ -558,11 +561,13 @@ Free for personal and noncommercial use under PolyForm Noncommercial 1.0.0. Comm
 | [Multi-User Setup](docs/MULTI_USER.md) | Key server, policy scopes, per-backend identity propagation |
 | [OpenAPI Import](docs/OPENAPI_IMPORT.md) | Generate capabilities from OpenAPI specs |
 | [Webhooks](docs/WEBHOOKS.md) | Event integration setup |
+| [Long-running calls](docs/TASKS.md) | Tasks, progress and cancellation |
 | [Community Registry](docs/COMMUNITY_REGISTRY.md) | Share and install capabilities |
 | [Benchmarks](docs/BENCHMARKS.md) | Performance measurements |
 | [MCP compatibility](docs/PROTOCOL_COMPATIBILITY.md) | Client and backend revision pairings: what works, what is translated, what is refused |
 | [Windows limits](CONTRIBUTING.md#windows-test-coverage) | Unix-only behaviors and what the Windows CI job runs |
 | [Changelog](CHANGELOG.md) | Release history |
+| [Security posture](docs/SECURITY_POSTURE.md) | What is on by default, what to turn on, and known limits |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
 | [ShadowRadar](docs/SHADOW_SCAN.md) | Passive local discovery and static network-rule export |
 

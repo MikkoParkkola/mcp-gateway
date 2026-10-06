@@ -203,7 +203,7 @@ fn build_capturing_backend(
     let config = BackendConfig {
         transport: TransportConfig::Http {
             http_url: "https://mem.internal/mcp".to_string(),
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         identity_propagation: Some(idp_cfg(true)),
@@ -343,7 +343,7 @@ fn meta_that_asks_once(retry_round: RetryRound) -> (MetaMcp, Arc<parking_lot::Mu
     let config = BackendConfig {
         transport: TransportConfig::Http {
             http_url: "https://asks.internal/mcp".to_string(),
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         ..BackendConfig::r2_off()
