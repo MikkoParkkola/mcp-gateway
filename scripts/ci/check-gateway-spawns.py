@@ -39,7 +39,7 @@ HELPER = "tests/common/gateway_bin.rs"
 ISOLATION = r"(?:HOME|USERPROFILE|MCP_GATEWAY_TEST_HOME_DIR|APPDATA|LOCALAPPDATA)"
 RULES = [
     ("names the gateway binary", re.compile(r'CARGO_BIN_EXE_mcp-gateway|cargo_bin\(\s*"mcp-gateway"\s*\)')),
-    ("spawns the binary path around the helper", re.compile(r"Command::new\(\s*(?:gateway_bin::)?path\(\)")),
+    ("spawns the binary path around the helper", re.compile(r"Command::new\(\s*(?:(?:\w+::)*gateway_bin::)?path\(\)")),
     ("clears a child environment", re.compile(r"\.env_clear\(\s*\)")),
     ("sets or removes an isolation variable",
      re.compile(r'\.env(?:_remove)?\(\s*"' + ISOLATION + r'"')),
@@ -75,6 +75,8 @@ def self_test():
         "tests/clear.rs": "command.env_clear();\n",
         "tests/home.rs": 'command.env(\n    "HOME", dir);\n',
         "tests/bypass.rs": "let c = Command::new(gateway_bin::path());\n",
+        "tests/qualified.rs": "let c = Command::new(signing_gateway::gateway_bin::path());\n",
+        "tests/rooted.rs": "let c = Command::new(crate::gateway_bin::path());\n",
         "tests/no_reason.rs": 'node.env("HOME", dir); // spawn-check: not the gateway:\n',
         "tests/bulk.rs": "command.envs(vars.iter().copied());\n",
         "tests/bulk_home.rs": 'command.envs(std::env::var_os("HOME").map(|h| ("HOME", h)));\n',
