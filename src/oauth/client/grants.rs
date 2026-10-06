@@ -422,11 +422,21 @@ impl OAuthClient {
     /// Take up a live token another client of this backend stored, with the
     /// client id it registered (a refresh needs both). `None` if there is none.
     fn adopt_stored_login(&self) -> Option<String> {
+        let key = self.credential_key().ok()?;
         let token = self
             .storage
-            .load(&self.credential_key().ok()?, &self.resource_url)
+            .load(&key, &self.resource_url)
             .filter(|token| !token.is_expired())?;
-        self.restore_persisted_client_id();
+        // The login that stored this token may have registered afresh: a
+        // dynamically registered id held here is replaced by the stored one,
+        // or a refresh would present the old id. A configured id stays.
+        if *self.client_id_source.read() == Some(super::ClientIdSource::Registered)
+            && let Some(stored) = self.storage.load_client_id(&key, &self.resource_url)
+        {
+            *self.client_id.write() = Some(stored);
+        } else {
+            self.restore_persisted_client_id();
+        }
         let access = token.access_token.clone();
         *self.current_token.write() = Some(token);
         Some(access)

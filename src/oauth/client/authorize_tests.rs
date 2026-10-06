@@ -464,3 +464,32 @@ impl OAuthClient {
         ));
     }
 }
+
+/// MIK-7982 (delta review): a client holding a dynamically registered id that
+/// takes up a login another client of its backend stored also takes up the id
+/// that login stored. Keeping its own would present a stale id on refresh.
+#[tokio::test]
+async fn taking_up_a_shared_login_takes_up_its_registered_client_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let issuer = "https://as.example";
+    let client = client(dir.path(), Some(issuer))
+        .with_login_gate(Arc::new(crate::oauth::login_gate::LoginGate::default()));
+    *client.client_id.write() = Some("stale-registered-id".to_string());
+    *client.client_id_source.write() = Some(ClientIdSource::Registered);
+    let key = storage_key(BACKEND, issuer);
+    let shared = token("shared-access", None, Expiry::Live);
+    client.storage.save(&key, RESOURCE, &shared).unwrap();
+    client
+        .storage
+        .save_client_id(&key, RESOURCE, "fresh-registered-id")
+        .unwrap();
+
+    let access = client.authorize_shared(true, None).await.unwrap();
+
+    assert_eq!(access, "shared-access", "the stored login is taken up");
+    assert_eq!(
+        client.client_id.read().as_deref(),
+        Some("fresh-registered-id"),
+        "the shared login's registered id replaces the stale one"
+    );
+}

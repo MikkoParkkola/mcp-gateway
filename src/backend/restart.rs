@@ -56,15 +56,17 @@ impl Backend {
         // holds the port this restart's own login binds: end that login
         // first. Starts queued behind it share its Cancelled end (MIK-7982).
         // A non-interactive restart (the health probe's rebuild) neither ends
-        // a login nor queues behind a start in flight: it does nothing.
+        // a login, nor bumps the cancel epoch under a start still
+        // discovering, nor queues behind a start in flight: it does nothing.
         let interactive = crate::oauth::login_gate::interactive();
         let required = || Error::AuthorizationRequired {
             backend: self.name.clone(),
         };
-        if !interactive && self.login_gate.in_flight() {
+        if interactive {
+            self.login_gate.cancel_and_join().await;
+        } else if self.login_gate.in_flight() {
             return Err(required());
         }
-        self.login_gate.cancel_and_join().await;
 
         let entry = self.shared_entry();
         let _guard = if interactive {

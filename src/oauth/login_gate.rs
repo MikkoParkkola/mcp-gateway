@@ -263,6 +263,20 @@ impl LoginGate {
 tokio::task_local! {
     static PROVENANCE: Arc<Provenance>;
     static NON_INTERACTIVE: ();
+    static SET_OUT: u64;
+}
+
+/// Run the start `work` as one that set out at the gate's cancel `epoch`:
+/// its login is refused if a restart or stop cancelled logins since, however
+/// late its detached OAuth task is first scheduled.
+pub(crate) async fn set_out<F: std::future::Future>(epoch: u64, work: F) -> F::Output {
+    SET_OUT.scope(epoch, work).await
+}
+
+/// The epoch the current start set out at (`None` outside a start). Read
+/// before any `tokio::spawn`, as [`interactive`] is.
+pub(crate) fn set_out_epoch() -> Option<u64> {
+    SET_OUT.try_with(|epoch| *epoch).ok()
 }
 
 /// Run `work` as a caller that never begins or waits on a login (the health

@@ -145,6 +145,9 @@ impl Backend {
         // MIK-7982 C1: the login this caller would wait behind, captured
         // before it queues on the start lock.
         let cohort = self.login_gate.cohort();
+        // The cancel epoch it set out at, captured with the cohort: a restart
+        // that cancels while this start queues or discovers refuses its login.
+        let set_out = self.login_gate.epoch();
 
         for _attempt in 0..MAX_RACE_RETRIES {
             let entry = self.pooled_entry(key)?;
@@ -195,7 +198,8 @@ impl Backend {
             }
 
             // Start transport for this slot.
-            let transport = self.start_entry(key, &entry).await?;
+            let transport =
+                crate::oauth::login_gate::set_out(set_out, self.start_entry(key, &entry)).await?;
 
             // Reconcile: did the evictor remove this exact entry while we
             // were building its transport?

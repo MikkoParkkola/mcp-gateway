@@ -407,3 +407,67 @@ async fn the_outer_tools_for_check_deadline_keeps_the_fill_owners_provenance() {
         "a pending login is not a backend failure"
     );
 }
+
+/// MIK-7982 (delta review, HIGH): a start keeps the cancel epoch it set out
+/// at, however late its detached OAuth task is first scheduled. A restart's
+/// cancel that came in between refuses its login: no browser opens.
+#[tokio::test]
+async fn a_start_cancelled_before_its_login_task_runs_opens_no_login() {
+    let origin = authorization_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let browser = Browser::new();
+    let backend = login_backend(&origin, dir.path(), &browser, Duration::from_secs(30), None);
+    let set_out = backend.login_gate.epoch();
+    // A restart's cancel, after the start set out but before its task ran.
+    backend.login_gate.cancel_and_join().await;
+
+    let entry = backend.shared_entry();
+    let started = within(
+        "the cancelled start ending",
+        crate::oauth::login_gate::set_out(
+            set_out,
+            backend.start_entry(&crate::backend::pool::PoolKey::Shared, &entry),
+        ),
+    )
+    .await;
+
+    assert!(
+        started.is_err(),
+        "a cancelled start hands over no transport"
+    );
+    assert_eq!(
+        browser.opens(),
+        0,
+        "a cancelled start opens no login: {:?}",
+        started.err()
+    );
+}
+
+/// MIK-7982 (delta review): the health probe's rebuild with no login in
+/// flight leaves the cancel epoch alone, so it cannot refuse the login of an
+/// interactive start still discovering.
+#[tokio::test]
+async fn a_non_interactive_restart_cancels_nothing() {
+    let origin = authorization_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let browser = Browser::new();
+    let backend = login_backend(&origin, dir.path(), &browser, Duration::from_secs(5), None);
+    let before = backend.login_gate.epoch();
+
+    let _ = within(
+        "the probe's rebuild",
+        crate::oauth::login_gate::non_interactive(backend.force_restart()),
+    )
+    .await;
+
+    assert_eq!(
+        backend.login_gate.epoch(),
+        before,
+        "a non-interactive rebuild bumped the cancel epoch"
+    );
+    assert_eq!(
+        browser.opens(),
+        0,
+        "a non-interactive rebuild opens no login"
+    );
+}
