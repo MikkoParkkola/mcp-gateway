@@ -164,6 +164,31 @@ async fn meta_tenant_guard_refusal_record_names_the_tenants() {
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0);
 }
 
+/// MIK-7646 (T2, two requests). `cust-1` is admitted, then a request naming
+/// only `cust-2` is refused at limit 1: its record names its own request's
+/// tenant, not the window's.
+#[tokio::test]
+async fn meta_tenant_guard_refusal_record_names_only_its_own_request() {
+    let fx = fixture(Setup {
+        tenant_limit: Some(1),
+        ..Setup::default()
+    })
+    .await;
+    for (id, tenant) in [(5, "cust-1"), (6, "cust-2")] {
+        let arguments = json!({"server": "alpha", "tool": "t",
+                               "arguments": {"rows": [{"customer_id": tenant}]}});
+        let body = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+                          "params": {"name": "gateway_invoke", "arguments": arguments}});
+        let _ = post_to(&fx, "/mcp", &body.to_string(), &Caller::Session).await;
+    }
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "only cust-1 dispatches");
+    let all = invocations(&fx);
+    assert_eq!(all.len(), 2, "{all:?}");
+    let refused = &all[1];
+    assert_eq!(refused["outcome"], "denied", "{refused}");
+    assert_eq!(refused["tenants"], sorted(&["cust-2"]), "{refused}");
+}
+
 /// A replayed terminal error is a cached delivery too: no backend ran, so the
 /// record says so, names the request's tenants and carries no data classes.
 #[tokio::test]
