@@ -105,6 +105,20 @@ async fn t2c_a_needle_in_the_last_twenty_lines_is_found() {
     );
 }
 
+/// T2e: with two needles in the tail, the later line names the cause.
+#[tokio::test]
+async fn t2e_the_last_matching_line_names_the_cause() {
+    let t = transport(
+        "echo EACCES >&2; echo \"Cannot find module x\" >&2; exit 1",
+        &[],
+    );
+    let _ = start_err(&t).await;
+    assert_eq!(
+        t.start_failure_class(),
+        Some(("missing_module", Some("Cannot find module")))
+    );
+}
+
 /// T2b: a last line with no newline is matched.
 #[tokio::test]
 async fn t2b_a_final_line_without_a_newline_is_matched() {
