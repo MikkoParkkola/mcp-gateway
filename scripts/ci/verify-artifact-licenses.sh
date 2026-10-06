@@ -64,7 +64,7 @@ fi
 #    license declaration and a licensing pointer in caveats.
 if [ -f homebrew/mcp-gateway.rb ]; then
   grep -q 'license :cannot_represent' homebrew/mcp-gateway.rb \
-    || fail "homebrew formula must declare 'license :cannot_represent' (mixed licensing)"
+    || fail "homebrew formula must declare 'license :cannot_represent'"
   grep -qi 'COMMERCIAL.md\|Noncommercial' homebrew/mcp-gateway.rb \
     || fail "homebrew formula caveats must point to the license/COMMERCIAL terms"
   ok "homebrew formula: honest license declaration + licensing caveat"
