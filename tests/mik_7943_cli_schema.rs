@@ -76,6 +76,7 @@ schema:
       kind:
         type: string
         enum: [\"12\"]
+        default: \"12\"
 providers:
   primary:
     service: rest
