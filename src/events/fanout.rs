@@ -37,7 +37,10 @@ pub(crate) struct SourceEvent {
     pub data: Value,
     /// Set by a source whose upstream work is per lifecycle key (a
     /// credentialed watch): the occurrence then reaches only subscriptions
-    /// holding this key (design §4, MIK-7811).
+    /// holding this key (design §4, MIK-7811). The core enforces key
+    /// equality only; a source whose work runs under one principal's
+    /// credential must put that principal in its `lifecycle_key`, computed
+    /// from the same canonical arguments on both sides.
     pub lifecycle_key: Option<String>,
 }
 
