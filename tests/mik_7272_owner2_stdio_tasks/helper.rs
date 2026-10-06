@@ -8,12 +8,12 @@
 //! crate item, so the red commit compiles before the fix exists.
 
 #![allow(
-#[path = "../common/gateway_bin.rs"]
-mod gateway_bin;
-
     dead_code,
     reason = "shared by two test targets that each use a subset"
 )]
+
+#[path = "../common/gateway_bin.rs"]
+mod gateway_bin;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
