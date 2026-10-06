@@ -250,5 +250,10 @@ mod tests {
             remove_entry("backends:  # mine\n  a:\n    command: x\n", "a").expect("a"),
             "backends: {} # mine\n"
         );
+        // Bare `backends:` would load as null, not the empty mapping.
+        assert_eq!(
+            remove_entry("backends:\n  a:\n    command: x\nauth: {}\n", "a").expect("a"),
+            "backends: {}\nauth: {}\n"
+        );
     }
 }
