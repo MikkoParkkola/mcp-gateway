@@ -1286,17 +1286,19 @@ async fn meta_mcp_dispatch(
             // What cannot wait is the malformed shape, refused below before
             // anything dispatches.
             let retry = crate::protocol::mrtr::RetryFields::from_params(params);
+            // A refusal below is written to the chain as the meta layer would (#2420).
+            let refused = Refused::of(
+                &arguments,
+                client.as_ref(),
+                grant_subject.as_ref(),
+                &session_id,
+            );
             if retry.is_malformed() {
                 // Neither a usable retry nor a fresh call. Running it as a fresh
                 // call would repeat whatever the first attempt already did, and
                 // for a destructive tool that is the whole risk.
-                return build_error_response(
-                    Some(id),
-                    -32602,
-                    format!("malformed request fields: {}", retry.malformed.join(", ")),
-                    &session_id,
-                    StatusCode::BAD_REQUEST,
-                );
+                let message = format!("malformed request fields: {}", retry.malformed.join(", "));
+                return refused.answer_malformed(&state, id, message).await;
             }
             // Exposure decides before admin does, here as well as in the
             // dispatcher. The dispatcher orders these two correctly for its own
@@ -1325,13 +1327,6 @@ async fn meta_mcp_dispatch(
             response_targets = crate::gateway::meta_mcp::response_security::meta_response_targets(
                 tool_name,
                 &backend_targets,
-            );
-            // A refusal below is written to the chain as the meta layer would (#2420).
-            let refused = Refused::of(
-                &arguments,
-                client.as_ref(),
-                grant_subject.as_ref(),
-                &session_id,
             );
             for target in &backend_targets {
                 // A surfaced name this caller could not invoke is answered by
