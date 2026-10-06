@@ -726,3 +726,70 @@ async fn a_cache_is_cleared_once_until_a_start_succeeds() {
         .expect_err("the stub fails on every attempt");
     assert!(!path.exists(), "a start that succeeds arms the next repair");
 }
+
+#[tokio::test]
+async fn an_assignment_the_child_never_received_is_not_cleared() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    write_stub(workspace.path(), STUB);
+    let cache = seed_cache(workspace.path());
+    let log = workspace.path().join("spawns.log");
+
+    // The transport is told it assigned `cache.root`, but the child's
+    // environment names no cache at all, so the child never used it.
+    let transport = transport(
+        workspace.path(),
+        stub_env(&log, "always-fail", CACHE_SHAPED),
+        Duration::from_secs(5),
+        Some(&cache.root),
+    );
+    let _ = start_with_repair(&transport)
+        .await
+        .expect_err("the stub fails on every attempt");
+
+    assert_eq!(
+        spawns(&log).len(),
+        1,
+        "nothing the child used, nothing to retry"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&cache.sentinel).expect("the assignment is untouched"),
+        SEEDED
+    );
+}
+
+#[tokio::test]
+async fn a_retry_that_succeeds_arms_the_next_repair() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    write_stub(workspace.path(), STUB);
+    let cache = seed_cache(workspace.path());
+    let path = cache.root.clone();
+    let start = |log: &Path, mode: &str| {
+        transport(
+            workspace.path(),
+            env_with_cache(log, mode, CACHE_SHAPED, &path),
+            Duration::from_secs(5),
+            Some(&path),
+        )
+    };
+
+    let first_log = workspace.path().join("first.log");
+    let first = start(&first_log, "fail-once");
+    start_with_repair(&first)
+        .await
+        .expect("the retry after the repair succeeds");
+    first.close().await.expect("close");
+
+    // No start succeeds in between other than that retry.
+    std::fs::create_dir_all(path.join("_npx/1")).expect("re-seed the cache tree");
+    let second_log = workspace.path().join("second.log");
+    let second = start(&second_log, "always-fail");
+    let _ = start_with_repair(&second)
+        .await
+        .expect_err("the stub fails on every attempt");
+    assert_eq!(
+        spawns(&second_log).len(),
+        2,
+        "the next failure is repaired again"
+    );
+    assert!(!path.exists(), "a retry that succeeds arms the next repair");
+}
