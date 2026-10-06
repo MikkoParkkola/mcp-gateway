@@ -62,17 +62,31 @@ fi
 
 # 4. Homebrew — bare-binary formula can't embed a text file, so the caveats
 #    block users see on install must point to the commercial terms. Only the
-#    heredoc body of a `def caveats` statement counts, since nothing else is
-#    printed: not a comment naming the method elsewhere in the formula, and
-#    not a Ruby comment inside it, outside the heredoc (MIK-7972).
+#    text the method returns counts (MIK-7972). The method must be blank or
+#    comment lines, one heredoc and `end`: Ruby discards a heredoc that another
+#    value follows, so any other shape yields nothing and fails. A comment
+#    naming the method, or one inside it, is never printed.
 caveats() {
-  awk '
-    !f && /^[[:space:]]*def caveats[[:space:]]*$/ { f = 1; next }
-    f == 1 && match($0, /<<[~-]?[A-Z_]+/) {
-      tag = substr($0, RSTART, RLENGTH); sub(/^<<[~-]?/, "", tag); f = 2; next
+  awk -v q="'" '
+    function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    !f && /^[ \t]*def caveats[ \t]*$/ { f = 1; next }
+    !f { next }
+    f != 2 && /^[ \t]*(#.*)?$/ { next }
+    f == 1 {
+      tag = trim($0)
+      if (tag !~ /^<<[~-]?/) exit
+      sub(/^<<[~-]?/, "", tag)
+      c = substr(tag, 1, 1)
+      if (c == q || c == "\"") {
+        if (length(tag) < 3 || substr(tag, length(tag), 1) != c) exit
+        tag = substr(tag, 2, length(tag) - 2)
+      }
+      if (tag !~ /^[A-Za-z_][A-Za-z0-9_]*$/) exit
+      f = 2; next
     }
-    f == 1 && /^[[:space:]]*end[[:space:]]*$/ { exit }
-    f == 2 { line = $0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", line); if (line == tag) exit; print }
+    f == 2 { if (trim($0) == tag) { f = 3; next } body = body $0 "\n"; next }
+    f == 3 { if (trim($0) == "end") ok = 1; exit }
+    END { if (ok) printf "%s", body }
   ' "$1"
 }
 caveat_rc=0
