@@ -345,6 +345,7 @@ impl super::MetaMcp {
                 caller: "task",
                 external_server: server,
                 external_tool: tool,
+                subject: None,
             };
             let verdict = firewall
                 .check_response_artifact(
