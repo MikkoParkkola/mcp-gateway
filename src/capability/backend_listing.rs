@@ -67,14 +67,12 @@ impl CapabilityBackend {
     }
 
     /// The startup scan loaded every directory. A client served while it ran
-    /// may have listed part of it, and no reload announces its loads: mark the
-    /// scan complete (readiness, MIK-7268), then announce once if anything is
-    /// listed.
+    /// may have listed part of it, even a tool a later directory hid again, and
+    /// no reload announces its loads: mark the scan complete (readiness,
+    /// MIK-7268), then announce once.
     pub(crate) fn finish_initial_scan(&self, registry: &BackendRegistry) {
         self.mark_initial_scan_complete();
-        if !self.listed_names().is_empty() {
-            registry.announce_change(&self.name);
-        }
+        registry.announce_change(&self.name);
     }
 
     /// When the earliest listed `oauth:` login stops counting, if any.
