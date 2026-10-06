@@ -322,7 +322,11 @@ async fn parked_task_prompt_read_is_recorded() {
 /// string survives in its print, so a receipt of the raw value cannot match.
 #[tokio::test]
 async fn a_primitive_task_result_is_receipted_as_stored() {
-    let raw: String = (0..120).map(|n| format!("r{n}\"")).collect();
+    use std::fmt::Write as _;
+    let raw = (0..120).fold(String::new(), |mut raw, n| {
+        let _ = write!(raw, "r{n}\"");
+        raw
+    });
     let stored = Value::String(raw.clone()).to_string();
     let mock = MockBackend::answering(Answer::Sequence(vec![json!(raw), text("ok")]));
     let (state, _store) = relay_state(&mock, 600).await;
