@@ -368,6 +368,31 @@ async fn a_restart_over_the_cap_keeps_the_earliest_timers() {
     assert_eq!(error.code, -32013);
 }
 
+/// A replay starts a shared timer for whichever holder it reads first: one
+/// principal past its cap does not keep the timer from a holder within it.
+#[tokio::test]
+async fn a_replay_starts_a_timer_any_holder_may_keep() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut config = crate::config::EventsConfig::default();
+    config.schedule.max_timers_per_principal = 2;
+    let hub = hub(dir.path(), &config);
+    let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
+    let rows = [
+        json!({"cron": "0 1 * * *"}),
+        json!({"cron": "0 2 * * *"}),
+        json!({"cron": "0 3 * * *"}),
+    ];
+    for (n, arguments) in rows.iter().enumerate() {
+        admit(&hub, &format!("sub_p{n}"), "p", arguments);
+    }
+    admit(&hub, "sub_q", "q", &rows[2]);
+    let key = source.lifecycle_key("p", NAME, &rows[2]);
+    source
+        .on_first_subscriber(&key, "p", NAME, &rows[2])
+        .await
+        .expect("q keeps it within its cap");
+}
+
 /// U9: a label the response firewall blocks is dead-lettered
 /// `firewall_blocked` at fan-out, never queued for delivery.
 #[cfg(feature = "firewall")]
