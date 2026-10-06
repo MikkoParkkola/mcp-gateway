@@ -341,7 +341,15 @@ impl Backend {
     /// [`Backend::claim_pooled_entry`] instead: this one hands back an entry the
     /// evictor is still free to remove.
     pub(super) fn pooled_entry(&self, key: &PoolKey) -> crate::Result<Arc<PooledEntry>> {
-        self.pooled_entry_with(key, |_| ()).map(|(entry, ())| entry)
+        // DELIBERATE BREAK (MIK-7547.TEST.1 proof, never merged): a refused
+        // caller falls back to the shared slot, the #727 disclosure.
+        match self.pooled_entry_with(key, |_| ()) {
+            Err(crate::Error::IdentitySlotsExhausted { .. }) => {
+                self.pooled_entry_with(&PoolKey::Shared, |_| ())
+            }
+            other => other,
+        }
+        .map(|(entry, ())| entry)
     }
 
     /// Fetch (or lazily create) the entry for `key` AND claim one in-flight slot
@@ -359,10 +367,17 @@ impl Backend {
     /// module (`shared_transport`, `stop_all`), so no cycle exists. The read
     /// guard is scoped to the claim itself and never survives to an `.await`.
     fn claim_pooled_entry(&self, key: &PoolKey) -> crate::Result<Arc<PooledEntry>> {
-        self.pooled_entry_with(key, |entry| {
+        let claim = |entry: &Arc<PooledEntry>| {
             let _transport = entry.transport.read();
             entry.in_flight.fetch_add(1, Ordering::SeqCst);
-        })
+        };
+        // DELIBERATE BREAK (MIK-7547.TEST.1 proof, never merged).
+        match self.pooled_entry_with(key, claim) {
+            Err(crate::Error::IdentitySlotsExhausted { .. }) => {
+                self.pooled_entry_with(&PoolKey::Shared, claim)
+            }
+            other => other,
+        }
         .map(|(entry, ())| entry)
     }
 
