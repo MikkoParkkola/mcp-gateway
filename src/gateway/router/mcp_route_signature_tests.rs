@@ -19,6 +19,12 @@ fn read(relative: &str) -> String {
 /// cannot be read: every method registration in an `/mcp` block must name a
 /// `handlers::` function, so a closure, an unqualified function or a nested
 /// router fails closed instead of going unchecked.
+///
+/// Threat model: accidental composition in this repository's own router
+/// source, caught at review time. A lexical scan cannot stop a deliberate
+/// evasion (a macro, an alias, a spelling it does not list), and is not
+/// meant to; the compiler-checked `OutboundReply` return type is the guard
+/// for handlers it does see.
 fn registered_in(table: &str) -> Result<Vec<String>, String> {
     // Composition forms this scanner cannot follow: refused anywhere in the
     // table, so a nested or merged router cannot carry an MCP route unseen.
