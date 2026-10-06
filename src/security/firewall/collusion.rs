@@ -81,21 +81,81 @@ pub(super) const MAX_COMMON_PRINCIPALS: usize = MAX_TUPLES + 1;
 /// Fingerprints kept per delivered result; the rest are counted, not stored.
 const MAX_SOURCE_FINGERPRINTS: usize = 1_024;
 
+/// Delivery instants kept per pair; see [`Copies`].
+const MAX_COPIES: usize = 3;
+
+/// When one pair received a fingerprint: up to [`MAX_COPIES`] delivery
+/// instants, ascending. Calls reach the lock out of time order, so a copy
+/// stamped after an egress can already be here when that egress is checked,
+/// and the earliest and latest alone cannot say whether a copy was held in
+/// the window at that instant (MIK-7881).
+///
+/// A copy whose neighbours are at most a window apart is dropped: a window
+/// that contains it contains one of them, so no answer changes. Past the cap
+/// the oldest is dropped; an egress checked more than about a window before
+/// the pair's latest copy can then miss an older one, which turns an excuse
+/// into a finding and can drop a witness.
+#[derive(Clone, Copy)]
+struct Copies {
+    at: [Instant; MAX_COPIES],
+    len: usize,
+}
+
+impl Copies {
+    fn one(at: Instant) -> Self {
+        Self {
+            at: [at; MAX_COPIES],
+            len: 1,
+        }
+    }
+
+    fn all(&self) -> &[Instant] {
+        &self.at[..self.len]
+    }
+
+    fn latest(&self) -> Instant {
+        self.at[self.len - 1]
+    }
+
+    fn add(&mut self, other: &Self, window: Duration) {
+        for &at in other.all() {
+            let mut all = [at; MAX_COPIES + 1];
+            all[..self.len].copy_from_slice(self.all());
+            let mut n = self.len + 1;
+            all[..n].sort_unstable();
+            let mut i = 1;
+            while i + 1 < n {
+                if all[i + 1].saturating_duration_since(all[i - 1]) <= window {
+                    all.copy_within(i + 1..n, i);
+                    n -= 1;
+                    i = (i - 1).max(1);
+                } else {
+                    i += 1;
+                }
+            }
+            let oldest = n.saturating_sub(MAX_COPIES);
+            self.len = n - oldest;
+            self.at[..self.len].copy_from_slice(&all[oldest..n]);
+        }
+    }
+
+    /// A copy delivered by `now` and within `window` of it.
+    fn held(&self, now: Instant, window: Duration) -> bool {
+        self.all()
+            .iter()
+            .any(|&at| at <= now && now.saturating_duration_since(at) <= window)
+    }
+}
+
 /// One (source, principal) pair that received a fingerprint.
 struct Holder {
     source: u64,
     principal: u64,
-    /// Any delivery of this pair: what the same-source excuse ages on.
-    last_seen: Instant,
-    /// The earliest delivery. Calls reach the lock out of time order, so a
-    /// copy stamped after an egress can already be here when that egress is
-    /// checked; only a pair held by the egress instant may excuse it.
-    first_seen: Instant,
-    /// The latest *sensitive* delivery: what a relay witness ages on. Kept
-    /// apart so a plain re-delivery cannot extend sensitive evidence.
-    sensitive_at: Option<Instant>,
-    /// The earliest sensitive delivery: a witness must predate the egress.
-    sensitive_first: Option<Instant>,
+    /// Every delivery of this pair: what the same-source excuse reads.
+    copies: Copies,
+    /// The *sensitive* deliveries: what a relay witness reads. Kept apart so
+    /// a plain re-delivery cannot extend sensitive evidence.
+    sensitive: Option<Copies>,
     /// The `allowed_flows` entries whose source glob matched this source (one
     /// bit per entry): a copy delivered here may leave through an egress
     /// matching the same entry without being a relay.
@@ -309,13 +369,11 @@ impl CollusionDetector {
             );
             fps.truncate(MAX_SOURCE_FINGERPRINTS);
         }
-        let holder = |last_seen| Holder {
+        let holder = |at| Holder {
             source: self.digest(source),
             principal: self.digest(principal),
-            last_seen,
-            first_seen: last_seen,
-            sensitive_at: sensitive.then_some(last_seen),
-            sensitive_first: sensitive.then_some(last_seen),
+            copies: Copies::one(at),
+            sensitive: sensitive.then(|| Copies::one(at)),
             flows,
         };
         let window = self.params.window;
@@ -347,21 +405,19 @@ impl CollusionDetector {
         let Holders::Tracked(mut tuples) = holders else {
             return holders;
         };
-        tuples.retain(|t| now.saturating_duration_since(t.last_seen) <= self.params.window);
+        let window = self.params.window;
+        tuples.retain(|t| now.saturating_duration_since(t.copies.latest()) <= window);
         match tuples
             .iter_mut()
             .find(|t| t.source == new.source && t.principal == new.principal)
         {
             Some(t) => {
-                // Keep the earliest and latest of each time, whatever order calls arrive in.
-                t.last_seen = t.last_seen.max(new.last_seen);
-                t.first_seen = t.first_seen.min(new.first_seen);
-                t.sensitive_at = t.sensitive_at.max(new.sensitive_at);
-                t.sensitive_first = t
-                    .sensitive_first
-                    .into_iter()
-                    .chain(new.sensitive_first)
-                    .min();
+                // Kept by their own times, whatever order calls arrive in.
+                t.copies.add(&new.copies, window);
+                match (&mut t.sensitive, new.sensitive) {
+                    (Some(held), Some(more)) => held.add(&more, window),
+                    (held, more) => *held = held.or(more),
+                }
                 t.flows |= new.flows;
             }
             None => tuples.push(new),
@@ -408,12 +464,8 @@ impl CollusionDetector {
         let sender = self.digest(principal);
         let fps = self.fingerprints(args);
         let window = self.params.window;
-        // Held at `now`: first delivered by then, last delivered in the window.
-        // Known limit: a pair with one copy before the window and one after
-        // `now` still counts; exact per-copy times would need a list per pair.
-        let live = |t: &&Holder| {
-            t.first_seen <= now && now.saturating_duration_since(t.last_seen) <= window
-        };
+        // Held at `now`: some copy delivered by then, inside the window.
+        let live = |t: &&Holder| t.copies.held(now, window);
         let mut state = self.state.lock();
         state.sweep(now, window);
         let mut matches = 0;
@@ -432,11 +484,8 @@ impl CollusionDetector {
                     .filter(live)
                     .any(|t| t.source == source && t.principal == sender)
             };
-            let sensitive = |t: &&Holder| {
-                t.sensitive_first.is_some_and(|first| first <= now)
-                    && t.sensitive_at
-                        .is_some_and(|at| now.saturating_duration_since(at) <= window)
-            };
+            let sensitive =
+                |t: &&Holder| t.sensitive.is_some_and(|copies| copies.held(now, window));
             if let Some(t) = tuples.iter().filter(sensitive).find(|t| {
                 t.principal != sender && !excused(t.source) && t.flows & egress_flows == 0
             }) {
