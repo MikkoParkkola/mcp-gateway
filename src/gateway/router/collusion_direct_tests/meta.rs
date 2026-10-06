@@ -50,6 +50,18 @@ async fn post(
     arguments: &Value,
     extra: &Value,
 ) -> (u16, String) {
+    post_with(fx, who, name, arguments, extra, None).await
+}
+
+/// [`post`], the caller also presenting `identity` as a verified OIDC caller.
+async fn post_with(
+    fx: &Fixture,
+    who: Option<&str>,
+    name: &str,
+    arguments: &Value,
+    extra: &Value,
+    identity: Option<crate::key_server::oidc::VerifiedIdentity>,
+) -> (u16, String) {
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                       "params": {"name": name, "arguments": arguments, "_meta": meta_of(extra)}});
     let mut request = axum::http::Request::builder()
@@ -63,9 +75,12 @@ async fn post(
     if let Some(who) = who {
         request = request.header("authorization", format!("Bearer {who}"));
     }
-    let request = request
+    let mut request = request
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
+    if let Some(identity) = identity {
+        request.extensions_mut().insert(identity);
+    }
     let response = create_router(Arc::clone(&fx.state))
         .oneshot(request)
         .await
@@ -442,7 +457,17 @@ async fn meta_grant_decision_failure_leaves_no_receipt() {
         CAPS, DECISION_KIND, PERSONAL, capability_backend, grant, grants, logger,
     };
     use crate::security::audit::AuditFailurePolicy;
-    const ALICE: (&str, &str) = ("api_key", "alice");
+    // A personal capability needs a proven caller identity, which a bearer
+    // key never carries on HTTP: caller A also presents a verified identity,
+    // and that identity owns the capability.
+    const ALICE: (&str, &str) = ("https://idp.example.invalid", "alice-sub");
+    let alice = || crate::key_server::oidc::VerifiedIdentity {
+        subject: ALICE.1.to_string(),
+        email: "alice@example.invalid".to_string(),
+        name: None,
+        groups: vec![],
+        issuer: ALICE.0.to_string(),
+    };
     // The capability's endpoint answers the relayable prose.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -471,14 +496,30 @@ async fn meta_grant_decision_failure_leaves_no_receipt() {
     let args = json!({"server": CAPS, "tool": PERSONAL, "arguments": {}});
 
     log.fail_next_append_of_kind_for_test(DECISION_KIND);
-    let (_, body) = post(&fx, Some("a"), "gateway_invoke", &args, &json!({})).await;
+    let (_, body) = post_with(
+        &fx,
+        Some("a"),
+        "gateway_invoke",
+        &args,
+        &json!({}),
+        Some(alice()),
+    )
+    .await;
     assert_eq!(
         envelope(&body)["error"]["code"],
         -32005,
         "base: the failed decision record withholds the read: {body}"
     );
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
-    let (_, delivered) = post(&fx, Some("a"), "gateway_invoke", &args, &json!({})).await;
+    let (_, delivered) = post_with(
+        &fx,
+        Some("a"),
+        "gateway_invoke",
+        &args,
+        &json!({}),
+        Some(alice()),
+    )
+    .await;
     assert!(
         envelope(&delivered).get("error").is_none() && delivered.contains(PROSE),
         "control: the decided read is delivered: {delivered}"
