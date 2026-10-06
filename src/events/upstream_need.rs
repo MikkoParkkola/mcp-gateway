@@ -202,6 +202,9 @@ impl Snapshot {
     }
 }
 
+#[path = "upstream_ledger.rs"]
+pub(crate) mod ledger;
+
 #[cfg(test)]
 #[path = "upstream_need_tests.rs"]
 mod tests;
