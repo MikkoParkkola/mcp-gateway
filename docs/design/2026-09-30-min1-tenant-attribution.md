@@ -117,8 +117,8 @@ guard may refuse. Nothing is refused that was not before.
   is not read). Gap 3 (lead ruling 2026-10-01): any response string that opens
   like JSON must parse or is unread (depth limit, malformed text, bracket-led
   prose: fail closed); JSON carried in a string, double-encoded text included,
-  is decoded and read up to three layers, and deeper encoding is unread. The record says so even when it names no tenant; `tenants` is
-  then a lower bound. `cached_delivery_uninspected` means both. The parse
+  is decoded and read up to three layers, and deeper encoding is unread. The
+  record says so even when it names no tenant; `tenants` is then a lower bound. `cached_delivery_uninspected` means both. The parse
   bound stays, as a DoS limit.
 - **Cap (H3):** one crate-private writer,
   `TransparencyLogger::log_invocation_attributed(.., extra: serde_json::Map)`,

@@ -537,15 +537,17 @@ fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
     }
     match value {
         Value::String(s) => *s = scrub(s, needles),
-        // A credential that is all digits can come back as a JSON number. A
-        // short needle would hit every number, so below the floor (the same as
-        // caller values) only the exact-equality check above applies.
-        // An all-digit needle is also compared by value: printed as a number,
-        // it loses its leading zeros ("012345" comes back as 12345), and past
-        // u64 it parses as a float and prints in exponent form. The floor is
-        // on the needle as injected, so "0007" redacts the number 7 but never
-        // the 7 inside 1771. The sign is ignored on both paths: a needle has
-        // none, so -12345, -12345.0 and -0.0 are the same value as one.
+        // A credential that is all digits can come back as a JSON number. It
+        // matches a number of the same value only, never one whose digits
+        // merely hold it: 912345 is not the secret 1234 (MIK-7954). Below the
+        // floor (the same as caller values) only the exact-equality check above
+        // applies. An all-digit needle is compared by value: printed as a
+        // number, it loses its leading zeros ("012345" comes back as 12345),
+        // and past u64 it parses as a float and prints in exponent form. The
+        // floor is on the needle as injected, so "0007" redacts the number 7
+        // but never the 7 inside 1771. The sign is ignored on both paths: a
+        // needle has none, so -12345, -12345.0 and -0.0 are the same value as
+        // one.
         Value::Number(n) => {
             let digits = n.to_string();
             let float = n.as_f64().filter(|_| n.is_f64()).map(f64::abs);
@@ -606,10 +608,10 @@ fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
                 }
                 digits.trim_start_matches('-') == value
             };
-            if needles.iter().any(|needle| {
-                needle.len() >= MIN_REDACTED_CALLER_VALUE
-                    && (digits.contains(needle) || same_value(needle))
-            }) {
+            if needles
+                .iter()
+                .any(|needle| needle.len() >= MIN_REDACTED_CALLER_VALUE && same_value(needle))
+            {
                 *value = Value::String(marker_for(needles).to_owned());
             }
         }

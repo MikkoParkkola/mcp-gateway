@@ -8,19 +8,19 @@
 // Unix-only: sets umask 002 in a child `sh` and asserts POSIX mode bits.
 #![cfg(unix)]
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
-use std::process::Command;
 
 use mcp_gateway::mtls::MtlsConfig;
 use mcp_gateway::mtls::cert_manager::build_tls_config;
 
 /// Run the gateway binary under umask 002 with `args`.
-fn gateway_umask_002(args: &[&str]) {
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg("umask 002; exec \"$0\" \"$@\"")
-        .arg(env!("CARGO_BIN_EXE_mcp-gateway"))
+fn gateway_umask_002(home: &Path, args: &[&str]) {
+    let wrapper = ["sh", "-c", "umask 002; exec \"$0\" \"$@\""];
+    let status = gateway_bin::wrapped(&wrapper, home, gateway_bin::Inherit::Environment)
         .args(args)
         .status()
         .expect("run mcp-gateway");
@@ -37,21 +37,27 @@ fn init_ca_output_serves_under_umask_002() {
     let tls = dir.path().join("tls");
     let tls_s = tls.to_str().unwrap();
     let (ca_crt, ca_key) = (format!("{tls_s}/ca.crt"), format!("{tls_s}/ca.key"));
-    gateway_umask_002(&["tls", "init-ca", "--cn", "umask CA", "--out", tls_s]);
-    gateway_umask_002(&[
-        "tls",
-        "issue-server",
-        "--ca-cert",
-        &ca_crt,
-        "--ca-key",
-        &ca_key,
-        "--cn",
-        "localhost",
-        "--san-dns",
-        "localhost",
-        "--out",
-        tls_s,
-    ]);
+    gateway_umask_002(
+        dir.path(),
+        &["tls", "init-ca", "--cn", "umask CA", "--out", tls_s],
+    );
+    gateway_umask_002(
+        dir.path(),
+        &[
+            "tls",
+            "issue-server",
+            "--ca-cert",
+            &ca_crt,
+            "--ca-key",
+            &ca_key,
+            "--cn",
+            "localhost",
+            "--san-dns",
+            "localhost",
+            "--out",
+            tls_s,
+        ],
+    );
 
     for (file, want) in [
         ("ca.crt", 0o644),

@@ -7,7 +7,8 @@
 //! directory is absent it must degrade gracefully (empty catalogue, exit 0)
 //! with a one-line explanation on stderr, rather than hard-failing.
 
-use std::process::Command;
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
 
 #[test]
 fn test_tool_list_missing_dir_degrades_gracefully() {
@@ -20,7 +21,8 @@ fn test_tool_list_missing_dir_degrades_gracefully() {
     };
     assert!(!missing.exists(), "test precondition: path must not exist");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let home = tempfile::tempdir().expect("an isolated home");
+    let output = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
         .args(["tool", "list", "-C"])
         .arg(&missing)
         .output()
