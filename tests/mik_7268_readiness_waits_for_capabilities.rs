@@ -59,23 +59,26 @@ fn spawn(directory: &Path, scan_gate: &Path) -> Child {
     )
     .expect("write gateway config");
     let log = std::fs::File::create(directory.join("gateway.log")).expect("gateway log");
-    gateway_bin::command(directory, gateway_bin::Inherit::Nothing)
-        .env(HOLD_SCAN_ENV, scan_gate)
-        .env("XDG_CONFIG_HOME", directory.join(".config"))
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        // Winsock cannot initialise without SystemRoot (os error 10106); unset off Windows.
-        .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
-        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|p| ("LLVM_PROFILE_FILE", p)))
-        .current_dir(directory)
-        .arg("--config")
-        .arg(&config_path)
-        .arg("serve")
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log.try_clone().expect("clone log")))
-        .stderr(Stdio::from(log))
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn gateway")
+    Command::from(gateway_bin::command(
+        directory,
+        gateway_bin::Inherit::Nothing,
+    ))
+    .env(HOLD_SCAN_ENV, scan_gate)
+    .env("XDG_CONFIG_HOME", directory.join(".config"))
+    .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+    // Winsock cannot initialise without SystemRoot (os error 10106); unset off Windows.
+    .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
+    .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|p| ("LLVM_PROFILE_FILE", p)))
+    .current_dir(directory)
+    .arg("--config")
+    .arg(&config_path)
+    .arg("serve")
+    .stdin(Stdio::null())
+    .stdout(Stdio::from(log.try_clone().expect("clone log")))
+    .stderr(Stdio::from(log))
+    .kill_on_drop(true)
+    .spawn()
+    .expect("spawn gateway")
 }
 
 /// Poll `/readyz` unauthenticated until it answers 200, returning the base URL

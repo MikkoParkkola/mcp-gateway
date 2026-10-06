@@ -68,7 +68,10 @@ fn http_config(port: u16, env_file: &str, auth: bool, backend: bool) -> String {
 
 /// The child's command: own cwd and HOME, a state dir inside `home`, INFO logs.
 fn gateway_command(cwd: &Path, home: &Path) -> Command {
-    let mut command = gateway_bin::command(home, gateway_bin::Inherit::Environment);
+    let mut command = Command::from(gateway_bin::command(
+        home,
+        gateway_bin::Inherit::Environment,
+    ));
     command
         .current_dir(cwd)
         .env("MCP_GATEWAY_CONFIG_DIR", home.join("state"))

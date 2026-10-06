@@ -140,7 +140,10 @@ pub fn fixture_config(backend_url: &str) -> Value {
 }
 
 pub fn child_command(directory: &Path, config_path: &Path) -> Command {
-    let mut command = gateway_bin::command(directory, gateway_bin::Inherit::Nothing);
+    let mut command = Command::from(gateway_bin::command(
+        directory,
+        gateway_bin::Inherit::Nothing,
+    ));
     command
         .env("XDG_CONFIG_HOME", directory.join(".config"))
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())

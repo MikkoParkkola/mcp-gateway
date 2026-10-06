@@ -49,7 +49,10 @@ struct StdioSession {
 impl StdioSession {
     /// Spawns the shipped binary with no configuration reachable from anywhere.
     fn spawn(home: &std::path::Path) -> Self {
-        let mut command = gateway_bin::command(home, gateway_bin::Inherit::Environment);
+        let mut command = Command::from(gateway_bin::command(
+            home,
+            gateway_bin::Inherit::Environment,
+        ));
         command.arg("serve").arg("--stdio").current_dir(home);
         // `gateway_bin` drops every inherited `MCP_GATEWAY_*` overlay, not a
         // list of the ones that were thought of: a configured child proves

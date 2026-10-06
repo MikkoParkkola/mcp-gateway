@@ -34,7 +34,10 @@ pub struct StdioSession {
 
 impl StdioSession {
     pub fn spawn(home: &Path) -> Self {
-        let mut command = gateway_bin::command(home, gateway_bin::Inherit::Environment);
+        let mut command = Command::from(gateway_bin::command(
+            home,
+            gateway_bin::Inherit::Environment,
+        ));
         command.arg("serve").arg("--stdio").current_dir(home);
         let mut child = command
             .stdin(Stdio::piped())
@@ -172,7 +175,10 @@ impl StdioSession {
     /// `EnvFilter::try_from_default_env()` wins over its `--log-level`, so an
     /// ambient value in the test environment could silence the lines read here.
     pub fn spawn_capturing_stderr(home: &Path) -> (Self, CapturedStderr) {
-        let mut command = gateway_bin::command(home, gateway_bin::Inherit::Environment);
+        let mut command = Command::from(gateway_bin::command(
+            home,
+            gateway_bin::Inherit::Environment,
+        ));
         command
             .arg("serve")
             .arg("--stdio")

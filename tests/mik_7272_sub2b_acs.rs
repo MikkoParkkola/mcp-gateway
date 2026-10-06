@@ -297,7 +297,10 @@ struct StdioSession {
 
 impl StdioSession {
     fn spawn(home: &Path) -> Self {
-        let mut command = gateway_bin::command(home, gateway_bin::Inherit::Environment);
+        let mut command = Command::from(gateway_bin::command(
+            home,
+            gateway_bin::Inherit::Environment,
+        ));
         command.arg("serve").arg("--stdio").current_dir(home);
         let mut child = command
             .stdin(Stdio::piped())

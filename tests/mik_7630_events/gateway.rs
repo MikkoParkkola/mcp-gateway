@@ -205,7 +205,10 @@ impl Gateway {
         )
         .expect("write gateway config");
         let log = std::fs::File::create(self.log_path()).expect("gateway log");
-        let mut command = gateway_bin::command(&self.root, gateway_bin::Inherit::Nothing);
+        let mut command = Command::from(gateway_bin::command(
+            &self.root,
+            gateway_bin::Inherit::Nothing,
+        ));
         command
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
