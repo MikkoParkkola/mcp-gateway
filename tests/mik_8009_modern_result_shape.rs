@@ -128,18 +128,26 @@ async fn stdio_modern_results_carry_the_fields_2026_07_28_requires() {
 }
 
 #[tokio::test]
-async fn http_modern_discover_carries_the_cache_hints() {
+async fn http_modern_results_carry_the_fields_2026_07_28_requires() {
     let (state, _store_dir) = common::state(Fixture::default()).await;
-    let (status, body) =
-        common::post(&state, common::modern("server/discover", json!({})), &[]).await;
+    let rows: [(&str, &[&str]); 4] = [
+        ("server/discover", DISCOVER_RESULT),
+        ("prompts/list", LIST_PROMPTS_RESULT),
+        ("resources/list", LIST_RESOURCES_RESULT),
+        ("tools/list", LIST_TOOLS_RESULT),
+    ];
+    let mut failures = Vec::new();
+    for (method, required) in rows {
+        let (status, body) = common::post(&state, common::modern(method, json!({})), &[]).await;
+        assert!(status.is_success(), "{method} must answer: {status} {body}");
+        let found = violations(&body["result"], required);
+        if !found.is_empty() {
+            failures.push(format!("{method}: {found:?}"));
+        }
+    }
     assert!(
-        status.is_success(),
-        "discovery must answer: {status} {body}"
-    );
-    let found = violations(&body["result"], DISCOVER_RESULT);
-    assert!(
-        found.is_empty(),
-        "HTTP discovery is invalid under 2026-07-28: {found:?} in {body}"
+        failures.is_empty(),
+        "HTTP results are invalid under 2026-07-28: {failures:#?}"
     );
 }
 
