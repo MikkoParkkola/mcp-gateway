@@ -4,8 +4,9 @@ name: Rustdoc links
 # nothing (MIK-8008). Its own workflow, not a ci.yml job: a `throwaway/` PR
 # must run this (it is how a planted broken link is shown red), while ci.yml
 # runs nothing but `Tests (throwaway)` on one
-# (scripts/ci/test_throwaway_routing.py). Private-only items are out of scope:
-# no --document-private-items.
+# (scripts/ci/test_throwaway_routing.py). Every feature is built, so a
+# public item behind an opt-in feature is checked too; private-only items are
+# out of scope: no --document-private-items.
 on:
   pull_request:
   push:
@@ -32,4 +33,4 @@ jobs:
       - name: Build the docs with broken links denied
         env:
           RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
-        run: cargo doc --no-deps --locked
+        run: cargo doc --no-deps --locked --all-features
