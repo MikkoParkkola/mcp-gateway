@@ -555,9 +555,11 @@ providers:
     fn key_value_text_is_typed_by_the_tool_schema() {
         let schema = kv_schema();
         let resolved = resolve_for(&schema, None, &["count=007", "flag=TRUE", "zip=007"]);
-        assert_eq!(resolved["count"], json!(7), "{resolved}");
-        assert_eq!(resolved["flag"], json!(true), "{resolved}");
-        assert_eq!(resolved["zip"], json!("007"), "{resolved}");
+        assert_eq!(
+            resolved,
+            json!({ "count": 7, "flag": true, "zip": "007" }),
+            "count=007 is 7, flag=TRUE is true, zip=007 stays \"007\""
+        );
     }
 
     /// Typed JSON is the caller's own typing: `"007"` for an integer goes out
