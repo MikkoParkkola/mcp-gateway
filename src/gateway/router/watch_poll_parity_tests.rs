@@ -156,3 +156,76 @@ fn a_poll_runs_its_stages_in_order_and_no_primitive() {
         );
     }
 }
+
+/// One read-day capability served by a loopback endpoint, `read_only` as the
+/// executor will find it.
+fn served(port: u16, read_only: bool) -> Arc<crate::capability::CapabilityBackend> {
+    let definition = crate::capability::parse_capability(&format!(
+        "name: probe\n\
+         description: Read one day\n\
+         metadata:\n\
+         \x20 exposure: public\n\
+         \x20 read_only: {read_only}\n\
+         providers:\n\
+         \x20 primary:\n\
+         \x20   service: rest\n\
+         \x20   config:\n\
+         \x20     base_url: http://localhost:{port}\n\
+         \x20     path: /read\n\
+         \x20     method: GET\n"
+    ))
+    .expect("the capability parses");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .expect("client");
+    let executor =
+        Arc::new(crate::capability::CapabilityExecutor::new().with_test_http_client(client));
+    let backend = Arc::new(crate::capability::CapabilityBackend::new(
+        "probe_caps",
+        executor,
+    ));
+    backend
+        .register_capability(definition)
+        .expect("the capability registers");
+    backend
+}
+
+/// End to end, through the dispatch a poll really takes: the source read a
+/// read-only catalogue entry, but the definition the executor runs is not
+/// read-only (a reload in between), so the poll is refused before any
+/// request. The control polls the same route and arrives, so the refusal is
+/// the read-only call's, carried across the whole dispatch.
+#[tokio::test]
+async fn a_poll_runs_only_what_the_executor_finds_read_only() {
+    use crate::events::watch_source::{Charge, CredentialUse, Target};
+    let endpoint = crate::gateway::meta_mcp::grant_audit_fixture::Endpoint::start(false).await;
+    let catalogued = Target {
+        capability: "probe".into(),
+        backend: "probe_caps".into(),
+        read_only: true,
+        credential: CredentialUse::Free,
+        input_schema: json!({}),
+    };
+    for (read_only, arrives) in [(true, true), (false, false)] {
+        let fx = fixture(Answer::Ok, |_| {}).await;
+        fx.state
+            .meta_mcp
+            .set_capabilities(served(endpoint.port, read_only));
+        let client = fx
+            .state
+            .auth_config
+            .client_for_key("k-budget", &crate::gateway::auth::principal_of("k-budget"))
+            .expect("the fixture key is live");
+        let polled = super::super::watch_poll::poll_capability(
+            &fx.state,
+            &client,
+            "subscriber",
+            Charge::Global,
+            &catalogued,
+            json!({}),
+        )
+        .await;
+        assert_eq!(polled.is_ok(), arrives, "read_only {read_only}: {polled:?}");
+    }
+}

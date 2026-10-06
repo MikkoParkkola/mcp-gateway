@@ -487,3 +487,60 @@ async fn a_holder_without_access_is_revoked_before_any_call() {
         .expect_err("fan-out re-check refuses");
     assert_eq!(refused.code, -32012);
 }
+
+/// A shared poller counts against the principal that opened it, so one key
+/// cannot fill the gateway's pollers with distinct shared arguments.
+#[tokio::test]
+async fn shared_pollers_count_against_the_principal_that_opened_them() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut config = crate::config::EventsConfig::default();
+    config.watch.max_pollers_per_principal = 1;
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    let source = WatchSource::new(&hub, host);
+    let name = "watch.weather.changed";
+    let open = |n: u32| {
+        let arguments = json!({"arguments": {"city": n}});
+        let key = source.lifecycle_key("p", name, &arguments);
+        (key, arguments)
+    };
+    let (key, arguments) = open(1);
+    source
+        .on_first_subscriber(&key, "p", name, &arguments)
+        .await
+        .expect("the first");
+    let (key, arguments) = open(2);
+    let refused = source
+        .on_first_subscriber(&key, "p", name, &arguments)
+        .await
+        .expect_err("past the principal's cap");
+    assert_eq!(refused.code, -32013);
+}
+
+/// A poller that ended on its own leaves its entry behind until the core
+/// reconciles; a subscribe in that gap starts a fresh poller instead of
+/// joining the dead one.
+#[tokio::test]
+async fn a_subscribe_after_a_poller_exited_starts_a_fresh_one() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    let source = WatchSource::new(&hub, host);
+    let name = "watch.weather.changed";
+    let arguments = json!({});
+    let key = source.lifecycle_key("p", name, &arguments);
+    source
+        .on_first_subscriber(&key, "p", name, &arguments)
+        .await
+        .expect("started");
+    let exited = Arc::clone(&source.pollers.lock()[&key].stop);
+    exited.store(true, Ordering::Release);
+    source
+        .on_first_subscriber(&key, "p", name, &arguments)
+        .await
+        .expect("restarted");
+    assert!(
+        !source.pollers.lock()[&key].stop.load(Ordering::Acquire),
+        "a live poller holds the key"
+    );
+}
