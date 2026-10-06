@@ -31,7 +31,7 @@ env:
   # CPU figures are on the System allocator and not comparable). TARGET empty
   # builds the host default (glibc); a triple builds that target.
   MODE: profile
-  TARGET: ""
+  TARGET: aarch64-unknown-linux-musl
 
 jobs:
   profile:
