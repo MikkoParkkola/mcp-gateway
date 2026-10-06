@@ -39,6 +39,10 @@ fn a_returning_caller_sees_only_its_new_spend() {
         tools(&costs, "k", 1000 + IDLE),
         Some(vec![("alpha:write".to_string(), 1)])
     );
+    // The totals were reset with the breakdown, not only the tool rows
+    let snap = costs.snapshot("k", 1000 + IDLE).expect("fresh spend");
+    assert_eq!((snap.call_count, snap.total_tokens), (1, 10));
+    assert!((snap.total_cost_usd - 0.000_01).abs() < 1e-12);
 }
 
 #[test]

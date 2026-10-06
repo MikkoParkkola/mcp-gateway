@@ -34,6 +34,10 @@ pub(super) struct Caller {
     /// caller's own backend credential from the operator-named header.
     pub(super) inbound_headers: HeaderMap,
     pub(super) grant_subject: Option<GrantSubject>,
+    /// The caller's own spend key (MIK-7653), empty for a keyless caller.
+    /// Owned here so a session-less call's `BackendCall` can borrow it for
+    /// the whole route.
+    pub(super) caller_key: String,
 }
 
 impl Caller {
@@ -128,6 +132,7 @@ pub(super) async fn resolve_caller(
         verified_identity,
         inbound_headers: request.headers().clone(),
         grant_subject: None,
+        caller_key: String::new(),
     };
     validate_agent(state, &request, &caller)?;
 
@@ -152,6 +157,11 @@ pub(super) async fn resolve_caller(
         Ok(subject) => subject,
         Err(refusal) => return Err(super::super::identity::identity_refusal_response(refusal)),
     };
+    caller.caller_key = super::super::identity::caller_key(
+        caller.grant_subject.as_ref(),
+        caller.cert_identity.as_ref(),
+        caller.client.as_ref(),
+    );
     let key = super::super::identity::subject_key(
         caller.grant_subject.as_ref(),
         caller.cert_identity.as_ref(),
