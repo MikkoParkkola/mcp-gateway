@@ -471,3 +471,120 @@ async fn a_non_interactive_restart_cancels_nothing() {
         "a non-interactive rebuild opens no login"
     );
 }
+
+/// MIK-7982 C2 (NonInteractive): a health probe on an OAuth backend with no
+/// token never begins a login. It answers `AuthorizationRequired` at once,
+/// and the browser stays closed.
+#[tokio::test]
+async fn a_health_probe_never_begins_a_login() {
+    let origin = authorization_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let browser = Browser::new();
+    let backend = login_backend(&origin, dir.path(), &browser, Duration::from_secs(30), None);
+
+    tokio::select! {
+        outcome = backend.health_probe(Duration::from_secs(5)) => {
+            let error = outcome.expect_err("no token, so the probe cannot look");
+            assert!(
+                variant(&error).starts_with("AuthorizationRequired"),
+                "a probe that would need a login answers AuthorizationRequired: {error:?}"
+            );
+        }
+        _ = browser.opened(1, "the probe answering") => {
+            panic!("a health probe began an interactive login");
+        }
+    }
+    assert_eq!(browser.opens(), 0, "a probe never opens the browser");
+}
+
+/// An authorization server that issues a token good for `expires_in` seconds
+/// (no refresh token), and an MCP endpoint at `/mcp` that answers the
+/// handshake and lists no tools. Returns its origin.
+async fn issuing_server(expires_in: u64) -> String {
+    use axum::{Json, Router, http::StatusCode, routing::get, routing::post};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let metadata = json!({
+        "issuer": origin,
+        "authorization_endpoint": format!("{origin}/authorize"),
+        "token_endpoint": format!("{origin}/token"),
+    });
+    let mcp = |Json(request): Json<Value>| async move {
+        let Some(id) = request.get("id").cloned() else {
+            return (StatusCode::ACCEPTED, Json(Value::Null));
+        };
+        let body = match request["method"].as_str() {
+            Some("initialize") => json!({"jsonrpc": "2.0", "id": id, "result": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "login-window", "version": "1"},
+            }}),
+            Some("tools/list") => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}}),
+            _ => json!({"jsonrpc": "2.0", "id": id,
+                "error": {"code": -32601, "message": "method not found"}}),
+        };
+        (StatusCode::OK, Json(body))
+    };
+    let app = Router::new()
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(move || {
+                let body = metadata.clone();
+                async move { Json(body) }
+            }),
+        )
+        .route(
+            "/token",
+            post(move || async move {
+                Json(json!({
+                    "access_token": "login-window-token",
+                    "token_type": "Bearer",
+                    "expires_in": expires_in,
+                }))
+            }),
+        )
+        .route("/mcp", post(mcp));
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    origin
+}
+
+/// MIK-7982 r6 HIGH 2 (R6H2, C3): the transport is up, its token has lapsed,
+/// and a fill's request-time token step joins the login that opens. When the
+/// fill's deadline passes, nothing was handed to the transport yet, so it is
+/// `AuthorizationPending`, and the breaker counts nothing.
+#[tokio::test]
+async fn a_request_waiting_on_a_request_time_login_times_out_as_authorization_pending() {
+    // 65 s, less the 60 s early-expiry margin: good for the start, gone after.
+    let origin = issuing_server(65).await;
+    let dir = tempfile::tempdir().unwrap();
+    let browser = Browser::new();
+    let backend = login_backend(&origin, dir.path(), &browser, Duration::from_secs(1), None);
+    let start = spawn_start(&backend);
+    let url = browser.opened(1, "the start opening the browser").await;
+    approve(&url).await;
+    within("the start completing with a token", start)
+        .await
+        .expect("start task")
+        .expect("the approved login starts the backend");
+    sleep(Duration::from_secs(6)).await;
+    let before = backend.health_metrics().failure_count;
+
+    let error = within("the fill's own deadline", fill(&backend))
+        .await
+        .expect_err("no tools while the request-time login is pending");
+
+    assert_eq!(
+        browser.opens(),
+        2,
+        "the lapsed token opened a request-time login"
+    );
+    assert!(
+        variant(&error).starts_with("AuthorizationPending"),
+        "a deadline spent on the request-time login is AuthorizationPending: {error:?}"
+    );
+    assert_eq!(
+        backend.health_metrics().failure_count,
+        before,
+        "a pending login is not a backend failure"
+    );
+}
