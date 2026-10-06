@@ -11,7 +11,7 @@
 //! # Validation steps (in order)
 //!
 //! 1. **Required parameters** – every name listed under `required:` must be
-//!    present and non-null.
+//!    present, and non-null unless its `type` admits `"null"`.
 //! 2. **Unknown parameters** – keys in the argument object that are not listed
 //!    under `properties:` are rejected.
 //! 3. **Type validation with coercion** – each value is checked against the
@@ -305,17 +305,17 @@ fn validate_object(
     let mut violations = Vec::new();
     let mut coerced_map = serde_json::Map::new();
 
-    // Step 1 – required parameters.
+    // Step 1 – required parameters. A present null is refused unless the
+    // property's `type` admits `"null"` (MIK-7943).
     for name in &required {
         match arg_map.get(*name) {
             None => violations.push(ValidationViolation::new(
                 *name,
                 "required parameter is missing",
             )),
-            Some(Value::Null) => violations.push(ValidationViolation::new(
-                *name,
-                "required parameter must not be null",
-            )),
+            Some(Value::Null) if !admits_null(properties.get(*name)) => violations.push(
+                ValidationViolation::new(*name, "required parameter must not be null"),
+            ),
             _ => {}
         }
     }
@@ -524,6 +524,15 @@ fn validate_property(
 }
 
 // ── Type coercion ─────────────────────────────────────────────────────────────
+
+/// Whether a property's `type` is `"null"` or a list that names it.
+fn admits_null(prop_schema: Option<&Value>) -> bool {
+    match prop_schema.and_then(|p| p.get("type")) {
+        Some(Value::String(ty)) => ty == "null",
+        Some(Value::Array(types)) => types.iter().any(|t| t == "null"),
+        _ => false,
+    }
+}
 
 /// A union `type`: a value that already is one of the listed types is kept
 /// as sent; otherwise it takes the first listed type it coerces to. `"null"`

@@ -489,10 +489,11 @@ fn is_pure_placeholder(s: &str) -> bool {
 }
 
 /// Whether `{name}` names a parameter. Only literal braces are not: `{}` (or
-/// blank) and a JSON fragment such as `{"a":1}`, whose quoted key a parameter
-/// name never has. Any other name (`{first|50}`, `{filter[id]}`) is one.
+/// blank) and a JSON fragment such as `{"a":1}`, which opens with a quoted
+/// key. Any other name (`{first|50}`, `{filter[id]}`, `{a"b}`) is one.
 fn is_parameter_name(name: &str) -> bool {
-    !name.trim().is_empty() && !name.contains('"')
+    let name = name.trim_start();
+    !name.trim_end().is_empty() && !name.starts_with('"')
 }
 
 /// Returns `true` when a substituted string is still an unresolved placeholder.
@@ -517,11 +518,11 @@ fn detect_xml_format(headers: &reqwest::header::HeaderMap, response_format: &str
 }
 
 /// The call's parameters plus the schema `default` of every parameter the REST
-/// path names and the caller left out.
+/// URL names and the caller left out.
 ///
-/// A `{placeholder}` left in a URL path is always wrong, and a parameter that
+/// A `{placeholder}` left in a URL is always wrong, and a parameter that
 /// has a default can be left out by design (`ruleset_phase` of a Cloudflare
-/// ruleset call). Only path parameters get this: a default for a query or body
+/// ruleset call). Only URL parameters get this: a default for a query or body
 /// field stays the upstream's own to apply.
 pub(super) fn with_path_defaults<'a>(
     config: &crate::capability::definition::RestConfig,
@@ -532,12 +533,14 @@ pub(super) fn with_path_defaults<'a>(
         return std::borrow::Cow::Borrowed(params);
     };
     let mut merged: Option<serde_json::Map<String, Value>> = None;
+    let templates = url_templates(config);
     for (name, property) in properties {
         let Some(default) = property.get("default") else {
             continue;
         };
         let given = params.get(name).is_some_and(|value| !value.is_null());
-        if given || !config.path.contains(&format!("{{{name}}}")) {
+        let placeholder = format!("{{{name}}}");
+        if given || !templates.iter().any(|t| t.contains(&placeholder)) {
             continue;
         }
         merged
@@ -547,6 +550,19 @@ pub(super) fn with_path_defaults<'a>(
     merged.map_or(std::borrow::Cow::Borrowed(params), |map| {
         std::borrow::Cow::Owned(Value::Object(map))
     })
+}
+
+/// Every template `build_url` can fill: the endpoint, or the base URL with
+/// the path and each path a selector can pick (MIK-7943).
+fn url_templates(config: &crate::capability::definition::RestConfig) -> Vec<&str> {
+    if config.uses_endpoint() {
+        return vec![config.endpoint.as_str()];
+    }
+    let mut templates = vec![config.base_url.as_str(), config.path.as_str()];
+    if let Some(selector) = &config.path_selector {
+        templates.extend(selector.paths.values().map(String::as_str));
+    }
+    templates
 }
 
 #[cfg(test)]

@@ -167,8 +167,16 @@ pub async fn execute_tool_with_context(
         .find(tool_name)
         .ok_or_else(|| Error::Config(format!("Tool not found: '{tool_name}'")))?;
 
+    // The schema check a gateway call gets, before anything is sent
+    // (MIK-7943); the coerced arguments go on.
+    let verdict = crate::capability::validate_arguments(&args, &cap.schema.input);
+    if !verdict.is_valid() {
+        return Err(Error::Config(verdict.format_error(&cap.schema.input)));
+    }
     let executor = Arc::new(CapabilityExecutor::new());
-    executor.execute_with_context(cap, args, context).await
+    executor
+        .execute_with_context(cap, verdict.coerced, context)
+        .await
 }
 
 /// Build registry entries from the catalogue (for completion / listing).
