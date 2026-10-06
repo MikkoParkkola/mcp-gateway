@@ -245,7 +245,7 @@ pub enum Error {
     /// (MIK-7982). Every start that waited on that login ends with it.
     #[error(
         "authorization for backend '{backend}' was not completed within {window_secs}s; \
-         complete the login in the browser and retry"
+         retry to open a new login, then complete it in the browser"
     )]
     AuthorizationIncomplete {
         /// The backend whose login it was.
@@ -398,6 +398,12 @@ impl Error {
                 | Self::ToolNotFound(_)
                 | Self::TransportConnect(_)
                 | Self::BackendUnavailable(_)
+                // A login wait: the start never finished, so nothing was sent
+                // and the same-key retry after the login must run (MIK-7982).
+                | Self::AuthorizationIncomplete { .. }
+                | Self::AuthorizationCancelled { .. }
+                | Self::AuthorizationRequired { .. }
+                | Self::AuthorizationPending { .. }
         )
     }
 

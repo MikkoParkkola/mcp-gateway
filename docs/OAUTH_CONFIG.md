@@ -211,7 +211,7 @@ when the gateway is running detached.
 A login waits at most **300 s** for the browser callback. If nobody completes
 it in that time, the callback port is released and every start waiting on
 that login ends with `authorization for backend '<name>' was not completed
-within 300s; complete the login in the browser and retry`. The window is not
+within 300s; retry to open a new login, then complete it in the browser`. The window is not
 the backend's `timeout` (that bounds one request; a login with MFA routinely
 takes longer) and is not configurable in 4.0. With every HTTP step of the flow
 bounded at 30 s, a start's whole OAuth phase takes at most about 420 s.
