@@ -135,6 +135,37 @@ async fn two_spellings_of_one_grant_file_share_journal_and_lock() {
     assert_eq!(verbs, vec![(JournalVerb::Add, "g1".to_string())]);
 }
 
+/// MIK-7715: a CLI change made through a symlink edits the file it points at
+/// and leaves the link in place, so a gateway reading the real path sees it.
+// Unix-only: plants a file symlink, which Windows gates behind a privilege.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_change_through_a_symlink_keeps_the_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("grants.yaml");
+    let link = dir.path().join("link.yaml");
+    change(&real, upsert(row("g0", "r"), false)).await.unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    change(&link, upsert(row("g1", "r"), false)).await.unwrap();
+
+    let meta = std::fs::symlink_metadata(&link).unwrap();
+    assert!(
+        meta.file_type().is_symlink(),
+        "the link was replaced by a file"
+    );
+    let ids: Vec<_> = read_identity_grants_file(&real)
+        .await
+        .unwrap()
+        .grants
+        .into_iter()
+        .map(|g| g.grant_id)
+        .collect();
+    assert_eq!(ids, vec!["g0", "g1"]);
+    let verbs: Vec<_> = entries(&real).into_iter().map(|e| e.grant_id).collect();
+    assert_eq!(verbs, vec!["g0", "g1"]);
+}
+
 /// T1c: pinned bytes. A new serialised field on `IdentityGrant` changes every
 /// digest, and every grant would then read as edited out-of-band; it must be
 /// skipped when default.
