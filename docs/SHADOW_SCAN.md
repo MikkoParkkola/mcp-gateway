@@ -124,6 +124,8 @@ Current stable codes include:
 | `unauthenticated_http_endpoint` | HTTP transport lacks passive access metadata. |
 | `local_http_without_auth_metadata` | Loopback HTTP transport lacks passive access metadata. |
 | `network_http_without_auth_metadata` | Non-loopback HTTP transport lacks passive access metadata. |
+| `http_auth_header_configured` | Client config sends an `Authorization`, `Proxy-Authorization` or `X-API-Key` header (judged by name; the value never reaches the report). `auth_exposure` is `http_auth_header`; the asset is not counted as network-exposed or quarantined. |
+| `server_auth_unverified` | Paired with `http_auth_header_configured`: a passive scan cannot verify the server enforces the header. |
 | `local_stdio_process` | Local stdio server was found in passive evidence. |
 | `sensitive_data_domain` | Name, description, or command indicates sensitive data access. |
 | `high_privilege_domain` | Name, description, or command indicates high-privilege local access. |
