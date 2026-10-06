@@ -95,3 +95,32 @@ async fn a_key_caller_delivery_record_is_unchanged() {
     assert_eq!(delivery["who"]["account"], "alpha-client", "{delivery}");
     assert!(delivery["who"].get("subject").is_none(), "{delivery}");
 }
+
+/// MIK-7938 safety claim: with no verified subject, the record's `who` is
+/// exactly what `AuditWho::from_actor_id(caller)` produced before this change,
+/// byte for byte, for an anonymous and for an API-key caller.
+#[tokio::test]
+async fn a_record_without_a_subject_is_unchanged() {
+    for (caller, setup, name) in [
+        (Caller::Anonymous, Setup::default(), "anonymous"),
+        (
+            Caller::Key,
+            Setup {
+                auth: Some(key_for_alpha(None)),
+                ..Setup::default()
+            },
+            "alpha-client",
+        ),
+    ] {
+        let fx = fixture(setup).await;
+        let (status, body) = post(&fx, "alpha", &tools_call("t"), &caller).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let delivery = only_attempt(&fx);
+        let before = crate::security::audit::AuditWho::from_actor_id(name);
+        assert_eq!(
+            serde_json::to_string(&delivery["who"]).unwrap(),
+            serde_json::to_string(&serde_json::to_value(&before).unwrap()).unwrap(),
+            "{delivery}"
+        );
+    }
+}
