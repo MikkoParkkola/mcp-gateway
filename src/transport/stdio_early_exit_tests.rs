@@ -238,3 +238,24 @@ async fn an_early_exit_logs_no_child_stderr() {
         "child stderr reached the log:\n{text}"
     );
 }
+
+/// MIK-7978: the log record of a classified exit names its class and needle,
+/// and carries no `stderr` field at all.
+#[tokio::test]
+async fn an_early_exit_logs_its_class_and_needle() {
+    let (captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
+    let t = transport(
+        "echo \"Error: Cannot find module secret-path-7978\" >&2; exit 3",
+        &[],
+    );
+    let _ = start_err(&t).await;
+    let text = captured.text();
+    let line = text
+        .lines()
+        .find(|l| l.contains("exited before initialize"))
+        .unwrap_or_else(|| panic!("the early exit is logged:\n{text}"));
+    assert!(line.contains("missing_module"), "{line}");
+    assert!(line.contains("Cannot find module"), "{line}");
+    assert!(!line.contains("stderr="), "{line}");
+    assert!(!text.contains("secret-path-7978"), "{text}");
+}

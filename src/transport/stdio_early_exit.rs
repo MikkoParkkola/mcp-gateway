@@ -167,7 +167,7 @@ impl StdioTransport {
     // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
     #[cfg(all(test, unix))]
     pub(super) fn start_failure_class(&self) -> Option<(&'static str, Option<&'static str>)> {
-        self.start.failure.lock().clone()
+        *self.start.failure.lock()
     }
 
     /// The `initialize` request, raced against this start's stdout closing.
