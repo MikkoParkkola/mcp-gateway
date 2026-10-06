@@ -41,9 +41,10 @@ static SECRET_VALUE: LazyLock<Regex> = LazyLock::new(|| {
 /// and plain numbers stay readable.
 static LONG_TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[A-Za-z0-9_-]{24,}").expect("valid"));
-/// A long base64 run, such as a PEM key body line, which `+` and `/` would
-/// otherwise cut into pieces shorter than [`LONG_TOKEN`]'s floor. Longer
-/// than that floor so a slash-separated path is rarely caught.
+/// A long base64 run that `+` and `/` would otherwise cut into pieces
+/// shorter than [`LONG_TOKEN`]'s floor. Masked only when it holds a `+` or
+/// ends in `=` padding, so a slash-separated path stays readable; a PEM
+/// body line without either cue is caught by its block instead.
 static BASE64_RUN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[A-Za-z0-9+/]{40,}={0,2}").expect("valid"));
 #[cfg(feature = "firewall")]
@@ -51,14 +52,25 @@ static REDACTOR: LazyLock<crate::security::firewall::redactor::Redactor> =
     LazyLock::new(crate::security::firewall::redactor::Redactor::new);
 
 /// The tail as shown: UTF-8 lines only, control characters as spaces,
-/// credentials masked, each line and the line count capped.
+/// credentials masked, each line and the line count capped. A line inside a
+/// `-----BEGIN`/`-----END` block is masked whole.
 pub(super) fn sanitize(tail: &VecDeque<Vec<u8>>) -> Vec<String> {
+    let mut in_block = false;
     let lines: Vec<String> = tail
         .iter()
         .filter_map(|raw| std::str::from_utf8(raw).ok())
         .map(|line| line.trim_end_matches(['\r', '\n']))
         .filter(|line| !line.trim().is_empty())
-        .map(|line| mask(line).chars().take(SHOWN_CHARS).collect())
+        .map(|line| {
+            let body = in_block && !line.contains("-----END");
+            if line.contains("-----BEGIN") {
+                in_block = true;
+            } else if line.contains("-----END") {
+                in_block = false;
+            }
+            let shown = if body { MASK.to_string() } else { mask(line) };
+            shown.chars().take(SHOWN_CHARS).collect()
+        })
         .collect();
     let skip = lines.len().saturating_sub(SHOWN_LINES);
     lines.into_iter().skip(skip).collect()
@@ -76,13 +88,22 @@ fn mask(line: &str) -> String {
     let line = URL_USERINFO.replace_all(&line, format!("${{1}}{MASK}@"));
     let line = AUTH_SCHEME.replace_all(&line, format!("${{1}} {MASK}"));
     let line = SECRET_VALUE.replace_all(&line, format!("${{1}}${{2}}{MASK}"));
-    let line = BASE64_RUN.replace_all(&line, mask_mixed);
-    LONG_TOKEN.replace_all(&line, mask_mixed).into_owned()
+    let line = BASE64_RUN.replace_all(&line, |run: &regex::Captures<'_>| {
+        let run = &run[0];
+        let cue = run.contains('+') || run.ends_with('=');
+        if cue {
+            mask_mixed(run)
+        } else {
+            run.to_string()
+        }
+    });
+    LONG_TOKEN
+        .replace_all(&line, |run: &regex::Captures<'_>| mask_mixed(&run[0]))
+        .into_owned()
 }
 
 /// Only a run holding both a letter and a digit is masked.
-fn mask_mixed(run: &regex::Captures<'_>) -> String {
-    let run = &run[0];
+fn mask_mixed(run: &str) -> String {
     let mixed =
         run.bytes().any(|b| b.is_ascii_alphabetic()) && run.bytes().any(|b| b.is_ascii_digit());
     if mixed { MASK } else { run }.to_string()
@@ -209,15 +230,45 @@ mod tests {
 
     #[test]
     fn a_base64_key_body_is_masked_whole() {
+        // Letters and digits left once the masks are taken out.
+        let residue = |s: &str| {
+            s.replace(MASK, "")
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .count()
+        };
         let body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcw+ggSjAgEAAoIB/AQC7k9x2Q==";
         for line in [body.to_string(), format!("stderr: {body} end")] {
             let out = one(&line);
             assert!(out.contains(MASK), "{line} -> {out}");
-            assert!(!out.contains("BADANBgkqhkiG9w0B"), "{out}");
-            assert!(!out.contains("AoIB/AQC7k9x2Q"), "{out}");
+            assert_eq!(residue(&out), residue(&line.replace(body, "")), "{out}");
         }
-        let path = "/usr/lib/node/modules/server/filesystem/dist/index";
-        assert_eq!(one(path), path, "a path without digits stays");
+        for path in [
+            "/usr/lib/node/modules/server/filesystem/dist/index",
+            "/usr/lib/python3/dist/packages/mcp/server/filesystem.py",
+        ] {
+            assert_eq!(one(path), path, "a path stays readable");
+        }
+    }
+
+    #[test]
+    fn a_block_body_without_base64_cues_is_masked() {
+        let body = "MIIEvQIBADANBg/kqhkiG9w0BAQEFAASCBKcwggSjAgEA/AoIBAQC7k9x2Q";
+        let out = shown(&[
+            b"-----BEGIN EXAMPLE BLOCK-----",
+            body.as_bytes(),
+            b"-----END EXAMPLE BLOCK-----",
+            b"after the block",
+        ]);
+        assert_eq!(
+            out,
+            [
+                "-----BEGIN EXAMPLE BLOCK-----",
+                MASK,
+                "-----END EXAMPLE BLOCK-----",
+                "after the block"
+            ]
+        );
     }
 
     #[test]
