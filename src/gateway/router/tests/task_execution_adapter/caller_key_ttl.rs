@@ -58,7 +58,7 @@ fn assert_reclaimed_once_after(lifecycle: &SessionLifecycle, reclaimed: &Reclaim
     );
     let keys = reclaimed.lock().expect("recorder").clone();
     assert!(
-        keys.len() == 1 && keys[0].starts_with("credential:"),
+        keys.len() == 1 && keys[0].starts_with("subject:") && keys[0].ends_with(":alice"),
         "reclaimed under a key that is not the caller's: {keys:?}"
     );
 }
