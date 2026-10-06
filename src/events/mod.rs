@@ -129,6 +129,12 @@ pub(crate) trait EventSource: Send + Sync {
     /// The last subscription for `key` went away (unsubscribe, expiry,
     /// revocation or withdrawal).
     async fn on_last_subscriber(&self, _key: &str) {}
+    /// Whether a delivery of event type `name` is charged to a budget. A
+    /// source reporting on budgets answers `false`, so exhausting a budget
+    /// does not charge the event that reports it (event-sources design §3).
+    fn charges(&self, _name: &str) -> bool {
+        true
+    }
 }
 
 /// Distinct callback hosts the verification limiter tracks before it sheds
