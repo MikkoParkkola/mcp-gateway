@@ -377,6 +377,80 @@ async fn an_unparseable_authorization_endpoint_is_refused_before_any_browser_ope
     assert_eq!(*opened.lock().unwrap(), 0, "no browser is opened");
 }
 
+/// A loopback port nothing listens on, for a callback the test must see freed.
+async fn free_port() -> u16 {
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    probe.local_addr().unwrap().port()
+}
+
+/// The callback listener on `port` is gone: the port binds again. An aborted
+/// listener drops on its next poll, so this allows it a moment.
+async fn assert_port_released(port: u16) {
+    let released = async {
+        while tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .is_err()
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), released)
+        .await
+        .expect("the callback listener is released");
+}
+
+/// A client whose callback listens on a known port, and whose browser opens
+/// without anyone approving: `opened` fires once the URL is handed over.
+async fn unanswered_client(dir: &std::path::Path) -> (OAuthClient, u16, Arc<tokio::sync::Notify>) {
+    let mut client = client(dir, Some("https://as.example"));
+    let port = free_port().await;
+    client.callback_port = Some(port);
+    let opened = Arc::new(tokio::sync::Notify::new());
+    let signal = Arc::clone(&opened);
+    client.open_browser = Box::new(move |_| {
+        signal.notify_one();
+        true
+    });
+    (client, port, opened)
+}
+
+/// MIK-7982.BOUND.1: an authorization nobody completes ends on its own when
+/// the 300 s authorization window passes, naming the backend and telling the
+/// caller to retry, and its callback port is free afterwards.
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_authorization_ends_at_the_window_and_frees_the_port() {
+    let dir = tempfile::tempdir().unwrap();
+    let (client, port, _opened) = unanswered_client(dir.path()).await;
+
+    let outcome = tokio::time::timeout(Duration::from_secs(301), client.authorize()).await;
+
+    let error = outcome
+        .expect("an unanswered authorization must end on its own within the 300 s window")
+        .expect_err("no callback arrived, so there is no token");
+    let text = error.to_string();
+    assert!(
+        text.contains(BACKEND) && text.contains("300s") && text.contains("retry"),
+        "the error names the backend, the window and the remedy: {text}"
+    );
+    assert_port_released(port).await;
+}
+
+/// MIK-7982.BOUND.3 (root cause F2): an authorization whose future is dropped
+/// mid-wait (a cancelled or timed-out caller) closes its callback listener
+/// rather than leaving it running detached.
+#[tokio::test]
+async fn a_dropped_authorization_closes_its_callback_listener() {
+    let dir = tempfile::tempdir().unwrap();
+    let (client, port, opened) = unanswered_client(dir.path()).await;
+
+    tokio::select! {
+        _ = client.authorize() => panic!("nobody approved, so the flow cannot finish"),
+        () = opened.notified() => {}
+    }
+
+    assert_port_released(port).await;
+}
+
 impl OAuthClient {
     /// A live (one-hour) token in place, as a completed flow would leave it,
     /// for a transport test that needs `get_token` to answer without a flow.
