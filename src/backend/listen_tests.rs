@@ -148,6 +148,17 @@ async fn concurrent_resolutions_share_one_start_task() {
     assert_eq!(resolutions(&backend), 1, "one start task for five waits");
 }
 
+/// T12b: the wait is bounded by the backend timeout even when the start
+/// itself never ends (here it queues behind a held start lock).
+#[tokio::test]
+async fn a_start_that_never_ends_still_bounds_the_wait() {
+    let backend = backend_at(&silent_url().await);
+    let entry = backend.shared_entry();
+    let _held = entry.start_lock.lock().await;
+    let waited = tokio::time::timeout(Duration::from_secs(5), backend.resolve_for_events()).await;
+    assert_eq!(waited, Ok(false), "the wait outlived the backend timeout");
+}
+
 /// T20: a settled resolution is cleared, so the next subscribe starts anew
 /// rather than reusing an old outcome.
 #[tokio::test]
