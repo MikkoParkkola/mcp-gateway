@@ -240,6 +240,36 @@ async fn a_reserved_env_name_is_not_scrubbed_from_the_result() {
     assert!(!ok.to_string().contains(secret), "{ok}");
 }
 
+/// MIK-7953's safety claim: a reserved name declared in `env` never delivers
+/// the operator's value to the child; the child sees the value the gateway
+/// sets. Unscrubbing HOME from results rests on this.
+#[tokio::test]
+async fn a_reserved_env_name_never_delivers_the_operator_value() {
+    let home = "/home-7953-operator";
+    let (_dir, executor) = executor_with_env(&format!("HOME={home}\n"));
+    let cap = probe(
+        "echo",
+        "      x:\n        type: string",
+        "",
+        "      env: [HOME]\n",
+    );
+    let Some(ProcessConfig::Cli(config)) = cap.providers.process.get("primary") else {
+        panic!("not a cli provider");
+    };
+    let ok = executor
+        .execute_cli(
+            &cap,
+            config,
+            &json!({}),
+            &CapabilityExecutionContext::default(),
+        )
+        .await
+        .unwrap();
+    let seen = ok["home"].as_str().expect("the probe reports HOME");
+    assert!(!seen.is_empty(), "{ok}");
+    assert_ne!(seen, home, "the child got the operator's HOME: {ok}");
+}
+
 /// MIK-7955.FIX.1: no secret survives in the output, whether it is part of
 /// the marker or formed where the marker meets the text around it.
 #[test]
