@@ -401,6 +401,7 @@ impl MetaMcp {
             session_id,
             api_key_name,
             trace_id,
+            caller_key: None,
         })?;
         #[cfg(feature = "cost-governance")]
         let cost_warnings = std::mem::take(&mut admission.warnings);
@@ -621,6 +622,7 @@ impl MetaMcp {
             session_id,
             api_key_name,
             trace_id,
+            caller_key: None,
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
         result = gated;

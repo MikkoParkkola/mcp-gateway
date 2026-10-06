@@ -184,6 +184,15 @@ pub(super) async fn admit<'a>(
         identity: caller.verified_identity.as_ref(),
         managed: propagation.managed.as_ref(),
     };
+    // A session-less call's spend goes to its caller's own report (MIK-7653);
+    // a sessioned one is reported under its session, so it needs no key.
+    let caller_key = route.session_id.is_none_or(str::is_empty).then(|| {
+        super::super::identity::caller_key(
+            caller.grant_subject.as_ref(),
+            caller.cert_identity.as_ref(),
+            client,
+        )
+    });
     let call = BackendCall {
         server: name,
         tool: envelope
@@ -195,6 +204,7 @@ pub(super) async fn admit<'a>(
         session_id: route.session_id,
         api_key_name: client.map(|c| c.name.as_str()),
         trace_id: "",
+        caller_key: caller_key.as_deref(),
     };
     if envelope.method == "tools/call"
         && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call, preflight.signing_scope)
