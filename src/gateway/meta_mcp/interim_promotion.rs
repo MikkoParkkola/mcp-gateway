@@ -4,8 +4,8 @@
 //!
 //! The synchronous request thread wraps every meta-tool result:
 //! `wrap_tool_success` (`meta_mcp_helpers.rs:748`) pretty-prints the whole
-//! value into `content[0].text` and states `is_error: false`. For a completed
-//! call that is correct. For an interim round it is the defect the dispatch
+//! value into `content[0].text` and states only the payload's own top-level
+//! `isError`. For a completed call that is correct. For an interim round it is the defect the dispatch
 //! path already documents on its sibling entry point — `resultType:
 //! "input_required"` inside a JSON string is not a claim any classifier can
 //! read, so a question is committed as an answer. The task worker escaped via

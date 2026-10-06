@@ -1,4 +1,4 @@
-sha256: 4a2d26b4a60ef028b6f07d01378e24aba1b54c237e333f60ef121cfa9578e70c
+sha256: 1468f5be8548d021eba16bf3bd99349b4fe78a2264d4f7f2a809606a6087998b
 fulcrum: "1.0"
 name: sentry_get_issue
 description: |
@@ -15,8 +15,8 @@ schema:
         pattern: "^[a-z0-9][a-z0-9_-]*$"
       issue_id:
         type: string
-        description: "Issue ID, the digits Sentry shows. A string, because IDs can exceed what a JSON number holds exactly"
-        pattern: "^[0-9]+$"
+        description: "Issue ID, the digits Sentry shows (no leading zero). A string, because IDs can exceed what a JSON number holds exactly"
+        pattern: "^[1-9][0-9]*$"
     required:
       - organization
       - issue_id
