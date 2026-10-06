@@ -117,8 +117,10 @@ impl StdioTransport {
         crate::security::summarize_stdio_command(&self.command)
     }
 
-    /// The child's command line, piped stdio, environment and working directory.
-    fn spawn_command(&self) -> Result<Command> {
+    /// The child's command, with piped stdio, environment and working
+    /// directory, and the argv it was parsed into (the early-exit report
+    /// redacts against it).
+    fn spawn_command(&self) -> Result<(Command, Vec<String>)> {
         let parts = crate::transport::split_command(&self.command).ok_or_else(|| {
             Error::Config(format!(
                 "Invalid stdio command quoting: {}",
@@ -144,7 +146,7 @@ impl StdioTransport {
         if let Some(ref cwd) = self.cwd {
             cmd.current_dir(cwd);
         }
-        Ok(cmd)
+        Ok((cmd, parts))
     }
 
     /// Start the subprocess and complete the MCP handshake.
@@ -158,7 +160,8 @@ impl StdioTransport {
     pub async fn start(self: &Arc<Self>) -> Result<()> {
         self.failure.begin();
 
-        let mut child = spawn_in_own_tree(self.spawn_command()?)?;
+        let (cmd, parts) = self.spawn_command()?;
+        let mut child = spawn_in_own_tree(cmd)?;
 
         let stdin = child
             .stdin()
