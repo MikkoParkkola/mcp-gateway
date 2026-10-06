@@ -75,6 +75,9 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
     config
         .validate_with_env(&config.env_overlay())
         .map_err(|e| format!("Failed to validate config: {e}"))?;
+    if let Some(edited) = text_keeping_comments(path, config) {
+        return write_yaml(path, &edited);
+    }
     let yaml =
         serde_yaml::to_string(config).map_err(|e| format!("Failed to serialize config: {e}"))?;
     write_yaml(path, &yaml)
@@ -83,47 +86,36 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
 #[path = "config_persistence_splice.rs"]
 mod splice;
 
-/// [`write_config`] for `config`, which is `before` (the file at `path`) with
-/// the one backend `name` added or removed, keeping the file's comments: that
-/// entry is edited in the file's text rather than the whole config
-/// re-serialised. When the edit cannot be proven to load as `config`, this
-/// is [`write_config`].
+/// The file at `path` with `config`'s one changed backend edited into its
+/// text, keeping the file's comments, when `config` differs from what the
+/// file loads as by exactly one backend added or removed. `None` sends
+/// [`write_config`] to the full re-serialisation.
 ///
-/// Internal to the gateway CLI, not a library API: public only because the
-/// `add` and `remove` commands live in the binary crate, and hidden from the
-/// docs so no library user comes to rely on it.
-///
-/// # Errors
-///
-/// Returns `Err` on validation, serialisation, or I/O failure.
-#[doc(hidden)]
-pub fn write_config_keeping_comments(
-    path: &Path,
-    before: &Config,
-    config: &Config,
-    name: &str,
-) -> Result<(), String> {
-    let edited = unchanged_since_load(path, before)
-        .and_then(|original| splice::with_backend_edited(&original, before, config, name));
-    let Some(edited) = edited else {
-        return write_config(path, config);
-    };
-    config
-        .validate_with_env(&config.env_overlay())
-        .map_err(|e| format!("Failed to validate config: {e}"))?;
-    write_yaml(path, &edited)
+/// The file is loaded through the strict loader from a single read, and that
+/// exact text is the one edited: a file that does not load, or that another
+/// writer changed into something more than one backend away, is rewritten in
+/// full instead. An edit landing after that read is overwritten by the rename,
+/// as the full rewrite overwrites it.
+fn text_keeping_comments(path: &Path, config: &Config) -> Option<String> {
+    let (before, text) = Config::load_literal_with_text(path).ok()?;
+    let name = sole_changed_backend(&before, config)?;
+    splice::with_backend_edited(&text, &before, config, &name)
 }
 
-/// The text at `path` if the file still loads, through the strict loader, as
-/// `before`: a file another writer changed since `before` was loaded is never
-/// spliced into, and gets the full rewrite instead.
-///
-/// The text is the one the strict checks ran on, from a single read, so no
-/// other bytes can be spliced. An edit landing after that read is overwritten
-/// by the rename, as the full rewrite overwrites it.
-fn unchanged_since_load(path: &Path, before: &Config) -> Option<String> {
-    let (reloaded, text) = Config::load_literal_with_text(path).ok()?;
-    (serde_json::to_value(reloaded).ok()? == serde_json::to_value(before).ok()?).then_some(text)
+/// The one backend name in exactly one of `before` and `config`.
+fn sole_changed_backend(before: &Config, config: &Config) -> Option<String> {
+    let mut changed = before
+        .backends
+        .keys()
+        .filter(|name| !config.backends.contains_key(*name))
+        .chain(
+            config
+                .backends
+                .keys()
+                .filter(|name| !before.backends.contains_key(*name)),
+        );
+    let name = changed.next()?.clone();
+    changed.next().is_none().then_some(name)
 }
 
 /// How many times a rename is retried before the write is reported failed.

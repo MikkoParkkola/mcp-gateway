@@ -106,9 +106,7 @@ fn remove_keeps_hand_written_comments() {
 #[test]
 fn a_file_another_writer_broke_is_not_spliced_into() {
     use mcp_gateway::config::{BackendConfig, Config};
-    use mcp_gateway::config_persistence::{
-        load_existing_or_default, write_config_keeping_comments,
-    };
+    use mcp_gateway::config_persistence::{load_existing_or_default, write_config};
 
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
@@ -124,7 +122,7 @@ fn a_file_another_writer_broke_is_not_spliced_into() {
     )
     .expect("write");
 
-    write_config_keeping_comments(&path, &before, &config, "new").expect("write config");
+    write_config(&path, &config).expect("write config");
     let written = std::fs::read_to_string(&path).expect("read");
     let loaded = Config::load_literal(Some(&path))
         .unwrap_or_else(|e| panic!("the written config must load: {e}\n{written}"));
@@ -137,9 +135,7 @@ fn a_file_another_writer_broke_is_not_spliced_into() {
 #[test]
 fn an_invalid_config_is_refused_and_left_unwritten() {
     use mcp_gateway::config::BackendConfig;
-    use mcp_gateway::config_persistence::{
-        load_existing_or_default, write_config_keeping_comments,
-    };
+    use mcp_gateway::config_persistence::{load_existing_or_default, write_config};
 
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
@@ -151,7 +147,7 @@ fn an_invalid_config_is_refused_and_left_unwritten() {
         serde_yaml::from_str("command: echo\nruntime_profile: nosuch\n").expect("backend");
     config.backends.insert("new".into(), backend);
 
-    assert!(write_config_keeping_comments(&path, &before, &config, "new").is_err());
+    assert!(write_config(&path, &config).is_err());
     assert_eq!(
         std::fs::read_to_string(&path).expect("read"),
         "# mine\nbackends: {}\n"
