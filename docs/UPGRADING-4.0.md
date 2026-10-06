@@ -172,6 +172,7 @@ backend" and "fails a capability file" first.**
 | 145 | The `plugin` command is removed (`search`, `install`, `uninstall`, `list`), with `mcp_gateway::registry::marketplace` and `mcp_gateway::config::MarketplaceConfig`; a `marketplace:` block in the config loads and warns once | Delete the `marketplace:` block and `~/.mcp-gateway/plugins`; add tools as `backends:` entries or capability files (`mcp-gateway cap`) |
 | 146 | An OAuth backend whose authorization server, authorization endpoint, token endpoint or registration endpoint is `http://` to a host off this machine fails at connect, and so does a redirect from one to such a URL; a capability that sends a credential (`auth.required`) and names an `http://` `base_url` or `endpoint` off this machine fails to load, and a templated one is refused at call time. `http://` to a loopback host is allowed, and is no longer proxied | Serve the authorization server and the capability's API over `https://`, or on a loopback host (`localhost`, `127.0.0.1`, `[::1]`). `allow_cleartext_credentials` does not cover either |
 | 147 | A capability whose declared output root is not object-shaped (an array, a string, a type list) advertises `outputSchema` as an object and publishes `structuredContent` under `items` | Read `structuredContent.items` for the nine shipped capabilities listed below, and for your own; the text content is unchanged |
+| 148 | `mcp_gateway::cli::invoke::resolve_args` takes a fourth parameter, `kv_schema: Option<&Value>`: `key=value` text is typed by that input schema; `None` keeps the old behaviour | An embedder passes the tool's input schema, or `None` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3957,6 +3958,16 @@ The nested schema is given an `$id` of the form
 `$schema` is repeated on the wrapper. A schema in the draft-04 dialect, which
 scopes references with `id` rather than `$id`, is not covered. A root with `properties` and no `type` is
 advertised with `type: "object"` added and is otherwise unchanged.
+
+## 148. `resolve_args` takes the tool's input schema
+
+**Startup:** no notice
+
+`mcp_gateway::cli::invoke::resolve_args` gains a fourth parameter,
+`kv_schema: Option<&Value>`. With a schema, a `key=value` value is typed by it as a
+gateway call coerces it (`count=007` against an integer is `7`, `flag=TRUE` against a boolean is
+`true`, `zip=007` against a string stays `"007"`); JSON from `--args` or stdin is left as
+written. `None` keeps the old behaviour. `mcp-gateway invoke` passes the tool's schema.
 
 ## Upgrading from 3.5.x: a walkthrough
 
