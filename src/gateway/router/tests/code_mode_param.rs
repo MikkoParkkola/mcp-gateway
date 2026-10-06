@@ -249,8 +249,14 @@ async fn a_codemode_param_caller_gets_code_mode_recovery_hints() {
         "params": {"name": "gateway_execute",
                    "arguments": {"tool": "absent:missing", "arguments": {}}}
     });
+    // Over HTTP the dispatch answer, hint included, rides in the tool
+    // result's text as JSON.
     let hint = |answer: &Value| {
-        answer["result"]["recovery"]["suggest"]
+        let text = answer["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no tool result in {answer}"));
+        let inner: Value = serde_json::from_str(text).expect("the tool result is JSON");
+        inner["recovery"]["suggest"]
             .as_str()
             .unwrap_or_else(|| panic!("no recovery hint in {answer}"))
             .to_owned()
