@@ -544,6 +544,37 @@ mod tests {
         }
     }
 
+    /// Review follow-up to MIK-7941: empty userinfo is stripped by the URL
+    /// parser but published verbatim, so the raw authority is checked; an `@`
+    /// in the path is fine.
+    #[test]
+    fn issuers_with_empty_userinfo_are_not_advertised() {
+        let config = config_with_issuers(
+            true,
+            true,
+            &[
+                "https://@idp.corp.internal",
+                "https://:@idp.corp.internal/tenant",
+                "https://idp.corp.internal/t@nant",
+            ],
+        );
+        let meta = build_protected_resource_metadata(&config, &config, None).unwrap();
+        assert_eq!(
+            meta.authorization_servers,
+            ["https://idp.corp.internal/t@nant"]
+        );
+    }
+
+    /// Agent auth refuses every bearer that is not a registered agent's
+    /// token, an OIDC ID token included, so no issuer is named while it is on.
+    #[test]
+    fn issuers_are_not_advertised_under_agent_auth() {
+        let mut agent = config_with_issuers(true, true, &["https://idp.corp.internal"]);
+        agent.agent_auth.enabled = true;
+        let meta = build_protected_resource_metadata(&agent, &agent, None).unwrap();
+        assert!(meta.authorization_servers.is_empty());
+    }
+
     #[test]
     fn advertised_issuers_are_unique_and_never_blank() {
         let config = config_with_issuers(
