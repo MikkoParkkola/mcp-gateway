@@ -389,3 +389,32 @@ async fn a_backend_stopped_mid_call_is_not_executed_again() {
     );
     assert!(format!("{retry:?}").contains(UNCERTAIN), "{retry:?}");
 }
+
+/// A lost round that finds its reservation already settled by another path
+/// leaves that path's answer in place: it neither reports settling the key nor
+/// replaces the stored error with the uncertainty notice.
+#[test]
+fn a_lost_round_leaves_an_already_settled_key_alone() {
+    let cache = Arc::new(IdempotencyCache::new());
+    let crate::idempotency::GuardOutcome::Proceed(mut reservation) =
+        crate::idempotency::enforce(&cache, KEY, "fp").expect("a fresh key is admitted")
+    else {
+        panic!("a fresh key must proceed");
+    };
+    let first = json!({ "code": -32000, "message": "first answer" });
+    reservation.fail(&first);
+
+    let settled = super::settle_lost_round(
+        &crate::Error::Transport("reset".to_string()),
+        Some(&mut reservation),
+        super::LostRoundRoute::Meta,
+    );
+
+    assert!(!settled, "an already settled key was settled again");
+    match crate::idempotency::enforce(&cache, KEY, "fp").expect("the key is stored") {
+        crate::idempotency::GuardOutcome::CachedError(stored) => {
+            assert_eq!(stored, first, "the first answer was overwritten");
+        }
+        other => panic!("the stored answer changed: {other:?}"),
+    }
+}
