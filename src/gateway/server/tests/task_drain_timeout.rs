@@ -159,7 +159,7 @@ async fn eof_with_a_held_task() {
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: url,
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             ..BackendConfig::default()

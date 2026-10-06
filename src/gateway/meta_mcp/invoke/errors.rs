@@ -5,7 +5,9 @@
 use serde_json::{Value, json};
 
 use super::audit;
-use crate::gateway::recovery::{ErrorCategory, RecoveryContext, attach_recovery, recovery_for};
+use crate::gateway::recovery::{
+    ErrorCategory, MetaSurface, RecoveryContext, attach_recovery, recovery_for_surface,
+};
 use crate::{Error, Result};
 
 // ============================================================================
@@ -18,10 +20,15 @@ use crate::{Error, Result};
 /// The audit record still says `error` with the failure's code (D1-d.2). A11:
 /// an upstream-rejection mark sets the hint's code and retry flag. Shared by
 /// the first dispatch and a bridged continuation, so both answer alike.
-pub(super) fn dispatch_error_result(e: &Error, tool: &str, server: &str) -> Value {
+pub(super) fn dispatch_error_result(
+    e: &Error,
+    tool: &str,
+    server: &str,
+    surface: MetaSurface,
+) -> Value {
     audit::note_dispatch_failure(e);
     let (category, detail) = classify_dispatch_error(e);
-    let mut hint = recovery_for(
+    let mut hint = recovery_for_surface(
         category,
         RecoveryContext {
             tool: Some(tool),
@@ -29,6 +36,7 @@ pub(super) fn dispatch_error_result(e: &Error, tool: &str, server: &str) -> Valu
             detail: Some(&detail),
             ..Default::default()
         },
+        surface,
     );
     if let Some(rejection) = crate::personal_accounts::refusal::upstream_rejection(e) {
         rejection.error_code.clone_into(&mut hint.error_code);
@@ -41,6 +49,23 @@ pub(super) fn dispatch_error_result(e: &Error, tool: &str, server: &str) -> Valu
         }),
         hint,
     )
+}
+
+impl super::MetaMcp {
+    /// The meta-tools this gateway's callers can see, for recovery hints: a
+    /// Code Mode gateway exposes only `gateway_search` and `gateway_execute`,
+    /// and `exposed_meta_tools` can hide either mode's discovery tool.
+    pub(super) fn hint_surface(&self) -> MetaSurface {
+        let surface = if self.code_mode_enabled {
+            MetaSurface::CodeMode
+        } else {
+            MetaSurface::Standard
+        };
+        match surface.discovery_tool() {
+            Some(tool) if !self.meta_tool_exposure.is_exposed(tool) => MetaSurface::Undiscoverable,
+            _ => surface,
+        }
+    }
 }
 
 /// Map a dispatch [`Error`] to an [`ErrorCategory`] and a human-readable detail

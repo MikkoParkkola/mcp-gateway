@@ -422,7 +422,7 @@ async fn code_mode_discovery_omits_oauth_isolated_backend_on_multi_user_gateway(
     let config = BackendConfig {
         transport: TransportConfig::Http {
             http_url: "https://isomem.internal/mcp".to_string(),
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         oauth: Some(oauth),
@@ -481,7 +481,7 @@ async fn tools_resolve_omits_oauth_isolated_backend_on_multi_user_gateway() {
     let config = BackendConfig {
         transport: TransportConfig::Http {
             http_url: "https://isomem.internal/mcp".to_string(),
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         oauth: Some(oauth),

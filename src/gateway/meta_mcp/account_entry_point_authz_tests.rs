@@ -134,7 +134,7 @@ fn meta_with(config: BackendConfig, multi_user: bool) -> (MetaMcp, Arc<AtomicUsi
 fn http_transport() -> TransportConfig {
     TransportConfig::Http {
         http_url: "https://isomem.internal/mcp".to_string(),
-        streamable_http: true,
+        streamable_http: Some(true),
         protocol_version: None,
     }
 }

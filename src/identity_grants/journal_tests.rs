@@ -101,6 +101,71 @@ fn journal_and_lock_sit_beside_the_grant_file() {
     );
 }
 
+/// MIK-7715: the gateway configured with a symlink to the grant file and the
+/// CLI editing the real path share one journal and one lock, so the CLI's
+/// change reaches the gateway as an `add`, not as an out-of-band edit.
+// Unix-only: plants a file symlink, which Windows gates behind a privilege.
+#[cfg(unix)]
+#[tokio::test]
+async fn two_spellings_of_one_grant_file_share_journal_and_lock() {
+    use crate::config_reload::grant_audit::JournalRead;
+    let dir = tempfile::tempdir().unwrap();
+    let real_dir = dir.path().join("data");
+    let link_dir = dir.path().join("etc");
+    std::fs::create_dir_all(&real_dir).unwrap();
+    std::fs::create_dir_all(&link_dir).unwrap();
+    let real = real_dir.join("grants.yaml");
+    let link = link_dir.join("grants.yaml");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    change(&real, upsert(row("g1", "r"), false)).await.unwrap();
+
+    assert_eq!(lock_path(&link), lock_path(&real), "one lock for both");
+    let locked = super::journal::read_locked(&link, std::time::Duration::from_secs(5))
+        .await
+        .expect("lock taken");
+    let JournalRead::Bytes(bytes) = locked.journal else {
+        panic!("gateway saw no journal through the symlink");
+    };
+    let verbs: Vec<_> = parse_journal(&bytes)
+        .entries
+        .into_iter()
+        .map(|e| (e.verb, e.grant_id))
+        .collect();
+    assert_eq!(verbs, vec![(JournalVerb::Add, "g1".to_string())]);
+}
+
+/// MIK-7715: a CLI change made through a symlink edits the file it points at
+/// and leaves the link in place, so a gateway reading the real path sees it.
+// Unix-only: plants a file symlink, which Windows gates behind a privilege.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_change_through_a_symlink_keeps_the_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("grants.yaml");
+    let link = dir.path().join("link.yaml");
+    change(&real, upsert(row("g0", "r"), false)).await.unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    change(&link, upsert(row("g1", "r"), false)).await.unwrap();
+
+    let meta = std::fs::symlink_metadata(&link).unwrap();
+    assert!(
+        meta.file_type().is_symlink(),
+        "the link was replaced by a file"
+    );
+    let ids: Vec<_> = read_identity_grants_file(&real)
+        .await
+        .unwrap()
+        .grants
+        .into_iter()
+        .map(|g| g.grant_id)
+        .collect();
+    assert_eq!(ids, vec!["g0", "g1"]);
+    let verbs: Vec<_> = entries(&real).into_iter().map(|e| e.grant_id).collect();
+    assert_eq!(verbs, vec!["g0", "g1"]);
+}
+
 /// T1c: pinned bytes. A new serialised field on `IdentityGrant` changes every
 /// digest, and every grant would then read as edited out-of-band; it must be
 /// skipped when default.
@@ -440,4 +505,107 @@ fn sample_entry(entry_id: &str) -> JournalEntry {
         actor: UNKNOWN_ACTOR.to_string(),
         os_account: None,
     }
+}
+
+/// MIK-7715: the first change through a symlink whose target does not exist
+/// yet creates the target and keeps the link.
+// Unix-only: plants a file symlink, which Windows gates behind a privilege.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_first_change_through_a_dangling_symlink_keeps_the_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("grants.yaml");
+    let link = dir.path().join("link.yaml");
+    std::os::unix::fs::symlink("grants.yaml", &link).unwrap();
+
+    change(&link, upsert(row("g1", "r"), false)).await.unwrap();
+
+    let meta = std::fs::symlink_metadata(&link).unwrap();
+    assert!(
+        meta.file_type().is_symlink(),
+        "the link was replaced by a file"
+    );
+    assert!(real.is_file(), "the link's target was not created");
+    assert_eq!(journal_path(&link), journal_path(&real));
+    let ids: Vec<_> = entries(&real).into_iter().map(|e| e.grant_id).collect();
+    assert_eq!(ids, vec!["g1"]);
+}
+
+/// MIK-7715: the first change through a dangling symlink into a directory
+/// that does not exist yet creates the directory and the target.
+// Unix-only: plants a file symlink, which Windows gates behind a privilege.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dangling_symlink_into_a_new_directory_creates_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let link = dir.path().join("link.yaml");
+    std::os::unix::fs::symlink("sub/grants.yaml", &link).unwrap();
+
+    change(&link, upsert(row("g1", "r"), false)).await.unwrap();
+
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(dir.path().join("sub/grants.yaml").is_file());
+}
+
+/// MIK-7715: a symlink loop never resolves, so the change is refused and the
+/// link is not replaced by a file.
+// Unix-only: plants a file symlink, which Windows gates behind a privilege.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlink_loop_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a.yaml"), dir.path().join("b.yaml"));
+    std::os::unix::fs::symlink(&b, &a).unwrap();
+    std::os::unix::fs::symlink(&a, &b).unwrap();
+
+    let refused = change(&a, upsert(row("g1", "r"), false)).await;
+
+    assert!(
+        matches!(refused, Err(ChangeError::Refused(_))),
+        "{refused:?}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&a)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+/// MIK-7715: a journal a pre-release kept beside a symlinked spelling is
+/// adopted on the next locked read, so its entries are not lost.
+// Unix-only: plants a file symlink, which Windows gates behind a privilege.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_journal_beside_the_link_is_adopted() {
+    use crate::config_reload::grant_audit::JournalRead;
+    let dir = tempfile::tempdir().unwrap();
+    let (etc, data) = (dir.path().join("etc"), dir.path().join("data"));
+    std::fs::create_dir_all(&etc).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    let (link, real) = (etc.join("grants.yaml"), data.join("grants.yaml"));
+    // The pre-release layout: the journal written beside the spelled path.
+    change(&link, upsert(row("g1", "r"), false)).await.unwrap();
+    std::fs::rename(&link, &real).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    assert!(etc.join("grants.yaml.journal.jsonl").is_file());
+
+    let locked = super::journal::read_locked(&link, std::time::Duration::from_secs(5))
+        .await
+        .expect("lock taken");
+
+    let JournalRead::Bytes(bytes) = locked.journal else {
+        panic!("the journal beside the link was not adopted");
+    };
+    let ids: Vec<_> = parse_journal(&bytes)
+        .entries
+        .into_iter()
+        .map(|e| e.grant_id)
+        .collect();
+    assert_eq!(ids, vec!["g1"]);
 }

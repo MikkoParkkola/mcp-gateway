@@ -169,7 +169,7 @@ pub fn write_config(root: &Path, port: u16, backend_url: &str) -> PathBuf {
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: backend_url.to_string(),
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             timeout: Duration::from_secs(10),

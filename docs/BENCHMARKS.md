@@ -6,7 +6,7 @@ Public quantitative claims are tracked in [benchmarks/public_claims.json](../ben
 
 | Metric | Value |
 |--------|-------|
-| Rust Version | 1.88+ (Edition 2024) |
+| Rust Version | 1.95+ (Edition 2024) |
 | Binary Size | ~12-13 MB (release, stripped) |
 | Source / test counts | Intentionally not hard-coded here |
 
