@@ -183,3 +183,18 @@ fn a_repeated_call_on_one_key_backs_off_and_doubles() {
     assert!(l.due(t0 + RETRY_FIRST).is_empty(), "the wait doubled");
     assert_eq!(l.due(t0 + RETRY_FIRST * 2).len(), 1);
 }
+
+#[test]
+fn a_call_that_never_left_changes_nothing() {
+    let mut l = Ledger::default();
+    l.want("a").expect("room");
+    let call = l.sent("a", true).expect("key");
+    l.answered(&call, Outcome::NotSent, Instant::now());
+    l.unwant("a");
+    assert_eq!(l.size().0, 0, "not stranded, not held");
+    subscribed(&mut l, "b");
+    l.unwant("b");
+    let call = l.sent("b", false).expect("key");
+    l.answered(&call, Outcome::NotSent, Instant::now());
+    assert_eq!(l.releasable(), vec!["b".to_owned()], "still held Yes");
+}

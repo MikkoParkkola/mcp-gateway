@@ -17,8 +17,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::EventsHub;
 use super::types::RpcError;
+use super::upstream_need::ledger::Ledger;
 use super::upstream_need::{Full, Interest, Need, Snapshot, Verdict};
-use crate::backend::BackendRegistry;
+use crate::backend::{Backend, BackendRegistry};
+use crate::transport::upstream_tap::NoteKind;
 
 /// How often ended listeners are checked for a backend that can be listened
 /// to again (MIK-7944 `D6.EVENTS_MISC.6`).
@@ -30,6 +32,9 @@ const REVIVE_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
 pub(super) struct Shared {
     pub name: String,
     pub need: Mutex<Need>,
+    /// What the backend's legacy holders may keep of ours (D5). Shared by
+    /// every task of the backend; taken after `need` when both are held.
+    pub ledger: Arc<Mutex<Ledger>>,
     pub snapshot: Mutex<Snapshot>,
     /// Bumped on every change of the upstream filter.
     pub wake: watch::Sender<u64>,
@@ -76,6 +81,10 @@ pub(crate) struct UpstreamListeners {
     backends: Mutex<HashMap<String, Arc<Shared>>>,
     ineligible: super::backend_source::Ineligible,
     gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Per backend, kept while the registry holds the same `Backend`: a
+    /// backend removed from (or replaced in) the config, or a restart, is
+    /// the only thing that drops a ledger (D5 release points).
+    ledgers: Mutex<HashMap<String, (Weak<Backend>, Arc<Mutex<Ledger>>)>>,
     stop: CancellationToken,
     /// Tasks `start` has spawned: a task started wrongly for a refused
     /// backend cancels itself at once, so its entry alone cannot show it.
@@ -136,6 +145,7 @@ impl UpstreamListeners {
             ineligible,
             backends: Mutex::new(HashMap::new()),
             gates: Mutex::new(HashMap::new()),
+            ledgers: Mutex::new(HashMap::new()),
             stop: CancellationToken::new(),
             #[cfg(test)]
             starts: std::sync::atomic::AtomicUsize::new(0),
@@ -172,14 +182,18 @@ impl UpstreamListeners {
             map.entry(backend.to_owned())
                 .or_insert_with(|| self.start(backend, carried)),
         );
-        let outcome = shared.need.lock().add(interest);
+        let outcome = admit(&shared, interest);
         match outcome {
             Ok(true) => shared.wake.send_modify(|n| *n += 1),
             Ok(false) => {}
             Err(full) => {
-                if shared.need.lock().is_empty() {
+                // A refusal for capacity keeps an idle task running while
+                // its passes can still release keys (D5 cleanup).
+                if idle(&shared) {
                     shared.stop.cancel();
                     map.remove(backend);
+                } else {
+                    shared.wake.send_modify(|n| *n += 1);
                 }
                 return Err(full);
             }
@@ -241,8 +255,17 @@ impl UpstreamListeners {
         let Some(shared) = map.get(backend).cloned() else {
             return;
         };
-        let changed = shared.need.lock().remove(interest);
-        if shared.need.lock().is_empty() {
+        let changed = {
+            let mut need = shared.need.lock();
+            let changed = need.remove(interest);
+            if let Interest::ResourceUpdated(uri) = interest
+                && !need.emits(NoteKind::ResourceUpdated, Some(uri))
+            {
+                shared.ledger.lock().unwant(uri);
+            }
+            changed
+        };
+        if idle(&shared) {
             shared.stop.cancel();
             map.remove(backend);
         } else if changed {
@@ -312,6 +335,24 @@ impl UpstreamListeners {
         }
     }
 
+    /// The backend's ledger, fresh when the registry holds another `Backend`
+    /// than the one it was made for.
+    fn ledger(&self, backend: &str) -> Arc<Mutex<Ledger>> {
+        let current = self
+            .registry
+            .get(backend)
+            .map_or_else(Weak::new, |b| Arc::downgrade(&b));
+        let mut ledgers = self.ledgers.lock();
+        if let Some((made_for, ledger)) = ledgers.get(backend)
+            && Weak::ptr_eq(made_for, &current)
+        {
+            return Arc::clone(ledger);
+        }
+        let ledger = Arc::new(Mutex::new(Ledger::default()));
+        ledgers.insert(backend.to_owned(), (current, Arc::clone(&ledger)));
+        ledger
+    }
+
     fn start(&self, backend: &str, need: Need) -> Arc<Shared> {
         #[cfg(test)]
         self.starts
@@ -330,6 +371,7 @@ impl UpstreamListeners {
         Arc::new(Shared {
             name: backend.to_owned(),
             need: Mutex::new(need),
+            ledger: self.ledger(backend),
             snapshot: Mutex::new(Snapshot::default()),
             wake,
             stop: self.stop.child_token(),
@@ -338,6 +380,31 @@ impl UpstreamListeners {
             tools: Mutex::default(),
         })
     }
+}
+
+/// Count `interest`; a URI new to the need must first find room in the
+/// ledger, the admission authority (D5).
+fn admit(shared: &Shared, interest: &Interest) -> Result<bool, Full> {
+    let mut need = shared.need.lock();
+    let new_uri = match interest {
+        Interest::ResourceUpdated(uri) if !need.emits(NoteKind::ResourceUpdated, Some(uri)) => {
+            Some(uri)
+        }
+        _ => None,
+    };
+    if let Some(uri) = new_uri {
+        shared.ledger.lock().want(uri)?;
+    }
+    let outcome = need.add(interest);
+    if let (Err(_), Some(uri)) = (&outcome, new_uri) {
+        shared.ledger.lock().unwant(uri);
+    }
+    outcome
+}
+
+/// Nothing is watched and no pass can release anything more: the task ends.
+fn idle(shared: &Shared) -> bool {
+    shared.need.lock().is_empty() && !shared.ledger.lock().needs_cleanup()
 }
 
 #[cfg(test)]
