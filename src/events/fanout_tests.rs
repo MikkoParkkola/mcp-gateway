@@ -411,4 +411,7 @@ async fn an_occurrence_with_a_lifecycle_key_reaches_only_its_holders() {
         3,
         "a keyless occurrence reaches both"
     );
+    hub.fan_out(&services, &event("t3", Some("no holder".into())))
+        .await;
+    assert_eq!(outbox(dir.path()).len(), 3, "an unknown key reaches no one");
 }
