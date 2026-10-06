@@ -419,7 +419,7 @@ jobs:
       # the scanned, started image with its content ID so it can be pinned
       # after `docker load`. Registry pushes are untouched.
       - name: Export the scanned image (release-line push only)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line'
+        if: github.event_name == 'pull_request' && github.head_ref == 'throwaway/mik8009-image'
         # explicit bash enables pipefail, so a failed `docker save` fails the step
         shell: bash
         run: |
@@ -431,7 +431,7 @@ jobs:
           echo "image-${{ matrix.arch }} ${{ github.sha }} ${id}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the scanned image (release-line push only)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line'
+        if: github.event_name == 'pull_request' && github.head_ref == 'throwaway/mik8009-image'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: image-${{ matrix.arch }}-${{ github.sha }}
