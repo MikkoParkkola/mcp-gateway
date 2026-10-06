@@ -113,8 +113,47 @@ providers:
       body:
         note: "{{note}}"
         k: "{{k}}"
+        label: "n:{{note}}"
 "#
     );
     let (_, body) = call(&yaml, serde_json::json!({ "note": null, "k": "v" }), &seen).await;
+    // Inside a longer string a null still reads as empty text, as before.
+    assert_eq!(body, serde_json::json!({ "k": "v", "label": "n:" }));
+}
+
+/// A null the caller never sent: a static param's, or a schema default the
+/// URL takes. The schema admits null for both, and neither reaches the body.
+#[tokio::test]
+async fn a_null_the_caller_did_not_send_stays_out_of_the_body() {
+    let (port, seen) = recording_server().await;
+    let yaml = format!(
+        r#"
+name: null_body_probe
+description: probe
+schema:
+  input:
+    type: object
+    properties:
+      id:
+        type: [string, "null"]
+        default: null
+      tag:
+        type: [string, "null"]
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: http://127.0.0.1:{port}
+      path: /items/{{id}}
+      method: POST
+      static_params:
+        tag: null
+      body:
+        id: "{{id}}"
+        tag: "{{tag}}"
+        k: v
+"#
+    );
+    let (_, body) = call(&yaml, serde_json::json!({}), &seen).await;
     assert_eq!(body, serde_json::json!({ "k": "v" }));
 }

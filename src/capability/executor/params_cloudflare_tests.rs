@@ -205,7 +205,7 @@ fn update_dns_record_sends_a_brace_wrapped_comment() {
     let provider = cap.primary_provider().expect("a primary provider");
     let template = provider.config.body.as_ref().expect("a body template");
     let body = CapabilityExecutor::new()
-        .substitute_value(template, &args)
+        .substitute_value(template, &args, super::KeptNulls::None)
         .unwrap();
     assert_eq!(body, json!({ "comment": "{literal}" }), "{body}");
 }

@@ -175,6 +175,7 @@ backend" and "fails a capability file" first.**
 | 148 | An `http_url` backend with no `streamable_http` key POSTs `initialize` first and falls back to the legacy SSE `GET` only when that POST is refused with a 4xx that is not about the credential or a retry (any but 401, 403, 407, 408, 429); `add --url` no longer writes `streamable_http: false`. An explicit `true` or `false` is tried first, and when the server refuses it with such a 4xx the other transport is tried once, with a warning naming the backend and the value to set. `TransportConfig::Http::streamable_http` is now `Option<bool>` | None. A config the old `add --url` wrote keeps working; to skip the refused request, set the value the warning names or remove the key. A backend with the key unset is refused MCP Events even when it connects over Streamable HTTP, since eligibility is read from config: set `streamable_http: true` to offer them |
 | 149 | A meta-tool result whose payload says `isError: true` (a failed `gateway_invoke`, or a backend's own tool error) carries `isError: true` on the outer `tools/call` result; it was always `false`, with the failure only in the text | A client that read failure from the text alone keeps working; one that treated `isError: true` as a protocol failure should read the text and its `recovery` hint instead |
 | 150 | `mcp_gateway::cli::invoke::resolve_args` takes a fourth parameter, `kv_schema: Option<&Value>`: `key=value` text is typed by that input schema; `None` keeps the old behaviour | An embedder passes the tool's input schema, or `None` |
+| 153 | A REST capability body field that is a pure placeholder (`"{cursor}"`) now sends an explicit `null` the property's schema admits (`type: [string, "null"]`); 3.x left the field out. A null the schema does not admit is still left out, and query and path parameters are unchanged | To keep the field out, leave the argument out instead of sending `null` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4010,6 +4011,19 @@ hint instead.
 gateway call coerces it (`count=007` against an integer is `7`, `flag=TRUE` against a boolean is
 `true`, `zip=007` against a string stays `"007"`); JSON from `--args` or stdin is left as
 written. `None` keeps the old behaviour. `mcp-gateway invoke` passes the tool's schema.
+
+## 153. An admitted explicit null reaches a REST capability's JSON body
+
+**Startup:** no notice
+
+When a body template field is a pure placeholder (`body: {cursor: "{cursor}"}`) and the caller
+sends `"cursor": null` for a property whose `type` admits null (`[string, "null"]`), the
+backend now receives `{"cursor": null}`. 3.x left the field out. The null wins over a schema
+`default` that fills the same parameter in the URL. A null the schema does not admit, a
+placeholder nothing fills and the template's own literal `null` are still left out. Query and
+path parameters are unchanged, because they cannot carry a JSON null.
+
+To keep the field out, leave the argument out instead of sending `null`.
 
 ## Upgrading from 3.5.x: a walkthrough
 

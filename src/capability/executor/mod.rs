@@ -475,6 +475,7 @@ impl CapabilityExecutor {
 
         // Merge static_params (capability-defined fixed values) with caller params.
         // Caller-supplied values always win on key collision.
+        let body_nulls = params::admitted_nulls(&capability.schema.input, params);
         let merged = config.merge_with_static_params(params);
         let effective_params =
             params::with_path_defaults(config, &capability.schema.input, merged.as_ref());
@@ -533,7 +534,7 @@ impl CapabilityExecutor {
         // Add body for POST/PUT/PATCH
         let method_upper = config.method.to_uppercase();
         if matches!(method_upper.as_str(), "POST" | "PUT" | "PATCH") {
-            request = self.attach_request_body(request, config, params)?;
+            request = self.attach_request_body(request, config, params, &body_nulls)?;
         }
 
         let timeout = Duration::from_secs(provider.timeout);
@@ -755,6 +756,7 @@ impl CapabilityExecutor {
         mut request: reqwest::RequestBuilder,
         config: &RestConfig,
         params: &Value,
+        body_nulls: &[String],
     ) -> Result<reqwest::RequestBuilder> {
         let use_plain_text = config.body_content_type.eq_ignore_ascii_case("text/plain");
 
@@ -765,13 +767,17 @@ impl CapabilityExecutor {
                 // we send the string contents (not JSON-encoded).
                 let raw = match body_template {
                     Value::String(s) => self.substitute_string(s, params)?,
-                    other => self.substitute_value(other, params)?.to_string(),
+                    other => self
+                        .substitute_value(other, params, params::KeptNulls::None)?
+                        .to_string(),
                 };
                 request = request
                     .header(reqwest::header::CONTENT_TYPE, "text/plain")
                     .body(raw);
             } else {
-                let body = self.substitute_value(body_template, params)?;
+                let params = params::with_nulls(params, body_nulls);
+                let kept = params::KeptNulls::Named(body_nulls);
+                let body = self.substitute_value(body_template, &params, kept)?;
                 request = request.json(&body);
             }
         } else if !params.is_null() && params.as_object().is_some_and(|o| !o.is_empty()) {

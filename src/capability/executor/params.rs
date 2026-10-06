@@ -276,15 +276,20 @@ impl CapabilityExecutor {
     /// A pure placeholder string like `"{priority}"` is replaced by the
     /// original typed value (integer, boolean, etc.) rather than its string
     /// representation. Null and unresolved placeholders are dropped from
-    /// object fields.
-    pub(super) fn substitute_value(&self, template: &Value, params: &Value) -> Result<Value> {
+    /// object fields, except a null `kept` names.
+    pub(super) fn substitute_value(
+        &self,
+        template: &Value,
+        params: &Value,
+        kept: KeptNulls<'_>,
+    ) -> Result<Value> {
         match template {
             Value::String(s) => self.substitute_string_value(s, params),
-            Value::Object(map) => self.substitute_object_value(map, params),
+            Value::Object(map) => self.substitute_object_value(map, params, kept),
             Value::Array(arr) => {
                 let result: Result<Vec<Value>> = arr
                     .iter()
-                    .map(|v| self.substitute_value(v, params))
+                    .map(|v| self.substitute_value(v, params, kept))
                     .collect();
                 Ok(Value::Array(result?))
             }
@@ -436,6 +441,7 @@ impl CapabilityExecutor {
         &self,
         map: &serde_json::Map<String, Value>,
         params: &Value,
+        kept: KeptNulls<'_>,
     ) -> Result<Value> {
         let mut result = serde_json::Map::new();
         for (k, v) in map {
@@ -443,10 +449,11 @@ impl CapabilityExecutor {
             // scan: a filled value is never dropped for looking like one.
             let (substituted, unfilled) = match v {
                 Value::String(s) => self.substitute_string_value_tracked(s, params)?,
-                _ => (self.substitute_value(v, params)?, false),
+                _ => (self.substitute_value(v, params, kept)?, false),
             };
-            // Skip null values and unresolved placeholders
-            if substituted.is_null() {
+            // Skip null values, except a null `kept` names (MIK-7970), and
+            // unresolved placeholders.
+            if substituted.is_null() && !v.as_str().is_some_and(|s| kept.keeps(s)) {
                 continue;
             }
             if unfilled
@@ -550,6 +557,62 @@ pub(super) fn with_path_defaults<'a>(
     merged.map_or(std::borrow::Cow::Borrowed(params), |map| {
         std::borrow::Cow::Owned(Value::Object(map))
     })
+}
+
+/// Which nulls filling a pure placeholder an object keeps (MIK-7970).
+#[derive(Clone, Copy)]
+pub(super) enum KeptNulls<'a> {
+    /// None: a plain-text body, where a null is not given.
+    None,
+    /// A JSON body can carry null: the caller's explicit nulls for these
+    /// names, each one its property's schema admits.
+    Named(&'a [String]),
+}
+
+impl KeptNulls<'_> {
+    /// Whether `template` is a pure placeholder for a kept name.
+    fn keeps(self, template: &str) -> bool {
+        let template = template.trim();
+        match self {
+            Self::None => false,
+            Self::Named(names) => {
+                is_pure_placeholder(template)
+                    && names.iter().any(|n| *n == template[1..template.len() - 1])
+            }
+        }
+    }
+}
+
+/// MIK-7970: the names the caller sent as an explicit null that the
+/// property's schema admits. Any other null is not given, as the validator
+/// treats it; static params and schema defaults never name a null here.
+pub(super) fn admitted_nulls(input_schema: &Value, caller: &Value) -> Vec<String> {
+    let properties = input_schema.get("properties");
+    caller.as_object().map_or_else(Vec::new, |caller| {
+        caller
+            .iter()
+            .filter(|(name, value)| {
+                value.is_null()
+                    && super::super::schema_validator::admits_null(
+                        properties.and_then(|p| p.get(*name)),
+                    )
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    })
+}
+
+/// `params` with each admitted null restored, over a URL default that
+/// [`with_path_defaults`] put in its place.
+pub(super) fn with_nulls<'a>(params: &'a Value, names: &[String]) -> std::borrow::Cow<'a, Value> {
+    if names.is_empty() {
+        return std::borrow::Cow::Borrowed(params);
+    }
+    let mut map = params.as_object().cloned().unwrap_or_default();
+    for name in names {
+        map.insert(name.clone(), Value::Null);
+    }
+    std::borrow::Cow::Owned(Value::Object(map))
 }
 
 /// Every template `build_url` fills for this call: the endpoint, or the base
