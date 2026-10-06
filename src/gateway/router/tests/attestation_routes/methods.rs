@@ -284,7 +284,7 @@ async fn direct_route_refusal_precedes_identity_minting() {
     let config = BackendConfig {
         transport: crate::config::TransportConfig::Http {
             http_url: "https://mem.internal/mcp".to_string(),
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         identity_propagation: Some(IdentityPropagationConfig {

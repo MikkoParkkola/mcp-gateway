@@ -95,9 +95,15 @@ impl HttpPeer {
                         && state.hang_tools.load(std::sync::atomic::Ordering::SeqCst)
                     {
                         // Logged on arrival, so a test sees the request it is
-                        // holding; the answer, a minute later, is logged too.
+                        // holding; the answer, a minute later or on release,
+                        // is logged too.
                         log(&state, Seen::Frame(frame.clone()));
-                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                        let held = std::time::Instant::now();
+                        while state.hang_tools.load(std::sync::atomic::Ordering::SeqCst)
+                            && held.elapsed() < std::time::Duration::from_secs(60)
+                        {
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        }
                     }
                     answer(&state, frame)
                 }
@@ -151,6 +157,13 @@ impl HttpPeer {
         self.state
             .hang_tools
             .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Answer the held `tools/list` now, and every later one at once.
+    pub fn release_tools_list(&self) {
+        self.state
+            .hang_tools
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// URIs the client is subscribed to (legacy).

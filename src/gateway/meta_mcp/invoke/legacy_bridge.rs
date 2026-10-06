@@ -250,7 +250,10 @@ impl MetaMcp {
                     // like the undeclared-key refusal above: the result is
                     // gateway-built from a typed error, never backend bytes.
                     return Ok(Some(GuardedValue::sealed_by_guard(dispatch_error_result(
-                        &refused, tool, server,
+                        &refused,
+                        tool,
+                        server,
+                        self.hint_surface(),
                     ))));
                 }
                 Err(error) => {

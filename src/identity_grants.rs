@@ -164,6 +164,25 @@ fn default_identity_grants_file_schema_version() -> String {
     IDENTITY_GRANTS_FILE_SCHEMA_VERSION.to_string()
 }
 
+/// Run a blocking file read off the async workers, on a detached thread and
+/// not `spawn_blocking`: dropping a Tokio runtime waits for its blocking
+/// tasks, so a read stalled on NFS or FUSE would hold shutdown for as long as
+/// the mount stalls (#1808, MIK-7693).
+async fn read_off_runtime(
+    read: impl FnOnce() -> std::io::Result<String> + Send + 'static,
+) -> std::io::Result<String> {
+    let (done, result) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("identity-grants-read".into())
+        .spawn(move || {
+            // The reader may be gone (reload cancelled); nothing to tell it.
+            let _ = done.send(read());
+        })?;
+    result
+        .await
+        .map_err(|_| std::io::Error::other("identity grants read thread ended without a result"))?
+}
+
 /// Read a local identity-grants file as persisted rows.
 ///
 /// # Errors
@@ -176,11 +195,8 @@ pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile,
         path.to_path_buf(),
         crate::config::CheckedFile::IdentityGrants,
     );
-    let read = tokio::task::spawn_blocking(move || crate::config::read_checked_file(&owned, what));
-    let content = read
+    let content = read_off_runtime(move || crate::config::read_checked_file(&owned, what))
         .await
-        .map_err(std::io::Error::other)
-        .and_then(|r| r)
         .map_err(|e| {
             format!(
                 "failed to read identity grants file {}: {e}",

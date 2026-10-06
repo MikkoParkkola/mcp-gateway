@@ -88,7 +88,7 @@ mod tests {
         match &config.backends["context7"].transport {
             TransportConfig::Http {
                 streamable_http, ..
-            } => assert!(*streamable_http),
+            } => assert_eq!(*streamable_http, Some(true)),
             other => panic!("context7 is http, got {other:?}"),
         }
     }

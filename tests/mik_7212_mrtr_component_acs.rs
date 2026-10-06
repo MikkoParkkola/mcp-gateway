@@ -429,7 +429,7 @@ fn register_fixture_backend(state: &Arc<AppState>, url: &str) {
         enabled: true,
         transport: TransportConfig::Http {
             http_url: url.to_string(),
-            streamable_http: true,
+            streamable_http: Some(true),
             protocol_version: None,
         },
         ..BackendConfig::default()

@@ -623,6 +623,7 @@ impl<'a> State<'a> {
                 upstream_id: uuid::Uuid::new_v4().to_string(),
                 occurred_at: Utc::now(),
                 data: uri.map_or_else(|| json!({}), |uri| json!({ "uri": uri })),
+                lifecycle_key: None,
             });
         }
     }
