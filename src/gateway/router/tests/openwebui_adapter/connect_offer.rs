@@ -173,7 +173,7 @@ fn install_capability(meta: &crate::gateway::meta_mcp::MetaMcp) {
          auth:\n\
          \x20 required: true\n\
          \x20 type: bearer\n\
-         \x20 key: oauth:google\n\
+         \x20 key: oauth:fixture\n\
          \x20 account: {ACCOUNT}\n\
          providers:\n\
          \x20 primary:\n\
@@ -396,14 +396,16 @@ async fn t_offer_a_rest_capability_offers_the_callers_one_journey() {
     // GIVEN: a bridged caller whose account was never connected
     let gw = gateway(Shape::Bridged).await;
 
-    // WHEN: the capability route dispatches first, then the two MCP routes
+    // WHEN: the capability route dispatches twice, then the two MCP routes
     let rest = capability(&gw, Caller::Bridged, "alice").await;
+    let again = capability(&gw, Caller::Bridged, "alice").await;
     let meta = invoke(&gw, Caller::Bridged, "alice").await;
     let routed = direct(&gw, Caller::Bridged, "alice").await;
 
     // THEN: the capability refusal is the -32001 offer, and the others reuse it
     assert_eq!(rest["error"]["code"], -32001, "{rest}");
     let url = offered(&rest, "account_not_connected");
+    assert_eq!(offered(&again, "account_not_connected"), url, "reused");
     assert_eq!(offered(&meta, "account_not_connected"), url, "reused");
     assert_eq!(offered(&routed, "account_not_connected"), url, "reused");
     let id = url
