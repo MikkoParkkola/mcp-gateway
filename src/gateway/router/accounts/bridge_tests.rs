@@ -92,4 +92,17 @@ fn only_one_nonempty_session_cookie_yields_a_token() {
         HeaderValue::from_bytes(b"token=\xff").unwrap(),
     );
     assert_eq!(sole_cookie(&opaque, NAME), None);
+    // An unreadable line refuses even beside a valid one, in either order.
+    let (unreadable, valid) = (&b"token=\xff"[..], &b"token=abc"[..]);
+    for (first, second) in [(unreadable, valid), (valid, unreadable)] {
+        let mut mixed = HeaderMap::new();
+        mixed.append(header::COOKIE, HeaderValue::from_bytes(first).unwrap());
+        mixed.append(header::COOKIE, HeaderValue::from_bytes(second).unwrap());
+        assert_eq!(sole_cookie(&mixed, NAME), None);
+    }
+    assert_eq!(
+        sole_cookie(&headers(&["token=; token=abc"]), NAME),
+        None,
+        "an empty cookie still counts as a duplicate"
+    );
 }

@@ -438,7 +438,9 @@ impl WebSocketTransport {
         match frame {
             McpFrame::Response(response) => {
                 if let Some(ref id) = response.id
-                    && inner.taps.response_to(id, response.result.as_ref())
+                    && inner
+                        .taps
+                        .response_to(id, response.result.as_ref(), response.error.as_ref())
                 {
                     // A listen is never a pending request (I5 design §4).
                 } else if let Some(ref id) = response.id {
