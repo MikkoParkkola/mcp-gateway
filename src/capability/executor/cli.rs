@@ -81,8 +81,8 @@ impl CapabilityExecutor {
             &lookup,
             token.as_ref().map(|(name, value)| (*name, value.as_str())),
         );
-        // A reserved name never reaches the child (`child_env`), so its value
-        // is no secret of this call.
+        // The gateway sets a reserved name for the child itself (`child_env`),
+        // never from this list, so its value is no injected secret.
         let secrets: Vec<String> = config
             .env
             .iter()
