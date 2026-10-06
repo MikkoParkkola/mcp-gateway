@@ -101,7 +101,7 @@ jobs:
           # hung in addr2line until the job timed out (runs 37484979867,
           # 37500520719); symbols still resolve by each arm's own path.
           record() { # record <arm> <seconds>: profile $pid into $RUNNER_TEMP/<arm>.data
-            timeout -s INT 600 "$PERF" record -B -F 1999 --call-graph dwarf,16384 -p "$pid" -o "$RUNNER_TEMP/$1.data" -- sleep "$2" \
+            timeout -s INT -k 10 600 "$PERF" record -B -F 1999 --call-graph dwarf,16384 -p "$pid" -o "$RUNNER_TEMP/$1.data" -- sleep "$2" \
               2> "$out/prof-$1.record.err" || { echo "VOID: perf record $1 did not finish"; exit 3; }
           }
           # Smoke: a short record and report per arm before any measured rep,
@@ -114,7 +114,7 @@ jobs:
             record "smoke-$arm" 3
             wait "$driver"
             stop
-            timeout 120 "$PERF" report -i "$RUNNER_TEMP/smoke-$arm.data" --no-inline --children --sort symbol -g none --stdio \
+            timeout -k 10 120 "$PERF" report -i "$RUNNER_TEMP/smoke-$arm.data" --no-inline --children --sort symbol -g none --stdio \
               > "$out/smoke-$arm.children.txt" 2> "$out/smoke-$arm.report.err" || { echo "VOID: smoke report $arm failed"; exit 3; }
             grep -q 'mcp_gateway' "$out/smoke-$arm.children.txt" || { echo "VOID: smoke report $arm has no gateway frame"; exit 3; }
             rm -f "$RUNNER_TEMP/smoke-$arm.data"
@@ -139,16 +139,19 @@ jobs:
             wait "$driver"
             stop
           done
+          failed=0
           # Reports after every arm is recorded, so a slow report cannot cost a
           # recording. --no-inline: inline resolution per dwarf sample ran past
           # three hours in run 37461088507. Each report is time-boxed.
           for arm in B C T; do
-            timeout 1200 "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-inline --children --sort symbol -g none --percent-limit 0.1 --stdio \
-              > "$out/prof-$arm.children.txt" 2> "$out/prof-$arm.report.err" || echo "children report exit $?" >> "$out/prof-$arm.report.err"
-            timeout 1200 "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-inline --no-children --sort symbol -g none --percent-limit 0.1 --stdio \
-              > "$out/prof-$arm.self.txt" 2>> "$out/prof-$arm.report.err" || echo "self report exit $?" >> "$out/prof-$arm.report.err"
+            timeout -k 10 1200 "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-inline --children --sort symbol -g none --percent-limit 0.1 --stdio \
+              > "$out/prof-$arm.children.txt" 2> "$out/prof-$arm.report.err" || { echo "children report exit $?" >> "$out/prof-$arm.report.err"; failed=1; }
+            timeout -k 10 1200 "$PERF" report -i "$RUNNER_TEMP/$arm.data" --no-inline --no-children --sort symbol -g none --percent-limit 0.1 --stdio \
+              > "$out/prof-$arm.self.txt" 2>> "$out/prof-$arm.report.err" || { echo "self report exit $?" >> "$out/prof-$arm.report.err"; failed=1; }
             rm -f "$RUNNER_TEMP/$arm.data"
           done
+          # Every arm gets its reports first; then a failed one voids the run.
+          [[ "$failed" == 0 ]] || { echo "VOID: a profile report failed"; exit 3; }
       - name: Socket table on failure
         if: failure()
         shell: bash
