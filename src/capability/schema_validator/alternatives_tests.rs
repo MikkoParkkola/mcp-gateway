@@ -3,6 +3,8 @@
 //! MIK-7818: an object schema may say which parameters must be given together
 //! (`anyOf`) or exclusively (`oneOf`), as lists of `required` names. The
 //! validator refuses a call that satisfies none, or (`oneOf`) more than one.
+//! MIK-7943: a null a property's `type` admits counts as given, in `required`
+//! and in a branch, and is checked and forwarded like any value.
 
 use super::*;
 use serde_json::json;
@@ -196,4 +198,74 @@ fn a_type_error_is_reported_alone() {
         .map(|v| v.param.as_str())
         .collect();
     assert_eq!(params, ["everything"], "{:?}", verdict.violations);
+}
+
+/// MIK-7943 finding 6: a required property whose type admits null accepts a
+/// present null; it must still be present, and a non-null type still refuses.
+#[test]
+fn a_required_nullable_union_property_accepts_a_present_null() {
+    let schema = json!({
+        "type": "object",
+        "properties": { "cursor": { "type": ["string", "null"] } },
+        "required": ["cursor"]
+    });
+    let result = validate_arguments(&json!({ "cursor": null }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+    assert!(
+        !validate_arguments(&json!({}), &schema).is_valid(),
+        "still required"
+    );
+    let strict = json!({
+        "type": "object",
+        "properties": { "cursor": { "type": "string" } },
+        "required": ["cursor"]
+    });
+    assert!(!validate_arguments(&json!({ "cursor": null }), &strict).is_valid());
+}
+
+/// A `type` of `"null"` alone admits null too: a required property of that
+/// type accepts a present null.
+#[test]
+fn a_required_null_typed_property_accepts_a_present_null() {
+    let schema = json!({
+        "type": "object",
+        "properties": { "cursor": { "type": "null" } },
+        "required": ["cursor"]
+    });
+    let result = validate_arguments(&json!({ "cursor": null }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+}
+
+/// A null the `type` admits is a value: an `enum` without null refuses it,
+/// and an accepted one is forwarded, not dropped.
+#[test]
+fn an_admitted_null_is_checked_and_forwarded() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "cursor": { "type": ["string", "null"] },
+            "mode": { "type": ["string", "null"], "enum": ["a", "b"] }
+        },
+        "required": ["cursor"]
+    });
+    let result = validate_arguments(&json!({ "cursor": null }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+    assert_eq!(result.coerced, json!({ "cursor": null }), "forwarded");
+    let refused = validate_arguments(&json!({ "cursor": "c", "mode": null }), &schema);
+    assert!(!refused.is_valid(), "null is not in the enum");
+}
+
+/// An `anyOf` branch that requires a nullable property holds when it is null.
+#[test]
+fn an_any_of_branch_counts_an_admitted_null_as_present() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "cursor": { "type": ["string", "null"] },
+            "page": { "type": "integer" }
+        },
+        "anyOf": [{ "required": ["cursor"] }, { "required": ["page"] }]
+    });
+    let result = validate_arguments(&json!({ "cursor": null }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
 }

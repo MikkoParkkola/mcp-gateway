@@ -254,9 +254,9 @@ async fn start_task(gw: &Gateway, key: &str, idem: &str) -> String {
         .to_owned()
 }
 
-/// A gateway whose two task owners are delegated OIDC bearers: with auth on,
-/// task creation needs a verified caller identity, which an API key does not
-/// carry. Returns the gateway, receiver, mock backend and the two tokens.
+/// A gateway whose two task owners are delegated OIDC bearers, so each owner
+/// is a verified identity. Returns the gateway, receiver, mock backend and the
+/// two tokens.
 async fn two_owner_gateway(
     root: &std::path::Path,
 ) -> (Gateway, Receiver, Mock, String, String, issuer::Issuer) {

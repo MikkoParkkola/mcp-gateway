@@ -170,3 +170,15 @@ fn brave_news_search_accepts_the_type_and_query_fields() {
         &json!({ "type": "news", "query": { "original": "mcp" }, "results": [] }),
     );
 }
+
+/// MIK-7943 finding 5: Sentry issue IDs start at 1, so a zero or a leading
+/// zero never goes upstream.
+#[test]
+fn sentry_get_issue_refuses_a_zero_id() {
+    let cap = shipped("capabilities/observability/sentry_get_issue.yaml");
+    for id in ["0", "007"] {
+        let args = json!({ "organization": "acme", "issue_id": id });
+        let verdict = validate_arguments(&args, &cap.schema.input);
+        assert!(!verdict.is_valid(), "{id} accepted");
+    }
+}
