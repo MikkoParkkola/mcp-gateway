@@ -178,3 +178,47 @@ async fn a_cancelled_wait_leaves_the_start_to_settle() {
     );
     assert!(settled(&backend).await, "the start never settled");
 }
+
+fn http(url: &str) -> Arc<crate::transport::HttpTransport> {
+    crate::transport::HttpTransport::new(
+        url,
+        std::collections::HashMap::new(),
+        Duration::from_secs(1),
+        true,
+    )
+    .expect("transport")
+}
+
+/// Install `transport` in `backend`'s shared slot as a start would.
+fn install(backend: &Backend, transport: &Arc<crate::transport::HttpTransport>) {
+    let entry = backend.shared_entry();
+    let erased: Arc<dyn crate::transport::Transport> = Arc::clone(transport) as _;
+    *entry.transport.write() = Some(erased);
+    *entry.listen.write() = Some(super::handle_of(transport));
+}
+
+/// T11 (MIK-7969 F2): the backend reads the installed transport's flavour
+/// live, so a session recovery that switched it is seen at the next read;
+/// a handle left by a transport no longer installed counts for nothing.
+#[test]
+fn the_slot_reads_its_installed_transport_live() {
+    let backend = backend();
+    let first = http("http://127.0.0.1:9/mcp");
+    install(&backend, &first);
+    for flavour in [Some(true), Some(false), None] {
+        first.set_detected(flavour);
+        assert_eq!(backend.connected_streamable(), flavour);
+    }
+    first.set_detected(Some(true));
+    let replacement = http("http://127.0.0.1:9/mcp");
+    replacement.set_detected(Some(false));
+    let erased: Arc<dyn crate::transport::Transport> = Arc::clone(&replacement) as _;
+    *backend.shared_entry().transport.write() = Some(erased);
+    assert_eq!(
+        backend.connected_streamable(),
+        None,
+        "the old transport's handle answered for the new one"
+    );
+    *backend.shared_entry().transport.write() = None;
+    assert_eq!(backend.connected_streamable(), None, "a stopped slot");
+}

@@ -145,6 +145,14 @@ impl HttpTransport {
 }
 
 #[async_trait::async_trait]
+#[cfg(test)]
+impl HttpTransport {
+    /// Stand in for a connect or a session recovery that detected `flavour`.
+    pub(crate) fn set_detected(&self, flavour: Option<bool>) {
+        *self.streamable_http.write() = flavour;
+    }
+}
+
 impl UpstreamListen for HttpTransport {
     async fn listen(
         self: std::sync::Arc<Self>,
@@ -271,7 +279,7 @@ mod tests {
         )
         .expect("transport");
         for flavour in [Some(false), Some(true), None] {
-            *transport.streamable_http.write() = flavour;
+            transport.set_detected(flavour);
             assert_eq!(transport.detected_streamable(), flavour);
         }
     }
