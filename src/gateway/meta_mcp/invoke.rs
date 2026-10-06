@@ -101,6 +101,8 @@ mod output_shape;
 mod provenance_stamp;
 pub(crate) mod relay;
 pub(super) use output_shape::enforce_output_schema;
+#[cfg(all(test, feature = "firewall"))]
+pub(crate) mod receipt_test_support;
 
 mod admin;
 mod bridge_dispatch;

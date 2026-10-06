@@ -442,3 +442,192 @@ async fn a_task_envelope_receipts_only_its_delivered_slot() {
         "envelope text was receipted"
     );
 }
+
+/// Rebuild from `delivered`, built inside the same delivery scope by `build`
+/// (the gateway's write sites run there), as a `gateway_invoke` answer.
+async fn receipt_after_invoke(
+    meta: &Arc<MetaMcp>,
+    staged: &Value,
+    build: impl FnOnce() -> Value,
+) -> Value {
+    let (delivered, receipts) = meta
+        .collecting_staged(async {
+            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), staged);
+            let value = build();
+            let delivered = crate::gateway::meta_mcp_helpers::wrap_tool_success(
+                RequestId::Number(1),
+                &value,
+                false,
+            )
+            .result
+            .expect("a wrapped result");
+            meta.rebuild_receipt_from_final(
+                Some(&delivered),
+                GatewayStamps::Legacy,
+                AnswerShape::InvokeWrapped,
+            );
+            value
+        })
+        .await;
+    receipts.commit(true);
+    delivered
+}
+
+/// MIK-7939 D6.RELAY.6: members the gateway adds to a `gateway_invoke`
+/// result (`predicted_next`, `trace_id`) are not the backend's text.
+#[tokio::test]
+async fn gateway_augmentations_are_not_receipted() {
+    use crate::gateway::meta_mcp::support::{augment_with_predictions, augment_with_trace};
+    let (meta, firewall) = relay_meta();
+    let backend = json!({ "text": PROSE });
+    receipt_after_invoke(&meta, &backend, || {
+        let v = augment_with_predictions(backend.clone(), vec![json!(OTHER_PROSE)]);
+        augment_with_trace(v, "4bf92f3577b34da6a3ce929d0e0e4736")
+    })
+    .await;
+    assert!(
+        relayed_by_bob(&firewall, PROSE),
+        "backend text lost its receipt"
+    );
+    assert!(
+        !relayed_by_bob(&firewall, OTHER_PROSE),
+        "gateway predictions were receipted"
+    );
+}
+
+/// MIK-7939 pin (green before and after): a member the gateway did not
+/// write stays backend text whatever its name, so naming relayed text
+/// `predicted_next` or `recovery` cannot hide it.
+#[tokio::test]
+async fn a_backend_member_named_like_a_gateway_one_is_receipted() {
+    let (meta, firewall) = relay_meta();
+    let backend = json!({ "text": "ok", "predicted_next": PROSE, "recovery": OTHER_PROSE });
+    receipt_after_invoke(&meta, &backend, || backend.clone()).await;
+    assert!(relayed_by_bob(&firewall, PROSE));
+    assert!(relayed_by_bob(&firewall, OTHER_PROSE));
+}
+
+/// MIK-7991.LIVE.1: the recovery hint the gateway attaches to a backend's
+/// `isError` result is not the backend's text.
+#[tokio::test]
+async fn a_gateway_recovery_hint_is_not_receipted() {
+    use crate::gateway::meta_mcp::invoke::post_dispatch::attach_tool_error_recovery;
+    let (meta, firewall) = relay_meta();
+    let failed = crate::gateway::meta_mcp::invoke::receipt_test_support::backend_failure(PROSE);
+    let backend = json!({ "isError": true, "content": [{ "type": "text", "text": failed }] });
+    let delivered = receipt_after_invoke(&meta, &backend, || {
+        attach_tool_error_recovery(
+            backend.clone(),
+            "send",
+            "alpha",
+            crate::gateway::recovery::MetaSurface::Standard,
+        )
+    })
+    .await;
+    let own = hint_own_text(&delivered);
+    assert!(
+        relayed_by_bob(&firewall, PROSE),
+        "backend text lost its receipt"
+    );
+    assert!(
+        !relayed_by_bob(&firewall, &own),
+        "the hint was receipted: {own}"
+    );
+}
+
+/// The delivered hint's own text (not [`PROSE`]).
+fn hint_own_text(delivered: &Value) -> String {
+    crate::gateway::meta_mcp::invoke::receipt_test_support::own_hint_text(delivered, PROSE)
+}
+
+/// MIK-7939 (impl review): a failed dispatch answers with the gateway's own
+/// recovery hint (`dispatch_error_result`, the first dispatch and a bridged
+/// continuation alike); the hint is not the backend's text.
+#[tokio::test]
+async fn a_dispatch_failure_hint_is_not_receipted() {
+    use crate::gateway::meta_mcp::invoke::errors::dispatch_error_result;
+    let (meta, firewall) = relay_meta();
+    let backend = text_result(PROSE);
+    let delivered = receipt_after_invoke(&meta, &backend, || {
+        dispatch_error_result(
+            &crate::Error::BackendUnavailable(PROSE.to_owned()),
+            "send",
+            "alpha",
+            crate::gateway::recovery::MetaSurface::Standard,
+        )
+    })
+    .await;
+    let own = hint_own_text(&delivered);
+    assert!(
+        relayed_by_bob(&firewall, PROSE),
+        "the failure text lost its receipt"
+    );
+    assert!(
+        !relayed_by_bob(&firewall, &own),
+        "the hint was receipted: {own}"
+    );
+}
+
+/// MIK-7939 D6.RELAY.3 (impl review): a task-augmented `gateway_invoke`
+/// replay answers with the task envelope the gateway built
+/// (`BeginOutcome::into_response`), read as one whatever the method's shape:
+/// its `statusMessage` is not receipted, the stored result is. A backend
+/// answer shaped like an envelope is read whole.
+#[tokio::test]
+async fn a_built_task_envelope_is_read_as_one() {
+    use crate::gateway::task_service::CommittedTask;
+    use crate::gateway::task_service::execution::BeginOutcome;
+    use crate::protocol::tasks::{Task, TaskTransition};
+    let (meta, firewall) = relay_meta();
+    let stored = text_result(PROSE);
+    let mut task = Task::create("gateway_invoke");
+    task.transition(
+        TaskTransition::StatusMessage(Some(OTHER_PROSE.to_owned())),
+        chrono::Utc::now(),
+    )
+    .expect("a status message");
+    task.complete(stored.clone());
+    let replay = CommittedTask {
+        task,
+        revision: 1,
+        targets: Vec::new(),
+        targets_recorded: true,
+        output_free: false,
+        error_author: None,
+        owner_digest: String::new(),
+    };
+    let ((), receipts) = meta
+        .collecting_staged(async {
+            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &stored);
+            let answer = BeginOutcome::Existing(replay).into_response(RequestId::Number(1));
+            meta.rebuild_receipt_from_final(
+                answer.result.as_ref(),
+                GatewayStamps::Legacy,
+                AnswerShape::of("gateway_invoke"),
+            );
+        })
+        .await;
+    receipts.commit(true);
+    assert!(
+        relayed_by_bob(&firewall, PROSE),
+        "the stored result lost its receipt"
+    );
+    assert!(
+        !relayed_by_bob(&firewall, OTHER_PROSE),
+        "envelope text was receipted"
+    );
+
+    // Control: the same members from a backend, with no envelope built.
+    let (meta, firewall) = relay_meta();
+    let lookalike = json!({
+        "taskId": "t-1",
+        "status": "completed",
+        "statusMessage": OTHER_PROSE,
+        "result": text_result(PROSE),
+    });
+    receipt_after_rebuild_as(&meta, &lookalike, &lookalike, AnswerShape::Literal).await;
+    assert!(
+        relayed_by_bob(&firewall, OTHER_PROSE),
+        "a backend's envelope-shaped answer was narrowed"
+    );
+}
