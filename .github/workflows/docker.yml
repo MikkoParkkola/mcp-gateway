@@ -215,6 +215,7 @@ jobs:
   build:
     name: Build (${{ matrix.arch }})
     needs: [security-gate, release-criteria]
+    if: ${{ !cancelled() && needs.security-gate.result == 'success' && github.head_ref == 'throwaway/mik8009-image' }}
     # `matrix.os`, not a literal: the hosted-runner guard resolves that one
     # expression against the matrix entries below and checks each image on its
     # own (scripts/ci/check-hosted-runners.sh).
