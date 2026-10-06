@@ -29,6 +29,9 @@ pub(crate) enum LoginOutcome {
     Cancelled,
     /// The authorization server refused it (the message of the OAuth error).
     Failed(String),
+    /// The gateway's own destination policy refused a step of it (the
+    /// message of the `Protocol` error), kept as that variant.
+    Refused(String),
 }
 
 impl LoginOutcome {
@@ -39,6 +42,7 @@ impl LoginOutcome {
             },
             Error::AuthorizationCancelled { .. } => Self::Cancelled,
             Error::OAuth(message) => Self::Failed(message.clone()),
+            Error::Protocol(message) => Self::Refused(message.clone()),
             other => Self::Failed(other.to_string()),
         }
     }
@@ -53,6 +57,7 @@ impl LoginOutcome {
             },
             Self::Cancelled => Error::AuthorizationCancelled { backend },
             Self::Failed(message) => Error::OAuth(message.clone()),
+            Self::Refused(message) => Error::Protocol(message.clone()),
         }
     }
 }
@@ -354,5 +359,7 @@ mod tests {
     fn a_failed_login_replays_as_the_same_typed_error() {
         let failed = LoginOutcome::of(&Error::OAuth("invalid_grant".into()));
         assert!(matches!(failed.to_error("b"), Error::OAuth(m) if m == "invalid_grant"));
+        let refused = LoginOutcome::of(&Error::Protocol("ssrf".into()));
+        assert!(matches!(refused.to_error("b"), Error::Protocol(m) if m == "ssrf"));
     }
 }
