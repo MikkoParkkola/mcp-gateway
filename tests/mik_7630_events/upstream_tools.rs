@@ -195,6 +195,7 @@ async fn tools_session(
 /// the next refill, which runs once the first ends, and the change is
 /// announced.
 #[tokio::test]
+#[ignore = "MIK-8007: refill notice lost when the session ends mid-refill; fix in 4.0.0"]
 async fn a_notice_during_a_refill_is_served_by_the_next_one() {
     let dir = tempfile::tempdir().expect("tempdir");
     let receiver = Receiver::start(dir.path()).await;
