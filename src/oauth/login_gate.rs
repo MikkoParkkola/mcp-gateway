@@ -180,6 +180,62 @@ impl LoginGate {
     }
 }
 
+tokio::task_local! {
+    static PROVENANCE: Arc<Provenance>;
+}
+
+/// Whose deadline it is (MIK-7982 C3): the cohort a bounded caller captured
+/// and whether its own start already handed it a transport. Caller-local, in
+/// a task-local scope, never a backend-wide flag: another caller's timeout
+/// must not read as this caller's pending login.
+#[derive(Debug)]
+pub(crate) struct Provenance {
+    gate: Arc<LoginGate>,
+    cohort: Arc<Cohort>,
+    dispatched: std::sync::atomic::AtomicBool,
+}
+
+impl Provenance {
+    /// Run `work` as a caller bounded by its own deadline, capturing the
+    /// cohort now, before it can queue on a start lock.
+    pub(crate) async fn scope<F: std::future::Future>(gate: &Arc<LoginGate>, work: F) -> F::Output {
+        let provenance = Arc::new(Self {
+            gate: Arc::clone(gate),
+            cohort: gate.cohort(),
+            dispatched: std::sync::atomic::AtomicBool::new(false),
+        });
+        PROVENANCE.scope(provenance, work).await
+    }
+
+    /// The scope's start returned a transport: from here a deadline is the
+    /// backend's, not the login's.
+    pub(crate) fn mark_dispatched() {
+        let _ = PROVENANCE.try_with(|p| {
+            p.dispatched
+                .store(true, std::sync::atomic::Ordering::SeqCst)
+        });
+    }
+
+    /// The error a deadline that expired in this scope reports:
+    /// `AuthorizationPending` when nothing was dispatched and the captured
+    /// cohort's login is in flight or ended, else `otherwise`.
+    pub(crate) fn expired(backend: &str, otherwise: Error) -> Error {
+        let waited_on_login = PROVENANCE
+            .try_with(|p| {
+                !p.dispatched.load(std::sync::atomic::Ordering::SeqCst)
+                    && (p.gate.pending_in(&p.cohort) || p.cohort.outcome().is_some())
+            })
+            .unwrap_or(false);
+        if waited_on_login {
+            Error::AuthorizationPending {
+                backend: backend.to_string(),
+            }
+        } else {
+            otherwise
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
