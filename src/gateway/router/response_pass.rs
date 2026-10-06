@@ -93,6 +93,7 @@ mod tests {
             caller: "caller-a",
             external_server: "demo",
             external_tool: "probe",
+            subject: None,
         }
     }
 

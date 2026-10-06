@@ -92,6 +92,7 @@ fn firewall_pass(mut artifact: Value) -> (FirewallVerdict, Value, Vec<Value>) {
                 caller: "c",
                 external_server: "cap",
                 external_tool: "tool",
+                subject: None,
             },
             ResponseArtifactKind::FinalResponse,
             ResponseMutationPolicy::Redact,
