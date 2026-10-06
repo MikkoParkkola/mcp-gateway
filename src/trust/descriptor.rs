@@ -261,6 +261,23 @@ mod tests {
         }
     }
 
+    /// MIK-7916 review: a server over the per-server bound keeps its resident
+    /// cards; an unchanged list recomputes only the tools that did not fit.
+    #[test]
+    fn a_catalog_over_the_bound_recomputes_only_the_overflow() {
+        let (id, name) = ("backend:memo-overflow", "memo-overflow");
+        let tools: Vec<Tool> = (0..=MEMO_TOOLS_PER_SERVER)
+            .map(|i| Tool {
+                name: format!("{name}_tool_{i}"),
+                ..tool()
+            })
+            .collect();
+        project_tool_descriptors_trust_cards(id, name, &tools);
+        let start = computations();
+        project_tool_descriptors_trust_cards(id, name, &tools);
+        assert_eq!(computations() - start, 1, "only the overflow tool");
+    }
+
     /// The same tool under another server identity is a different card.
     #[test]
     fn server_identity_is_part_of_the_key() {
