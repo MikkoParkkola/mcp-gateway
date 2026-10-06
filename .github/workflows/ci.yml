@@ -116,6 +116,8 @@ jobs:
         run: scripts/ci/check-license-headers.sh
       - name: Verify license files ship in every packaged artifact
         run: scripts/ci/verify-artifact-licenses.sh
+      - name: Validate the license check against broken notices
+        run: tests/artifact_licenses.sh
       - name: Validate the hosted-runner guard
         run: scripts/ci/check-hosted-runners.sh --self-test
       - name: Require GitHub-hosted runners (plus the one trusted label)
