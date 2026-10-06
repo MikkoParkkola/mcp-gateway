@@ -573,6 +573,8 @@ mod tests {
                 "https:user@idp.corp.internal",
                 "https::pw@idp.corp.internal",
                 "ftp://idp.corp.internal",
+                // The parser reads `\` as `/`; published verbatim it would differ.
+                "https://idp.corp.internal\\tenant",
                 "https://idp.corp.internal/t@nant",
             ],
         );
