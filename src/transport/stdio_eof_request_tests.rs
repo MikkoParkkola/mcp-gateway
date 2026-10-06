@@ -76,6 +76,34 @@ async fn a_request_after_stdout_closed_fails_at_once() {
     let _ = t.close().await;
 }
 
+/// STDIO.1, the precheck's own effect: a request made after stdout closed
+/// fails before its frame is written, so the child never receives it.
+#[tokio::test]
+async fn a_request_after_stdout_closed_writes_nothing() {
+    let (w, t) = started("exec 1>&-\ncat > seen").await;
+    stdout_closed(&t).await;
+    fails_fast(&t, None).await;
+    // A pipe keeps order: once this marker is recorded, any frame the request
+    // wrote before it is recorded too.
+    t.notify("notifications/marker", None)
+        .await
+        .expect("stdin is still open");
+    let seen = w.path().join("seen");
+    let recorded = tokio::time::timeout(ROW_LIMIT, async {
+        loop {
+            let text = std::fs::read_to_string(&seen).unwrap_or_default();
+            if text.contains("notifications/marker") {
+                return text;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the child records its stdin");
+    assert!(!recorded.contains("tools/list"), "{recorded}");
+    let _ = t.close().await;
+}
+
 /// STDIO.2: stdout closes while the write is blocked on a full stdin pipe the
 /// child never reads. The call ends at EOF, not at a write that never returns.
 #[tokio::test]
