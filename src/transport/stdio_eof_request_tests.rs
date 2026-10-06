@@ -69,7 +69,10 @@ async fn a_request_after_stdout_closed_fails_at_once() {
     let (_w, t) = started("exec 1>&-\nwhile IFS= read -r l; do :; done").await;
     stdout_closed(&t).await;
     let err = fails_fast(&t, None).await;
-    assert!(matches!(err, Error::Transport(_)), "{err:?}");
+    assert!(
+        matches!(&err, Error::Transport(message) if message.contains("stdout closed")),
+        "{err:?}"
+    );
     let _ = t.close().await;
 }
 
@@ -80,7 +83,10 @@ async fn eof_during_a_blocked_write_ends_the_call() {
     let (_w, t) = started("sleep 1\nexec 1>&-\nsleep 60").await;
     let began = std::time::Instant::now();
     let err = fails_fast(&t, big_params()).await;
-    assert!(matches!(err, Error::Transport(_)), "{err:?}");
+    assert!(
+        matches!(&err, Error::Transport(message) if message.contains("stdout closed")),
+        "{err:?}"
+    );
     // EOF came a second after the handshake; a call that ended sooner went
     // through the already-closed check, not the in-flight race.
     assert!(
@@ -88,6 +94,12 @@ async fn eof_during_a_blocked_write_ends_the_call() {
         "ended before EOF: {:?}",
         began.elapsed()
     );
+    // The race dropped the write mid-frame, so stdin is retired.
+    let err = tokio::time::timeout(ROW_LIMIT, t.notify("notifications/progress", None))
+        .await
+        .expect("a retired stdin fails at once")
+        .expect_err("half a frame is on stdin");
+    assert!(err.to_string().contains("Not connected"), "{err}");
     let _ = t.close().await;
 }
 
