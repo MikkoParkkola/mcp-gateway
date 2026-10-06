@@ -491,4 +491,47 @@ providers:
         .to_string();
         assert!(error.contains("must be a string"), "{error}");
     }
+
+    fn kv_schema() -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "count": { "type": "integer" },
+                "flag": { "type": "boolean" },
+                "zip": { "type": "string" }
+            }
+        })
+    }
+
+    /// The CLI's argument path for one tool's schema.
+    fn resolve_for(schema: &Value, args_json: Option<&str>, kv: &[&str]) -> Value {
+        let kv: Vec<String> = kv.iter().map(|s| (*s).to_string()).collect();
+        // Bite run: the pre-fix three-argument signature, schema unused.
+        let _ = schema;
+        resolve_args(args_json, &kv, false).unwrap()
+    }
+
+    /// MIK-7943: `key=value` text is typed by the schema, as a gateway call
+    /// coerces it, and only as the schema says: a string stays as written.
+    #[test]
+    fn key_value_text_is_typed_by_the_tool_schema() {
+        let schema = kv_schema();
+        let resolved = resolve_for(&schema, None, &["count=007", "flag=TRUE", "zip=007"]);
+        assert_eq!(
+            resolved,
+            json!({ "count": 7, "flag": true, "zip": "007" }),
+            "count=007 is 7, flag=TRUE is true, zip=007 stays \"007\""
+        );
+    }
+
+    /// Typed JSON is the caller's own typing: `"007"` for an integer goes out
+    /// as written, and the schema check still lets it through, as it does today.
+    #[test]
+    fn typed_json_arguments_go_out_as_written() {
+        let schema = kv_schema();
+        let resolved = resolve_for(&schema, Some(r#"{"count":"007"}"#), &[]);
+        assert_eq!(resolved, json!({ "count": "007" }));
+        let verdict = crate::capability::validate_arguments(&resolved, &schema);
+        assert!(verdict.is_valid(), "{:?}", verdict.violations);
+    }
 }

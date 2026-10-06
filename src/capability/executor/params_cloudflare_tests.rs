@@ -256,3 +256,26 @@ fn an_unpicked_selector_path_gets_no_default() {
     let effective = super::with_path_defaults(&rest, &schema, &args);
     assert_eq!(effective["region"], "eu");
 }
+
+/// With a selector, `path` is only a compatibility copy of the default route:
+/// a call that picks another route gets no default from it.
+#[test]
+fn the_compatibility_path_gives_no_default_to_another_route() {
+    let schema = json!({ "properties": { "region": { "default": "eu" } } });
+    let rest: crate::capability::RestConfig = serde_json::from_value(json!({
+        "base_url": "https://api.invalid",
+        "path": "/{region}/a",
+        "path_selector": {
+            "parameter": "kind",
+            "default": "a",
+            "paths": { "a": "/{region}/a", "b": "/items" }
+        }
+    }))
+    .expect("a REST config");
+    let args = json!({ "kind": "b" });
+    let effective = super::with_path_defaults(&rest, &schema, &args);
+    assert!(effective.get("region").is_none(), "{effective}");
+    let args = json!({});
+    let effective = super::with_path_defaults(&rest, &schema, &args);
+    assert_eq!(effective["region"], "eu", "the default route still gets it");
+}
