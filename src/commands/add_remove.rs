@@ -13,7 +13,7 @@ use std::process::ExitCode;
 
 use mcp_gateway::{
     config::TransportConfig,
-    config_persistence::load_existing_or_default,
+    config_persistence::{load_existing_or_default, write_config_adding_backend},
     gateway::ui::backend_ops::{
         self, BackendUpdate, add_backend, get_backend, list_backends, parse_env_vars,
         remove_backend, resolve_backend, update_backend, write_config,
@@ -80,6 +80,7 @@ pub async fn run_add_command(
     };
 
     // ── Insert backend ─────────────────────────────────────────────────────
+    let before = gateway_config.clone();
     let notes = match add_backend(&mut gateway_config, name, resolved) {
         Ok(notes) => notes,
         Err(msg) => {
@@ -89,7 +90,7 @@ pub async fn run_add_command(
     };
 
     // ── Write config ───────────────────────────────────────────────────────
-    if let Err(e) = write_config(config, &gateway_config) {
+    if let Err(e) = write_config_adding_backend(config, &before, &gateway_config, name) {
         eprintln!("Error: Failed to write {}: {e}", config.display());
         return ExitCode::FAILURE;
     }

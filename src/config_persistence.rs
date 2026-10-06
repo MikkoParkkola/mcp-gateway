@@ -80,6 +80,35 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
     write_yaml(path, &yaml)
 }
 
+#[path = "config_persistence_splice.rs"]
+mod splice;
+
+/// [`write_config`] for `config`, which is `before` (the file at `path`) plus
+/// the one backend `name`, keeping the file's comments: the backend's block is
+/// added to the file's text, not the whole config re-serialised. When that
+/// edit cannot be proven to load as `config`, this is [`write_config`].
+///
+/// # Errors
+///
+/// Returns `Err` on validation, serialisation, or I/O failure.
+pub fn write_config_adding_backend(
+    path: &Path,
+    before: &Config,
+    config: &Config,
+    name: &str,
+) -> Result<(), String> {
+    let edited = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|original| splice::with_backend_added(&original, before, config, name));
+    let Some(edited) = edited else {
+        return write_config(path, config);
+    };
+    config
+        .validate_with_env(&config.env_overlay())
+        .map_err(|e| format!("Failed to validate config: {e}"))?;
+    write_yaml(path, &edited)
+}
+
 /// How many times a rename is retried before the write is reported failed.
 ///
 /// Windows can refuse a rename that Unix would complete: another process
