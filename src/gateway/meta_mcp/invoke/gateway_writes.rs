@@ -38,10 +38,14 @@ tokio::task_local! {
 }
 
 /// Run `delivery` with a write record, beside its receipt collector.
-pub(super) async fn scope<F: std::future::Future>(delivery: F) -> F::Output {
-    GATEWAY_WRITES
-        .scope(RefCell::new(Vec::new()), delivery)
-        .await
+///
+/// Not an `async fn`: one would hold `delivery` twice (as its argument and
+/// inside the scope it awaits), and the dispatch future it wraps is large
+/// enough that the copy overflowed a 2 MiB test thread.
+pub(super) fn scope<F: std::future::Future>(
+    delivery: F,
+) -> impl std::future::Future<Output = F::Output> {
+    GATEWAY_WRITES.scope(RefCell::new(Vec::new()), delivery)
 }
 
 // ponytail: a DefaultHasher over the member's JSON text; a member the gateway
