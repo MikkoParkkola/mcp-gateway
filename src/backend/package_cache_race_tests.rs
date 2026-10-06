@@ -194,8 +194,9 @@ async fn a_cancelled_rename_keeps_the_cache_locked_until_it_ends() {
     );
 }
 
-/// A start that cannot get its cache's lock within the request timeout fails
-/// as unavailable instead of queueing behind it forever.
+/// A start that cannot get its cache's lock within one full repair
+/// (`lock_hold_bound`) fails as unavailable instead of queueing behind it
+/// forever, and it does not give up any sooner.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_start_gives_up_waiting_for_a_held_cache() {
     let workspace = tempfile::tempdir().expect("workspace");
@@ -212,14 +213,21 @@ async fn a_start_gives_up_waiting_for_a_held_cache() {
 
     let lock = repair_lock(&cache.root);
     let _held = lock.lock().await;
+    let began = std::time::Instant::now();
     let (result, repair) =
         tokio::time::timeout(Duration::from_secs(15), start_reporting(&transport))
             .await
             .expect("the wait is bounded by one full repair");
+    let waited = began.elapsed();
 
     assert!(
         matches!(result, Err(Error::BackendUnavailable(_))),
         "{result:?}"
+    );
+    let bound = super::super::lock_hold_bound(Duration::from_millis(100));
+    assert!(
+        waited >= bound,
+        "gave up after {waited:?}, before {bound:?}"
     );
     assert_eq!(repair, Repair::NotRepaired);
     assert!(spawns(&log).is_empty(), "nothing spawned without the lock");
