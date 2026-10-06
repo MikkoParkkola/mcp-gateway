@@ -522,3 +522,43 @@ async fn meta_cache_hit_leaves_the_cost_suggestion_out_of_the_receipt() {
     let relay = format!("{PROSE} ");
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
 }
+
+/// MIK-7991 (replay): an idempotent replay of a successful read serves the
+/// cost suggestion the gateway wrote on the first call; the replay's
+/// receipt leaves it out and keeps the backend's text.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn meta_replay_leaves_the_cost_suggestion_out_of_the_receipt() {
+    let mut fx = meta_fixture(Setup::default(), None).await;
+    suggest_send(&mut fx);
+    let read = invoke("read", &json!({}));
+    let (_, first) = post(
+        &fx,
+        Some("a"),
+        "gateway_invoke",
+        &read,
+        &keyed("key-7991-ok"),
+    )
+    .await;
+    assert!(
+        first.contains(CATEGORY),
+        "base: the gateway suggested a cheaper tool: {first}"
+    );
+    let reads = fx.reads();
+    let (_, replay) = post(
+        &fx,
+        Some("a"),
+        "gateway_invoke",
+        &read,
+        &keyed("key-7991-ok"),
+    )
+    .await;
+    assert_eq!(fx.reads(), reads, "base: the re-issue must be a replay");
+    assert!(
+        replay.contains(CATEGORY),
+        "the replay serves the suggestion: {replay}"
+    );
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 1);
+    let relay = format!("{PROSE} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
+}
