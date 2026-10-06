@@ -3064,6 +3064,7 @@ impl Gateway {
                     caller: "stdio",
                     external_server: "gateway",
                     external_tool: &external_tool,
+                    subject: None,
                 },
                 mutation:
                     crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
