@@ -361,6 +361,38 @@ async fn watch_stops_when_its_capability_is_reclassified() {
     );
 }
 
+/// U11: a capability removed from the catalogue stops its poller the same
+/// way, with no call made and its subscriptions deleted.
+#[tokio::test]
+async fn watch_stops_when_its_capability_is_removed() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    let name = "watch.weather.changed";
+    admit(&hub, "p", name, &json!({}));
+    let poller = run(&hub, &host, "p", name, &json!({}));
+    host.targets.lock().clear();
+    let mut last = None;
+    assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
+    assert!(host.calls.lock().is_empty(), "no call after the removal");
+    assert!(
+        hub.store.subscriptions().is_empty(),
+        "subscriptions deleted"
+    );
+}
+
+/// U4: jitter only stretches a wait, so no two polls come closer than the
+/// interval, and the 60 s floor holds for the polls themselves.
+#[test]
+fn jitter_never_shortens_the_interval() {
+    let base = std::time::Duration::from_secs(MIN_INTERVAL);
+    for _ in 0..1000 {
+        let wait = jitter(base);
+        assert!(wait >= base, "{wait:?} under {base:?}");
+        assert!(wait <= base.mul_f64(1.1), "{wait:?} over a tenth more");
+    }
+}
+
 /// U11: a credential-free capability that starts needing a credential is
 /// reclassified: its shared poller makes no call (one sharer's credential
 /// never answers for every principal) and the type's subscriptions are
