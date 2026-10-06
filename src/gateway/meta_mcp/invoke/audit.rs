@@ -339,10 +339,10 @@ impl MetaMcp {
 /// A delivered result as a receipt reads it. A `gateway_invoke` answer wraps
 /// the backend value as one pretty-printed text block, whose escapes (`\n` as
 /// two characters) are not the text the caller reads: it is read decoded, as
-/// the receipt was staged from the backend value, whatever its type (an
-/// object, an array, a string; MIK-7939). Only a block that is exactly that
-/// printing is decoded; any other text, JSON or not, is read as delivered
-/// (decoding would drop a number in it).
+/// the receipt was staged from the backend value, whatever its JSON type
+/// (MIK-7939). Only a block that is exactly that printing is decoded; any
+/// other text, JSON or not, is read as delivered (decoding it would drop a
+/// number written in the text).
 #[cfg(feature = "firewall")]
 pub(super) fn delivered_value(delivered: &Value) -> std::borrow::Cow<'_, Value> {
     let one_block = delivered.get("structuredContent").is_none()
