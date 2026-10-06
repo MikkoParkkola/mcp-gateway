@@ -166,10 +166,11 @@ async fn meta_tenant_guard_refusal_record_names_the_tenants() {
 
 /// MIK-7646 (T2, two requests). `cust-1` is admitted, then a request naming
 /// only `cust-2` is refused at limit 1: its record names its own request's
-/// tenant, not the window's.
+/// tenant, not the window's. Keyed, so both requests share one window.
 #[tokio::test]
 async fn meta_tenant_guard_refusal_record_names_only_its_own_request() {
     let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
         tenant_limit: Some(1),
         ..Setup::default()
     })
@@ -179,7 +180,7 @@ async fn meta_tenant_guard_refusal_record_names_only_its_own_request() {
                                "arguments": {"rows": [{"customer_id": tenant}]}});
         let body = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
                           "params": {"name": "gateway_invoke", "arguments": arguments}});
-        let _ = post_to(&fx, "/mcp", &body.to_string(), &Caller::Session).await;
+        let _ = post_to(&fx, "/mcp", &body.to_string(), &Caller::Key).await;
     }
     assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "only cust-1 dispatches");
     let all = invocations(&fx);
