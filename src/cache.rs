@@ -32,6 +32,9 @@ struct CachedResponse {
     /// MIK-7116.MIN.2: what the dispatch that produced `value` read before
     /// any transform; `None` when stored with attribution off.
     read: Option<crate::security::tenant_reads::ReadAttribution>,
+    /// MIK-7991: what the gateway wrote into `value` on the call that
+    /// stored it, restored on a hit so the hit's receipt leaves it out.
+    writes: crate::gateway::WriteRecord,
     /// When this entry was cached
     cached_at: Instant,
     /// Time-to-live duration
@@ -153,16 +156,18 @@ impl ResponseCache {
     /// Returns `None` if the key doesn't exist or the entry has expired.
     /// Expired entries are automatically evicted.
     pub fn get(&self, key: &str) -> Option<Value> {
-        self.get_read(key).map(|(value, _)| value)
+        self.get_read(key).map(|(value, _, _)| value)
     }
 
-    /// [`Self::get`] with the reading stored beside the value (MIN.2).
+    /// [`Self::get`] with the reading (MIN.2) and the gateway's write record
+    /// (MIK-7991) stored beside the value.
     pub(crate) fn get_read(
         &self,
         key: &str,
     ) -> Option<(
         Value,
         Option<crate::security::tenant_reads::ReadAttribution>,
+        crate::gateway::WriteRecord,
     )> {
         if let Some(entry) = self.entries.get(key) {
             if entry.is_expired() {
@@ -175,7 +180,11 @@ impl ResponseCache {
             } else {
                 // Cache hit
                 self.stats.hits.fetch_add(1, Ordering::Relaxed);
-                Some((entry.value.clone(), entry.read.clone()))
+                Some((
+                    entry.value.clone(),
+                    entry.read.clone(),
+                    entry.writes.clone(),
+                ))
             }
         } else {
             // Cache miss
@@ -203,16 +212,25 @@ impl ResponseCache {
     /// Returns whether the value was stored, so a caller cannot log a write
     /// that a refusal silently skipped.
     pub fn set(&self, key: &str, value: Value, ttl: Duration) -> bool {
-        self.set_read(key, value, None, ttl)
+        self.set_read(
+            key,
+            value,
+            (None, crate::gateway::WriteRecord::default()),
+            ttl,
+        )
     }
 
     /// [`Self::set`] with the reading of the dispatch that produced `value`
+    /// and what the gateway wrote into it (MIK-7991)
     /// kept beside it, in the same entry (MIN.2).
     pub(crate) fn set_read(
         &self,
         key: &str,
         value: Value,
-        read: Option<crate::security::tenant_reads::ReadAttribution>,
+        (read, writes): (
+            Option<crate::security::tenant_reads::ReadAttribution>,
+            crate::gateway::WriteRecord,
+        ),
         ttl: Duration,
     ) -> bool {
         // A result the backend has not finished producing is not stored:
@@ -239,6 +257,7 @@ impl ResponseCache {
         let entry = CachedResponse {
             value,
             read,
+            writes,
             cached_at: Instant::now(),
             ttl,
         };

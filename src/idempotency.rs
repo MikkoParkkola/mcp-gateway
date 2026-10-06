@@ -188,6 +188,9 @@ struct Entry {
     /// MIK-7116.MIN.2: what the dispatch behind a completed result read
     /// before any transform, kept in the same entry as the result.
     read: Option<crate::security::tenant_reads::ReadAttribution>,
+    /// MIK-7991: what the gateway wrote into a completed result on the call
+    /// that stored it, restored on a replay so its receipt leaves it out.
+    writes: crate::gateway::WriteRecord,
 }
 
 impl Entry {
@@ -197,6 +200,7 @@ impl Entry {
             fingerprint: fingerprint.to_string(),
             owner: Weak::new(),
             read: None,
+            writes: crate::gateway::WriteRecord::default(),
         }
     }
 
@@ -207,6 +211,7 @@ impl Entry {
             fingerprint: fingerprint.to_string(),
             owner: Arc::downgrade(owner),
             read: None,
+            writes: crate::gateway::WriteRecord::default(),
         }
     }
 
@@ -286,10 +291,12 @@ pub(crate) enum AdmitOutcome {
     /// Another caller holds a live in-flight entry.
     InFlight,
     /// A completed entry exists — return the cached result, with the
-    /// reading kept beside it (MIK-7116.MIN.2), read under the same lock.
+    /// reading (MIK-7116.MIN.2) and the gateway's write record (MIK-7991)
+    /// kept beside it, read under the same lock.
     Completed(
         Value,
         Option<crate::security::tenant_reads::ReadAttribution>,
+        crate::gateway::WriteRecord,
     ),
     /// A failed entry exists — return the cached JSON-RPC error object.
     Failed(Value),
@@ -435,7 +442,11 @@ impl IdempotencyCache {
                         let IdempotencyState::Completed(value, _) = &occupied.get().state else {
                             unreachable!("live completed status must hold a completed value");
                         };
-                        AdmitOutcome::Completed(value.clone(), occupied.get().read.clone())
+                        AdmitOutcome::Completed(
+                            value.clone(),
+                            occupied.get().read.clone(),
+                            occupied.get().writes.clone(),
+                        )
                     }
                     CheckPlan::Failed => {
                         let IdempotencyState::Failed(error, _) = &occupied.get().state else {
@@ -506,7 +517,12 @@ impl IdempotencyCache {
     /// fingerprint matches every later request, so a result stored that way
     /// would answer any call reusing the key.
     pub(crate) fn mark_completed_bound(&self, key: &str, result: Value, fingerprint: &str) -> bool {
-        self.mark_completed_read(key, result, fingerprint, None)
+        self.mark_completed_read(
+            key,
+            result,
+            fingerprint,
+            (None, crate::gateway::WriteRecord::default()),
+        )
     }
 
     /// [`Self::mark_completed_bound`] with the dispatch's reading kept in the
@@ -516,7 +532,10 @@ impl IdempotencyCache {
         key: &str,
         result: Value,
         fingerprint: &str,
-        read: Option<crate::security::tenant_reads::ReadAttribution>,
+        (read, writes): (
+            Option<crate::security::tenant_reads::ReadAttribution>,
+            crate::gateway::WriteRecord,
+        ),
     ) -> bool {
         if !crate::protocol::cacheable::is_final(&result) {
             self.entries.remove(key);
@@ -528,6 +547,7 @@ impl IdempotencyCache {
             fingerprint,
         );
         entry.read = read;
+        entry.writes = writes;
         self.entries.insert(key.to_string(), entry);
         true
     }
@@ -704,14 +724,18 @@ impl IdempotencyReservation {
     /// key first and may still store a structured error result afterwards, which
     /// is the behaviour the invoke path already relied on.
     pub fn complete(&mut self, result: &Value) -> bool {
-        self.complete_read(result, None)
+        self.complete_read(result, (None, crate::gateway::WriteRecord::default()))
     }
 
-    /// [`Self::complete`] with the dispatch's reading kept in the entry (MIN.2).
+    /// [`Self::complete`] with the dispatch's reading (MIN.2) and the
+    /// gateway's write record (MIK-7991) kept in the entry.
     pub(crate) fn complete_read(
         &mut self,
         result: &Value,
-        read: Option<crate::security::tenant_reads::ReadAttribution>,
+        read: (
+            Option<crate::security::tenant_reads::ReadAttribution>,
+            crate::gateway::WriteRecord,
+        ),
     ) -> bool {
         self.settled = true;
         self.cache

@@ -70,6 +70,7 @@ mod tests {
 
     use super::*;
     use crate::cache::ResponseCache;
+    use crate::gateway::WriteRecord;
     use crate::security::firewall::tenant_guard::TenantGuardConfig;
     use crate::security::firewall::{Firewall, FirewallConfig};
     use crate::security::hash_argument;
@@ -109,14 +110,19 @@ mod tests {
                 let ((), mine) = with_dispatch_reads(async {
                     tenant_reads::note_attribution(Some(tenant(read)));
                     let stored = reading(BTreeSet::new);
-                    assert!(cache.set_read(key, json!({ "note": "x" }), stored, ttl));
+                    assert!(cache.set_read(
+                        key,
+                        json!({ "note": "x" }),
+                        (stored, WriteRecord::default()),
+                        ttl
+                    ));
                 })
                 .await;
                 tenant_reads::note_attribution(mine);
             }
         })
         .await;
-        let (value, read) = cache.get_read("second").expect("stored");
+        let (value, read, _) = cache.get_read("second").expect("stored");
         assert_eq!(value, json!({ "note": "x" }), "the value is untouched");
         let ((), restored) =
             with_read_scope(Arc::clone(&fw), async { restore(read.as_ref()) }).await;
@@ -130,7 +136,7 @@ mod tests {
         );
 
         assert!(cache.set("bare", json!({ "note": "y" }), ttl));
-        let (_, read) = cache.get_read("bare").expect("stored");
+        let (_, read, _) = cache.get_read("bare").expect("stored");
         let ((), bare) = with_read_scope(fw, async { restore(read.as_ref()) }).await;
         assert!(bare.uninspected, "an entry without a reading is unread");
     }

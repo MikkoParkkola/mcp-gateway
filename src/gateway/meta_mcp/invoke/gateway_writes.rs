@@ -31,10 +31,75 @@ struct Written {
     layer: Layer,
     path: &'static [&'static str],
     digest: u64,
+    /// Order of noting within the delivery, so one invocation's own notes
+    /// are told apart from an earlier step's (MIK-7991). Never reused: a
+    /// [`rebind`] that drops a note does not free its number.
+    seq: u64,
+}
+
+/// A delivery's write record.
+#[derive(Default)]
+struct Writes {
+    next: u64,
+    list: Vec<Written>,
+}
+
+impl Writes {
+    fn push(&mut self, written: Written) {
+        self.list.push(Written {
+            seq: self.next,
+            ..written
+        });
+        self.next += 1;
+    }
 }
 
 tokio::task_local! {
-    static GATEWAY_WRITES: RefCell<Vec<Written>>;
+    static GATEWAY_WRITES: RefCell<Writes>;
+}
+
+/// Where an invocation's own notes begin in its delivery's record.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Mark(u64);
+
+/// The members one invocation wrote, stored beside its answer in the
+/// response and idempotency caches so a hit served from either restores
+/// them (MIK-7991): the hit writes nothing itself, yet serves what the
+/// original call wrote.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct WriteRecord(Vec<Written>);
+
+/// The current end of the delivery's record; `0` outside a scope.
+pub(crate) fn mark() -> Mark {
+    Mark(GATEWAY_WRITES.try_with(|w| w.borrow().next).unwrap_or(0))
+}
+
+/// The notes made since `mark`, still bound to what they wrote. Empty
+/// outside a scope.
+pub(crate) fn snapshot_since(mark: Mark) -> WriteRecord {
+    WriteRecord(
+        GATEWAY_WRITES
+            .try_with(|w| {
+                w.borrow()
+                    .list
+                    .iter()
+                    .filter(|written| written.seq >= mark.0)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
+/// Add `record` to the delivery's record, as notes of this call. A no-op
+/// outside a scope.
+pub(crate) fn restore(record: &WriteRecord) {
+    let _ = GATEWAY_WRITES.try_with(|w| {
+        let mut writes = w.borrow_mut();
+        for written in &record.0 {
+            writes.push(written.clone());
+        }
+    });
 }
 
 /// Run `delivery` with a write record, beside its receipt collector.
@@ -45,7 +110,7 @@ tokio::task_local! {
 pub(super) fn scope<F: std::future::Future>(
     delivery: F,
 ) -> impl std::future::Future<Output = F::Output> {
-    GATEWAY_WRITES.scope(RefCell::new(Vec::new()), delivery)
+    GATEWAY_WRITES.scope(RefCell::new(Writes::default()), delivery)
 }
 
 // ponytail: a DefaultHasher over the member's JSON text; a member the gateway
@@ -71,6 +136,7 @@ pub(crate) fn note(layer: Layer, path: &'static [&'static str], value: &Value) {
             layer,
             path,
             digest: digest(written),
+            seq: 0,
         });
     });
 }
@@ -97,6 +163,7 @@ pub(super) fn built_task_envelope(answer: &Value) -> bool {
             let digest = digest(id);
             writes
                 .borrow()
+                .list
                 .iter()
                 .any(|w| w.layer == Layer::Answer && w.path == TASK_ID && w.digest == digest)
         })
@@ -107,17 +174,27 @@ pub(super) fn built_task_envelope(answer: &Value) -> bool {
 /// holds what it wrote.
 #[cfg(feature = "firewall")]
 pub(super) fn strip(value: &mut Value, layer: Layer) {
-    let _ = GATEWAY_WRITES.try_with(|writes| {
-        for w in writes.borrow().iter().filter(|w| w.layer == layer) {
-            let Some((last, parent)) = w.path.split_last() else {
-                continue;
-            };
-            let owned = member(value, w.path).is_some_and(|m| digest(m) == w.digest);
-            if owned && let Some(map) = member_mut(value, parent).and_then(Value::as_object_mut) {
-                map.remove(*last);
-            }
+    let _ = GATEWAY_WRITES.try_with(|writes| remove_owned(value, &writes.borrow().list, layer));
+}
+
+/// [`strip`] by `record` alone: a cached answer's receipt leaves out what
+/// its own call wrote, never what another step of the delivery wrote.
+#[cfg(feature = "firewall")]
+pub(crate) fn strip_record(value: &mut Value, record: &WriteRecord) {
+    remove_owned(value, &record.0, Layer::Value);
+}
+
+#[cfg(feature = "firewall")]
+fn remove_owned(value: &mut Value, writes: &[Written], layer: Layer) {
+    for w in writes.iter().filter(|w| w.layer == layer) {
+        let Some((last, parent)) = w.path.split_last() else {
+            continue;
+        };
+        let owned = member(value, w.path).is_some_and(|m| digest(m) == w.digest);
+        if owned && let Some(map) = member_mut(value, parent).and_then(Value::as_object_mut) {
+            map.remove(*last);
         }
-    });
+    }
 }
 
 #[cfg(feature = "firewall")]
@@ -132,7 +209,7 @@ fn member_mut<'v>(value: &'v mut Value, path: &[&str]) -> Option<&'v mut Value> 
 #[cfg(feature = "firewall")]
 pub(super) fn rebind(layer: Layer, before: &Value, after: &Value) {
     let _ = GATEWAY_WRITES.try_with(|writes| {
-        writes.borrow_mut().retain_mut(|w| {
+        writes.borrow_mut().list.retain_mut(|w| {
             if w.layer != layer {
                 return true;
             }
@@ -193,6 +270,42 @@ mod tests {
             let mut later = json!({"recovery": {"hint": "back"}});
             strip(&mut later, Layer::Value);
             assert_eq!(later["recovery"]["hint"], "back", "a stale note revived");
+        })
+        .await;
+    }
+
+    /// MIK-7991: a record taken from a mark holds only the notes made after
+    /// it, also after a rewrite drops an earlier step's note, and
+    /// restored into another delivery it strips as that delivery's own.
+    #[tokio::test]
+    async fn a_record_since_a_mark_holds_only_its_own_notes() {
+        let advice = json!({"_cost_suggestion": {"message": "cheaper"}, "text": "x"});
+        let traced = json!({"trace_id": "t-1", "text": "x"});
+        let record = scope(async {
+            note(Layer::Value, &["_cost_suggestion"], &advice);
+            let mark = mark();
+            assert!(
+                snapshot_since(mark).0.is_empty(),
+                "an earlier step's note is in this call's record"
+            );
+            note(Layer::Value, &["trace_id"], &traced);
+            // Drops the earlier step's note, which sits before the mark.
+            rebind(Layer::Value, &traced, &traced);
+            snapshot_since(mark)
+        })
+        .await;
+        assert_eq!(record.0.len(), 1, "{record:?}");
+        let both = json!({"trace_id": "t-1", "_cost_suggestion": {"message": "cheaper"}});
+        let mut cached = both.clone();
+        strip_record(&mut cached, &record);
+        assert!(cached.get("trace_id").is_none(), "{cached}");
+        assert!(cached.get("_cost_suggestion").is_some(), "{cached}");
+        scope(async {
+            restore(&record);
+            let mut delivered = both.clone();
+            strip(&mut delivered, Layer::Value);
+            assert!(delivered.get("trace_id").is_none(), "{delivered}");
+            assert!(delivered.get("_cost_suggestion").is_some(), "{delivered}");
         })
         .await;
     }
