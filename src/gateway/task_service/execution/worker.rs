@@ -546,7 +546,7 @@ pub(super) fn inspect_settled(
     // wrapper, whatever tool started it.
     rebuild_task_receipt(
         state,
-        &super::settlement::backend_output(result.clone()),
+        &super::settlement::stored_result(result.clone()),
         AnswerShape::Literal,
     );
     if refused {
