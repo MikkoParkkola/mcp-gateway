@@ -14,14 +14,9 @@
 //! it the principal only), so the credential checks run against the stored
 //! subscription: at every fan-out, and before every poll, where a holder that
 //! no longer passes is revoked before the call is made.
-#![allow(
-    dead_code,
-    unused_imports,
-    clippy::unused_self,
-    reason = "stub until the source lands"
-)]
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -67,6 +62,7 @@ pub(crate) struct Target {
     /// Classified read-only as data (MIK-7216.IDEM.1); anything else is
     /// side-effecting and never watchable.
     pub read_only: bool,
+    // ci-allow-secret-debug: an enum naming whose credential a call needs; it holds no secret.
     pub credential: CredentialUse,
     pub input_schema: Value,
 }
@@ -75,6 +71,7 @@ pub(crate) struct Target {
 #[derive(Debug, Clone)]
 pub(crate) struct Holder {
     pub principal: String,
+    // ci-allow-secret-debug: a key's name and digest-derived principal, never the secret.
     pub api_key: ApiKeyRef,
 }
 
@@ -199,8 +196,11 @@ fn changed(before: &BTreeMap<String, Value>, after: &BTreeMap<String, Value>) ->
 }
 
 /// A running poller and whose credential it runs under, if only one.
+/// Stopped by its flag, not aborted: the stop can come from inside the
+/// poller's own task (it revoked its last holder), and an abort there would
+/// cut short the core's lifecycle bookkeeping it is running.
 struct Poller {
-    task: tokio::task::JoinHandle<()>,
+    stop: Arc<AtomicBool>,
     alone: Option<String>,
 }
 
@@ -259,8 +259,6 @@ impl WatchSource {
     }
 }
 
-// Stub: the rows in `watch_source_tests.rs` fail against it until the
-// source lands.
 #[async_trait::async_trait]
 impl EventSource for WatchSource {
     fn kind(&self) -> SourceKind {
@@ -268,11 +266,167 @@ impl EventSource for WatchSource {
     }
 
     fn descriptors(&self) -> Vec<EventDescriptor> {
-        Vec::new()
+        self.host
+            .targets()
+            .into_iter()
+            .filter(|t| t.read_only)
+            .map(|t| EventDescriptor {
+                name: event_name(&t.capability),
+                description: format!(
+                    "The answer of the read-only capability {} changed. Polled every \
+                     `interval` seconds (default {DEFAULT_INTERVAL}, {MIN_INTERVAL} to \
+                     {MAX_INTERVAL}). Name `fields` (JSON pointers) to ignore parts that change \
+                     on every call; without them the top-level keys {} are ignored. The \
+                     payload names what changed, never the values: read them with the \
+                     capability itself.",
+                    t.capability,
+                    VOLATILE.join(", "),
+                ),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "arguments": t.input_schema,
+                        "interval": {"type": "integer", "minimum": MIN_INTERVAL,
+                                     "maximum": MAX_INTERVAL, "default": DEFAULT_INTERVAL},
+                        "fields": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "additionalProperties": false,
+                }),
+                payload_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "capability": {"type": "string"},
+                        "changed": {"type": "array", "items": {"type": "string"}},
+                        "digest_before": {"type": "string"},
+                        "digest_after": {"type": "string"},
+                        "observed_at": {"type": "string"},
+                    },
+                    "additionalProperties": false,
+                }),
+                scope: Visibility::Backend(t.backend),
+                kind: SourceKind::RestWatch,
+            })
+            .collect()
     }
 
-    fn matches(&self, _principal: &str, _arguments: &Value, _event: &SourceEvent) -> bool {
-        false
+    fn offers(&self, name: &str) -> bool {
+        name.starts_with(PREFIX) && name.ends_with(SUFFIX) && self.target(name).is_some()
+    }
+
+    /// The capability must still be watchable and the options valid. Where
+    /// the principal already holds rows (every fan-out), each must still have
+    /// a live API key that may invoke the capability; at subscribe no row
+    /// exists yet, and the first poll judges the new one before any call.
+    async fn authorize(
+        &self,
+        principal: &str,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<(), RpcError> {
+        let target = self.target(name).ok_or_else(RpcError::forbidden)?;
+        if target.credential == CredentialUse::Account {
+            return Err(RpcError {
+                code: -32014,
+                message: "Unsupported",
+                data: Some(json!({"feature": "watch", "reason": "account_credential"})),
+            });
+        }
+        options(arguments)?;
+        let Some(hub) = self.hub.upgrade() else {
+            return Err(RpcError::internal());
+        };
+        // ponytail: scans the store per check; an index by principal is the
+        // upgrade if many watch rows make fan-out measurable.
+        let rows = Self::rows(&hub, principal, name, arguments);
+        if rows.iter().any(|row| self.holder(row, &target).is_none()) {
+            return Err(RpcError::forbidden());
+        }
+        Ok(())
+    }
+
+    fn matches(&self, principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+        event
+            .lifecycle_key
+            .as_deref()
+            .is_some_and(|key| self.lifecycle_key(principal, &event.name, arguments) == key)
+    }
+
+    /// Shared across principals for a credential-free capability; per
+    /// principal otherwise, so one principal's credential never answers for
+    /// another's subscription.
+    fn lifecycle_key(&self, principal: &str, name: &str, arguments: &Value) -> String {
+        let shared = self
+            .target(name)
+            .is_some_and(|t| t.credential == CredentialUse::Free);
+        let key = if shared {
+            json!([name, arguments])
+        } else {
+            json!([principal, name, arguments])
+        };
+        String::from_utf8(serde_json_canonicalizer::to_vec(&key).unwrap_or_default())
+            .unwrap_or_default()
+    }
+
+    async fn on_first_subscriber(
+        &self,
+        key: &str,
+        principal: &str,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<(), RpcError> {
+        let target = self.target(name).ok_or_else(RpcError::forbidden)?;
+        let options = options(arguments)?;
+        let alone = (target.credential != CredentialUse::Free).then(|| principal.to_owned());
+        let mut pollers = self.pollers.lock();
+        if pollers.contains_key(key) {
+            return Ok(());
+        }
+        if pollers.len() >= self.max_pollers {
+            return Err(RpcError::exhausted("watch_pollers", Some(self.max_pollers)));
+        }
+        if let Some(owner) = &alone
+            && pollers
+                .values()
+                .filter(|p| p.alone.as_ref() == Some(owner))
+                .count()
+                >= self.max_per_principal
+        {
+            return Err(RpcError::exhausted(
+                "watch_pollers_per_principal",
+                Some(self.max_per_principal),
+            ));
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let run = Run {
+            stop: Arc::clone(&stop),
+            hub: self.hub.clone(),
+            host: Arc::clone(&self.host),
+            key: key.to_owned(),
+            name: name.to_owned(),
+            options,
+            charge: if alone.is_some() {
+                Charge::Holder
+            } else {
+                Charge::Global
+            },
+        };
+        pollers.insert(
+            key.to_owned(),
+            Poller {
+                stop: {
+                    tokio::spawn(run.forever());
+                    stop
+                },
+                alone,
+            },
+        );
+        Ok(())
+    }
+
+    async fn on_last_subscriber(&self, key: &str) {
+        if let Some(poller) = self.pollers.lock().remove(key) {
+            poller.stop.store(true, Ordering::Release);
+        }
     }
 }
 
@@ -286,6 +440,8 @@ enum Step {
 
 /// One poller's loop.
 struct Run {
+    /// Set when the last subscription for the key went away.
+    stop: Arc<AtomicBool>,
     hub: Weak<EventsHub>,
     host: Arc<dyn WatchHost>,
     key: String,
@@ -307,6 +463,9 @@ impl Run {
         let mut failures = 0_u32;
         loop {
             tokio::time::sleep(wait).await;
+            if self.stop.load(Ordering::Acquire) {
+                return;
+            }
             let Some(hub) = self.hub.upgrade() else {
                 return;
             };
@@ -343,9 +502,93 @@ impl Run {
 
     async fn once(
         &self,
-        _hub: &Arc<EventsHub>,
-        _last: &mut Option<(BTreeMap<String, Value>, String)>,
+        hub: &Arc<EventsHub>,
+        last: &mut Option<(BTreeMap<String, Value>, String)>,
     ) -> Step {
+        // The classification is re-read every poll (MIK-7216.IDEM.1): a
+        // capability removed or reclassified takes its subscriptions with it.
+        let Some(target) = self
+            .host
+            .targets()
+            .into_iter()
+            .find(|t| t.read_only && event_name(&t.capability) == self.name)
+        else {
+            let (gone, owner) = (vec![self.name.clone()], Arc::clone(hub));
+            let _ = tokio::task::spawn_blocking(move || owner.withdraw(&gone)).await;
+            hub.reconcile_stops_in_background();
+            return Step::Stop;
+        };
+        let Some(services) = hub.runtime.services.get().cloned() else {
+            return Step::Failed;
+        };
+        let now = Utc::now();
+        let rows: Vec<Subscription> = hub
+            .store
+            .subscriptions()
+            .into_iter()
+            .filter(|s| s.live(now) && s.name == self.name && self.key_of(s) == self.key)
+            .collect();
+        let mut chosen = None;
+        for row in rows {
+            let passes = services
+                .admits_subscription(&row, Some(target.backend.as_str()))
+                .await;
+            let api_key = row
+                .api_key
+                .clone()
+                .filter(|_| row.legacy_api_key_name.is_none());
+            let holder = api_key
+                .map(|api_key| Holder {
+                    principal: row.principal.clone(),
+                    api_key,
+                })
+                .filter(|h| passes && self.host.may_invoke(h, &target));
+            match holder {
+                Some(holder) => {
+                    if chosen.is_none() {
+                        chosen = Some(holder);
+                    }
+                }
+                // Revoked before any call is made for it.
+                None => hub.revoke(&row).await,
+            }
+        }
+        let Some(holder) = chosen else {
+            return Step::Stop;
+        };
+        let Ok(value) = self
+            .host
+            .poll(&holder, &target, &self.options.arguments, self.charge)
+            .await
+        else {
+            return Step::Failed;
+        };
+        let after = projection(&value, self.options.fields.as_deref());
+        let digest_after = digest(&after);
+        if let Some((before, digest_before)) = last.as_ref()
+            && *digest_before != digest_after
+        {
+            hub.emit(SourceEvent {
+                kind: SourceKind::RestWatch,
+                name: self.name.clone(),
+                backend: target.backend.clone(),
+                scope: Visibility::Backend(target.backend.clone()),
+                owner: None,
+                // A fresh id per transition: a flap A->B->A is three
+                // occurrences, and a restarted poller repeats none.
+                upstream_id: hex::encode(rand::random::<[u8; 16]>()),
+                occurred_at: now,
+                data: json!({
+                    "capability": target.capability,
+                    "changed": changed(before, &after),
+                    "digest_before": digest_before,
+                    "digest_after": digest_after,
+                    "observed_at": now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                }),
+                lifecycle_key: Some(self.key.clone()),
+            });
+        }
+        *last = Some((after, digest_after));
         Step::Polled
     }
 

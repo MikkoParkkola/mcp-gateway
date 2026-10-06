@@ -3,7 +3,7 @@
 //! MIK-7720 (W1): an events watch poll (`poll_capability`) gets every
 //! control a `/mcp` `tools/call` gets. Three parts, as for the direct route:
 //! the `DISPATCH_CONTROLS` table run as polls, a row per control the router
-//! applies before MetaMcp, and a structural check of the poll's stages.
+//! applies before `MetaMcp`, and a structural check of the poll's stages.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -20,7 +20,7 @@ use crate::gateway::meta_mcp::invoke::dispatch_guards::DISPATCH_CONTROLS;
 const NOT_ON_POLLS: [&str; 1] = ["session_profile"];
 
 /// The controls a poll runs, in this order, in `poll_capability`'s body: the
-/// two the router applies before MetaMcp, MetaMcp's request-free tail (grant,
+/// two the router applies before `MetaMcp`, `MetaMcp`'s request-free tail (grant,
 /// kill switch, budget, response gates, audit), then the response firewall.
 const POLL_STAGES: [&str; 4] = [
     "check_authenticated_client_rate_limit(",

@@ -131,6 +131,7 @@ fn run(
         .iter()
         .any(|t| event_name(&t.capability) == name && t.credential == CredentialUse::Free);
     Run {
+        stop: Arc::default(),
         hub: Arc::downgrade(hub),
         host: Arc::clone(host) as Arc<dyn WatchHost>,
         key,
@@ -355,6 +356,23 @@ async fn watch_stops_when_its_capability_is_reclassified() {
         hub.store.subscriptions().is_empty(),
         "subscriptions deleted"
     );
+}
+
+/// U11: a credential-free capability that starts needing a credential is
+/// reclassified too: its shared poller stops before any call, so one
+/// sharer's credential never answers for every principal sharing it.
+#[tokio::test]
+async fn watch_stops_when_its_capability_changes_credential_class() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    let name = "watch.weather.changed";
+    admit(&hub, "p", name, &json!({}));
+    let poller = run(&hub, &host, "p", name, &json!({}));
+    *host.targets.lock() = vec![target("weather", true, CredentialUse::Keyed)];
+    let mut last = None;
+    assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
+    assert!(host.calls.lock().is_empty(), "no call under the new class");
 }
 
 /// U12: a change only in a default volatile key or in `_meta` emits nothing;

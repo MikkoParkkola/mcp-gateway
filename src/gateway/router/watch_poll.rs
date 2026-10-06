@@ -5,8 +5,8 @@
 //! with every control a `/mcp` `tools/call` gets.
 //!
 //! No control is reimplemented. The per-key rate limit and the request
-//! firewall are the two the router applies before MetaMcp, called as the
-//! handler calls them; the rest is MetaMcp's request-free tail, the one task
+//! firewall are the two the router applies before `MetaMcp`, called as the
+//! handler calls them; the rest is `MetaMcp`'s request-free tail, the one task
 //! workers dispatch on (grant check, kill switch, budget admit and spend,
 //! response gates, the attributed audit record); the response firewall runs
 //! after, as it does for a task's result. `POLL_STAGES` in the tests pins the
@@ -29,7 +29,7 @@ use crate::protocol::RequestId;
 pub(crate) enum PollRefused {
     RateLimited,
     Firewall,
-    /// MetaMcp's tail refused it (grant, kill switch, budget, gates) or the
+    /// `MetaMcp`'s tail refused it (grant, kill switch, budget, gates) or the
     /// capability answered with an error.
     Dispatch,
     /// The response firewall refused the answer.
