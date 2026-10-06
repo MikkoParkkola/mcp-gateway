@@ -497,3 +497,30 @@ fn a_failed_refill_is_retried_once_after_the_cooldown() {
     assert!(!state.tools_pending, "the retry is silent");
     assert_eq!(due(), None, "a failed retry is not retried again");
 }
+
+/// MIK-8007: a backend gone from the config owes no tools notice; one added
+/// again later starts afresh.
+#[tokio::test]
+async fn a_removed_backend_owes_no_tools_notice() {
+    let shared = shared();
+    shared.tools.lock().due = Some(Instant::now());
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let task = tokio::spawn(run(
+        Arc::clone(&shared),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        Arc::downgrade(&hub),
+    ));
+    let cleared = tokio::time::timeout(Duration::from_secs(5), async {
+        while shared.tools.lock().due.is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    shared.stop.cancel();
+    task.await.expect("task");
+    assert!(
+        cleared.is_ok(),
+        "a removed backend still owed a tools refill"
+    );
+}
