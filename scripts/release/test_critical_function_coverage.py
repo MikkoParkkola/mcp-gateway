@@ -11,6 +11,7 @@ import contextlib
 import importlib.util
 import io
 import pathlib
+import re
 import tempfile
 import unittest
 
@@ -572,6 +573,15 @@ class InventoryResolves(unittest.TestCase):
             if cfc.fn_line(lines, row["fn"], int(row["occurrence"])) is None:
                 unresolved.append(f"{row['path']}:{row['fn']}#{row['occurrence']}")
         self.assertEqual(unresolved, [], "move these rows to the file that now defines them")
+
+    def test_the_documented_critical_count_matches_the_inventory(self):
+        root = HERE.parent.parent
+        rows = cfc.read_inventory(root / "docs/release/v4.0.0-critical-functions.tsv")
+        critical = sum(row["tier"] == "critical" for row in rows)
+        doc = (root / "docs/release/v4.0.0-critical-path-coverage.md").read_text()
+        stated = re.search(r"(\d+) rows are\s+Critical", doc)
+        self.assertIsNotNone(stated, "the doc no longer states the Critical count")
+        self.assertEqual(int(stated.group(1)), critical, "update the count in the doc")
 
 
 if __name__ == "__main__":

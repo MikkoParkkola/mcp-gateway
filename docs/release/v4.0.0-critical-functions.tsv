@@ -138,7 +138,7 @@ src/gateway/router/identity.rs	caller_key	1	standard	borderline	caller_key	Firew
 src/gateway/router/identity.rs	grant_subject_from_cert_identity	1	standard	borderline	grant_subject_from_cert_identity	mTLS subject derivation, with a display-name fallback.
 src/gateway/router/identity.rs	grant_subject_from_oauth_agent	1	standard	borderline	grant_subject_from_oauth_agent	Agent JWT sub used verbatim as the subject.
 src/gateway/router/identity.rs	subject_key	1	standard	borderline	subject_key	Session-ownership and CallerKey encoding; a collision would merge principals.
-src/gateway/router/identity.rs	control_identity	1	standard	borderline	control_identity	Per-caller control key for session-less callers; mirrors direct_control_identity
+src/gateway/router/identity.rs	control_identity	1	critical	d	control_identity	Picks the key per-principal rate and budget limits score on; a fresh session falls to one shared anonymous bucket
 src/gateway/router/judged_answer.rs	record_delivery	1	critical	d	record_delivery	Replaces a judged answer with the audit-unavailable refusal when its delivery cannot be recorded (fail closed).
 src/gateway/router/meta_refusal_audit.rs	answer	1	critical	borderline	Refused::answer	Answers 503 when the refusal's audit write fails under FailClosed.
 src/gateway/router/mod.rs	authenticate	1	standard	borderline	authenticate	Layer order (agent auth, adapter, auth); swapping it lets unauthenticated callers assert identity.
