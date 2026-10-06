@@ -253,7 +253,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             note = recv(&mut state.current) => Ev::Current(note),
             note = recv_pending(&mut state.pending) => Ev::Pending(note),
             filled = refilled(&mut refill) => Ev::Refilled(filled),
-            opened = opened(&mut state.opening) => Ev::Opened(opened),
+            opened = replacement_opened(&mut state.opening) => Ev::Opened(opened),
             _ = wake.changed() => Ev::Wake,
             _ = tick.tick() => Ev::Tick,
         };
@@ -387,7 +387,9 @@ type Opening = std::pin::Pin<
     Box<dyn std::future::Future<Output = (Result<FrameStream, Refused>, Requested)> + Send>,
 >;
 
-async fn opened(opening: &mut Option<Opening>) -> (Result<FrameStream, Refused>, Requested) {
+async fn replacement_opened(
+    opening: &mut Option<Opening>,
+) -> (Result<FrameStream, Refused>, Requested) {
     match opening {
         Some(future) => future.await,
         None => std::future::pending().await,
