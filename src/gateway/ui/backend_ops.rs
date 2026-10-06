@@ -388,7 +388,7 @@ fn registry_backend(
         } => {
             backend.transport = TransportConfig::Http {
                 http_url: default_url.to_string(),
-                streamable_http: flavor == HttpFlavor::Streamable,
+                streamable_http: Some(flavor == HttpFlavor::Streamable),
                 protocol_version: None,
             };
             match entry.auth {

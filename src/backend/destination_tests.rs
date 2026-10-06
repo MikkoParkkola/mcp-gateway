@@ -38,7 +38,7 @@ fn transport(template: &str, port: u16) -> TransportConfig {
     } else {
         TransportConfig::Http {
             http_url: url,
-            streamable_http: !template.contains("sse"),
+            streamable_http: Some(!template.contains("sse")),
             protocol_version: None,
         }
     }
@@ -602,7 +602,7 @@ async fn a_start_refused_before_connecting_does_not_block_a_hardened_pairing() {
     };
     let http_at = |url: &str| TransportConfig::Http {
         http_url: url.to_string(),
-        streamable_http: true,
+        streamable_http: Some(true),
         protocol_version: None,
     };
     for (kind, backend) in [

@@ -3813,7 +3813,7 @@ mod tests {
         BackendConfig {
             transport: TransportConfig::Http {
                 http_url: "https://backend.internal/mcp".to_string(),
-                streamable_http: false,
+                streamable_http: Some(false),
                 protocol_version: None,
             },
             identity_propagation: Some(IdentityPropagationConfig {
@@ -4761,7 +4761,7 @@ mod tests {
             BackendConfig {
                 transport: TransportConfig::Http {
                     http_url: "http://127.0.0.1:65535/mcp".to_string(),
-                    streamable_http: true,
+                    streamable_http: Some(true),
                     protocol_version: None,
                 },
                 ..BackendConfig::r2_off()

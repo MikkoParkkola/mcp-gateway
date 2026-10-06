@@ -116,6 +116,12 @@ impl TransparencyLogger {
         mut extra: Map<String, Value>,
     ) -> io::Result<()> {
         Self::reject_reserved_keys(&extra)?;
+        // MIK-7646: the overflow count is derived here alone, never supplied.
+        if extra.contains_key("tenants_total") {
+            return Err(io::Error::other(
+                "attribution field `tenants_total` is written only by the writer",
+            ));
+        }
         cap_tenants(&mut extra);
 
         // Domain fields for an invocation entry. `counter`, `prev_entry_hash`,

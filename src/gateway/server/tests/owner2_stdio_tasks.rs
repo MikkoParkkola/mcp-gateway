@@ -92,7 +92,7 @@ pub(super) async fn fixture_on(
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: url,
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             ..BackendConfig::default()
@@ -367,7 +367,7 @@ async fn stdio_eof_releases_the_store_lease_before_returning() {
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: url,
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             ..BackendConfig::default()
@@ -577,7 +577,7 @@ async fn eof_drains_a_running_task_before_returning() {
             enabled: true,
             transport: TransportConfig::Http {
                 http_url: url,
-                streamable_http: true,
+                streamable_http: Some(true),
                 protocol_version: None,
             },
             ..BackendConfig::default()
