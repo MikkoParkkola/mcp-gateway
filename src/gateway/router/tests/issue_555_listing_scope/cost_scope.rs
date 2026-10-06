@@ -29,7 +29,7 @@ async fn governed(auth: Auth) -> super::Fixture {
 /// A 2026-07-28 `tools/call` of `name` on `/mcp` as `key` (anonymous when `None`).
 async fn modern_call(router: &axum::Router, key: Option<&str>, name: &str, args: Value) -> Value {
     let who = key.unwrap_or("anonymous");
-    let body = json!({
+    let mut body = json!({
         "jsonrpc": "2.0",
         "id": "modern-cost",
         "method": "tools/call",
@@ -39,11 +39,15 @@ async fn modern_call(router: &axum::Router, key: Option<&str>, name: &str, args:
             "_meta": {
                 "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                 "io.modelcontextprotocol/clientCapabilities": {},
-                "io.modelcontextprotocol/clientInfo": { "name": "cost", "version": "1.0.0" },
-                crate::protocol::mrtr::IDEMPOTENCY_KEY_META: format!("cost-{who}-{name}")
+                "io.modelcontextprotocol/clientInfo": { "name": "cost", "version": "1.0.0" }
             }
         }
     });
+    // A keyed call needs a verified principal, so an anonymous one goes unkeyed.
+    if key.is_some() {
+        body["params"]["_meta"][crate::protocol::mrtr::IDEMPOTENCY_KEY_META] =
+            json!(format!("cost-{who}-{name}"));
+    }
     let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
