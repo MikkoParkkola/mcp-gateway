@@ -150,6 +150,20 @@ impl OwnedCallerContext {
         self.session_id.as_deref()
     }
 
+    /// Hold the caller key for the length of one backend call, so an idle
+    /// sweep cannot reclaim it under a call that outlasts `IDLE_TTL`
+    /// (MIK-7828.FIX.2). Only an HTTP host tracks caller keys.
+    pub(crate) fn hold_caller_key(
+        &self,
+        host: &LiveHost,
+    ) -> Option<crate::gateway::session_lifecycle::KeyHold> {
+        let LiveHost::Http(state) = host else {
+            return None;
+        };
+        let key = self.caller_key.as_deref()?;
+        Some(state.session_lifecycle.as_ref()?.hold(key))
+    }
+
     /// Rebuild the dispatch funnel.
     ///
     /// - Retry metadata is not forwarded: admission already reserved the key

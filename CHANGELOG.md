@@ -980,8 +980,8 @@ Evidence for each highlight, file and test: `src/config/mod.rs` and `tests/mik_7
   response counted against the backend error budget, the per-capability budget
   and the circuit breaker exactly as a `500` did, so a caller fast enough to be
   throttled could open a circuit on a backend that was answering correctly.
-  `429`, `too many requests`, `rate limit`, `RESOURCE_EXHAUSTED` and `throttled`
-  now record the backend as reachable and contribute no budget sample at all —
+  `429`, `too many requests`, `rate limit` and `RESOURCE_EXHAUSTED` now
+  record the backend as reachable and contribute no budget sample at all —
   neither success nor failure, because a throttle says nothing about health.
   Every exclusion increments `mcp_error_budget_suppressed_total`, so the
   suppression is visible rather than inferred.

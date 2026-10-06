@@ -8,6 +8,8 @@
 //! admin answer (404 where 200 is expected). Linux-only for `SSL_CERT_FILE`.
 #![cfg(all(unix, not(target_vendor = "apple")))]
 
+use gateway::gateway_bin;
+
 #[path = "mik_7630_events/delivery.rs"]
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]
 mod delivery;
@@ -487,15 +489,12 @@ async fn the_cli_lists_and_replays_through_the_admin_route() {
         let (url, home) = (url.clone(), home.clone());
         async move {
             tokio::task::spawn_blocking(move || {
-                std::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+                gateway_bin::command(&home, gateway_bin::Inherit::Nothing)
                     .args(["events", "dead-letters"])
                     .args(&args)
                     .args(["--url", &url])
-                    .env_clear()
                     .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-                    .env("HOME", &home)
                     .env("MCP_GATEWAY_TOKEN", token)
-                    .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|p| ("LLVM_PROFILE_FILE", p)))
                     .output()
                     .expect("run the CLI")
             })
