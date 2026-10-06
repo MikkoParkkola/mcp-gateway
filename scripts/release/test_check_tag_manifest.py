@@ -1588,12 +1588,17 @@ class WorkflowWiring(unittest.TestCase):
         gate = job_if("ci.yml", "helm-chart-publish")
         self.assertIn("startsWith(github.ref, 'refs/tags/v')", gate)
         self.assertIn("needs.docker-manifest.result == 'success'", gate, "a tag run publishes only over a signed image")
+        self.assertIn("needs.docker-manifest.outputs.is_prerelease == 'false'", gate, "a prerelease must not take a stable chart version")
+        manifest = jobs("ci.yml")["docker-manifest"]
+        self.assertRegex(manifest, r"(?m)^\s+list: \$\{\{ steps\.list\.outputs\.list \}\}$")
+        self.assertIn("SIGNED_LIST: ${{ needs.docker-manifest.outputs.list }}", body)
         self.assertRegex(body, r"(?m)^\s+id-token:\s*write\b")
         self.assertIn("IDENTITY: https://github.com/${{ github.workflow_ref }}", body)
         self.assertIn("SIGNER_ISSUER: https://token.actions.githubusercontent.com", body)
         ran = "\n".join(c for b in steps("ci.yml", "helm-chart-publish") for c in joined(b))
         self.assertRegex(ran, r'SIGNER_IDENTITY="\$IDENTITY"[^\n]*\n?[^\n]*scripts/release/publish_pinned_chart\.sh "\$image" "\$repo"')
-        self.assertIn('repo=oci://ghcr.io/mikkoparkkola/charts\n', ran + "\n")
+        self.assertIn('image="ghcr.io/mikkoparkkola/mcp-gateway@${SIGNED_LIST}"; repo=oci://ghcr.io/mikkoparkkola/charts\n', ran + "\n",
+                      "the release chart must pin the digest docker-manifest verified, not a tag")
         self.assertRegex(ran, r'(?m)^\s*if cosign verify --certificate-identity "\$wrong"', "no wrong-identity verify")
         self.assertRegex(
             ran,

@@ -109,13 +109,13 @@ health_url="http://127.0.0.1:$port/health"
 mcp_url="http://127.0.0.1:$port/mcp"
 
 for _ in $(seq 1 150); do
-  if curl -fsS "$health_url" >/dev/null 2>&1; then
+  if curl -fsS --max-time 10 "$health_url" >/dev/null 2>&1; then
     break
   fi
   sleep 0.2
 done
 
-if ! curl -fsS "$health_url" >/dev/null; then
+if ! curl -fsS --max-time 10 "$health_url" >/dev/null; then
   docker logs "$container" >&2 || true
   exit 1
 fi
@@ -129,7 +129,7 @@ admin_token="$(sed -n 's/^ *bearer_token: *"\(.*\)"/\1/p' "$work/gateway.yaml" |
 [[ -n "$admin_token" ]] || { echo "could not read admin token from gateway.yaml" >&2; exit 1; }
 capabilities_ready=""
 for _ in $(seq 1 150); do
-  if curl -fsS -H "Authorization: Bearer $admin_token" "$health_url" 2>/dev/null \
+  if curl -fsS --max-time 10 -H "Authorization: Bearer $admin_token" "$health_url" 2>/dev/null \
     | python3 -c 'import json,sys
 try:
     b = json.load(sys.stdin).get("capability_backend") or {}
@@ -167,7 +167,7 @@ cat >"$tmp/invoke.json" <<'JSON'
 }
 JSON
 
-curl -fsS \
+curl -fsS --max-time 60 \
   -H "Content-Type: application/json" \
   --data-binary "@$tmp/invoke.json" \
   "$mcp_url" >"$tmp/response.json"

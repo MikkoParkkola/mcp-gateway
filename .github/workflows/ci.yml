@@ -1365,6 +1365,9 @@ jobs:
     # Read by publish-mcp-registry, which must not list a release candidate.
     outputs:
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+      # The index digest this job signed and verified, for the chart publisher:
+      # re-reading the movable :VERSION tag there could pin another image.
+      list: ${{ steps.list.outputs.list }}
     permissions:
       contents: read
       packages: write
@@ -1684,7 +1687,9 @@ jobs:
   # discovery surface only once the suite that qualifies it has passed.
   # The Helm chart, pinned to the release image's digest and signed by this
   # workflow, so chart and image carry one signer: ci.yml at the tag (MIK-7952).
-  # Runs after docker-manifest has signed the index and named :VERSION. The
+  # Runs after docker-manifest has signed the index, on the digest it verified,
+  # and on a stable tag only: Chart.yaml carries a stable chart version, so a
+  # prerelease would put a candidate image under it. The
   # rehearsal dispatch publishes to the private `charts-rehearsal` package from
   # a pinned, already-signed image and never touches `charts`; it runs without
   # docker-manifest, so the condition reads that job's result only on a tag.
@@ -1695,7 +1700,8 @@ jobs:
     if: >-
       !cancelled() && (
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-      && needs.docker-manifest.result == 'success')
+      && needs.docker-manifest.result == 'success'
+      && needs.docker-manifest.outputs.is_prerelease == 'false')
       || (github.event_name == 'workflow_dispatch'
       && (inputs.rehearse_chart_publish == true || inputs.rehearse_chart_publish == 'true')))
     runs-on: ubuntu-latest
@@ -1727,6 +1733,7 @@ jobs:
       - name: Publish, sign and verify the chart
         env:
           REHEARSAL: ${{ github.event_name == 'workflow_dispatch' }}
+          SIGNED_LIST: ${{ needs.docker-manifest.outputs.list }}
           # v4.0.0-beta.2's index, signed by run 36193916273: the rehearsal's image.
           REHEARSAL_IMAGE: ghcr.io/mikkoparkkola/mcp-gateway@sha256:1471cafc9f2a88855fd8997da8316b8122335bef3d3886a3bbb64768aebc9638
           SIGNER_ISSUER: https://token.actions.githubusercontent.com
@@ -1737,7 +1744,8 @@ jobs:
           if [ "$REHEARSAL" = true ]; then
             image="$REHEARSAL_IMAGE"; repo=oci://ghcr.io/mikkoparkkola/charts-rehearsal
           else
-            image="ghcr.io/mikkoparkkola/mcp-gateway:${GITHUB_REF_NAME#v}"; repo=oci://ghcr.io/mikkoparkkola/charts
+            [[ $SIGNED_LIST =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no signed index digest from docker-manifest"; exit 1; }
+            image="ghcr.io/mikkoparkkola/mcp-gateway@${SIGNED_LIST}"; repo=oci://ghcr.io/mikkoparkkola/charts
           fi
           TAG_COMMIT="$GITHUB_SHA" SIGNER_IDENTITY="$IDENTITY" SIGNER_ISSUER="$SIGNER_ISSUER" \
             CHART_NOTES="$RUNNER_TEMP/chart-notes.md" \

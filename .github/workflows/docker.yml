@@ -305,6 +305,7 @@ jobs:
       # start (MIK-7484). One leg: the recipe is arch-independent.
       - name: Smoke the documented container recipe (it must serve a tool call)
         if: matrix.arch == 'amd64'
+        timeout-minutes: 15
         env:
           MCP_GATEWAY_DOCKER_BUILD: "0"
           MCP_GATEWAY_INIT_IN_IMAGE: "1"
