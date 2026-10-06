@@ -32,8 +32,8 @@ def clauses(item):
 
 
 def value_problem(value):
-    """None when the value is non-empty and ends in a period."""
-    if not value.strip(" .*_`"):
+    """None when the value says something (a letter or digit) and ends in a period."""
+    if not re.search(r"[A-Za-z0-9]", value):
         return "an empty '{}' value"
     if not value.endswith("."):
         return "a '{}' value with no closing period"

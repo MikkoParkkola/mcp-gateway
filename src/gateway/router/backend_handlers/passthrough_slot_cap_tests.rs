@@ -13,6 +13,7 @@
 use axum::http::StatusCode;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use tower::ServiceExt;
 
@@ -24,6 +25,7 @@ use crate::identity_propagation::{
     IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
 };
 use crate::key_server::oidc::VerifiedIdentity;
+use crate::transport::Transport;
 
 /// The per-backend identity-slot cap (MIK-7547.SLOTS.1).
 const CAP: usize = 64;
@@ -70,8 +72,14 @@ fn header_value(i: usize) -> String {
 }
 
 /// POST one JSON-RPC message to `/mcp/ledger` carrying passthrough header `i`,
-/// as `subject` (a verified identity) or anonymously (auth disabled).
-async fn send(router: &axum::Router, i: usize, subject: Option<&str>, notification: bool) {
+/// as `subject` (a verified identity) or anonymously (auth disabled), and
+/// return the status and body.
+async fn send(
+    router: &axum::Router,
+    i: usize,
+    subject: Option<&str>,
+    notification: bool,
+) -> (StatusCode, String) {
     let body = if notification {
         json!({ "jsonrpc": "2.0", "method": "notifications/cancelled", "params": { "requestId": 7 } })
     } else {
@@ -94,9 +102,13 @@ async fn send(router: &axum::Router, i: usize, subject: Option<&str>, notificati
         });
     }
     let response = router.clone().oneshot(request).await.unwrap();
-    // Any status is fine here; the pool is the assertion. A 5xx is expected:
-    // the fixture transport cannot start.
-    let _: StatusCode = response.status();
+    // Callers that only count slots ignore the status: a 5xx is expected,
+    // because the fixture transport cannot start.
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&body).into_owned())
 }
 
 /// GIVEN auth disabled, so every caller is the one anonymous principal
@@ -177,6 +189,77 @@ async fn an_admitted_caller_keeps_its_slot_at_the_budget() {
     send(&router, 0, None, false).await;
     assert_eq!(backend.per_user_slot_bindings_for_test(), before);
     assert_eq!(before.len(), PER_PRINCIPAL);
+}
+
+/// A transport that records the method of every request and notification
+/// reaching it. On the shared slot it is the oracle for "an over-budget caller
+/// never lands there": the slot counts above cannot tell a refusal from a
+/// fallback to `Shared`, because a fallback mints no `PerUser` slot either.
+struct RecordingTransport(Arc<Mutex<Vec<String>>>);
+
+#[async_trait::async_trait]
+impl Transport for RecordingTransport {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        self.0.lock().unwrap().push(method.to_string());
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            crate::protocol::RequestId::Number(1),
+            json!({ "resources": [] }),
+        ))
+    }
+    async fn notify(&self, method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
+        self.0.lock().unwrap().push(method.to_string());
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// MIK-7547.TEST.1. GIVEN the anonymous principal at its budget, and a
+/// recording transport on the shared slot
+/// WHEN a caller with a new passthrough header sends a request, then a
+/// notification
+/// THEN the request is answered with the slot refusal, the notification with
+/// 429, and neither reaches the shared slot. Red if the cap path hands the
+/// caller `PoolKey::Shared` (#727).
+#[tokio::test]
+async fn an_over_budget_caller_is_refused_and_never_reaches_the_shared_slot() {
+    let backend = passthrough_backend();
+    let (router, _store) = router_with(&backend).await;
+    for i in 0..PER_PRINCIPAL {
+        send(&router, i, None, false).await;
+    }
+    assert_eq!(backend.per_user_slots_for_test(), PER_PRINCIPAL);
+    let shared = Arc::new(Mutex::new(Vec::new()));
+    backend.set_transport_for_test(Arc::new(RecordingTransport(Arc::clone(&shared))));
+
+    let (status, body) = send(&router, PER_PRINCIPAL, None, false).await;
+    assert!(
+        body.contains("has no free caller slot (principal limit reached)"),
+        "the over-budget request must get the slot refusal, got {status}: {body}"
+    );
+    let (status, _) = send(&router, PER_PRINCIPAL + 1, None, true).await;
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "over-budget notification"
+    );
+
+    let reached = shared.lock().unwrap().clone();
+    assert!(
+        !reached
+            .iter()
+            .any(|m| m == "resources/list" || m == "notifications/cancelled"),
+        "an over-budget caller reached the shared slot: {reached:?}"
+    );
+    assert_eq!(backend.per_user_slots_for_test(), PER_PRINCIPAL);
 }
 
 fn api_key(key: &str) -> crate::config::ApiKeyConfig {

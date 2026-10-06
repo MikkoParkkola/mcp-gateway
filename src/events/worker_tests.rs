@@ -276,6 +276,7 @@ async fn an_attempt_the_audit_log_refuses_is_not_sent() {
         credentials: crate::events::LiveCredentials::default(),
     };
     let (port, accepted) = counting_callback().await;
+    offer(&hub, &["webhook.c.r.received"]);
     queued(&hub, port, "evt_refused");
     log.set_append_failure_for_test(true);
     hub.attempt(&services, "evt_refused").await;
@@ -309,8 +310,8 @@ async fn an_attempt_the_audit_log_refuses_is_not_sent() {
 
 /// MIK-7894: a pending record for a backend event type no source offers any
 /// more (a reload made the backend ineligible and its withdrawal failed) is
-/// refused, not sent. The control: the same record under a webhook type, which
-/// no source offers in this harness either, reaches the callback.
+/// refused, not sent. The control: the same record under a webhook type a
+/// source offers reaches the callback.
 #[tokio::test]
 async fn a_backend_type_no_source_offers_is_not_sent() {
     use std::sync::atomic::Ordering;
@@ -351,10 +352,13 @@ async fn a_backend_type_no_source_offers_is_not_sent() {
             credentials: crate::events::LiveCredentials::default(),
         };
         let (port, accepted) = counting_callback().await;
+        offer(&hub, &["webhook.c.r.received"]);
         queued_as(&hub, port, "evt", name);
         hub.attempt(&services, "evt").await;
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(accepted.load(Ordering::SeqCst) >= 1, sent, "{name}");
+        // Refused, not held: the backend subscription goes (MIK-7976 WORKER.3).
+        assert_eq!(hub.store.subscriptions().is_empty(), !sent, "{name}");
     }
 }
 
@@ -396,6 +400,7 @@ async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
         budget: None,
         credentials: crate::events::LiveCredentials::default(),
     };
+    offer(&hub, &["webhook.c.r.received"]);
     queued(&hub, 9, "evt_overdue");
     log.set_append_failure_for_test(true);
     hub.attempt(&services, "evt_overdue").await;
@@ -537,6 +542,8 @@ fn config_default() -> crate::config::EventsConfig {
 struct Flipping {
     admits: usize,
     asked: std::sync::atomic::AtomicUsize,
+    /// Event types the source exempts from the delivery charge.
+    free: &'static [&'static str],
 }
 
 #[async_trait::async_trait]
@@ -545,14 +552,9 @@ impl crate::events::EventSource for Flipping {
         crate::events::types::SourceKind::RestWatch
     }
     fn descriptors(&self) -> Vec<crate::events::types::EventDescriptor> {
-        vec![crate::events::types::EventDescriptor {
-            name: "probe.flip".into(),
-            description: "test source".into(),
-            input_schema: serde_json::json!({"type": "object"}),
-            payload_schema: serde_json::json!({"type": "object"}),
-            scope: crate::events::types::Visibility::Owner,
-            kind: crate::events::types::SourceKind::RestWatch,
-        }]
+        ["probe.flip", "probe.free"]
+            .map(|name| descriptor(name, crate::events::types::SourceKind::RestWatch))
+            .into()
     }
     fn matches(
         &self,
@@ -561,6 +563,9 @@ impl crate::events::EventSource for Flipping {
         _event: &crate::events::fanout::SourceEvent,
     ) -> bool {
         true
+    }
+    fn charges(&self, name: &str) -> bool {
+        !self.free.contains(&name)
     }
     async fn authorize(
         &self,
@@ -596,24 +601,13 @@ async fn eligibility_lost_after_the_sending_record_is_not_sent_or_charged() {
         let source = Arc::new(Flipping {
             admits,
             asked: std::sync::atomic::AtomicUsize::new(0),
+            free: &[],
         });
         hub.register_source(Arc::clone(&source) as Arc<dyn crate::events::EventSource>);
         #[allow(unused_mut, reason = "set only with cost-governance")]
         let mut services = logged_services(dir.path());
         #[cfg(feature = "cost-governance")]
-        let registry = {
-            use crate::cost_accounting::{
-                config::CostGovernanceConfig, enforcer::BudgetEnforcer, registry::CostRegistry,
-            };
-            let cfg = CostGovernanceConfig {
-                enabled: true,
-                ..Default::default()
-            };
-            let registry = Arc::new(CostRegistry::new(&cfg));
-            let enforcer = Arc::new(BudgetEnforcer::new(cfg, Arc::clone(&registry)));
-            services.budget = Some((enforcer, Arc::clone(&registry)));
-            registry
-        };
+        let registry = budgeted(&mut services);
         let (port, accepted) = counting_callback().await;
         queued_as(&hub, port, "evt_flip", "probe.flip");
         hub.attempt(&services, "evt_flip").await;
@@ -645,3 +639,134 @@ async fn eligibility_lost_after_the_sending_record_is_not_sent_or_charged() {
         );
     }
 }
+
+/// A test catalogue entry for `name`.
+fn descriptor(
+    name: &str,
+    kind: crate::events::types::SourceKind,
+) -> crate::events::types::EventDescriptor {
+    crate::events::types::EventDescriptor {
+        name: name.into(),
+        description: "test source".into(),
+        input_schema: serde_json::json!({"type": "object"}),
+        payload_schema: serde_json::json!({"type": "object"}),
+        scope: crate::events::types::Visibility::Owner,
+        kind,
+    }
+}
+
+/// A source of kind `kind` offering exactly `names` and admitting everyone.
+struct Offering {
+    kind: crate::events::types::SourceKind,
+    names: Vec<&'static str>,
+}
+
+#[async_trait::async_trait]
+impl crate::events::EventSource for Offering {
+    fn kind(&self) -> crate::events::types::SourceKind {
+        self.kind
+    }
+    fn descriptors(&self) -> Vec<crate::events::types::EventDescriptor> {
+        self.names
+            .iter()
+            .map(|name| descriptor(name, self.kind))
+            .collect()
+    }
+    fn matches(
+        &self,
+        _principal: &str,
+        _arguments: &serde_json::Value,
+        _event: &crate::events::fanout::SourceEvent,
+    ) -> bool {
+        true
+    }
+}
+
+/// Register a webhook-kind source offering `names`.
+fn offer(hub: &Arc<EventsHub>, names: &[&'static str]) {
+    hub.register_source(Arc::new(Offering {
+        kind: crate::events::types::SourceKind::Webhook,
+        names: names.to_vec(),
+    }));
+}
+
+/// A budget that records every charge; the registry it charges.
+#[cfg(feature = "cost-governance")]
+fn budgeted(services: &mut Services) -> Arc<crate::cost_accounting::registry::CostRegistry> {
+    use crate::cost_accounting::{
+        config::CostGovernanceConfig, enforcer::BudgetEnforcer, registry::CostRegistry,
+    };
+    let cfg = CostGovernanceConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    let registry = Arc::new(CostRegistry::new(&cfg));
+    let enforcer = Arc::new(BudgetEnforcer::new(cfg, Arc::clone(&registry)));
+    services.budget = Some((enforcer, Arc::clone(&registry)));
+    registry
+}
+
+/// MIK-7976 WORKER.1, WORKER.2: a pending record whose type its source has
+/// withdrawn (the source switched off, here replaced by one offering nothing)
+/// is not sent and not charged, and its attempt ends on record. The control:
+/// with the type still offered the same record is charged and sent.
+#[tokio::test]
+async fn a_type_no_source_offers_any_more_is_not_sent_or_charged() {
+    use crate::events::types::SourceKind;
+    use std::sync::atomic::Ordering;
+    for (withdrawn, sent) in [(false, true), (true, false)] {
+        let dir = tempfile::tempdir().expect("dir");
+        let config = crate::config::EventsConfig {
+            callback_allow_private: vec!["127.0.0.0/8".into()],
+            cost_per_delivery_usd: 0.01,
+            ..crate::config::EventsConfig::default()
+        };
+        let hub = EventsHub::open(&config, dir.path()).expect("hub");
+        hub.register_source(Arc::new(Offering {
+            kind: SourceKind::GatewayOperational,
+            names: vec!["probe.gone"],
+        }));
+        #[allow(unused_mut, reason = "set only with cost-governance")]
+        let mut services = logged_services(dir.path());
+        #[cfg(feature = "cost-governance")]
+        let registry = budgeted(&mut services);
+        let (port, accepted) = counting_callback().await;
+        queued_as(&hub, port, "evt_gone", "probe.gone");
+        if withdrawn {
+            hub.register_source(Arc::new(Offering {
+                kind: SourceKind::GatewayOperational,
+                names: Vec::new(),
+            }));
+        }
+        hub.attempt(&services, "evt_gone").await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        assert_eq!(
+            accepted.load(Ordering::SeqCst) >= 1,
+            sent,
+            "POST (withdrawn {withdrawn})"
+        );
+        #[cfg(feature = "cost-governance")]
+        assert_eq!(
+            registry.snapshot().contains_key("events:probe.gone"),
+            sent,
+            "charged only when sent (withdrawn {withdrawn})"
+        );
+        if sent {
+            continue;
+        }
+        let log = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap_or_default();
+        assert!(
+            log.lines()
+                .any(|l| l.contains("evt_gone") && l.contains("\"status\":\"source_unavailable\"")),
+            "the refused attempt is on record: {log}"
+        );
+    }
+}
+
+#[cfg(feature = "cost-governance")]
+#[path = "worker_charge_tests.rs"]
+mod charge;
+
+#[path = "worker_hold_tests.rs"]
+mod hold;
