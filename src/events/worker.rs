@@ -168,7 +168,8 @@ impl EventsHub {
                 return;
             }
             self.revoke(&sub).await;
-            self.settle(services, &record, refused_retry()).await;
+            self.settle(services, &record, refusal_retry("access_revoked"))
+                .await;
             return;
         }
         // A record a crash or a long suspension carried past its bounds is
@@ -188,11 +189,8 @@ impl EventsHub {
         // Held, unsent and uncharged, until a source offers the type again
         // or the record runs past its bounds above (MIK-7976).
         if verdict == Verdict::Unoffered {
-            if self
-                .recorded_or_retry(services, &ctx, "access_revoked")
-                .await
-            {
-                self.settle(services, &record, refused_retry()).await;
+            if self.recorded_or_retry(services, &ctx, HELD).await {
+                self.settle(services, &record, refusal_retry(HELD)).await;
             }
             return;
         }
@@ -305,12 +303,13 @@ impl EventsHub {
             Verdict::Refuses => {
                 services.audit_outcome(&ended("access_revoked")).await;
                 self.revoke(sub).await;
-                self.settle(services, record, refused_retry()).await;
+                self.settle(services, record, refusal_retry("access_revoked"))
+                    .await;
                 return;
             }
             Verdict::Unoffered => {
-                services.audit_outcome(&ended("access_revoked")).await;
-                self.settle(services, record, refused_retry()).await;
+                services.audit_outcome(&ended(HELD)).await;
+                self.settle(services, record, refusal_retry(HELD)).await;
                 return;
             }
         }
@@ -693,12 +692,16 @@ enum Verdict {
     Unoffered,
 }
 
-/// Back to pending after a refusal before the POST: a revoked
-/// subscription's record goes with it, a held one waits.
-fn refused_retry() -> Settle {
+/// The status of an attempt held because no source offers its type: nothing
+/// was revoked, the type is only unavailable for now.
+const HELD: &str = "source_unavailable";
+
+/// Back to pending after a refusal before the POST, ending `status`: a
+/// revoked subscription's record goes with it, a held one waits.
+fn refusal_retry(status: &'static str) -> Settle {
     Settle::Retry {
         next: Utc::now() + REFUSAL_RETRY,
-        status: "access_revoked",
+        status,
     }
 }
 

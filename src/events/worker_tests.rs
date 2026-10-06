@@ -751,7 +751,7 @@ async fn a_type_no_source_offers_any_more_is_not_sent_or_charged() {
         let log = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap_or_default();
         assert!(
             log.lines()
-                .any(|l| l.contains("evt_gone") && l.contains("\"status\":\"access_revoked\"")),
+                .any(|l| l.contains("evt_gone") && l.contains("\"status\":\"source_unavailable\"")),
             "the refused attempt is on record: {log}"
         );
     }

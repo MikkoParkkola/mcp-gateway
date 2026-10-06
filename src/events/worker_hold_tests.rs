@@ -49,15 +49,16 @@ async fn an_unoffered_type_is_held_then_sent_once_offered() {
         assert_eq!(due.ready.len(), 1, "{name}: still pending");
         assert_eq!(
             due.ready[0].last_status.as_deref(),
-            Some("access_revoked"),
+            Some("source_unavailable"),
             "{name}"
         );
         let log = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap_or_default();
         assert!(!log.contains("\"status\":\"sending\""), "{name}: {log}");
         assert!(
-            log.contains("\"status\":\"access_revoked\""),
+            log.contains("\"status\":\"source_unavailable\""),
             "{name}: {log}"
         );
+        assert!(!log.contains("access_revoked"), "{name}: nothing revoked");
 
         hub.register_source(Arc::new(Offering {
             kind,
@@ -69,20 +70,31 @@ async fn an_unoffered_type_is_held_then_sent_once_offered() {
     }
 }
 
-/// A held record is bounded like any other: past its attempts it dies
-/// `exhausted`, unsent, and the subscription stays.
+/// A held record is bounded like any other: held through its attempts, never
+/// sent or charged, then dead `exhausted`, and the subscription stays.
 #[tokio::test]
-async fn an_unoffered_record_past_its_bounds_dies_and_keeps_its_subscription() {
+async fn an_unoffered_record_is_held_until_exhausted_and_keeps_its_subscription() {
     let dir = tempfile::tempdir().expect("dir");
-    let hub = open_hub(dir.path(), 0);
-    let services = logged_services(dir.path());
+    let hub = open_hub(dir.path(), 2);
+    #[allow(unused_mut, reason = "set only with cost-governance")]
+    let mut services = logged_services(dir.path());
+    #[cfg(feature = "cost-governance")]
+    let registry = super::budgeted(&mut services);
     let (port, accepted) = counting_callback().await;
     queued_as(&hub, port, "evt_old", "probe.late");
-    hub.attempt(&services, "evt_old").await;
+    for attempt in 1..=3 {
+        hub.attempt(&services, "evt_old").await;
+        let buried = hub.store.dead_letter_by_id("evt_old").is_some();
+        assert_eq!(buried, attempt == 3, "attempt {attempt}");
+    }
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    assert_eq!(accepted.load(Ordering::SeqCst), 0);
-    assert!(hub.store.dead_letter_by_id("evt_old").is_some(), "buried");
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "never sent");
+    #[cfg(feature = "cost-governance")]
+    assert!(
+        !registry.snapshot().contains_key("events:probe.late"),
+        "never charged"
+    );
     assert_eq!(hub.store.subscriptions().len(), 1, "kept");
     let log = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap_or_default();
     assert!(log.contains("\"status\":\"exhausted\""), "{log}");
@@ -120,7 +132,7 @@ impl crate::events::EventSource for Vanishing {
 }
 
 /// The type is read again after the waits for the record: withdrawn during
-/// them, the attempt is not sent or charged, ends `access_revoked` on record,
+/// them, the attempt is not sent or charged, ends `source_unavailable` on record,
 /// and the subscription stays.
 #[tokio::test]
 async fn a_type_withdrawn_after_the_sending_record_is_held() {
@@ -148,6 +160,6 @@ async fn a_type_withdrawn_after_the_sending_record_is_held() {
     assert!(log.contains("\"status\":\"sending\""), "{log}");
     let ended = audit_actions(dir.path(), "events.delivery_outcome");
     assert_eq!(ended.len(), 1, "{ended:?}");
-    assert_eq!(ended[0]["status"], "access_revoked");
+    assert_eq!(ended[0]["status"], "source_unavailable");
     assert_eq!(hub.store.subscriptions().len(), 1, "kept");
 }
