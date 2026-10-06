@@ -21,8 +21,8 @@ use super::{HeaderMode, HttpTransport, finalise_modern_headers, with_modern_meta
 use crate::protocol::{JsonRpcMessage, RequestId};
 use crate::security::http_diagnostics::safe_request_error;
 use crate::transport::upstream_tap::{
-    FrameStream, Refused, Requested, TAP_CAPACITY, UpstreamListen, UpstreamNote, classify_response,
-    listen_filter, project, project_listen,
+    Dropped, FrameStream, Refused, Requested, TAP_CAPACITY, UpstreamListen, UpstreamNote,
+    classify_response, listen_filter, project, project_listen,
 };
 use crate::{Error, Result};
 
@@ -79,7 +79,9 @@ impl HttpTransport {
         let single = response
             .headers()
             .get(header::CONTENT_TYPE)
-            .is_some_and(|v| v.as_bytes().starts_with(b"application/json"));
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(';').next())
+            .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"));
         let (tx, rx) = mpsc::channel(TAP_CAPACITY);
         let cancel = self.listen_cancel.clone();
         tokio::spawn(async move {
@@ -288,7 +290,8 @@ enum Frame {
     Note(UpstreamNote),
     /// A frame of this listen that carries nothing for the hub.
     Skip,
-    /// Not a JSON-RPC message (a comment, a keep-alive).
+    /// Not a JSON-RPC message (a comment, a keep-alive), or a frame of
+    /// another listen: neither counts as this listen's first frame.
     Ignore,
 }
 
@@ -302,8 +305,18 @@ fn frame(
 ) -> Frame {
     match serde_json::from_str::<JsonRpcMessage>(data) {
         Ok(JsonRpcMessage::Notification(n)) => {
-            project_listen(&n.method, n.params.as_ref(), id_value, requested, first)
-                .map_or(Frame::Skip, Frame::Note)
+            project_listen(&n.method, n.params.as_ref(), id_value, requested, first).map_or_else(
+                // A frame of another listen is not this one's first, as on
+                // the tap, where it never reaches the listen.
+                |dropped| {
+                    if dropped == Dropped::Untagged {
+                        Frame::Ignore
+                    } else {
+                        Frame::Skip
+                    }
+                },
+                Frame::Note,
+            )
         }
         Ok(JsonRpcMessage::Response(r)) if r.id.as_ref() == Some(id) => {
             Frame::Note(classify_response(
@@ -386,7 +399,7 @@ mod tests {
             "params": {"uri": "file:///a"}});
         assert!(matches!(
             frame(&untagged.to_string(), &id, &v, &r, false),
-            Frame::Skip
+            Frame::Ignore
         ));
         let end = json!({"jsonrpc": "2.0", "id": 4, "result": {"resultType": "complete"}});
         assert!(matches!(
@@ -549,5 +562,54 @@ mod tests {
             .await
             .expect("the stream ends");
         assert!(matches!(note, Some(UpstreamNote::Ack { .. })), "{note:?}");
+    }
+
+    /// MIK-7899 CLASS.1: a `-32601` answer inside the listen's SSE stream is
+    /// `Unsupported`, as a plain JSON one is.
+    #[tokio::test]
+    async fn an_sse_method_not_found_answer_is_unsupported() {
+        let url = peer(|id| {
+            let answer = json!({"jsonrpc": "2.0", "id": id,
+                "error": {"code": -32601, "message": "Method not found"}});
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n\
+                 data: {answer}\n\n"
+            )
+        })
+        .await;
+        let mut stream = transport(&url).listen(req()).await.expect("opened");
+        let note = tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
+            .await
+            .expect("the stream ends");
+        assert_eq!(note, Some(UpstreamNote::Unsupported));
+    }
+
+    /// A 404 on the listen POST is an expired session, retried as such; the
+    /// media type of a JSON answer matches whatever its case and parameters.
+    #[tokio::test]
+    async fn a_404_listen_is_expired_and_json_is_matched_loosely() {
+        let url = peer(|_| {
+            "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned()
+        })
+        .await;
+        let refused = transport(&url).listen(req()).await.err();
+        assert!(matches!(refused, Some(Refused::Expired)), "{refused:?}");
+
+        let url = peer(|id| {
+            let body = json!({"jsonrpc": "2.0", "id": id,
+                "error": {"code": -32601, "message": "Method not found"}})
+            .to_string();
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: Application/JSON; charset=utf-8\r\n\
+                 content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        })
+        .await;
+        let mut stream = transport(&url).listen(req()).await.expect("opened");
+        let note = tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
+            .await
+            .expect("the stream ends");
+        assert_eq!(note, Some(UpstreamNote::Unsupported));
     }
 }
