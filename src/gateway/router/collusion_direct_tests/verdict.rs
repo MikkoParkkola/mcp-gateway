@@ -167,10 +167,19 @@ async fn a_judged_direct_read_is_one_record() {
         "a standalone tenant_read record: {records:#?}"
     );
     let t1 = crate::security::hash_argument(&json!("t1"));
-    let carrying = records
+    // One delivery record for the read, and that one names t1: counting only
+    // the records that carry t1 would let a second, tenantless one through.
+    let deliveries: Vec<&Value> = records
         .iter()
         .filter(|r| r["event"] == "response_delivery_attempt")
-        .filter(|r| r.to_string().contains(&t1))
-        .count();
-    assert_eq!(carrying, 1, "the delivery record names t1: {records:#?}");
+        .collect();
+    assert_eq!(
+        deliveries.len(),
+        1,
+        "one delivery record for the read: {records:#?}"
+    );
+    assert!(
+        deliveries[0].to_string().contains(&t1),
+        "the delivery record names t1: {records:#?}"
+    );
 }
