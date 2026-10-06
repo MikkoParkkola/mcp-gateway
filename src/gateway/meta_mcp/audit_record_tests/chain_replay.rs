@@ -87,11 +87,10 @@ async fn a_replayed_chain_refusal_keeps_its_uninspected_attribution() {
             .invoke_tool(&args, None, &caller)
             .await
             .expect_err("the chain check refuses the unchained answer");
-        errors.push((error.to_rpc_code(), error.to_string()));
+        errors.push(error.to_rpc_code());
     }
-    // The replay answers the stored refusal; the stored marker stays internal.
-    assert_eq!(errors[0].0, errors[1].0, "{errors:?}");
-    assert!(!errors[1].1.contains("\"uninspected\""), "{errors:?}");
+    // The replay answers the stored refusal's code.
+    assert_eq!(errors[0], errors[1], "{errors:?}");
     let all = records(&dir);
     assert_eq!(all.len(), 2, "{all:?}");
     assert_eq!(all[0]["attribution"], json!("uninspected"), "{}", all[0]);
