@@ -62,8 +62,19 @@ fi
 
 # 4. Homebrew — bare-binary formula can't embed a text file, so the caveats
 #    block users see on install must point to the commercial terms. Only the
-#    `def caveats` block counts: a comment elsewhere in the formula is not shown.
-caveats() { awk '/def caveats/{f=1} f{print} f&&/^[[:space:]]*end[[:space:]]*$/{exit}' "$1"; }
+#    heredoc body of a `def caveats` statement counts, since nothing else is
+#    printed: not a comment naming the method elsewhere in the formula, and
+#    not a Ruby comment inside it, outside the heredoc (MIK-7972).
+caveats() {
+  awk '
+    !f && /^[[:space:]]*def caveats[[:space:]]*$/ { f = 1; next }
+    f == 1 && match($0, /<<[~-]?[A-Z_]+/) {
+      tag = substr($0, RSTART, RLENGTH); sub(/^<<[~-]?/, "", tag); f = 2; next
+    }
+    f == 1 && /^[[:space:]]*end[[:space:]]*$/ { exit }
+    f == 2 { line = $0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", line); if (line == tag) exit; print }
+  ' "$1"
+}
 caveat_rc=0
 for f in homebrew/mcp-gateway.rb .github/workflows/release.yml; do
   [ -f "$f" ] || continue
