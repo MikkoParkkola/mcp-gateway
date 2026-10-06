@@ -94,6 +94,34 @@ async fn post(
     request.send().await.expect("the gateway answers")
 }
 
+/// Poll `/health` until the gateway answers, failing with its log if it exits
+/// or misses `READY_BOUND`.
+async fn wait_ready(
+    http: &reqwest::Client,
+    base: &str,
+    child: &mut tokio::process::Child,
+    log: &std::path::Path,
+) {
+    let logs = || std::fs::read_to_string(log).unwrap_or_default();
+    let deadline = tokio::time::Instant::now() + READY_BOUND;
+    while !http
+        .get(format!("{base}/health"))
+        .send()
+        .await
+        .is_ok_and(|r| r.status().is_success())
+    {
+        if let Some(status) = child.try_wait().expect("child status") {
+            panic!("serve exited before ready ({status})\n{}", logs());
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "serve not ready\n{}",
+            logs()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test]
 async fn add_url_reaches_a_streamable_http_server() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -142,23 +170,7 @@ async fn add_url_reaches_a_streamable_http_server() {
 
     let base = format!("http://127.0.0.1:{port}");
     let http = http_client();
-    let deadline = tokio::time::Instant::now() + READY_BOUND;
-    while !http
-        .get(format!("{base}/health"))
-        .send()
-        .await
-        .is_ok_and(|r| r.status().is_success())
-    {
-        if let Some(status) = child.try_wait().expect("child status") {
-            panic!("serve exited before ready ({status})\n{}", logs());
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "serve not ready\n{}",
-            logs()
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    wait_ready(&http, &base, &mut child, &log).await;
 
     let mcp_url = format!("{base}/mcp");
     let init = post(
