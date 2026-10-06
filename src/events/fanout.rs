@@ -35,6 +35,13 @@ pub(crate) struct SourceEvent {
     pub upstream_id: String,
     pub occurred_at: DateTime<Utc>,
     pub data: Value,
+    /// Set by a source whose upstream work is per lifecycle key (a
+    /// credentialed watch): the occurrence then reaches only subscriptions
+    /// holding this key (design §4, MIK-7811). The core enforces key
+    /// equality only; a source whose work runs under one principal's
+    /// credential must put that principal in its `lifecycle_key`, computed
+    /// from the same canonical arguments on both sides.
+    pub lifecycle_key: Option<String>,
 }
 
 /// `evt_` + 32 hex of SHA-256 over kind, upstream id and subscription id:
@@ -88,6 +95,12 @@ impl EventsHub {
             .subscriptions()
             .into_iter()
             .filter(|s| s.name == event.name && s.live(now))
+            // A keyed occurrence belongs to its key's holders alone (MIK-7811).
+            .filter(|s| {
+                event.lifecycle_key.as_deref().is_none_or(|key| {
+                    source.lifecycle_key(&s.principal, &s.name, &s.arguments) == key
+                })
+            })
             .filter(|s| source.matches(&s.principal, &s.arguments, event))
             .collect();
         for sub in matching {
@@ -156,7 +169,9 @@ impl EventsHub {
             subscription_id: sub.id.clone(),
             name: event.name.clone(),
             backend: event.backend.clone(),
-            owner_scoped: event.scope == Visibility::Owner,
+            // Asks no backend grant at delivery: owner and operator events
+            // are authorized by their source, not by a backend's grant.
+            owner_scoped: event.scope.grant_backend().is_none(),
             callback_host: url::Url::parse(&sub.url)
                 .ok()
                 .and_then(|u| u.host_str().map(str::to_owned))

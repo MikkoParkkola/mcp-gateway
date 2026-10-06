@@ -138,6 +138,7 @@ impl EventsHub {
                 "status": status_name,
                 "settledAt": at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             }),
+            lifecycle_key: None,
         });
     }
 

@@ -5,7 +5,7 @@
 **Sources**: [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/), [OWASP Agentic Security Initiative](https://genai.owasp.org/initiatives/agentic-security-initiative/), [OWASP Agentic AI Threats and Mitigations](https://genai.owasp.org/resource/agentic-ai-threats-and-mitigations/)
 **Scope**: mcp-gateway repo-local controls at the gateway boundary.
 
-This matrix is a **self-assessment**, not a certification. It tracks mcp-gateway only. It cites controls that run on the request path or when config loads, plus, for ASI04 alone, the release-time supply-chain controls (signing, SBOM, npm provenance); a control that exists only in the CLI or in tests is not counted. Each row says which controls are on by default and which an operator must enable. Current mapping: **2/10 COVERED, 8/10 PARTIAL** for the gateway boundary. CI checks that every path and validation test cited here exists (`scripts/dev/check-owasp-citations.py`).
+This matrix is a **self-assessment**, not a certification. It tracks mcp-gateway only. It cites controls that run on the request path or when config loads, plus, for ASI04 alone, the release-time supply-chain controls (signing, SBOM, npm provenance); a control that exists only in the CLI or in tests is not counted. Each row says which controls are on by default and which an operator must enable. Current mapping: **3/10 COVERED, 7/10 PARTIAL** for the gateway boundary. CI checks that every path and validation test cited here exists (`scripts/dev/check-owasp-citations.py`).
 
 ## Compliance Matrix
 
@@ -67,8 +67,7 @@ cargo test anomaly_above_block_threshold_is_rejected
 
 These items strengthen coverage.
 
-- Sign release binaries and attach an SBOM to them, as the container images already are.
 - Define a live remote attestation discovery protocol for remote MCP servers.
-- Add signed-hop chaining for multi-gateway deployments.
+- Extend signature chaining to caches, idempotent replays, tasks, Code Mode, playbooks and capability backends.
 - Add first-class SQL-sink profiles that default SQL-injection findings to block.
 - Extend relay detection past the per-result recording window.
