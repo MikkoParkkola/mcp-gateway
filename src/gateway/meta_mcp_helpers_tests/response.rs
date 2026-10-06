@@ -319,3 +319,35 @@ fn tool_matches_query_finds_a_backend_by_its_own_name() {
         "matching on the tool name and description is unchanged"
     );
 }
+
+#[test]
+fn wrap_tool_success_carries_a_failed_payloads_is_error() {
+    let content = json!({"isError": true, "content": [], "recovery": {"retry": false}});
+    let response = wrap_tool_success(RequestId::Number(7), &content, false);
+
+    let result: ToolsCallResult = serde_json::from_value(response.result.unwrap()).unwrap();
+    assert!(
+        result.is_error,
+        "MCP reports a tool failure on the outer result"
+    );
+    let Content::Text { text, .. } = &result.content[0] else {
+        panic!("Expected text content");
+    };
+    assert!(
+        text.contains("\"recovery\""),
+        "the recovery payload stays: {text}"
+    );
+}
+
+#[test]
+fn wrap_tool_success_reads_is_error_only_as_a_true_boolean() {
+    for content in [
+        json!({"isError": false, "content": []}),
+        json!({"isError": "true", "content": []}),
+        json!({"result": {"isError": true}}),
+    ] {
+        let response = wrap_tool_success(RequestId::Number(8), &content, false);
+        let result: ToolsCallResult = serde_json::from_value(response.result.unwrap()).unwrap();
+        assert!(!result.is_error, "{content}");
+    }
+}
