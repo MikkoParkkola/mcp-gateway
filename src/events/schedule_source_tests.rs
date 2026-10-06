@@ -459,3 +459,58 @@ async fn a_stopped_timer_leaves_no_state() {
     source.on_last_subscriber(&key).await;
     assert_eq!(files(), 0);
 }
+
+/// `*/2` in the weekday field means Sunday, Tuesday, Thursday and Saturday:
+/// 7 is Sunday's alias, not a second test of every day.
+#[tokio::test]
+async fn a_weekday_step_fires_only_on_its_days() {
+    // Sunday 4 October 2026 through Saturday 10 October.
+    let ticks = fired(
+        &json!({"cron": "0 9 * * */2"}),
+        utc(10, 4, 0, 0),
+        7 * 24 * 60,
+    )
+    .await;
+    assert_eq!(
+        ticks,
+        [
+            "2026-10-04T09:00:00Z",
+            "2026-10-06T09:00:00Z",
+            "2026-10-08T09:00:00Z",
+            "2026-10-10T09:00:00Z"
+        ]
+    );
+}
+
+/// Joins that raced past the per-principal cap are cut at fan-out: the
+/// principal keeps its earliest timers and the rest are refused (revoked).
+#[tokio::test]
+async fn timers_past_the_cap_are_refused_at_fan_out() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut config = crate::config::EventsConfig::default();
+    config.schedule.max_timers_per_principal = 2;
+    let hub = hub(dir.path(), &config);
+    let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
+    let timers = [
+        json!({"cron": "0 1 * * *"}),
+        json!({"cron": "0 2 * * *"}),
+        json!({"cron": "0 3 * * *"}),
+    ];
+    for (n, arguments) in timers.iter().enumerate() {
+        admit(&hub, &format!("sub_{n}"), "p", arguments);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    source
+        .authorize("p", NAME, &timers[0])
+        .await
+        .expect("earliest");
+    source
+        .authorize("p", NAME, &timers[1])
+        .await
+        .expect("second");
+    let refused = source
+        .authorize("p", NAME, &timers[2])
+        .await
+        .expect_err("past the cap");
+    assert_eq!(refused.code, -32012);
+}

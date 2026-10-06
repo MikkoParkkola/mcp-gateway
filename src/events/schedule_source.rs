@@ -10,7 +10,7 @@
 //! same minute does not fire it twice. A tick missed while the gateway was
 //! down is not sent late (emit-only).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
@@ -229,7 +229,12 @@ impl ScheduleSource {
             .collect();
         let mut guard = self.last.lock();
         let last = guard.get_or_insert_with(|| Self::load(&self.dir));
+        self.prune(last, minute);
         for (key, label) in firing {
+            // Stopped since it was selected: its state is gone and stays gone.
+            if !self.timers.lock().contains_key(&key) {
+                continue;
+            }
             // The floor holds in UTC too: a daylight-saving jump can bring a
             // collapsed tick within minutes of a regular one, and the later
             // is dropped. It also stops a second tick in the same minute.
@@ -246,10 +251,13 @@ impl ScheduleSource {
                 key: key.clone(),
                 last: minute,
             };
+            // Not durable, not sent: an unrecorded tick could repeat after a
+            // restart and break the floor.
             if let Err(error) = super::records::write_record(&self.dir, &fired_file(&key), &fired)
                 .and_then(super::records::Placed::durable)
             {
-                tracing::warn!(%error, "events: schedule tick not persisted; a restart this minute may repeat it");
+                tracing::warn!(%error, "events: schedule tick not persisted, so not sent");
+                continue;
             }
             let at = minute.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             hub.emit(SourceEvent {
@@ -265,18 +273,44 @@ impl ScheduleSource {
         }
     }
 
-    /// Distinct timer keys `principal` holds in live subscriptions.
-    fn held_by(&self, principal: &str) -> HashSet<String> {
+    /// Drop the state of timers no subscription has run for a day: those
+    /// whose subscriptions ended while the gateway was down never see
+    /// `on_last_subscriber`. A day, not at once: at startup the timers are
+    /// restarted after the first tick may already have run.
+    fn prune(&self, last: &mut HashMap<String, DateTime<Utc>>, now: DateTime<Utc>) {
+        let timers = self.timers.lock();
+        let stale: Vec<String> = last
+            .iter()
+            .filter(|(key, at)| !timers.contains_key(*key) && now - **at > Duration::days(1))
+            .map(|(key, _)| key.clone())
+            .collect();
+        drop(timers);
+        for key in stale {
+            last.remove(&key);
+            if let Err(error) = super::records::remove_record(&self.dir, &fired_file(&key)) {
+                tracing::warn!(%error, "events: stale schedule tick state not removed");
+            }
+        }
+    }
+
+    /// The distinct timer keys `principal` holds in live subscriptions, each
+    /// with the earliest time one of them was granted.
+    fn held_by(&self, principal: &str) -> HashMap<String, DateTime<Utc>> {
         let Some(hub) = self.hub.upgrade() else {
-            return HashSet::new();
+            return HashMap::new();
         };
         let now = Utc::now();
-        hub.store
-            .subscriptions()
-            .into_iter()
-            .filter(|s| s.name == NAME && s.principal == principal && s.live(now))
-            .filter_map(|s| parts(&s.arguments).ok().map(|p| p.key))
-            .collect()
+        let mut held: HashMap<String, DateTime<Utc>> = HashMap::new();
+        for sub in hub.store.subscriptions() {
+            if sub.name != NAME || sub.principal != principal || !sub.live(now) {
+                continue;
+            }
+            if let Ok(Parts { key, .. }) = parts(&sub.arguments) {
+                let first = held.entry(key).or_insert(sub.granted_at);
+                *first = (*first).min(sub.granted_at);
+            }
+        }
+        held
     }
 }
 
@@ -334,9 +368,20 @@ impl EventSource for ScheduleSource {
         arguments: &Value,
     ) -> Result<(), RpcError> {
         let Parts { key, .. } = parts(arguments)?;
-        let mut held = self.held_by(principal);
-        if held.remove(&key) {
-            return Ok(());
+        let held = self.held_by(principal);
+        if held.contains_key(&key) {
+            // Two subscribes that join running timers at once both pass the
+            // check below; here, at every fan-out, a principal past the cap
+            // keeps its earliest timers and loses the rest.
+            let mut order: Vec<(DateTime<Utc>, &String)> =
+                held.iter().map(|(k, at)| (*at, k)).collect();
+            order.sort();
+            let rank = order.iter().position(|(_, k)| **k == key).unwrap_or(0);
+            return if rank < self.max_per_principal {
+                Ok(())
+            } else {
+                Err(RpcError::forbidden())
+            };
         }
         canonical(arguments)?;
         if self.timers.lock().len() >= self.max_timers {
