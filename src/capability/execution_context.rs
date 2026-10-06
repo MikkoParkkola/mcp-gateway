@@ -238,6 +238,8 @@ pub(crate) fn require_tls_for_credentials(url: &str) -> Result<()> {
 /// `auth` injects one (as a header, an account header, or the `auth.param`
 /// query parameter), or one of `templates` fills in a gateway secret
 /// (`{env.X}`, `{keychain.X}`; MIK-7958). Checked before any secret is read.
+/// GraphQL and JSON-RPC resolve secrets in headers only (their query, variables
+/// and params are filled from caller values), so they pass their headers.
 pub(crate) fn require_tls_for_auth<'a>(
     url: &str,
     auth: &super::AuthConfig,
@@ -250,12 +252,16 @@ pub(crate) fn require_tls_for_auth<'a>(
     }
 }
 
-/// [`require_tls_for_auth`] for a REST request built from `config`.
+/// [`require_tls_for_auth`] for a REST request built from `config`. An
+/// injected credential decides it without walking the templates.
 pub(crate) fn require_tls_for_rest(
     url: &str,
     auth: &super::AuthConfig,
     config: &super::RestConfig,
 ) -> Result<()> {
+    if auth.required {
+        return require_tls_for_credentials(url);
+    }
     require_tls_for_auth(
         url,
         auth,

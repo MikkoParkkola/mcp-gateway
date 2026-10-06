@@ -251,7 +251,7 @@ auth:
 
 /// MIK-7958: a capability without `auth.required` whose header, query or body
 /// template fills in a `{env.X}`/`{keychain.X}` secret sends that secret too.
-fn templated_secret(url_line: &str, secret_line: &str) -> CapabilityDefinition {
+fn templated_secret(url_line: &str, template_line: &str) -> CapabilityDefinition {
     parse_capability(&format!(
         "
 name: template_secret_probe
@@ -263,7 +263,7 @@ providers:
       {url_line}
       path: /v1/items
       method: POST
-      {secret_line}
+      {template_line}
 "
     ))
     .expect("parses")
@@ -271,7 +271,7 @@ providers:
 
 #[test]
 fn a_secret_in_a_header_query_or_body_template_refuses_cleartext_at_load() {
-    for (secret_line, field) in [
+    for (template_line, field) in [
         (
             "headers: {X-Api-Key: \"{env.MCP_GW_7958_KEY}\"}",
             "providers.primary.config.headers.X-Api-Key",
@@ -285,12 +285,12 @@ fn a_secret_in_a_header_query_or_body_template_refuses_cleartext_at_load() {
             "providers.primary.config.body",
         ),
     ] {
-        let cap = templated_secret("base_url: http://api.example.com", secret_line);
+        let cap = templated_secret("base_url: http://api.example.com", template_line);
         let error = validate_capability(&cap)
-            .expect_err(secret_line)
+            .expect_err(template_line)
             .to_string();
         assert!(error.contains("template_secret_probe"), "{error}");
-        assert!(error.contains(field), "{secret_line}: {error}");
+        assert!(error.contains(field), "{template_line}: {error}");
         assert!(
             error.contains("providers.primary.config.base_url"),
             "{error}"
@@ -302,7 +302,7 @@ fn a_secret_in_a_header_query_or_body_template_refuses_cleartext_at_load() {
 
 #[test]
 fn a_template_secret_on_https_or_loopback_and_a_caller_value_on_http_still_load() {
-    for (url_line, secret_line) in [
+    for (url_line, template_line) in [
         (
             "base_url: https://api.example.com",
             "headers: {X-Api-Key: \"{env.K}\"}",
@@ -322,8 +322,8 @@ fn a_template_secret_on_https_or_loopback_and_a_caller_value_on_http_still_load(
             "params: {k: \"{env.}\"}",
         ),
     ] {
-        validate_capability(&templated_secret(url_line, secret_line))
-            .unwrap_or_else(|e| panic!("{url_line} / {secret_line}: {e}"));
+        validate_capability(&templated_secret(url_line, template_line))
+            .unwrap_or_else(|e| panic!("{url_line} / {template_line}: {e}"));
     }
 }
 
@@ -331,27 +331,31 @@ fn a_template_secret_on_https_or_loopback_and_a_caller_value_on_http_still_load(
 /// before the secret is read: an unset variable would otherwise be the error.
 #[tokio::test]
 async fn a_template_secret_to_a_templated_cleartext_url_is_refused_before_the_read() {
-    let cap = templated_secret(
-        "base_url: \"http://{host}\"",
+    for template_line in [
         "headers: {X-Api-Key: \"{env.MCP_GW_7958_UNSET}\"}",
-    );
-    let provider = cap.providers.named.get("primary").expect("primary");
-    let error = CapabilityExecutor::new()
-        .execute_provider_with_context(
-            &cap,
-            provider,
-            &json!({"host": "off-machine.invalid"}),
-            &CapabilityExecutionContext::default(),
-        )
-        .await
-        .expect_err("cleartext with a template secret")
-        .to_string();
-    assert!(error.contains("cleartext"), "{error}");
-    assert!(!error.contains("is not set"), "secret read first: {error}");
-    assert!(
-        !error.contains("off-machine.invalid"),
-        "URL echoed: {error}"
-    );
+        "params: {key: \"{env.MCP_GW_7958_UNSET}\"}",
+        "body: {items: [{token: \"{env.MCP_GW_7958_UNSET}\"}]}",
+        "body_content_type: text/plain\n      body: \"key={env.MCP_GW_7958_UNSET}\"",
+    ] {
+        let cap = templated_secret("base_url: \"http://{host}\"", template_line);
+        let provider = cap.providers.named.get("primary").expect("primary");
+        let error = CapabilityExecutor::new()
+            .execute_provider_with_context(
+                &cap,
+                provider,
+                &json!({"host": "off-machine.invalid"}),
+                &CapabilityExecutionContext::default(),
+            )
+            .await
+            .expect_err(template_line)
+            .to_string();
+        assert!(error.contains("cleartext"), "{template_line}: {error}");
+        assert!(!error.contains("is not set"), "secret read first: {error}");
+        assert!(
+            !error.contains("off-machine.invalid"),
+            "URL echoed: {error}"
+        );
+    }
 }
 
 #[tokio::test]
