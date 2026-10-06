@@ -273,6 +273,8 @@ GATE_SCRIPT = re.compile(r"(?:python3?|uv run)\s+scripts/release/")
 # ending at a shell argument boundary, or `smoke-image.sh.bak` (a different
 # script, or none) satisfies every assertion below.
 SMOKE_GATE = re.compile(r"(?:(?:ba)?sh\s+)?scripts/ci/smoke-image\.sh(?=\s|$)")
+RECURSION_MARGIN = re.compile(r"(?:(?:ba)?sh\s+)?scripts/ci/check-recursion-margin\.sh(?=\s|$)")
+RECIPE_SMOKE = re.compile(r"(?:(?:ba)?sh\s+)?scripts/dev/docker-smoke\.sh(?=\s|$)")
 # Separate from SMOKE_GATE: an alternation would read the variant as the base.
 SMOKE_FULL_GATE = re.compile(r"(?:(?:ba)?sh\s+)?scripts/ci/smoke-full-image\.sh(?=\s|$)")
 # A step key that turns a failure into a log line, or a condition that is false
@@ -1562,6 +1564,99 @@ class WorkflowWiring(unittest.TestCase):
                         f"{shell(command)}",
                     )
 
+    def test_a_required_linux_job_holds_the_recursion_margin(self):
+        # MIK-7678: Clippy is a required Linux check, so it carries the depth
+        # margin Windows and Kani would otherwise be first to break, fatally.
+        blocks = steps("ci.yml", "check")  # "Clippy (pedantic)"
+        margin = [
+            "\n".join(b) for b in blocks
+            if any(runs(c, RECURSION_MARGIN) for c in joined(b))
+        ]
+        self.assertEqual(len(margin), 1, "Clippy (pedantic) no longer runs scripts/ci/check-recursion-margin.sh")
+        self.assertNotRegex(margin[0], r"(?m)continue-on-error:\s*true|^\s+if:", "the margin check must be unconditional and fatal")
+        script = (pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "check-recursion-margin.sh").read_text(encoding="utf-8")
+        self.assertRegex(script, r"(?m)^LIMIT=\d+$")
+        self.assertIn("Pin<Box<dyn Future + Send>>", script, "the failure must say to erase the future's type")
+
+    def test_the_chart_is_published_and_signed_by_this_workflow(self):
+        # MIK-7952: the chart is signed by ci.yml at the tag, the image's own
+        # signer, after the manifest job has signed and named the image, and a
+        # verify under any other identity is refused for its identity.
+        body = jobs("ci.yml").get("helm-chart-publish", "")
+        self.assertTrue(body, "ci.yml has no helm-chart-publish job")
+        self.assertIn("docker-manifest", needs_of(body) or "", "the chart must wait for the signed image")
+        gate = job_if("ci.yml", "helm-chart-publish")
+        self.assertIn("startsWith(github.ref, 'refs/tags/v')", gate)
+        self.assertIn("needs.docker-manifest.result == 'success'", gate, "a tag run publishes only over a signed image")
+        self.assertIn("needs.docker-manifest.outputs.is_prerelease == 'false'", gate, "a prerelease must not take a stable chart version")
+        manifest = jobs("ci.yml")["docker-manifest"]
+        self.assertRegex(manifest, r"(?m)^\s+list: \$\{\{ steps\.list\.outputs\.list \}\}$")
+        self.assertIn("SIGNED_LIST: ${{ needs.docker-manifest.outputs.list }}", body)
+        self.assertRegex(body, r"(?m)^\s+id-token:\s*write\b")
+        self.assertIn("IDENTITY: https://github.com/${{ github.workflow_ref }}", body)
+        self.assertIn("SIGNER_ISSUER: https://token.actions.githubusercontent.com", body)
+        ran = "\n".join(c for b in steps("ci.yml", "helm-chart-publish") for c in joined(b))
+        self.assertRegex(ran, r'SIGNER_IDENTITY="\$IDENTITY"[^\n]*\n?[^\n]*scripts/release/publish_pinned_chart\.sh "\$image" "\$repo"')
+        self.assertIn('image="ghcr.io/mikkoparkkola/mcp-gateway@${SIGNED_LIST}"; repo=oci://ghcr.io/mikkoparkkola/charts\n', ran + "\n",
+                      "the release chart must pin the digest docker-manifest verified, not a tag")
+        self.assertRegex(ran, r'(?m)^\s*if cosign verify --certificate-identity "\$wrong"', "no wrong-identity verify")
+        self.assertRegex(
+            ran,
+            r"(?m)^\s*grep -q 'none of the expected identities matched' \"\$RUNNER_TEMP/wrong-identity\.err\" \|\| \{",
+            "a wrong-identity refusal must be for its identity",
+        )
+
+    def test_the_documented_recipe_serves_a_call_before_the_handoff(self):
+        # MIK-7484: smoke-image.sh proves the image starts; only
+        # scripts/dev/docker-smoke.sh runs the documented recipe (127.0.0.1
+        # publish, 0.0.0.0 bind, the unauthenticated-bind opt-in) through to a
+        # routed tool call. It must run on the image this job built, with no
+        # host build, fatally, and before the digest leaves the job.
+        blocks = steps("docker.yml", "build")
+        recipe = [i for i, b in enumerate(blocks) if any(runs(c, RECIPE_SMOKE) for c in joined(b))]
+        self.assertTrue(recipe, "docker.yml: build never runs scripts/dev/docker-smoke.sh")
+        handoffs = [
+            i for i, b in enumerate(blocks)
+            if any(re.match(r"^\s*uses:\s*actions/upload-artifact@", line) for line in b)
+        ]
+        self.assertTrue(handoffs, "docker.yml: build no longer uploads its digest")
+        self.assertLess(min(recipe), min(handoffs), "the recipe smoke runs after the digest is handed on")
+        step = "\n".join(blocks[min(recipe)])
+        for setting in (
+            'MCP_GATEWAY_DOCKER_BUILD: "0"',
+            'MCP_GATEWAY_INIT_IN_IMAGE: "1"',
+            "MCP_GATEWAY_DOCKER_IMAGE: ${{ env.REGISTRY }}/mikkoparkkola/mcp-gateway:scan",
+        ):
+            self.assertIn(setting, step, "the recipe smoke must run the image this job built")
+        self.assertNotRegex(step, r"continue-on-error:\s*true", "the recipe smoke must be fatal")
+
+    def test_a_source_pull_request_compiles_on_both_declared_toolchains(self):
+        # MIK-7835: a source-only PR into the release line does not build the
+        # image before merge, so it must at least compile as the image does, on
+        # the Dockerfile's toolchain and on the declared rust-version.
+        body = jobs("docker.yml").get("release-compile", "")
+        self.assertTrue(body, "docker.yml: the release-compile job is gone")
+        self.assertRegex(body, r"(?m)^    needs: scope$")
+        self.assertRegex(body, r"(?m)^    if: needs\.scope\.outputs\.compile_check == 'true'$")
+        rows = re.search(r"(?m)^        source: \[([^\]]*)\]$", body)
+        self.assertTrue(rows, "release-compile has no source matrix")
+        self.assertEqual(
+            sorted(r.strip() for r in rows.group(1).split(",")),
+            ["dockerfile", "rust-version"],
+            "release-compile must compile on both the Dockerfile's toolchain and the rust-version",
+        )
+        self.assertIn("sed -n 's/^FROM rust:", body, "the Dockerfile row no longer reads the Dockerfile")
+        self.assertIn("sed -n 's/^rust-version = ", body, "the rust-version row no longer reads Cargo.toml")
+        self.assertRegex(body, r'(?m)^        run: cargo \+"\$TOOLCHAIN" check --release --locked$')
+        self.assertNotRegex(body, r"continue-on-error:\s*true", "the compile must be fatal")
+        scope = jobs("docker.yml")["scope"]
+        self.assertRegex(scope, r"compile_check: \$\{\{ steps\.decide\.outputs\.compile_check \}\}")
+        self.assertRegex(
+            scope,
+            r"grep -Eq '\^\(src/\|crates/[^']*' <<<\"\$files\"; then\s+compile true",
+            "a source change no longer selects the compile",
+        )
+
     def test_the_variant_index_is_composed_from_the_variant_legs(self):
         # Every gate downstream of this reads the index by digest and compares
         # it to itself, so an index composed from the base legs passes all of
@@ -2596,8 +2691,8 @@ class WorkflowWiring(unittest.TestCase):
         release = jobs("release.yml")["release"]
         self.assertRegex(release, r"IDENTITY: https://github\.com/\$\{\{ github\.workflow_ref \}\}")
         # W5: OIDC is granted where it is used and nowhere else. The image
-        # and registry jobs held it before release signing; the two new
-        # holders are the release job and its rehearsal.
+        # and registry jobs held it before release signing; the release job
+        # and its rehearsal followed, then the chart publisher (MIK-7952).
         oidc = sorted(
             f"{wf}:{job}" for wf in ("release.yml", "ci.yml", "docker.yml")
             for job, body in jobs(wf).items() if re.search(r"(?m)^\s+id-token:\s*write\b", body)
@@ -2607,6 +2702,7 @@ class WorkflowWiring(unittest.TestCase):
             sorted([
                 "release.yml:release", "release.yml:npm-publish",
                 "ci.yml:binary-signing-rehearsal", "ci.yml:docker-manifest", "ci.yml:publish-mcp-registry",
+                "ci.yml:helm-chart-publish",
             ]),
             "W5: id-token: write outside its allow-list",
         )
@@ -2699,6 +2795,23 @@ class WorkflowWiring(unittest.TestCase):
         release_jobs = jobs("release.yml")
         self.assertIn("uses: ./.github/workflows/mrtr7b-full-burst.yml", release_jobs.get("mrtr7b-full-burst", ""))
         self.assertIn("mrtr7b-full-burst", needs_of(release_jobs["verify"]) or "", "verify must wait for the full burst")
+
+    def test_windows_skips_the_full_burst_and_keeps_its_property(self):
+        # MIK-7644: 1,026 calls miss the full burst's deadline on the Windows
+        # runner, so the Windows suite skips it by name as `test` does. The
+        # property it checks still runs there at the per-PR size: `--skip`
+        # matches substrings, so no Windows skip may occur in that test's name.
+        suite = [
+            c for b in steps("ci.yml", "windows-check") for c in joined(b)
+            if re.search(r"\bcargo test --all-features --tests\b", c)
+        ]
+        self.assertEqual(len(suite), 1, suite)
+        skips = re.findall(r"--skip\s+(\S+)", suite[0])
+        self.assertIn("mik_7479_full_burst", skips, "Windows must skip the full burst by name")
+        per_pr = "ac_mrtr_7b_every_call_reaches_one_terminal_frame"
+        self.assertFalse([s for s in skips if s in per_pr], f"a Windows skip also drops {per_pr}")
+        ledger = (pathlib.Path(__file__).parents[2] / "tests" / "mik_7479_mrtr7b_ledger.rs").read_text(encoding="utf-8")
+        self.assertIn(f"async fn {per_pr}()", ledger)
 
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):
         # An artifact a later job of the same run downloads is that job's only
