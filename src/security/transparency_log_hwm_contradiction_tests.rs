@@ -396,6 +396,88 @@ fn a_copied_seal_behind_a_lagging_mark_is_a_finding() {
     }
 }
 
+/// Point the mark at `record` in segment `segment_seq`, as a crash before the
+/// mark moved past it would leave it.
+fn mark_at(path: &std::path::Path, record: &serde_json::Value, segment_seq: u64, signed: bool) {
+    use super::rotation_tests::SECRET;
+    use super::segments::{HighWater, encode_hwm, write_hwm};
+    let secret = if signed { SECRET.as_bytes() } else { b"" };
+    let mark = HighWater {
+        counter: record["counter"].as_u64().unwrap(),
+        entry_hash: record["entry_hash"].as_str().unwrap().into(),
+        segment_seq,
+    };
+    write_hwm(path, &encode_hwm(&mark, secret, "test").unwrap(), true).unwrap();
+}
+
+/// #2831: a tail at the mark in a file that opens a newer segment than the
+/// mark names. Counter, hash and the record at the mark all agree, and the
+/// segment number is ahead of every seal, so only the segment the mark names
+/// shows the file was rebuilt. Unsigned: the open record is re-hashed.
+#[test]
+fn a_tail_at_the_mark_under_a_newer_segment_than_it_names_is_a_finding() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    rotate_n(&l, &path, 1);
+    (0..3).for_each(|i| append(&l, i));
+    drop(l);
+    assert_eq!(event(&lines(&path)[0]), Some("audit_segment_opened"));
+    super::rotation_tests::rewrite_line(&path, 0, |v| v["segment_seq"] = 2.into());
+    drop(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
+    assert!(!marks(&path).is_empty(), "no finding");
+}
+
+/// #2831: the active file restored from sealed segment 0 (without its seal)
+/// behind a lagging mark. The tail is ahead of the mark and the record at the
+/// mark is intact, so only the segment number, below the next one, shows it.
+#[test]
+fn a_restored_older_segment_behind_a_lagging_mark_is_a_finding() {
+    use super::segments::sealed_path;
+    for signed in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        rotate_n(&l, &path, 1);
+        drop(l);
+        let sealed = lines(&sealed_path(&path, 0));
+        assert_eq!(
+            event(&sealed[sealed.len() - 1]),
+            Some("audit_segment_sealed")
+        );
+        mark_at(&path, &sealed[sealed.len() - 3], 0, signed);
+        write_lines(&path, &sealed[..sealed.len() - 1]);
+        drop(TransparencyLogger::open(cfg(&path, 12, signed)).unwrap());
+        assert!(!marks(&path).is_empty(), "no finding (signed: {signed})");
+    }
+}
+
+/// #2831: the mark names segment 2, whose records follow segment 1's open
+/// record in a rebuilt active file, segment 1's seal gone. The file opens the
+/// segment after every seal and the record at the lagging mark is intact, so
+/// only the segment the mark names, ahead of the file's, shows it.
+#[test]
+fn a_file_opening_an_older_segment_than_the_mark_names_is_a_finding() {
+    use super::segments::sealed_path;
+    for signed in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        rotate_n(&l, &path, 2);
+        (0..3).for_each(|i| append(&l, i));
+        drop(l);
+        let active = lines(&path);
+        mark_at(&path, &active[active.len() - 2], 2, signed);
+        let mut rebuilt = vec![lines(&sealed_path(&path, 1))[0].clone()];
+        assert_eq!(event(&rebuilt[0]), Some("audit_segment_opened"));
+        rebuilt.extend(active[1..].iter().cloned());
+        std::fs::remove_file(sealed_path(&path, 1)).unwrap();
+        write_lines(&path, &rebuilt);
+        drop(TransparencyLogger::open(cfg(&path, 12, signed)).unwrap());
+        assert!(!marks(&path).is_empty(), "no finding (signed: {signed})");
+    }
+}
+
 /// MIK-7949 (review): a sealed segment renamed to the last number makes the
 /// next number wrap (debug panic, release 0) or saturate onto that name, so a
 /// seal would replace a segment. The restart must refuse instead, active file
