@@ -721,14 +721,14 @@ enum Verdict {
 /// was revoked, the type is only unavailable for now.
 const HELD: &str = "source_unavailable";
 
-/// Back to pending after a refusal before the POST, ending `status`: a
-/// revoked subscription's record goes with it, a held one waits.
 /// The backend grant a delivery of `record` needs: none for an owner-scoped
 /// event, which was authorized where it was made.
 fn grant(record: &OutboxRecord) -> Option<&str> {
     (!record.owner_scoped).then_some(record.backend.as_str())
 }
 
+/// Back to pending after a refusal before the POST, ending `status`: a
+/// revoked subscription's record goes with it, a held one waits.
 fn refusal_retry(status: &'static str) -> Settle {
     Settle::Retry {
         next: Utc::now() + REFUSAL_RETRY,
