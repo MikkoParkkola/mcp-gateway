@@ -487,8 +487,10 @@ pub(crate) async fn slot_rpc<'a, X: Send + 'a>(
 /// Record the id a failed slot write refuses this HTTP answer under, so
 /// `slot_http` never reads the answer back. The first id recorded in the
 /// open slot wins; with no slot open (no log) nothing is kept or cloned.
-pub(crate) fn note_answer_id(id: &RequestId) {
-    let _ = GRANT_SLOT.try_with(|slot| slot.answer_id.set(id.clone()));
+pub(crate) fn note_answer_id(id: Option<&RequestId>) {
+    if let Some(id) = id {
+        let _ = GRANT_SLOT.try_with(|slot| slot.answer_id.set(id.clone()));
+    }
 }
 
 /// An HTTP answer, replaced by a 503 carrying -32005 under the replaced

@@ -306,9 +306,7 @@ async fn http_refusal_carries_the_recorded_id_without_reading_the_answer() {
         let answer = json!({ "jsonrpc": "2.0", "id": 7, "result": { "pad": "x".repeat(padding) } });
 
         let response = super::grant_audit::slot_http(Some(Arc::clone(&log)), async {
-            if let Some(id) = &recorded {
-                super::grant_audit::note_answer_id(id);
-            }
+            super::grant_audit::note_answer_id(recorded.as_ref());
             meta.check_invocation_policy(&invoke_args(), Some("d3a-session"), &context(&who))
                 .expect("alice holds the grant");
             axum::Json(answer)
