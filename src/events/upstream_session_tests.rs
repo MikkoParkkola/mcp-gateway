@@ -718,3 +718,97 @@ async fn a_notice_before_the_acknowledgement_is_not_delivered() {
     legacy.flush_at(&weak, Instant::now() + WINDOW);
     assert!(intake.try_recv().is_ok(), "control: a legacy stream");
 }
+
+/// A backend `maintain` can be handed without any network: its listen
+/// handle is dead, so an open fails at once.
+fn offline() -> (Backend, Weak<dyn UpstreamListen>) {
+    let backend = Backend::new(
+        "b",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    );
+    let handle: Weak<dyn UpstreamListen> = Weak::<crate::transport::StdioTransport>::new();
+    (backend, handle)
+}
+
+fn stream() -> FrameStream {
+    FrameStream::new(tokio::sync::mpsc::channel(1).1)
+}
+
+/// The wait before the next open, as `unacked` last set it.
+fn next_open_in(state: &State<'_>) -> Duration {
+    state
+        .retry_open_at
+        .saturating_duration_since(Instant::now())
+}
+
+/// MIK-7898 SESS.2a: each unacknowledged end waits one step longer, and the
+/// ±25 % jitter intervals [0.75, 1.25] / [1.5, 2.5] / [3, 5] s are disjoint,
+/// so the strict growth cannot flake. An acknowledgement resets the steps.
+#[test]
+fn unacknowledged_ends_back_off_and_an_ack_resets() {
+    let shared = shared();
+    let mut state = State::new(&shared, Era::Modern);
+    let mut gaps = Vec::new();
+    for _ in 0..3 {
+        state.pending_ended();
+        gaps.push(next_open_in(&state));
+    }
+    assert!(gaps[0] <= Duration::from_millis(1250), "{gaps:?}");
+    assert!(gaps[1] > Duration::from_millis(1400), "{gaps:?}");
+    assert!(gaps[2] > Duration::from_millis(2900), "{gaps:?}");
+    state.on_ack(KindSet::default(), &[], false);
+    state.pending_ended();
+    assert!(
+        next_open_in(&state) <= Duration::from_millis(1250),
+        "reset by the ack"
+    );
+}
+
+/// SESS.2a: a replacement past its acknowledgement deadline backs off.
+#[tokio::test]
+async fn a_replacement_past_its_ack_deadline_backs_off() {
+    let (shared, (backend, handle)) = (shared(), offline());
+    let mut state = State::new(&shared, Era::Modern);
+    state.pending = Some(Pending {
+        stream: stream(),
+        requested: Requested::default(),
+        since: Instant::now() - ACK_DEADLINE * 2,
+    });
+    state.maintain(&backend, &Weak::new(), &handle, true).await;
+    assert!(state.pending.is_none());
+    assert_eq!(state.open_failures, 1);
+    assert!(next_open_in(&state) > Duration::from_millis(500));
+}
+
+/// SESS.2a: a first listen never acknowledged backs off, once, not per tick.
+#[tokio::test]
+async fn an_unacknowledged_first_listen_backs_off_once() {
+    let (shared, (backend, handle)) = (shared(), offline());
+    let mut state = State::new(&shared, Era::Modern);
+    state.current = Some((stream(), Requested::default()));
+    state.opened = Instant::now() - ACK_DEADLINE * 2;
+    for _ in 0..3 {
+        state.maintain(&backend, &Weak::new(), &handle, true).await;
+    }
+    assert!(state.current.is_none());
+    assert_eq!(state.open_failures, 1);
+}
+
+/// SESS.2a: an open that fails backs off, and is not retried at once.
+#[tokio::test]
+async fn a_failed_open_backs_off() {
+    let (shared, (backend, handle)) = (shared(), offline());
+    let mut state = State::new(&shared, Era::Modern);
+    shared
+        .need
+        .lock()
+        .add(&Interest::ResourcesChanged)
+        .expect("room");
+    for _ in 0..3 {
+        state.maintain(&backend, &Weak::new(), &handle, true).await;
+    }
+    assert_eq!(state.open_failures, 1, "the second and third waited");
+    assert!(next_open_in(&state) > Duration::from_millis(500));
+}
