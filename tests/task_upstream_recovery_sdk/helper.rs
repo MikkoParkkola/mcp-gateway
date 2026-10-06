@@ -33,7 +33,6 @@ pub struct Fixture<'a> {
     /// Filename under the temp root. Named per fixture so a test that writes a
     /// second configuration is visibly writing a different file.
     pub name: &'a str,
-    pub port: u16,
     pub backend_url: &'a str,
     /// Names written to `tasks.recovery_adapters`.
     pub adapters: Vec<String>,
@@ -42,7 +41,7 @@ pub struct Fixture<'a> {
 pub fn write_config(root: &Path, fixture: &Fixture<'_>) -> PathBuf {
     let mut config = Config::default();
     config.server.host = "127.0.0.1".to_string();
-    config.server.port = fixture.port;
+    config.server.port = gateway_bin::ANY_PORT;
     config.server.modern_protocol = true;
     config.auth.enabled = false;
     config.capabilities.enabled = false;
@@ -79,15 +78,6 @@ pub fn write_config(root: &Path, fixture: &Fixture<'_>) -> PathBuf {
 
 pub fn store_dir(root: &Path) -> PathBuf {
     root.join("tasks")
-}
-
-pub fn free_port() -> u16 {
-    let listener =
-        std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port can be reserved");
-    listener
-        .local_addr()
-        .expect("the reserved listener reports its address")
-        .port()
 }
 
 /// One task's durable record, found by the name the store derives from its id
@@ -127,7 +117,6 @@ impl Gateway {
     pub fn start_with_env(
         root: &Path,
         config: &Path,
-        port: u16,
         log_name: &str,
         env: &[(&str, &str)],
     ) -> Self {
@@ -157,7 +146,7 @@ impl Gateway {
         Self {
             child,
             log,
-            base: format!("http://127.0.0.1:{port}"),
+            base: String::new(),
         }
     }
 
@@ -167,8 +156,9 @@ impl Gateway {
         format!("--- {} ---\n{body}", self.log.display())
     }
 
+    /// Read the port the child bound (`server.port: 0`) from its log, then
+    /// wait for `/health` on it (MIK-7984).
     pub async fn wait_until_ready(&mut self, client: &reqwest::Client) {
-        let url = format!("{}/health", self.base);
         let ready = async {
             loop {
                 if let Some(status) = self.child.try_wait().expect("owned child status") {
@@ -177,15 +167,27 @@ impl Gateway {
                         self.logs()
                     );
                 }
-                if client.get(&url).send().await.is_ok() {
+                if self.base.is_empty()
+                    && let Some(port) = gateway_bin::logged_port(&self.log)
+                {
+                    self.base = format!("http://127.0.0.1:{port}");
+                }
+                if !self.base.is_empty()
+                    && client
+                        .get(format!("{}/health", self.base))
+                        .send()
+                        .await
+                        .is_ok()
+                {
                     return;
                 }
                 tokio::time::sleep(POLL_GAP).await;
             }
         };
+        let ready = tokio::time::timeout(READY_BOUND, ready).await.is_ok();
         assert!(
-            tokio::time::timeout(READY_BOUND, ready).await.is_ok(),
-            "the gateway never answered on {url} within {READY_BOUND:?}\n{}",
+            ready,
+            "the gateway never answered /health within {READY_BOUND:?}\n{}",
             self.logs()
         );
     }

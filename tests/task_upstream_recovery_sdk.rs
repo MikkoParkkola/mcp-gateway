@@ -145,12 +145,10 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result() {
     let ca = issuer.ca_file.display().to_string();
     let trust = [("SSL_CERT_FILE", ca.as_str())];
 
-    let port = helper::free_port();
     let base = helper::write_config(
         root,
         &Fixture {
             name: "gateway-base.yaml",
-            port,
             backend_url: &sdk.url(),
             adapters: vec![helper::BACKEND.to_string()],
         },
@@ -191,7 +189,7 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result() {
     );
 
     // ── 1. Submit one real SDK job ────────────────────────────────────────
-    let mut first = Gateway::start_with_env(root, &granted, port, "first.log", &trust);
+    let mut first = Gateway::start_with_env(root, &granted, "first.log", &trust);
     first.wait_until_ready(&client).await;
 
     let anonymous = first
@@ -256,7 +254,7 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result() {
 
     // ── 3. Restart: managed working, zero startup queries ─────────────────
     let before_restart = sdk.queries().await;
-    let mut second = Gateway::start_with_env(root, &granted, port, "second.log", &trust);
+    let mut second = Gateway::start_with_env(root, &granted, "second.log", &trust);
     second.wait_until_ready(&client).await;
     assert_eq!(
         sdk.queries().await,
@@ -361,7 +359,7 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result() {
 
     // ── 6. The same subject, a changed CURRENT grant ──────────────────────
     second.terminate().await;
-    let mut denied = Gateway::start_with_env(root, &revoked, port, "revoked.log", &trust);
+    let mut denied = Gateway::start_with_env(root, &revoked, "revoked.log", &trust);
     denied.wait_until_ready(&client).await;
     let before_denied = sdk.queries().await;
     let row_before_denied = durable_record(root, &task_id);
@@ -412,7 +410,7 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result() {
 
     // ── 7. The grant restored, the gate released, the exact result ────────
     denied.terminate().await;
-    let mut last = Gateway::start_with_env(root, &granted, port, "final.log", &trust);
+    let mut last = Gateway::start_with_env(root, &granted, "final.log", &trust);
     last.wait_until_ready(&client).await;
     sdk.release().await;
 
@@ -485,12 +483,10 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result_from
     let alice = Owner::new(&issuer, "alice-subject", "alice@vertical.test");
     let ca = issuer.ca_file.display().to_string();
     let trust = [("SSL_CERT_FILE", ca.as_str())];
-    let port = helper::free_port();
     let base = helper::write_config(
         root,
         &Fixture {
             name: "gateway-base.yaml",
-            port,
             backend_url: &sdk.url(),
             adapters: vec![helper::BACKEND.to_string()],
         },
@@ -506,7 +502,7 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result_from
         }],
     );
 
-    let mut first = Gateway::start_with_env(root, &granted, port, "first.log", &trust);
+    let mut first = Gateway::start_with_env(root, &granted, "first.log", &trust);
     first.wait_until_ready(&client).await;
     let created = first
         .post_as(&client, &sdk_task_invoke(2), Some(alice.token.as_str()))
@@ -528,7 +524,7 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result_from
     std::fs::write(&path, serde_json::to_vec(&row).expect("the row serializes"))
         .expect("the v3 row is written back");
 
-    let mut second = Gateway::start_with_env(root, &granted, port, "second.log", &trust);
+    let mut second = Gateway::start_with_env(root, &granted, "second.log", &trust);
     second.wait_until_ready(&client).await;
     sdk.release().await;
     let deadline = tokio::time::Instant::now() + PEER_BOUND;
