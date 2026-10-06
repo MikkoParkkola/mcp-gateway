@@ -940,17 +940,17 @@ async fn meta_mcp_dispatch(
     let owner = tasks::route_task_owner(
         &state,
         verified_identity.as_ref(),
-        &tasks::session_owner_key(client.as_ref()),
+        &tasks::task_owner_key(
+            grant_subject.as_ref(),
+            cert_identity.as_ref(),
+            client.as_ref(),
+        ),
     );
 
-    // An empty owner key is not an identity — `session_owner_key` says so in
-    // its own doc comment, and the firewall arm refuses on it. Only the task
-    // arms pooled: on a gateway that HAS identities, every caller that
-    // presented no credential answered to that one key and therefore owned
-    // every other unattributed caller's tasks. `/mcp` is listed public in the
-    // shipped local, compose and published-probe presets so ordinary tools stay
-    // open, which is precisely the deployment where credentialled and
-    // unattributed callers meet.
+    // An empty owner key is not an identity (`task_owner_key`); the firewall
+    // refuses on it too. On a gateway that HAS identities, every credential-less
+    // caller would own every other one's tasks. `/mcp` is public in the shipped
+    // presets: exactly where credentialled and unattributed callers meet.
     //
     // Auth DISABLED is the other case and it is not a defect: there are no
     // identities to keep apart, and `anonymous_client` documents one shared
