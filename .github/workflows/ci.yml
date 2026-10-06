@@ -39,6 +39,10 @@ on:
         description: With rehearse_binary_signing, also build every release target with cargo auditable and check its SBOM
         type: boolean
         default: true
+      rehearse_chart_publish:
+        description: Publish and sign the Helm chart into the separate charts-rehearsal package, from a pinned signed image
+        type: boolean
+        default: false
 
 # A new push to a pull request cancels that PR's superseded run. Every other
 # event (branch push, tag, dispatch) gets a group of its own run id, so it is
@@ -421,6 +425,11 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       - run: cargo clippy --all-targets --all-features -- -D warnings
+      # Here because this job is a required Linux check: the futures' depth
+      # margin below rustc's recursion limit, which Windows and Kani exceed
+      # first (MIK-7678).
+      - name: Trait-recursion margin
+        run: scripts/ci/check-recursion-margin.sh
 
   # Feature combinations run post-merge only: see feature-combos.yml.
 
@@ -475,7 +484,11 @@ jobs:
       # Every test target: library, binary and the integration targets under
       # tests/. The store suites are included: both stores run on Windows with
       # owner-only DACLs (ADR-016). Windows-only limits are `cfg(unix)` gates.
-      - run: cargo test --all-features --tests --no-fail-fast -- --show-output
+      # mik_7479_full_burst is skipped as in `test` (MIK-7644): 1,026 calls miss
+      # its deadline on this runner. The exactly-one-terminal-frame property
+      # still runs here at 194 calls (ac_mrtr_7b_every_call_reaches_one_terminal_frame),
+      # and the full burst runs in mrtr7b-full-burst.yml (MIK-7479).
+      - run: cargo test --all-features --tests --no-fail-fast -- --show-output --skip mik_7479_full_burst
       # Owner-only rows that need real Windows state: a second, non-admin
       # account (the runner is an administrator, whose rights bypass DACLs), a
       # mapped network drive, and FAT32/exFAT volumes. Runs after the suite
@@ -699,6 +712,8 @@ jobs:
         run: python3 scripts/release/test_sign_release_assets.py
       - name: Test that an upload onto a published release is refused
         run: python3 scripts/release/test_refuse_published_release.py
+      - name: Test that a published chart version is never replaced
+        run: python3 scripts/release/test_publish_pinned_chart.py
 
   # The release.yml signing path, rehearsed without a tag: one binary built
   # with cargo auditable, signed keylessly as this workflow, uploaded to a
@@ -1356,6 +1371,9 @@ jobs:
     # Read by publish-mcp-registry, which must not list a release candidate.
     outputs:
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+      # The index digest this job signed and verified, for the chart publisher:
+      # re-reading the movable :VERSION tag there could pin another image.
+      list: ${{ steps.list.outputs.list }}
     permissions:
       contents: read
       packages: write
@@ -1673,6 +1691,105 @@ jobs:
   # internal/validators/registries/oci.go), so it can only run after the job
   # that creates the tag. Running it here also means a version reaches a public
   # discovery surface only once the suite that qualifies it has passed.
+  # The Helm chart, pinned to the release image's digest and signed by this
+  # workflow, so chart and image carry one signer: ci.yml at the tag (MIK-7952).
+  # Runs after docker-manifest has signed the index, on the digest it verified,
+  # and on a stable tag only: Chart.yaml carries a stable chart version, so a
+  # prerelease would put a candidate image under it. The
+  # rehearsal dispatch publishes to the separate `charts-rehearsal` package from
+  # a pinned, already-signed image and never touches `charts`; it runs without
+  # docker-manifest, so the condition reads that job's result only on a tag.
+  # The first tag run's push creates `charts/mcp-gateway`, linked to this
+  # repository with its Actions write access; never create it by hand.
+  helm-chart-publish:
+    name: Publish and sign the Helm chart
+    needs: docker-manifest
+    if: >-
+      !cancelled() && (
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+      && needs.docker-manifest.result == 'success'
+      && needs.docker-manifest.outputs.is_prerelease == 'false')
+      || (github.event_name == 'workflow_dispatch'
+      && (inputs.rehearse_chart_publish == true || inputs.rehearse_chart_publish == 'true')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # One publisher per package at a time, queued, never cancelled: the lookup
+    # that refuses to replace a version and the push must not interleave.
+    concurrency:
+      group: helm-chart-publish-${{ github.event_name == 'workflow_dispatch' && 'rehearsal' || 'release' }}
+      cancel-in-progress: false
+      # Without it a third arrival cancels the one already pending.
+      queue: max
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # keyless cosign signing (OIDC)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v2.6.5
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log Helm in to GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$TOKEN" | helm registry login ghcr.io --username "$ACTOR" --password-stdin
+      - name: Publish, sign and verify the chart
+        env:
+          REHEARSAL: ${{ github.event_name == 'workflow_dispatch' }}
+          SIGNED_LIST: ${{ needs.docker-manifest.outputs.list }}
+          # v4.0.0-beta.2's index, signed by run 36193916273: the rehearsal's image.
+          REHEARSAL_IMAGE: ghcr.io/mikkoparkkola/mcp-gateway@sha256:1471cafc9f2a88855fd8997da8316b8122335bef3d3886a3bbb64768aebc9638
+          SIGNER_ISSUER: https://token.actions.githubusercontent.com
+          # The OIDC subject GitHub issues: <owner>/<repo>/.github/workflows/ci.yml@<ref>.
+          IDENTITY: https://github.com/${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$REHEARSAL" = true ]; then
+            image="$REHEARSAL_IMAGE"; repo=oci://ghcr.io/mikkoparkkola/charts-rehearsal
+          else
+            [[ $SIGNED_LIST =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no signed index digest from docker-manifest"; exit 1; }
+            image="ghcr.io/mikkoparkkola/mcp-gateway@${SIGNED_LIST}"; repo=oci://ghcr.io/mikkoparkkola/charts
+          fi
+          TAG_COMMIT="$GITHUB_SHA" SIGNER_IDENTITY="$IDENTITY" SIGNER_ISSUER="$SIGNER_ISSUER" \
+            CHART_NOTES="$RUNNER_TEMP/chart-notes.md" \
+            scripts/release/publish_pinned_chart.sh "$image" "$repo" | tee "$RUNNER_TEMP/publish.log"
+          chart_ref=$(sed -n 's/^chart .* signed as \(.*\)$/\1/p' "$RUNNER_TEMP/publish.log")
+          test -n "$chart_ref"
+          # The script's pass line, the release body's publish check.
+          # shellcheck disable=SC2016 # the backticks are Markdown code spans
+          printf '\nPublish check: `%s`\n' "$(grep '^chart .* signed as ' "$RUNNER_TEMP/publish.log")" \
+            >> "$RUNNER_TEMP/chart-notes.md"
+          # Any other identity is refused, and refused for its identity: a network
+          # or registry error must not pass for the rejection (WF.2).
+          wrong="${IDENTITY/\/ci.yml@//release.yml@}"
+          if cosign verify --certificate-identity "$wrong" --certificate-oidc-issuer "$SIGNER_ISSUER" \
+              "$chart_ref" > /dev/null 2> "$RUNNER_TEMP/wrong-identity.err"; then
+            echo "::error::the chart verified under $wrong"; exit 1
+          fi
+          grep -q 'none of the expected identities matched' "$RUNNER_TEMP/wrong-identity.err" \
+            || { cat "$RUNNER_TEMP/wrong-identity.err"; echo "::error::the wrong-identity verify failed for another reason"; exit 1; }
+          if [ "$REHEARSAL" = true ]; then
+            printf '\nRehearsal: chart signed as %s; its image is v4.0.0-beta.2, signed as ci.yml@refs/tags/v4.0.0-beta.2.\n' \
+              "$IDENTITY" >> "$RUNNER_TEMP/chart-notes.md"
+          fi
+      - name: Keep the release-notes block
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: chart-notes
+          path: ${{ runner.temp }}/chart-notes.md
+          retention-days: 14
+
   publish-mcp-registry:
     name: Publish to the MCP Registry
     # Skipped on a prerelease. The MCP Registry is a discovery surface where
