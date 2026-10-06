@@ -35,7 +35,9 @@ SCOPE_ROW = re.compile(
 CORE_LINE = re.compile(r"Coverage: (\d+) criteria, (\d+) rows, (\d+) met or non-blocking, (\d+) blocking\.")
 SCOPE_LINE = re.compile(r"Scope contract consistent: (\d+) criteria \((\d+) met / (\d+) waived / (\d+) pending\)")
 PUBLISH_COUNT = re.compile(r"fails on \*\*(\w+)\*\* ids?\b")
-PUBLISH_BULLETS = re.compile(r"(?:^- `[^`\n]+`\n)+", re.MULTILINE)
+PUBLISH_BULLET = re.compile(r"^- `([^`\n]+)`$", re.MULTILINE)
+NEXT_HEADING = re.compile(r"^#{1,6} ", re.MULTILINE)
+FENCED = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
 # A tag push is the context in which the gate blocks the container publish.
 TAG_CONTEXT = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/tags/v4.0.0"}
 NUMBER_WORDS = ("zero one two three four five six seven eight nine ten eleven twelve thirteen "
@@ -80,15 +82,20 @@ def scope_counts(output: str) -> dict:
 def tracker_publish_gate(text: str) -> dict:
     """The publish-gate count and id list the tracker states; empty if absent.
 
-    The list is the first run of "- `ID`" lines after the count sentence.
+    The list is every "- `ID`" line from the count sentence to the next
+    heading, blank lines between items included, so no listed id escapes.
     """
     counts = PUBLISH_COUNT.findall(text)
     if len(counts) != 1:
         return {"problem": f"{len(counts)} 'fails on **N** ids' sentences, expected one"}
     word = counts[0].lower()
     count = int(word) if word.isdigit() else NUMBER_WORDS.index(word) if word in NUMBER_WORDS else None
-    bullets = PUBLISH_BULLETS.search(text, PUBLISH_COUNT.search(text).end())
-    ids = re.findall(r"^- `([^`\n]+)`$", bullets.group(0), re.MULTILINE) if bullets else []
+    start = PUBLISH_COUNT.search(text).end()
+    # A shell comment inside a fenced block is not a heading; blank the
+    # fences out, keeping offsets, before looking for the next one.
+    unfenced = FENCED.sub(lambda m: " " * len(m.group(0)), text)
+    heading = NEXT_HEADING.search(unfenced, start)
+    ids = PUBLISH_BULLET.findall(text, start, heading.start() if heading else len(text))
     return {"count": count, "ids": ids, "word": counts[0]}
 
 
@@ -103,6 +110,21 @@ def publish_ids(output: str) -> list[str]:
             break
         ids.append(line.strip())
     return ids
+
+
+def publish_gate_trust(output: str, rc: int) -> str | None:
+    """Why the --publish-check result cannot be compared, or None if it can.
+
+    Only two outcomes are a measurement: exit 1 listing the pending ids, and
+    exit 0 saying acceptance is complete with none listed. Anything else (a
+    crash, a branch context, a failure for another reason) is not.
+    """
+    ids = publish_ids(output)
+    if rc == 1 and ids:
+        return None
+    if rc == 0 and not ids and "Release acceptance complete." in output.splitlines():
+        return None
+    return f"--publish-check exited {rc} with {len(ids)} ids listed; its ids are not trusted"
 
 
 def publish_gate_mismatches(stated: dict, measured: list[str]) -> list[str]:
@@ -155,12 +177,12 @@ def main() -> int:
     stated = tracker_counts(text)
     core_out, core_rc = run("count-release-criteria.py", "--check")
     scope_out, scope_rc = run("check_scope_acceptance.py", "--check")
-    # Exit 1 is the gate reporting pending ids, which is what is compared; the
-    # ids printed are trusted whatever the exit status.
-    publish_out, _ = run("check_scope_acceptance.py", "--publish-check", env=TAG_CONTEXT)
+    publish_out, publish_rc = run("check_scope_acceptance.py", "--publish-check", env=TAG_CONTEXT)
     measured = {**core_counts(core_out), **scope_counts(scope_out)}
     problems = mismatches(stated, measured)
     problems += publish_gate_mismatches(tracker_publish_gate(text), publish_ids(publish_out))
+    if untrusted := publish_gate_trust(publish_out, publish_rc):
+        problems.append(untrusted)
     for name, rc in (("count-release-criteria.py --check", core_rc),
                      ("check_scope_acceptance.py --check", scope_rc)):
         if rc != 0:
