@@ -580,3 +580,7 @@ mod tests;
 #[cfg(all(test, feature = "firewall"))]
 #[path = "cli_firewall_tests.rs"]
 mod firewall_tests;
+
+#[cfg(test)]
+#[path = "cli_literal_tests.rs"]
+mod literal_tests;
