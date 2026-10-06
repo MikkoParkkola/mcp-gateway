@@ -562,6 +562,16 @@ providers:
         );
     }
 
+    /// Text the declared type cannot take keeps the old scalar guess: `7.5` is
+    /// no integer, so it goes out as the number 7.5 (and the schema check then
+    /// refuses it), not as the string the failed check left behind.
+    #[test]
+    fn key_value_text_the_schema_refuses_keeps_the_scalar_guess() {
+        let schema = kv_schema();
+        let resolved = resolve_for(&schema, None, &["count=7.5"]);
+        assert_eq!(resolved, json!({ "count": 7.5 }));
+    }
+
     /// Typed JSON is the caller's own typing: `"007"` for an integer goes out
     /// as written, and the schema check still lets it through, as it does today.
     #[test]

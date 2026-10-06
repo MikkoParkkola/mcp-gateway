@@ -223,6 +223,19 @@ fn a_required_nullable_union_property_accepts_a_present_null() {
     assert!(!validate_arguments(&json!({ "cursor": null }), &strict).is_valid());
 }
 
+/// A `type` of `"null"` alone admits null too: a required property of that
+/// type accepts a present null.
+#[test]
+fn a_required_null_typed_property_accepts_a_present_null() {
+    let schema = json!({
+        "type": "object",
+        "properties": { "cursor": { "type": "null" } },
+        "required": ["cursor"]
+    });
+    let result = validate_arguments(&json!({ "cursor": null }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+}
+
 /// A null the `type` admits is a value: an `enum` without null refuses it,
 /// and an accepted one is forwarded, not dropped.
 #[test]
