@@ -33,6 +33,16 @@ LEGACY_CELLS = ("A", "B", "C")
 REPORT_ONLY_CELLS = ("D", "E")
 MEASURED_REPS = (1, 2, 3)
 
+# The baselines the release criterion names, by COMMIT: v3.5.0 and v3.5.1 are
+# annotated tags, so these are what `<tag>^{commit}` resolves to, which is what
+# the runner records. run_workload.sh takes cells A and B from REF_A and REF_B,
+# so a run can repurpose either; the verdict is then a real comparison, but not
+# against the refs the criterion is graded on.
+RELEASE_BASELINES = {
+    "A": ("v3.5.0", "32f135a61fb50c20a044fb4c2347bc1cf8015d89"),
+    "B": ("v3.5.1", "e138680a542b41fa156a94a1ffc9decd9692be77"),
+}
+
 
 class Void(Exception):
     pass
@@ -354,6 +364,20 @@ def check_graded_schedule(run: Path, pins: dict, measured: list) -> None:
         raise Void("graded run: cell_order.jsonl is not the planned counterbalanced schedule")
 
 
+def baseline_mismatches(pins: dict) -> list[str]:
+    """Why this run's baseline cells are not the release refs; empty when they are.
+
+    Read from pins.json, which check_rep has already held every rep's meta to,
+    so the commit named here is the commit every rep of that cell ran.
+    """
+    found = []
+    for cell, (tag, sha) in RELEASE_BASELINES.items():
+        seen = pins["cells"][cell]["checkout_sha"]
+        if seen != sha:
+            found.append(f"cell {cell} is {seen}, not {tag} ({sha[:9]})")
+    return found
+
+
 def evaluate(run: Path, require_graded: bool = False) -> int:
     pins = load(run / "pins.json")
     graded = pins.get("graded") is True
@@ -391,6 +415,10 @@ def evaluate(run: Path, require_graded: bool = False) -> int:
 
     if graded:
         check_graded_schedule(run, pins, measured)
+
+    mismatches = baseline_mismatches(pins)
+    if require_graded and mismatches:
+        raise Void("--graded: not the release baselines: " + "; ".join(mismatches))
 
     cells: dict[str, list[dict]] = {}
     for cell in LEGACY_CELLS + REPORT_ONLY_CELLS:
@@ -502,6 +530,15 @@ def evaluate(run: Path, require_graded: bool = False) -> int:
     report["unstable"] = unstable
     report["verdict"] = verdict
     report["mode"] = "graded" if graded else "diagnostic"
+    # Which binaries the cells were, so a verdict carries its own provenance,
+    # and whether it is the release grade: the planned schedule on the release
+    # baselines. A run that fails either still gets its verdict, labelled.
+    report["cell_refs"] = {
+        cell: {k: pins["cells"][cell][k] for k in ("checkout_sha", "health_version")}
+        for cell in LEGACY_CELLS + REPORT_ONLY_CELLS
+    }
+    report["baseline_mismatches"] = mismatches
+    report["release_grade"] = graded and not mismatches
     report["report_only"] = {
         cell: report["cells"][cell] for cell in REPORT_ONLY_CELLS
     }
@@ -511,6 +548,8 @@ def evaluate(run: Path, require_graded: bool = False) -> int:
     print(payload)
     mode = "" if graded else "  [DIAGNOSTIC run: not the release grade]"
     print(f"\nVERDICT: {verdict}  (exit {status}){mode}", file=sys.stderr)
+    if mismatches:
+        print("NOT A RELEASE GRADE: " + "; ".join(mismatches), file=sys.stderr)
     if unstable:
         print(
             "INCONCLUSIVE: the median interval is too wide for the margin it "

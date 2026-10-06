@@ -28,6 +28,8 @@ mod delivery_who;
 mod meta_refusal;
 mod meta_replay;
 #[cfg(feature = "firewall")]
+mod session_less;
+#[cfg(feature = "firewall")]
 mod tenants;
 
 /// A backend that answers `tools/list` with its one tool `t` and anything

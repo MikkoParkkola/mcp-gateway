@@ -1380,20 +1380,18 @@ async fn meta_mcp_dispatch(
                 if let Some(ref fw) = state.firewall {
                     let target = target.as_target();
                     let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
-                    // The key the per-caller controls score on: the caller's
-                    // `CallerKey` on both eras; the session id only when there
-                    // is no key at all (authentication off). Never the display
-                    // name: operator-chosen, shared by API keys and by every
-                    // anonymous caller, it would let one caller poison
-                    // another's history. Empty is no identity: refused.
-                    let mut control_identity = super::identity::caller_key(
-                        grant_subject.as_ref(),
-                        cert_identity.as_ref(),
-                        client.as_ref(),
+                    // The key the per-caller controls score on (MIK-7971):
+                    // never the display name, which every anonymous caller
+                    // shares. Empty is no identity: refused.
+                    let control_identity = super::identity::control_identity(
+                        super::identity::caller_key(
+                            grant_subject.as_ref(),
+                            cert_identity.as_ref(),
+                            client.as_ref(),
+                        ),
+                        &session_id,
+                        existing_session_id.as_deref(),
                     );
-                    if control_identity.is_empty() {
-                        control_identity.clone_from(&session_id);
-                    }
                     // Renew the reclaim deadline on every call (`IDLE_TTL`). An
                     // empty identity holds no per-identity state: not tracked.
                     if let Some(ref lifecycle) = state.session_lifecycle

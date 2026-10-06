@@ -8,6 +8,9 @@
 # Every counter here is created at its first increment, already at 1, so a
 # rule on a single event pairs increase() with an `unless ... offset` branch
 # that fires for a series new in the window: increase() alone reads 0 there.
+# That branch reads max_over_time over 5m at the offset, not an instant
+# sample: one missed scrape exactly a window back would otherwise make an old
+# series look new and fire again with no new event.
 groups:
   - name: mcp-gateway
     rules:
@@ -15,7 +18,7 @@ groups:
         expr: >-
           increase(mcp_backend_idle_stop_close_failures[15m]) > 0
           or (mcp_backend_idle_stop_close_failures
-          unless mcp_backend_idle_stop_close_failures offset 15m) > 0
+          unless max_over_time(mcp_backend_idle_stop_close_failures[5m] offset 15m)) > 0
         labels:
           severity: warning
         annotations:
@@ -43,7 +46,7 @@ groups:
           sum(increase(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}[5m]))
           > 0
           or sum(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}
-          unless mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"} offset 5m)
+          unless max_over_time(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}[5m] offset 5m))
           > 0
         labels:
           severity: warning
@@ -66,7 +69,7 @@ groups:
         expr: >-
           increase(mcp_backend_identity_slots_refused_total[15m]) > 0
           or (mcp_backend_identity_slots_refused_total
-          unless mcp_backend_identity_slots_refused_total offset 15m) > 0
+          unless max_over_time(mcp_backend_identity_slots_refused_total[5m] offset 15m)) > 0
         labels:
           severity: warning
         annotations:
