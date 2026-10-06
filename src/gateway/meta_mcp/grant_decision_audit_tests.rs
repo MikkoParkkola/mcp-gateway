@@ -156,6 +156,17 @@ async fn grant_denial_writes_decision_record() {
     assert!(record.get("timestamp").is_some(), "{record}");
     assert_eq!(trace_of(&record), trace_of(&invocation), "{record}");
     assert!(trace_of(&record).is_some(), "{record}");
+    // MIK-7663.GH2409.4: `who` is built from the subject's authority and
+    // subject, the same pair the record's `subject` field carries.
+    assert_eq!(
+        record["who"]["authority"], record["subject"]["authority"],
+        "{record}"
+    );
+    assert_eq!(
+        record["who"]["subject"], record["subject"]["subject"],
+        "{record}"
+    );
+    assert_eq!(record["who"]["authority"], json!("api_key"), "{record}");
     // Control for the empty-flush row below: a slot holding a note flushes.
     assert!(
         super::grant_audit::grant_bookkeeping_for_test().flushes_spawned >= 1,
