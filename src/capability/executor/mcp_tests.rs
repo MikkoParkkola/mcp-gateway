@@ -660,6 +660,44 @@ async fn a_successful_result_loses_the_injected_env_value() {
     );
 }
 
+/// MIK-7953: HOME in `env` is reserved and never reaches the child, so its
+/// value stays in the result; the declared name the child receives is scrubbed.
+#[tokio::test]
+async fn a_reserved_env_name_is_not_scrubbed_from_the_result() {
+    let home = "/home-7953-operator";
+    let secret = "tok-7953-mcp-declared";
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join(".env");
+    crate::gateway::test_helpers::write_owner_only(
+        &file,
+        format!("CAP_EXEC_TEST_TOKEN={secret}\nHOME={home}\n"),
+    )
+    .unwrap();
+    let overlay = std::sync::Arc::new(crate::config::EnvOverlay::from_paths(&[file]));
+    let executor = CapabilityExecutor::new().with_env(std::sync::Arc::new(
+        crate::config::LiveEnv::new(overlay, crate::config::ResolvedEnvFiles::default()),
+    ));
+    let cap = parse_capability(&capability_yaml().replace(
+        "transport: stdio",
+        "transport: stdio\n      env: [HOME, CAP_EXEC_TEST_TOKEN]",
+    ))
+    .expect("probe parses");
+    let out = call(
+        &executor,
+        &cap,
+        json!({"operation": "say", "text": home}),
+        &caller("a"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out["arguments"]["message"], home, "{out}");
+    assert_eq!(
+        out["test_values"]["CAP_EXEC_TEST_TOKEN"], "[redacted]",
+        "{out}"
+    );
+    assert!(!out.to_string().contains(secret), "{out}");
+}
+
 /// The child is started with the environment the call redacts against, not a
 /// second read of it: after a reload between the two, the value the child holds
 /// is still one the result is scrubbed of.
