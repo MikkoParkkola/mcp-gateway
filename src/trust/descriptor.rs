@@ -84,6 +84,8 @@ pub fn project_tool_descriptor_trust_card(
     server_name: impl Into<String>,
     tool: &Tool,
 ) -> Value {
+    #[cfg(test)]
+    CARD_COMPUTATIONS.with(|n| n.set(n.get() + 1));
     let trust_card = ToolDescriptorTrustCard::from_tool(server_id, server_name, tool);
     let mut descriptor = serde_json::to_value(tool).unwrap_or_else(|_| {
         json!({
@@ -124,10 +126,92 @@ pub fn tools_list_result_with_trust_cards(tools: Vec<Value>) -> Value {
 }
 
 #[cfg(test)]
+thread_local! {
+    /// Test-only: `TrustCard` references computed on this thread.
+    static CARD_COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
+
+    fn computations() -> usize {
+        CARD_COMPUTATIONS.with(std::cell::Cell::get)
+    }
+
+    /// A catalog under a server identity no other test uses, so a shared
+    /// memo cannot have seen it.
+    fn catalog(server: &str) -> Vec<Tool> {
+        (0..3)
+            .map(|i| Tool {
+                name: format!("{server}_tool_{i}"),
+                description: Some(format!("tool {i}")),
+                ..tool()
+            })
+            .collect()
+    }
+
+    /// MIK-7916 AC1: an unchanged catalog computes each reference once; a
+    /// changed tool is recomputed, and only that one.
+    #[test]
+    fn unchanged_catalog_computes_each_card_once() {
+        let (id, name) = ("backend:memo-once", "memo-once");
+        let mut tools = catalog(name);
+        let start = computations();
+        let first = project_tool_descriptors_trust_cards(id, name, &tools);
+        let second = project_tool_descriptors_trust_cards(id, name, &tools);
+        assert_eq!(first, second);
+        assert_eq!(
+            computations() - start,
+            tools.len(),
+            "one computation per tool, not per list"
+        );
+
+        tools[1].description = Some("changed".to_string());
+        let third = project_tool_descriptors_trust_cards(id, name, &tools);
+        assert_eq!(
+            computations() - start,
+            tools.len() + 1,
+            "only the changed tool is recomputed"
+        );
+        assert_ne!(
+            third[1]["trustCard"], first[1]["trustCard"],
+            "a changed tool gets a new card"
+        );
+        assert_eq!(third[0], first[0]);
+    }
+
+    /// MIK-7916 AC2: whatever is reused, the projection equals a fresh
+    /// per-tool computation, digests included.
+    #[test]
+    fn memoised_projection_equals_a_fresh_one() {
+        let (id, name) = ("backend:memo-fresh", "memo-fresh");
+        let tools = catalog(name);
+        for _ in 0..2 {
+            let listed = project_tool_descriptors_trust_cards(id, name, &tools);
+            for (descriptor, tool) in listed.iter().zip(&tools) {
+                assert_eq!(
+                    descriptor,
+                    &project_tool_descriptor_trust_card(id, name, tool)
+                );
+            }
+        }
+    }
+
+    /// The same tool under another server identity is a different card.
+    #[test]
+    fn server_identity_is_part_of_the_key() {
+        let tools = catalog("memo-identity");
+        let a = project_tool_descriptors_trust_cards("backend:a", "memo-identity-a", &tools);
+        let b = project_tool_descriptors_trust_cards("backend:b", "memo-identity-b", &tools);
+        assert_ne!(a[0]["trustCard"]["serverId"], b[0]["trustCard"]["serverId"]);
+        assert_eq!(
+            b[0],
+            project_tool_descriptor_trust_card("backend:b", "memo-identity-b", &tools[0])
+        );
+    }
 
     fn tool() -> Tool {
         Tool {
