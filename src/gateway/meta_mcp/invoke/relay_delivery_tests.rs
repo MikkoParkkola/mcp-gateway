@@ -337,7 +337,7 @@ async fn a_native_pretty_printed_json_text_keeps_its_numbers() {
         .collecting_staged(async {
             meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &both);
             let snapshot = meta.relay_snapshot(&both);
-            meta.restage_if_changed(snapshot, Some(&delivered));
+            meta.restage_if_changed(snapshot, Some(&delivered), AnswerShape::Literal);
         })
         .await;
     staged.commit(true);

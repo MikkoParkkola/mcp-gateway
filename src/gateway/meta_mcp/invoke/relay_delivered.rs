@@ -48,11 +48,20 @@ impl MetaMcp {
     /// [`MetaMcp::rebuild_receipt_from_final`], which keeps each to the text
     /// the final answer still delivers; until then they never commit. Several
     /// receipts of no plan cannot be told apart and are dropped.
+    ///
+    /// `shape` is how the caller delivered the answer: only a `gateway_invoke`
+    /// wrapper is read decoded. A surfaced tool's text is read as delivered,
+    /// even when it happens to look like the wrapper (MIK-7906).
     #[cfg_attr(
         not(feature = "firewall"),
         allow(clippy::unused_self, clippy::needless_pass_by_value)
     )]
-    pub(crate) fn restage_if_changed(&self, snapshot: Option<Value>, result: Option<&Value>) {
+    pub(crate) fn restage_if_changed(
+        &self,
+        snapshot: Option<Value>,
+        result: Option<&Value>,
+        shape: AnswerShape,
+    ) {
         if !snapshot.is_some_and(|before| Some(&before) != result) {
             return;
         }
@@ -74,7 +83,12 @@ impl MetaMcp {
                 && let Some(digest) = fw.delivery_digest(
                     &one.server,
                     &one.tool,
-                    &super::super::audit::delivered_value(delivered),
+                    &match shape {
+                        AnswerShape::InvokeWrapped => {
+                            super::super::audit::delivered_value(delivered)
+                        }
+                        AnswerShape::Literal => std::borrow::Cow::Borrowed(delivered),
+                    },
                 )
             {
                 // A redaction can drop the classification marker with the
@@ -91,7 +105,7 @@ impl MetaMcp {
                 });
             }
             #[cfg(not(feature = "firewall"))]
-            drop(staged);
+            drop((staged, shape));
         });
     }
 
@@ -198,6 +212,19 @@ pub(crate) enum AnswerShape {
     InvokeWrapped,
     /// A surfaced tool's answer: its blocks are read as the caller sees them.
     Literal,
+}
+
+impl AnswerShape {
+    /// The shape the gateway gives an answer to `external_tool`: only a
+    /// `gateway_invoke` answer is wrapped.
+    #[must_use]
+    pub(crate) fn of(external_tool: &str) -> Self {
+        if external_tool == "gateway_invoke" {
+            Self::InvokeWrapped
+        } else {
+            Self::Literal
+        }
+    }
 }
 
 /// The backend text of a finally delivered `result`: the gateway's chain
