@@ -80,9 +80,10 @@ fn gap_before_attempt(policy: &WarmStartPolicy, attempt: u32, elapsed: Duration)
 
 /// Whether an error can mean "this backend is not ready yet".
 ///
-/// Deliberately enumerated rather than delegated to `chains::retry_step`, whose
-/// predicate rejects `BackendUnavailable` — the variant `start_entry` returns
-/// while a backend is mid-lifecycle. Since the slow phase runs indefinitely,
+/// Deliberately enumerated rather than delegated to `chains::retry_step`: that
+/// predicate asks whether a chain step may be retried, this one whether a
+/// backend is not up yet, and `BackendUnavailable` is what `start_entry`
+/// returns while a backend is mid-lifecycle. Since the slow phase runs indefinitely,
 /// anything not listed here must stop the loop: no amount of waiting turns an
 /// unsupported protocol version into a working backend.
 ///
