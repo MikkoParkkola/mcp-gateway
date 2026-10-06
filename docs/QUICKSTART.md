@@ -240,7 +240,7 @@ Or manually — add to your client config:
 }
 ```
 
-Restart your client. The gateway's compact Meta-MCP surface (11 tools by default; 9 to 17 depending on configuration) replaces every backend tool definition.
+Restart your client. The gateway's compact Meta-MCP surface (11 tools for an administrator on the default HTTP setup, 9 to 17 depending on configuration; a caller without admin standing sees fewer) replaces every backend tool definition.
 
 See [examples/claude-desktop.json](../examples/claude-desktop.json) for a full example config.
 
