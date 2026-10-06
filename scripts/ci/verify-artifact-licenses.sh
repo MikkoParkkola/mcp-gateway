@@ -63,7 +63,7 @@ fi
 # 4. Homebrew — bare-binary formula can't embed a text file, so require a
 #    licensing pointer in caveats (the license field is checked in 5).
 if [ -f homebrew/mcp-gateway.rb ]; then
-  grep -qi 'COMMERCIAL.md\|Noncommercial' homebrew/mcp-gateway.rb \
+  grep -q 'COMMERCIAL\.md' homebrew/mcp-gateway.rb \
     || fail "homebrew formula caveats must point to the license/COMMERCIAL terms"
   ok "homebrew formula: licensing caveat"
 fi
@@ -72,19 +72,20 @@ fi
 #    the SPDX identifier the file headers carry; npm points at LICENSES.md.
 SPDX="PolyForm-Noncommercial-1.0.0"
 id="${SPDX//./\\.}"
-rc_before=$rc
+meta_rc=0
+meta_fail() { fail "$@"; meta_rc=1; }
 need() { # <file> <extended regex> <what>
-  [ -f "$1" ] || { fail "missing $1"; return; }
-  grep -Eq "$2" "$1" || fail "$1: $3 must be $SPDX"
+  [ -f "$1" ] || { meta_fail "missing $1"; return; }
+  grep -Eq "$2" "$1" || meta_fail "$1: $3 must be $SPDX"
 }
 for f in Cargo.toml crates/*/Cargo.toml; do
   need "$f" "^license[[:space:]]*=[[:space:]]*\"$id\"$" "license"
 done
 grep -Eq '^[[:space:]]*"license":[[:space:]]*"SEE LICENSE IN LICENSES\.md",?$' npm/package.json \
-  || fail "npm/package.json: \"license\" must be \"SEE LICENSE IN LICENSES.md\" (ADR-013)"
+  || meta_fail "npm/package.json: \"license\" must be \"SEE LICENSE IN LICENSES.md\" (ADR-013)"
 need homebrew/mcp-gateway.rb "^[[:space:]]*license \"$id\"$" "license"
 need .github/workflows/release.yml "^[[:space:]]*license \"$id\"$" "generated formula license"
-[ "$rc" -eq "$rc_before" ] && ok "package metadata matches ADR-013"
+[ "$meta_rc" -eq 0 ] && ok "package metadata matches ADR-013"
 
 [ "$rc" -eq 0 ] && echo "ok: all packaged artifacts carry the license files"
 exit $rc
