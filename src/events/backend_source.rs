@@ -141,17 +141,19 @@ impl EventSource for BackendSource {
         };
         // `tools_changed` is offered on every backend (a reload announces it);
         // only a backend that can be listened to gets a listener (§6, §14).
-        if !up.listeners.knows(backend) {
-            return Ok(());
-        }
-        if (up.ineligible)().contains(backend) {
-            // `tools_changed` needs no listener here. Any other kind was
-            // refused since the commit check judged it, and a start with no
-            // listener would leave it silent (MIK-7969); a replay retries it.
+        // The other kinds are offered only for one that can: if it was
+        // removed or refused since the commit check, a start with no listener
+        // would leave the subscription silent, so it is refused (MIK-7969),
+        // and a replay retries it.
+        let known = up.listeners.knows(backend);
+        let refused = known && (up.ineligible)().contains(backend);
+        if !known || refused {
             return if matches!(interest, Interest::ToolsChanged) {
                 Ok(())
-            } else {
+            } else if refused {
                 Err(RpcError::forbidden())
+            } else {
+                Err(RpcError::not_found())
             };
         }
         up.listeners

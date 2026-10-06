@@ -331,4 +331,13 @@ async fn the_commit_admits_only_a_detected_or_unneeded_transport() {
         first("backend.s.tools_changed").await.is_ok(),
         "tools_changed needs no listener"
     );
+    assert_eq!(
+        first("backend.gone.resources_changed")
+            .await
+            .err()
+            .map(|e| e.code),
+        Some(-32011),
+        "a backend removed since the check gets no silent start"
+    );
+    assert!(first("backend.gone.tools_changed").await.is_ok());
 }
