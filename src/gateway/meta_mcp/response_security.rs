@@ -243,7 +243,8 @@ impl super::MetaMcp {
                 ResponseArtifactKind::FinalResponse,
                 context.mutation,
             );
-            self.restage_if_changed(snapshot, Some(&*result));
+            let shape = super::invoke::relay::AnswerShape::of(context.correlation.external_tool);
+            self.restage_if_changed(snapshot, Some(&*result), shape);
             if !verdict
                 .is_ok_and(|verdict| verdict.allowed && verdict.action != FirewallAction::Block)
             {

@@ -21,7 +21,9 @@ impl TransportConfig {
         }
         Self::Http {
             http_url: url.to_string(),
-            streamable_http: false,
+            // Left to detection: a pasted URL says nothing about which
+            // HTTP transport the server speaks.
+            streamable_http: None,
             protocol_version: None,
         }
     }

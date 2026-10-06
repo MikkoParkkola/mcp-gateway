@@ -80,7 +80,7 @@ fn per_user_backend() -> Arc<Backend> {
     let cfg = BackendConfig {
         transport: TransportConfig::Http {
             http_url: "https://mem.internal/mcp".to_string(),
-            streamable_http: false,
+            streamable_http: Some(false),
             protocol_version: None,
         },
         identity_propagation: Some(idp),
