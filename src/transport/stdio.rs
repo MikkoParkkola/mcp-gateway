@@ -9,7 +9,6 @@
 //! supported version.
 
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -37,54 +36,9 @@ use crate::{Error, Result};
 mod cache;
 pub use cache::isolated_package_manager_env;
 
-#[cfg(unix)]
-const FALLBACK_EXEC_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
-#[cfg(windows)]
-const FALLBACK_EXEC_PATH: &str = r"C:\Windows\System32;C:\Windows";
-#[cfg(not(any(unix, windows)))]
-const FALLBACK_EXEC_PATH: &str = "";
-
-pub(crate) fn configure_child_environment(
-    cmd: &mut Command,
-    backend_env: &HashMap<String, String>,
-) {
-    cmd.env_clear();
-
-    let path = std::env::var_os("PATH").unwrap_or_else(|| OsString::from(FALLBACK_EXEC_PATH));
-    cmd.env("PATH", path);
-
-    if let Some(home) = std::env::var_os("HOME")
-        .or_else(|| dirs::home_dir().map(std::path::PathBuf::into_os_string))
-    {
-        cmd.env("HOME", home);
-    }
-
-    let tmpdir =
-        std::env::var_os("TMPDIR").unwrap_or_else(|| std::env::temp_dir().into_os_string());
-    cmd.env("TMPDIR", tmpdir);
-
-    #[cfg(windows)]
-    for key in [
-        "USERPROFILE",
-        "APPDATA",
-        "LOCALAPPDATA",
-        "TEMP",
-        "TMP",
-        "SYSTEMROOT",
-        "COMSPEC",
-        "PATHEXT",
-    ] {
-        if let Some(value) = std::env::var_os(key) {
-            cmd.env(key, value);
-        }
-    }
-
-    // Backend configuration is authoritative and may intentionally override
-    // a safe default such as PATH, HOME, or TMPDIR.
-    for (key, value) in backend_env {
-        cmd.env(key, value);
-    }
-}
+#[path = "stdio_env.rs"]
+mod env;
+pub(crate) use env::configure_child_environment;
 
 /// Stdio transport for subprocess MCP servers
 pub struct StdioTransport {
@@ -793,33 +747,5 @@ mod cache_tests;
 mod start_refusal_tests;
 
 #[cfg(test)]
-mod spawn_classification_tests {
-    use super::StdioTransport;
-    use crate::Error;
-    use std::collections::HashMap;
-    use std::time::Duration;
-
-    #[tokio::test]
-    async fn a_missing_command_is_reported_as_permanent() {
-        // END TO END, not a synthetic classifier input: this really tries to
-        // spawn, so it pins the actual io::ErrorKind the OS returns rather than
-        // the one this code assumes it returns.
-        let transport = StdioTransport::new(
-            "/nonexistent/definitely-not-a-real-binary",
-            HashMap::new(),
-            None,
-            Duration::from_secs(1),
-            None,
-        );
-
-        let err = transport
-            .start()
-            .await
-            .expect_err("spawning a missing binary must fail");
-
-        assert!(
-            matches!(err, Error::TransportPermanent(_)),
-            "a missing command must be permanent, got {err:?}"
-        );
-    }
-}
+#[path = "stdio_spawn_classification_tests.rs"]
+mod spawn_classification_tests;
