@@ -279,3 +279,42 @@ fn session_less_spend_still_counts_in_the_aggregate() {
         "no session was opened for the empty id"
     );
 }
+
+// ── Memory bound (MIK-8000) ───────────────────────────────────────
+
+#[test]
+fn many_calls_on_one_key_hold_a_bounded_number_of_entries() {
+    // GIVEN: the shared unauthenticated name answering 1000 calls on one tool
+    let tracker = CostTracker::new();
+    for _ in 0..1_000 {
+        tracker.record("", Some("anonymous"), "srv", "t", 1, 15.0);
+    }
+    // THEN: the key holds one hour bucket and one tool row, not one per call
+    assert!(
+        tracker.key_retained("anonymous") <= 2,
+        "the key holds {} entries after 1000 calls",
+        tracker.key_retained("anonymous")
+    );
+    assert_eq!(
+        tracker.key_snapshot("anonymous").unwrap().window_24h.tokens,
+        1_000
+    );
+}
+
+#[test]
+fn many_calls_in_one_session_hold_a_bounded_number_of_entries() {
+    // GIVEN: one session answering 1000 calls on one tool
+    let tracker = CostTracker::new();
+    for _ in 0..1_000 {
+        tracker.record("s1", Some("public"), "srv", "t", 1, 15.0);
+    }
+    // THEN: the session holds one tool row, and its totals are exact
+    assert!(
+        tracker.session_retained("s1") <= 1,
+        "the session holds {} entries after 1000 calls",
+        tracker.session_retained("s1")
+    );
+    let snap = tracker.session_snapshot("s1").unwrap();
+    assert_eq!((snap.call_count, snap.total_tokens), (1_000, 1_000));
+    assert_eq!(snap.by_tool[0].call_count, 1_000);
+}

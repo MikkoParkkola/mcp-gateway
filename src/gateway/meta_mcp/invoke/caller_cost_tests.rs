@@ -105,3 +105,25 @@ async fn a_caller_with_a_session_is_reported_under_its_session_only() {
         "a sessioned call was also keyed on its caller: {report}"
     );
 }
+
+/// MIK-8000: an auth-off caller (the shared `anonymous` name, no caller key,
+/// no session) spending repeatedly keeps a bounded number of cost entries.
+#[tokio::test]
+async fn an_unauthenticated_callers_repeated_spend_stays_bounded() {
+    let meta = gateway();
+    let anonymous = MetaMcpCallerContext {
+        caller_key: None,
+        api_key_name: Some("anonymous"),
+        ..ctx(&AllowAll)
+    };
+    // GIVEN: 50 served session-less calls on one tool
+    for _ in 0..50 {
+        spend(&meta, &anonymous, None, "read").await;
+    }
+    // THEN: the key holds one hour bucket and one tool row, not one per call
+    let held = meta.cost_tracker.key_retained("anonymous");
+    assert!(
+        held <= 2,
+        "the anonymous key holds {held} entries after 50 calls"
+    );
+}

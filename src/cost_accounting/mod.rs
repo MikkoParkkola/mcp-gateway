@@ -673,6 +673,23 @@ pub struct AggregateCost {
     pub total_cost_usd: f64,
 }
 
+#[cfg(test)]
+impl CostTracker {
+    /// Entries `key_name` holds in memory: what another answered call can grow.
+    pub(crate) fn key_retained(&self, key_name: &str) -> usize {
+        self.per_key
+            .get(key_name)
+            .map_or(0, |key| key.records.lock().len())
+    }
+
+    /// Entries `session_id` holds in memory.
+    pub(crate) fn session_retained(&self, session_id: &str) -> usize {
+        self.per_session
+            .get(session_id)
+            .map_or(0, |session| session.records.lock().len())
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn now_secs() -> u64 {
