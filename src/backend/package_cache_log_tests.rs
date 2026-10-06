@@ -94,6 +94,15 @@ fn a_failed_start_logs_the_classification_and_not_the_childs_text() {
             .is_some_and(|status| status.contains('3')),
         "and how the child ended, which is not text the child chose: {classification:?}"
     );
+    // The sweep below only means something if the transport's own report of
+    // the early exit was captured with it.
+    assert!(
+        captured.iter().any(|fields| fields
+            .get("message")
+            .is_some_and(|message| message.starts_with("stdio backend"))
+            && fields.contains_key("class")),
+        "the early-exit report reaches this collector: {every_field}"
+    );
     assert!(
         !every_field.contains("ghp_SENTINELSENTINELSENTINELSENTINEL01"),
         "the child's stderr never reaches the log, at any level: {every_field}"

@@ -14,6 +14,8 @@ Held operation of a counted capability: `cisco_scanner` `scan_mcp_server` is not
 
 ## Categories
 
+Counted as raw inventory: all 137 files, the held entries included.
+
 | Category | Count |
 |----------|-------|
 | **automation/** | 6 |

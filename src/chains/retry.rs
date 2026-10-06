@@ -191,12 +191,16 @@ fn is_retryable(error: &Error) -> bool {
     // unknown". `TransportConnect` is a narrowing of `Transport`, not a new
     // class -- it must stay retryable or splitting the variant would silently
     // stop retrying the one failure that is provably safe to retry.
+    // `BackendUnavailable` is a pre-send refusal of a backend that may recover
+    // (a start, a closed concurrency limit, a cold tools/list timeout), and is
+    // retried after the step's own delay (MIK-7979).
     matches!(
         error,
         Error::Transport(_)
             | Error::JsonRpcRetryable { .. }
             | Error::TransportConnect(_)
             | Error::BackendTimeout(_)
+            | Error::BackendUnavailable(_)
             | Error::Http(_)
             | Error::Io(_)
     )
@@ -212,6 +216,14 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
+
+    /// MIK-7979: start failures and a cold tools/list timeout now surface as
+    /// `BackendUnavailable` (pre-send). They were `Transport`/`BackendTimeout`
+    /// and retried; the chain must keep retrying them.
+    #[test]
+    fn a_pre_send_backend_unavailable_is_retried() {
+        assert!(is_retryable(&Error::BackendUnavailable("svc".to_string())));
+    }
 
     #[test]
     fn a_permanent_transport_failure_is_not_retried() {

@@ -40,9 +40,10 @@ impl StdioTransport {
             complete: false,
         };
         let Some(stdin) = frame.writer.as_mut() else {
-            // Nothing was written, so there is nothing to retire.
+            // Nothing was written, so there is nothing to retire, and the
+            // failure is pre-send (MIK-7979).
             frame.complete = true;
-            return Err(Error::Transport("Not connected".to_string()));
+            return Err(Error::TransportConnect("Not connected".to_string()));
         };
         stdin
             .write_all(message.as_bytes())
