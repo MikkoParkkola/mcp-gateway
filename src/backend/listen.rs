@@ -127,9 +127,7 @@ impl Backend {
                     *backend.events_resolution.lock() = None;
                     started
                 });
-                let resolution = async move { task.await.unwrap_or(false) }
-                    .boxed()
-                    .shared();
+                let resolution = async move { task.await.unwrap_or(false) }.boxed().shared();
                 *running = Some(resolution.clone());
                 resolution
             }

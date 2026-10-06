@@ -35,6 +35,9 @@ pub(crate) struct Runtime {
     pub busy: Mutex<HashSet<String>>,
     /// The gateway's controls, once [`EventsHub::start`] ran.
     pub services: std::sync::OnceLock<Arc<Services>>,
+    /// The backends the upstream-notification source listens on, once it is
+    /// installed: their live connections decide HTTP eligibility (MIK-7969).
+    pub backends: std::sync::OnceLock<Arc<crate::backend::BackendRegistry>>,
     /// Set once the stored subscriptions have been reconciled with the
     /// catalogue the startup capability scan built; no attempt starts before.
     pub reconciled: AtomicBool,
@@ -54,6 +57,7 @@ impl Runtime {
             failures: FailureWindows::new(config.suspend_window, config.suspend_min_attempts),
             busy: Mutex::new(HashSet::new()),
             services: std::sync::OnceLock::new(),
+            backends: std::sync::OnceLock::new(),
             reconciled: AtomicBool::new(false),
             dropped: AtomicU64::new(0),
             projection_failed: AtomicU64::new(0),

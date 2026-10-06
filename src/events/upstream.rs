@@ -119,9 +119,13 @@ pub(crate) fn live_ineligible(
     registry: Arc<BackendRegistry>,
 ) -> super::backend_source::Ineligible {
     Arc::new(move || {
-        ineligible_backends(&live.get(), multi_user(live.running()), &detected_in(&registry))
-            .into_keys()
-            .collect()
+        ineligible_backends(
+            &live.get(),
+            multi_user(live.running()),
+            &detected_in(&registry),
+        )
+        .into_keys()
+        .collect()
     })
 }
 
@@ -162,8 +166,12 @@ pub(crate) fn judged_backends(
         .filter(|(_, raw)| raw.enabled)
         .filter_map(|(name, raw)| {
             let effective = bound.get(name).map(|b| b.effective(raw));
-            judge(effective.as_ref().unwrap_or(raw), multi_user, detected(name))
-                .map(|j| (name.clone(), j))
+            judge(
+                effective.as_ref().unwrap_or(raw),
+                multi_user,
+                detected(name),
+            )
+            .map(|j| (name.clone(), j))
         })
         .collect()
 }

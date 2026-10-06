@@ -208,30 +208,52 @@ async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
     assert_eq!(hub.store.subscriptions().len(), 2, "control: both held");
     assert!(!shared.stop.is_cancelled());
 
-    // A reload restores eligibility before the withdrawal gets the lifecycle
-    // lock (a subscribe holds it): nothing is withdrawn.
+    // T19 (MIK-7969): eligibility returns before the withdrawal gets the
+    // lifecycle lock (a subscribe holds it). Nothing pending is sent, nothing
+    // is withdrawn, and the listener keeps running and delivering.
     let held = hub.lifecycle.lock().await;
     refused.store(true, std::sync::atomic::Ordering::SeqCst);
     state.note(changed(), false);
     tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
-    state.flush(&weak);
+    assert!(state.flush(&weak), "the flush saw the backend ineligible");
     assert!(
         intake.try_recv().is_err(),
         "an ineligible backend still delivered"
     );
-    assert!(shared.stop.is_cancelled(), "its listener was not stopped");
+    let ending = tokio::spawn({
+        let (shared, weak) = (Arc::clone(&shared), weak.clone());
+        async move { super::end_ineligible(&shared, &weak).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !shared.stop.is_cancelled(),
+        "stopped before the locked recheck"
+    );
     refused.store(false, std::sync::atomic::Ordering::SeqCst);
     drop(held);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !ending.await.expect("task"),
+        "a restored backend's listener was ended"
+    );
+    assert!(
+        !shared.stop.is_cancelled(),
+        "a restored listener was stopped"
+    );
     assert_eq!(
         hub.store.subscriptions().len(),
         2,
         "a withdrawal outlived the restore and deleted subscriptions"
     );
+    state.note(changed(), false);
+    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
+    assert!(!state.flush(&weak));
+    assert!(intake.try_recv().is_ok(), "delivery resumes once restored");
 
-    // Still ineligible when the lock is had: the listener-only one goes.
+    // Still ineligible when the lock is had: the listener stops and the
+    // listener-only subscription goes.
     refused.store(true, std::sync::atomic::Ordering::SeqCst);
-    super::end_ineligible(&shared, &weak);
+    assert!(super::end_ineligible(&shared, &weak).await);
+    assert!(shared.stop.is_cancelled(), "its listener was not stopped");
     let left = after_withdrawal(&hub).await;
     assert_eq!(
         left,
@@ -270,7 +292,8 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     let dir = tempfile::tempdir().expect("dir");
     let reload = Reload::new(dir.path());
     let registry = Arc::clone(&reload.registry);
-    let ineligible = crate::events::upstream_live_ineligible(Arc::clone(&reload.live));
+    let ineligible =
+        crate::events::upstream_live_ineligible(Arc::clone(&reload.live), Arc::clone(&registry));
 
     // Reload 1 adds `b`, eligible (Streamable HTTP).
     reload.to(true).await;
