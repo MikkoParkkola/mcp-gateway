@@ -493,17 +493,20 @@ async fn another_key_cannot_cancel_or_update_a_running_task() {
         );
     }
 
-    // MIK-7986.XKEY.3: A's task is untouched, and the same calls from A are
-    // not the missing-task answer, so the comparisons above have teeth.
+    // MIK-7986.XKEY.3: A's task is untouched, and each update from A answers
+    // differently from A's same update on a made-up id, so the comparisons
+    // above have teeth. Cancel's own control is A's cancel below.
     assert_eq!(
         status(&read().await),
         Some(json!("working")),
         "key B's attempts must leave key A's task running"
     );
-    let missing = gateway
-        .post(Some(ALPHA), 5, "tasks/cancel", json!({ "taskId": fake }))
-        .await;
-    for (method, params) in mutating_verbs(&task_id).into_iter().skip(1) {
+    for ((method, params), (_, missing_params)) in mutating_verbs(&task_id)
+        .into_iter()
+        .zip(mutating_verbs(&fake))
+        .skip(1)
+    {
+        let missing = gateway.post(Some(ALPHA), 5, method, missing_params).await;
         let own = gateway.post(Some(ALPHA), 6, method, params.clone()).await;
         assert_ne!(
             own.get("error"),
