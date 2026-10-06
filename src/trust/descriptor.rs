@@ -292,6 +292,27 @@ mod tests {
         );
     }
 
+    /// MIK-7916 review: `serde_json` numbers compare `-0.0 == 0.0` yet
+    /// serialise apart, so an equality hit on that change would publish the
+    /// old schema. A schema whose only change is the sign of a zero re-projects.
+    #[test]
+    fn a_schema_changed_only_in_the_sign_of_zero_misses_the_memo() {
+        let (id, name) = ("backend:memo-signed-zero", "memo-signed-zero");
+        let mut zero = tool();
+        zero.input_schema["properties"]["query"]["default"] = json!(0.0);
+        let mut negative = zero.clone();
+        negative.input_schema["properties"]["query"]["default"] = json!(-0.0);
+        let _ = project_tool_descriptors_trust_cards(id, name, std::slice::from_ref(&zero));
+        let listed =
+            project_tool_descriptors_trust_cards(id, name, std::slice::from_ref(&negative));
+        assert_eq!(
+            serde_json::to_string(&listed[0]).unwrap(),
+            serde_json::to_string(&project_tool_descriptor_trust_card(id, name, &negative))
+                .unwrap(),
+            "the listing must serialise exactly as a fresh projection of the changed tool"
+        );
+    }
+
     /// MIK-7916 AC3: the memo is keyed on the whole tool. A change to any one
     /// field, however small, misses and re-projects; a hand-picked subset of
     /// fields would serve a card computed for other content.
