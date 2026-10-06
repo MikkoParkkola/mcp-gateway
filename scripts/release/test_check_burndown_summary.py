@@ -84,6 +84,21 @@ def test_conflicting_duplicate_rows_fail_closed():
     assert problems, "two disagreeing summary rows must not pass"
 
 
+def test_a_duplicate_row_with_extra_whitespace_fails_closed():
+    # MIK-7847.SCRIPT.5: the label count must not need single spaces. Only the
+    # spaced row is duplicated, so nothing else can trip the check.
+    rows = {line.split("|")[1].strip(): line for line in TRACKER.splitlines() if line.startswith("| ")}
+    for label, spaced in (
+        ("Core release criteria", "|  Core release criteria |"),
+        ("Core release criteria", "| Core release criteria  |"),
+        ("Core release criteria", "|\tCore release criteria |"),
+        ("Scope-update criteria", "|  Scope-update criteria   |"),
+    ):
+        extra = rows[label].replace(f"| {label} |", spaced, 1)
+        problems = check.mismatches(check.tracker_counts(TRACKER + extra + "\n"), measured())
+        assert any("more than one summary row" in p for p in problems), (spaced, problems)
+
+
 def test_a_malformed_duplicate_row_fails_closed():
     doubled = TRACKER + TRACKER.replace("| 134 |", "| 135.5 |")
     problems = check.mismatches(check.tracker_counts(doubled), measured())
