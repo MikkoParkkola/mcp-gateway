@@ -356,6 +356,9 @@ async fn t_offer3_a_rate_limited_offer_keeps_todays_text_and_says_retry() {
         assert!(!response.to_string().contains("/journeys/"), "{response}");
         assert_eq!(data["error"]["retryable"], true, "{response}");
         assert!(data["retry_after"].is_number(), "{response}");
+        // Each route may prefix its JSON-RPC code; the text itself is today's.
+        let message = response["error"]["message"].as_str().expect("message");
+        assert!(message.ends_with(ABSENT_TEXT), "{response}");
     }
 }
 

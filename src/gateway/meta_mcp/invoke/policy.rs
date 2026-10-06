@@ -355,6 +355,11 @@ impl MetaMcp {
                             serde_json::to_value(&inspection.findings).unwrap_or_default(),
                         );
                     }
+                    super::gateway_writes::note(
+                        super::gateway_writes::Layer::Value,
+                        &["_security_findings"],
+                        &result,
+                    );
                 }
             }
         }
