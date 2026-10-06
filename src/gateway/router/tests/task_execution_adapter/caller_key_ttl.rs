@@ -106,6 +106,7 @@ async fn a_resumed_call_running_past_the_idle_ttl_keeps_its_caller_key() {
     assert_survives_a_sweep(&lifecycle, &reclaimed);
 
     gate.release();
-    poll_until_terminal(&state, "key-a", &id).await;
+    let settled = poll_until_terminal(&state, "key-a", &id).await;
+    assert_carries_the_backend_result(&settled);
     assert_reclaimed_once_after(&lifecycle, &reclaimed);
 }

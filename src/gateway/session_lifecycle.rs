@@ -545,7 +545,9 @@ mod tests {
     /// A hold asked for while a sweep is freeing that key's state is granted
     /// only once the freeing is done, so the held call's writes come after it.
     /// The handler does not finish until it is told to, so a hold granted
-    /// early is seen early, whatever the scheduler does.
+    /// early is seen as early. A holder thread slower than the 500 ms wait
+    /// can still hide a missing wait (never fail a correct one); the
+    /// handler counts as finished only when told to, not on its timeout.
     #[test]
     fn a_hold_waits_for_a_sweep_already_freeing_its_key() {
         use std::sync::mpsc::{RecvTimeoutError, channel};
@@ -558,8 +560,9 @@ mod tests {
         let done = Arc::clone(&freed);
         lifecycle.register("slow", move |_| {
             started_tx.send(()).expect("test alive");
-            let _ = go_rx.lock().recv_timeout(Duration::from_secs(10));
-            done.store(true, Ordering::SeqCst);
+            if go_rx.lock().recv_timeout(Duration::from_secs(10)).is_ok() {
+                done.store(true, Ordering::SeqCst);
+            }
         });
         lifecycle.track("caller", 0);
         let sweeper = Arc::clone(&lifecycle);
