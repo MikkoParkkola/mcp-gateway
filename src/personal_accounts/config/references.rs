@@ -12,6 +12,20 @@ pub(super) fn is_reference(reference: &str) -> bool {
     reference.starts_with("env:") || reference.starts_with("file:")
 }
 
+/// Every `accounts.keys` entry is an `env:` or `file:` reference. Text only;
+/// run before any key is resolved, so a later malformed key never follows an
+/// earlier read (#2248, MIK-7714).
+pub(super) fn validate_key_references(
+    keys: &std::collections::BTreeMap<String, String>,
+) -> Result<(), AccountsConfigError> {
+    match keys.iter().find(|(_, reference)| !is_reference(reference)) {
+        Some((key_id, _)) => Err(AccountsConfigError::KeyNotAReference {
+            key_id: key_id.clone(),
+        }),
+        None => Ok(()),
+    }
+}
+
 /// The name a resolved reference is reported under: the variable for `env:`,
 /// the whole `file:PATH` text for a file.
 pub(super) fn reference_name(reference: &str) -> &str {
