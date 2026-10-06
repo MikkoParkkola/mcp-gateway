@@ -102,7 +102,7 @@ are covered by the next copy. A copy taken from a host that is already compromis
 the compromised log, and a rotated `shared_secret` makes older signed copies fail their MAC. With a `shared_secret`, the copy carries a MAC: verify with the same secret, or the
 anchor is refused. An anchor older than the retained segments fails with "predates the retained
 range" (for an unsigned log, so does one whose record has just expired); take anchors more often
-than retention expires segments. UPGRADING-4.0 item 155 has the details.
+than retention expires segments. UPGRADING-4.0 item 156 has the details.
 
 ## Restoring
 
