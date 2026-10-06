@@ -5,6 +5,7 @@
 //! check never reaches the backend's wire to warm it.
 use super::*;
 use crate::gateway::authz::ToolAuthorizer;
+use pretty_assertions::assert_eq;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Answers `tools/list` with one tool, counting every request.
