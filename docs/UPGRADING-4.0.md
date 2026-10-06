@@ -4115,7 +4115,7 @@ these callers' old 12-hex principal.
 
 ## 156. `webhooks.base_path` may not overlap a gateway route
 
-**Startup:** no notice, the start is refused with its own error, which names the path and the route; refuses to start
+**Startup:** no notice, the start is refused with its own error, which names the setting and the path, and for an overlap also the route; refuses to start
 
 With the webhook receiver enabled, `webhooks.base_path` is mounted beside the gateway's own
 routes. A path on or under one of them, such as `/mcp/hooks`, put a webhook handler where the
