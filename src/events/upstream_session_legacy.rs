@@ -13,7 +13,7 @@ use super::{Era, OPEN_LIMIT, RELEASE_LIMIT, State};
 use crate::backend::Backend;
 use crate::events::upstream_listener::Shared;
 use crate::events::upstream_need::ledger::{drive, holder_of};
-use crate::transport::upstream_tap::{NoteKind, UpstreamListen, Watched};
+use crate::transport::upstream_tap::{UpstreamListen, Watched};
 
 /// Order `due` (sorted by URI) to start after `last`, wrapping around.
 pub(super) fn resume_after(due: &mut [(String, bool)], last: Option<&str>) {
@@ -26,11 +26,7 @@ pub(super) fn resume_after(due: &mut [(String, bool)], last: Option<&str>) {
 /// The legacy URI filter of `shared`'s need, read at each update (D5).
 pub(super) fn watched_by(shared: &Arc<Shared>) -> Watched {
     let shared = Arc::downgrade(shared);
-    Watched::by(move |uri| {
-        shared
-            .upgrade()
-            .is_some_and(|s| s.need.lock().emits(NoteKind::ResourceUpdated, Some(uri)))
-    })
+    Watched::by(move |uri| shared.upgrade().is_some_and(|s| s.need.lock().watches(uri)))
 }
 
 impl State<'_> {
