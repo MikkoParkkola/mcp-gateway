@@ -78,7 +78,8 @@ fn write_command_config(home: &Path) -> std::path::PathBuf {
         home.join("gateway.yaml"),
         format!(
             "backends:\n  {BACKEND}:\n    command: 'sh \"{}\"'\n",
-            sh_path(&script)
+            // A YAML single-quoted scalar escapes `'` by doubling it.
+            sh_path(&script).replace('\'', "''")
         ),
     )
     .expect("write gateway.yaml");
