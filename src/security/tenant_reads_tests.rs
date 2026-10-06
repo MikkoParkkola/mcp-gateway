@@ -228,10 +228,12 @@ fn concurrent_new_principals_never_pass_the_cap() {
 fn a_key_admitted_meanwhile_is_found_at_a_full_cap() {
     let history = ReadHistory::shared();
     let mut held = fill_live(&history, MAX_PRINCIPALS - 1);
-    held.push(reserve(&history, &tenant("a")));
+    let a = tenant("a");
+    held.push(reserve(&history, &a));
+    let hash = a.tenants.first().expect("one hashed tenant");
     let found = history
         .admit(KEY, history.now(), WINDOW)
-        .map(|principal| principal.holds("a"));
+        .map(|principal| principal.holds(hash));
     assert_eq!(found, Some(true), "KEY is present and live");
     assert_eq!(history.principals.len(), MAX_PRINCIPALS);
     drop(held);
