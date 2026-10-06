@@ -457,6 +457,8 @@ impl<'a> State<'a> {
         }
         debt.due = None;
         self.refill_announces = std::mem::take(&mut debt.unannounced);
+        // A newer notice earns its own retry.
+        debt.retrying &= !self.refill_announces;
         true
     }
 

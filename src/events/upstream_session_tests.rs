@@ -496,6 +496,22 @@ fn a_failed_refill_is_retried_once_after_the_cooldown() {
     state.refill_ended(false);
     assert!(!state.tools_pending, "the retry is silent");
     assert_eq!(due(), None, "a failed retry is not retried again");
+    // A newer notice joining a retry earns its own.
+    shared.tools.lock().due = Some(Instant::now());
+    state.refill_ended(false);
+    {
+        let mut debt = shared.tools.lock();
+        assert!(debt.retrying, "armed");
+        debt.due = Some(Instant::now());
+        debt.unannounced = true;
+    }
+    assert!(state.take_due_refill());
+    state.refill_ended(false);
+    assert!(state.tools_pending, "the joined notice is announced");
+    assert!(
+        due().is_some(),
+        "the joined notice's failed refill is retried"
+    );
 }
 
 /// MIK-8007: a backend gone from the config owes no tools notice; one added
