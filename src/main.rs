@@ -33,11 +33,42 @@ const MAIN_STACK_BYTES: usize = 8 * 1024 * 1024;
 mod runtime;
 use runtime::RuntimeShutdown;
 fn main() -> ExitCode {
+    exit_quietly_when_stdout_is_gone();
     on_main_stack(|| {
         // Parsed here, so the shutdown mode is known before the runtime exists.
         let cli = Cli::parse();
         runtime::block_on(RuntimeShutdown::of(cli.command.as_ref()), run(cli))
     })
+}
+
+/// `mcp-gateway list | head`: once the reader of stdout has gone, `println!`
+/// panics with "failed printing to stdout: Broken pipe", and the release
+/// profile's `panic = "abort"` dumps core. Rust ignores SIGPIPE and restoring
+/// it takes `unsafe`, so the panic is the signal instead: a command whose
+/// reader left has nothing more to say, so it exits with success. Any other
+/// panic, including any other stdout failure, takes the default hook.
+fn exit_quietly_when_stdout_is_gone() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let message = info.payload().downcast_ref::<String>();
+        if message.is_some_and(|message| is_broken_stdout(message)) {
+            std::process::exit(0);
+        }
+        default(info);
+    }));
+}
+
+/// Whether `message` is std's `print!` panic for a broken stdout pipe. The OS
+/// code decides, not the platform's wording: EPIPE on Unix, and
+/// `ERROR_BROKEN_PIPE` or `ERROR_NO_DATA` on Windows, all map to `BrokenPipe`.
+fn is_broken_stdout(message: &str) -> bool {
+    message
+        .strip_prefix("failed printing to stdout: ")
+        .and_then(|cause| cause.rsplit_once("(os error "))
+        .and_then(|(_, code)| code.strip_suffix(')')?.parse::<i32>().ok())
+        .is_some_and(|code| {
+            std::io::Error::from_raw_os_error(code).kind() == std::io::ErrorKind::BrokenPipe
+        })
 }
 
 /// Run `body` on a thread with [`MAIN_STACK_BYTES`] of stack and return its
