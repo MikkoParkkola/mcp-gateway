@@ -49,7 +49,7 @@ mod owner;
 pub(super) mod request_checks;
 mod tasks;
 
-use modern_response::shape_modern_response;
+pub(super) use modern_response::shape_modern_response;
 #[cfg(test)]
 use modern_response::{CACHEABLE_METHODS, build_modern_response};
 pub(super) use owner::owner_of;

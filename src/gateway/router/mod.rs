@@ -30,6 +30,7 @@ use crate::security::firewall::Firewall;
 mod accounts;
 use crate::personal_accounts::AccountHandles;
 pub(crate) use accounts::{ConnectOffers, account_handles_of};
+pub(crate) use handlers::shape_modern_response;
 mod authorization;
 pub use authorization::CallerStanding;
 pub(crate) use authorization::{

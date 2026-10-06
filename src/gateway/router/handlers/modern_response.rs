@@ -7,6 +7,8 @@ use axum::http::StatusCode;
 #[cfg(test)]
 use axum::response::IntoResponse;
 
+use crate::protocol::cacheable::LIST_TTL_MS;
+
 /// Build a response for a request written against 2026-07-28.
 ///
 /// Two differences from the legacy path, and they are the same difference: the
@@ -15,9 +17,9 @@ use axum::response::IntoResponse;
 /// there was no handshake in which to say so.
 /// The methods whose results carry `ttlMs` and `cacheScope`.
 ///
-/// Five, from the `CacheableResult` interface. `server/discover` supports
-/// caching too, but is not in this list — its document is built elsewhere and
-/// the fields are added there when its own scope is decided.
+/// Five, from the `CacheableResult` interface. `server/discover` requires the
+/// fields too, but carries them in its own document (`discover_document`), so
+/// that a discovery answered on any route is valid without this shaping.
 pub(super) const CACHEABLE_METHODS: &[&str] = &[
     "tools/list",
     "prompts/list",
@@ -25,11 +27,6 @@ pub(super) const CACHEABLE_METHODS: &[&str] = &[
     "resources/read",
     "resources/templates/list",
 ];
-
-/// How long a client may consider a list fresh. A freshness hint, not a
-/// promise: `listChanged` notifications remain the authority on change, and
-/// this only stops a client re-listing on every turn.
-pub(super) const LIST_TTL_MS: u64 = 60_000;
 
 // Unit-test adapter only: production must shape before security finalization
 // and serialize afterward without mutating the signed response.
@@ -44,7 +41,10 @@ pub(super) fn build_modern_response(
 }
 
 /// Shape modern metadata before security finalization and signing.
-pub(super) fn shape_modern_response(response: &mut crate::protocol::JsonRpcResponse, method: &str) {
+///
+/// Crate-visible because both transports answer modern requests: stdio
+/// skipping this sent results a 2026-07-28 client rejects (MIK-8009).
+pub(crate) fn shape_modern_response(response: &mut crate::protocol::JsonRpcResponse, method: &str) {
     if let Some(ref mut result) = response.result
         && let Some(object) = result.as_object_mut()
     {

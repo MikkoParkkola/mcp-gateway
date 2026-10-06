@@ -400,12 +400,13 @@ mod http {
 
     #[tokio::test]
     async fn ac_cache_1_a_non_cacheable_result_carries_no_cache_fields() {
-        // The fields belong to five results. Putting them on everything would
-        // tell a client it may cache a tool call.
-        let (_, body) = post_modern("server/discover", 4).await;
+        // The fields belong to five results and discovery. Putting them on
+        // everything would tell a client it may cache any answer.
+        let (_, body) = post_modern("ping", 4).await;
+        assert!(body["result"].is_object(), "ping must answer: {body}");
         assert!(
             body["result"].get("ttlMs").is_none(),
-            "discovery's cache scope is decided with its own document, not here: {body}"
+            "a non-cacheable result must not carry a cache hint: {body}"
         );
     }
 
