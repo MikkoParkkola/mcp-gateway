@@ -206,8 +206,8 @@ fn resolve_resource_origin(config: &Config, bind_origin: Option<&str>) -> Option
 
 /// The authorization servers whose tokens this gateway accepts as bearers
 /// (RFC 9728 section 2): the OIDC issuers of an enabled key server with
-/// `delegated_bearer` on, behind enabled auth, in configured order, blank,
-/// repeated and unpublishable ones dropped. Empty otherwise, and then omitted
+/// `delegated_bearer` on, behind enabled auth and no agent auth, in configured
+/// order, blank, repeated and unpublishable ones dropped. Empty otherwise, and then omitted
 /// from the document: an exchange-only key server accepts no issuer token on
 /// the MCP routes, auth off accepts no token at all, and the gateway itself
 /// serves no authorization-server metadata.
@@ -217,7 +217,13 @@ fn resolve_resource_origin(config: &Config, bind_origin: Option<&str>) -> Option
 /// which issuers are named.
 fn authorization_servers(running: &Config) -> Vec<String> {
     let key_server = &running.key_server;
-    if !(running.auth.enabled && key_server.enabled && key_server.delegated_bearer) {
+    // Agent auth refuses every bearer that is not a registered agent's token,
+    // an OIDC ID token included.
+    if !(running.auth.enabled
+        && !running.agent_auth.enabled
+        && key_server.enabled
+        && key_server.delegated_bearer)
+    {
         return Vec::new();
     }
     let mut issuers: Vec<String> = Vec::new();
@@ -263,6 +269,14 @@ fn is_publishable_issuer(issuer: &str) -> bool {
         .chars()
         .any(|c| c.is_whitespace() || c.is_control() || c == '\\')
     {
+        return false;
+    }
+    // The parser drops empty userinfo (`https://@host`), so look for `@` in
+    // the raw authority, which ends at the first `/`, `?` or `#`.
+    let authority = issuer.split_once("://").map_or("", |(_, rest)| {
+        rest.split(['/', '?', '#']).next().unwrap_or("")
+    });
+    if authority.contains('@') {
         return false;
     }
     let Ok(parsed) = url::Url::parse(issuer) else {

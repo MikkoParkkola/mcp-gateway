@@ -114,9 +114,11 @@ from the gateway's protected-resource metadata
 `key_server.delegated_bearer: true`, every `key_server.oidc[].issuer` is listed
 there in `authorization_servers`, in configured order. Without all three the
 list is empty and left out, because the gateway then accepts no provider token
-on the MCP routes. These settings apply on restart, so the list follows the
+on the MCP routes. With `agent_auth.enabled: true` the list is empty too: agent
+auth refuses every bearer that is not a registered agent's token. These
+settings apply on restart, so the list follows the
 running gateway, not a reloaded file. An issuer that is not an http(s) URL, or
-that carries userinfo, a query or a fragment, is left out and a warning is
+that carries userinfo (even an empty `@`), a query or a fragment, is left out and a warning is
 logged: the endpoint needs no sign-in, and a client cannot use such an issuer.
 
 ```yaml
