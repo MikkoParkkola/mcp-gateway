@@ -16,6 +16,9 @@ use super::*;
 #[derive(Default)]
 struct Fake {
     targets: parking_lot::Mutex<Vec<Target>>,
+    /// Catalogues answered before `targets`, one per call: a reload landing
+    /// between two reads.
+    script: parking_lot::Mutex<VecDeque<Vec<Target>>>,
     denied: parking_lot::Mutex<Vec<String>>,
     answers: parking_lot::Mutex<VecDeque<Value>>,
     calls: parking_lot::Mutex<Vec<(String, Charge)>>,
@@ -24,7 +27,10 @@ struct Fake {
 #[async_trait::async_trait]
 impl WatchHost for Fake {
     fn targets(&self) -> Vec<Target> {
-        self.targets.lock().clone()
+        self.script
+            .lock()
+            .pop_front()
+            .unwrap_or_else(|| self.targets.lock().clone())
     }
     fn may_invoke(&self, holder: &Holder, _target: &Target) -> bool {
         !self.denied.lock().contains(&holder.principal)
@@ -356,9 +362,10 @@ async fn watch_stops_when_its_capability_is_reclassified() {
 }
 
 /// U11: a credential-free capability that starts needing a credential is
-/// re-keyed: its shared poller stops before any call, so one sharer's
-/// credential never answers for every principal, and the subscriptions stay
-/// for the core to restart under the new sharing rule.
+/// reclassified: its shared poller makes no call (one sharer's credential
+/// never answers for every principal) and the type's subscriptions are
+/// withdrawn, as for a side-effecting reclassification. Subscribers
+/// subscribe again under the new class.
 #[tokio::test]
 async fn watch_stops_when_its_capability_changes_credential_class() {
     let dir = tempfile::tempdir().expect("dir");
@@ -367,20 +374,31 @@ async fn watch_stops_when_its_capability_changes_credential_class() {
     let name = "watch.weather.changed";
     admit(&hub, "p", name, &json!({}));
     let poller = run(&hub, &host, "p", name, &json!({}));
-    let fresh = json!({"units": "metric"});
-    admit(&hub, "q", name, &fresh);
     *host.targets.lock() = vec![target("weather", true, CredentialUse::Keyed)];
     let mut last = None;
     assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
     assert!(host.calls.lock().is_empty(), "no call under the new class");
-    let mut left: Vec<String> = hub
-        .store
-        .subscriptions()
-        .into_iter()
-        .map(|s| s.principal)
-        .collect();
-    left.sort();
-    assert_eq!(left, ["p", "q"], "re-keyed, never revoked");
+    assert!(hub.store.subscriptions().is_empty(), "withdrawn");
+}
+
+/// A reclassification read once is confirmed under the lifecycle lock before
+/// anything is withdrawn: a capability that is watchable again by then keeps
+/// its subscriptions, including one admitted after the flip back.
+#[tokio::test]
+async fn a_flip_back_before_the_withdrawal_keeps_every_subscription() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    let name = "watch.weather.changed";
+    admit(&hub, "p", name, &json!({}));
+    let poller = run(&hub, &host, "p", name, &json!({}));
+    admit(&hub, "q", name, &json!({"units": "metric"}));
+    host.script
+        .lock()
+        .push_back(vec![target("weather", true, CredentialUse::Account)]);
+    let mut last = None;
+    poller.once(&hub, &mut last).await;
+    assert_eq!(hub.store.subscriptions().len(), 2, "nothing withdrawn");
 }
 
 /// Keys and digests keep every integer: two arguments that differ past
