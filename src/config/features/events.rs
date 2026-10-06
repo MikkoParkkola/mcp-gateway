@@ -34,6 +34,7 @@ impl Default for EventsRateLimit {
 /// Which built-in sources are on. Webhook events are opt-in per route.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[allow(clippy::struct_excessive_bools)] // config surface: independent on/off source switches
 pub struct EventsSourcesConfig {
     /// Gateway operational events: budgets, backend health, the kill switch.
     /// Off by default.
