@@ -13,7 +13,7 @@ with source files, is in the [OWASP Agentic AI self-assessment](OWASP_AGENTIC_AI
 | Request firewall (`security.firewall`) | Shell injection and path traversal in tool arguments. High-severity findings are blocked and medium ones are logged as warnings |
 | Response firewall | Credentials leaking out in tool results, which are redacted. Prompt-injection text in a result is flagged and stays in place |
 | Memory-poisoning scanner | Control tokens and role-confusion text written through memory tools such as `remember` and `kv_set` |
-| Tool policy | Tools with destructive or dynamic-execution names, which are refused by default |
+| Tool policy (`security.tool_policy`) | A fixed list of high-risk tool names, such as `write_file`, `run_command`, `drop_table` and `shutdown`, is refused. Any other name is allowed unless you add it to the deny list |
 | SSRF guard (`security.ssrf_protection`) | Tool arguments that point the gateway at private, loopback, link-local or cloud-metadata addresses |
 | Tool-description screening | Backend tools whose descriptions carry poisoning patterns. They are withheld from tool lists |
 | Per-caller visibility | A credentialled caller seeing or reaching backends it was not granted, once auth is on |

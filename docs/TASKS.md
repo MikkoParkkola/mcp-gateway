@@ -48,11 +48,32 @@ ignores `task`. The gateway refuses to create a task when:
 |---|---|
 | The tasks extension is not declared | An error whose `data.requiredCapabilities` names the extension |
 | Auth is on and the caller presented no credential, for example on a public `/mcp` | `-32602` "no such task", the same answer as for a task that does not exist |
-| Auth is on and the credential does not establish a verified identity | `-32600` "task creation requires a verified caller identity" |
+| Auth is on and the caller signed in with an API key or the bearer token rather than a key-server (OIDC) token | `-32600` "task creation requires a verified caller identity" |
 | No idempotency key | `-32602` "task creation requires an idempotency key" |
 | The call needs a confirmation and the client did not declare `elicitation` | `-32021` |
 
 ## Follow a task
+
+Every follow-up request carries the same `_meta` as the call that created the task: the
+2026-07-28 protocol version and the tasks extension in the client capabilities. Without the
+extension, the gateway refuses the request.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 11,
+  "method": "tasks/get",
+  "params": {
+    "taskId": "task-…",
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {
+        "extensions": { "io.modelcontextprotocol/tasks": {} }
+      }
+    }
+  }
+}
+```
 
 | Method | Params | What it does |
 |---|---|---|
@@ -112,7 +133,8 @@ A call that is not a task can still report progress and be cancelled:
 
 - **Progress.** Put a `progressToken` in the call's `_meta`. A stdio or WebSocket backend's
   `notifications/progress` for that call reaches you while the call runs, carrying your own
-  token.
+  token. Over HTTP, the request must accept `text/event-stream` for progress to arrive before
+  the result.
 - **Cancel over stdio.** Send `notifications/cancelled` with the request id. The gateway stops
   handling the call at once and never answers it. A backend that has already received the call
   may still finish its own work. If a keyed call is cancelled after it started, a retry with the
