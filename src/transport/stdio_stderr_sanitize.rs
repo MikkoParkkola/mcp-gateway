@@ -94,6 +94,7 @@ fn mask_spans(text: &str, spans: &[(usize, usize)]) -> String {
 }
 
 /// Red stub: keeps every line.
+#[allow(dead_code)]
 pub(super) fn captured_line(_in_block: &mut bool, line: &[u8]) -> Vec<u8> {
     line.to_vec()
 }
