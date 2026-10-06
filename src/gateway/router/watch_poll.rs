@@ -28,6 +28,8 @@ use crate::protocol::RequestId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PollRefused {
     RateLimited,
+    /// The request firewall refused it (only built with the `firewall` feature).
+    #[cfg(feature = "firewall")]
     Firewall,
     /// `MetaMcp`'s tail refused it (grant, kill switch, budget, gates) or the
     /// capability answered with an error.
