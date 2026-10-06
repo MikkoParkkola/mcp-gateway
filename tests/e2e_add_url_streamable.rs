@@ -18,7 +18,6 @@ use std::time::Duration;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
 use serde_json::{Value, json};
 
 const BACKEND: &str = "tidebook";
@@ -102,7 +101,11 @@ async fn add_url_reaches_a_streamable_http_server() {
         .expect("mock server binds");
     let server_url = format!("http://{}/mcp", listener.local_addr().expect("address"));
     let server = tokio::spawn(async move {
-        let _ = axum::serve(listener, axum::Router::new().route("/mcp", post(mcp))).await;
+        let _ = axum::serve(
+            listener,
+            axum::Router::new().route("/mcp", axum::routing::post(mcp)),
+        )
+        .await;
     });
 
     let tmp = tempfile::tempdir().expect("temp root");
