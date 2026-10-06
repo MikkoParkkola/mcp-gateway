@@ -58,7 +58,8 @@ case "${1:-}" in
     echo "pushed $branch = $probe (grading $rev)"
     run=""
     for _ in $(seq 60); do
-      run="$(gh run list -R "$REPO" --branch "$branch" --workflow "Coverage probe" -L 20 \
+      # By file, not by name: older throwaway workflows share the name.
+      run="$(gh run list -R "$REPO" --branch "$branch" --workflow "${PROBE_PATH##*/}" -L 20 \
         --json databaseId,headSha \
         -q "[.[] | select(.headSha == \"$probe\") | .databaseId][0] // empty")"
       [[ -n "$run" ]] && break
