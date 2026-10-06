@@ -6,17 +6,18 @@
 //! `init`'s own "already exists" hint tells the user to run, so examples could
 //! not be turned off at all.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::Path;
 use std::process::Output;
 
 fn init(dir: &Path, flag: Option<&str>) -> Output {
-    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+    let mut command = gateway_bin::command(dir, gateway_bin::Inherit::Environment);
     command
         .arg("init")
         .arg("--output")
-        .arg(dir.join("gateway.yaml"))
-        .env("HOME", dir)
-        .env("MCP_GATEWAY_TEST_HOME_DIR", dir);
+        .arg(dir.join("gateway.yaml"));
     if let Some(flag) = flag {
         command.arg(flag);
     }

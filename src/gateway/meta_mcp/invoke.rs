@@ -404,6 +404,7 @@ impl MetaMcp {
             session_id,
             api_key_name,
             trace_id,
+            caller_key: None,
         })?;
         #[cfg(feature = "cost-governance")]
         let cost_warnings = std::mem::take(&mut admission.warnings);
@@ -624,6 +625,7 @@ impl MetaMcp {
             session_id,
             api_key_name,
             trace_id,
+            caller_key: None,
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
         result = gated;
@@ -739,6 +741,9 @@ mod captured_invoke_tests;
 
 #[cfg(test)]
 mod cancel_settles_tests;
+
+#[cfg(test)]
+mod caller_cost_tests;
 
 #[cfg(test)]
 mod f13_hint_scope_tests;

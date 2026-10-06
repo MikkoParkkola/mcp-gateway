@@ -263,6 +263,7 @@ async fn dispatch(
         return None;
     }
     let authorizer = state.authorizer(owned.authorizer());
+    let _key_hold = owned.hold_caller_key(state);
     let caller = owned.dispatch_context_retrying(state, &authorizer, retry);
     let dispatched = state.meta_mcp().dispatch_below_gate_native_result(
         RequestId::Number(0),
