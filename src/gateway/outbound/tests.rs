@@ -603,9 +603,28 @@ fn a_stream_wrapper_does_not_rescan_the_data_id() {
     let _a = read_a(&fw);
     let data = json!({ "jsonrpc": "2.0", "id": B, "method": "m" });
     match stream_item(&fw, data, "gateway") {
-        Admission::Admitted(frame) => assert_eq!(frame.verdict(), None),
+        Admission::Admitted(frame) => {
+            assert_eq!(frame.verdict(), None);
+            let named = frame.assessment().map(|a| a.attribution.tenants.clone());
+            assert!(
+                named.unwrap_or_default().is_empty(),
+                "nothing is attributed"
+            );
+        }
         Admission::Blocked(e) => panic!("data.id was attributed: {e:?}"),
     }
+}
+
+/// MIK-7942 D6.CATALOGUE.8 pin (green before and after): the response judge
+/// scans placeholders for `result`, so a configured key equal to `result`
+/// must still match a scalar result naming another tenant.
+#[test]
+fn a_scalar_result_under_a_result_key_is_attributed() {
+    let fw = firewall_with(CrossTenantReads::Block, &["customer_id", "result"]);
+    let _a = read_a(&fw);
+    let b = JsonRpcResponse::success(RequestId::Number(5), json!(B));
+    let frame = delivered(&fw, Some(KEY), Payload::Response(b), None, None);
+    assert_eq!(frame.verdict(), Some(ReadVerdict::Blocked));
 }
 
 /// MIK-7942 D6.CATALOGUE.7 pins (green before and after the fix): the wrapper

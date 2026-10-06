@@ -369,17 +369,22 @@ fn a_recorded_prompt_is_classified_without_the_stripped_chain() {
     use crate::security::signature_chain::CHAIN_META;
     let meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     let pii = "Contact: keeper@orchardcoop.fi";
-    let only_in_chain = json!({
-        "contents": [{"uri": "res://orchard", "text": PROSE}],
-        "_meta": {CHAIN_META: {"link": pii}},
-    });
-    let recorded = meta.recorded_prompt(
-        ("alpha", "resources/read"),
-        None,
-        "catalogue",
-        &only_in_chain,
-    );
-    assert!(recorded.get("_context_integrity").is_none(), "{recorded}");
+    // In the chain member, which delivery strips, and in a scope delivery
+    // clamps to `private`.
+    for undelivered in [
+        json!({
+            "contents": [{"uri": "res://orchard", "text": PROSE}],
+            "_meta": {CHAIN_META: {"link": pii}},
+        }),
+        json!({
+            "contents": [{"uri": "res://orchard", "text": PROSE}],
+            "cacheScope": pii,
+        }),
+    ] {
+        let recorded =
+            meta.recorded_prompt(("alpha", "resources/read"), None, "catalogue", &undelivered);
+        assert!(recorded.get("_context_integrity").is_none(), "{recorded}");
+    }
     let delivered = json!({
         "contents": [{"uri": "res://orchard", "text": format!("{PROSE} {pii}")}],
     });
