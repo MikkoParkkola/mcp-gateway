@@ -158,7 +158,7 @@ async fn request_cleans_pending_entry_when_write_fails() {
 
     let result = t.request("tools/list", None).await;
 
-    assert!(matches!(result, Err(Error::Transport(message)) if message == "Not connected"));
+    assert!(matches!(result, Err(Error::TransportConnect(message)) if message == "Not connected"));
     assert!(t.pending.is_empty());
 }
 

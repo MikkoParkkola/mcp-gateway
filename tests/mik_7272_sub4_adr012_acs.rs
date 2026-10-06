@@ -586,11 +586,7 @@ async fn a_post_dispatch_transport_failure_keeps_its_key() {
         StatusCode::OK,
         "the retry must be served the stored terminal, which is an answer: {second}"
     );
-    assert_eq!(
-        second.pointer("/error/message"),
-        first.pointer("/error/message"),
-        "the served terminal must carry the error the first caller saw"
-    );
+    assert_told_uncertain(&first, &second);
 }
 
 /// Row 2c — the same guarantee on the *other* forward arm: a pass-through
@@ -637,11 +633,15 @@ async fn a_passthrough_forward_failure_keeps_its_key() {
         StatusCode::OK,
         "the retry must be served the stored terminal: {second}"
     );
-    assert_eq!(
-        second.pointer("/error/message"),
-        first.pointer("/error/message"),
-        "the served terminal must carry the error the first caller saw"
-    );
+    assert_told_uncertain(&first, &second);
+}
+
+/// MIK-7979: a lost round's retry keeps the first caller's code and is told the
+/// outcome is undetermined, instead of being served that error as a failure.
+fn assert_told_uncertain(first: &Value, second: &Value) {
+    let told = second["error"]["message"].as_str().unwrap_or_default();
+    assert!(told.contains("outcome is unknown"), "{second}");
+    assert_eq!(second["error"]["code"], first["error"]["code"], "{second}");
 }
 
 /// Row 3 — an unannotated `tools/call` that times out reaches the backend

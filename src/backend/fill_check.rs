@@ -375,8 +375,11 @@ pub(crate) fn is_transport_failure(error: &Error) -> bool {
     )
 }
 
+/// The cold tools/list fill ran out of time. Only the read-only tools/list was
+/// sent, never the tools/call it was checking for, so this is a pre-send
+/// refusal that frees the caller's idempotency key (MIK-7979).
 pub(super) fn list_timeout(backend: &str, limit: Duration) -> Error {
-    Error::BackendTimeout(format!(
+    Error::BackendUnavailable(format!(
         "{backend}: tools/list did not finish within {}ms",
         limit.as_millis()
     ))
