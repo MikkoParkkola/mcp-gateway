@@ -380,3 +380,81 @@ async fn an_orphaned_moved_rename_still_discards_its_tombstone() {
         "the tombstone was handed on although the caller had gone"
     );
 }
+
+/// Where `record_cancelled_discard` left the tombstone a cancelled rename handed on.
+static CANCELLED_DISCARDED: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+fn record_cancelled_discard(tombstone: PathBuf) {
+    *CANCELLED_DISCARDED.lock().expect("cancelled lock") = Some(tombstone);
+}
+
+/// Runs `retire` as a rename whose caller is aborted mid-rename, then waits for
+/// the rename to finish and let go of the cache.
+async fn cancelled_rename(dir: &Path, retire: Retired) {
+    let lock = repair_lock(dir);
+    let held = Arc::clone(&lock).lock_owned().await;
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let caller = tokio::spawn({
+        let dir = dir.to_path_buf();
+        async move {
+            retire_cache_dir(
+                &dir,
+                held,
+                move |_| {
+                    started_tx.send(()).expect("the test is listening");
+                    release_rx.recv().expect("the test releases the rename");
+                    retire
+                },
+                record_cancelled_discard,
+            )
+            .await
+        }
+    });
+    tokio::task::spawn_blocking(move || started_rx.recv())
+        .await
+        .expect("the wait does not panic")
+        .expect("the rename starts");
+    caller.abort();
+    let _ = caller.await;
+    release_tx.send(()).expect("the rename is waiting");
+    drop(
+        tokio::time::timeout(Duration::from_secs(5), lock.lock())
+            .await
+            .expect("the cancelled rename ends"),
+    );
+}
+
+/// A refused rename whose caller was cancelled still re-arms the repair.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_refused_rename_re_arms_the_repair() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let dir = temp_root(workspace.path()).join(unique_leaf());
+    assert!(
+        mark_repaired(&dir),
+        "the repair is taken, as a failed start does"
+    );
+
+    cancelled_rename(&dir, Retired::Refused).await;
+
+    assert!(
+        mark_repaired(&dir),
+        "the refused rename re-armed the latch although its caller was cancelled"
+    );
+}
+
+/// A moved tree whose caller was cancelled is still handed on for deletion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_moved_rename_still_discards_its_tombstone() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let dir = temp_root(workspace.path()).join(unique_leaf());
+    let tombstone = temp_root(workspace.path()).join(format!("{}.tombstone-y", unique_leaf()));
+
+    cancelled_rename(&dir, Retired::Moved(tombstone.clone())).await;
+
+    assert_eq!(
+        CANCELLED_DISCARDED.lock().expect("cancelled lock").take(),
+        Some(tombstone),
+        "the tombstone was handed on although the caller was cancelled"
+    );
+}

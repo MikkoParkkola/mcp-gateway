@@ -132,11 +132,15 @@ async fn a_late_failure_records_the_ending_of_the_child_it_killed() {
         None,
     );
 
-    transport
+    let error = transport
         .start()
         .await
         .expect_err("a refused handshake cannot start");
 
+    assert!(
+        matches!(error, crate::Error::Protocol(_)),
+        "the start failed on the refused handshake, not on a timeout: {error:?}"
+    );
     assert!(
         transport.exit_status().is_some(),
         "the child the failure killed has an ending to report, not \"running\""
