@@ -301,3 +301,28 @@ async fn the_proxied_client_refuses_a_hop_to_cleartext_loopback() {
     );
     assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
+
+/// The send-time backstop: the client a request goes through refuses a
+/// cleartext URL off this machine whatever checked it before, and still
+/// serves `https://` and `http://` loopback.
+#[test]
+fn the_send_client_refuses_cleartext_off_machine_on_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let client = OAuthClient::with_destination(
+        DestinationPolicy::Configured,
+        reqwest::Client::new(),
+        "backstop-backend".to_string(),
+        "https://resource.example/mcp".to_string(),
+        vec![],
+        storage,
+        OAuthClientConfig::default(),
+    );
+    let refused = client
+        .client_for("http://auth.example/token")
+        .map(|_| ())
+        .expect_err("cleartext off this machine is refused at send time");
+    assert!(is_ssrf_refusal(&refused), "{refused:?}");
+    assert!(client.client_for("https://auth.example/token").is_ok());
+    assert!(client.client_for("http://127.0.0.1:9/token").is_ok());
+}
