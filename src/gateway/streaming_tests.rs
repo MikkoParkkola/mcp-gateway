@@ -552,11 +552,40 @@ async fn a_withheld_request_fails_its_waiter_at_once() {
         () = read => panic!("the stream ended"),
     };
     assert!(
-        matches!(answer, Ok(Err(_))),
+        matches!(
+            answer,
+            Ok(Err(crate::gateway::proxy::SamplingError::SendFailed))
+        ),
         "the waiter was not failed at once: {answer:?}"
     );
     assert!(
         log.append_attempts_for_test() >= 1,
         "no record was attempted"
+    );
+}
+
+/// MIK-7975 WAIT.1, the bridge's sender: a bridged request withheld at write
+/// ends its wait at once, as a wait nothing came back to. Not `NoSession`:
+/// the legacy bridge reads that as "no session at all" and re-asks round one.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_withheld_bridged_request_ends_its_wait_at_once() {
+    use crate::gateway::input_bridge::{ClientChannel, DeliveryError};
+    use crate::gateway::proxy::ProxyManager;
+    use futures::StreamExt;
+
+    let (_dir, log, multiplexer, id, mut body) = judged_sse();
+    log.set_append_failure_for_test(true);
+    let proxy = ProxyManager::new(Arc::clone(&multiplexer));
+    let params = json!({"customer_id": "cust-b"});
+    let asked = proxy.send_request(&id, "bridge-1", "elicitation/create", Some(params));
+    let read = async { while body.next().await.is_some() {} };
+    let answer = tokio::select! {
+        answer = tokio::time::timeout(Duration::from_secs(5), asked) => answer,
+        () = read => panic!("the stream ended"),
+    };
+    assert!(
+        matches!(answer, Ok(Err(DeliveryError::TimedOut))),
+        "the bridged wait was not ended at once: {answer:?}"
     );
 }

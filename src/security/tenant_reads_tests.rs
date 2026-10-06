@@ -207,6 +207,11 @@ fn concurrent_new_principals_never_pass_the_cap() {
             "round {round}: {} principals, cap {MAX_PRINCIPALS}",
             history.principals.len()
         );
+        assert_eq!(
+            admitted.iter().filter(|a| a.is_some()).count(),
+            1,
+            "round {round}: the one free place is taken exactly once"
+        );
         drop((held, admitted));
     }
 }
