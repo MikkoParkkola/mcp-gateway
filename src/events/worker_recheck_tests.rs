@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::{
-    EventsHub, Flipping, audit_actions, counting_callback, descriptor, logged_services, queued_with,
+    EventsHub, audit_actions, counting_callback, descriptor, logged_services, queued_with,
 };
 use crate::config::{ApiKeyConfig, ApiKeyKind, Config, api_key_digest_spec};
 use crate::events::records::ApiKeyRef;
@@ -19,6 +19,8 @@ const SECRET: &str = "recheck-secret";
 fn open_hub(dir: &std::path::Path) -> Arc<EventsHub> {
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
+        // Priced, so a charge would show in the budget's registry.
+        cost_per_delivery_usd: 0.01,
         ..crate::config::EventsConfig::default()
     };
     EventsHub::open(&config, dir).expect("hub")
@@ -90,7 +92,10 @@ async fn access_lost_during_the_second_verdict_is_not_sent() {
             release: tokio::sync::Notify::new(),
         });
         hub.register_source(Arc::clone(&source) as Arc<dyn crate::events::EventSource>);
-        let services = logged_services(dir.path());
+        #[allow(unused_mut, reason = "set only with cost-governance")]
+        let mut services = logged_services(dir.path());
+        #[cfg(feature = "cost-governance")]
+        let registry = super::budgeted(&mut services);
         services.live.set(keyed());
         let (port, accepted) = counting_callback().await;
         queued_with(&hub, port, "evt_key", "probe.park", |sub, _| {
@@ -120,10 +125,20 @@ async fn access_lost_during_the_second_verdict_is_not_sent() {
             !revoke,
             "sent only while the grant stands (revoke {revoke})"
         );
+        #[cfg(feature = "cost-governance")]
+        assert_eq!(
+            registry.snapshot().contains_key("events:probe.park"),
+            !revoke,
+            "charged only when sent (revoke {revoke})"
+        );
         if revoke {
             let ended = audit_actions(dir.path(), "events.delivery_outcome");
             assert_eq!(ended.len(), 1, "{ended:?}");
             assert_eq!(ended[0]["status"], "access_revoked");
+            assert!(
+                hub.store.subscriptions().is_empty(),
+                "the refused subscription is revoked"
+            );
         }
     }
 }
@@ -229,8 +244,8 @@ async fn a_refusal_after_the_tenant_read_record_releases_the_frame() {
 
     let dir = tempfile::tempdir().expect("dir");
     let hub = open_hub(dir.path());
-    let source = Arc::new(Flipping {
-        admits: 1,
+    let source = Arc::new(AfterTenantRecord {
+        log: dir.path().join("audit.jsonl"),
         asked: AtomicUsize::new(0),
     });
     hub.register_source(Arc::clone(&source) as Arc<dyn crate::events::EventSource>);
@@ -249,13 +264,18 @@ async fn a_refusal_after_the_tenant_read_record_releases_the_frame() {
     let mut services = logged_services(dir.path());
     services.firewall = Some(firewall);
     let (port, accepted) = counting_callback().await;
-    queued_with(&hub, port, "evt_tenant", "probe.flip", |sub, record| {
+    queued_with(&hub, port, "evt_tenant", "probe.after", |sub, record| {
         sub.read_key = Some("k".to_owned());
         // {"data":{"repo":"t1"}}: a read the guard attributes to tenant t1.
         record.body_b64 = "eyJkYXRhIjp7InJlcG8iOiJ0MSJ9fQ==".to_owned();
     });
     let held_before = reads.tenants_held("k");
-    hub.attempt(&services, "evt_tenant").await;
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        hub.attempt(&services, "evt_tenant"),
+    )
+    .await
+    .expect("the attempt finished");
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     assert_eq!(source.asked.load(Ordering::SeqCst), 2, "asked again");
@@ -320,4 +340,39 @@ async fn the_lookup_budget_is_per_attempt() {
         4 * one,
         "the next attempt reads again"
     );
+}
+
+/// Admits until the attempt's `tenant_read` record is in the audit log, then
+/// refuses: a check made before admit_delivery wrote that record admits, so a
+/// second verdict moved ahead of it would send (MIK-7922 TEST.3).
+struct AfterTenantRecord {
+    log: std::path::PathBuf,
+    asked: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl crate::events::EventSource for AfterTenantRecord {
+    fn kind(&self) -> SourceKind {
+        SourceKind::RestWatch
+    }
+    fn descriptors(&self) -> Vec<crate::events::types::EventDescriptor> {
+        vec![descriptor("probe.after", SourceKind::RestWatch)]
+    }
+    fn matches(
+        &self,
+        _principal: &str,
+        _arguments: &serde_json::Value,
+        _event: &crate::events::fanout::SourceEvent,
+    ) -> bool {
+        true
+    }
+    async fn authorize(&self, _p: &str, _n: &str, _a: &serde_json::Value) -> Result<(), RpcError> {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        let log = std::fs::read_to_string(&self.log).unwrap_or_default();
+        if log.contains("\"event\":\"tenant_read\"") {
+            Err(RpcError::forbidden())
+        } else {
+            Ok(())
+        }
+    }
 }
