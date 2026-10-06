@@ -39,6 +39,7 @@
 //!     &config,
 //!     env,
 //!     None, // no identity-grant sink: grants are not reloaded
+//!     None, // no capability backend to announce listing changes for
 //!     shutdown_tx.subscribe(),
 //! );
 //! # });

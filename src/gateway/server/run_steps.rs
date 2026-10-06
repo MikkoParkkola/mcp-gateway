@@ -226,6 +226,7 @@ impl Gateway {
         &self,
         live_config: &Arc<LiveConfig>,
         identity_grant_sink: Option<Arc<IdentityGrantSink>>,
+        capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
         shutdown_tx: &tokio::sync::broadcast::Sender<()>,
         warmer: &WarmerGuard,
     ) -> Option<ConfigWatcher> {
@@ -237,6 +238,7 @@ impl Gateway {
                 &self.config,
                 Arc::clone(&self.env),
                 identity_grant_sink,
+                capabilities,
                 shutdown_tx.subscribe(),
                 Some(warmer.hook()),
             ) {

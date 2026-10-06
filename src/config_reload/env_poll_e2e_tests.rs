@@ -48,6 +48,7 @@ fn start(root: &Path, env_paths: Vec<PathBuf>) -> Started {
         &Config::default(),
         Arc::clone(&env),
         None,
+        None,
         shutdown_rx,
     )
     .expect("the watcher starts");

@@ -680,8 +680,13 @@ impl Gateway {
         // active. MIK-6750 r4: starting it earlier would let a startup-time
         // reload move `live_config` before the snapshot, surfacing a
         // never-bound host/port in the advertised resource.
-        let _config_watcher: Option<ConfigWatcher> =
-            self.start_config_watcher(&live_config, identity_grant_sink, &shutdown_tx, &warmer);
+        let _config_watcher: Option<ConfigWatcher> = self.start_config_watcher(
+            &live_config,
+            identity_grant_sink,
+            meta_mcp.get_capabilities(),
+            &shutdown_tx,
+            &warmer,
+        );
 
         // Start health check task. Shared with `run_stdio` for the same reason
         // the idle reaper is: a setting that works in one serve mode and
