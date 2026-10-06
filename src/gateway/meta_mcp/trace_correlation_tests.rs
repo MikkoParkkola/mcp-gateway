@@ -107,6 +107,7 @@ fn ctx() -> MetaMcpCallerContext<'static> {
         caller_key: None,
         verified_identity: None,
         is_admin: false,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,

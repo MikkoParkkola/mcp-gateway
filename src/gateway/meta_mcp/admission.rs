@@ -521,7 +521,14 @@ impl MetaMcp {
                 server,
                 tool,
                 &operation_arguments,
-                || self.meta_representation(tool_name, full, session, arm_key),
+                || {
+                    // A stored answer's recovery hint names this caller's meta-tools,
+                    // so a replay under another surface is a different answer (MIK-7974).
+                    let mut representation =
+                        self.meta_representation(tool_name, full, session, arm_key);
+                    representation["surface"] = json!(format!("{:?}", self.hint_surface(caller)));
+                    representation
+                },
                 id,
             );
         }

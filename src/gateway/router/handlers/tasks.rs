@@ -264,6 +264,7 @@ fn with_policy_caller<R>(
         caller_key: Some(caller_key.as_str()).filter(|key| !key.is_empty()),
         verified_identity: caller.verified_identity,
         is_admin: caller.is_admin,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: caller.input_capabilities,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         retry: &crate::protocol::mrtr::NO_RETRY,

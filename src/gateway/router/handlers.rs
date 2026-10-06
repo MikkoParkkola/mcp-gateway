@@ -31,9 +31,8 @@ use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::outbound::{OutboundReply, gateway_reply, judged_reply, stream_reply};
-use crate::gateway::session_id::session_fp;
-use crate::gateway::session_lifecycle;
 use crate::gateway::streaming::create_sse_response;
+use crate::gateway::{recovery::SurfaceRequest, session_id::session_fp, session_lifecycle};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
@@ -1625,6 +1624,7 @@ async fn meta_mcp_dispatch(
                 caller_key: Some(caller_key.as_str()).filter(|key| !key.is_empty()),
                 verified_identity: verified_identity.as_ref(),
                 is_admin: client.as_ref().is_some_and(|c| c.admin),
+                surface_request: SurfaceRequest::from_url(code_mode_url_active),
                 input_capabilities: declared_capabilities,
                 retry: &retry,
                 // Already derived at the top of this handler from the

@@ -493,14 +493,14 @@ impl MetaMcp {
         }
         let mut answered = mcp_backend && dispatch_result.is_ok();
         let mut result = match dispatch_result {
-            Ok(value) => attach_tool_error_recovery(value, tool, server, self.hint_surface()),
+            Ok(value) => attach_tool_error_recovery(value, tool, server, self.hint_surface(caller)),
             Err(e) => {
                 self.settle_dispatch_error(
                     e,
                     caller_credential.managed.as_ref(),
                     &mut idem_reservation,
                     verified_identity,
-                    (server, tool),
+                    (server, tool, self.hint_surface(caller)),
                 )
                 .await?
             }

@@ -218,6 +218,7 @@ impl OwnedCallerContext {
             caller_key: self.caller_key.as_deref(),
             verified_identity: self.verified_identity.as_ref(),
             is_admin: self.is_admin,
+            surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
             input_capabilities: self.input_capabilities,
             confirmation: ConfirmationChannel::Unavailable,
             retry,

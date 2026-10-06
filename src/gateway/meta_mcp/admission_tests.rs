@@ -94,6 +94,7 @@ fn context<'a>(policy: &'a MutablePolicy, retry: &'a RetryFields) -> MetaMcpCall
         caller_key: None,
         verified_identity: None,
         is_admin: false,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         retry,

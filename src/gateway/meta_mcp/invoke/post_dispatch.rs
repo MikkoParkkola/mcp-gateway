@@ -74,7 +74,7 @@ impl MetaMcp {
         managed: Option<&crate::personal_accounts::ManagedLease>,
         idem_reservation: &mut Option<IdempotencyReservation>,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
-        (server, tool): (&str, &str),
+        (server, tool, surface): (&str, &str, MetaSurface),
     ) -> Result<Value> {
         // A11-c: a 401 on a managed credential forces at most one
         // refresh, then either asks the user to reconnect (an offer,
@@ -112,7 +112,7 @@ impl MetaMcp {
         // The error budget already counted this failure (the shared
         // accounting stage).  The idempotency reservation is left
         // for the commit below unless the refusal was pre-dispatch.
-        Ok(dispatch_error_result(&e, tool, server, self.hint_surface()))
+        Ok(dispatch_error_result(&e, tool, server, surface))
     }
 
     #[cfg(feature = "cost-governance")]

@@ -202,7 +202,12 @@ impl MetaMcp {
             Err(e) => {
                 let managed = caller_credential.managed.as_ref();
                 match self
-                    .answer_refused_fill((server, tool), e, managed, checked_at)
+                    .answer_refused_fill(
+                        (server, tool),
+                        e,
+                        managed,
+                        (checked_at, self.hint_surface(caller)),
+                    )
                     .await
                 {
                     Ok((value, _)) => Some(value),
