@@ -236,7 +236,9 @@ impl CronExpression {
             && self.hour.matches(hour)
             && self.day.matches(day)
             && self.month.matches(month)
-            && (self.weekday.matches(weekday) || self.weekday.matches(weekday + 7))
+            // 7 is Sunday's alias only: `*/2` must not admit every day by
+            // also testing weekday + 7.
+            && (self.weekday.matches(weekday) || (weekday == 0 && self.weekday.matches(7)))
     }
 }
 
