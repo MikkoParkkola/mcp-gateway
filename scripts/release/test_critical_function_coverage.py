@@ -440,6 +440,44 @@ class HeadLineCalls(unittest.TestCase):
         shadowed = self.graded_with("macro_rules /* c */ ! format { ($($t:tt)*) => { tracing::debug!($($t)*) } }\n", '    let s = format!("{}", clean(x));\n')
         self.assertEqual(len(shadowed[9]), 1)
 
+    def test_a_macro_split_across_lines_is_unverifiable(self):
+        # MIK-7864: with the name and the delimiter on different lines, a scan
+        # of one line at a time sees no call on either.
+        for body in [
+            "    hidden\n        !(clean(x));\n",
+            "    hidden!\n        (clean(x));\n",
+            "    debug\n        !(url = %clean(x));\n",
+        ]:
+            with self.subTest(body=body):
+                result = self.grade(body, {2: 1, 3: 1})
+                self.assertEqual(result[4], [2, 3])
+                self.assertEqual(
+                    result[9], ["src/lib.rs:2 (head count 1)", "src/lib.rs:3 (head count 1)"]
+                )
+        # Control: a known-safe macro split the same way is graded by its counts.
+        safe = self.grade('    let s = format\n        !("{}", x);\n', {2: 1, 3: 1})
+        self.assertEqual((safe[0], safe[9]), ("ok", []))
+
+    def test_a_qualified_macro_is_not_a_safe_built_in_by_its_name(self):
+        # MIK-7864: `other::format!` is some crate's macro, not `format!`.
+        for line in [
+            '    let s = other::format!("{}", clean(x));\n',
+            '    let s = ::other::format!("{}", clean(x));\n',
+            '    let v = my_crate::json!({ "a": clean(x) });\n',
+        ]:
+            with self.subTest(line=line):
+                self.assertEqual(self.graded_with("", line)[4], [2])
+        # Control: the standard crates' paths, and serde_json's json!, stay safe.
+        for line in [
+            '    let s = std::format!("{}", clean(x));\n',
+            '    let s = ::core::format_args!("{}", clean(x));\n',
+            '    let v = serde_json::json!({ "a": clean(x) });\n',
+            '    telemetry_metrics::counter!("hits", "k" => clean(x)).increment(1);\n',
+        ]:
+            with self.subTest(line=line):
+                result = self.graded_with("", line)
+                self.assertEqual((result[0], result[9]), ("ok", []))
+
     def graded_with(self, header, body):
         source = header + "fn logs(x: u8) -> bool {\n" + body + "    x > 0\n}\n"
         first = header.count("\n") + 1
