@@ -611,7 +611,8 @@ fn cost_suggestion(body: &str) -> Value {
 }
 
 /// MIK-7991 (R4): a plan step's cache entry holds only that step's writes.
-/// Step A (`send`) gets the gateway's suggestion; step B (`read`) answers
+/// Step A (`send`, unlike the first send so not a cache hit) gets the
+/// gateway's suggestion; step B (`read`) answers
 /// with a backend member equal to it. A later hit on B's entry keeps that
 /// backend member in the receipt, so relaying it is refused.
 #[cfg(feature = "cost-governance")]
@@ -625,7 +626,7 @@ async fn meta_chain_step_entry_holds_only_its_own_writes() {
     answer["_cost_suggestion"] = cost_suggestion(&sent);
     fx.answer_read(Read::Raw(answer));
     let chain = json!({"chain": [
-        {"tool": "alpha:send", "arguments": {"text": "hello"}},
+        {"tool": "alpha:send", "arguments": {"text": "hello again"}},
         {"tool": "alpha:read", "arguments": {}}
     ]});
     let (_, body) = post(&fx, Some("a"), "gateway_execute", &chain, &json!({})).await;
