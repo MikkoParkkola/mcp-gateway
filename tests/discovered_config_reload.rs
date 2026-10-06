@@ -10,6 +10,9 @@
 //! `MCP_GATEWAY_*` variable. Waits are on completion lines, never trigger
 //! lines, and edits are sequential, so one reload never absorbs the next edit.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -17,6 +20,8 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::process::{Child, Command};
+
+use gateway_bin::{ANY_PORT, reported_port};
 
 /// Start-up, including a cold binary on a shared runner.
 const STARTUP: Duration = Duration::from_secs(60);
@@ -29,10 +34,6 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 const CONFIG_RELOADED: &str = "Config reload: complete";
 const ENV_RELOADED: &str = "Config reload: env file changed, reloaded";
 const RELOAD_TOOL: &str = "gateway_reload_config";
-
-/// `server.port: 0`: the child binds an OS-chosen port and logs the one it
-/// got, so no port is picked here and dropped before the child binds it.
-const ANY_PORT: u16 = 0;
 
 fn write_owner_only(path: &Path, text: &str) {
     if let Some(dir) = path.parent() {
@@ -67,53 +68,16 @@ fn http_config(port: u16, env_file: &str, auth: bool, backend: bool) -> String {
 
 /// The child's command: own cwd and HOME, a state dir inside `home`, INFO logs.
 fn gateway_command(cwd: &Path, home: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-    for (name, _) in std::env::vars_os() {
-        if name.to_string_lossy().starts_with("MCP_GATEWAY_") {
-            command.env_remove(name);
-        }
-    }
+    let mut command = Command::from(gateway_bin::command(
+        home,
+        gateway_bin::Inherit::Environment,
+    ));
     command
         .current_dir(cwd)
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .env("MCP_GATEWAY_TEST_HOME_DIR", home)
         .env("MCP_GATEWAY_CONFIG_DIR", home.join("state"))
         .env("RUST_LOG", "info")
         .kill_on_drop(true);
     command
-}
-
-/// The port in the gateway's `Listening` banner line, with terminal colour
-/// codes stripped (their digits are not part of the port). The last `port`
-/// on the line is the field; the module path before it can contain the word.
-fn reported_port(log: &str) -> Option<u16> {
-    // Only a line already ended by a newline: the child may be mid-write, and
-    // a prefix such as `port=39` would parse as a wrong port.
-    let line = log
-        .split_inclusive('\n')
-        .filter(|line| line.ends_with('\n'))
-        .find(|line| line.contains("Listening") && line.contains("port"))?;
-    let mut plain = String::new();
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        if c == '\u{1b}' {
-            for skipped in chars.by_ref() {
-                if skipped.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            plain.push(c);
-        }
-    }
-    let rest = &plain[plain.rfind("port")? + "port".len()..];
-    let digits: String = rest
-        .chars()
-        .skip_while(|c| !c.is_ascii_digit())
-        .take_while(char::is_ascii_digit)
-        .collect();
-    digits.parse().ok()
 }
 
 /// An HTTP gateway whose stdout and stderr go to one log file.

@@ -5,6 +5,9 @@
 //! No `AppState` or signer is installed by this fixture: the shipped binary reads
 //! its isolated YAML and runs its production constructor.
 
+#[path = "gateway_bin.rs"]
+pub(crate) mod gateway_bin;
+
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, RwLock};
@@ -137,17 +140,13 @@ pub fn fixture_config(backend_url: &str) -> Value {
 }
 
 pub fn child_command(directory: &Path, config_path: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+    let mut command = Command::from(gateway_bin::command(
+        directory,
+        gateway_bin::Inherit::Nothing,
+    ));
     command
-        .env_clear()
-        .env("HOME", directory)
-        // Windows resolves home through the Known Folder API, not HOME: the
-        // debug build's override isolates the child's default task store too.
-        .env("MCP_GATEWAY_TEST_HOME_DIR", directory)
         .env("XDG_CONFIG_HOME", directory.join(".config"))
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        // Winsock cannot initialise without SystemRoot (os error 10106); unset off Windows.
-        .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
         .current_dir(directory)
         .arg("--config")
         .arg(config_path)
@@ -193,7 +192,7 @@ impl HttpGateway {
         .expect("write gateway config");
         let log = std::fs::File::create(directory.path().join("gateway.log")).expect("gateway log");
         let mut command = child_command(directory.path(), &config_path);
-        command.envs(env.iter().copied());
+        command.envs(gateway_bin::checked_env(env.iter().copied()));
         command
             .stdin(Stdio::null())
             .stdout(Stdio::from(log.try_clone().expect("clone gateway log")))

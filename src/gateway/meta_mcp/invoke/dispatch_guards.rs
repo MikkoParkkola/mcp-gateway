@@ -21,6 +21,9 @@ pub(crate) struct BackendCall<'a> {
     pub session_id: Option<&'a str>,
     pub api_key_name: Option<&'a str>,
     pub trace_id: &'a str,
+    /// The router's caller key, for a session-less call's own spend record
+    /// (MIK-7653). `None` where no spend is recorded, or the caller is keyless.
+    pub caller_key: Option<&'a str>,
 }
 
 /// What admitting one backend call leaves behind: the warnings for its result
@@ -191,11 +194,23 @@ impl MetaMcp {
         if !spend {
             return;
         }
-        if let Some(sid) = call.session_id {
-            // token_count 0: a backend tool call runs no model inference.
-            self.cost_tracker.record(
-                sid,
-                call.api_key_name,
+        // token_count 0: a backend tool call runs no model inference. A call
+        // with no session still counts: `record` keeps "" out of any session.
+        let session = call.session_id.unwrap_or_default();
+        self.cost_tracker.record(
+            session,
+            call.api_key_name,
+            call.server,
+            call.tool,
+            0,
+            crate::cost_accounting::DEFAULT_PRICE_PER_MILLION,
+        );
+        // Only session-less spend needs this: a session's report covers its own.
+        if session.is_empty()
+            && let Some(key) = call.caller_key.filter(|key| !key.is_empty())
+        {
+            self.cost_tracker.record_caller(
+                key,
                 call.server,
                 call.tool,
                 0,
