@@ -359,6 +359,7 @@ struct Pending {
     since: Instant,
 }
 
+#[allow(clippy::struct_excessive_bools)] // Each flag is an independent fact about the current stream.
 struct State<'a> {
     shared: &'a Arc<Shared>,
     era: Era,
