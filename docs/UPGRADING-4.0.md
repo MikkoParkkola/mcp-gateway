@@ -175,6 +175,8 @@ backend" and "fails a capability file" first.**
 | 148 | An `http_url` backend with no `streamable_http` key POSTs `initialize` first and falls back to the legacy SSE `GET` only when that POST is refused with a 4xx that is not about the credential or a retry (any but 401, 403, 407, 408, 429); `add --url` no longer writes `streamable_http: false`. An explicit `true` or `false` is tried first, and when the server refuses it with such a 4xx the other transport is tried once, with a warning naming the backend and the value to set. `TransportConfig::Http::streamable_http` is now `Option<bool>` | None. A config the old `add --url` wrote keeps working; to skip the refused request, set the value the warning names or remove the key. A backend with the key unset is refused MCP Events even when it connects over Streamable HTTP, since eligibility is read from config: set `streamable_http: true` to offer them |
 | 149 | A meta-tool result whose payload says `isError: true` (a failed `gateway_invoke`, or a backend's own tool error) carries `isError: true` on the outer `tools/call` result; it was always `false`, with the failure only in the text | A client that read failure from the text alone keeps working; one that treated `isError: true` as a protocol failure should read the text and its `recovery` hint instead |
 | 150 | `mcp_gateway::cli::invoke::resolve_args` takes a fourth parameter, `kv_schema: Option<&Value>`: `key=value` text is typed by that input schema; `None` keeps the old behaviour | An embedder passes the tool's input schema, or `None` |
+| 151 | Reserved: lands with #3125 | None yet |
+| 152 | A same-key retry after a lost round (a broken stream, a timeout, a reload stopping the backend mid-call, an HTTP 5xx, or a 400, 401, 403, 404, 407, 408, 429 or session-expiry answer) is served the uncertain-outcome notice instead of the original error; `BackendUnavailable` frees the key | A client that read a served error as "the work failed" treats the notice as "may have run" and checks before re-issuing under a new key |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4010,6 +4012,31 @@ hint instead.
 gateway call coerces it (`count=007` against an integer is `7`, `flag=TRUE` against a boolean is
 `true`, `zip=007` against a string stays `"007"`); JSON from `--args` or stdin is left as
 written. `None` keeps the old behaviour. `mcp-gateway invoke` passes the tool's schema.
+
+## 152. A retry after a lost round is told the outcome is uncertain
+
+**Startup:** no notice
+
+A call that carries an idempotency key and fails after its request may have
+reached the backend keeps its key settled, so a same-key retry never runs the
+work twice. What the retry is served changed:
+
+- When nothing that came back shows whether the work ran (a broken stream, a
+  timeout, a config reload stopping the backend mid-call, an HTTP 5xx, or an
+  HTTP 400, 401, 403, 404, 407, 408, 429 or session-expiry answer), the retry
+  gets the uncertain-outcome notice under the first caller's error code. It
+  used to get the original error, which read as "the work failed".
+- An answer that shows the outcome (a JSON-RPC error, or any other HTTP 4xx
+  refusal) is served as before.
+- A backend that could not take the request (`BackendUnavailable`, a cold
+  `tools/list` timeout, a stdio backend with no writer) frees the key, and the
+  retry runs. Freeing it is safe because the request never left the gateway: a
+  cold `tools/list` timeout sent only the read-only `tools/list`, never the
+  `tools/call`.
+
+Library users: `Error::is_pre_dispatch` is `true` for `BackendUnavailable`, and
+`security::safe_http_status_error` returns `TransportPermanent` for the 4xx
+refusals above. `chains` retries `BackendUnavailable`. See ADR-012.
 
 ## Upgrading from 3.5.x: a walkthrough
 
