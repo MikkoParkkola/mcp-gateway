@@ -36,39 +36,60 @@ CARGO_TEST = re.compile(r"^\s*cargo\s+test(\s+--lib)?\s+([A-Za-z_][A-Za-z0-9_]*)
 TEST_FN = re.compile(r"#\[(?:tokio::)?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)")
 # A matrix row: `| ASI01 | <risk> | <STATUS> | ...`.
 MATRIX_ROW = re.compile(r"^\|\s*(ASI\d{2})\s*\|[^|]*\|\s*(COVERED|PARTIAL|GAP)\s*\|", re.M)
-# The headline: `**3/10 COVERED, 7/10 PARTIAL**`.
-HEADLINE = re.compile(r"\*\*((?:\d+/\d+ [A-Z]+(?:, )?)+)\*\*")
-HEADLINE_PART = re.compile(r"(\d+/\d+) (COVERED|PARTIAL|GAP)")
+# The headline: a bold run naming a status, e.g. `**3/10 COVERED, 7/10 PARTIAL**`.
+HEADLINE = re.compile(r"\*\*([^*]*\b(?:COVERED|PARTIAL|GAP)\b[^*]*)\*\*")
+# One status in the headline. `HEADLINE_STATUS` finds every status named, so a
+# status whose count does not parse is reported rather than skipped.
+HEADLINE_PART = re.compile(r"(\d+)\s*/\s*(\d+)\s+(COVERED|PARTIAL|GAP)\b")
+HEADLINE_STATUS = re.compile(r"\b(COVERED|PARTIAL|GAP)\b")
 # A summary row: `| COVERED | 3/10 | ASI01, ASI02, ASI08 |`.
-SUMMARY_ROW = re.compile(r"^\|\s*(COVERED|PARTIAL|GAP)\s*\|\s*(\d+/\d+)\s*\|\s*([^|]*?)\s*\|", re.M)
+SUMMARY_ROW = re.compile(r"^\|\s*(COVERED|PARTIAL|GAP)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|", re.M)
+COUNT = re.compile(r"^(\d+)\s*/\s*(\d+)$")
+RISK = re.compile(r"ASI\d{2}")
 
 
 def count_problems(text: str) -> list[str]:
     """The headline and the summary table must say what the matrix rows say.
 
     The rows are the assessment; every count is derived from them, so a count
-    edited on its own is reported against the rows rather than trusted.
+    edited on its own is reported against the rows rather than trusted. Counts
+    are read whatever their spacing, and one that cannot be read is reported.
     """
     rows = MATRIX_ROW.findall(text)
+    headlines = HEADLINE.findall(text)
+    summaries = SUMMARY_ROW.findall(text)
     if not rows:
-        return []
+        return ["counts are claimed but no matrix rows were found"] if headlines or summaries else []
+    if not headlines:
+        return ["no header count found for the matrix rows"]
     by_status: dict[str, list[str]] = {}
     for risk, status in rows:
         by_status.setdefault(status, []).append(risk)
 
-    def actual(status: str) -> tuple[str, str]:
-        risks = by_status.get(status, [])
-        return f"{len(risks)}/{len(rows)}", ", ".join(risks) or "-"
+    def actual(status: str) -> str:
+        return f"{len(by_status.get(status, []))}/{len(rows)}"
 
     found = []
-    for headline in HEADLINE.findall(text):
-        for count, status in HEADLINE_PART.findall(headline):
-            if count != actual(status)[0]:
-                found.append(f"header says {count} {status}; the matrix rows give {actual(status)[0]}")
-    for status, count, risks in SUMMARY_ROW.findall(text):
-        want = actual(status)
-        if (count, risks) != want:
-            found.append(f"summary {status} says {count} {risks}; the matrix rows give {want[0]} {want[1]}")
+    for headline in headlines:
+        parts = HEADLINE_PART.findall(headline)
+        if len(parts) != len(HEADLINE_STATUS.findall(headline)):
+            found.append(f"header count not readable: {headline}")
+            continue
+        for num, den, status in parts:
+            if f"{num}/{den}" != actual(status):
+                found.append(f"header says {num}/{den} {status}; the matrix rows give {actual(status)}")
+    for status, count, risks in summaries:
+        match = COUNT.match(count)
+        if match is None:
+            found.append(f"summary {status} count not readable: {count}")
+            continue
+        claimed = f"{match.group(1)}/{match.group(2)}"
+        want = by_status.get(status, [])
+        if claimed != actual(status) or sorted(RISK.findall(risks)) != sorted(want):
+            found.append(
+                f"summary {status} says {claimed} {risks}; "
+                f"the matrix rows give {actual(status)} {', '.join(want) or '-'}"
+            )
     return found
 
 
