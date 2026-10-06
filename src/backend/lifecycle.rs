@@ -98,6 +98,8 @@ impl Backend {
             destination: std::sync::OnceLock::new(),
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            oauth_test_seam: parking_lot::Mutex::new(None),
         }
     }
 

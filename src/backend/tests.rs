@@ -22,6 +22,7 @@ use crate::{Error, Result};
 mod breaker_and_status;
 mod era_probe;
 mod login_probe;
+mod login_window;
 mod per_identity_catalogue;
 mod tool_cache;
 

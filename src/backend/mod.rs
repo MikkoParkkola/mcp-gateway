@@ -225,7 +225,20 @@ pub struct Backend {
     /// [`Backend::begin_connecting`] checks and marks.
     #[cfg(test)]
     mark_window_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
+    /// A test's stand-ins for the user's token store and browser, used by the
+    /// OAuth client [`Backend::create_oauth_client`] builds.
+    #[cfg(test)]
+    oauth_test_seam: parking_lot::Mutex<Option<OAuthTestSeam>>,
     pub(crate) budgets: ShutdownBudgets,
+}
+
+/// Where a test backend's OAuth client keeps tokens, and who plays the
+/// browser it hands the authorization URL to.
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct OAuthTestSeam {
+    pub(crate) storage_dir: std::path::PathBuf,
+    pub(crate) open_browser: Arc<dyn Fn(&str) -> bool + Send + Sync>,
 }
 
 /// Holds a start in the window before it marks: the start signals `reached`

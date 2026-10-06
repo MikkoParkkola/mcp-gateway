@@ -579,6 +579,19 @@ fn open_browser(url: &str) -> bool {
 #[cfg(test)]
 mod authorize_tests;
 pub(crate) mod destination;
+
+#[cfg(test)]
+impl OAuthClient {
+    /// This client with `open` playing the browser, for a backend test that
+    /// builds its client through the backend.
+    pub(crate) fn with_open_browser(
+        mut self,
+        open: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    ) -> Self {
+        self.open_browser = Box::new(move |url: &str| open(url));
+        self
+    }
+}
 #[cfg(test)]
 use url::Url;
 
