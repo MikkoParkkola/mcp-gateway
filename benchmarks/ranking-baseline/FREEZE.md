@@ -61,10 +61,12 @@ substring-`contains` + a synonym table. The `RANKING.3` ordering window
 
 The generator reads the tree it is pointed at, so it reproduces the file
 byte for byte only from the freeze tree, not from a later checkout with more
-capabilities:
+capabilities. `f241b464` (the harness commit, on the release line) has the
+same `capabilities/` tree as the freeze commit, which is not; CI runs this
+in the release tooling job:
 
 ```
-git archive b121451e959ee99b34945cd0fece1379ddaff37a capabilities | tar -x -C <dir>
+git archive f241b464acf6007a88ebc2b576c0825350b018a1 capabilities | tar -x -C <dir>
 python3 benchmarks/ranking-baseline/gen_corpus.py <dir> | cmp - benchmarks/ranking-baseline/corpus.json
 ```
 

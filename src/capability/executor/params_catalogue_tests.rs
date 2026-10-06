@@ -214,6 +214,7 @@ fn pairs(expected: &[(&str, &str)]) -> Vec<(String, String)> {
 #[test]
 fn tavily_search_posts_the_documented_body() {
     let cap = shipped("capabilities/search/tavily_search.yaml");
+    assert_eq!(provider(&cap).config.method, "POST");
     let args = json!({
         "query": "mcp", "max_results": 3, "search_depth": "advanced",
         "topic": "news", "include_answer": true
@@ -234,6 +235,7 @@ fn tavily_search_posts_the_documented_body() {
 #[test]
 fn tavily_extract_posts_the_url_list() {
     let cap = shipped("capabilities/search/tavily_extract.yaml");
+    assert_eq!(provider(&cap).config.method, "POST");
     let args =
         json!({ "urls": ["https://a.example", "https://b.example"], "extract_depth": "advanced" });
     let (url, query, body) = rendered(&cap, &args);
@@ -248,6 +250,7 @@ fn tavily_extract_posts_the_url_list() {
 #[test]
 fn firecrawl_search_posts_query_and_limit() {
     let cap = shipped("capabilities/search/firecrawl_search.yaml");
+    assert_eq!(provider(&cap).config.method, "POST");
     let (url, query, body) = rendered(&cap, &json!({ "query": "mcp", "limit": 2 }));
     assert_eq!(url, "https://api.firecrawl.dev/v2/search");
     assert!(query.is_empty(), "{query:?}");
@@ -260,6 +263,7 @@ fn firecrawl_search_posts_query_and_limit() {
 #[test]
 fn firecrawl_scrape_posts_markdown_format_and_main_content_flag() {
     let cap = shipped("capabilities/search/firecrawl_scrape.yaml");
+    assert_eq!(provider(&cap).config.method, "POST");
     let (url, query, body) = rendered(
         &cap,
         &json!({ "url": "https://a.example", "only_main_content": false }),
@@ -282,6 +286,7 @@ fn firecrawl_scrape_posts_markdown_format_and_main_content_flag() {
 #[test]
 fn brave_web_search_sends_the_documented_query_parameters() {
     let cap = shipped("capabilities/search/brave_web_search.yaml");
+    assert_eq!(provider(&cap).config.method, "GET");
     let (url, query, body) = rendered(
         &cap,
         &json!({ "q": "mcp", "count": 3, "country": "fi", "freshness": "pw" }),
@@ -305,6 +310,7 @@ fn brave_web_search_sends_the_documented_query_parameters() {
 #[test]
 fn brave_news_search_sends_the_documented_query_parameters() {
     let cap = shipped("capabilities/search/brave_news_search.yaml");
+    assert_eq!(provider(&cap).config.method, "GET");
     let (url, query, body) = rendered(&cap, &json!({ "q": "mcp", "count": 4, "freshness": "pd" }));
     assert_eq!(url, "https://api.search.brave.com/res/v1/news/search");
     assert_eq!(
