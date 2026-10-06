@@ -133,15 +133,17 @@ fn remove_entry(original: &str, name: &str) -> Option<String> {
         .map_or(lines.len(), |i| header + 1 + i);
     let child = lines[header + 1..end].iter().find(|l| content(l))?;
     let depth = child.len() - child.trim_start().len();
-    let key_of = |line: &str| {
-        let rest = line.get(depth..)?;
+    let names_entry = |line: &str| {
+        let Some(rest) = line.get(depth..) else {
+            return false;
+        };
         if rest.starts_with([' ', '\t']) {
-            return None;
+            return false;
         }
-        let key = rest.split_once(':')?.0.trim();
-        Some(key.trim_matches(|c| c == '"' || c == '\''))
+        rest.split_once(':')
+            .is_some_and(|(key, _)| key.trim().trim_matches(|c| c == '"' || c == '\'') == name)
     };
-    let start = (header + 1..end).find(|&i| key_of(lines[i]) == Some(name))?;
+    let start = (header + 1..end).find(|&i| names_entry(lines[i]))?;
     // The entry runs to the next line at the child depth or shallower.
     let next = (start + 1..end)
         .find(|&i| content(lines[i]) && lines[i].len() - lines[i].trim_start().len() <= depth)
