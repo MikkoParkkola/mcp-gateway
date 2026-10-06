@@ -40,7 +40,7 @@ async fn a_malformed_retry_writes_one_invalid_record_with_no_target() {
 }
 
 /// D1-f, as for the admin path: a record that cannot be appended answers
-/// 503/-32005 under FailClosed, and the original refusal under BestEffort.
+/// 503/-32005 under `FailClosed`, and the original refusal under `BestEffort`.
 #[tokio::test]
 async fn a_malformed_retry_whose_record_fails_follows_the_policy() {
     for (fail_closed, status, code) in [

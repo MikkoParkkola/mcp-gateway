@@ -271,10 +271,16 @@ async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (Statu
         builder = builder.header("mcp-session-id", "sess-d2");
     }
     if matches!(caller, Caller::Modern) {
-        builder = builder.header(
-            "mcp-protocol-version",
-            crate::protocol::meta::MODERN_VERSIONS[0],
-        );
+        // The modern era also requires the method and name headers to echo
+        // the body, or the call is refused (-32020) before any audit path.
+        let parsed: Value = serde_json::from_str(body).unwrap();
+        builder = builder
+            .header(
+                "mcp-protocol-version",
+                crate::protocol::meta::MODERN_VERSIONS[0],
+            )
+            .header("mcp-method", parsed["method"].as_str().unwrap())
+            .header("mcp-name", parsed["params"]["name"].as_str().unwrap());
     }
     let mut request = builder
         .body(axum::body::Body::from(body.to_string()))
