@@ -321,3 +321,28 @@ async fn a_nested_task_result_scope_is_not_receipted() {
         "undelivered nested scope text was receipted"
     );
 }
+
+/// MIK-7906 (MIK-7887R.SHAPE.1): a surfaced tool's text that is exactly a
+/// pretty-printed JSON object is read as delivered, not decoded as though the
+/// gateway had wrapped it, so the numbers in it keep their receipt after a
+/// redaction.
+#[tokio::test]
+async fn a_native_pretty_printed_json_text_keeps_its_numbers() {
+    let (meta, firewall) = relay_meta();
+    let numbers: Vec<u32> = (1000..1060).collect();
+    let text = serde_json::to_string_pretty(&json!({ "n": numbers })).unwrap();
+    let both = text_result(&format!("{text}\n{OTHER_PROSE}"));
+    let delivered = text_result(&text);
+    let ((), staged) = meta
+        .collecting_staged(async {
+            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &both);
+            let snapshot = meta.relay_snapshot(&both);
+            meta.restage_if_changed(snapshot, Some(&delivered));
+        })
+        .await;
+    staged.commit(true);
+    assert!(
+        relayed_by_bob(&firewall, &text),
+        "the numbers lost their receipt"
+    );
+}
