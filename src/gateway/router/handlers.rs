@@ -1768,7 +1768,7 @@ async fn meta_mcp_dispatch(
                         caller: client.as_ref().map_or("anonymous", |c| c.name.as_str()),
                         external_server: "gateway",
                         external_tool: &external_tool,
-                        subject: None,
+                        subject: grant_subject.as_ref(),
                     },
                 );
                 // A redaction changed the delivery: its receipt is rebuilt from what goes out.

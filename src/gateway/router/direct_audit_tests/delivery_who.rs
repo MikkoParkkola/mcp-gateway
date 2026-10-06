@@ -43,6 +43,16 @@ async fn a_certificate_caller_is_named_in_the_direct_delivery_record() {
     assert_named(&fx, "mtls", "spiffe://example.invalid/cert-7938");
 }
 
+/// A caller verified by an OIDC identity with auth off (`/mcp/{name}`): the
+/// verified-identity channel names its subject the same way.
+#[tokio::test]
+async fn a_verified_identity_caller_is_named_in_the_direct_delivery_record() {
+    let fx = fixture(Setup::default()).await;
+    let (status, body) = post(&fx, "alpha", &tools_call("t"), &Caller::Oidc).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_named(&fx, "https://a.example.invalid", "1");
+}
+
 /// AC2: an OAuth-agent caller on the direct route.
 #[tokio::test]
 async fn an_agent_caller_is_named_in_the_direct_delivery_record() {
@@ -118,8 +128,8 @@ async fn a_record_without_a_subject_is_unchanged() {
         let delivery = only_attempt(&fx);
         let before = crate::security::audit::AuditWho::from_actor_id(name);
         assert_eq!(
-            serde_json::to_string(&delivery["who"]).unwrap(),
-            serde_json::to_string(&serde_json::to_value(&before).unwrap()).unwrap(),
+            delivery["who"],
+            serde_json::to_value(&before).unwrap(),
             "{delivery}"
         );
     }
