@@ -356,8 +356,9 @@ async fn watch_stops_when_its_capability_is_reclassified() {
 }
 
 /// U11: a credential-free capability that starts needing a credential is
-/// reclassified too: its shared poller stops before any call, so one
-/// sharer's credential never answers for every principal sharing it.
+/// re-keyed: its shared poller stops before any call, so one sharer's
+/// credential never answers for every principal, and the subscriptions stay
+/// for the core to restart under the new sharing rule.
 #[tokio::test]
 async fn watch_stops_when_its_capability_changes_credential_class() {
     let dir = tempfile::tempdir().expect("dir");
@@ -372,13 +373,14 @@ async fn watch_stops_when_its_capability_changes_credential_class() {
     let mut last = None;
     assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
     assert!(host.calls.lock().is_empty(), "no call under the new class");
-    let left: Vec<String> = hub
+    let mut left: Vec<String> = hub
         .store
         .subscriptions()
         .into_iter()
         .map(|s| s.principal)
         .collect();
-    assert_eq!(left, ["q"], "only the old poller's holders are revoked");
+    left.sort();
+    assert_eq!(left, ["p", "q"], "re-keyed, never revoked");
 }
 
 /// Keys and digests keep every integer: two arguments that differ past
