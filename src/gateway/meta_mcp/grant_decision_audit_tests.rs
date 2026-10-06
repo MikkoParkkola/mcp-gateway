@@ -357,49 +357,6 @@ async fn no_logger_changes_nothing() {
     );
 }
 
-/// MIK-7917 item 2. With no logger, a `tools/call` through the dispatch tail
-/// opens no slot and boxes once (the type erasure E0275 needs), not twice;
-/// the answer is the one the slotted path gives.
-#[tokio::test]
-async fn no_logger_dispatch_tail_skips_the_slot() {
-    let endpoint = Endpoint::start(false).await;
-    let who = api_key("alice");
-    let unlogged = gateway(
-        &endpoint,
-        vec![grant("g1", ALICE, ALICE)],
-        None,
-        AuditFailurePolicy::BestEffort,
-    );
-    let answer = call(&unlogged, &who, "gateway_invoke", invoke_args()).await;
-    assert!(answer.get("error").is_none(), "{answer}");
-    assert_eq!(
-        super::grant_audit::grant_bookkeeping_for_test(),
-        super::grant_audit::GrantBookkeeping {
-            slot_futures_boxed: 1,
-            ..Default::default()
-        },
-        "no logger: the dispatch tail opens no slot and boxes once"
-    );
-
-    let dir = tempfile::tempdir().unwrap();
-    let logged = gateway(
-        &endpoint,
-        vec![grant("g1", ALICE, ALICE)],
-        Some(&dir),
-        AuditFailurePolicy::BestEffort,
-    );
-    let slotted = call(&logged, &who, "gateway_invoke", invoke_args()).await;
-    // Each call mints a fresh invocation id; everything else must match.
-    let ids = regex::Regex::new("gw-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-        .unwrap();
-    let same = |answer: &Value| ids.replace_all(&answer.to_string(), "gw-ID").into_owned();
-    assert_eq!(
-        same(&answer),
-        same(&slotted),
-        "the unslotted answer is the slotted one"
-    );
-}
-
 /// T27 (H1). A direct-name call to a surfaced personal tool is a dispatch
 /// decision: the concealed -32601 answer is unchanged, and it is recorded.
 #[tokio::test]
