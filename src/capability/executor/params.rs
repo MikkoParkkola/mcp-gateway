@@ -74,6 +74,49 @@ pub(super) async fn status_error(response: Response, endpoint: &str) -> Error {
 }
 
 impl CapabilityExecutor {
+    /// Attach the request body for POST/PUT/PATCH methods.
+    ///
+    /// When `config.body_content_type` is `"text/plain"` and a `body` template
+    /// is present the template is substituted and the resulting string is sent
+    /// verbatim (no JSON encoding).  This is required for databases such as
+    /// `SurrealDB` whose `/sql` endpoint only accepts raw SQL as `text/plain`.
+    pub(super) fn attach_request_body(
+        &self,
+        mut request: reqwest::RequestBuilder,
+        config: &RestConfig,
+        params: &Value,
+        body_nulls: &[String],
+    ) -> Result<reqwest::RequestBuilder> {
+        let use_plain_text = config.body_content_type.eq_ignore_ascii_case("text/plain");
+
+        if let Some(ref body_template) = config.body {
+            if use_plain_text {
+                // Substitute into the template and send as a raw string body.
+                // The template must be a JSON string value; after substitution
+                // we send the string contents (not JSON-encoded).
+                let raw = match body_template {
+                    Value::String(s) => self.substitute_string(s, params)?,
+                    other => self
+                        .substitute_value(other, params, KeptNulls::None)?
+                        .to_string(),
+                };
+                request = request
+                    .header(reqwest::header::CONTENT_TYPE, "text/plain")
+                    .body(raw);
+            } else {
+                let params = with_nulls(params, body_nulls);
+                let kept = KeptNulls::Named(body_nulls);
+                let body = self.substitute_value(body_template, &params, kept)?;
+                request = request.json(&body);
+            }
+        } else if !params.is_null() && params.as_object().is_some_and(|o| !o.is_empty()) {
+            // No body template — use input params directly as body.
+            // Enables LLM APIs where the input IS the request body.
+            request = request.json(params);
+        }
+        Ok(request)
+    }
+
     /// Handle an API response.
     ///
     /// Supports JSON (default) and XML response formats.  The format is
