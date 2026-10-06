@@ -57,7 +57,7 @@ check({"name": "x", "command": "npx -y @playwright/mcp@0.0.83-beta.1"}, ("npm", 
 
 # Probe verdicts, with the network replaced.
 answers = {}
-crp.fetch = lambda url: answers[url]
+crp.fetch = lambda url, body=None: answers[("POST", url) if body is not None else url]
 answers["https://registry.npmjs.org/p/1.0.0"] = (404, b"")
 assert "HTTP 404" in crp.probe("npm", "p", "1.0.0")
 answers["https://registry.npmjs.org/p/1.0.0"] = (200, json.dumps({"deprecated": "gone"}).encode())
@@ -74,10 +74,17 @@ for status, ok in ((401, True), (405, True), (400, True), (404, False), (410, Fa
 
 
 # Header and OAuth entries.
-answers["https://h/mcp"] = (405, b"")
+answers["https://h/mcp"] = (200, b"")
 assert "without a credential" in crp.probe("http-header", "https://h/mcp", "")
 answers["https://h/mcp"] = (401, b"")
 assert crp.probe("http-header", "https://h/mcp", "") is None
+# MIK-7817: a GET answered 405 says nothing about credentials (a streamable
+# endpoint need not serve GET), so the check asks with an unauthenticated POST.
+answers["https://h/mcp"] = (405, b"")
+for post, verdict in ((401, None), (403, None), (200, "without a credential"), (405, "does not serve MCP")):
+    answers[("POST", "https://h/mcp")] = (post, b"")
+    got = crp.probe("http-header", "https://h/mcp", "")
+    assert got == verdict if verdict is None else verdict in (got or ""), (post, got)
 answers["https://h/.well-known/oauth-protected-resource"] = (404, b"")
 answers["https://h/.well-known/oauth-authorization-server"] = (404, b"")
 assert "no dynamic client registration" in crp.probe("http-oauth", "https://h/mcp", "")
