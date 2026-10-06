@@ -104,6 +104,10 @@ impl Peer {
         *self.payload.lock() = payload;
     }
 
+    #[allow(
+        dead_code,
+        reason = "task_crash_boundaries waits on the worker; task_upstream_recovery reads instead"
+    )]
     pub async fn wait_for_queries(&self, at_least: usize) {
         let observe = async {
             loop {

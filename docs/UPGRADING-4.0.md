@@ -177,6 +177,7 @@ backend" and "fails a capability file" first.**
 | 150 | `mcp_gateway::cli::invoke::resolve_args` takes a fourth parameter, `kv_schema: Option<&Value>`: `key=value` text is typed by that input schema; `None` keeps the old behaviour | An embedder passes the tool's input schema, or `None` |
 | 151 | A legacy client that calls without a credential (authentication off, or on with the path in `auth.public_paths`, as `/mcp` is in the shipped presets) and does not resume a session the gateway issued is counted under one shared identity by the anomaly detector, the tenant guard and the call budget; in 3.x each such request was a new session and the first call in it | None unless these controls refuse such clients: give them a credential, have them keep the `mcp-session-id` from `initialize`, or raise the limit |
 | 152 | A weekday step `*/n` in a cron expression matches only the days `n` divides; the old match also tried each day plus 7, so `*/2` matched every day and `*/3` to `*/13` (except `*/7`) matched extra days; `*/1`, `*/7` and `*/14` up are unchanged | Check each scheduled job and `schedule.tick` subscription whose weekday field uses `/`; one meant to run daily uses `*` |
+| 153 | Two credentials that resolve to one principal (the same key listed twice, or two digests sharing their first 48 bits) are refused at load, reload and startup | Remove the duplicate entry, or replace one of the two credentials |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4051,6 +4052,22 @@ and `*/14` or more match the same days as before.
 
 Check every scheduled job and `schedule.tick` subscription whose weekday field
 uses `/`. If it was meant to run every day, use `*` instead.
+
+## 153. Two credentials may not share one principal
+
+**Startup:** no notice, the start is refused with its own error, which names both credentials; refuses to start
+
+A configured bearer token or API key is identified by the first 48 bits of its SHA-256 digest,
+and sessions, grants, journals and task owners are keyed on that principal. Two credentials
+with the same principal, such as one key listed twice under two names, were one caller: in
+3.5.0 and 3.5.1 each could attach to the other's sessions, and in the 4.0.0 pre-releases each
+could also read and cancel the other's tasks. Config load, reload and startup now refuse such
+a configuration, naming the two credentials and never a secret or digest. The check covers
+the bearer token and API keys configured together. Identities issued at runtime, such as
+key-server tokens minted for an OIDC sign-in, are not checked, nor is a principal that a
+removed credential once held. The principal encoding is unchanged, so existing sessions,
+grants and tasks stay readable. Remove the duplicate entry, or replace one of the two
+credentials.
 
 ## Upgrading from 3.5.x: a walkthrough
 

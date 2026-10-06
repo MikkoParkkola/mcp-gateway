@@ -184,7 +184,7 @@ pub(super) async fn read_envelope(
         &mut super::direct_audit::DirectReads,
     ),
 ) -> Result<Envelope, Rejection> {
-    reads.name_caller(caller.client.as_ref());
+    reads.name_caller(caller.client.as_ref(), caller.grant_subject.as_ref());
     let body_bytes = super::super::helpers::read_body(request).await?;
     let mut json_request: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
