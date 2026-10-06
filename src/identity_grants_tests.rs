@@ -444,3 +444,33 @@ async fn identity_grants_readable_loads() {
             .is_empty()
     );
 }
+
+/// MIK-7693: a grants read stalled on NFS or FUSE must not hold the runtime
+/// drop at shutdown. Dropping a runtime waits for its blocking tasks.
+#[test]
+fn a_stalled_grants_read_does_not_hold_the_runtime_drop() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (started, read_started) = std::sync::mpsc::channel();
+    runtime.spawn(read_off_runtime(move || {
+        started.send(()).unwrap();
+        // Never returns, as on a stalled mount; the thread leaks until exit.
+        loop {
+            std::thread::park();
+        }
+    }));
+    read_started
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the read started");
+
+    let (dropped, drop_done) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(runtime);
+        let _ = dropped.send(());
+    });
+    assert!(
+        drop_done
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .is_ok(),
+        "dropping the runtime waited on a stalled grants read"
+    );
+}

@@ -80,6 +80,34 @@ async fn meta_replay_writes_an_invocation_record() {
     assert_eq!(replay["who"]["credential_kind"], "api_key", "{replay}");
 }
 
+/// MIK-7641 (#2522): admission reads the tool's `arguments` as an object and
+/// as the equivalent JSON string as one operation, so a retry that sends the
+/// string form is a replay. Its record carries the request hash the first
+/// execution hashed, not one over the retry as sent.
+#[tokio::test]
+async fn meta_replay_of_a_string_arguments_retry_keeps_the_original_request_hash() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        ..Setup::default()
+    })
+    .await;
+    let (status, first) = post_modern(&fx, &keyed_invoke(1).0).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let mut retry: Value = serde_json::from_str(&keyed_invoke(2).0).unwrap();
+    retry["params"]["arguments"]["arguments"] = json!(json!({"q": 1}).to_string());
+    let (status, second) = post_modern(&fx, &retry.to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "the string-form retry must be a replay: {second}"
+    );
+
+    let all = invocations(&fx);
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert_eq!(all[1]["request_hash"], all[0]["request_hash"], "{all:?}");
+}
+
 /// A replayed failure is recorded as the failure it was: the delivered replay
 /// wraps the tool result in a successful envelope, so the record takes the
 /// first execution's own outcome, code and response hash, kept server-side.

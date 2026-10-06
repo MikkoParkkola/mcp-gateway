@@ -116,6 +116,8 @@ jobs:
         run: scripts/ci/check-license-headers.sh
       - name: Verify license files ship in every packaged artifact
         run: scripts/ci/verify-artifact-licenses.sh
+      - name: Validate the license check against broken notices
+        run: tests/artifact_licenses.sh
       - name: Validate the hosted-runner guard
         run: scripts/ci/check-hosted-runners.sh --self-test
       - name: Require GitHub-hosted runners (plus the one trusted label)
@@ -420,6 +422,9 @@ jobs:
 
   windows-check:
     name: Windows check
+    # Waits for the Linux suite: a red head never takes one of the account's
+    # few concurrent runner slots for a Windows run that cannot pass.
+    needs: test
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: windows-2025
     steps:
