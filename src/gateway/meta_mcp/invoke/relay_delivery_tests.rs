@@ -347,15 +347,98 @@ async fn a_native_pretty_printed_json_text_keeps_its_numbers() {
     );
 }
 
-/// MIK-7906: only a `gateway_invoke` answer is wrapped; a surfaced tool's
-/// answer, whatever its name, is read as delivered.
+/// MIK-7906: a `gateway_invoke` answer is wrapped, and so is a single-tool
+/// `gateway_execute` answer (MIK-7939 D6.RELAY.7, the same `wrap_tool_success`
+/// envelope); a surfaced tool's answer, whatever its name, is read as delivered.
 #[test]
 fn only_a_gateway_invoke_answer_is_wrapped() {
-    assert_eq!(
-        AnswerShape::of("gateway_invoke"),
-        AnswerShape::InvokeWrapped
-    );
+    for tool in ["gateway_invoke", "gateway_execute"] {
+        assert_eq!(AnswerShape::of(tool), AnswerShape::InvokeWrapped, "{tool}");
+    }
     for tool in ["send", "gateway_search", "alpha__send"] {
         assert_eq!(AnswerShape::of(tool), AnswerShape::Literal, "{tool}");
     }
+}
+
+/// [`receipt_after_rebuild`] for an answer of `shape` (a legacy route).
+async fn receipt_after_rebuild_as(
+    meta: &Arc<MetaMcp>,
+    staged: &Value,
+    delivered: &Value,
+    shape: AnswerShape,
+) {
+    let ((), receipts) = meta
+        .collecting_staged(async {
+            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), staged);
+            meta.rebuild_receipt_from_final(Some(delivered), GatewayStamps::Legacy, shape);
+        })
+        .await;
+    receipts.commit(true);
+}
+
+/// [`PROSE`] as lines shorter than a fingerprint: every window crosses a
+/// newline, which a wrapper escapes.
+fn short_lines() -> String {
+    PROSE
+        .split(' ')
+        .collect::<Vec<_>>()
+        .chunks(4)
+        .map(|words| words.join(" "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// MIK-7939 D6.RELAY.7: a single-tool `gateway_execute` answer is the
+/// backend value wrapped as pretty-printed JSON text, read decoded, so the
+/// lines the caller read keep their receipt.
+#[tokio::test]
+async fn a_wrapped_gateway_execute_answer_is_read_decoded() {
+    let (meta, firewall) = relay_meta();
+    let value = json!({ "text": short_lines() });
+    let delivered =
+        crate::gateway::meta_mcp_helpers::wrap_tool_success(RequestId::Number(1), &value, false)
+            .result
+            .expect("a wrapped result");
+    let shape = AnswerShape::of("gateway_execute");
+    receipt_after_rebuild_as(&meta, &value, &delivered, shape).await;
+    assert!(relayed_by_bob(&firewall, &short_lines()), "{delivered}");
+}
+
+/// MIK-7939 D6.RELAY.12: a `gateway_invoke` value that is not an object (an
+/// array of lines) is wrapped the same way and read decoded too.
+#[tokio::test]
+async fn a_wrapped_array_value_is_read_decoded() {
+    let (meta, firewall) = relay_meta();
+    let value = json!([short_lines()]);
+    let delivered =
+        crate::gateway::meta_mcp_helpers::wrap_tool_success(RequestId::Number(1), &value, false)
+            .result
+            .expect("a wrapped result");
+    receipt_after_rebuild_as(&meta, &value, &delivered, AnswerShape::InvokeWrapped).await;
+    assert!(relayed_by_bob(&firewall, &short_lines()), "{delivered}");
+}
+
+/// MIK-7939 D6.RELAY.3/.9: a `tasks/get` answer is the gateway's task
+/// envelope around the stored result. Only the delivered slot is the
+/// backend's text: the envelope's `statusMessage` is not receipted.
+#[tokio::test]
+async fn a_task_envelope_receipts_only_its_delivered_slot() {
+    let (meta, firewall) = relay_meta();
+    let stored = text_result(PROSE);
+    let delivered = json!({
+        "taskId": "t-1",
+        "status": "completed",
+        "statusMessage": OTHER_PROSE,
+        "result": stored,
+    });
+    let shape = AnswerShape::of("tasks/get");
+    receipt_after_rebuild_as(&meta, &stored, &delivered, shape).await;
+    assert!(
+        relayed_by_bob(&firewall, PROSE),
+        "the slot lost its receipt"
+    );
+    assert!(
+        !relayed_by_bob(&firewall, OTHER_PROSE),
+        "envelope text was receipted"
+    );
 }

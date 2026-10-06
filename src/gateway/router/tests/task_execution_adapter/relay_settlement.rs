@@ -266,3 +266,30 @@ async fn parked_task_prompt_read_is_recorded() {
         "prompt not recorded: {answer}"
     );
 }
+
+/// MIK-7939 D6.RELAY.10: a backend's primitive result is stored as a text
+/// block holding its JSON print. The receipt is the stored text, so relaying
+/// that text is caught. Densely escaped: no fingerprint window of the raw
+/// string survives in its print, so a receipt of the raw value cannot match.
+#[tokio::test]
+async fn a_primitive_task_result_is_receipted_as_stored() {
+    let raw: String = (0..120).map(|n| format!("r{n}\"")).collect();
+    let stored = Value::String(raw.clone()).to_string();
+    let mock = MockBackend::answering(Answer::Sequence(vec![json!(raw), text("ok")]));
+    let (state, _store) = relay_state(&mock, 600).await;
+    start_task(&state, &mock, 1, "relay-d10", 1).await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut id = 100;
+    let answer = loop {
+        let answer = post(&state, "key-b", sync_invoke(id, json!({"text": stored}))).await;
+        if answer["error"]["code"] == -32002 || tokio::time::Instant::now() >= deadline {
+            break answer;
+        }
+        id += 1;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        answer["error"]["code"], -32002,
+        "the stored text was not receipted: {answer}"
+    );
+}
