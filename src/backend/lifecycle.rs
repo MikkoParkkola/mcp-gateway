@@ -484,15 +484,28 @@ impl Backend {
                 transport
             }
             #[cfg(feature = "a2a")]
-            TransportConfig::A2a { a2a_url, .. } => {
-                // A2A backends are managed by A2aProvider, not the legacy
-                // Backend/Transport stack.  Reaching this branch means an A2A
-                // backend was incorrectly started through the legacy path.
-                return Err(crate::Error::Config(format!(
-                    "A2A backend '{name}' (url: {a2a_url}) must be started via A2aProvider, \
-                     not the legacy Backend::start() path",
-                    name = self.name,
-                )));
+            TransportConfig::A2a {
+                a2a_url,
+                a2a_agent_card_path,
+            } => {
+                // The outbound A2A bridge (MIK-8063): the agent becomes one
+                // tool behind the same funnel as every backend. Built under
+                // the destination policy like the HTTP arm: the configured
+                // address is checked before anything connects, and every
+                // request goes through the guarded client.
+                built_under = self.mark_connecting();
+                self.begin_connecting(built_under)?;
+                let transport = crate::a2a::transport::A2aTransport::start(
+                    a2a_url,
+                    a2a_agent_card_path.as_deref(),
+                    &self.config.headers,
+                    self.config.timeout,
+                    built_under,
+                )
+                .await?;
+                // An agent has no server-initiated stream.
+                listen = None;
+                transport
             }
         };
 

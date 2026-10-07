@@ -252,9 +252,11 @@ pub enum TransportConfig {
     },
     /// A2A (`Agent2Agent`) transport.
     ///
-    /// The gateway fetches the Agent Card from `<a2a_url>/.well-known/agent.json`
-    /// (or a custom path), converts A2A skills to MCP tools, and proxies
-    /// `tools/call` invocations as A2A `message/send` requests.
+    /// Outbound delegation to an A2A 1.0 agent (JSON-RPC binding). The gateway
+    /// fetches the Agent Card from `<a2a_url>/.well-known/agent-card.json` (or
+    /// `a2a_agent_card_path`), exposes the agent as one tool, `send_message`,
+    /// and sends each call as an A2A `SendMessage` to the card's JSON-RPC
+    /// endpoint, which must share the origin of `a2a_url`.
     ///
     /// Requires the `a2a` Cargo feature (enabled by default).
     ///
@@ -272,7 +274,7 @@ pub enum TransportConfig {
         a2a_url: String,
         /// Custom path for the Agent Card.
         ///
-        /// Defaults to `/.well-known/agent.json` when absent.
+        /// Defaults to `/.well-known/agent-card.json` when absent.
         #[serde(default)]
         a2a_agent_card_path: Option<String>,
     },
@@ -326,8 +328,9 @@ impl TransportConfig {
         match self {
             Self::Http { .. } => true,
             Self::Stdio { .. } | Self::WebSocket { .. } => false,
+            // Applied per request by the A2A transport (MIK-8063).
             #[cfg(feature = "a2a")]
-            Self::A2a { .. } => false,
+            Self::A2a { .. } => true,
         }
     }
 }
