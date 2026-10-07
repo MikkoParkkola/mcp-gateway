@@ -677,6 +677,47 @@ fn has_due_sees_a_pending_record_behind_one_in_flight() {
     assert!(!store.has_due("gone", now));
 }
 
+/// MIK-7944 .2: a claim settled `Unsent` keeps its attempt number but is
+/// not a send; the next claim numbers on from it.
+#[test]
+fn an_unsent_claim_keeps_its_number_but_is_not_a_send() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    assert!(matches!(
+        store.claim("a", now).expect("io"),
+        Claim::Ready(_)
+    ));
+    let unsent = Settle::Unsent {
+        next: now,
+        status: "audit_unavailable",
+    };
+    store.settle("a", now, unsent, now, ROOMY).expect("io");
+    let Claim::Ready(claimed) = store.claim("a", now).expect("io") else {
+        panic!("claimable again");
+    };
+    assert_eq!(claimed.record.attempt, 2, "numbers stay unique");
+    assert_eq!(
+        claimed.record.sends(),
+        1,
+        "the refused claim was not a send"
+    );
+}
+
+/// MIK-7944 .2: a record written before `unsent` existed loads with none.
+#[test]
+fn a_record_without_unsent_reads_as_none() {
+    let mut value = serde_json::to_value(record("a", "s1", Utc::now())).expect("json");
+    value.as_object_mut().expect("object").remove("unsent");
+    let read: OutboxRecord = serde_json::from_value(value).expect("an older record");
+    assert_eq!(read.unsent, 0);
+}
+
 #[path = "store_pending_burial_tests.rs"]
 mod burial;
 #[path = "store_pending_crash_tests.rs"]

@@ -426,6 +426,8 @@ async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
         due.ready[0].last_status.as_deref(),
         Some("audit_unavailable")
     );
+    // MIK-7944 .2: the refused ending sent nothing, so it is no send.
+    assert_eq!(due.ready[0].unsent, 1);
 
     // AUDIT.1, AUDIT.2: with the log back, the ending is recorded with the
     // documented values for a record fan-out never stamped and a send that
