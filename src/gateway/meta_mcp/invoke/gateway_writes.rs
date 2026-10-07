@@ -402,4 +402,46 @@ mod tests {
         })
         .await;
     }
+
+    /// MIK-7991 r4 (R9): a record as the sync admission stores it keeps all
+    /// nine noted paths on both layers through a round trip; a stored path
+    /// this build does not note drops only that entry; restored, the record
+    /// lands after the replay's mark and strips what it wrote.
+    #[tokio::test]
+    async fn a_stored_record_round_trips_every_noted_path() {
+        let value = json!({
+            "recovery": {"hint": "retry"}, "_signature": {"sig": "s"}, "taskId": "t-9",
+            "trace_id": "t-1", "predicted_next": ["b"], "_meta": {"provenance": {"p": 1}},
+            "_security_findings": ["f"], "_cost_warnings": ["w"],
+            "_cost_suggestion": {"message": "m"}, "text": "backend",
+        });
+        let stored = scope(async {
+            for layer in [Layer::Value, Layer::Answer] {
+                for &path in NOTED_PATHS {
+                    note(layer, path, &value);
+                }
+            }
+            serde_json::to_value(recorded()).expect("serializes")
+        })
+        .await;
+        let mut entries = stored.as_array().expect("a list").clone();
+        assert_eq!(entries.len(), 2 * NOTED_PATHS.len(), "{stored}");
+        entries.push(json!({"layer": "value", "path": ["not_noted"], "digest": 1}));
+        let decoded: WriteRecord =
+            serde_json::from_value(Value::Array(entries)).expect("deserializes");
+        assert_eq!(decoded.0.len(), 2 * NOTED_PATHS.len(), "{decoded:?}");
+        let receipt = without(&value, &decoded);
+        assert_eq!(
+            receipt.as_ref(),
+            &json!({"_meta": {}, "text": "backend"}),
+            "{receipt}"
+        );
+        scope(async {
+            note(Layer::Value, &["trace_id"], &value);
+            let mark = mark();
+            restore(&decoded);
+            assert_eq!(snapshot_since(mark).0.len(), decoded.0.len());
+        })
+        .await;
+    }
 }
