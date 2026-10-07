@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-7651.GH2470.1: every record the store accepts leaves room for the
+//! `MIK-7651.GH2470.1`: every record the store accepts leaves room for the
 //! bounded output-free failure it may have to settle as. Each test names the
 //! mutant it must fail on.
 

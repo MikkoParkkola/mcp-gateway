@@ -321,6 +321,39 @@ async fn a_plan_step_that_fails_at_the_backend_is_recorded_and_reauthorized() {
     assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
 }
 
+/// `MIK-7651.GH2470.2`: a call the backend answered, refused by the gateway
+/// AFTER dispatch, is still a target. The backend asks for input a client
+/// that declared no `elicitation` cannot give, so the gateway's refusal is an
+/// `Err` out of the invocation, not a tool-error result. Mutant: only an `Ok`
+/// invocation recorded.
+#[tokio::test]
+async fn a_call_refused_after_dispatch_is_recorded_and_reauthorized() {
+    let mock = MockBackend::answering(Answer::Result(super::input_round::ask(
+        "confirm",
+        super::input_round::STATE_1,
+    )));
+    let (state, _store) = state_with(&mock).await;
+    let id = task_id(
+        &post(
+            &state,
+            "key-a",
+            task_invoke(13, "b-post-dispatch", json!({})),
+        )
+        .await,
+    );
+    let recorded = wait_for_targets(&state, &id).await;
+    let step = crate::gateway::task_service::Target {
+        server: BACKEND.to_owned(),
+        tool: TOOL.to_owned(),
+    };
+    std::assert_eq!(recorded, vec![step], "the dispatched call is stored");
+    std::assert_eq!(mock.calls(), 1, "the call reached the backend");
+    let settled = poll_until_terminal(&state, "key-a", &id).await;
+    std::assert_eq!(status_of(&settled), "failed", "{settled}");
+    withhold(&state, TOOL);
+    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+}
+
 /// The fixture's task runtime, reopened with a small per-record byte budget.
 async fn state_with_record_budget(
     mock: &Arc<MockBackend>,

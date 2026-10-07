@@ -43,7 +43,9 @@ pub struct TasksConfig {
     pub max_per_principal: usize,
     /// Concurrent dispatched workers. Must be nonzero.
     pub max_workers: usize,
-    /// Maximum serialized bytes of one record.
+    /// Maximum serialized bytes of one record. A task is admitted only with
+    /// room for the bounded failure it may have to settle as, so a cap below
+    /// that refuses creation rather than leaving a task working.
     pub max_record_bytes: usize,
     /// Logical byte budget: `max_records * max_record_bytes` must fit.
     pub logical_budget_bytes: usize,

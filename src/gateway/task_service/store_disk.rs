@@ -260,6 +260,18 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
             return Err(StoreError::Capacity);
         }
         if let Some((record, task)) = restored {
+            // A live row written before this check, or under a larger cap,
+            // may have no room for the bounded failure it could settle as;
+            // refused like a row over the cap (MIK-7651).
+            let needed = super::targets::fallback_bytes(&task, &record, chrono::Utc::now())?;
+            if needed > limits.record_bytes {
+                tracing::warn!(
+                    path = %shown_path,
+                    needed,
+                    "task record leaves no room for its bounded failure; raise max_record_bytes to at least `needed` or remove the row"
+                );
+                return Err(StoreError::Capacity);
+            }
             loaded.entries.insert(task_id, Entry { task, record });
         } else {
             tracing::warn!(
