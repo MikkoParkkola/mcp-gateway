@@ -177,10 +177,71 @@ async fn a2a_9_past_the_deadline_the_task_is_canceled() {
         .result
         .expect("a tool result");
     assert_eq!(result["isError"], true, "{result}");
-    assert_eq!(
-        stub::calls(&log, "CancelTask").len(),
-        1,
-        "canceled at the agent"
+    wait_for_cancel(&log).await;
+    assert_eq!(stub::calls(&log, "CancelTask").len(), 1, "canceled once");
+}
+
+/// The cancel is sent from a spawned task: wait for the agent to see it.
+async fn wait_for_cancel(log: &stub::Log) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while stub::calls(log, "CancelTask").is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the agent's task was never canceled"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// A2A.9: a `GetTask` the agent never answers is bounded by the deadline
+/// too, and the known task is canceled.
+#[tokio::test]
+async fn a2a_9_a_hanging_poll_is_bounded_and_canceled() {
+    let mut agent = Agent::answering(Value::Null);
+    agent.answer = stub::script(vec![
+        Step::Reply(stub::task_in("TASK_STATE_WORKING", "started")),
+        Step::Hang,
+    ]);
+    let (base, log) = stub::serve(agent).await;
+    let backend = backend_timed(&base, None, &[], Duration::from_secs(3));
+    let started = tokio::time::Instant::now();
+    let result = send(&backend, first_call(), None)
+        .await
+        .result
+        .expect("a tool result");
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "bounded by the deadline"
+    );
+    assert_eq!(result["isError"], true, "{result}");
+    wait_for_cancel(&log).await;
+    assert_eq!(stub::calls(&log, "CancelTask")[0]["params"]["id"], "task-2");
+}
+
+/// A2A.9: a first send the agent never answers names no task, so nothing is
+/// canceled and the caller is told the outcome is not known.
+#[tokio::test]
+async fn a2a_9_a_hanging_first_send_reports_an_unknown_outcome() {
+    let mut agent = Agent::answering(Value::Null);
+    agent.answer = stub::script(vec![Step::Hang]);
+    let (base, log) = stub::serve(agent).await;
+    let backend = backend_timed(&base, None, &[], Duration::from_secs(3));
+    let started = tokio::time::Instant::now();
+    let response = backend
+        .request_with_headers("tools/call", Some(first_call()), &[], None)
+        .await;
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "bounded by the deadline"
+    );
+    let text = match response {
+        Ok(response) => response.result.map(|r| r.to_string()).unwrap_or_default(),
+        Err(error) => error.to_string(),
+    };
+    assert!(text.contains("not known"), "{text}");
+    assert!(
+        stub::calls(&log, "CancelTask").is_empty(),
+        "no task was named"
     );
 }
 
