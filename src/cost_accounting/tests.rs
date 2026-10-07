@@ -384,3 +384,29 @@ fn key_and_session_breakdowns_fold_tools_past_the_cap() {
     }
     assert_eq!(session.call_count, 300);
 }
+
+#[test]
+fn setting_a_budget_on_a_spending_key_keeps_its_spend_and_shields_it() {
+    // GIVEN: a key that has spent, idle for a month on the sweep's clock
+    let tracker = CostTracker::new();
+    tracker.record("", Some("k"), "srv", "t", 40, 15.0);
+    let limited = BudgetConfig {
+        hard_limit_usd: Some(5.0),
+        ..BudgetConfig::default()
+    };
+    // WHEN: a budget is set on it
+    tracker.set_key_budget("k", limited);
+    let key = tracker.per_key.get("k").map(|k| Arc::clone(&k)).unwrap();
+    key.last_spend
+        .store(now_secs() - 31 * 86_400, Ordering::Relaxed);
+    // The first record ran the sweep: make the next one due again
+    tracker.next_key_sweep.store(0, Ordering::Relaxed);
+    tracker.record("", Some("other"), "srv", "t", 1, 15.0);
+    // THEN: the spend moved across, the budget applies, and the sweep kept it
+    let snap = tracker
+        .key_snapshot("k")
+        .expect("a budgeted key is never swept");
+    assert_eq!(snap.window_24h.tokens, 40);
+    assert_eq!(snap.by_tool[0].token_count, 40);
+    assert_eq!(snap.hard_limit_usd, Some(5.0));
+}
