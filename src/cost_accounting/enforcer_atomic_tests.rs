@@ -178,13 +178,15 @@ fn an_add_inside_the_day_reset_window_is_kept() {
 fn a_check_during_a_settle_counts_the_call_once() {
     use std::sync::{Mutex, TryLockError};
     use std::thread::JoinHandle;
+    /// Whether the ledger was held inside the settle, and call B's check.
+    type Slot = Arc<Mutex<Option<(bool, JoinHandle<bool>)>>>;
 
     for scope in [Scope::Global, Scope::Tool, Scope::Key] {
         // GIVEN: room for exactly two calls, and call A admitted
         let enforcer = enforcer(scope, 2);
         let a = enforcer.check(TOOL, Some(KEY));
         assert!(a.allowed, "{scope:?}: call A is admitted");
-        let slot: Arc<Mutex<Option<(bool, JoinHandle<bool>)>>> = Arc::default();
+        let slot: Slot = Arc::default();
         let (inner, hook_slot) = (Arc::clone(&enforcer), Arc::clone(&slot));
         AFTER_SPEND_ADDED.with(|hook| {
             *hook.borrow_mut() = Some(Box::new(move || {
