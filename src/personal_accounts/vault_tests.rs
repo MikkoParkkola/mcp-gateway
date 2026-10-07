@@ -150,6 +150,15 @@ impl CredentialReleaseObserver for SilentObserver {
 /// A strategy over the REAL store, with the deployment mode set as the install
 /// site would set it.
 fn strategy(root: &std::path::Path, sole_operator: bool) -> (VaultStrategy, Arc<AtomicUsize>) {
+    let (custody, calls) = custody(root);
+    (
+        VaultStrategy::new(custody, descriptor(), seeded_revision(), sole_operator),
+        calls,
+    )
+}
+
+/// Custody over the seeded store, and its provider's refresh counter.
+fn custody(root: &std::path::Path) -> (Arc<dyn AccountCustody>, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let handle = CustodyHandle::start(
         store_config(root),
@@ -160,11 +169,7 @@ fn strategy(root: &std::path::Path, sole_operator: bool) -> (VaultStrategy, Arc<
         4,
     )
     .expect("custody starts against a seeded store");
-    let custody: Arc<dyn AccountCustody> = Arc::new(handle);
-    (
-        VaultStrategy::new(custody, descriptor(), seeded_revision(), sole_operator),
-        calls,
-    )
+    (Arc::new(handle), calls)
 }
 
 fn block_on<F: Future>(fut: F) -> F::Output {
@@ -729,43 +734,8 @@ fn a_reconsented_grant_gets_a_new_binding() {
     assert_ne!(before, binding_for(renewed));
 }
 
-/// Mutant: a backend expecting another audience is minted for, or a principal
-/// whose key cannot be built is minted for, before custody is consulted.
-#[test]
-fn prepare_refuses_a_wrong_audience_and_an_unbindable_principal_before_custody() {
-    let tmp = tempfile::TempDir::new().expect("root");
-    seed_sole_operator(tmp.path());
-
-    block_on(async {
-        let (vault, refreshes) = strategy(tmp.path(), true);
-        let mut elsewhere = backend();
-        elsewhere.audience = "https://other.invalid/".into();
-        let refused = vault.prepare(Principal::SoleOperator, &elsewhere).await;
-        assert!(
-            matches!(refused, Err(PropagationError::Misconfigured(_))),
-            "{refused:?}"
-        );
-
-        let mut nameless = identity();
-        nameless.subject = String::new();
-        let refused = vault
-            .prepare(Principal::Verified(&nameless), &backend())
-            .await;
-        // The identity-binding refusal specifically: custody also refuses an
-        // invalid key, with the same variant but its own text.
-        let Err(PropagationError::Refuse(why)) = refused else {
-            panic!("an unbindable principal must be refused: {refused:?}");
-        };
-        assert!(why.starts_with("account identity binding refused"), "{why}");
-        assert_eq!(refreshes.load(Ordering::SeqCst), 0, "custody was not asked");
-
-        // Positive control: the same strategy and backend mint for the operator.
-        vault
-            .prepare(Principal::SoleOperator, &backend())
-            .await
-            .expect("control: the seeded grant leases");
-    });
-}
-
 #[path = "vault_revalidate_tests.rs"]
 mod revalidate;
+
+#[path = "vault_custody_order_tests.rs"]
+mod custody_order;
