@@ -307,7 +307,7 @@ async fn probe_backend(mock: Arc<ProbeMock>, resolve_era: bool) -> Arc<Backend> 
     let transport = mock as Arc<dyn Transport>;
     backend.set_transport_for_test(Arc::clone(&transport));
     if resolve_era {
-        backend.resolve_era(&transport).await;
+        backend.resolve_era_for_test(&transport).await;
     }
     backend
 }
