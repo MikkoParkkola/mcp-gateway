@@ -25,7 +25,8 @@ pub(crate) struct DirState {
     last_read: BTreeSet<String>,
     /// Whether its latest read failed, or a file in it failed to load.
     failed: bool,
-    /// Whether any read of it has succeeded in this process.
+    /// Whether any read of it has been clean (every file loaded) in this
+    /// process.
     ever_loaded: bool,
 }
 
@@ -55,7 +56,7 @@ impl LoadState {
 
 /// One directory's read: its admitted capabilities and whether a file failed,
 /// or `None` when the directory could not be read.
-type Read = Option<(Vec<CapabilityDefinition>, bool)>;
+type Read = Option<(Vec<CapabilityDefinition>, BTreeSet<String>, bool)>;
 
 impl CapabilityBackend {
     /// Record a read of `dir`. Called with the catalogue the read produced
@@ -69,10 +70,11 @@ impl CapabilityBackend {
                 state.failed = false;
                 state.ever_loaded = true;
             }
+            // Not a clean read: what the failed file holds is not known, so
+            // a directory never read cleanly keeps every absent capability.
             Some((names, true)) => {
                 state.last_read.extend(names);
                 state.failed = true;
-                state.ever_loaded = true;
             }
             None => state.failed = true,
         }
@@ -145,7 +147,11 @@ impl CapabilityBackend {
         for dir in &dirs {
             match CapabilityLoader::load_directory_reporting(dir).await {
                 Ok((loaded, file_failed)) => {
-                    reads.push((dir.clone(), Some(self.admit(loaded, file_failed))));
+                    // Every parsed name, refused or not: a refused capability
+                    // is not proven deleted (MIK-8050).
+                    let names = loaded.iter().map(|c| c.name.clone()).collect();
+                    let (admitted, failed) = self.admit(loaded, file_failed);
+                    reads.push((dir.clone(), Some((admitted, names, failed))));
                 }
                 Err(e) => {
                     warn!(backend = %self.name, directory = %dir, error = %e, "Failed to reload directory");
@@ -156,7 +162,7 @@ impl CapabilityBackend {
         let admitted: Vec<CapabilityDefinition> = reads
             .iter()
             .filter_map(|(_, read)| read.as_ref())
-            .flat_map(|(caps, _)| caps.iter().cloned())
+            .flat_map(|(caps, _, _)| caps.iter().cloned())
             .collect();
         let total = admitted.len();
 
@@ -183,9 +189,7 @@ impl CapabilityBackend {
             // With the swap, under the same lock: `catalogue_snapshot` never
             // sees one without the other.
             for (dir, read) in reads {
-                let read = read
-                    .map(|(loaded, failed)| (loaded.into_iter().map(|c| c.name).collect(), failed));
-                self.record_read(&dir, read);
+                self.record_read(&dir, read.map(|(_, names, failed)| (names, failed)));
             }
             self.note_reload_during_scan();
             self.executor.bump_policy_epoch();
@@ -195,7 +199,16 @@ impl CapabilityBackend {
         }
 
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
+        if let Some(notice) = self.reload_notice.get() {
+            let _ = notice.send(self.name.clone());
+        }
         Ok(total)
+    }
+
+    /// Where every successful reload announces itself; set once, by the
+    /// capability watcher.
+    pub(crate) fn set_reload_notice(&self, notice: tokio::sync::mpsc::UnboundedSender<String>) {
+        let _ = self.reload_notice.set(notice);
     }
 
     /// The same admission gate the initial load applies, per directory: a

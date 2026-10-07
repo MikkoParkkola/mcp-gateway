@@ -175,6 +175,9 @@ pub struct CapabilityBackend {
     /// Held by each directory read through its publication, so the catalogue
     /// and `dirs_loaded` change together and in read order.
     load_order: tokio::sync::Mutex<()>,
+    /// Hears the backend's name after every successful reload, whoever ran
+    /// it, so listeners get `tools/list_changed` (F24, MIK-8050).
+    reload_notice: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<String>>,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -203,6 +206,7 @@ impl CapabilityBackend {
             initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
             dirs_loaded: load_state::DirsLoaded::default(),
             load_order: tokio::sync::Mutex::new(()),
+            reload_notice: std::sync::OnceLock::new(),
         }
     }
 

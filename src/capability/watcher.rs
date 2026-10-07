@@ -40,6 +40,10 @@ impl CapabilityWatcher {
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         changes: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> Result<Self> {
+        // Every successful reload announces itself, the watcher's included.
+        if let Some(changes) = changes {
+            backend.set_reload_notice(changes);
+        }
         let directories = backend.watched_directories();
         debug!(directories = ?directories, "Starting capability watcher");
 
@@ -58,7 +62,7 @@ impl CapabilityWatcher {
         debug!("File watcher created successfully");
 
         // Spawn debounced reload task
-        Self::spawn_reload_task(backend, event_rx, shutdown_rx, changes);
+        Self::spawn_reload_task(backend, event_rx, shutdown_rx);
         debug!("Reload task spawned");
 
         Ok(Self {
@@ -121,7 +125,6 @@ impl CapabilityWatcher {
         backend: Arc<CapabilityBackend>,
         mut event_rx: mpsc::Receiver<()>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-        changes: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) {
         tokio::spawn(async move {
             // Debounce: wait 500ms after last event before reloading
@@ -168,9 +171,6 @@ impl CapabilityWatcher {
                                                 capabilities = count,
                                                 "Hot-reload complete"
                                             );
-                                            if let Some(changes) = &changes {
-                                                let _ = changes.send(backend.name.clone());
-                                            }
                                         }
                                         Err(e) => {
                                             error!(

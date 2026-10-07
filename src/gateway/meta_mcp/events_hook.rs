@@ -94,6 +94,7 @@ impl MetaMcp {
             // held: re-read the directories and rerun, backing off, until a
             // pass is whole and applied (MIK-8050).
             while !settled.load(std::sync::atomic::Ordering::Acquire) {
+                wait = (wait * 2).min(RERUN_CAP);
                 let held = hub.held_webhook_subscriptions();
                 tracing::warn!(
                     held,
@@ -101,7 +102,6 @@ impl MetaMcp {
                     "events: the deferred startup withdraw found the capability catalogue \
                      partial or its route refresh refused; re-reading and retrying"
                 );
-                wait = (wait * 2).min(RERUN_CAP);
                 tokio::time::sleep(wait).await;
                 if let Some(capabilities) = &capabilities
                     && let Err(error) = capabilities.reload().await
