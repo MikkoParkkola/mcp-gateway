@@ -110,10 +110,11 @@ impl CapabilityBackend {
 
     /// Record `name` as read but refused by the account gate (MIK-8037): a
     /// catalogue write, so the generation moves. Takes the write lock: call
-    /// it holding no capabilities guard. An admission forgets it again.
+    /// it holding no capabilities guard. An admission forgets it again, and
+    /// a reload rebuilds the absent names from the directories it read.
     pub(super) fn note_refused(&self, name: &str) {
         let mut caps = self.capabilities.write();
-        caps.refused.insert(name.to_owned());
+        caps.absent.insert(name.to_owned());
         self.bump_catalogue_generation(&caps);
     }
 
@@ -125,8 +126,8 @@ impl CapabilityBackend {
     }
 
     /// [`Self::catalogue_snapshot`], the generation it was read at and the
-    /// names the account gate refused from the directories read, all under
-    /// the one lock (MIK-8037).
+    /// names known absent though read (refused by the account gate, or
+    /// unloaded), all under the one lock (MIK-8037).
     pub(crate) fn catalogue_snapshot_at(
         &self,
     ) -> (Vec<super::CapabilityDefinition>, bool, u64, Vec<String>) {
@@ -135,7 +136,7 @@ impl CapabilityBackend {
             caps.entries.clone(),
             self.initial_scan_loaded_every_directory(),
             self.catalogue_generation(),
-            caps.refused.iter().cloned().collect(),
+            caps.absent.iter().cloned().collect(),
         )
     }
 }
