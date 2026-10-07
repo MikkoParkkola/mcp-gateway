@@ -198,7 +198,7 @@ async fn direct_replayed_chain_refusal_keeps_its_uninspected_attribution() {
     let fx = fixture(Setup {
         tenant_limit: Some(0),
         meta_mode: MetaMode::Idempotent,
-        chained: true,
+        chain: crate::config::ChainMode::Require,
         ..Setup::default()
     })
     .await;
