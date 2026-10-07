@@ -642,7 +642,7 @@ def module_files(root: Path) -> list[Path]:
         seen.append(f)
         code, mask = prod_scan(f)
         child_dir = f.parent if f.name in ("lib.rs", "main.rs", "mod.rs") else f.parent / f.stem
-        for m in re.finditer(r"((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;", mask):
+        for m in re.finditer(r"((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?mod\s+(?:r#)?(\w+)\s*;", mask):
             attrs = code[m.start(1) : m.end(1)]
             if re.search(r"cfg\((?:all\()?test\b", attrs):
                 continue

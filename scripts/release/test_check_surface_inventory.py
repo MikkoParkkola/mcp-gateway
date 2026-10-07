@@ -159,17 +159,19 @@ def test_ufcs_route_and_extern_crate_are_items() -> None:
             "pub const unsafe fn planted_cu() {}\n#[macro_export(local_inner_macros)]\nmacro_rules! planted_lim { () => {} }\n",
             encoding="utf-8",
         )
-        lib.write_text(lib.read_text(encoding="utf-8") + "mod planted_mac;\n#[cfg(test)]\nmod planted_t;\n", encoding="utf-8")
+        lib.write_text(lib.read_text(encoding="utf-8") + "mod planted_mac;\npub mod r#planted_raw;\n#[path = \"planted_lib/elsewhere.rs\"]\nmod planted_pathed;\n#[cfg(test)]\nmod planted_t;\n", encoding="utf-8")
         (Path(tmp) / "planted_lib").mkdir()
         mac = "#[macro_export]\nmacro_rules! {} {{ () => {{}} }}\n"
         (Path(tmp) / "planted_lib" / "planted_mac.rs").write_text(mac.format("planted_nested"), encoding="utf-8")
+        (Path(tmp) / "planted_lib" / "planted_raw.rs").write_text(mac.format("planted_rawmac"), encoding="utf-8")
+        (Path(tmp) / "planted_lib" / "elsewhere.rs").write_text(mac.format("planted_pathmac"), encoding="utf-8")
         (Path(tmp) / "planted_lib" / "planted_t.rs").write_text(mac.format("planted_testonly"), encoding="utf-8")
         (Path(tmp) / "planted_orphan.rs").write_text(mac.format("planted_orphan"), encoding="utf-8")
         ids = {e.id for e in inv.extract_routes()}
         libs = {e.id for e in inv.extract_lib(lib)}
     assert any('"/ufcs"' in i for i in ids), sorted(ids)
     assert any('"/generic"' in i for i in ids), sorted(ids)
-    assert "mcp_gateway::planted_nested!" in libs, sorted(libs)
+    assert {"mcp_gateway::planted_nested!", "mcp_gateway::planted_rawmac!", "mcp_gateway::planted_pathmac!"} <= libs, sorted(libs)
     assert not {"mcp_gateway::planted_testonly!", "mcp_gateway::planted_orphan!"} & libs, sorted(libs)
     assert {"mcp_gateway::planted_dep", "mcp_gateway::planted_alias", "mcp_gateway::planted_cu", "mcp_gateway::planted_lim!"} <= libs, libs
 
