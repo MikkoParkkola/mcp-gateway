@@ -743,8 +743,8 @@ impl Transport for StdioTransport {
         // Close stdin
         *self.writer.lock().await = None;
 
-        // Kill child process
-        if let Some(ref mut child) = *self.child.lock().await {
+        // Taken out, so nothing can signal the group again once it is reaped.
+        if let Some(mut child) = self.child.lock().await.take() {
             let _ = Box::into_pin(child.kill()).await;
         }
 

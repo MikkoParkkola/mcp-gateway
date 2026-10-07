@@ -252,12 +252,18 @@ impl StdioTransport {
         let child = self.child.lock().await.take();
         let status = match child {
             Some(mut child) => {
-                if let Ok(Ok(status)) = tokio::time::timeout(DRAIN, child.wait()).await {
-                    Some(status)
-                } else {
-                    let _ = Box::into_pin(child.kill()).await;
-                    None
+                // Watch for the leader's exit without reaping it, then end the
+                // whole group while the zombie still reserves its id (MIK-8080):
+                // descendants that closed their pipes would otherwise outlive it.
+                let deadline = tokio::time::Instant::now() + DRAIN;
+                let mut exited = super::tree::leader_exited(child.as_mut());
+                while !exited && tokio::time::Instant::now() < deadline {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    exited = super::tree::leader_exited(child.as_mut());
                 }
+                let _ = child.start_kill();
+                let reaped = tokio::time::timeout(DRAIN, child.wait()).await;
+                exited.then_some(reaped).and_then(|r| r.ok()?.ok())
             }
             None => None,
         };
