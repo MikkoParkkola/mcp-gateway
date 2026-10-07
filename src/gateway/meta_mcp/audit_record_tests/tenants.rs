@@ -596,7 +596,7 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
         1,
-        "the replay reached the backend again"
+        "the backend ran other than once (0: first round never sent; 2: the replay re-ran it)"
     );
     let notice = answers[1]["content"][0]["text"]
         .as_str()
