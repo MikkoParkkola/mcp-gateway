@@ -638,29 +638,65 @@ async fn deliver_step(
 async fn short_fields_delivered_adjacent_keep_their_run() {
     let (meta, firewall) = relay_meta();
     let (p, s) = (
-        "row 01: late pears, north slope, ok",
-        "row 02: grafting dates logged, ok",
+        "row 01: late pears on the north slope, crate 17",
+        "row 02: grafting dates logged by Aino, frost 3x",
     );
-    assert!(p.len() < 48 && s.len() < 48 && p.len() + s.len() >= 64);
+    assert!(
+        p.len() < 48 && s.len() < 48,
+        "premise: each field under a k-gram"
+    );
     let step = json!({"a": p, "b": filler("pad", 60), "c": p, "d": s});
     let delivered = json!({"x": p, "y": s});
     deliver_step(&meta, &step, &plan_answer(&delivered)).await;
-    firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "b", &delivered);
-    let relayed = |who: &str| {
-        let params = json!({"name": "send", "arguments": delivered.clone()});
-        !firewall
-            .check_relay(
-                RelayCaller::Keyed(who),
-                "alpha",
-                "send",
-                &params,
-                ("s", who),
-            )
-            .allowed
-    };
+    firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "a", &delivered);
 
-    assert!(relayed("bob"), "control: bob holds no copy of the row");
-    assert!(!relayed("alice"), "the row was delivered adjacent");
+    assert!(
+        relays_row(&firewall, "bob", &delivered),
+        "control: bob holds no copy of the row"
+    );
+    assert!(
+        !relays_row(&firewall, "alice", &delivered),
+        "the row was delivered adjacent"
+    );
+}
+
+/// Whether `who` sending `row` as a tool's arguments is refused as a relay.
+fn relays_row(firewall: &Firewall, who: &str, row: &Value) -> bool {
+    let params = json!({"name": "send", "arguments": row});
+    !firewall
+        .check_relay(
+            RelayCaller::Keyed(who),
+            "alpha",
+            "send",
+            &params,
+            ("s", who),
+        )
+        .allowed
+}
+
+/// MIK-7992: a step's two short fields delivered with another step's field
+/// between them. The run across them is the step's own; its fingerprints
+/// stay, as before the deferred cap.
+#[tokio::test]
+async fn interleaved_short_fields_keep_their_step_run() {
+    let (meta, firewall) = relay_meta();
+    let (p, s) = (
+        "the vineyard gate opens at six for the pickers",
+        "dog on premises, ring twice at the side porch!",
+    );
+    let row = json!({"a": p, "b": s});
+    let answer = plan_answer(&json!({"x": p, "y": OTHER_PROSE, "z": s}));
+    deliver_step(&meta, &row, &answer).await;
+    firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "a", &row);
+
+    assert!(
+        relays_row(&firewall, "bob", &row),
+        "control: bob holds no copy of the row"
+    );
+    assert!(
+        !relays_row(&firewall, "alice", &row),
+        "another step's field between them split the step's run"
+    );
 }
 
 /// MIK-7992: many undelivered copies of a delivered leaf, sorted before a

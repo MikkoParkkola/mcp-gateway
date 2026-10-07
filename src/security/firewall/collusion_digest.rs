@@ -11,7 +11,7 @@
 //! delivered leaf or across adjacent kept leaves.
 
 use std::cell::OnceCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
@@ -282,7 +282,7 @@ impl DeliveryDigest {
             sensitive: self.sensitive,
             deferred: false,
         };
-        kept.with_original(detector, found, original, retained)
+        kept.with_original(detector, found, original, retained, &HashSet::new())
     }
 
     /// [`Self::retaining`] for a digest whose cap is deferred (MIK-7992): its
@@ -322,19 +322,59 @@ impl DeliveryDigest {
             .flat_map(|s| detector.fingerprints(&s.text))
             .filter(|fp| found.contains(fp))
             .collect();
+        let in_step = self.step_runs_kgrams(detector, delivered);
         let kept = Self {
             segments,
             retained: Vec::new(),
             sensitive: self.sensitive,
             deferred: true,
         };
-        kept.with_original(detector, found, original, retained)
+        kept.with_original(detector, found, original, retained, &in_step)
+    }
+
+    /// Every k-gram hash of each step-order run of this digest's whole
+    /// leaves the plan delivered verbatim, each leaf counted no more times
+    /// than it was delivered; any other leaf is a seam. The step's own
+    /// adjacency, which another step's leaf between them in the answer does
+    /// not undo, without the copies the caller never got.
+    fn step_runs_kgrams(
+        &self,
+        detector: &CollusionDetector,
+        delivered: &Delivered<'_>,
+    ) -> HashSet<u64> {
+        let mut left: HashMap<&str, usize> = HashMap::new();
+        for leaf in &delivered.all {
+            *left.entry(*leaf).or_insert(0) += 1;
+        }
+        let mut runs: Vec<Vec<&str>> = Vec::new();
+        let mut gap = false;
+        for segment in &self.segments {
+            let unused = segment.whole
+                && left.get_mut(segment.text.as_str()).is_some_and(|n| {
+                    let unused = *n > 0;
+                    *n = n.saturating_sub(1);
+                    unused
+                });
+            if !unused {
+                gap = true;
+                continue;
+            }
+            match runs.last_mut() {
+                Some(run) if !(gap || segment.gap_before) => run.push(&segment.text),
+                _ => runs.push(vec![&segment.text]),
+            }
+            gap = false;
+        }
+        runs.iter()
+            .flat_map(|run| detector.kgram_hashes(&run.join("\n")))
+            .collect()
     }
 
     /// This kept digest with `retained`, then the `original` fingerprints
-    /// whose k-gram is `found` in a delivered leaf or spans adjacent kept
-    /// leaves (a removed leaf splits its run, and re-winnowing the pieces can
-    /// drop minima of text still delivered); each fingerprint once, so a
+    /// whose k-gram is `found` in a delivered leaf, spans adjacent kept
+    /// leaves, or is `in_step` (a removed leaf splits its run, and
+    /// re-winnowing the pieces can drop minima of text still delivered);
+    /// each fingerprint once, so a
     /// later cap on their count never drops a distinct one for a repeat.
     fn with_original(
         mut self,
@@ -342,12 +382,13 @@ impl DeliveryDigest {
         found: &HashSet<u64>,
         original: Vec<u64>,
         mut retained: Vec<u64>,
+        in_step: &HashSet<u64>,
     ) -> Self {
         let across = self.run_kgrams(detector);
         retained.extend(
             original
                 .into_iter()
-                .filter(|fp| found.contains(fp) || across.contains(fp)),
+                .filter(|fp| found.contains(fp) || across.contains(fp) || in_step.contains(fp)),
         );
         let mut seen = HashSet::new();
         retained.retain(|fp| seen.insert(*fp));
