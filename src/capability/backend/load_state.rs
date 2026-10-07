@@ -235,12 +235,12 @@ impl CapabilityBackend {
             }
             // The whole published list, duplicates included: an edit to a
             // definition another directory shadows still changes it.
-            let edited = caps.entries.len() != admitted.len()
-                || caps
-                    .entries
-                    .iter()
-                    .zip(&admitted)
-                    .any(|(old, new)| old.name != new.name || definition_changed(old, new));
+            let edited =
+                announce == Announce::OnChange
+                    && (caps.entries.len() != admitted.len()
+                        || caps.entries.iter().zip(&admitted).any(|(old, new)| {
+                            old.name != new.name || definition_changed(old, new)
+                        }));
             caps.replace_all(admitted);
             // With the swap, under the same lock: `catalogue_snapshot` never
             // sees one without the other.
@@ -312,3 +312,7 @@ pub(crate) enum Announce {
 
 /// The directory map type the backend holds.
 pub(super) type DirsLoaded = parking_lot::Mutex<BTreeMap<String, DirState>>;
+
+#[cfg(test)]
+#[path = "load_state_tests.rs"]
+mod tests;
