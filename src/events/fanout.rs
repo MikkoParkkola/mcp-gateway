@@ -301,6 +301,16 @@ impl EventsHub {
         // deferred pass: a reload the scan did not see may be about to offer
         // them (MIK-8027). With webhooks off none can come back.
         if webhooks_on && !self.webhook_withdrawals_armed() {
+            let held = self
+                .absent_names(super::webhook_source::NAME_PREFIX, &offered)
+                .len();
+            if held > 0 {
+                tracing::info!(
+                    held,
+                    "events: webhook subscriptions to unoffered types are held until the \
+                     deferred startup pass"
+                );
+            }
             return self.release_worker();
         }
         if !self.withdraw_unoffered_webhooks(&|_| false) {
