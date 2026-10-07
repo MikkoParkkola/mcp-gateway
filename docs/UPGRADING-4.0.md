@@ -3411,9 +3411,11 @@ TTL has passed with no request is reaped at the next sweep, not a full TTL later
 When a session ends, by its owner's `DELETE /mcp` or by the reaper, the state kept under its id
 is reclaimed: routing profile, workflow state, cost bucket, last-tool entry, cached-token counter
 and spec-preview promotions. Before, these were never removed and grew with every session. The
-ended session's calls, tokens and cost stay in the operator's aggregate totals. A second pass
-two minutes after the end removes state that a call still in flight wrote under the ended id; a
-call that runs longer than that (a backend `timeout` above two minutes) can still leave an entry.
+ended session's calls, tokens and cost stay in the operator's aggregate totals. A call still in
+flight when the session ends, or one that starts after it (a task worker, an input-round resume, a
+call released from a confirmation), holds the session until it finishes; when it does, the state
+it wrote under the ended id is removed too, however long it ran. A second pass two minutes after
+the end stays as a backstop.
 
 **Action:** none. A client that relied on a session being replaced after 30 minutes should send
 `DELETE /mcp` instead.
