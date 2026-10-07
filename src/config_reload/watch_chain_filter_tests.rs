@@ -287,6 +287,25 @@ mod real_watcher {
         let _ = h.shutdown.send(());
     }
 
+    /// `MIK-8024.WATCHDIR.1`, restored late: the directory stays missing long
+    /// enough for its deletion to wake a resolve that fails, so the record of
+    /// the dead watch must outlive that failure. Multi-threaded, so the task
+    /// resolves while the test thread waits.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn watchdir1_a_directory_restored_after_a_failed_resolve_is_watched() {
+        let (_root, cfg, mut h) = replaced_config_dir(|conf| {
+            std::fs::remove_dir_all(conf).unwrap();
+            std::thread::sleep(Duration::from_secs(1));
+        })
+        .await;
+        std::fs::write(&cfg, "a: 3\n").unwrap();
+        assert!(
+            h.triggered_within(10).await,
+            "an edit in the restored directory was not heard"
+        );
+        let _ = h.shutdown.send(());
+    }
+
     /// `MIK-8024.WATCHDIR.1`, renamed away: the old watch followed the
     /// directory to its new name. The new directory at the path is watched,
     /// and a write in the old one is no longer heard as the config.
