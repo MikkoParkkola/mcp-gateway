@@ -175,6 +175,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "append-only audit log; no secret",
     ),
     (
+        "src/security/transparency_log_anchor.rs",
+        "reads an operator-copied audit high-water mark, bounded; no secret",
+    ),
+    (
         "src/security/transparency_log_append.rs",
         "audit log writer; reopens only to cut back a torn tail; no secret",
     ),
@@ -189,6 +193,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/security/transparency_log_segments.rs",
         "audit log segments, high-water mark and reserve; no secret",
+    ),
+    (
+        "src/security/transparency_log_session.rs",
+        "reads audit log segments for one session's entries; no secret",
     ),
     (
         "src/security/transparency_log_verify.rs",
