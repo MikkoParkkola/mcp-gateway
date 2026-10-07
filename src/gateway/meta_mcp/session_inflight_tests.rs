@@ -373,7 +373,11 @@ async fn a_live_session_keeps_what_its_calls_wrote() {
         meta.cost_tracker.session_snapshot(SESSION).is_some(),
         "cost"
     );
-    assert_eq!(w.tracker.key_count(), 1, "last tool");
+    assert_eq!(
+        w.tracker.key_count(),
+        0,
+        "a keyless caller records no last tool (MIK-7997)"
+    );
     assert_eq!(meta.session_profiles.len(), 1, "profile");
     assert_eq!(meta.session_state.len(), 1, "workflow state");
     #[cfg(feature = "spec-preview")]
