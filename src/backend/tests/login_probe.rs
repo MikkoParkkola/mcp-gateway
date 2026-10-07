@@ -50,7 +50,11 @@ async fn a_probe_refused_for_a_login_runs_one_start_and_no_rebuild() {
     let browser = Browser::new();
     let backend = login_backend(&origin, dir.path(), &browser, Duration::from_secs(30), None);
 
-    let probed = within("the probe", backend.health_probe(Duration::from_secs(5))).await;
+    let probed = within(
+        "the probe",
+        Box::pin(backend.health_probe(Duration::from_secs(5))),
+    )
+    .await;
     let error = probed.expect_err("no token, so the probe cannot look");
     assert!(
         variant(&error).starts_with("AuthorizationRequired"),

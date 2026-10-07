@@ -352,7 +352,7 @@ async fn fill(
     backend.tools_for_check(None, &[], false).await
 }
 
-/// MIK-7982 r5 HIGH 2 (R5H2b, C3): a fill that captured the pending login's
+/// MIK-7982 r5 HIGH 2 (`R5H2b`, C3): a fill that captured the pending login's
 /// cohort, and is still waiting on it when its own deadline passes, ends as
 /// `AuthorizationPending`: the backend did not fail, the person has not
 /// finished logging in. The breaker counts nothing.
@@ -368,7 +368,7 @@ async fn a_start_waiting_on_the_login_times_out_as_authorization_pending() {
         .await;
     let before = backend.health_metrics().failure_count;
 
-    let error = within("the fill's own deadline", fill(&backend))
+    let error = within("the fill's own deadline", Box::pin(fill(&backend)))
         .await
         .expect_err("no tools while the login is pending");
 
@@ -398,9 +398,10 @@ async fn the_outer_tools_for_check_deadline_keeps_the_fill_owners_provenance() {
         .await;
     let before = backend.health_metrics().failure_count;
 
-    let (owner, joiner) = within("both fills' deadlines", async {
-        tokio::join!(fill(&backend), fill(&backend))
-    })
+    let (owner, joiner) = within(
+        "both fills' deadlines",
+        Box::pin(async { tokio::join!(fill(&backend), fill(&backend)) }),
+    )
     .await;
 
     for (who, outcome) in [("owner", owner), ("joiner", joiner)] {
@@ -465,7 +466,9 @@ async fn a_non_interactive_restart_cancels_nothing() {
 
     let _ = within(
         "the probe's rebuild",
-        crate::oauth::login_gate::non_interactive(backend.force_restart()),
+        Box::pin(crate::oauth::login_gate::non_interactive(
+            backend.force_restart(),
+        )),
     )
     .await;
 
@@ -602,7 +605,7 @@ async fn a_request_waiting_on_a_request_time_login_times_out_as_authorization_pe
     sleep(LAPSE).await;
     let before = backend.health_metrics().failure_count;
 
-    let error = within("the fill's own deadline", fill(&backend))
+    let error = within("the fill's own deadline", Box::pin(fill(&backend)))
         .await
         .expect_err("no tools while the request-time login is pending");
 
@@ -658,7 +661,7 @@ pub(super) fn spawn_call(
     })
 }
 
-/// MIK-7982 r5 HIGH 2 (R5H2a, C3): a fill whose own request was handed to the
+/// MIK-7982 r5 HIGH 2 (`R5H2a`, C3): a fill whose own request was handed to the
 /// transport and then timed out is a backend timeout, even while a login of
 /// its cohort is in flight: it waited on the backend, not on the login.
 #[tokio::test]
@@ -758,7 +761,9 @@ async fn a_probe_during_a_request_time_login_neither_waits_nor_rebuilds() {
 
     let rebuilt = within(
         "the probe's rebuild",
-        crate::oauth::login_gate::non_interactive(backend.force_restart()),
+        Box::pin(crate::oauth::login_gate::non_interactive(
+            backend.force_restart(),
+        )),
     )
     .await;
     assert!(rebuilt.is_err(), "a rebuild during a login does nothing");
