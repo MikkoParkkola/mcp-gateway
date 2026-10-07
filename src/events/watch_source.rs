@@ -376,12 +376,17 @@ impl EventSource for WatchSource {
             .find(|t| t.read_only && event_name(&t.capability) == name)
             .cloned()
         else {
-            // Only a confirmed absence revokes; an unread one skips (MIK-8037).
-            return Err(if unread(&catalogue, name) {
-                RpcError::not_found()
-            } else {
-                RpcError::forbidden()
-            });
+            // Only a confirmed absence revokes: an unread one, or one a
+            // catalogue write since the read may have undone, skips (MIK-8037).
+            return Err(
+                if unread(&catalogue, name)
+                    || self.host.catalogue_generation() != catalogue.generation
+                {
+                    RpcError::not_found()
+                } else {
+                    RpcError::forbidden()
+                },
+            );
         };
         if target.credential == CredentialUse::Account {
             return Err(RpcError {
