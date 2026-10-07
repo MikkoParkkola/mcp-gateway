@@ -539,6 +539,7 @@ async fn a_route_removed_before_the_first_pass_is_withdrawn_by_it() {
     let store = tempfile::tempdir().expect("store");
     std::fs::write(dir.path().join("a.yaml"), capability("alpha")).expect("write");
     std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    seed_subscription(store.path(), "alpha");
     seed_subscription(store.path(), "beta");
     seed_sentinel(store.path());
     let (caps, registry, meta) = wired(&[dir.path()], store.path()).await;
@@ -553,4 +554,5 @@ async fn a_route_removed_before_the_first_pass_is_withdrawn_by_it() {
         !subscribed(store.path(), "beta"),
         "the first pass withdraws the type its refresh removed"
     );
+    assert!(subscribed(store.path(), "alpha"), "and nothing else");
 }
