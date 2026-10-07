@@ -101,6 +101,15 @@ tools-open with remote reach. A is strengthened cheaply: `init` prints one line 
 local processes and naming how to require the token. **B is the 4.1 direction**, together with the
 client-setup writer that adds the token.
 
+Under A, "any local process" includes a request a co-hosted application is tricked into sending (server-side
+request forgery, SSRF). The origin guard (src/gateway/router/origin_guard.rs:322) blocks browser
+cross-site requests and DNS rebinding, because those carry an `Origin` or `Sec-Fetch-Site` header; a
+server-side forged request carries neither. So P2e adds a guard (lead ruling, 2026-10-08): on a loopback
+`/mcp` that serves without a token, a POST is refused unless it has `Content-Type: application/json` and an
+`Accept` header naming `application/json` or `text/event-stream`. The MCP streamable-HTTP transport
+requires clients to send both, so conforming clients are unaffected; a typical SSRF primitive cannot set
+them. The release notes state this case beside "any local process".
+
 ## Adaptive values (later, separate item)
 
 `meta_mcp.warm_start` (start the backends recent sessions used) and `backends.<name>.stop_when_idle_for`
@@ -117,7 +126,7 @@ One open PR at a time, each merged and closed before the next.
 | P2b | Hidden keys: one table in code of every INTERNAL and AUTO config key and variable (generated from the inventory and checked against it), `doctor` lists the ones a config sets, and the validators stay as they are | yes |
 | P2c | Deterministic AUTO: backend `url` with `http_url`/`ws_url` as hidden aliases; `transparency_log.enabled` defaults on with auth; the 13 P1 AUTO rows | yes |
 | P2d | REMOVE keys refused at load naming the replacement. `upgrade` deletes the dead ones; `auth.api_keys[].key` is migrated, not deleted: `upgrade` writes `key_sha256` from the plaintext (the `hash-key` path) and leaves the entry unchanged if the key cannot be resolved | yes |
-| P2e | Posture A kept: `init` prints one line saying `/mcp` is open to local processes and how to require the token | yes, `init` output only |
+| P2e | Posture A kept: `init` prints one line saying `/mcp` is open to local processes and how to require the token; a tokenless loopback `/mcp` refuses a POST without the MCP `Content-Type` and `Accept` headers | yes |
 | P2f | Docs: tier column in the inventory; the reference, `gateway.example.yaml` and QUICKSTART lead with ESSENTIAL and list no non-KEEP key; `init` writes ESSENTIAL keys plus the posture-A declarations (`single_user`, `public_paths`), which stay although ADVANCED; the minimal setup fits one screen | docs and `init` |
 
 SURF.2 is met when P2b to P2f have merged.
@@ -136,6 +145,7 @@ Each test is written first and seen failing on CI at its own assertion before th
 | P2d | each REMOVE key fails the load with a message naming its replacement; `upgrade` output has no dead REMOVE key | most warn once or have no effect today (inventory rows say which) |
 | P2d | a config with a plaintext `auth.api_keys[].key`: after `upgrade` the entry carries `key_sha256` and the original key still authenticates; an unresolvable key leaves the entry unchanged and `upgrade` says so | `upgrade` does not migrate it |
 | P2e | `init` output contains the local-exposure line naming `/mcp` and the setting that requires the token; the generated config is unchanged | the line is absent |
+| P2e | on a tokenless loopback `/mcp`: an SSRF-shaped POST (no `Accept`, or a form or plain-text `Content-Type`) is refused; a spec-conforming client POST (`Content-Type: application/json`, `Accept: application/json, text/event-stream`) is served; a request carrying the token is unaffected | the SSRF-shaped POST is served |
 | P2f | the minimal config in QUICKSTART loads and serves a tool call (this also feeds SURF.7) | QUICKSTART still shows the longer config |
 | P2f | `init` output: `/mcp` answers without a token on loopback, the dashboard needs it, and `single_user` grants the solo OAuth principal, as before | (guard: passes before and after) |
 | P2f | the inventory check reads the reference, `gateway.example.yaml` and QUICKSTART and fails on any non-KEEP config key or variable they mention; the loader still accepts hidden keys | the check does not read the docs |
@@ -150,7 +160,9 @@ saying what the user loses, gains and does:
 - Transparency log: an authenticated config no longer needs the line. No action.
 - REMOVE keys: the load fails naming the replacement; `mcp-gateway upgrade` deletes the dead ones and
   rewrites a plaintext `auth.api_keys[].key` as `key_sha256`.
-- Auth posture: unchanged in 4.0 (decision A). `init` now says that `/mcp` is open to local processes.
+- Auth posture: unchanged in 4.0 (decision A). `init` now says that `/mcp` is open to local processes,
+  including a request a co-hosted application is tricked into sending; a tokenless loopback `/mcp` now
+  refuses POSTs without the MCP `Content-Type` and `Accept` headers. Conforming clients: no action.
 
 ## Falsifiers
 
