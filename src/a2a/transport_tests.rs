@@ -219,6 +219,8 @@ async fn close_cancels_waiting_questions() {
             "close never canceled the question"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
 
 /// MIK-8063 A2A.3: under the hardened policy a literal private `a2a_url` is
 /// refused at start, before anything connects (no server listens there).
