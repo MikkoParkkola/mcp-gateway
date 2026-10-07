@@ -79,7 +79,11 @@ async fn an_edit_keeps_comments_in_crlf_and_unterminated_files() {
         let (status, body) = patch(&router, "svc", json!({"description": "new"})).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         let after = read(&path);
-        kept_in_order(&yaml.replace("    description: old", ""), &after);
+        let untouched: Vec<&str> = yaml
+            .lines()
+            .filter(|l| !l.contains("description: old"))
+            .collect();
+        kept_in_order(&untouched.join("\n"), &after);
         let config = Config::load_literal(Some(&path)).expect("loads");
         assert_eq!(config.backends["svc"].description, "new");
     }
@@ -106,13 +110,16 @@ async fn an_env_edit_appends_inside_the_block() {
     );
 }
 
-/// No-op PATCH: the value is already there, so nothing is written.
+/// No-op PATCH: the value is already there, so nothing is written or reloaded.
 #[tokio::test]
 async fn an_edit_that_changes_nothing_writes_nothing() {
-    let (router, path, _keep) = served(SVC, Route::File).await;
-    let (status, body) = patch(&router, "svc", json!({"description": "old"})).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(read(&path), SVC);
+    for route in [Route::Live, Route::File] {
+        let (router, path, _keep) = served(SVC, route).await;
+        let (status, body) = patch(&router, "svc", json!({"description": "old"})).await;
+        assert_eq!(status, StatusCode::OK, "{route:?}: {body}");
+        assert!(body["reload"].is_null(), "{route:?}: reloaded: {body}");
+        assert_eq!(read(&path), SVC, "{route:?}");
+    }
 }
 
 /// T3 KEEP.2: the inline comment on `enabled:` is carried onto the new value.
@@ -123,6 +130,18 @@ async fn an_inline_comment_follows_its_edited_value() {
     let (status, body) = patch(&router, "svc", json!({"enabled": false})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(read(&path), yaml.replace("enabled: true", "enabled: false"));
+}
+
+/// T3b: an apostrophe in a plain value opens no quote, so the comment after
+/// it is still found and carried onto the edited line.
+#[tokio::test]
+async fn an_apostrophe_does_not_hide_the_inline_comment() {
+    let yaml =
+        "backends:\n  svc:\n    command: x\n    description: it's old  # shown in the panel\n";
+    let (router, path, _keep) = served(yaml, Route::File).await;
+    let (status, body) = patch(&router, "svc", json!({"description": "new"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(read(&path), yaml.replace("it's old", "new"));
 }
 
 /// T4 KEEP.2: clearing `stop_when_idle_for` writes `null`; the comments around
