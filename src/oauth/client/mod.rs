@@ -123,6 +123,10 @@ pub struct OAuthClient {
     /// Backend name (for storage key)
     backend_name: String,
 
+    /// The backend's one-login-at-a-time gate, shared by every client the
+    /// backend builds (MIK-7982). `None` authorizes ungated.
+    login_gate: Option<Arc<super::login_gate::LoginGate>>,
+
     /// Resource URL (MCP endpoint)
     resource_url: String,
 
@@ -282,6 +286,7 @@ impl OAuthClient {
             http_client,
             loopback_client: destination::loopback_client().ok(),
             backend_name,
+            login_gate: None,
             resource_url,
             oauth_base_url: None,
             auth_metadata: None,
@@ -482,7 +487,9 @@ impl OAuthClient {
         }
 
         // Need to authorize from scratch
-        let token = self.authorize().await?;
+        let token = self
+            .authorize_shared(super::login_gate::interactive(), None)
+            .await?;
         Ok(token)
     }
 
@@ -579,6 +586,19 @@ fn open_browser(url: &str) -> bool {
 #[cfg(test)]
 mod authorize_tests;
 pub(crate) mod destination;
+
+#[cfg(test)]
+impl OAuthClient {
+    /// This client with `open` playing the browser, for a backend test that
+    /// builds its client through the backend.
+    pub(crate) fn with_open_browser(
+        mut self,
+        open: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    ) -> Self {
+        self.open_browser = Box::new(move |url: &str| open(url));
+        self
+    }
+}
 #[cfg(test)]
 use url::Url;
 

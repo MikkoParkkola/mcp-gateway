@@ -484,8 +484,9 @@ jobs:
       # Every test target: library, binary and the integration targets under
       # tests/. The store suites are included: both stores run on Windows with
       # owner-only DACLs (ADR-016). Windows-only limits are `cfg(unix)` gates.
-      # mik_7479_full_burst is skipped as in `test` (MIK-7644): 1,026 calls miss
-      # its deadline on this runner. The exactly-one-terminal-frame property
+      # mik_7479_full_burst is skipped as in `test` (MIK-7644): 1,026 calls missed
+      # its former flat 510 s deadline on this runner (not re-measured at 590 s,
+      # MIK-7534). The exactly-one-terminal-frame property
       # still runs here at 194 calls (ac_mrtr_7b_every_call_reaches_one_terminal_frame),
       # and the full burst runs in mrtr7b-full-burst.yml (MIK-7479).
       - run: cargo test --all-features --tests --no-fail-fast -- --show-output --skip mik_7479_full_burst

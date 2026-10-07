@@ -30,6 +30,7 @@
 //! `admin_token` is the value from `key_server.admin.bearer_token` in config.
 //! If no admin token is configured, the endpoints return `503 Service Unavailable`.
 
+use crate::gateway::routes;
 use std::{
     net::IpAddr,
     sync::Arc,
@@ -134,9 +135,9 @@ pub struct RevokeBySubjectQuery {
 /// auth check.
 pub fn key_server_routes(key_server: Arc<KeyServer>) -> Router {
     Router::new()
-        .route("/auth/token", post(exchange_token))
-        .route("/auth/token/{jti}", delete(revoke_token))
-        .route("/auth/tokens", delete(revoke_tokens_by_subject))
+        .route(routes::AUTH_TOKEN, post(exchange_token))
+        .route(routes::AUTH_TOKEN_JTI, delete(revoke_token))
+        .route(routes::AUTH_TOKENS, delete(revoke_tokens_by_subject))
         .with_state(key_server)
 }
 
