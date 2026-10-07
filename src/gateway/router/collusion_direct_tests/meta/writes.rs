@@ -235,10 +235,11 @@ fn signing(mut meta: MetaMcp) -> MetaMcp {
     meta
 }
 
-/// MIK-7991 (notice): a keyed read whose round is lost after the send
-/// settles its key with the gateway's uncertainty notice (MIK-7979). With
-/// signing on, the invoke path's guard replays it as a result: the gateway's
-/// own text, so it puts nothing in the replay's receipt.
+/// MIK-7991 (notice): a keyed read whose round is lost after the send is
+/// answered with its transport failure, and its key is settled with the
+/// gateway's uncertainty notice (MIK-7979). With signing on, the invoke
+/// path's guard replays that notice as a result: the gateway's own text, so
+/// it puts nothing in the replay's receipt.
 #[tokio::test]
 async fn meta_replayed_gateway_notice_is_not_receipted() {
     let fx = meta_fixture_with(Setup::default(), None, signing).await;
@@ -247,8 +248,8 @@ async fn meta_replayed_gateway_notice_is_not_receipted() {
     let key = keyed("key-7991-notice");
     let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
     assert!(
-        first.contains("may have reached the backend"),
-        "base: the lost round is answered with the notice: {first}"
+        first.contains("stream lost") && !first.contains("may have reached the backend"),
+        "base: the lost round answers its transport failure, not the notice: {first}"
     );
     let reads = fx.reads();
     let (_, replay) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
