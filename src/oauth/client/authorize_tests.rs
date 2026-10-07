@@ -328,6 +328,17 @@ async fn get_token_refreshes_an_expired_token() {
     assert_eq!(forms[0]["refresh_token"], "r1");
 }
 
+/// Expire the stored record and the cached copy alike, so the next
+/// `get_token` refreshes rather than taking up a fresher stored token
+/// (MIK-8018: a client adopts a fresh stored token instead of refreshing).
+fn expire_stored_and_cached(client: &OAuthClient) {
+    let key = client.credential_key().unwrap();
+    let mut stored = client.storage.load(&key, RESOURCE).expect("a stored token");
+    stored.expires_at = Some(1);
+    client.storage.save(&key, RESOURCE, &stored).unwrap();
+    *client.current_token.write() = Some(stored);
+}
+
 /// MIK-8021.KEEPRT.1: a server that answers a refresh without a new refresh
 /// token means "keep the one you have" (RFC 6749 section 6). The kept token
 /// must survive in memory and in storage, so the next expiry refreshes again
@@ -347,7 +358,7 @@ async fn a_refresh_without_a_new_refresh_token_keeps_the_old_one() {
     assert_eq!(stored.refresh_token.as_deref(), Some("r1"), "stored");
 
     // The next expiry refreshes headlessly with the kept token.
-    client.current_token.write().as_mut().unwrap().expires_at = Some(1);
+    expire_stored_and_cached(&client);
     assert_eq!(client.get_token().await.unwrap(), "access-b");
     let forms = forms.lock().unwrap().clone();
     assert_eq!(forms.len(), 2, "{forms:?}");
@@ -370,7 +381,7 @@ async fn a_refresh_with_a_new_refresh_token_stores_the_new_one() {
     assert_eq!(stored.refresh_token.as_deref(), Some("r-next"), "stored");
 
     // The next refresh sends the rotated token, never the replaced one.
-    client.current_token.write().as_mut().unwrap().expires_at = Some(1);
+    expire_stored_and_cached(&client);
     assert_eq!(client.get_token().await.unwrap(), "access-b");
     let forms = forms.lock().unwrap().clone();
     assert_eq!(forms.len(), 2, "{forms:?}");
