@@ -73,6 +73,10 @@ mod listen_payload;
 #[path = "agent_task_owner.rs"]
 mod agent_task_owner;
 
+// MIK-7798: an agent-JWT listener is re-validated at every delivery.
+#[path = "agent_listener_liveness.rs"]
+mod agent_listener_liveness;
+
 use helpers::{
     ReleasedOnDrop, SUBSCRIPTION_ID_META, TASK_NOTIFICATION, assert_only_its_own_task,
     assert_receives_nothing, expect_message, open_listen, task_notification,

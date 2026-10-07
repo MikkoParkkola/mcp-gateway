@@ -14,8 +14,8 @@ use super::helpers::{
     EventStream, ReleasedOnDrop, assert_only_its_own_task, assert_receives_nothing, expect_message,
 };
 
-const AGENT_A: &str = "agent-a";
-const AGENT_B: &str = "agent-b";
+pub(super) const AGENT_A: &str = "agent-a";
+pub(super) const AGENT_B: &str = "agent-b";
 
 /// Gateway authentication off, with every other field the suite's own.
 fn auth_off() -> AuthConfig {
@@ -26,7 +26,10 @@ fn auth_off() -> AuthConfig {
 }
 
 /// Register `client_id` in `registry` and return a JWT it validates.
-fn agent_token(registry: &crate::gateway::oauth::AgentRegistry, client_id: &str) -> String {
+pub(super) fn agent_token(
+    registry: &crate::gateway::oauth::AgentRegistry,
+    client_id: &str,
+) -> String {
     let secret = format!("{client_id}-task-owner-secret-0123456789");
     registry.register(crate::gateway::oauth::AgentDefinition {
         client_id: client_id.to_string(),
@@ -47,7 +50,7 @@ fn agent_token(registry: &crate::gateway::oauth::AgentRegistry, client_id: &str)
 }
 
 /// Gateway auth off, agent auth on with two agents; returns their tokens.
-async fn agent_gateway(
+pub(super) async fn agent_gateway(
     mock: &Arc<MockBackend>,
 ) -> (Arc<AppState>, tempfile::TempDir, String, String) {
     let (mut state, store) = fixture_state(&auth_off()).await;
@@ -166,7 +169,12 @@ async fn an_agent_reusing_another_agents_idempotency_key_gets_its_own_task() {
 }
 
 /// A listen presenting `bearer`, with its acknowledgement consumed.
-async fn listen_as(state: &Arc<AppState>, bearer: &str, id: i64, params: Value) -> EventStream {
+pub(super) async fn listen_as(
+    state: &Arc<AppState>,
+    bearer: &str,
+    id: i64,
+    params: Value,
+) -> EventStream {
     let body = task_method(id, "subscriptions/listen", params);
     let request = axum::http::Request::builder()
         .method("POST")
