@@ -47,11 +47,13 @@ pub struct SessionLifecycle {
     /// Keys a running task call is writing under, with how many such calls.
     /// A sweep passes them over: a caller whose task is still running is not
     /// idle, however long ago its last request was (MIK-7828.FIX.2).
-    /// Lock order: `held`, then `tracked`; never the reverse. `reap` holds
-    /// both while it decides on one key, removes it and runs its handlers, so
-    /// neither a hold nor a renewal can land between the decision and the
-    /// freeing (MIK-7746). [`KeyHold`]'s drop takes `tracked` and then `held`
-    /// one after the other, never both at once, so it is outside this order.
+    /// Lock order: `held`, then `tracked`, then `callbacks`; never the
+    /// reverse. `ended` and `ended_pending` are leaves, taken alone. `reap`
+    /// holds `held` and `tracked` while it decides on one key, removes it and
+    /// runs its handlers, so neither a hold nor a renewal can land between the
+    /// decision and the freeing (MIK-7746). [`KeyHold`]'s drop takes `tracked`
+    /// and then `held` one after the other, never both at once, so it is
+    /// outside this order.
     held: parking_lot::Mutex<std::collections::HashMap<String, usize>>,
     /// Test seam: run by `reap` before each key's critical section, with no
     /// registry lock held, so a test can renew a key between the sweep's
@@ -122,9 +124,9 @@ impl SessionLifecycle {
     /// Register a named cleanup callback.
     ///
     /// The callback receives the session ID string when a session disconnects.
-    /// Name is used for debug logging only. A callback must not call back into
-    /// this registry: it runs under the registry's locks, so a `track`,
-    /// `untrack`, `hold` or `tracked_count` from inside it deadlocks.
+    /// Name is used for debug logging only. A callback must not call any
+    /// method of this registry, nor take a lock that a caller of one holds:
+    /// it runs under the registry's locks, which are not reentrant.
     pub fn register(
         &self,
         name: impl Into<String>,
@@ -214,6 +216,12 @@ impl SessionLifecycle {
     /// second deadline for a key already tracked kept the older one, so a
     /// refreshed caller was reclaimed on its previous deadline while still
     /// live — and the handlers, which free things, ran twice for one key.
+    ///
+    /// A caller renews BEFORE it writes state under the key: a renewal waits
+    /// for a running cleanup of the key, so only a write that follows it is
+    /// sure to outlive that cleanup (MIK-7746). Caller keys only: state keyed
+    /// by a session id is freed by the session-end handlers, which a renewal
+    /// does not order against.
     pub fn track(&self, key: impl Into<String>, expires_at: u64) {
         self.tracked.write().insert(key.into(), expires_at);
     }
