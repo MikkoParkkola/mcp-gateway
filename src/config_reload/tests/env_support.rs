@@ -7,7 +7,7 @@ use crate::config::{EnvOverlay, Evaluated, HomeResolver, LiveEnv};
 use std::sync::{Mutex, atomic::AtomicBool};
 
 /// A home resolver that answers exactly as production does — the overlay under
-/// construction first, `dirs::home_dir()` otherwise — while recording what it
+/// construction first, `crate::home_dir::home_dir()` otherwise — while recording what it
 /// returned on each call and REFUSING to answer once startup has completed.
 ///
 /// The refusal is the mechanism. An outcome assertion cannot tell a
@@ -72,7 +72,7 @@ impl HomeResolver for RecordingHome {
             .filter(|h| !h.is_empty())
             .map(std::path::PathBuf::from)
             .or_else(|| self.base.clone())
-            .or_else(dirs::home_dir);
+            .or_else(crate::home_dir::home_dir);
         if let Some(ref h) = home {
             self.calls.lock().unwrap().push(h.clone());
         }

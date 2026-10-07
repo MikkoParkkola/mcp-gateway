@@ -524,7 +524,7 @@ impl TransparencyLogger {
 /// Expand a leading `~/` in `s` to the user's home directory.
 fn expand_tilde(s: &str) -> PathBuf {
     if let Some(rest) = s.strip_prefix("~/")
-        && let Some(home) = dirs::home_dir()
+        && let Some(home) = crate::home_dir::home_dir()
     {
         return home.join(rest);
     }

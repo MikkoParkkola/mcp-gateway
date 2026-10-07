@@ -144,11 +144,23 @@ fn queued(hub: &EventsHub, port: u16, event_id: &str) {
 
 /// [`queued`] for the event type `name`.
 fn queued_as(hub: &EventsHub, port: u16, event_id: &str, name: &str) {
+    queued_with(hub, port, event_id, name, |_, _| {});
+}
+
+/// [`queued_as`], with the subscription and the record changed by `edit`
+/// before they are stored.
+fn queued_with(
+    hub: &EventsHub,
+    port: u16,
+    event_id: &str,
+    name: &str,
+    edit: impl FnOnce(&mut crate::events::records::Subscription, &mut OutboxRecord),
+) {
     use crate::events::outbox::{Enqueued, OutboxCaps, OutboxState};
     use crate::events::records::Subscription;
     use crate::events::store::{Caps, TailPolicy};
     let now = Utc::now();
-    let sub = Subscription {
+    let mut sub = Subscription {
         v: 1,
         id: "sub_worker".into(),
         principal: "p".into(),
@@ -180,11 +192,7 @@ fn queued_as(hub: &EventsHub, port: u16, event_id: &str, name: &str) {
         per_principal: 10,
         global: 10,
     };
-    hub.store
-        .admit(sub, true, caps, chrono::Duration::zero(), now, tail)
-        .expect("io")
-        .expect("admitted");
-    let record = OutboxRecord {
+    let mut record = OutboxRecord {
         v: 1,
         event_id: event_id.into(),
         subscription_id: "sub_worker".into(),
@@ -206,6 +214,11 @@ fn queued_as(hub: &EventsHub, port: u16, event_id: &str, name: &str) {
         attribution_keys: Vec::new(),
         firewall: None,
     };
+    edit(&mut sub, &mut record);
+    hub.store
+        .admit(sub, true, caps, chrono::Duration::zero(), now, tail)
+        .expect("io")
+        .expect("admitted");
     let caps = OutboxCaps {
         global: 10,
         per_subscription: 10,
@@ -786,3 +799,6 @@ mod charge;
 mod audit_order;
 #[path = "worker_hold_tests.rs"]
 mod hold;
+
+#[path = "worker_recheck_tests.rs"]
+mod recheck;
