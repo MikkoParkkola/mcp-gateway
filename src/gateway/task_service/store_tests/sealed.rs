@@ -332,3 +332,36 @@ async fn a_repaired_row_counts_once_against_the_record_cap() {
     );
     service.close().await.unwrap();
 }
+
+/// No window frees a repaired key: inside the re-read, right after its import
+/// and before the seal is lowered, a retry of that key already finds its task,
+/// and a new key is still refused.
+#[tokio::test]
+async fn a_repaired_key_is_never_free_while_the_seal_lifts() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, rows, admission, service) = sealed_service(dir.path(), &["k-race"]).await;
+    let (id, original) = &rows[0];
+    std::fs::write(path.join(format!("{id}.json")), original).unwrap();
+    let seen = std::sync::Mutex::new(Vec::new());
+    let sealed = service
+        .store
+        .reread_sealed(|binding, task_id| {
+            let imported = admission.import_tasks(&[(binding, task_id)]).is_ok();
+            seen.lock().unwrap().push((
+                admission.admit_task(task_request("oidc:acme:alice", "k-race")),
+                is_new_owner(&admission, "k-meanwhile"),
+            ));
+            imported
+        })
+        .await;
+    let seen = seen.into_inner().unwrap();
+    assert_eq!(seen.len(), 1, "one repaired row");
+    let (retry, new_owner) = &seen[0];
+    assert!(
+        matches!(retry, Ok(TaskAdmission::Existing { task_id, .. }) if task_id == id),
+        "the repaired key is held from its import on, got {retry:?}"
+    );
+    assert!(!new_owner, "the seal holds until it is lowered");
+    assert_eq!(sealed, 0);
+    service.close().await.unwrap();
+}
