@@ -239,8 +239,7 @@ struct Receipt {
 tokio::task_local! {
     /// The receipts of the delivery this task owns (§13.3 "Recording").
     static RELAY_RECEIPTS: RefCell<Vec<Receipt>>;
-    /// What the delivery has staged so far, as `staged_len` counts (MIK-7992).
-    static RELAY_STAGED: Cell<usize>;
+    static RELAY_STAGED: Cell<usize>; // What it staged so far (MIK-7992).
     /// Set while one step of a plan dispatches.
     static PLAN_STEP: ();
 }
@@ -613,7 +612,11 @@ impl MetaMcp {
         };
         if let Some(target) = target {
             let value = unwrapped.as_ref().unwrap_or(result);
-            self.stage_relay_receipt(caller.relay_caller(session_id), target, value);
+            // MIK-7991: the stored record was restored on decode; the replay
+            // wrote nothing else, so the delivery's record is exactly it.
+            let record = super::gateway_writes::recorded();
+            let value = super::gateway_writes::without(value, &record);
+            self.stage_relay_receipt(caller.relay_caller(session_id), target, &value);
         }
     }
 }
@@ -661,12 +664,10 @@ fn receipt_with(
     value: &Value,
 ) -> Option<Receipt> {
     let staged = RELAY_STAGED.try_with(Cell::get).ok()?;
-    // MIK-7994: digested without the gateway's members of this call: a plan
-    // step's receipt is only retained later, never rebuilt.
+    // MIK-7994: without this call's gateway members; plan receipts are never rebuilt.
     let mut value = value.clone();
     super::gateway_writes::strip(&mut value, super::gateway_writes::Layer::Value);
     let in_plan = PLAN_STEP.try_with(|()| ()).is_ok();
-    // MIK-7992: a plan step is capped once kept to what its plan delivers.
     let digest = fw.receipt_digest(server, tool, &value, in_plan.then_some(staged))?;
     RELAY_STAGED.with(|s| s.set(staged + digest.staged_len()));
     Some(Receipt {

@@ -1618,17 +1618,15 @@ verify can report such a gap for records that never reached disk. To verify a co
 has no `.hwm`, run `audit verify --archive <path>`, which reports tail completeness as unchecked.
 On a signed log, `.hwm` is signed too.
 
-Limitation: this detects a partial deletion, not a total one. Anyone with write access to the
+On its own, `.hwm` detects a partial deletion, not a total one. Anyone with write access to the
 whole audit directory (a compromised gateway service account, a shared volume, a log-shipping
 agent's credentials, not only full host control) can delete every segment and the `.hwm`
-together. `audit verify` on the emptied path reports that nothing exists to read; once the
-gateway restarts and starts a fresh log, verify passes on it, and nothing in the directory
-shows an earlier log existed. A log stored only in that directory cannot prove it existed.
-Forward audit records off-host: `control_plane.export` writes a local NDJSON file, and the
-protection holds only once an agent running as another account ships that file to a store (a
-SIEM, for example) where the gateway account cannot delete or alter records already landed. To
-detect a wipe or rollback, keep a copy of `<log>.hwm` off the host and verify with
-`audit verify --anchor` (item 158).
+together, and a log stored only in that directory cannot prove it existed. An off-host anchor
+can: keep a copy of `<log>.hwm` off the host and verify with `audit verify --anchor` (item 158),
+which fails on a wiped or rolled-back log. To keep the records themselves, forward them off-host:
+`control_plane.export` writes a local NDJSON file, and the protection holds only once an agent
+running as another account ships that file to a store (a SIEM, for example) where the gateway
+account cannot delete or alter records already landed.
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
