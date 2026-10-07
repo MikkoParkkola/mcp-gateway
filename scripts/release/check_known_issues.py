@@ -204,18 +204,27 @@ def is_prerelease_tag(tag):
 def later_releases(line):
     """The versions `line` renders that are later than this release.
 
-    Read from the rendered text: inline tags and link targets dropped before
-    entities are decoded (so &lt;b&gt; stays text), then backslash escapes,
-    emphasis, code and bracket marks dropped, so 4\\.0\\.1, 4.0.&#49;,
+    Markdown decides what renders (a code span keeps its markup), so the line
+    is read two ways and a version either reading shows counts (fail closed).
+    Both decode entities and drop backslash escapes, emphasis and code marks,
+    so 4\\.0\\.1 and 4.0.&#49; count. The second also drops inline tags, link
+    targets and brackets (tags before decoding, so &lt;b&gt; stays text), so
     4.0.<em>1</em> and 4.0.[1](url) count.
     """
-    line = re.sub(r"[\\`*_\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", line)))
-    return [
-        match.group(0)
-        for match in VERSION_TOKEN.finditer(line)
-        if tuple(int(part or 0) for part in match.groups()) > THIS_RELEASE
-        and not IN_SUFFIX.search(line[: match.start()])
-    ]
+    found = []
+    readings = (
+        re.sub(r"[\\`*_]", "", html.unescape(line)),
+        re.sub(r"[\\`*_\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", line))),
+    )
+    for text in readings:
+        found += [
+            match.group(0)
+            for match in VERSION_TOKEN.finditer(text)
+            if tuple(int(part or 0) for part in match.groups()) > THIS_RELEASE
+            and not IN_SUFFIX.search(text[: match.start()])
+            and match.group(0) not in found
+        ]
+    return found
 
 
 def problems(section, release):
