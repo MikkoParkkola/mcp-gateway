@@ -100,7 +100,9 @@ impl AgentRegistry {
     }
 
     /// The time, in Unix seconds, a token is judged at: the wall clock, which
-    /// tests may move forward.
+    /// tests may move forward. A method so every judgement reads the clock of
+    /// the registry it validates against; only test builds read `self`.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
     pub(crate) fn now(&self) -> u64 {
         let now = jsonwebtoken::get_current_timestamp();
         #[cfg(test)]
