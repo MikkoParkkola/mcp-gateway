@@ -449,8 +449,10 @@ impl MetaMcp {
             });
         let validated =
             super::invoke::enforce_output_schema(server, tool, result, output_schema.as_ref());
-        let mut gated =
-            self.apply_response_gates(server, tool, api_key_name, trace_id, validated)?;
+        let gated = self.apply_response_gates(server, tool, api_key_name, trace_id, validated)?;
+        // The live path stamps after its gates (MIK-6909): a peer receipt is
+        // replaced, or dropped with stamping off, never stored as ours (MIK-8030).
+        let mut gated = self.stamp_direct_result(gated, server, tool, api_key_name);
         let target = super::response_security::ResponsePolicyTarget {
             server: server.to_owned(),
             tool: tool.to_owned(),

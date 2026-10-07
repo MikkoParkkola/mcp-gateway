@@ -61,12 +61,13 @@ impl MetaMcp {
         stamped
     }
 
-    /// Stamp provenance onto a direct per-backend route result (the
-    /// `/mcp/{name}` passthrough, which bypasses the meta chokepoint — rung 3).
+    /// Stamp provenance onto a result that bypassed the meta chokepoint: the
+    /// direct per-backend route (the `/mcp/{name}` passthrough, rung 3) and a
+    /// recovered upstream task result (MIK-8030).
     ///
-    /// Tagged [`CacheOutcome::Bypass`] because the direct route never consults
-    /// the meta response cache. No-op when stamping is disabled, so the
-    /// passthrough stays byte-identical with the feature off.
+    /// Tagged [`CacheOutcome::Bypass`] because neither consults the meta
+    /// response cache. With stamping disabled a backend-supplied receipt is
+    /// removed and nothing else changes.
     #[must_use]
     pub fn stamp_direct_result(
         &self,
