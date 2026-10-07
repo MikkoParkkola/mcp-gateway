@@ -11,7 +11,7 @@
 //! delivered leaf or across adjacent kept leaves.
 
 use std::cell::OnceCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
@@ -24,7 +24,6 @@ use super::collusion_gate::RECORD_CAP;
 pub(super) const DELIVERED_SET_CAP: usize = 1024 * 1024;
 
 /// One piece of delivered text.
-#[derive(Clone)]
 struct Segment {
     text: String,
     /// The whole leaf, not a piece the cap cut from it.
@@ -33,9 +32,37 @@ struct Segment {
     gap_before: bool,
 }
 
+impl Segment {
+    fn view(&self) -> View<'_> {
+        View {
+            text: &self.text,
+            whole: self.whole,
+            gap_before: self.gap_before,
+        }
+    }
+}
+
+/// A [`Segment`] borrowed, so capping copies only the text it keeps.
+#[derive(Clone, Copy)]
+struct View<'a> {
+    text: &'a str,
+    whole: bool,
+    gap_before: bool,
+}
+
+impl View<'_> {
+    fn owned(self) -> Segment {
+        Segment {
+            text: self.text.to_owned(),
+            whole: self.whole,
+            gap_before: self.gap_before,
+        }
+    }
+}
+
 /// A delivery reduced to what recording it needs, so a staged receipt holds
 /// at most [`RECORD_CAP`] of text rather than the whole result.
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub(crate) struct DeliveryDigest {
     segments: Vec<Segment>,
     /// Fingerprints kept from leaves a change removed (plans only).
@@ -46,11 +73,11 @@ pub(crate) struct DeliveryDigest {
 }
 
 /// Each leaf as a whole segment, no seam between them.
-fn whole_segments(leaves: &[&str]) -> Vec<Segment> {
+fn leaf_views<'a>(leaves: &[&'a str]) -> Vec<View<'a>> {
     leaves
         .iter()
-        .map(|leaf| Segment {
-            text: (*leaf).to_owned(),
+        .map(|&leaf| View {
+            text: leaf,
             whole: true,
             gap_before: false,
         })
@@ -60,25 +87,25 @@ fn whole_segments(leaves: &[&str]) -> Vec<Segment> {
 /// `segments` in walk order, capped: segments from the head and from the
 /// tail up to half of [`RECORD_CAP`] each, one at a boundary cut on a char
 /// boundary, and the middle dropped behind a seam. A kept segment keeps its
-/// own seam. Also whether anything was cut.
-fn cap(segments: Vec<Segment>) -> (Vec<Segment>, bool) {
+/// own seam. Only kept text is copied. Also whether anything was cut.
+fn cap(segments: &[View<'_>]) -> (Vec<Segment>, bool) {
     let total = segments
         .iter()
         .map(|s| s.text.len() + 1)
         .sum::<usize>()
         .saturating_sub(1);
     if total <= RECORD_CAP {
-        return (segments, false);
+        return (segments.iter().map(|s| s.owned()).collect(), false);
     }
     let half = RECORD_CAP / 2;
     let mut head = Vec::new();
     let mut room = half;
-    for s in &segments {
+    for s in segments {
         if room == 0 {
             break;
         }
         if s.text.len() <= room {
-            head.push(s.clone());
+            head.push(s.owned());
             room -= (s.text.len() + 1).min(room);
         } else {
             let end = s.text.floor_char_boundary(room);
@@ -99,7 +126,7 @@ fn cap(segments: Vec<Segment>) -> (Vec<Segment>, bool) {
             break;
         }
         if s.text.len() <= room {
-            tail.push(s.clone());
+            tail.push(s.owned());
             room -= (s.text.len() + 1).min(room);
         } else {
             let start = s.text.ceil_char_boundary(s.text.len() - room);
@@ -125,7 +152,7 @@ impl DeliveryDigest {
     /// `leaves` in walk order, capped by leaf (see [`cap`]). Also whether
     /// anything was cut.
     pub(super) fn of_leaves(leaves: &[&str], sensitive: bool) -> (Self, bool) {
-        let (segments, cut) = cap(whole_segments(leaves));
+        let (segments, cut) = cap(&leaf_views(leaves));
         let digest = Self {
             segments,
             retained: Vec::new(),
@@ -145,7 +172,7 @@ impl DeliveryDigest {
             return Self::of_leaves(leaves, sensitive);
         }
         let digest = Self {
-            segments: whole_segments(leaves),
+            segments: leaf_views(leaves).into_iter().map(View::owned).collect(),
             retained: Vec::new(),
             sensitive,
             deferred: true,
@@ -153,25 +180,36 @@ impl DeliveryDigest {
         (digest, false)
     }
 
-    /// This digest with a deferred cap applied: segments capped as
-    /// [`cap`] caps leaves, seams kept, and at most [`RECORD_CAP`]
-    /// retained fingerprints. Also whether anything was cut. A digest
-    /// capped at staging is returned as it is.
-    pub(super) fn capped(mut self) -> (Self, bool) {
+    /// A copy of this digest with its deferred cap applied: segments capped
+    /// as [`cap`] caps leaves, seams kept, and at most [`RECORD_CAP`]
+    /// retained fingerprints; also whether anything was cut. `None` for a
+    /// digest capped at staging. Only the kept text is copied.
+    pub(super) fn capped(&self) -> Option<(Self, bool)> {
         if !self.deferred {
-            return (self, false);
+            return None;
         }
-        let (segments, mut cut) = cap(std::mem::take(&mut self.segments));
-        cut |= self.retained.len() > RECORD_CAP;
-        self.retained.truncate(RECORD_CAP);
-        self.segments = segments;
-        self.deferred = false;
-        (self, cut)
+        let views: Vec<View<'_>> = self.segments.iter().map(Segment::view).collect();
+        let (segments, cut) = cap(&views);
+        let kept = self.retained.len().min(RECORD_CAP);
+        let digest = Self {
+            segments,
+            retained: self.retained[..kept].to_vec(),
+            sensitive: self.sensitive,
+            deferred: false,
+        };
+        Some((digest, cut || kept < self.retained.len()))
     }
 
-    /// Whether the cap is still to apply.
+    /// Whether the cap is still to apply (tests only).
+    #[cfg(test)]
     pub(super) fn is_deferred(&self) -> bool {
         self.deferred
+    }
+
+    /// How many fingerprints are retained (tests only).
+    #[cfg(test)]
+    pub(super) fn retained_len(&self) -> usize {
+        self.retained.len()
     }
 
     /// Each segment's text and whether a seam lies before it (tests only).
@@ -209,8 +247,32 @@ impl DeliveryDigest {
     /// fingerprint (the original runs' and retained ones) stays when its
     /// k-gram is in a delivered leaf or in a kept run.
     pub(super) fn retaining(self, detector: &CollusionDetector, delivered: &Delivered<'_>) -> Self {
-        let verbatim = |s: &Segment| s.whole && delivered.leaves.contains(s.text.as_str());
-        if self.retained.is_empty() && self.segments.iter().all(verbatim) {
+        // A deferred digest keeps no more verbatim copies of a leaf than the
+        // plan delivered (MIK-7992): its cap applies after this, and copies
+        // the caller never got must not take the budget of text it did.
+        let mut left: Option<HashMap<&str, usize>> = self.deferred.then(|| {
+            let mut counts = HashMap::new();
+            for leaf in &delivered.all {
+                *counts.entry(*leaf).or_insert(0) += 1;
+            }
+            counts
+        });
+        let keep: Vec<bool> = self
+            .segments
+            .iter()
+            .map(|s| {
+                s.whole
+                    && match left.as_mut() {
+                        Some(left) => left.get_mut(s.text.as_str()).is_some_and(|n| {
+                            let unused = *n > 0;
+                            *n = n.saturating_sub(1);
+                            unused
+                        }),
+                        None => delivered.leaves.contains(s.text.as_str()),
+                    }
+            })
+            .collect();
+        if self.retained.is_empty() && keep.iter().all(|&k| k) {
             return self;
         }
         let original = self.fingerprints(detector);
@@ -218,8 +280,8 @@ impl DeliveryDigest {
         let mut retained = Vec::new();
         let mut segments = Vec::with_capacity(self.segments.len());
         let mut gap = false;
-        for segment in self.segments {
-            if verbatim(&segment) {
+        for (segment, verbatim) in self.segments.into_iter().zip(keep) {
+            if verbatim {
                 segments.push(Segment {
                     gap_before: gap || segment.gap_before,
                     ..segment

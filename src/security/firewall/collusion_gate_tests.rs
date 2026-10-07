@@ -709,13 +709,11 @@ fn a_plan_step_digest_is_capped_later_as_a_delivery_is_now() {
     let (staged, cut) = DeliveryDigest::of_plan_step_leaves(&leaves, false);
     assert!(!cut && staged.is_deferred(), "staged whole, cap deferred");
     assert_eq!(staged.segment_texts().len(), 3, "every leaf whole");
-    let (capped, cut) = staged.capped();
+    let (capped, cut) = staged.capped().expect("the cap is deferred");
     assert!(cut && !capped.is_deferred());
     let (now, _) = DeliveryDigest::of_leaves(&leaves, false);
     assert_eq!(capped.segment_texts(), now.segment_texts());
-    let (again, cut) = capped.capped();
-    assert!(!cut, "a capped digest is capped once");
-    assert_eq!(again.segment_texts(), now.segment_texts());
+    assert!(capped.capped().is_none(), "a capped digest is capped once");
 }
 
 /// MIK-7992: a plan step's digest recorded without being kept to its plan's
@@ -742,4 +740,28 @@ fn a_deferred_digest_is_capped_where_it_is_recorded() {
         egress(&fw, RelayCaller::Keyed("bob")).findings.is_empty(),
         "the dropped middle was recorded"
     );
+}
+
+/// MIK-7992: a plan step kept to its answer can retain more fingerprints
+/// than its text would record; the deferred cap bounds them too.
+#[test]
+fn a_capped_plan_step_retains_at_most_the_cap_of_fingerprints() {
+    use super::super::collusion::{CollusionDetector, RelayParams};
+    use super::super::collusion_digest::Delivered;
+    let detector = CollusionDetector::new(RelayParams::default());
+    let text = (0..25_000)
+        .map(|i| format!("w{i:06}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let answer = format!("{text} as delivered");
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&[&text], false);
+    let delivered = Delivered::of_leaves(vec![answer.as_str()]).expect("under the bound");
+    let kept = staged.retaining(&detector, &delivered);
+    assert!(
+        kept.retained_len() > RECORD_CAP,
+        "premise: retention alone passes the cap"
+    );
+    let (capped, cut) = kept.capped().expect("the cap is deferred");
+    assert!(cut, "the truncation counts as a cut");
+    assert_eq!(capped.retained_len(), RECORD_CAP);
 }

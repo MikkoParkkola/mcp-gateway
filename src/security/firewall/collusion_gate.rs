@@ -438,11 +438,12 @@ impl Firewall {
         Some(digest)
     }
 
-    /// `digest` with a deferred cap applied, a cut counted.
-    fn capped(&self, digest: DeliveryDigest) -> DeliveryDigest {
-        let (digest, cut) = digest.capped();
+    /// A copy of `digest` with its deferred cap applied, a cut counted;
+    /// `None` when it was capped at staging.
+    fn capped(&self, digest: &DeliveryDigest) -> Option<DeliveryDigest> {
+        let (digest, cut) = digest.capped()?;
         self.count_cut(cut);
-        digest
+        Some(digest)
     }
 
     fn count_cut(&self, cut: bool) {
@@ -472,7 +473,10 @@ impl Firewall {
         delivered: &Delivered<'_>,
     ) -> DeliveryDigest {
         match self.relay_detector() {
-            Some(detector) => self.capped(digest.retaining(detector, delivered)),
+            Some(detector) => {
+                let kept = digest.retaining(detector, delivered);
+                self.capped(&kept).unwrap_or(kept)
+            }
             None => digest,
         }
     }
@@ -492,13 +496,8 @@ impl Firewall {
         let flows = self.relay.source_flows(&source);
         // MIK-7992: the one sink every record passes, so a plan step's
         // receipt never kept to its plan's answer is recorded capped too.
-        let capped;
-        let digest = if digest.is_deferred() {
-            capped = self.capped(digest.clone());
-            &capped
-        } else {
-            digest
-        };
+        let capped = self.capped(digest);
+        let digest = capped.as_ref().unwrap_or(digest);
         detector.record_fingerprints_at(
             &source,
             caller.key(),
