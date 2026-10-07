@@ -134,8 +134,9 @@ jobs:
         run: python3 scripts/release/test_scope_acceptance.py
       - name: Test the Known issues gate
         run: python3 scripts/release/test_check_known_issues.py
-      - name: Known issues is empty at a tag
-        # A known issue left at tag time ships in the release.
+      - name: Known issues is empty at a final tag
+        # A known issue left at a final tag ships in the release; a prerelease
+        # tag may carry known gaps, and the script reads the tag itself.
         run: python3 scripts/release/check_known_issues.py --release
       - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
         run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
