@@ -35,16 +35,20 @@ fn routes(registry: &Arc<parking_lot::RwLock<WebhookRegistry>>) -> Vec<String> {
 /// Store a subscription to capability `cap`'s push event in the events store
 /// at `store`, as an earlier run left it: the hub loads it when it opens.
 fn seed_subscription(store: &std::path::Path, cap: &str) {
+    seed_named(store, cap, &format!("webhook.{cap}.push.received"));
+}
+/// A subscription to event type `name`, found by [`subscribed`] under `key`.
+fn seed_named(store: &std::path::Path, key: &str, name: &str) {
     let subs = store.join("subs");
     std::fs::create_dir_all(&subs).expect("subs dir");
     let row = serde_json::json!({
-        "v": 1, "id": format!("sub_{cap}"), "principal": "p",
-        "url": "https://p.example/cb", "name": format!("webhook.{cap}.push.received"),
+        "v": 1, "id": format!("sub_{key}"), "principal": "p",
+        "url": "https://p.example/cb", "name": name,
         "arguments": {}, "secret": "whsec_x", "previous_secret": null,
         "previous_until": null, "granted_at": chrono::Utc::now(), "expires_at": null,
         "active": true, "failed_since": null, "last_delivery_at": null, "last_error": null
     });
-    let file = subs.join(format!("sub_{cap}.json"));
+    let file = subs.join(format!("sub_{key}.json"));
     std::fs::write(&file, serde_json::to_vec(&row).expect("json")).expect("write");
     #[cfg(unix)]
     {
@@ -251,24 +255,35 @@ async fn a_partial_reload_withdraws_a_route_a_read_capability_dropped() {
     let root = tempfile::tempdir().expect("root");
     let store = tempfile::tempdir().expect("store");
     let (d1, d2) = (root.path().join("d1"), root.path().join("d2"));
+    // Alpha's second route, which the reload keeps.
+    let pull = "  pull:\n    path: /alpha/pull\n    method: POST\n    transform:\n      \
+                event_type: \"alpha.pull\"\n      data: { ref: \"{ref}\" }\n    event:\n      \
+                description: \"A pull.\"\n      filters: [ref]\n";
     for (dir, cap) in [(&d1, "alpha"), (&d2, "beta")] {
         std::fs::create_dir_all(dir).expect("dir");
         std::fs::write(dir.join(format!("{cap}.yaml")), capability(cap)).expect("write");
         seed_subscription(store.path(), cap);
     }
+    std::fs::write(d1.join("alpha.yaml"), capability("alpha") + pull).expect("alpha pull");
+    seed_named(store.path(), "alpha_pull", "webhook.alpha.pull.received");
     let (caps, _registry, meta) = wired(&[&d1, &d2], store.path()).await;
     caps.mark_initial_scan_complete();
 
-    // Alpha is read again, without its webhook; beta's directory is not.
+    // Alpha is read again with its pull route only; beta's directory is not.
     let bare = capability("alpha");
     let bare = bare.split("webhooks:").next().expect("head");
-    std::fs::write(d1.join("alpha.yaml"), bare).expect("rewrite alpha");
+    std::fs::write(d1.join("alpha.yaml"), format!("{bare}webhooks:\n{pull}"))
+        .expect("rewrite alpha");
     std::fs::remove_dir_all(&d2).expect("make d2 unreadable");
     caps.reload().await.expect("partial reload");
     meta.events_capabilities_reloaded("hooks");
     assert!(
         !subscribed(store.path(), "alpha"),
         "a read capability's dropped route is withdrawn"
+    );
+    assert!(
+        subscribed(store.path(), "alpha_pull"),
+        "the read capability's kept route keeps its subscription"
     );
     assert!(
         subscribed(store.path(), "beta"),
