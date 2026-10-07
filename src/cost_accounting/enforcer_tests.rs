@@ -318,3 +318,19 @@ fn budgeted_names_present_first_leave_the_full_unbudgeted_allowance() {
     // THEN: the invented keys still get the whole cap of their own entries
     assert_eq!(e.key_daily.len(), budgets.len() + MAX_UNBUDGETED_ROWS);
 }
+
+#[test]
+fn a_due_sweep_frees_the_cap_before_a_new_name_is_counted() {
+    // GIVEN: the per-tool map full of unbudgeted entries from two days ago
+    let e = enforcer_with(true, None, &[], &[], &[]);
+    let old = current_day() - 2;
+    for i in 0..MAX_UNBUDGETED_ROWS {
+        e.tool_daily
+            .insert(format!("old-{i}"), DailyAccumulator::stale(old, 5));
+    }
+    // WHEN: the first spend of the day, with a sweep due, uses a new name
+    e.record_spend("new-today", None, 0.01);
+    // THEN: the sweep ran first, so the new name has its own entry
+    assert!(e.tool_daily.contains_key("new-today"));
+    assert!(e.snapshot().tool_overflow_usd.abs() < 1e-12);
+}
