@@ -249,9 +249,17 @@ async fn a_start_era_step_for_a_revoked_slot_keeps_the_era() {
         "the slot was revoked"
     );
 
-    let (legacy, _handles) = Peer::new(Answer::MethodNotFound);
+    // Held, so a probe that ran would never return: the refusal must come first.
+    let (legacy, mut handles) = Peer::new(Answer::MethodNotFound);
+    legacy.hold.store(true, Ordering::SeqCst);
     let started: Arc<dyn Transport> = legacy;
-    backend.resolve_era_for_entry_test(&started, &entry).await;
+    tokio::time::timeout(WAIT, backend.resolve_era_for_entry_test(&started, &entry))
+        .await
+        .expect("a refused era step returns without probing");
+    assert!(
+        handles.started.try_recv().is_err(),
+        "no probe reached the revoked slot's peer"
+    );
 
     assert_eq!(
         backend.cached_era().await,
@@ -263,8 +271,23 @@ async fn a_start_era_step_for_a_revoked_slot_keeps_the_era() {
 /// MIK-7643: the revocation lands while the start's probe is on the wire. The
 /// verdict was discarded while the slot still served; the revoked peer's
 /// answer is not installed.
-#[tokio::test]
-async fn a_start_probe_answer_for_a_slot_revoked_mid_probe_is_not_stored() {
+#[test]
+fn a_start_probe_answer_for_a_slot_revoked_mid_probe_is_not_stored() {
+    let records = run(a_start_probe_answered_after_its_slot_was_revoked());
+    // Refused for the slot, about the peer's real answer: not a probe that timed out.
+    let refused: Vec<_> = records
+        .iter()
+        .filter(|record| record["fields"]["reason"] == "transport_replaced")
+        .collect();
+    assert_eq!(refused.len(), 1, "one refused start answer: {records:?}");
+    assert_eq!(
+        refused[0]["fields"]["evidence"], "method_not_found",
+        "{refused:?}"
+    );
+    assert_eq!(refused[0]["fields"]["trigger"], "start", "{refused:?}");
+}
+
+async fn a_start_probe_answered_after_its_slot_was_revoked() {
     let backend = per_user_backend("era-retired-start-probe");
     let entry = revoked_primed_slot(&backend).await;
 
