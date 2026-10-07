@@ -409,6 +409,21 @@ mod tree_kill {
         );
     }
 
+    /// MIK-8080: `close()` gives up the child it reaped, so nothing (a second
+    /// `close()`, `Drop`, a read error) can signal that group id again.
+    #[tokio::test]
+    async fn close_gives_up_the_reaped_child() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let (command, _pidfile) = tree_backend(workspace.path(), false);
+        let transport = start_tree_transport(workspace.path(), &command);
+        transport.start().await.expect("start");
+        transport.close().await.expect("close");
+        assert!(
+            transport.child.lock().await.is_none(),
+            "close() kept the reaped child, whose group id can be reused"
+        );
+    }
+
     /// MIK-8080: a transport dropped without `close()` while its leader is an
     /// unreaped zombie still ends the descendants: the zombie keeps the group id.
     #[tokio::test]
