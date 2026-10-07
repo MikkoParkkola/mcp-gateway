@@ -90,8 +90,11 @@ impl TaskService {
         // Sealed BEFORE the import, so no admission is ever answered without
         // the seal; and apart from it, because the import returns early on an
         // empty batch and a store whose only rows are sealed must still seal.
-        admission.set_sealed(store.skipped_records().sealed);
+        // A refused import puts the previous seal back: the caller's index is
+        // left exactly as it was found.
+        let prior = admission.set_sealed(store.skipped_records().sealed);
         if admission.import_tasks(&store.restored_bindings()).is_err() {
+            admission.set_sealed(prior);
             let _ = store.close().await;
             return Err(ServiceError::Unavailable);
         }

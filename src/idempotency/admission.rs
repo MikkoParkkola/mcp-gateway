@@ -222,9 +222,10 @@ impl ExecutionAdmission {
     /// Seal or unseal NEW identities: `rows` is how many stored task rows hold
     /// a key nobody can read (MIK-8052). Set by the task service at open and
     /// after each re-read of those rows, always after any repaired row's
-    /// binding is imported, so a key never falls between the two.
-    pub(crate) fn set_sealed(&self, rows: usize) {
-        self.state.lock().sealed = rows;
+    /// binding is imported, so a key never falls between the two. Returns the
+    /// previous count, so a startup that fails can put it back.
+    pub(crate) fn set_sealed(&self, rows: usize) -> usize {
+        std::mem::replace(&mut self.state.lock().sealed, rows)
     }
 
     /// Call only after current authorization, with a stable verified principal
