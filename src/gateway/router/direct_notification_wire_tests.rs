@@ -24,7 +24,7 @@ use crate::identity_propagation::{
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
 
-const NOTE: &str = "notifications/cancelled";
+const NOTE: &str = "notifications/roots/list_changed";
 
 fn static_auth() -> String {
     format!("Bearer {}", "gateway-static")
@@ -197,7 +197,7 @@ async fn send(
 }
 
 fn note() -> Value {
-    json!({ "jsonrpc": "2.0", "method": NOTE, "params": { "requestId": 7 } })
+    json!({ "jsonrpc": "2.0", "method": NOTE, "params": {} })
 }
 
 fn list() -> Value {
@@ -264,6 +264,32 @@ async fn passthrough_callers_notifications_carry_their_own_values_on_the_wire() 
             .all(|(m, a)| m != NOTE || a.as_deref() != Some(static_auth.as_str())),
         "a notification carried the static credential"
     );
+}
+
+/// MIK-8072: a client's `notifications/cancelled` names the client's request
+/// id, which the backend never saw (each transport numbers its own requests
+/// from 1), so forwarding it could cancel another caller's call holding that
+/// number. It is accepted and never sent upstream; other notifications still
+/// are.
+#[tokio::test]
+async fn a_client_cancel_never_reaches_the_backend() {
+    let gw = gateway(PropagationStrategyKind::SignedAssertion).await;
+    assert_eq!(send(&gw, &list(), Some("beta"), None).await, StatusCode::OK);
+    let cancel = json!({ "jsonrpc": "2.0", "method": "notifications/cancelled",
+        "params": { "requestId": 1, "reason": "not yours" } });
+    assert_eq!(
+        send(&gw, &cancel, Some("alpha"), None).await,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        send(&gw, &note(), Some("alpha"), None).await,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        auths(&gw, "notifications/cancelled"),
+        Vec::<Option<String>>::new()
+    );
+    assert_eq!(auths(&gw, NOTE).len(), 1, "the control notification");
 }
 
 /// Neither strategy's forwarded credential reaches a trace span on the HTTP
