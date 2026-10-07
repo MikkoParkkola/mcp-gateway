@@ -25,6 +25,15 @@ type Forms = Arc<Mutex<Vec<HashMap<String, String>>>>;
 /// A token endpoint on loopback. `Some(token)` answers with that access token;
 /// `None` refuses every request with `invalid_grant`.
 async fn token_endpoint(answer: Option<&'static str>) -> (String, Forms) {
+    token_endpoint_issuing(answer, Some("r-next")).await
+}
+
+/// As [`token_endpoint`], answering with `refresh` as the refresh token, or
+/// with none at all, as a server that keeps its refresh tokens does.
+async fn token_endpoint_issuing(
+    answer: Option<&'static str>,
+    refresh: Option<&'static str>,
+) -> (String, Forms) {
     use axum::{Form, Json, Router, http::StatusCode, response::IntoResponse, routing::post};
     let forms: Forms = Arc::default();
     let seen = Arc::clone(&forms);
@@ -34,13 +43,17 @@ async fn token_endpoint(answer: Option<&'static str>) -> (String, Forms) {
             seen.lock().unwrap().push(form);
             async move {
                 match answer {
-                    Some(token) => Json(serde_json::json!({
-                        "access_token": token,
-                        "token_type": "Bearer",
-                        "expires_in": 3600,
-                        "refresh_token": "r-next"
-                    }))
-                    .into_response(),
+                    Some(token) => {
+                        let mut body = serde_json::json!({
+                            "access_token": token,
+                            "token_type": "Bearer",
+                            "expires_in": 3600,
+                        });
+                        if let Some(refresh) = refresh {
+                            body["refresh_token"] = refresh.into();
+                        }
+                        Json(body).into_response()
+                    }
                     None => (
                         StatusCode::BAD_REQUEST,
                         Json(serde_json::json!({ "error": "invalid_grant" })),
@@ -313,6 +326,46 @@ async fn get_token_refreshes_an_expired_token() {
     assert_eq!(forms.len(), 1, "{forms:?}");
     assert_eq!(forms[0]["grant_type"], "refresh_token");
     assert_eq!(forms[0]["refresh_token"], "r1");
+}
+
+/// MIK-8021.KEEPRT.1: a server that answers a refresh without a new refresh
+/// token means "keep the one you have" (RFC 6749 section 6). The kept token
+/// must survive in memory and in storage, so the next expiry refreshes again
+/// instead of sending the user through a login.
+#[tokio::test]
+async fn a_refresh_without_a_new_refresh_token_keeps_the_old_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, forms) = token_endpoint_issuing(Some("access-b"), None).await;
+    let client = client(dir.path(), Some(&issuer));
+    *client.current_token.write() = Some(token("access-old", Some("r1"), Expiry::Expired));
+
+    assert_eq!(client.get_token().await.unwrap(), "access-b");
+    let cached = client.current_token.read().clone().expect("a cached token");
+    assert_eq!(cached.refresh_token.as_deref(), Some("r1"), "cached");
+    let key = client.credential_key().unwrap();
+    let stored = client.storage.load(&key, RESOURCE).expect("a stored token");
+    assert_eq!(stored.refresh_token.as_deref(), Some("r1"), "stored");
+
+    // The next expiry refreshes headlessly with the kept token.
+    client.current_token.write().as_mut().unwrap().expires_at = Some(1);
+    assert_eq!(client.get_token().await.unwrap(), "access-b");
+    let forms = forms.lock().unwrap().clone();
+    assert_eq!(forms.len(), 2, "{forms:?}");
+    assert_eq!(forms[1]["refresh_token"], "r1");
+}
+
+/// MIK-8021.KEEPRT.2: a server that rotates is still followed.
+#[tokio::test]
+async fn a_refresh_with_a_new_refresh_token_stores_the_new_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, _forms) = token_endpoint(Some("access-b")).await;
+    let client = client(dir.path(), Some(&issuer));
+    *client.current_token.write() = Some(token("access-old", Some("r1"), Expiry::Expired));
+
+    assert_eq!(client.get_token().await.unwrap(), "access-b");
+    let key = client.credential_key().unwrap();
+    let stored = client.storage.load(&key, RESOURCE).expect("a stored token");
+    assert_eq!(stored.refresh_token.as_deref(), Some("r-next"));
 }
 
 /// No authorization server known: the refresh cannot run, the fall-back to
