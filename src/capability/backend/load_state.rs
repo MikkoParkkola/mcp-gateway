@@ -161,7 +161,7 @@ impl CapabilityBackend {
     /// the catalogue wholesale (MIK-8050).
     pub(crate) async fn reload_if_reloaded_during_scan(&self) {
         if self.take_reloaded_during_scan()
-            && let Err(error) = self.reload().await
+            && let Err(error) = self.reload_announcing(Announce::OnChange).await
         {
             warn!(backend = %self.name, %error, "the reload that ends the startup scan failed");
         }
@@ -176,6 +176,11 @@ impl CapabilityBackend {
     ///
     /// Returns an error if reloading fails for all directories.
     pub async fn reload(&self) -> Result<usize> {
+        self.reload_announcing(Announce::Always).await
+    }
+
+    /// [`Self::reload`], announcing as `announce` says.
+    pub(crate) async fn reload_announcing(&self, announce: Announce) -> Result<usize> {
         let _order = self.load_order.lock().await;
         let dirs: Vec<String> = self.directories.read().clone();
 
@@ -228,7 +233,14 @@ impl CapabilityBackend {
                     revoked.insert(name.clone());
                 }
             }
-            let added = admitted.iter().any(|c| !caps.index.contains_key(&c.name));
+            // The whole published list, duplicates included: an edit to a
+            // definition another directory shadows still changes it.
+            let edited = caps.entries.len() != admitted.len()
+                || caps
+                    .entries
+                    .iter()
+                    .zip(&admitted)
+                    .any(|(old, new)| old.name != new.name || definition_changed(old, new));
             caps.replace_all(admitted);
             // With the swap, under the same lock: `catalogue_snapshot` never
             // sees one without the other.
@@ -240,14 +252,20 @@ impl CapabilityBackend {
             self.executor.stop_unloaded_mcp(&|name| {
                 !revoked.contains(name) && caps.index.contains_key(name)
             });
-            added || !revoked.is_empty()
+            edited
         } || self.load_state() != proved;
 
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
-        // Only a reload that changed the tool set, or what the directories
-        // prove, announces it: a rerun over unchanged files must not send
-        // `tools/list_changed` (MIK-8050).
-        if changed && let Some(notice) = self.reload_notice.get() {
+        // The watcher's and the admin's reloads announce every time, as
+        // before: the notice also retries the events reconcile. A deferred
+        // rerun announces only a change to the tool set or to what the
+        // directories prove, so it cannot send `tools/list_changed` every
+        // few minutes (MIK-8050).
+        let announce = match announce {
+            Announce::Always => true,
+            Announce::OnChange => changed,
+        };
+        if announce && let Some(notice) = self.reload_notice.get() {
             let _ = notice.send(self.name.clone());
         }
         Ok(total)
@@ -281,6 +299,15 @@ impl CapabilityBackend {
         }
         (admitted, refused)
     }
+}
+
+/// When a reload sends its notice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Announce {
+    /// After every successful reload.
+    Always,
+    /// Only when the catalogue or what the directories prove changed.
+    OnChange,
 }
 
 /// The directory map type the backend holds.

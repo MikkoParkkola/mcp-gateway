@@ -104,7 +104,9 @@ impl MetaMcp {
                 );
                 tokio::time::sleep(wait).await;
                 if let Some(capabilities) = &capabilities
-                    && let Err(error) = capabilities.reload().await
+                    && let Err(error) = capabilities
+                        .reload_announcing(crate::capability::Announce::OnChange)
+                        .await
                 {
                     tracing::warn!(%error, "events: re-reading the capability directories failed");
                 }

@@ -39,7 +39,7 @@ use crate::protocol::{Content, Tool, ToolsCallResult};
 mod definition_access;
 mod initial_scan;
 mod load_state;
-pub(crate) use load_state::LoadState;
+pub(crate) use load_state::{Announce, LoadState};
 mod path_selector;
 
 use path_selector::path_selector_type_error;
