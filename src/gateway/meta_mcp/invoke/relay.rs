@@ -657,13 +657,18 @@ fn receipt_with(
     value: &Value,
 ) -> Option<Receipt> {
     RELAY_RECEIPTS.try_with(|_| ()).ok()?;
+    // MIK-7994: digested without the members the gateway wrote on this call.
+    // A plan step's receipt is only retained later, never rebuilt, so they
+    // must be gone before it is staged.
+    let mut value = value.clone();
+    super::gateway_writes::strip(&mut value, super::gateway_writes::Layer::Value);
     let in_plan = PLAN_STEP.try_with(|()| ()).is_ok();
     // MIK-7992: a plan step's receipt is capped after it is kept to what the
     // plan delivers, so a member the plan drops cannot spend its budget.
     let digest = if in_plan {
-        fw.plan_step_digest(server, tool, value)?
+        fw.plan_step_digest(server, tool, &value)?
     } else {
-        fw.delivery_digest(server, tool, value)?
+        fw.delivery_digest(server, tool, &value)?
     };
     Some(Receipt {
         key: who.key.to_owned(),
