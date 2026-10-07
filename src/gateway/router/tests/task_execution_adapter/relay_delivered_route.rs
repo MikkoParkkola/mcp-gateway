@@ -297,9 +297,18 @@ async fn a_backends_own_request_state_is_still_judged() {
 
 /// The answer was judged and `Strip` was enforced on it: the rendered text
 /// is the kernel's output, not ordinary wrapping, which also renders every
-/// member.
+/// member. An interim answer carries the envelope on `result`; a completed one
+/// wraps it into the text it delivers.
 fn assert_stripped(read: &Value) {
-    let policy = &read["result"]["_context_integrity"]["policy"];
+    let wrapped: Value = read["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_default();
+    let envelope = match &read["result"]["_context_integrity"] {
+        Value::Null => &wrapped["_context_integrity"],
+        top => top,
+    };
+    let policy = &envelope["policy"];
     assert_eq!(policy["decision"], "strip", "base: Strip decided: {read}");
     assert_eq!(
         policy["enforcement_applied"], true,
