@@ -134,3 +134,114 @@ fn a_split_step_keeps_its_run_together_form_across_an_interleaved_leaf() {
         "flat form kept"
     );
 }
+
+/// `MIK-7887.RECEIPT.2`: removing a middle leaf splits its run, and the
+/// neighbours re-winnowed can select other minima. Every fingerprint of the
+/// original run whose k-gram is still delivered, inside one leaf or across
+/// adjacent kept short fields, is kept, and no other: none of the removed
+/// text, none across a seam.
+#[test]
+fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
+    use std::collections::HashSet;
+
+    use super::super::DeliveryDigest as D;
+    let detector = CollusionDetector::new(RelayParams::default());
+    let fields = |tag: &str| (0..12).map(|i| format!("{tag} f{i}")).collect::<Vec<_>>();
+    let (mut moved, mut moved_together) = (false, false);
+    let ofs = [D::of_leaves, D::of_plan_step_leaves];
+    for round in 0..40 {
+        let (left, right) = (fields(&format!("l{round}")), fields(&format!("r{round}")));
+        let gone = format!("removed paragraph {round} ").repeat(8);
+        let mut leaves: Vec<&str> = left.iter().map(String::as_str).collect();
+        leaves.push(&gone);
+        leaves.extend(right.iter().map(String::as_str));
+        let (digest, _) = ofs[round % 2](&leaves, false);
+        let original = digest.fingerprints(&detector);
+        let mut shown: Vec<&str> = left.iter().map(String::as_str).collect();
+        shown.extend(right.iter().map(String::as_str));
+        let delivered = Delivered::of_leaves(shown.clone()).expect("bounded");
+        let kept: HashSet<u64> = digest
+            .retaining(&detector, &delivered)
+            .fingerprints(&detector)
+            .into_iter()
+            .collect();
+        // Each kept run in both forms, newline-joined and run together. A
+        // deferred receipt keeps leaves in delivered order (MIK-7992), so its
+        // run is the answer's: left beside right, as the caller received it.
+        let mut forms = vec![
+            left.join("\n"),
+            left.concat(),
+            right.join("\n"),
+            right.concat(),
+        ];
+        if round % 2 == 1 {
+            forms.extend([shown.join("\n"), shown.concat()]);
+        }
+        let allowed: HashSet<u64> = forms
+            .iter()
+            .flat_map(|run| detector.kgram_hashes(run))
+            .collect();
+        let alone: HashSet<u64> = forms
+            .iter()
+            .flat_map(|run| detector.fingerprints(run))
+            .collect();
+        // The run-together forms' k-grams that no newline form carries.
+        let newline: HashSet<u64> = forms
+            .iter()
+            .step_by(2)
+            .flat_map(|run| detector.kgram_hashes(run))
+            .collect();
+        let together: HashSet<u64> = forms
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .flat_map(|run| detector.kgram_hashes(run))
+            .filter(|k| !newline.contains(k))
+            .collect();
+        for fp in &original {
+            assert_eq!(kept.contains(fp), allowed.contains(fp), "round {round}");
+            moved |= allowed.contains(fp) && !alone.contains(fp);
+            moved_together |= together.contains(fp) && !alone.contains(fp);
+        }
+        assert!(
+            kept.iter().all(|fp| allowed.contains(fp)),
+            "round {round}: kept text never delivered"
+        );
+    }
+    assert!(moved, "premise: a split moved some minimum");
+    assert!(
+        moved_together,
+        "premise: a split moved a run-together minimum"
+    );
+}
+
+/// MIK-7992 with MIK-7773: kinds survive deferred retention and the cap, so
+/// a kept step's key is never run together with its values.
+#[test]
+fn a_kept_and_capped_step_never_runs_a_value_into_its_key() {
+    let detector = CollusionDetector::new(RelayParams::default());
+    let words = |tag: &str| (0..20).map(|i| format!("{tag}{i:03}")).collect::<Vec<_>>();
+    let (a, b, k) = (
+        words("a").join(" "),
+        words("b").join(" "),
+        words("k").join(" "),
+    );
+    let parts = [a.as_str(), b.as_str(), k.as_str()];
+    let (staged, _) = DeliveryDigest::of_plan_step_parts(&parts, 2, false);
+    let delivered = Delivered::of_parts(parts.to_vec(), 2).expect("bounded");
+    let (capped, _) = staged
+        .retaining(&detector, &delivered)
+        .capped()
+        .expect("deferred");
+    let allowed: std::collections::HashSet<u64> = [parts.join("\n"), format!("{a}{b}")]
+        .iter()
+        .flat_map(|t| detector.kgram_hashes(t))
+        .collect();
+    let joined = detector.fingerprints(&format!("{a}{b}{k}"));
+    assert!(
+        joined.iter().any(|fp| !allowed.contains(fp)),
+        "premise: a value run into the key adds fingerprints"
+    );
+    let kept = capped.fingerprints(&detector);
+    assert!(kept.iter().all(|fp| allowed.contains(fp)), "key kept apart");
+}
