@@ -243,7 +243,7 @@ fn a_budget_named_other_never_sees_overflow_spend() {
         e.record_spend(&format!("invented-{i}"), None, 0.01);
     }
     // THEN: that budget's own total is untouched, so its check passes
-    assert!(e.snapshot().tool_daily.get("(other)").is_none());
+    assert!(!e.snapshot().tool_daily.contains_key("(other)"));
     assert!(e.check("(other)", None).allowed);
 }
 
