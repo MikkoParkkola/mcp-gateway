@@ -93,7 +93,18 @@ pub(crate) fn note_task_envelope(answer: &Value) {
 /// backend answer that merely looks like one is not.
 #[cfg(feature = "firewall")]
 pub(super) fn built_task_envelope(answer: &Value) -> bool {
-    owns(Layer::Answer, TASK_ID, answer)
+    let Some(id) = member(answer, TASK_ID) else {
+        return false;
+    };
+    GATEWAY_WRITES
+        .try_with(|writes| {
+            let digest = digest(id);
+            writes
+                .borrow()
+                .iter()
+                .any(|w| w.layer == Layer::Answer && w.path == TASK_ID && w.digest == digest)
+        })
+        .unwrap_or(false)
 }
 
 /// Whether the gateway wrote `path` of `value` (at `layer`) on this call and
