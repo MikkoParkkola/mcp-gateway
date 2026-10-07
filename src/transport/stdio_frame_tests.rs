@@ -251,16 +251,29 @@ mod tree_kill {
         (pids[0], pids[1])
     }
 
-    /// Reap the leader once it has exited, the way the liveness check does.
-    async fn reap_leader(transport: &StdioTransport, leader: u32) {
+    /// Poll the liveness check until it sees the leader has exited; whether it
+    /// did within 5 s.
+    async fn await_leader_exit(transport: &StdioTransport) -> bool {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while tokio::time::Instant::now() < deadline {
-            let _ = transport.is_connected();
-            if !pid_is_alive(leader) {
-                return;
+            if !transport.is_connected() {
+                return true;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
+        false
+    }
+
+    /// Whether `pid` is an exited process nobody has reaped yet.
+    fn is_zombie(pid: u32) -> bool {
+        std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .is_ok_and(|out| {
+                String::from_utf8_lossy(&out.stdout)
+                    .trim_start()
+                    .starts_with('Z')
+            })
     }
 
     #[tokio::test]
@@ -295,17 +308,14 @@ mod tree_kill {
         transport.start().await.expect("start");
         let (leader, descendant) = read_pids(&pidfile);
 
-        // End the leader behind the transport's back and let the liveness check
-        // reap it, so the child handle no longer names a live process while the
-        // descendant still runs.
+        // End the leader behind the transport's back while the descendant runs.
         std::process::Command::new("kill")
             .args(["-9", &leader.to_string()])
             .status()
             .expect("kill leader");
-        reap_leader(&transport, leader).await;
         assert!(
-            !pid_is_alive(leader),
-            "precondition: the leader is gone and reaped"
+            await_leader_exit(&transport).await,
+            "precondition: the liveness check saw the leader exit"
         );
         assert!(
             pid_is_alive(descendant),
@@ -319,7 +329,7 @@ mod tree_kill {
 
         assert!(
             wait_until_gone(descendant, Duration::from_secs(5)).await,
-            "descendant pid {descendant} survived a close() that found the leader already reaped"
+            "descendant pid {descendant} survived a close() that found the leader already exited"
         );
     }
 
@@ -331,9 +341,8 @@ mod tree_kill {
         transport.start().await.expect("start");
         let (leader, descendant) = read_pids(&pidfile);
 
-        reap_leader(&transport, leader).await;
         assert!(
-            !pid_is_alive(leader),
+            await_leader_exit(&transport).await,
             "precondition: the leader exited on its own"
         );
         assert!(
@@ -346,6 +355,42 @@ mod tree_kill {
         assert!(
             wait_until_gone(descendant, Duration::from_secs(5)).await,
             "descendant pid {descendant} outlived its own leader and close() did not reach it"
+        );
+    }
+
+    /// MIK-8080: the liveness check sees the leader exit WITHOUT reaping it, so
+    /// the zombie keeps the group id reserved; only `close()` kills the group
+    /// and reaps the leader.
+    #[tokio::test]
+    async fn the_liveness_check_leaves_an_exited_leader_unreaped_until_close() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let (command, pidfile) = tree_backend(workspace.path(), false);
+        let transport = start_tree_transport(workspace.path(), &command);
+        transport.start().await.expect("start");
+        let (leader, descendant) = read_pids(&pidfile);
+        std::process::Command::new("kill")
+            .args(["-9", &leader.to_string()])
+            .status()
+            .expect("kill leader");
+        assert!(
+            await_leader_exit(&transport).await,
+            "precondition: the liveness check saw the leader exit"
+        );
+        assert!(
+            is_zombie(leader),
+            "the liveness check reaped leader {leader}, freeing its group id while {descendant} \
+             may still run under it"
+        );
+
+        transport.close().await.expect("close");
+
+        assert!(
+            wait_until_gone(descendant, Duration::from_secs(5)).await,
+            "descendant pid {descendant} survived close()"
+        );
+        assert!(
+            wait_until_gone(leader, Duration::from_secs(5)).await,
+            "close() did not reap leader {leader}"
         );
     }
 }
