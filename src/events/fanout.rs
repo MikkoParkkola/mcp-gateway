@@ -288,7 +288,7 @@ impl EventsHub {
             tracing::warn!(
                 "events: the startup catalogue is partial (a capability directory could not \
                  be read) or its webhook refresh was refused; stored subscriptions are kept \
-                 and reconciled at the next complete load"
+                 and reconciled at the next capability reload"
             );
             return self.release_worker();
         }
