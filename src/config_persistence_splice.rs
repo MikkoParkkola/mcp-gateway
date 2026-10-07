@@ -426,7 +426,7 @@ fn apply_delta(raw: &mut Mapping, old: &Mapping, new: &Mapping) {
 /// or edited in place), sorted so a multi-backend splice is deterministic.
 pub(super) fn changed_backends(before: &Config, config: &Config) -> Vec<String> {
     let value = |b: &crate::config::BackendConfig| serde_json::to_value(b).ok();
-    let mut changed = before
+    let changed = before
         .backends
         .iter()
         .filter(|(name, b)| {
