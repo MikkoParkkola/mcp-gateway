@@ -9,7 +9,6 @@ use tracing::debug;
 
 use super::bridge_settle::{arm, refuse_if_killed};
 use super::classify_bridged_dispatch_error;
-#[cfg(feature = "cost-governance")]
 use super::dispatch_guards;
 use super::relay;
 use crate::Error;
@@ -227,6 +226,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             .map_err(|e| crate::gateway::input_bridge::BridgeError::NotAdmitted {
                 message: e.to_string(),
             })?;
+        #[cfg(not(feature = "cost-governance"))]
+        let admission = dispatch_guards::Admission::default();
 
         // Through `accounted_dispatch`, not `dispatch_to_backend`: a bridged
         // round is a real backend call and is accounted and gated exactly like
@@ -299,10 +300,10 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.scope,
                 self.captured.clone(),
                 &super::super::response_security::chain_receipt::ChainSlot::default(),
+                &admission,
             )
             .await;
-        // The round's spend is recorded: give its reservation back.
-        #[cfg(feature = "cost-governance")]
+        // The round's spend is settled; an unsettled reservation is given back.
         drop(admission);
         let error = match dispatched {
             Ok(value) => {

@@ -29,17 +29,17 @@ pub(crate) struct BackendCall<'a> {
 /// What admitting one backend call leaves behind: the warnings for its result
 /// and, with cost governance on, the reservation on its cost (MIK-7763).
 ///
-/// Keep it until the call's spend is recorded, then drop it. Dropping it, on
-/// any path, gives the reservation back, so a refused, failed or cancelled
-/// call holds nothing.
+/// Pass it to `account_dispatch`, which settles the reservation with the
+/// spend, then drop it. Dropping an unsettled one, on any path, gives the
+/// reservation back, so a refused, failed or cancelled call holds nothing.
 #[derive(Default)]
 #[must_use = "dropping the admission gives the call's reserved budget back"]
 pub(crate) struct Admission {
     /// Budget warnings to attach to the result.
     pub(crate) warnings: Vec<String>,
-    /// Held only for its `Drop`, never read.
+    /// The reservation: settled with the spend, or released on drop.
     #[cfg(feature = "cost-governance")]
-    _hold: Option<std::sync::Arc<crate::cost_accounting::enforcer::SpendHold>>,
+    hold: Option<std::sync::Arc<crate::cost_accounting::enforcer::SpendHold>>,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -49,10 +49,12 @@ impl Admission {
         warnings: Vec<String>,
         hold: Option<std::sync::Arc<crate::cost_accounting::enforcer::SpendHold>>,
     ) -> Self {
-        Self {
-            warnings,
-            _hold: hold,
-        }
+        Self { warnings, hold }
+    }
+
+    /// The reservation a settle consumes, if the check made one.
+    fn hold(&self) -> Option<&crate::cost_accounting::enforcer::SpendHold> {
+        self.hold.as_deref()
     }
 }
 
@@ -188,7 +190,17 @@ impl MetaMcp {
 
     /// S3 accounting at dispatch completion: error budget, then spend on an
     /// answered call.
-    pub(crate) fn account_dispatch(&self, call: &BackendCall<'_>, outcome: DirectOutcome) {
+    ///
+    /// The spend is settled against `admission`'s reservation in one step, so
+    /// the caller's later drop of it gives nothing back (MIK-7903).
+    pub(crate) fn account_dispatch(
+        &self,
+        call: &BackendCall<'_>,
+        outcome: DirectOutcome,
+        admission: &Admission,
+    ) {
+        #[cfg(not(feature = "cost-governance"))]
+        let _ = admission;
         let (class, spend) = outcome.class_and_spend();
         self.record_error_budget(call.server, call.tool, class);
         if !spend {
@@ -220,7 +232,7 @@ impl MetaMcp {
         #[cfg(feature = "cost-governance")]
         if let Some(ref enforcer) = self.budget_enforcer {
             let cost = enforcer.registry.cost_for(call.tool);
-            enforcer.record_spend(call.tool, call.api_key_name, cost);
+            enforcer.settle(admission.hold(), call.tool, call.api_key_name, cost);
         }
     }
 

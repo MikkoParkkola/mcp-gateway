@@ -632,11 +632,8 @@ Decisions:
      3. Close the store, which releases the lease.
 
      Then the existing teardown runs (`backends.stop_all`).
-   - Residual, identical on both transports and not widened here: a drain that times out leaves
-     straggler workers running past the store close and into `stop_all`. Their writes fail on the
-     closed store. The fix (cancel and join remaining handoffs after the timeout) belongs in the
-     shared helper and lands for both transports at once. It is proposed for #2530's 4.0.1 scope,
-     with the lead.
+   - A drain that times out cancels the remaining workers and waits for them, bounded, before
+     the store closes, on both transports (MIK-7757, #2669).
 7. **Lease direction: decided by the lead, 2026-10-01, option (d).** Stdio derives its own
    store from the same base path: `expand_home_path(tasks.store_dir).join("stdio")`. It is
    resolved literally, with no new config key, and the derived path is logged at open.

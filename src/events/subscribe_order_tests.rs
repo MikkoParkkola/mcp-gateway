@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::{EventsHub, Probe, seed_verified, services, subscribe};
-use crate::events::test_pause::within;
+use crate::test_pause::within;
 
 /// The lifecycle actions in the audit log, in log order.
 fn lifecycle_actions(dir: &std::path::Path) -> Vec<String> {
