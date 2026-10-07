@@ -539,6 +539,10 @@ pub(crate) const RECOVERED_ERROR_WITHHELD: &str =
 mod error_policy_tests;
 
 #[cfg(test)]
+#[path = "upstream/provenance_tests.rs"]
+mod provenance_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
