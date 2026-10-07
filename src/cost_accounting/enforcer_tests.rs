@@ -334,3 +334,49 @@ fn a_due_sweep_frees_the_cap_before_a_new_name_is_counted() {
     assert!(e.tool_daily.contains_key("new-today"));
     assert!(e.snapshot().tool_overflow_usd.abs() < 1e-12);
 }
+
+#[test]
+fn the_first_spend_of_a_new_day_sweeps_whatever_the_minute_throttle_says() {
+    // GIVEN: yesterday's map full of unbudgeted rows, and the minute throttle
+    // armed far ahead, as if a sweep had just run before midnight
+    let e = enforcer_with(true, None, &[], &[], &[]);
+    let yesterday = current_day() - 1;
+    for i in 0..MAX_UNBUDGETED_ROWS {
+        e.tool_daily
+            .insert(format!("old-{i}"), DailyAccumulator::stale(yesterday, 5));
+    }
+    e.swept_day
+        .store(yesterday, std::sync::atomic::Ordering::Relaxed);
+    e.next_sweep
+        .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+    // WHEN: the first spend of today uses a new name
+    e.record_spend("new-today", None, 0.01);
+    // THEN: the new day swept first, so the name has its own entry
+    assert!(e.tool_daily.contains_key("new-today"));
+    assert!(e.snapshot().tool_overflow_usd.abs() < 1e-12);
+}
+
+#[test]
+fn a_restore_skips_rows_that_hold_no_spend() {
+    use super::super::persistence::{PersistedCosts, ToolTotal, now_secs};
+    // GIVEN: a same-day save holding zero rows left from the day before
+    let mut saved = PersistedCosts {
+        saved_at: now_secs(),
+        ..PersistedCosts::default()
+    };
+    for i in 0..300 {
+        let zero = ToolTotal {
+            call_count: 0,
+            total_cost_usd: 0.0,
+            avg_cost_usd: 0.0,
+        };
+        saved.tool_totals.insert(format!("idle-{i}"), zero);
+        saved.key_totals.insert(format!("idle-key-{i}"), 0.0);
+    }
+    // WHEN: it is restored
+    let e = enforcer_with(true, None, &[], &[], &[]);
+    e.restore(&saved);
+    // THEN: no zero row takes a place in the cap
+    assert!(e.tool_daily.is_empty());
+    assert!(e.key_daily.is_empty());
+}

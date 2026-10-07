@@ -383,6 +383,9 @@ pub struct BudgetEnforcer {
     observer: crate::observer::Observer<crossings::BudgetCrossing>,
     /// When the next sweep of earlier days' entries may run (MIK-8015).
     next_sweep: std::sync::atomic::AtomicU64,
+    /// The latest UTC day a sweep ran on: a new day sweeps at once, whatever
+    /// the minute throttle says, so yesterday's rows never fill today's cap.
+    swept_day: std::sync::atomic::AtomicU64,
     /// Spend of unbudgeted tool and key names past the day maps' cap.
     tool_overflow: DailyAccumulator,
     key_overflow: DailyAccumulator,
@@ -401,6 +404,7 @@ impl BudgetEnforcer {
             ledger: Arc::default(),
             observer: crate::observer::Observer::default(),
             next_sweep: std::sync::atomic::AtomicU64::new(0),
+            swept_day: std::sync::atomic::AtomicU64::new(0),
             tool_overflow: DailyAccumulator::new(),
             key_overflow: DailyAccumulator::new(),
         }
@@ -577,7 +581,12 @@ impl BudgetEnforcer {
         // Before the adds, so the first spend of a day never finds yesterday's
         // rows filling the cap. No entry guard is held: `retain` takes every
         // shard lock.
-        if super::tally::sweep_due(&self.next_sweep, super::persistence::now_secs()) {
+        let today = current_day();
+        let new_day = self
+            .swept_day
+            .fetch_max(today, std::sync::atomic::Ordering::Relaxed)
+            < today;
+        if new_day || super::tally::sweep_due(&self.next_sweep, super::persistence::now_secs()) {
             for (map, limits) in [
                 (&self.tool_daily, &budgets.per_tool),
                 (&self.key_daily, &budgets.per_key),
@@ -617,13 +626,19 @@ impl BudgetEnforcer {
         // Through the cap: a snapshot saved before the cap existed may hold
         // more names than it allows.
         let budgets = &self.config.budgets;
+        // A zero row (a name saved after midnight before it spent again) is
+        // not restored: it would take a place in the cap and read 0 anyway.
         for (tool, total) in &persisted.tool_totals {
             let spent = micro(total.total_cost_usd);
-            self.global_daily.add(spent);
-            add_capped(self.tool_maps(), tool, &budgets.per_tool, spent);
+            if spent > 0 {
+                self.global_daily.add(spent);
+                add_capped(self.tool_maps(), tool, &budgets.per_tool, spent);
+            }
         }
         for (key, &usd) in &persisted.key_totals {
-            add_capped(self.key_maps(), key, &budgets.per_key, micro(usd));
+            if micro(usd) > 0 {
+                add_capped(self.key_maps(), key, &budgets.per_key, micro(usd));
+            }
         }
         let tool_overflow = micro(persisted.tool_overflow_usd);
         self.global_daily.add(tool_overflow);
