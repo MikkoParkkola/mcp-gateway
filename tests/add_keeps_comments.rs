@@ -455,3 +455,24 @@ fn discover_write_with_force_rewrites() {
         assert!(config.backends.contains_key(name), "{name} missing");
     }
 }
+
+/// `cap discover --shadow --write-config` adopts unregistered servers into
+/// the compared config through the same writer.
+#[test]
+fn shadow_adopt_that_would_drop_comments_is_refused() {
+    let (home, path) = two_client_servers(Some(FLOW));
+    let p = path.to_str().unwrap();
+    refused(
+        home.path(),
+        &path,
+        FLOW,
+        &[
+            "cap",
+            "discover",
+            "--shadow",
+            "--write-config",
+            "--gateway-config",
+            p,
+        ],
+    );
+}
