@@ -298,20 +298,17 @@ fn many_calls_on_one_key_hold_a_bounded_number_of_entries() {
         }
     };
     calls(1_000);
-    let after_1k = tracker.key_retained("anonymous");
+    let early = tracker.key_retained("anonymous");
     // THEN: the key holds one tool row and an hour bucket (two, if the run
     // crossed an hour), not one entry per call
-    assert!(
-        after_1k <= 3,
-        "the key holds {after_1k} entries after 1000 calls"
-    );
+    assert!(early <= 3, "the key holds {early} entries after 1000 calls");
     // AND: ten times the calls hold no more, give or take one more hour
     // crossed (the bucket wrap is a tally test)
     calls(9_000);
-    let after_10k = tracker.key_retained("anonymous");
+    let late = tracker.key_retained("anonymous");
     assert!(
-        after_10k <= after_1k + 1,
-        "{after_10k} entries after 10000 calls, {after_1k} after 1000"
+        late <= early + 1,
+        "{late} entries after 10000 calls, {early} after 1000"
     );
     assert_eq!(
         tracker.key_snapshot("anonymous").unwrap().window_24h.tokens,
