@@ -343,9 +343,10 @@ fn a_ref_to_a_free_map_in_any_of_matches_the_inlined_form() {
     }
 }
 
-/// `MIK-8014.PERF.3a` guard: a `$ref` target is checked for matching nothing
-/// even when the level holding the `$ref` already was. An `anyOf` branch that
-/// `$ref`s a string schema cannot hold an object, so it opens nothing.
+/// `MIK-8014.PERF.3a` guard: only the object level `node` checked is known to
+/// match an object. An `anyOf` branch, and every `$ref` target it reaches
+/// (directly or through another `$ref`), is checked again: a branch ending in
+/// a string schema cannot hold an object, so it opens nothing.
 #[test]
 fn a_ref_to_a_match_nothing_target_in_any_of_opens_nothing() {
     let shut = closed(&json!({"a": {}}));
@@ -353,8 +354,15 @@ fn a_ref_to_a_match_nothing_target_in_any_of_opens_nothing() {
         "$defs": {"text": {"type": "string"}},
         "anyOf": [{"$ref": "#/$defs/text"}, shut]
     });
+    let chained = json!({
+        "$defs": {
+            "text": {"type": "string", "$ref": "#/$defs/free"},
+            "free": {"type": "object"}
+        },
+        "anyOf": [{"$ref": "#/$defs/text"}, shut]
+    });
     let inlined = json!({"anyOf": [{"type": "string"}, shut]});
-    for schema in [&by_ref, &inlined] {
+    for schema in [&by_ref, &chained, &inlined] {
         assert!(refused(schema, &json!({"b": 1})), "{schema}");
     }
 }
