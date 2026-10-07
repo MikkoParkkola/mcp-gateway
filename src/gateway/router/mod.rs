@@ -78,6 +78,8 @@ mod collusion_direct_tests;
 #[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
+mod direct_continuation_tests;
+#[cfg(test)]
 mod direct_guards_fixture;
 #[cfg(test)]
 mod direct_guards_tests;

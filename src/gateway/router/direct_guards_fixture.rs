@@ -65,6 +65,8 @@ pub(crate) enum Answer {
 /// listing never counts as a call.
 struct CountingBackend {
     calls: Arc<AtomicUsize>,
+    /// The params of every `tools/call`, in order (MIK-8078).
+    seen: Arc<std::sync::Mutex<Vec<Value>>>,
     answer: Answer,
 }
 
@@ -109,6 +111,10 @@ impl Transport for CountingBackend {
             }
             return Ok(JsonRpcResponse::success(id, result));
         }
+        self.seen
+            .lock()
+            .unwrap()
+            .push(params.clone().unwrap_or(Value::Null));
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         if matches!(self.answer, Answer::AskOnce) {
             return Ok(if n == 0 {
@@ -185,6 +191,8 @@ pub(crate) struct Fx {
     pub state: Arc<super::AppState>,
     pub router: axum::Router,
     pub calls: Arc<AtomicUsize>,
+    /// The params every `tools/call` reached the backend with.
+    pub seen: Arc<std::sync::Mutex<Vec<Value>>>,
     _store: tempfile::TempDir,
 }
 
@@ -371,6 +379,7 @@ async fn fixture_inner(
         test_router_app_state_with_auth(&auth).await
     };
     let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {
         let backend = Arc::new(Backend::new(
@@ -384,6 +393,7 @@ async fn fixture_inner(
         ));
         let transport = CountingBackend {
             calls: Arc::clone(&calls),
+            seen: Arc::clone(&seen),
             answer,
         };
         backend.set_transport_for_test(Arc::new(transport));
@@ -449,6 +459,7 @@ async fn fixture_inner(
         state,
         router,
         calls,
+        seen,
         _store: store,
     }
 }
