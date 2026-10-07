@@ -64,7 +64,7 @@ fn same(a: &Arc<dyn Transport>, b: &Arc<dyn Transport>) -> bool {
 ///
 /// Serving means pooled as well as holding it: a removed busy entry keeps its transport, and
 /// the pool marks it retired under that same write guard before it leaves the map (MIK-7643).
-pub(super) fn install_if_held(
+pub(super) fn with_serving(
     entry: &PooledEntry,
     transport: &Arc<dyn Transport>,
     store: &mut dyn FnMut(),
@@ -232,6 +232,8 @@ impl Backend {
         else {
             return;
         };
+        #[cfg(test)]
+        self.after_reprobe_lookup.pause().await;
         // Judging the verdict and dropping it are one locked step, and only the task that
         // dropped it probes. Reading the era and clearing it separately would let two answers
         // arriving at once both find the stale verdict and each fan out a detached probe.
@@ -245,7 +247,7 @@ impl Backend {
                 // Re-checked under the era lock, and held through the clear: a restart may have
                 // installed and resolved a new peer since the lookup above, or the pool removed
                 // the slot, and a contradiction from the old one must not erase the verdict.
-                |clear| install_if_held(&entry, transport, clear),
+                |clear| with_serving(&entry, transport, clear),
             )
             .await;
         if !discarded {
@@ -258,7 +260,7 @@ impl Backend {
         tokio::spawn(async move {
             era.reprobe_with(
                 || probe(&transport, timeout),
-                |store| install_if_held(&entry, &transport, store),
+                |store| with_serving(&entry, &transport, store),
             )
             .await;
         });

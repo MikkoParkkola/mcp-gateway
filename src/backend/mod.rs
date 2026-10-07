@@ -102,6 +102,10 @@ pub struct Backend {
     /// probe and shared with the detached re-probe task, which outlives the
     /// request that triggered it — hence `Arc`.
     era: Arc<crate::protocol::era::EraCache>,
+    /// Test-only: one re-probe pauses between finding its slot and discarding
+    /// the era, so a removal can land inside that window (MIK-7643).
+    #[cfg(test)]
+    after_reprobe_lookup: crate::test_pause::Slot,
     /// Consecutive health-probe answers this peer declined to serve
     /// (MIK-7217, OUTBOUND.2).
     ///

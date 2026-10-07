@@ -85,6 +85,8 @@ impl Backend {
             },
             failsafe_config: failsafe_config.clone(),
             era: Arc::new(crate::protocol::era::EraCache::for_backend(name)),
+            #[cfg(test)]
+            after_reprobe_lookup: crate::test_pause::Slot::default(),
             unserved_consecutive: AtomicU64::new(0),
             unserved_total: AtomicU64::new(0),
             probe_in_flight: std::sync::atomic::AtomicBool::new(false),

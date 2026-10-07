@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
-use super::era::install_if_held;
+use super::era::with_serving;
 use super::*;
 use crate::Result;
 use crate::config::TransportConfig;
@@ -274,7 +274,7 @@ fn the_installer_holds_the_slot_guard_while_it_stores() {
     *entry.transport.write() = Some(Arc::clone(&served));
 
     let mut stored = false;
-    let installed = install_if_held(&entry, &served, &mut || {
+    let installed = with_serving(&entry, &served, &mut || {
         assert!(
             entry.transport.try_write().is_none(),
             "the slot must not be writable while the answer is stored"
@@ -286,13 +286,13 @@ fn the_installer_holds_the_slot_guard_while_it_stores() {
     // Replaced by a successful start: refused, `store` never runs.
     let (other, _handles) = Peer::new(Answer::MethodNotFound);
     *entry.transport.write() = Some(other as Arc<dyn Transport>);
-    assert!(!install_if_held(&entry, &served, &mut || panic!(
+    assert!(!with_serving(&entry, &served, &mut || panic!(
         "a replaced transport's answer must not be stored"
     )));
 
     // Evicted but still referenced: the taken transport reads as none, and refuses.
     entry.transport.write().take();
-    assert!(!install_if_held(&entry, &served, &mut || panic!(
+    assert!(!with_serving(&entry, &served, &mut || panic!(
         "an evicted slot's answer must not be stored"
     )));
 }

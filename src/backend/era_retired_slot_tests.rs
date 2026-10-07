@@ -148,3 +148,61 @@ async fn the_reaper_leaves_busy_and_recent_slots_serving() {
         assert!(!entry.retired.load(Ordering::SeqCst), "{who} slot retired");
     }
 }
+
+/// MIK-7643: a contradiction found its slot, then the revocation removed that
+/// slot before the era was judged. The discard is refused: a removed slot's
+/// answer must not erase the backend's verdict either.
+#[tokio::test]
+async fn a_contradiction_from_a_slot_revoked_before_the_discard_keeps_the_era() {
+    use crate::test_pause::within;
+
+    let backend = per_user_backend("era-retired-discard");
+    let (peer, _handles) = Peer::new(Answer::Modern);
+    let transport: Arc<dyn Transport> = peer;
+    backend.set_pooled_transport_for_test(&slot(BINDING), Arc::clone(&transport));
+    backend.resolve_era_for_test(&transport).await;
+    assert_eq!(backend.cached_era().await, Some(Era::Modern), "primed");
+    entry_of(&backend, BINDING)
+        .in_flight
+        .fetch_add(1, Ordering::SeqCst);
+
+    let (reached, release) = backend.after_reprobe_lookup.arm();
+    let contradiction = tokio::spawn({
+        let backend = Arc::clone(&backend);
+        async move {
+            backend
+                .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND_CODE, &transport)
+                .await;
+        }
+    });
+    within("the contradiction finds its slot", reached.notified()).await;
+    assert_eq!(
+        backend.evict_identity_slots("rev:"),
+        1,
+        "the revoked slot left the pool inside the window"
+    );
+    release.notify_one();
+    within("the contradiction finishes", contradiction)
+        .await
+        .expect("the contradiction task");
+
+    assert_eq!(
+        backend.cached_era().await,
+        Some(Era::Modern),
+        "a contradiction from a slot the pool no longer serves keeps the verdict"
+    );
+}
+
+/// MIK-7643: a retired entry that still holds its transport is not serving.
+#[test]
+fn a_retired_entry_holding_its_transport_is_not_serving() {
+    let entry = PooledEntry::new("retired", &crate::config::FailsafeConfig::default());
+    let (peer, _handles) = Peer::new(Answer::Modern);
+    let served: Arc<dyn Transport> = peer;
+    *entry.transport.write() = Some(Arc::clone(&served));
+    entry.retired.store(true, Ordering::SeqCst);
+
+    assert!(!super::era::with_serving(&entry, &served, &mut || panic!(
+        "a retired entry's answer must not be stored or cleared"
+    )));
+}
