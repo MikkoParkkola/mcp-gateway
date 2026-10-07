@@ -25,6 +25,12 @@ pub struct PersistedCosts {
     pub tool_totals: HashMap<String, ToolTotal>,
     /// Per-API-key spend for the day of `saved_at`.
     pub key_totals: HashMap<String, f64>,
+    /// Spend of unbudgeted tools past the per-tool day map's cap (MIK-8015).
+    #[serde(default)]
+    pub tool_overflow_usd: f64,
+    /// Spend of unbudgeted keys past the per-key day map's cap (MIK-8015).
+    #[serde(default)]
+    pub key_overflow_usd: f64,
 }
 
 /// Spend for a single tool on the day of `saved_at`.
@@ -162,8 +168,7 @@ mod tests {
 
         let mut costs = PersistedCosts {
             saved_at: 1_700_000_000,
-            tool_totals: HashMap::new(),
-            key_totals: HashMap::new(),
+            ..PersistedCosts::default()
         };
         costs.tool_totals.insert(
             "tavily_search".to_string(),
@@ -324,5 +329,15 @@ mod tests {
         assert_eq!(t.call_count, 2);
         assert!((t.total_cost_usd - 0.04).abs() < 1e-9);
         assert!((t.avg_cost_usd - 0.02).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_file_saved_before_the_overflow_fields_still_loads() {
+        // MIK-8015: the overflow totals default to zero for an older file.
+        let old = r#"{"saved_at":1700000000,"tool_totals":{},"key_totals":{"k":1.5}}"#;
+        let costs: PersistedCosts = serde_json::from_str(old).expect("older file loads");
+        assert!((costs.key_totals["k"] - 1.5).abs() < 1e-9);
+        assert!(costs.tool_overflow_usd.abs() < 1e-12);
+        assert!(costs.key_overflow_usd.abs() < 1e-12);
     }
 }

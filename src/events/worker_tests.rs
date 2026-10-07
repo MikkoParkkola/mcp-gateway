@@ -92,17 +92,27 @@ fn an_attempt_past_its_bounds_is_overdue_before_it_is_sent() {
     let inside = first + chrono::Duration::seconds(899);
     let after = first + chrono::Duration::seconds(900);
     assert!(
-        !overdue(1, first, after, POLICY),
+        !overdue(1, 1, first, after, POLICY),
         "a first attempt always goes"
     );
     assert!(
-        !overdue(5, first, inside, POLICY),
+        !overdue(5, 5, first, inside, POLICY),
         "the last allowed attempt"
     );
-    assert!(overdue(6, first, inside, POLICY), "past max_attempts");
+    assert!(overdue(6, 6, first, inside, POLICY), "past max_attempts");
     assert!(
-        overdue(2, first, after, POLICY),
+        overdue(2, 2, first, after, POLICY),
         "a retry at the window's end"
+    );
+    // MIK-7944 .2: unsent claims number the attempt but not the limit, and
+    // never lift the window.
+    assert!(
+        !overdue(6, 1, first, inside, POLICY),
+        "one send of six claims"
+    );
+    assert!(
+        overdue(2, 1, first, after, POLICY),
+        "an unsent retry ages out"
     );
 }
 
@@ -193,6 +203,7 @@ fn queued_with(
         body_b64: "e30=".into(),
         tenants: Vec::new(),
         attempt: 0,
+        unsent: 0,
         next_attempt_at: now,
         first_attempt_at: None,
         created_at: now,
@@ -233,6 +244,7 @@ fn queued_event(hub: &EventsHub, event_id: &str) {
         body_b64: "e30=".into(),
         tenants: Vec::new(),
         attempt: 0,
+        unsent: 0,
         next_attempt_at: now,
         first_attempt_at: None,
         created_at: now,
@@ -427,6 +439,8 @@ async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
         due.ready[0].last_status.as_deref(),
         Some("audit_unavailable")
     );
+    // MIK-7944 .2: the refused ending sent nothing, so it is no send.
+    assert_eq!(due.ready[0].unsent, 1);
 
     // AUDIT.1, AUDIT.2: with the log back, the ending is recorded with the
     // documented values for a record fan-out never stamped and a send that
@@ -781,6 +795,8 @@ async fn a_type_no_source_offers_any_more_is_not_sent_or_charged() {
 #[path = "worker_charge_tests.rs"]
 mod charge;
 
+#[path = "worker_audit_order_tests.rs"]
+mod audit_order;
 #[path = "worker_hold_tests.rs"]
 mod hold;
 
