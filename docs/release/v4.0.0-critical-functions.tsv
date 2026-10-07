@@ -337,8 +337,8 @@ src/oauth/client/refresh_flight.rs	spend	3	critical	d	spend	Marks a possibly con
 src/oauth/client/refresh_flight.rs	run	1	critical	d	Exchange::run	Decides a refresh token is possibly consumed (no settled answer, or a supplied client's refusal) and spends it
 src/oauth/client/refresh_flight.rs	send	1	critical	d	Exchange::send	Classifies the exchange: not sent only on the owned client (redirects off); through a supplied client a connect error is unsettled; a redirect answer is never followed
 src/oauth/client/refresh_flight.rs	refused_target	1	critical	d	refused_target	Refuses a redirect target by literal or by what its name resolves to (SSRF)
-src/oauth/client/refresh_flight.rs	retire_unsettled	1	standard	borderline	retire_unsettled	Spends a token whose exchange never settled before a restart
-src/oauth/client/refresh_flight.rs	redirect_error	1	standard	borderline	Exchange::redirect_error	Keeps a refused redirect target typed as an SSRF refusal
+src/oauth/client/refresh_flight.rs	retire_unsettled	1	critical	d	retire_unsettled	Retires a token whose exchange never settled before a restart; clears its marker only when storage no longer holds the token
+src/oauth/client/refresh_flight.rs	redirect_error	1	critical	d	Exchange::redirect_error	Keeps a refused redirect target typed as an SSRF refusal, so callers stop instead of falling through to a login or another grant
 src/oauth/client/refresh_flight.rs	names_an_oauth_error	1	critical	d	names_an_oauth_error	Decides an OAuth refusal from an unsettled outcome; a refusal keeps the token unless it came through a supplied client on a rotating server
 src/oauth/metadata.rs	discover	1	critical	b	AuthorizationServerMetadata::discover	RFC 8414 issuer must match the discovery base
 src/oauth/storage.rs	is_expired	1	critical	d	TokenInfo::is_expired	Expiry decision (60s buffer) gating reuse of a cached token

@@ -216,7 +216,9 @@ async fn a_refresh_that_cannot_mark_its_token_sends_nothing() {
 }
 
 /// A refresh-state sidecar that does not parse reads as rotating, never as
-/// the non-rotating default: an unsettled exchange then spends its token.
+/// the non-rotating default, so an exchange that ends unsettled from here on
+/// spends its token. (An in-flight marker the damage destroyed is not
+/// recovered here; MIK-8091 tracks that case.)
 #[test]
 fn a_corrupt_refresh_state_reads_as_rotating() {
     let dir = tempfile::tempdir().unwrap();
@@ -241,4 +243,52 @@ fn an_unreadable_refresh_state_reads_as_rotating() {
     let state = storage.load_refresh_state(BACKEND, RESOURCE);
     assert!(state.rotates);
     assert_eq!(state.in_flight, None);
+}
+
+/// A token marked in flight by an exchange that never settled is retired at
+/// the next start. When storage refuses to clear it, the marker stays: no
+/// process sends the possibly consumed token, now or after a restart.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_marked_token_that_cannot_be_cleared_keeps_its_marker() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let owned = client(dir.path(), &server);
+    hold(&owned, &token("a1", Some("r1"), true));
+    headless(&owned)
+        .await
+        .expect("a first refresh takes the lock file");
+    expire(&owned);
+    let fingerprint = super::super::refresh_flight::fingerprint_hex("r2");
+    let key = owned.credential_key().unwrap();
+    let state = RefreshState {
+        rotates: true,
+        in_flight: Some(fingerprint.clone()),
+    };
+    owned
+        .storage
+        .save_refresh_state(&key, RESOURCE, &state)
+        .unwrap();
+
+    if !set_mode(dir.path(), 0o500) {
+        eprintln!("skipped: the storage directory stays writable (privileged runner)");
+        set_mode(dir.path(), 0o700);
+        return;
+    }
+    let result = headless(&owned).await;
+    set_mode(dir.path(), 0o700);
+
+    assert!(result.is_err(), "a login is needed");
+    assert_eq!(
+        server.requests(),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+    assert!(flight_of(&owned).is_spent("r2"));
+    assert_eq!(
+        stored(&owned).and_then(|t| t.refresh_token).as_deref(),
+        Some("r2")
+    );
+    assert_eq!(marker(&owned), Some(fingerprint), "the marker stays");
 }
