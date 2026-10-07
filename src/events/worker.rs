@@ -36,13 +36,7 @@ impl EventsHub {
         loop {
             if swept.is_none_or(|at| at.elapsed() >= SWEEP_EVERY) {
                 swept = Some(Instant::now());
-                let policy = self.dead_policy();
-                let ordered = self.receipts.lock().await;
-                let evicted = self
-                    .blocking(move |store| store.sweep_dead(Utc::now(), policy))
-                    .await;
-                services.audit_evictions(evicted.unwrap_or_default()).await;
-                drop(ordered);
+                self.sweep_dead_letters(services).await;
                 // Gone subscriptions take their rate and failure state along.
                 let held = self.store.live_subscription_ids(Utc::now());
                 self.runtime.rates.retain(&held);
@@ -251,11 +245,7 @@ impl EventsHub {
             return true;
         };
         tracing::warn!(%error, status, subscription = %ctx.sub.id, "events: attempt record not written; retrying");
-        let retry = Settle::Unsent {
-            next: Utc::now() + REFUSAL_RETRY,
-            status: "audit_unavailable",
-        };
-        self.settle(services, ctx.record, retry).await;
+        self.retry_unsent(services, ctx.record).await;
         false
     }
 
@@ -280,12 +270,7 @@ impl EventsHub {
             ..ctx.attempt(status)
         };
         if services.audit_attempt(&ended(SENDING)).await.is_err() {
-            let next = Utc::now() + REFUSAL_RETRY;
-            let retry = Settle::Unsent {
-                next,
-                status: "audit_unavailable",
-            };
-            self.settle(services, record, retry).await;
+            self.retry_unsent(services, record).await;
             return;
         }
         // MIN.2 E1, before the checks below: its own audit wait can span a
@@ -390,11 +375,7 @@ impl EventsHub {
                     // The log refused the tenant_read record under
                     // fail-closed: nothing was sent, so this is an audit
                     // outage to retry, never a transport failure.
-                    let retry = Settle::Unsent {
-                        next: Utc::now() + REFUSAL_RETRY,
-                        status: "audit_unavailable",
-                    };
-                    self.settle(services, record, retry).await;
+                    self.retry_unsent(services, record).await;
                     return None;
                 }
                 return Some((frame, verdict));
@@ -453,6 +434,27 @@ impl EventsHub {
             }
         })
         .await
+    }
+
+    /// Evict the dead letters past their retention or caps, and receipt each
+    /// eviction, in the receipt order a burial keeps (see `receipts`).
+    async fn sweep_dead_letters(&self, services: &Services) {
+        let policy = self.dead_policy();
+        let _ordered = self.receipts.lock().await;
+        let evicted = self
+            .blocking(move |store| store.sweep_dead(Utc::now(), policy))
+            .await;
+        services.audit_evictions(evicted.unwrap_or_default()).await;
+    }
+
+    /// Back to pending after a claim that sent nothing because the audit log
+    /// refused its record: an audit outage, not a send (MIK-7944).
+    async fn retry_unsent(&self, services: &Services, record: &OutboxRecord) {
+        let retry = Settle::Unsent {
+            next: Utc::now() + REFUSAL_RETRY,
+            status: "audit_unavailable",
+        };
+        self.settle(services, record, retry).await;
     }
 
     /// Settle the claimed occurrence `record`; a later occurrence that has

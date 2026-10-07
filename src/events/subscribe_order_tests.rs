@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::{EventsHub, Probe, seed_verified, services, subscribe};
+use crate::events::test_pause::within;
 
 /// The lifecycle actions in the audit log, in log order.
 fn lifecycle_actions(dir: &std::path::Path) -> Vec<String> {
@@ -52,7 +53,7 @@ async fn a_racing_refresh_is_audited_after_the_insert_it_follows() {
         let hub = Arc::clone(&hub);
         async move { subscribe(&hub, "p").await }
     });
-    reached.notified().await;
+    within("the insert's pause", reached.notified()).await;
     let second = tokio::spawn({
         let hub = Arc::clone(&hub);
         async move { subscribe(&hub, "p").await }
@@ -65,8 +66,8 @@ async fn a_racing_refresh_is_audited_after_the_insert_it_follows() {
     })
     .await;
     release.notify_one();
-    first.await.expect("first");
-    second.await.expect("second");
+    within("the insert", first).await.expect("first");
+    within("the refresh", second).await.expect("second");
     assert_eq!(
         lifecycle_actions(dir.path()),
         ["events.subscribe", "events.refresh"],

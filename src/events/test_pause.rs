@@ -30,3 +30,11 @@ impl Slot {
         }
     }
 }
+
+/// Await `step`, failing the test after 30 s so a broken handshake shows as
+/// a named failure, not a CI timeout.
+pub(crate) async fn within<T>(what: &str, step: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(std::time::Duration::from_secs(30), step)
+        .await
+        .unwrap_or_else(|_| panic!("{what} did not finish within 30 s"))
+}

@@ -678,7 +678,7 @@ fn has_due_sees_a_pending_record_behind_one_in_flight() {
 }
 
 /// MIK-7944 .2: a claim settled `Unsent` keeps its attempt number but is
-/// not a send; the next claim numbers on from it.
+/// not a send, across a restart too; the next claim numbers on from it.
 #[test]
 fn an_unsent_claim_keeps_its_number_but_is_not_a_send() {
     let dir = tempfile::tempdir().expect("dir");
@@ -698,6 +698,9 @@ fn an_unsent_claim_keeps_its_number_but_is_not_a_send() {
         status: "audit_unavailable",
     };
     store.settle("a", now, unsent, now, ROOMY).expect("io");
+    // Across a restart: the count is on disk with the record.
+    drop(store);
+    let store = Store::open(dir.path(), now, TAIL).expect("reopen");
     let Claim::Ready(claimed) = store.claim("a", now).expect("io") else {
         panic!("claimable again");
     };

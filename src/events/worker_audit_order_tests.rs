@@ -148,6 +148,45 @@ async fn a_self_evicting_refusal_is_receipted_before_its_eviction() {
     assert_burial_first(dir.path(), &id);
 }
 
+/// Run `first` until it stops at the armed `before_receipts` point, then
+/// `second` (given 2 s to finish while `first` waits), then release `first`.
+async fn raced<A, B>(hub: &EventsHub, first: A, second: B)
+where
+    A: std::future::Future<Output = ()> + Send + 'static,
+    B: std::future::Future<Output = ()> + Send + 'static,
+{
+    use crate::events::test_pause::within;
+    let (reached, release) = hub.before_receipts.arm();
+    let first = tokio::spawn(first);
+    within("the first burial's pause", reached.notified()).await;
+    let second = tokio::spawn(second);
+    let _ = tokio::time::timeout(Duration::from_secs(2), async {
+        while !second.is_finished() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    release.notify_one();
+    within("the first burial", first).await.expect("first");
+    within("the second step", second).await.expect("second");
+}
+
+/// A hub with `config`, one subscription and its pending record `evt_x`.
+fn buried_setup(
+    dir: &std::path::Path,
+    config: &crate::config::EventsConfig,
+) -> (
+    Arc<EventsHub>,
+    Arc<super::Services>,
+    crate::events::outbox::OutboxRecord,
+) {
+    let hub = EventsHub::open(config, dir).expect("hub");
+    let services = Arc::new(logged_services(dir));
+    queued(&hub, 9, "evt_x");
+    let x = stored(dir, "evt_x");
+    (hub, services, x)
+}
+
 /// .3 across callers: while one burial is between its store call and its
 /// receipts, a second burial that evicts the first waits, so the first
 /// burial's receipt still comes before its eviction.
@@ -158,29 +197,98 @@ async fn an_eviction_by_another_burial_follows_the_first_burials_receipt() {
         dead_letter_max_records: 1,
         ..crate::config::EventsConfig::default()
     };
-    let hub = EventsHub::open(&config, dir.path()).expect("hub");
-    let services = Arc::new(logged_services(dir.path()));
-    queued(&hub, 9, "evt_x");
+    let (hub, services, x) = buried_setup(dir.path(), &config);
     queued_event(&hub, "evt_y");
-    let (x, y) = (stored(dir.path(), "evt_x"), stored(dir.path(), "evt_y"));
-    let (reached, release) = hub.before_receipts.arm();
-    let first = tokio::spawn({
-        let (hub, services) = (Arc::clone(&hub), Arc::clone(&services));
-        async move { hub.settle(&services, &x, gone()).await }
-    });
-    reached.notified().await;
-    let second = tokio::spawn({
-        let (hub, services) = (Arc::clone(&hub), Arc::clone(&services));
-        async move { hub.settle(&services, &y, gone()).await }
-    });
-    let _ = tokio::time::timeout(Duration::from_secs(2), async {
-        while !second.is_finished() {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
+    let y = stored(dir.path(), "evt_y");
+    let (a, b) = (Arc::clone(&hub), Arc::clone(&hub));
+    let (sa, sb) = (Arc::clone(&services), Arc::clone(&services));
+    raced(
+        &hub,
+        async move { a.settle(&sa, &x, gone()).await },
+        async move { b.settle(&sb, &y, gone()).await },
+    )
     .await;
-    release.notify_one();
-    first.await.expect("first");
-    second.await.expect("second");
     assert_burial_first(dir.path(), "evt_x");
+}
+
+/// .3 across callers: a fan-out refusal that evicts a burial waits for that
+/// burial's receipt.
+#[tokio::test]
+async fn an_eviction_by_a_fan_out_refusal_follows_the_burials_receipt() {
+    use crate::events::fanout::{MAX_BODY, SourceEvent};
+    use crate::events::types::{SourceKind, Visibility};
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        dead_letter_max_records: 1,
+        ..crate::config::EventsConfig::default()
+    };
+    let (hub, services, x) = buried_setup(dir.path(), &config);
+    offer(&hub, &["webhook.c.r.received"]);
+    let event = SourceEvent {
+        kind: SourceKind::Webhook,
+        name: "webhook.c.r.received".into(),
+        backend: "b".into(),
+        scope: Visibility::Owner,
+        owner: None,
+        upstream_id: "big".into(),
+        occurred_at: Utc::now(),
+        data: serde_json::json!({ "blob": "x".repeat(MAX_BODY + 1) }),
+        lifecycle_key: None,
+    };
+    let (a, b) = (Arc::clone(&hub), Arc::clone(&hub));
+    let (sa, sb) = (Arc::clone(&services), Arc::clone(&services));
+    raced(
+        &hub,
+        async move { a.settle(&sa, &x, gone()).await },
+        async move { b.fan_out(&sb, &event).await },
+    )
+    .await;
+    assert_burial_first(dir.path(), "evt_x");
+}
+
+/// .3 across callers: the retention sweep that evicts a burial waits for
+/// that burial's receipt.
+#[tokio::test]
+async fn an_eviction_by_the_sweep_follows_the_burials_receipt() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        dead_letter_retention: Duration::from_secs(1),
+        ..crate::config::EventsConfig::default()
+    };
+    let (hub, services, x) = buried_setup(dir.path(), &config);
+    let (a, b) = (Arc::clone(&hub), Arc::clone(&hub));
+    let (sa, sb) = (Arc::clone(&services), Arc::clone(&services));
+    raced(
+        &hub,
+        async move { a.settle(&sa, &x, gone()).await },
+        async move {
+            // Past the retention by the time the sweep runs.
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            b.sweep_dead_letters(&sb).await;
+        },
+    )
+    .await;
+    assert_burial_first(dir.path(), "evt_x");
+}
+
+/// .2: the attempt limit and the backoff count sends, so a failure after
+/// unsent claims is retried, not buried `exhausted`.
+#[tokio::test]
+async fn a_failure_after_unsent_claims_is_judged_by_its_sends() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        retry_max_attempts: 2,
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    queued(&hub, 9, "evt_judged");
+    let mut record = pending(&hub, "evt_judged");
+    record.attempt = 3;
+    record.unsent = 2;
+    record.first_attempt_at = Some(Utc::now());
+    let (settle, _) = hub.judge(&record, &super::status(503));
+    assert!(
+        matches!(settle, Settle::Retry { .. }),
+        "one send of two allowed: {settle:?}"
+    );
 }
