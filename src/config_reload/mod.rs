@@ -379,6 +379,8 @@ pub use write::{
     ConfigMutation, ConfigWriteError, mutate_config_and_reload, write_config_and_reload,
     write_config_and_reload_outcome,
 };
+// Only the web UI writes in refusing mode.
+#[cfg(feature = "webui")]
 pub(crate) use write::{MutateError, mutate_config_and_reload_with};
 
 mod env_poll;
