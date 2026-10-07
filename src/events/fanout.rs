@@ -251,6 +251,7 @@ impl EventsHub {
     /// withdrawn and nothing is sent (MIK-7772); backend types are complete
     /// from the start and are withdrawn whatever the scan did (MIK-7803). `false`, with the worker still held, when
     /// a removal failed: the caller retries.
+    #[cfg(test)]
     pub(crate) fn reconcile_catalogue(&self, scan: CatalogueScan) -> bool {
         self.reconcile_catalogue_after(&|| scan)
     }
