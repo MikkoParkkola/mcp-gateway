@@ -66,11 +66,32 @@ impl MetaMcp {
             // refresh refused for narrowing a live type, withdraws no webhook
             // type. Disk work, off the async workers; a removal that failed is
             // retried from the stored state, the worker held meanwhile.
-            let refresh: Arc<dyn Fn() -> crate::events::CatalogueScan + Send + Sync> =
-                Arc::new(move || startup_refresh(capabilities.as_deref(), registry.as_ref()));
-            hub.reconcile_until_done(refresh, std::time::Duration::from_secs(5))
-                .await;
+            let retry = std::time::Duration::from_secs(5);
+            let first = startup_pass(Pass::First, &hub, capabilities.clone(), registry.clone());
+            hub.reconcile_until_done("first", first, retry).await;
+            // Unoffered webhook types wait out the grace period: a reload the
+            // scan did not see may still offer them (MIK-8027).
+            tokio::time::sleep(withdraw_grace()).await;
+            let deferred = startup_pass(Pass::Deferred, &hub, capabilities, registry);
+            hub.reconcile_until_done("deferred", deferred, retry).await;
         });
+    }
+
+    /// Tests only: run the deferred startup webhook withdraw now (MIK-8027)
+    /// and wait for it, instead of after the grace period.
+    #[cfg(test)]
+    pub(crate) async fn run_deferred_webhook_withdraw(&self) {
+        let Some(hub) = self.events().cloned() else {
+            return;
+        };
+        let pass = startup_pass(
+            Pass::Deferred,
+            &hub,
+            self.get_capabilities(),
+            self.get_webhook_registry(),
+        );
+        hub.reconcile_until_done("deferred", pass, std::time::Duration::from_millis(10))
+            .await;
     }
 
     /// The events hub, when events are on for this transport.
@@ -260,9 +281,75 @@ fn apply_webhook_refresh(
                 .iter()
                 .any(|cap| name.starts_with(&format!("webhook.{cap}.")))
     };
-    if !hub.withdraw_unoffered_webhooks(&kept) {
+    let withdrawn = if hub.webhook_withdrawals_armed() {
+        hub.withdraw_unoffered_webhooks(&kept)
+    } else {
+        // Inside the startup grace period (MIK-8027): only the types this
+        // reload removed from the routes. A type unoffered since startup is
+        // left to the deferred pass.
+        let gone: Vec<String> = refreshed
+            .removed
+            .iter()
+            .filter(|name| !kept(name))
+            .cloned()
+            .collect();
+        hub.withdraw(&gone)
+    };
+    if !withdrawn {
         tracing::warn!("events: a capability reload could not remove a withdrawn subscription");
     }
+}
+
+/// Which startup reconcile pass runs.
+#[derive(Clone, Copy)]
+enum Pass {
+    /// Right after the scan: withdraws no webhook type the catalogue does
+    /// not offer.
+    First,
+    /// After the grace period: from now on an unoffered webhook type is
+    /// withdrawn (MIK-8027).
+    Deferred,
+}
+
+/// One startup reconcile pass, as the refresh `reconcile_until_done` runs
+/// under the hub's catalogue gate.
+fn startup_pass(
+    pass: Pass,
+    hub: &Arc<EventsHub>,
+    capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
+    registry: Option<Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>>,
+) -> Arc<dyn Fn() -> crate::events::CatalogueScan + Send + Sync> {
+    let hub = Arc::clone(hub);
+    Arc::new(move || {
+        if matches!(pass, Pass::Deferred) {
+            hub.arm_webhook_withdrawals();
+        }
+        startup_refresh(capabilities.as_deref(), registry.as_ref())
+    })
+}
+
+/// How long the startup reconcile leaves unoffered webhook types alone
+/// (MIK-8027). It must outlast the capability watcher's 0.5 s debounce, its
+/// pin scan and a reload, which reads YAML files only: together milliseconds
+/// to a few seconds. Writes that keep arriving restart the debounce, so a
+/// reload can still land later: MIK-8057 tracks that defect.
+const WITHDRAW_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// [`WITHDRAW_GRACE`]. Debug builds take an override in milliseconds from
+/// `MCP_GATEWAY_TEST_EVENTS_WITHDRAW_GRACE_MS`, so a process test need not
+/// wait 30 s; release builds compile it out, and the release job greps for
+/// its name.
+#[cfg(debug_assertions)]
+fn withdraw_grace() -> std::time::Duration {
+    std::env::var("MCP_GATEWAY_TEST_EVENTS_WITHDRAW_GRACE_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map_or(WITHDRAW_GRACE, std::time::Duration::from_millis)
+}
+
+#[cfg(not(debug_assertions))]
+fn withdraw_grace() -> std::time::Duration {
+    WITHDRAW_GRACE
 }
 
 /// The startup reconcile's refresh, run under its catalogue gate: the routes
@@ -293,6 +380,8 @@ fn startup_refresh(
 struct Refreshed {
     /// Every directory loaded.
     complete: bool,
+    /// The event types the refresh removed from the routes.
+    removed: Vec<String>,
     /// The capabilities the snapshot holds.
     present: Vec<String>,
 }
@@ -307,8 +396,9 @@ fn refresh_from_snapshot(
 ) -> Option<Refreshed> {
     let (catalogue, complete) = capabilities.catalogue_snapshot();
     match crate::events::refresh_webhooks(registry, &catalogue) {
-        Ok(_) => Some(Refreshed {
+        Ok(removed) => Some(Refreshed {
             complete,
+            removed,
             present: catalogue.into_iter().map(|cap| cap.name).collect(),
         }),
         Err(event) => {
