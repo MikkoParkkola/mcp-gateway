@@ -247,8 +247,8 @@ async fn meta_replayed_gateway_notice_is_not_receipted() {
     let key = keyed("key-7991-notice");
     let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
     assert!(
-        envelope(&first).get("error").is_some(),
-        "base: the lost round answers an error: {first}"
+        first.contains("may have reached the backend"),
+        "base: the lost round is answered with the notice: {first}"
     );
     let reads = fx.reads();
     let (_, replay) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
