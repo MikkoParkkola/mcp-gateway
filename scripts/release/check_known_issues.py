@@ -94,14 +94,6 @@ def title_letters(text):
     return re.sub(r"[^a-z]", "", INLINE_NOISE.sub("", html.unescape(text)).lower())
 
 
-def rendered_title(text):
-    """title_letters of `text` with quoted-attribute tags dropped only outside
-    code spans: a tag inside backticks renders as text."""
-    parts = re.split(r"`+", text)
-    kept = (QUOTED_TAG.sub("", part) if i % 2 == 0 else part for i, part in enumerate(parts))
-    return title_letters(" ".join(kept))
-
-
 def title_readings(text):
     """title_letters of `text`, as written and with quoted-attribute tags
     dropped first; a title either reading holds counts (fail closed)."""
@@ -189,9 +181,10 @@ def known_issues(text):
             inside, underline = True, not atx_start(line)
             above = lines[i - 1] if i else ""
             title = line if is_title(line) else f"{above} {line}"
-            # Content too: a title whose rendered text does not hold the
-            # title (a tag in a code span shows), or leftover letters.
-            extra = TITLE not in rendered_title(title) or any(
+            # Content too: a title with both a code span and a tag (which
+            # renders depends on span boundaries this reader does not
+            # decide), or leftover letters.
+            extra = ("`" in title and "<" in title) or any(
                 TITLE in r and r.replace(TITLE, "", 1) for r in title_readings(title)
             )
             if extra or later_releases(title):
