@@ -1,19 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Adding or removing one backend in gateway.yaml as a text edit, so the file's comments
-//! survive. A re-serialised `Config` drops every comment, including the
-//! security warning `init` writes next to `bearer_token`.
+//! Adding, removing or editing one backend in gateway.yaml as a text edit, so
+//! the file's comments survive. A re-serialised `Config` drops every comment,
+//! including the security warning `init` writes next to `bearer_token`.
 
 use serde_yaml::{Mapping, Value};
 
 use crate::config::Config;
 
 /// The text at `original` with the one backend edit that turns `before` into
-/// `config`: `name` added to the top-level `backends:` mapping, or removed
-/// from it. `None` when the edit cannot be proven right, which sends the
-/// caller to the full re-serialisation. Proven means: `config` differs from
-/// `before` only by `name`, and the edited text parses to the original
-/// document with exactly that entry added or removed.
+/// `config`: `name` added to the top-level `backends:` mapping, removed from
+/// it, or edited in place key by key. `None` when the edit cannot be proven
+/// right, which sends the caller to the full re-serialisation or a refusal.
+/// Proven means: `config` differs from `before` only by `name`, and the
+/// edited text parses to the original document with exactly that entry added,
+/// removed, or given the changed keys' new values.
 pub(super) fn with_backend_edited(
     original: &str,
     before: &Config,
@@ -46,7 +47,19 @@ pub(super) fn with_backend_edited(
             backends.remove(name)?;
             remove_entry(original, name)?
         }
-        _ => return None,
+        (Some(old), Some(new)) => {
+            let (Value::Mapping(old), Value::Mapping(new)) = (
+                serde_yaml::to_value(old).ok()?,
+                serde_yaml::to_value(new).ok()?,
+            ) else {
+                return None;
+            };
+            // `want` is the file's own spelling of the entry with only the
+            // changed keys replaced, never the fully serialised backend.
+            apply_delta(backends.get_mut(name)?.as_mapping_mut()?, &old, &new);
+            edit_entry(original, name, &old, &new)?
+        }
+        (None, None) => return None,
     };
     let got: Value = serde_yaml::from_str(&edited).ok()?;
     // The text must also load as `config` itself: `original` is re-read at
@@ -175,9 +188,193 @@ fn remove_entry(original: &str, name: &str) -> Option<String> {
     Some(out.join("\n") + "\n")
 }
 
+/// The trailing comment of `line` with the blanks before it (`  # why`):
+/// a `#` after a blank and outside a quoted scalar. A quote opens a scalar
+/// only where a scalar can start, so the apostrophe in `it's` does not.
+fn inline_comment(line: &str) -> Option<&str> {
+    let mut quote = None;
+    let mut prev = ' ';
+    for (at, c) in line.char_indices() {
+        match (quote, c) {
+            (None, '\'' | '"') if matches!(prev, ' ' | '\t' | ':' | '[' | '{' | ',') => {
+                quote = Some(c);
+            }
+            (Some(q), _) if c == q => quote = None,
+            (None, '#') if prev == ' ' || prev == '\t' => {
+                let start = line[..at].trim_end_matches([' ', '\t']).len();
+                return Some(&line[start..]);
+            }
+            _ => {}
+        }
+        prev = c;
+    }
+    None
+}
+
+/// Columns of indent before `line`'s first non-blank character.
+fn depth(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// Whether `line` holds YAML content: neither blank nor a comment line.
+fn content(line: &str) -> bool {
+    let t = line.trim_start();
+    !t.is_empty() && !t.starts_with('#')
+}
+
+/// The key `line` names at exactly `at` columns of indent.
+fn key_at(line: &str, at: usize) -> Option<&str> {
+    let rest = line.get(at..)?;
+    if depth(line) != at || rest.starts_with('-') {
+        return None;
+    }
+    let (key, _) = rest.split_once(':')?;
+    Some(key.trim().trim_matches(|c| c == '"' || c == '\''))
+}
+
+/// The end of the lines the key at `start` spans inside `..end`: up to the
+/// next content line at its depth or shallower, less the blank and comment
+/// lines that lead that next line.
+fn key_span(lines: &[&str], start: usize, end: usize) -> usize {
+    let at = depth(lines[start]);
+    let next = (start + 1..end)
+        .find(|&i| content(lines[i]) && depth(lines[i]) <= at)
+        .unwrap_or(end);
+    let mut stop = next;
+    while stop > start + 1 && !content(lines[stop - 1]) {
+        stop -= 1;
+    }
+    stop
+}
+
+/// One text edit: lines `.0..` `.1` replaced by `.2`.
+type Edit = (usize, usize, Vec<String>);
+
+/// `key: value` as block YAML, each line led by `pad`.
+fn render(key: &Value, value: &Value, pad: &str) -> Option<Vec<String>> {
+    let mut one = Mapping::new();
+    one.insert(key.clone(), value.clone());
+    let text = serde_yaml::to_string(&one).ok()?;
+    Some(text.lines().map(|l| format!("{pad}{l}")).collect())
+}
+
+/// The edits that turn the block mapping on lines `start..end` from `old`
+/// into `new`, key by key, so an unchanged key is never touched. `None` when
+/// a comment inside a replaced or removed value could not be kept.
+fn edit_block(
+    lines: &[&str],
+    start: usize,
+    end: usize,
+    old: &Mapping,
+    new: &Mapping,
+    edits: &mut Vec<Edit>,
+) -> Option<()> {
+    let child = (start..end).find(|&i| content(lines[i]))?;
+    let at = depth(lines[child]);
+    let pad = &lines[child][..at];
+    let mut tail = end;
+    while tail > start && !content(lines[tail - 1]) {
+        tail -= 1;
+    }
+    let commented = |from: usize, to: usize| lines[from..to].iter().any(|l| l.contains('#'));
+    for key in old
+        .keys()
+        .chain(new.keys().filter(|k| !old.contains_key(*k)))
+    {
+        let (was, now) = (old.get(key), new.get(key));
+        if was == now {
+            continue;
+        }
+        let name = key.as_str()?;
+        let Some(line) = (start..end).find(|&i| key_at(lines[i], at) == Some(name)) else {
+            // A default the file never spelled out goes at the mapping's end.
+            if let Some(now) = now {
+                edits.push((tail, tail, render(key, now, pad)?));
+            }
+            continue;
+        };
+        let stop = key_span(lines, line, end);
+        let colon = at + lines[line][at..].find(':')?;
+        let value_text = &lines[line][colon + 1..];
+        let comment = inline_comment(value_text);
+        let block = value_text[..value_text.len() - comment.map_or(0, str::len)]
+            .trim()
+            .is_empty();
+        match (was, now) {
+            // A removed key takes its own line's comment; one inside its
+            // value cannot be kept.
+            (_, None) if !commented(line + 1, stop) => edits.push((line, stop, Vec::new())),
+            (Some(Value::Mapping(was)), Some(Value::Mapping(now))) if block && stop > line + 1 => {
+                edit_block(lines, line + 1, stop, was, now, edits)?;
+            }
+            (_, Some(now)) if !commented(line + 1, stop) => {
+                let mut replaced = render(key, now, pad)?;
+                if let (Some(first), Some(comment)) = (replaced.first_mut(), comment) {
+                    first.push_str(comment);
+                }
+                edits.push((line, stop, replaced));
+            }
+            _ => return None,
+        }
+    }
+    Some(())
+}
+
+/// The text of `original` with backend `name`'s block entry edited from
+/// `old` to `new` in place. Flow style, at either level, gives `None`.
+fn edit_entry(original: &str, name: &str, old: &Mapping, new: &Mapping) -> Option<String> {
+    let lines: Vec<&str> = original.lines().collect();
+    let header = lines.iter().position(|l| l.starts_with("backends:"))?;
+    let after_key = &lines[header]["backends:".len()..];
+    let comment = inline_comment(after_key).map_or(0, str::len);
+    if !after_key[..after_key.len() - comment].trim().is_empty() {
+        return None;
+    }
+    let end = (header + 1..lines.len())
+        .find(|&i| content(lines[i]) && depth(lines[i]) == 0)
+        .unwrap_or(lines.len());
+    let child = (header + 1..end).find(|&i| content(lines[i]))?;
+    let at = depth(lines[child]);
+    let start = (header + 1..end).find(|&i| key_at(lines[i], at) == Some(name))?;
+    let stop = key_span(&lines, start, end);
+    let mut edits = Vec::new();
+    edit_block(&lines, start + 1, stop, old, new, &mut edits)?;
+    // Applied from the bottom up, so each edit's line numbers still hold.
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
+    let mut out: Vec<String> = lines.iter().map(ToString::to_string).collect();
+    for (from, to, with) in edits {
+        out.splice(from..to, with);
+    }
+    Some(out.join("\n") + "\n")
+}
+
+/// `raw`, the file's own spelling of an entry, with the keys that differ
+/// between `old` and `new` set to `new`'s values, recursing where both sides
+/// are mappings, as [`edit_block`] does in the text.
+fn apply_delta(raw: &mut Mapping, old: &Mapping, new: &Mapping) {
+    for key in old.keys().chain(new.keys()) {
+        let (was, now) = (old.get(key), new.get(key));
+        if was == now {
+            continue;
+        }
+        match (was, now, raw.get_mut(key)) {
+            (_, None, _) => {
+                raw.remove(key);
+            }
+            (Some(Value::Mapping(was)), Some(Value::Mapping(now)), Some(Value::Mapping(raw))) => {
+                apply_delta(raw, was, now);
+            }
+            (_, Some(now), _) => {
+                raw.insert(key.clone(), now.clone());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
+
 mod tests {
-    use super::{remove_entry, splice};
+    use super::{edit_entry, inline_comment, remove_entry, splice};
 
     const BLOCK: &str = "new:\n  command: echo\n";
 
@@ -254,6 +451,90 @@ mod tests {
         assert_eq!(
             remove_entry("backends:\n  a:\n    command: x\nauth: {}\n", "a").expect("a"),
             "backends: {}\nauth: {}\n"
+        );
+    }
+
+    fn map(yaml: &str) -> serde_yaml::Mapping {
+        serde_yaml::from_str(yaml).expect("mapping")
+    }
+
+    fn edited(original: &str, old: &str, new: &str) -> Option<String> {
+        edit_entry(original, "svc", &map(old), &map(new))
+    }
+
+    #[test]
+    fn the_inline_comment_scanner_skips_quoted_hashes() {
+        assert_eq!(inline_comment("a: \"x # y\"  # z"), Some("  # z"));
+        assert_eq!(inline_comment("a: x#y"), None);
+        assert_eq!(inline_comment("a: x\t# t"), Some("\t# t"));
+        // An apostrophe inside a word opens no quote.
+        assert_eq!(inline_comment("a: it's old  # kept"), Some("  # kept"));
+    }
+
+    #[test]
+    fn an_edit_touches_only_the_keys_that_changed() {
+        let original = "backends:\n  svc:\n    command: \"x\"  # why\n    description: a\n";
+        assert_eq!(
+            edited(
+                original,
+                "command: x\ndescription: a\n",
+                "command: x\ndescription: b\n"
+            ),
+            Some("backends:\n  svc:\n    command: \"x\"  # why\n    description: b\n".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_omitted_default_is_appended_inside_the_entry() {
+        let original =
+            "backends:\n  svc:\n    command: x\n  # leads other\n  other:\n    command: y\n";
+        assert_eq!(
+            edited(original, "command: x\nenabled: true\n", "command: x\nenabled: false\n"),
+            Some(
+                "backends:\n  svc:\n    command: x\n    enabled: false\n  # leads other\n  other:\n    command: y\n"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn a_block_mapping_is_edited_key_by_key() {
+        let original = "backends:\n  svc:\n    env:\n      # vault\n      A: one\n";
+        assert_eq!(
+            edited(original, "env:\n  A: one\n", "env:\n  A: one\n  B: two\n"),
+            Some(
+                "backends:\n  svc:\n    env:\n      # vault\n      A: one\n      B: two\n"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn a_comment_inside_a_replaced_or_removed_value_refuses() {
+        let original = "backends:\n  svc:\n    secrets:\n      # pinned\n      - a\n";
+        assert_eq!(edited(original, "secrets: [a]\n", "secrets: [b]\n"), None);
+        assert_eq!(edited(original, "secrets: [a]\n", "{}\n"), None);
+        let flow = "backends:\n  svc:\n    env: {\n      # vault\n      A: one\n    }\n";
+        assert_eq!(
+            edited(flow, "env: {A: one}\n", "env: {A: one, B: two}\n"),
+            None
+        );
+        assert_eq!(
+            edited(
+                "backends: {svc: {env: {}}}\n",
+                "env: {}\n",
+                "env: {B: two}\n"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_type_change_replaces_the_value_and_keeps_its_inline_comment() {
+        let original = "backends:\n  svc:\n    timeout: 5s  # slow host\n";
+        assert_eq!(
+            edited(original, "timeout: 5s\n", "timeout:\n  secs: 9\n"),
+            Some("backends:\n  svc:\n    timeout:  # slow host\n      secs: 9\n".to_owned())
         );
     }
 }
