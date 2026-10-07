@@ -692,3 +692,54 @@ fn a_clean_call_and_a_blocked_relay_log_no_observed_warning() {
     );
     assert!(warnings.is_empty(), "{warnings:?}");
 }
+
+/// MIK-7992: a plan step is staged whole and capped later exactly as a
+/// delivery is capped now: the same head, seam and tail, char boundaries
+/// included, and capped once.
+#[test]
+fn a_plan_step_digest_is_capped_later_as_a_delivery_is_now() {
+    let half = RECORD_CAP / 2;
+    let text = format!(
+        "{}{}{}",
+        "a".repeat(half - 1),
+        "\u{1D11E}".repeat(RECORD_CAP),
+        "z"
+    );
+    let leaves = ["short leaf", text.as_str(), "last leaf"];
+    let (staged, cut) = DeliveryDigest::of_plan_step_leaves(&leaves, false);
+    assert!(!cut && staged.is_deferred(), "staged whole, cap deferred");
+    assert_eq!(staged.segment_texts().len(), 3, "every leaf whole");
+    let (capped, cut) = staged.capped();
+    assert!(cut && !capped.is_deferred());
+    let (now, _) = DeliveryDigest::of_leaves(&leaves, false);
+    assert_eq!(capped.segment_texts(), now.segment_texts());
+    let (again, cut) = capped.capped();
+    assert!(!cut, "a capped digest is capped once");
+    assert_eq!(again.segment_texts(), now.segment_texts());
+}
+
+/// MIK-7992: a plan step's digest recorded without being kept to its plan's
+/// answer is capped where it is recorded: the cut is counted and the middle
+/// of an over-cap text is not recorded, as for any other delivery.
+#[test]
+fn a_deferred_digest_is_capped_where_it_is_recorded() {
+    let (fw, _dir) = observing(|_| {});
+    let pad = |tag: &str| {
+        (0..700)
+            .map(|i| format!("{tag}{i:05}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let step = json!({"a": pad("head"), "body": PROSE, "z": pad("tail")});
+    let digest = fw
+        .plan_step_digest("alpha", "read", &step)
+        .expect("relay detection is on");
+    assert_eq!(fw.relay_text_cuts(), 0, "premise: staged whole");
+    fw.record_digest(RelayCaller::Keyed("carol"), "alpha", "read", &digest);
+
+    assert_eq!(fw.relay_text_cuts(), 1, "the cap applied at the sink");
+    assert!(
+        egress(&fw, RelayCaller::Keyed("bob")).findings.is_empty(),
+        "the dropped middle was recorded"
+    );
+}

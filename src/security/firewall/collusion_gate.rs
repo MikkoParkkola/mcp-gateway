@@ -408,15 +408,47 @@ impl Firewall {
         tool: &str,
         result: &Value,
     ) -> Option<DeliveryDigest> {
+        self.digest_with(server, tool, result, DeliveryDigest::of_leaves)
+    }
+
+    /// [`Self::delivery_digest`] for a plan step: staged whole, capped once
+    /// it is kept to what the plan delivers, or when recorded (MIK-7992).
+    pub(crate) fn plan_step_digest(
+        &self,
+        server: &str,
+        tool: &str,
+        result: &Value,
+    ) -> Option<DeliveryDigest> {
+        self.digest_with(server, tool, result, DeliveryDigest::of_plan_step_leaves)
+    }
+
+    fn digest_with(
+        &self,
+        server: &str,
+        tool: &str,
+        result: &Value,
+        of_leaves: fn(&[&str], bool) -> (DeliveryDigest, bool),
+    ) -> Option<DeliveryDigest> {
         self.relay_detector()?;
         let source = format!("{server}:{tool}");
         let sensitive = self.relay.sources.iter().any(|p| p.matches(&source))
             || context_integrity_sensitive(result);
-        let (digest, cut) = DeliveryDigest::of_leaves(&delivery_leaves(result), sensitive);
+        let (digest, cut) = of_leaves(&delivery_leaves(result), sensitive);
+        self.count_cut(cut);
+        Some(digest)
+    }
+
+    /// `digest` with a deferred cap applied, a cut counted.
+    fn capped(&self, digest: DeliveryDigest) -> DeliveryDigest {
+        let (digest, cut) = digest.capped();
+        self.count_cut(cut);
+        digest
+    }
+
+    fn count_cut(&self, cut: bool) {
         if cut {
             self.relay.text_cut.fetch_add(1, Ordering::Relaxed);
         }
-        Some(digest)
     }
 
     /// The leaves of a plan's final answer that its step receipts are kept
@@ -440,7 +472,7 @@ impl Firewall {
         delivered: &Delivered<'_>,
     ) -> DeliveryDigest {
         match self.relay_detector() {
-            Some(detector) => digest.retaining(detector, delivered),
+            Some(detector) => self.capped(digest.retaining(detector, delivered)),
             None => digest,
         }
     }
@@ -458,6 +490,15 @@ impl Firewall {
         };
         let source = format!("{server}:{tool}");
         let flows = self.relay.source_flows(&source);
+        // MIK-7992: the one sink every record passes, so a plan step's
+        // receipt never kept to its plan's answer is recorded capped too.
+        let capped;
+        let digest = if digest.is_deferred() {
+            capped = self.capped(digest.clone());
+            &capped
+        } else {
+            digest
+        };
         detector.record_fingerprints_at(
             &source,
             caller.key(),

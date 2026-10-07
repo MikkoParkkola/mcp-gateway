@@ -24,6 +24,7 @@ use super::collusion_gate::RECORD_CAP;
 pub(super) const DELIVERED_SET_CAP: usize = 1024 * 1024;
 
 /// One piece of delivered text.
+#[derive(Clone)]
 struct Segment {
     text: String,
     /// The whole leaf, not a piece the cap cut from it.
@@ -34,90 +35,143 @@ struct Segment {
 
 /// A delivery reduced to what recording it needs, so a staged receipt holds
 /// at most [`RECORD_CAP`] of text rather than the whole result.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct DeliveryDigest {
     segments: Vec<Segment>,
     /// Fingerprints kept from leaves a change removed (plans only).
     retained: Vec<u64>,
     pub(super) sensitive: bool,
+    /// Staged whole, its cap still to apply (a plan step, MIK-7992).
+    deferred: bool,
+}
+
+/// Each leaf as a whole segment, no seam between them.
+fn whole_segments(leaves: &[&str]) -> Vec<Segment> {
+    leaves
+        .iter()
+        .map(|leaf| Segment {
+            text: (*leaf).to_owned(),
+            whole: true,
+            gap_before: false,
+        })
+        .collect()
+}
+
+/// `segments` in walk order, capped: segments from the head and from the
+/// tail up to half of [`RECORD_CAP`] each, one at a boundary cut on a char
+/// boundary, and the middle dropped behind a seam. A kept segment keeps its
+/// own seam. Also whether anything was cut.
+fn cap(segments: Vec<Segment>) -> (Vec<Segment>, bool) {
+    let total = segments
+        .iter()
+        .map(|s| s.text.len() + 1)
+        .sum::<usize>()
+        .saturating_sub(1);
+    if total <= RECORD_CAP {
+        return (segments, false);
+    }
+    let half = RECORD_CAP / 2;
+    let mut head = Vec::new();
+    let mut room = half;
+    for s in &segments {
+        if room == 0 {
+            break;
+        }
+        if s.text.len() <= room {
+            head.push(s.clone());
+            room -= (s.text.len() + 1).min(room);
+        } else {
+            let end = s.text.floor_char_boundary(room);
+            if end > 0 {
+                head.push(Segment {
+                    text: s.text[..end].to_owned(),
+                    whole: false,
+                    gap_before: s.gap_before,
+                });
+            }
+            break;
+        }
+    }
+    let mut tail = Vec::new();
+    let mut room = half;
+    for s in segments.iter().rev() {
+        if room == 0 {
+            break;
+        }
+        if s.text.len() <= room {
+            tail.push(s.clone());
+            room -= (s.text.len() + 1).min(room);
+        } else {
+            let start = s.text.ceil_char_boundary(s.text.len() - room);
+            if start < s.text.len() {
+                tail.push(Segment {
+                    text: s.text[start..].to_owned(),
+                    whole: false,
+                    gap_before: false,
+                });
+            }
+            break;
+        }
+    }
+    tail.reverse();
+    if let Some(first) = tail.first_mut() {
+        first.gap_before = true;
+    }
+    head.extend(tail);
+    (head, true)
 }
 
 impl DeliveryDigest {
-    /// `leaves` in walk order, capped by leaf: leaves from the head and from
-    /// the tail up to half of [`RECORD_CAP`] each, a leaf at a boundary cut on
-    /// a char boundary, and the middle dropped behind a seam. Also whether
+    /// `leaves` in walk order, capped by leaf (see [`cap`]). Also whether
     /// anything was cut.
     pub(super) fn of_leaves(leaves: &[&str], sensitive: bool) -> (Self, bool) {
-        let total = leaves
-            .iter()
-            .map(|l| l.len() + 1)
-            .sum::<usize>()
-            .saturating_sub(1);
-        let whole = |text: &str, gap_before| Segment {
-            text: text.to_owned(),
-            whole: true,
-            gap_before,
-        };
-        let cut = total > RECORD_CAP;
-        let segments = if cut {
-            let half = RECORD_CAP / 2;
-            let mut head = Vec::new();
-            let mut room = half;
-            for leaf in leaves {
-                if room == 0 {
-                    break;
-                }
-                if leaf.len() <= room {
-                    head.push(whole(leaf, false));
-                    room -= (leaf.len() + 1).min(room);
-                } else {
-                    let end = leaf.floor_char_boundary(room);
-                    if end > 0 {
-                        head.push(Segment {
-                            text: leaf[..end].to_owned(),
-                            whole: false,
-                            gap_before: false,
-                        });
-                    }
-                    break;
-                }
-            }
-            let mut tail = Vec::new();
-            let mut room = half;
-            for leaf in leaves.iter().rev() {
-                if room == 0 {
-                    break;
-                }
-                if leaf.len() <= room {
-                    tail.push(whole(leaf, false));
-                    room -= (leaf.len() + 1).min(room);
-                } else {
-                    let start = leaf.ceil_char_boundary(leaf.len() - room);
-                    if start < leaf.len() {
-                        tail.push(Segment {
-                            text: leaf[start..].to_owned(),
-                            whole: false,
-                            gap_before: false,
-                        });
-                    }
-                    break;
-                }
-            }
-            tail.reverse();
-            if let Some(first) = tail.first_mut() {
-                first.gap_before = true;
-            }
-            head.extend(tail);
-            head
-        } else {
-            leaves.iter().map(|leaf| whole(leaf, false)).collect()
-        };
+        let (segments, cut) = cap(whole_segments(leaves));
         let digest = Self {
             segments,
             retained: Vec::new(),
             sensitive,
+            deferred: false,
         };
         (digest, cut)
+    }
+
+    /// `leaves` of a plan step, staged whole with the cap deferred until the
+    /// receipt is kept to what the plan delivers (MIK-7992): a member the
+    /// plan drops must not take the budget of one it delivers. Over
+    /// [`DELIVERED_SET_CAP`], capped now as [`Self::of_leaves`] does.
+    pub(super) fn of_plan_step_leaves(leaves: &[&str], sensitive: bool) -> (Self, bool) {
+        let total: usize = leaves.iter().map(|l| l.len()).sum();
+        if total > DELIVERED_SET_CAP {
+            return Self::of_leaves(leaves, sensitive);
+        }
+        let digest = Self {
+            segments: whole_segments(leaves),
+            retained: Vec::new(),
+            sensitive,
+            deferred: true,
+        };
+        (digest, false)
+    }
+
+    /// This digest with a deferred cap applied: segments capped as
+    /// [`cap`] caps leaves, seams kept, and at most [`RECORD_CAP`]
+    /// retained fingerprints. Also whether anything was cut. A digest
+    /// capped at staging is returned as it is.
+    pub(super) fn capped(mut self) -> (Self, bool) {
+        if !self.deferred {
+            return (self, false);
+        }
+        let (segments, mut cut) = cap(std::mem::take(&mut self.segments));
+        cut |= self.retained.len() > RECORD_CAP;
+        self.retained.truncate(RECORD_CAP);
+        self.segments = segments;
+        self.deferred = false;
+        (self, cut)
+    }
+
+    /// Whether the cap is still to apply.
+    pub(super) fn is_deferred(&self) -> bool {
+        self.deferred
     }
 
     /// Each segment's text and whether a seam lies before it (tests only).
@@ -185,6 +239,7 @@ impl DeliveryDigest {
             segments,
             retained: Vec::new(),
             sensitive: self.sensitive,
+            deferred: self.deferred,
         };
         // A removed leaf splits its run, and re-winnowing the pieces can drop
         // minima of text still delivered: the original runs' fingerprints stay

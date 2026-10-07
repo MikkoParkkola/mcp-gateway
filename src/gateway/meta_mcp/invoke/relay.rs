@@ -647,7 +647,7 @@ impl MetaMcp {
     }
 }
 
-/// `value` as a receipt for `who` under `fw`; `None` with relay detection off/// `value` as a receipt for `who` under `fw`; `None` with relay detection off
+/// `value` as a receipt for `who` under `fw`; `None` with relay detection off
 /// or outside a collector.
 #[cfg(feature = "firewall")]
 fn receipt_with(
@@ -657,14 +657,21 @@ fn receipt_with(
     value: &Value,
 ) -> Option<Receipt> {
     RELAY_RECEIPTS.try_with(|_| ()).ok()?;
-    let digest = fw.delivery_digest(server, tool, value)?;
+    let in_plan = PLAN_STEP.try_with(|()| ()).is_ok();
+    // MIK-7992: a plan step's receipt is capped after it is kept to what the
+    // plan delivers, so a member the plan drops cannot spend its budget.
+    let digest = if in_plan {
+        fw.plan_step_digest(server, tool, value)?
+    } else {
+        fw.delivery_digest(server, tool, value)?
+    };
     Some(Receipt {
         key: who.key.to_owned(),
         keyed: who.keyed,
         server: server.to_owned(),
         tool: tool.to_owned(),
         digest,
-        in_plan: PLAN_STEP.try_with(|()| ()).is_ok(),
+        in_plan,
         pending_retain: false,
     })
 }
