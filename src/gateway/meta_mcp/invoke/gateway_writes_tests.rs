@@ -409,61 +409,57 @@ async fn the_contract_annotations_are_the_gateways() {
     }
 }
 
-/// MIK-7993 F1 (c), delta D1: the strip applies each note only where its
-/// layer lives. A native answer loses the gateway's root member and keeps a
-/// backend member of the same name and bytes inside `structuredContent`; a
-/// wrapped answer loses the noted member from both copies of its value.
+/// MIK-7993 F1 (c), deltas D1/D4: a task stores its native result whatever
+/// tool started it, so the strip removes each noted member at the path it
+/// names in that result and nowhere else: a backend member of the same
+/// name and bytes inside `structuredContent` or a text block stays.
 #[tokio::test]
-async fn the_strip_applies_a_note_only_where_it_lives() {
-    let native = json!({
-        "content": [{"type": "text", "text": "t"}],
+async fn the_strip_removes_a_noted_member_only_at_its_path() {
+    let stored = json!({
+        "content": [{"type": "text", "text": "{\"_contract_violation\":true}"}],
         "_contract_violation": true,
-        "structuredContent": {"_contract_violation": true},
-    });
-    let record = noted(&native, &[CONTRACT_VIOLATION]).await;
-    let mut stored = native.clone();
-    let stripped = strip_recorded(&mut stored, &record, "read");
-    assert_eq!(stripped, vec!["_contract_violation".to_owned()]);
-    assert!(stored.get("_contract_violation").is_none(), "{stored}");
-    assert_eq!(
-        stored["structuredContent"]["_contract_violation"], true,
-        "a backend member was removed: {stored}"
-    );
-
-    let value = json!({"answer": "a", "trace_id": "gw-1"});
-    let record = noted(&value, &[&["trace_id"]]).await;
-    let mut wrapped = json!({
-        "content": [{"type": "text", "text": value.to_string()}],
-        "structuredContent": value,
         "trace_id": "gw-1",
+        "structuredContent": {"_contract_violation": true, "trace_id": "gw-1"},
     });
-    let stripped = strip_recorded(&mut wrapped, &record, "gateway_invoke");
-    assert_eq!(stripped, vec!["trace_id".to_owned()]);
-    assert!(
-        wrapped["structuredContent"].get("trace_id").is_none(),
-        "{wrapped}"
-    );
-    let text: Value =
-        serde_json::from_str(wrapped["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert!(text.get("trace_id").is_none(), "{text}");
+    let record = noted(&stored, &[CONTRACT_VIOLATION, &["trace_id"]]).await;
+    let mut result = stored.clone();
+    let stripped = strip_recorded(&mut result, &record);
     assert_eq!(
-        wrapped["trace_id"], "gw-1",
-        "the answer layer was not noted"
+        stripped,
+        vec!["_contract_violation".to_owned(), "trace_id".to_owned()]
     );
+    assert!(result.get("_contract_violation").is_none(), "{result}");
+    assert!(result.get("trace_id").is_none(), "{result}");
+    assert_eq!(
+        result["structuredContent"], stored["structuredContent"],
+        "{result}"
+    );
+    assert_eq!(result["content"], stored["content"], "{result}");
 }
 
-/// Delta D3: a note naming an array element empties that slot, keeping the
-/// later elements where their notes say they are.
+/// Delta D3: notes naming array elements empty those slots, keeping every
+/// other element where its note says it is, a backend element between
+/// them included.
 #[tokio::test]
-async fn a_noted_array_element_becomes_null() {
-    let step = json!({"_cost_warnings": ["first", "second"]});
+async fn noted_array_elements_become_null() {
+    let step = json!({"_cost_warnings": ["first", "second", "third"]});
     let record = noted(&step, &[&["_cost_warnings"]]).await;
-    let projected = record.projected(
-        &step,
-        &path(&["_cost_warnings", "0"]),
-        &path(&["items", "0"]),
+    let mut carried = WriteRecord::default();
+    for (from, to) in [("0", "0"), ("2", "2")] {
+        carried.0.extend(
+            record
+                .projected(
+                    &step,
+                    &path(&["_cost_warnings", from]),
+                    &path(&["items", to]),
+                )
+                .0,
+        );
+    }
+    let answer = json!({"items": ["first", "the backend's", "third"]});
+    let receipt = without(&answer, &carried);
+    assert_eq!(
+        receipt.as_ref(),
+        &json!({"items": [null, "the backend's", null]})
     );
-    let answer = json!({"items": ["first", "kept"]});
-    let receipt = without(&answer, &projected);
-    assert_eq!(receipt.as_ref(), &json!({"items": [null, "kept"]}));
 }

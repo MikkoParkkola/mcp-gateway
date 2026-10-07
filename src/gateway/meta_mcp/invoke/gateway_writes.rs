@@ -534,39 +534,19 @@ fn remove_owned(value: &mut Value, writes: &[Written], layer: Layer) -> Vec<Stri
     removed
 }
 
-/// MIK-7993 F1 (lead ruling c): `result`, as a task row stores it for a
-/// call to `tool`, without every member `record` would exempt. For a row
-/// that cannot hold its record, so the gateway's own text is never stored
-/// unrecorded and never receipted as backend text. Returns the names of the
-/// members removed.
+/// MIK-7993 F1 (lead ruling c): `result`, as a task row stores it, without
+/// every member `record` would exempt. For a row that cannot hold its
+/// record, so the gateway's own text is never stored unrecorded and never
+/// receipted as backend text. Returns the names of the members removed.
 ///
-/// Each note is applied only where its layer lives, as the receipt reads it
-/// (impl delta D1): the answer layer on the answer; the value layer on the
-/// answer itself, or, for a wrapped `gateway_invoke`/`gateway_execute`
-/// answer, on the value it wraps (its `structuredContent` and the JSON text
-/// of its first content block, two copies of one value). A note is never
-/// applied at a place it does not describe, so a backend member there is
-/// never removed.
-pub(crate) fn strip_recorded(result: &mut Value, record: &WriteRecord, tool: &str) -> Vec<String> {
+/// A task stores its NATIVE result whatever tool started it (the worker
+/// dispatches through `dispatch_below_gate_native_result`, never the
+/// wrapped answer), so each note is applied to that result itself, at the
+/// path it names, and nowhere else: a backend member elsewhere is never
+/// removed (last-round delta D4).
+pub(crate) fn strip_recorded(result: &mut Value, record: &WriteRecord) -> Vec<String> {
     let mut stripped = remove_owned(result, &record.0, Layer::Answer);
-    if matches!(tool, "gateway_invoke" | "gateway_execute") {
-        if let Some(structured) = result.get_mut("structuredContent") {
-            stripped.extend(remove_owned(structured, &record.0, Layer::Value));
-        }
-        if let Some(text) = result.pointer_mut("/content/0/text")
-            && let Some(mut decoded) = text
-                .as_str()
-                .and_then(|t| serde_json::from_str::<Value>(t).ok())
-        {
-            let removed = remove_owned(&mut decoded, &record.0, Layer::Value);
-            if !removed.is_empty() {
-                *text = Value::String(decoded.to_string());
-                stripped.extend(removed);
-            }
-        }
-    } else {
-        stripped.extend(remove_owned(result, &record.0, Layer::Value));
-    }
+    stripped.extend(remove_owned(result, &record.0, Layer::Value));
     stripped.sort();
     stripped.dedup();
     stripped

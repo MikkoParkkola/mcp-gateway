@@ -230,8 +230,7 @@ impl Shared {
         // the gateway's own text is never stored unrecorded and never
         // receipted as backend text on a later read.
         if recorded && let TaskTransition::Complete(mut result) = event {
-            let stripped =
-                crate::gateway::gateway_writes::strip_recorded(&mut result, &writes, task.tool());
+            let stripped = crate::gateway::gateway_writes::strip_recorded(&mut result, &writes);
             let attempt = (
                 TaskTransition::Complete(result),
                 targets,
