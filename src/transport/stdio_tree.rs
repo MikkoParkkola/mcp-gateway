@@ -55,8 +55,9 @@ pub(super) async fn write_frame(
     message: &str,
 ) -> Result<()> {
     let frame = [message.as_bytes(), b"\n"].concat();
-    let shutdown = shutdown.lock().clone();
     let mut writer = std::sync::Arc::clone(writer).lock_owned().await;
+    // Taken under the stdin lock: the token belongs to the stdin it guards.
+    let shutdown = shutdown.lock().clone();
     tokio::spawn(async move {
         let Some(stdin) = writer.as_mut() else {
             return Err(Error::TransportConnect("Not connected".to_string()));

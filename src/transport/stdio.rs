@@ -222,8 +222,12 @@ impl StdioTransport {
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stderr".to_string()))?;
 
+        let mut writer = self.writer.lock().await;
+        // Renewed under the stdin lock, so a write never pairs new stdin with
+        // the token a previous `close()` cancelled.
         *self.shutdown.lock() = tokio_util::sync::CancellationToken::new();
-        *self.writer.lock().await = Some(stdin);
+        *writer = Some(stdin);
+        drop(writer);
         *self.child.lock().await = Some(child);
         let (eof_tx, eof_rx) = tokio::sync::watch::channel(false);
         self.start.begin(eof_rx);

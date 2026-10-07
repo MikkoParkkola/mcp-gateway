@@ -341,7 +341,15 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
         "precondition: the escaped reader started"
     );
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        transport.writer.try_lock().is_err(),
+        "precondition: the write holds stdin"
+    );
     let closed = tokio::time::timeout(std::time::Duration::from_secs(10), transport.close()).await;
+    let escaped_alive = std::process::Command::new("kill")
+        .args(["-0", escaped.trim()])
+        .status()
+        .is_ok_and(|s| s.success());
     // Judged while the escaped reader still holds the pipe: killing it would
     // end the write by itself.
     let ended = tokio::time::timeout(std::time::Duration::from_secs(5), stuck).await;
@@ -358,4 +366,8 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
         "the stuck write outlived close(): {ended:?}"
     );
     assert!(released, "close() left stdin held by the stuck write");
+    assert!(
+        escaped_alive,
+        "precondition: the reader escaped the killed group"
+    );
 }
