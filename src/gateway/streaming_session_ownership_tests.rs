@@ -238,3 +238,17 @@ fn a_reused_id_is_fingerprinted_as_the_new_session() {
     }
     assert_ne!(session_fp("gw-reused"), session_fp("gw-other"));
 }
+
+/// `MIK-8014.PERF.2a`: removing a session logs the fingerprint its key already
+/// holds; nothing is hashed again, with logging on.
+#[test]
+fn removing_a_session_does_not_fingerprint_it_again() {
+    use crate::gateway::session_id::FINGERPRINTS;
+    let m = mux();
+    drop(m.seed_session("gw-gone"));
+    let (_captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
+    FINGERPRINTS.with(|n| n.set(0));
+    m.remove_session("gw-gone");
+    assert!(!m.has_session("gw-gone"), "the session was removed");
+    assert_eq!(FINGERPRINTS.with(std::cell::Cell::get), 0);
+}
