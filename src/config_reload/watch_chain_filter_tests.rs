@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Which events wake the rewatch task (MIK-8013). Each wake re-resolves the
 //! config's whole link chain, so a write beside the config that cannot move
-//! the chain must not cost one.
+//! the chain must not cost one. The real-watcher rows also cover a chain
+//! directory recreated in place and a chain that heals (MIK-8024).
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -222,5 +223,105 @@ mod real_watcher {
         std::fs::rename(&tmp, &cfg).unwrap();
         assert!(h.triggered_within(10).await, "the rename reloads");
         let _ = h.shutdown.send(());
+    }
+
+    /// `MIK-8024.WATCHDIR.1`: the config's directory deleted and recreated at
+    /// the same path is watched again. Its inotify watch died with the old
+    /// directory, so an edit in the new one is heard only through a new watch.
+    /// The pause outlasts a broken-chain retry, so the edit's reload is the
+    /// only trigger left to arrive.
+    #[tokio::test]
+    async fn watchdir1_a_recreated_config_directory_is_watched_again() {
+        let root = tempfile::tempdir().expect("root");
+        let conf = root.path().join("conf");
+        std::fs::create_dir(&conf).unwrap();
+        let cfg = conf.join("gateway.yaml");
+        std::fs::write(&cfg, "a: 1\n").unwrap();
+        let mut h = start(&cfg);
+        h.wait_wakes_above(0).await;
+        h.drain_idle().await;
+
+        std::fs::remove_dir_all(&conf).unwrap();
+        std::fs::create_dir(&conf).unwrap();
+        std::fs::write(&cfg, "a: 2\n").unwrap();
+        settled_wakes(&h).await;
+        tokio::time::sleep(super::super::CHAIN_RETRY + Duration::from_millis(500)).await;
+        settled_wakes(&h).await;
+        h.drain_idle().await;
+
+        std::fs::write(&cfg, "a: 3\n").unwrap();
+        assert!(
+            h.triggered_within(10).await,
+            "an edit in the recreated directory was not heard"
+        );
+        let _ = h.shutdown.send(());
+    }
+
+    /// `MIK-8024.WATCHDIR.2`: a chain that heals after failing to resolve sends
+    /// one reload, though its end and directories are what they were. The
+    /// watcher here hears nothing, so only the task's own wakes can reload.
+    #[tokio::test]
+    async fn watchdir2_a_healed_chain_reloads_once() {
+        use std::sync::Arc;
+        let root = tempfile::tempdir().expect("root");
+        let cfg = root.path().join("gateway.yaml");
+        std::fs::write(&cfg, "a: 1\n").unwrap();
+        let named = super::super::named_config_path(cfg.clone());
+        let deaf =
+            notify::recommended_watcher(|_: notify::Result<notify::Event>| {}).expect("watcher");
+        let chain = super::super::ChainWatch::with_names(deaf, Arc::default());
+        let (reload, mut reloads) = tokio::sync::mpsc::channel(8);
+        let (wake, mut woken) = tokio::sync::watch::channel(());
+        let (shutdown, _) = tokio::sync::broadcast::channel(1);
+        woken.mark_changed();
+        let _task = super::super::spawn_rewatch_task(
+            named,
+            Arc::clone(&chain),
+            woken,
+            reload,
+            shutdown.subscribe(),
+            Duration::from_secs(3600),
+            crate::config_reload::env_poll::EnvPoller::new(
+                Arc::new(crate::config::LiveEnv::default()),
+                Arc::default(),
+                std::path::PathBuf::new(),
+            ),
+            Duration::from_secs(3600),
+        );
+        let handled = |n: usize| {
+            let chain = Arc::clone(&chain);
+            async move {
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while chain.wakes_handled.load(Ordering::SeqCst) < n {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("the rewatch task stalled");
+            }
+        };
+        handled(1).await;
+        assert!(
+            matches!(
+                tokio::time::timeout(Duration::from_secs(5), reloads.recv()).await,
+                Ok(Some(_))
+            ),
+            "the first resolve reloads"
+        );
+
+        std::fs::remove_file(&cfg).unwrap();
+        wake.send_replace(());
+        handled(2).await;
+        std::fs::write(&cfg, "a: 2\n").unwrap();
+        let seen = chain.wakes_handled.load(Ordering::SeqCst);
+        wake.send_replace(());
+        handled(seen + 1).await;
+
+        let mut healed = 0;
+        while let Ok(Some(_)) = tokio::time::timeout(Duration::from_secs(1), reloads.recv()).await {
+            healed += 1;
+        }
+        assert_eq!(healed, 1, "reloads after the chain healed");
+        let _ = shutdown.send(());
     }
 }
