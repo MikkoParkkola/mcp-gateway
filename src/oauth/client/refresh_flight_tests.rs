@@ -15,10 +15,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::*;
+use crate::security::ssrf::DestinationPolicy;
 
 const RESOURCE: &str = "https://backend.example.com/mcp";
 const BACKEND: &str = "flight-backend";
 const CLIENT_ID: &str = "flight-client";
+/// The `User-Agent` of the client a test supplies to `OAuthClient::new`.
+const SUPPLIED_AGENT: &str = "supplied-refresh-client";
 
 /// How the token server answers the next refresh request.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -47,6 +50,8 @@ struct TokenServer {
     sent: Mutex<Vec<String>>,
     /// The client id of every refresh request, in arrival order.
     client_ids: Mutex<Vec<String>>,
+    /// The `User-Agent` of every refresh request, in arrival order.
+    agents: Mutex<Vec<String>>,
     /// Refresh tokens already consumed; a second use revokes the grant.
     consumed: Mutex<Vec<String>>,
     revoked: AtomicBool,
@@ -65,6 +70,7 @@ impl TokenServer {
             base: format!("http://{}", listener.local_addr().unwrap()),
             sent: Mutex::default(),
             client_ids: Mutex::default(),
+            agents: Mutex::default(),
             consumed: Mutex::default(),
             revoked: AtomicBool::new(false),
             generation: AtomicUsize::new(1),
@@ -75,10 +81,18 @@ impl TokenServer {
         let handler = Arc::clone(&server);
         let app = Router::new().route(
             "/token",
-            post(move |Form(form): Form<HashMap<String, String>>| {
-                let server = Arc::clone(&handler);
-                async move { server.answer(&form).await }
-            }),
+            post(
+                move |headers: axum::http::HeaderMap, Form(form): Form<HashMap<String, String>>| {
+                    let server = Arc::clone(&handler);
+                    let agent = headers.get("user-agent").and_then(|v| v.to_str().ok());
+                    server
+                        .agents
+                        .lock()
+                        .unwrap()
+                        .push(agent.unwrap_or_default().to_string());
+                    async move { server.answer(&form).await }
+                },
+            ),
         );
         tokio::spawn(async move { axum::serve(listener, app).await });
         server
@@ -166,20 +180,42 @@ impl TokenServer {
     }
 }
 
-/// A client of the shared credential, whose storage is `dir`.
+/// A client of the shared credential, whose storage is `dir`, built the way
+/// production builds one: refreshes go through its own redirect-free client.
 fn client(dir: &std::path::Path, server: &TokenServer) -> OAuthClient {
+    with_client(dir, server, None)
+}
+
+/// As [`client`], built by [`OAuthClient::new`] from the caller's `http`.
+fn supplied_client(dir: &std::path::Path, server: &TokenServer) -> OAuthClient {
+    let http = Client::builder().no_proxy().user_agent(SUPPLIED_AGENT);
+    with_client(dir, server, Some(http.build().unwrap()))
+}
+
+/// Builds a client of the shared credential.
+type MakeClient = fn(&std::path::Path, &TokenServer) -> OAuthClient;
+
+/// A client of the credential: through `OAuthClient::new` when the caller
+/// supplies `http`, else through the production constructor.
+fn with_client(dir: &std::path::Path, server: &TokenServer, http: Option<Client>) -> OAuthClient {
     let storage = Arc::new(TokenStorage::new(dir.to_path_buf()).unwrap());
-    let mut client = OAuthClient::new(
-        Client::builder().no_proxy().build().unwrap(),
-        BACKEND.to_string(),
-        RESOURCE.to_string(),
-        vec![],
-        storage,
-        OAuthClientConfig {
-            client_id: Some(CLIENT_ID.to_string()),
-            ..OAuthClientConfig::default()
-        },
-    );
+    let cfg = OAuthClientConfig {
+        client_id: Some(CLIENT_ID.to_string()),
+        ..OAuthClientConfig::default()
+    };
+    let (backend, resource) = (BACKEND.to_string(), RESOURCE.to_string());
+    let mut client = match http {
+        Some(http) => OAuthClient::new(http, backend, resource, vec![], storage, cfg),
+        None => OAuthClient::with_destination(
+            DestinationPolicy::Configured,
+            Client::builder().no_proxy().build().unwrap(),
+            backend,
+            resource,
+            vec![],
+            storage,
+            cfg,
+        ),
+    };
     client.auth_metadata = Some(
         serde_json::from_value(serde_json::json!({
             "issuer": server.base,
@@ -321,11 +357,12 @@ async fn a_cancelled_refresh_still_stores_the_rotated_token() {
 
 /// RENEWREPLAY.3: once the server has been seen to rotate, an exchange whose
 /// outcome is unknown spends the refresh token it sent: no client sends it
-/// again. One case per way the outcome can be unknown.
-async fn an_uncertain_refresh_is_not_replayed(uncertain: Answer) {
+/// again. One case per way the outcome can be unknown; `make` builds the
+/// client that sees it.
+async fn an_uncertain_refresh_is_not_replayed(uncertain: Answer, make: MakeClient) {
     let server = TokenServer::start(&[Answer::Rotate, uncertain]).await;
     let dir = tempfile::tempdir().unwrap();
-    let first = client(dir.path(), &server);
+    let first = make(dir.path(), &server);
     let second = client(dir.path(), &server);
     hold(&first, &token("a1", Some("r1"), true));
     headless(&first)
@@ -355,17 +392,25 @@ async fn an_uncertain_refresh_is_not_replayed(uncertain: Answer) {
 
 #[tokio::test]
 async fn a_lost_rotated_answer_is_not_replayed() {
-    an_uncertain_refresh_is_not_replayed(Answer::RotateThenBrokenBody).await;
+    an_uncertain_refresh_is_not_replayed(Answer::RotateThenBrokenBody, client).await;
 }
 
 #[tokio::test]
 async fn a_rotated_answer_behind_a_502_is_not_replayed() {
-    an_uncertain_refresh_is_not_replayed(Answer::RotateThen502).await;
+    an_uncertain_refresh_is_not_replayed(Answer::RotateThen502, client).await;
 }
 
 #[tokio::test]
 async fn a_rotated_answer_behind_a_redirect_is_not_replayed() {
-    an_uncertain_refresh_is_not_replayed(Answer::RotateThenRedirect).await;
+    an_uncertain_refresh_is_not_replayed(Answer::RotateThenRedirect, client).await;
+}
+
+/// A client supplied to `OAuthClient::new` follows the redirect itself, and
+/// the followed request ends in a connect error. That error does not prove
+/// the rotated answer was never produced: the token is spent, not replayed.
+#[tokio::test]
+async fn a_followed_redirect_through_a_supplied_client_is_not_replayed() {
+    an_uncertain_refresh_is_not_replayed(Answer::RotateThenRedirect, supplied_client).await;
 }
 
 /// ADOPT.1: a client whose cached token has expired, while storage holds a
@@ -691,4 +736,37 @@ async fn a_login_save_waits_for_a_running_refresh() {
     refresh.await.unwrap().expect("refreshed");
     let issued = login.await.unwrap().expect("logged in");
     assert_eq!(stored(&refresher).unwrap().access_token, issued);
+}
+
+/// A client supplied to `OAuthClient::new` carries the refresh, standing in
+/// for one built with the caller's own roots, proxy or identity. `Private`
+/// keeps this loopback endpoint off the unproxied loopback route `Configured`
+/// would take.
+#[tokio::test]
+async fn a_supplied_client_carries_its_refreshes() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut supplied = supplied_client(dir.path(), &server);
+    supplied.destination = DestinationPolicy::Private;
+    hold(&supplied, &token("a1", Some("r1"), true));
+
+    headless(&supplied).await.expect("refreshed");
+    assert_eq!(*server.agents.lock().unwrap(), [SUPPLIED_AGENT]);
+}
+
+/// A token file that exists but cannot be read may still hold the spent
+/// token: spending does not count it retired, so the in-flight marker stays.
+#[tokio::test]
+async fn an_unreadable_token_file_is_not_counted_retired() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(dir.path(), &server);
+    let key = client.credential_key().unwrap();
+    let path = client.storage.token_path(&key, RESOURCE);
+    std::fs::create_dir_all(&path).unwrap();
+    let flight = super::refresh_flight::Flight::of(&path);
+
+    let retired =
+        super::refresh_flight::spend(&flight, &client.storage, (&key, RESOURCE), BACKEND, "r1");
+    assert!(!retired, "an unreadable record was counted retired");
 }

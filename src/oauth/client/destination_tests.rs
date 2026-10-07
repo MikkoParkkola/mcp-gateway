@@ -745,3 +745,22 @@ async fn assert_renewal_stops_at_the_refusal(mut client: OAuthClient) {
         "a refusal is not reported as needing re-authorization: {log}"
     );
 }
+
+/// A refresh redirect to a name is refused, typed as SSRF, when the policy
+/// refuses what the name resolves to; a policy that allows it does not.
+#[tokio::test]
+async fn a_redirect_to_a_refused_name_is_a_typed_refusal() {
+    let target = url::Url::parse("https://localhost/token").unwrap();
+    for (destination, refused) in [
+        (DestinationPolicy::Public, true),
+        (DestinationPolicy::Private, false),
+        (DestinationPolicy::Configured, false),
+    ] {
+        let reason = super::super::refresh_flight::refused_target(destination, &target).await;
+        assert_eq!(reason.is_some(), refused, "{destination:?}: {reason:?}");
+        if let Some(reason) = reason {
+            let error = crate::Error::Protocol(reason);
+            assert!(crate::security::ssrf::is_ssrf_refusal(&error), "{error}");
+        }
+    }
+}

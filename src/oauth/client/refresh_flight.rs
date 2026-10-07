@@ -277,8 +277,12 @@ pub(super) fn spend(
     warn!(backend = %backend, "A refresh with an unknown outcome spent its refresh token");
     let Some(mut stored) = storage.load(key, resource_url) else {
         // Absent is retired. A record that exists but cannot be read may
-        // still hold `sent`: not retired, so the marker stays.
-        return !storage.token_path(key, resource_url).exists();
+        // still hold `sent`: not retired, so the marker stays. So does a path
+        // whose existence cannot be checked.
+        return matches!(
+            storage.token_path(key, resource_url).try_exists(),
+            Ok(false)
+        );
     };
     if stored.refresh_token.as_deref() != Some(sent) {
         return true;
@@ -290,6 +294,9 @@ pub(super) fn spend(
     }
     true
 }
+
+/// How long a redirect target's name may take to resolve.
+const REDIRECT_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Why `destination` refuses a redirect to `target`, if it does: a literal
 /// through [`hop`], a name through the pinning resolver a followed hop would
@@ -309,7 +316,13 @@ pub(super) async fn refused_target(
     };
     let name = name.parse::<reqwest::dns::Name>().ok()?;
     let resolver = PinningResolver::new(SystemResolver).with_policy(destination);
-    let error = reqwest::dns::Resolve::resolve(&resolver, name).await.err()?;
+    // Bounded: the flight is held meanwhile. A lookup that does not finish
+    // is not a refusal; the redirect error stays untyped.
+    let lookup = reqwest::dns::Resolve::resolve(&resolver, name);
+    let error = tokio::time::timeout(REDIRECT_LOOKUP_TIMEOUT, lookup)
+        .await
+        .ok()?
+        .err()?;
     ssrf_denial(&*error).map(ToString::to_string)
 }
 
