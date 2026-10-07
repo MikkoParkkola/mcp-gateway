@@ -165,9 +165,12 @@ impl DeliveryDigest {
     /// `leaves` of a plan step, staged whole with the cap deferred until the
     /// receipt is kept to what the plan delivers (MIK-7992): a member the
     /// plan drops must not take the budget of one it delivers. Over
-    /// [`DELIVERED_SET_CAP`], capped now as [`Self::of_leaves`] does.
+    /// [`DELIVERED_SET_CAP`] of text plus one segment per leaf (so many
+    /// empty leaves cannot stage unbounded), capped now as
+    /// [`Self::of_leaves`] does.
     pub(super) fn of_plan_step_leaves(leaves: &[&str], sensitive: bool) -> (Self, bool) {
-        let total: usize = leaves.iter().map(|l| l.len()).sum();
+        let per_leaf = std::mem::size_of::<Segment>();
+        let total: usize = leaves.iter().map(|l| l.len() + per_leaf).sum();
         if total > DELIVERED_SET_CAP {
             return Self::of_leaves(leaves, sensitive);
         }
