@@ -268,7 +268,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
                 tracing::warn!(
                     path = %shown_path,
                     needed,
-                    "task record leaves no room for its bounded failure; raise max_record_bytes to at least `needed` or remove the row"
+                    "task record leaves no room for its bounded failure; raise max_record_bytes to at least {needed} or remove the row"
                 );
                 return Err(StoreError::Capacity);
             }
