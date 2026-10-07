@@ -72,7 +72,12 @@ async fn a_refresh_that_never_connects_keeps_its_token() {
     let mut owned = client(dir.path(), &server);
     rotating(&owned);
     hold(&owned, &token("a1", Some("r1"), true));
-    token_endpoint(&mut owned, "http://127.0.0.1:1/token".to_string());
+    // Bound for the whole test and never listening: a connection is refused,
+    // and no parallel test can take the port meanwhile (MIK-7981).
+    let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+    reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let refused = reserved.local_addr().unwrap();
+    token_endpoint(&mut owned, format!("http://{refused}/token"));
 
     assert!(headless(&owned).await.is_err(), "nothing answered");
     assert_eq!(
@@ -106,10 +111,9 @@ async fn an_unparsable_answer_spends_a_rotating_servers_token() {
     hold(&owned, &token("a1", Some("r1"), true));
     token_endpoint(&mut owned, malformed_endpoint().await);
 
-    let error = headless(&owned)
-        .await
-        .expect_err("the answer does not parse");
-    assert!(error.to_string().contains("parse"), "{error}");
+    // The refresh fails; the client then falls back to a login, which the
+    // headless caller refuses. The token's fate is the assertion.
+    assert!(headless(&owned).await.is_err(), "the answer does not parse");
     assert!(flight_of(&owned).is_spent("r1"));
     assert_eq!(stored(&owned).and_then(|t| t.refresh_token), None);
     assert_eq!(
