@@ -157,6 +157,7 @@ impl StdioTransport {
     ///
     /// Returns an error if the command cannot be spawned or MCP initialization fails.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
+        self.start.forget_shown_stderr();
         self.failure.begin();
 
         let cmd = self.spawn_command()?;

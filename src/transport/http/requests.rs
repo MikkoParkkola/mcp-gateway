@@ -159,8 +159,21 @@ impl HttpTransport {
             })?;
             require_secure_oauth_target(&parsed)?;
 
-            let oauth = oauth_mutex.lock().await;
+            // A non-interactive caller (the health probe) never waits on the
+            // client mutex a login holds for minutes (MIK-7982 C2).
+            let oauth = if crate::oauth::login_gate::interactive() {
+                oauth_mutex.lock().await
+            } else {
+                oauth_mutex
+                    .try_lock()
+                    .map_err(|_| Error::AuthorizationRequired {
+                        backend: sanitize_url_for_diagnostics(&self.base_url),
+                    })?
+            };
             let token = oauth.get_token().await?;
+            // Past the request-time token step: a deadline from here is the
+            // backend's, not a login's (MIK-7982 C3).
+            crate::oauth::login_gate::Provenance::mark_dispatched();
             Ok(Some(token))
         } else {
             Ok(None)

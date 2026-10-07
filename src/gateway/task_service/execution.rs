@@ -77,6 +77,9 @@ impl BeginOutcome {
                 if let Some(obj) = value.as_object_mut() {
                     obj.insert("resultType".into(), json!("task"));
                 }
+                // MIK-7939: the envelope is the gateway's; a receipt reads
+                // only the slot it delivers.
+                crate::gateway::meta_mcp::invoke::gateway_writes::note_task_envelope(&value);
                 JsonRpcResponse::success(id, value)
             }
             Self::Mismatch => JsonRpcResponse::error(

@@ -22,6 +22,8 @@ use std::time::Duration;
 mod body_content_type;
 #[path = "executor_tests/cache_partitioning.rs"]
 mod cache_partitioning;
+#[path = "executor_tests/null_body.rs"]
+mod null_body;
 #[path = "executor_tests/rate_limit_errors.rs"]
 mod rate_limit_errors;
 #[path = "executor_tests/request_params.rs"]

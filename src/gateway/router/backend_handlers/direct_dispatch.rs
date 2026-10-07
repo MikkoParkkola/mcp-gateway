@@ -184,6 +184,12 @@ pub(super) async fn admit<'a>(
         identity: caller.verified_identity.as_ref(),
         managed: propagation.managed.as_ref(),
     };
+    // A session-less call's spend goes to its caller's own report (MIK-7653);
+    // a sessioned one is reported under its session, so it needs no key.
+    let caller_key = route
+        .session_id
+        .is_none_or(str::is_empty)
+        .then_some(caller.spend_key.as_str());
     let call = BackendCall {
         server: name,
         tool: envelope
@@ -195,6 +201,7 @@ pub(super) async fn admit<'a>(
         session_id: route.session_id,
         api_key_name: client.map(|c| c.name.as_str()),
         trace_id: "",
+        caller_key,
     };
     if envelope.method == "tools/call"
         && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call, preflight.signing_scope)
@@ -237,7 +244,7 @@ pub(super) async fn admit<'a>(
             return Err(build_http_response(&response, StatusCode::OK));
         }
         Some(crate::idempotency::GuardOutcome::CachedError(error)) => {
-            crate::gateway::meta_mcp::invoke::audit::note_cached();
+            crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
             let response = super::cached_error_response(Some(id.clone()), &error);
             return Err(build_http_response(&response, StatusCode::OK));
         }

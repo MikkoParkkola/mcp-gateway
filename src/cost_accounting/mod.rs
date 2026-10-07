@@ -4,18 +4,20 @@
 //! Per-client cost accounting for gateway tool calls.
 //!
 //! Tracks token usage and estimated spend per session and per API key,
-//! with rolling time windows (24 h / 7 d / 30 d) and optional hard/soft
-//! budget limits.
+//! with rolling time windows (24 h / 7 d / 30 d, to the hour) and optional
+//! hard/soft budget limits. Everything held is a running sum (tally.rs), so
+//! memory never grows with the number of calls (MIK-8000).
 //!
 //! # Design
 //!
 //! ```text
 //! CostTracker  (one global Arc, shared via AppState + MetaMcp)
 //!   ├── per_session : DashMap<session_id, SessionCost>
-//!   └── per_key     : DashMap<api_key_name, KeyCost>
+//!   ├── per_key     : DashMap<api_key_name, KeyCost>
+//!   └── per_caller  : session-less spend by caller key (caller.rs)
 //! ```
 //!
-//! `record()` is the single write path; everything else is read-only.
+//! `record()` and `record_caller()` are the write paths; everything else is read-only.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,6 +25,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+
+use tally::{HourBuckets, ToolTally};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -118,8 +122,8 @@ pub struct SessionCost {
     pub session_id: String,
     /// API-key name for this session (if any).
     pub api_key_name: Option<String>,
-    /// All recorded events (append-only; bounded by eviction in [`CostTracker`]).
-    records: parking_lot::Mutex<Vec<CostRecord>>,
+    /// Running per-tool sums: bounded by the catalog, never by the call count.
+    by_tool: parking_lot::Mutex<ToolTally>,
     /// Running token total (fast path).
     total_tokens: AtomicU64,
     /// Running cost total (stored as micro-dollars to avoid fp atomics).
@@ -135,7 +139,7 @@ impl SessionCost {
         Self {
             session_id: session_id.to_string(),
             api_key_name,
-            records: parking_lot::Mutex::new(Vec::new()),
+            by_tool: parking_lot::Mutex::new(ToolTally::default()),
             total_tokens: AtomicU64::new(0),
             total_cost_micro_usd: AtomicU64::new(0),
             call_count: AtomicU64::new(0),
@@ -143,55 +147,24 @@ impl SessionCost {
         }
     }
 
-    fn record(&self, rec: CostRecord) {
+    fn record(&self, rec: &CostRecord) {
         self.total_tokens
             .fetch_add(rec.token_count, Ordering::Relaxed);
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let micro = (rec.estimated_cost_usd * 1_000_000.0) as u64;
+        let micro = tally::micro(rec.estimated_cost_usd);
         self.total_cost_micro_usd
             .fetch_add(micro, Ordering::Relaxed);
         self.call_count.fetch_add(1, Ordering::Relaxed);
-        self.records.lock().push(rec);
+        self.by_tool
+            .lock()
+            .add(&rec.backend, &rec.tool, rec.token_count, micro);
     }
 
     /// Snapshot the session cost.
     #[must_use]
     pub fn snapshot(&self) -> SessionCostSnapshot {
-        let records = self.records.lock().clone();
+        let (by_backend, by_tool, _) = self.by_tool.lock().breakdown();
         #[allow(clippy::cast_precision_loss)]
         let total_cost_usd = self.total_cost_micro_usd.load(Ordering::Relaxed) as f64 / 1_000_000.0;
-
-        // Breakdown by backend
-        let mut by_backend: std::collections::HashMap<String, BackendCost> =
-            std::collections::HashMap::new();
-        for r in &records {
-            let e = by_backend.entry(r.backend.clone()).or_insert(BackendCost {
-                backend: r.backend.clone(),
-                call_count: 0,
-                token_count: 0,
-                cost_usd: 0.0,
-            });
-            e.call_count += 1;
-            e.token_count += r.token_count;
-            e.cost_usd += r.estimated_cost_usd;
-        }
-
-        // Breakdown by tool
-        let mut by_tool: std::collections::HashMap<String, ToolCost> =
-            std::collections::HashMap::new();
-        for r in &records {
-            let key = format!("{}:{}", r.backend, r.tool);
-            let e = by_tool.entry(key.clone()).or_insert(ToolCost {
-                tool_key: key,
-                call_count: 0,
-                token_count: 0,
-                cost_usd: 0.0,
-            });
-            e.call_count += 1;
-            e.token_count += r.token_count;
-            e.cost_usd += r.estimated_cost_usd;
-        }
-
         SessionCostSnapshot {
             session_id: self.session_id.clone(),
             api_key_name: self.api_key_name.clone(),
@@ -199,8 +172,8 @@ impl SessionCost {
             call_count: self.call_count.load(Ordering::Relaxed),
             total_tokens: self.total_tokens.load(Ordering::Relaxed),
             total_cost_usd,
-            by_backend: by_backend.into_values().collect(),
-            by_tool: by_tool.into_values().collect(),
+            by_backend,
+            by_tool,
         }
     }
 }
@@ -235,8 +208,13 @@ pub struct KeyCost {
     pub name: String,
     /// Budget limits.
     pub budget: BudgetConfig,
-    /// Timestamped events (eviction loop trims old entries).
-    records: parking_lot::Mutex<Vec<CostRecord>>,
+    /// Set through [`CostTracker::set_key_budget`]: never swept when idle.
+    budgeted: bool,
+    /// Hourly spend for the windows and all-time per-tool sums (MIK-8000):
+    /// bounded by the clock and the catalog, never by the call count.
+    spend: parking_lot::Mutex<(HourBuckets, ToolTally)>,
+    /// Unix second of the latest spend, for the idle sweep.
+    last_spend: AtomicU64,
 }
 
 impl KeyCost {
@@ -244,24 +222,31 @@ impl KeyCost {
         Self {
             name: name.to_string(),
             budget,
-            records: parking_lot::Mutex::new(Vec::new()),
+            budgeted: false,
+            spend: parking_lot::Mutex::default(),
+            // A key is born active: a sweep between its creation and its
+            // first spend must not take it for a month-idle one.
+            last_spend: AtomicU64::new(now_secs()),
         }
     }
 
-    fn record(&self, rec: CostRecord) {
-        self.records.lock().push(rec);
+    fn record(&self, rec: &CostRecord, now: u64) {
+        let micro = tally::micro(rec.estimated_cost_usd);
+        let mut spend = self.spend.lock();
+        spend.0.add(rec.timestamp, now, rec.token_count, micro);
+        spend.1.add(&rec.backend, &rec.tool, rec.token_count, micro);
+        self.last_spend.fetch_max(rec.timestamp, Ordering::Relaxed);
+    }
+
+    /// True when the key has had no spend for the 30-day window and no
+    /// budget was set for it: every window it reports would read zero.
+    fn idle(&self, now: u64) -> bool {
+        !self.budgeted && self.last_spend.load(Ordering::Relaxed) + BudgetWindow::Month.secs() < now
     }
 
     /// Compute cost totals for a given rolling window.
     fn window_totals(&self, window_secs: u64) -> (u64, f64) {
-        let cutoff = now_secs().saturating_sub(window_secs);
-        let records = self.records.lock();
-        records
-            .iter()
-            .filter(|r| r.timestamp >= cutoff)
-            .fold((0u64, 0.0f64), |(tok, cost), r| {
-                (tok + r.token_count, cost + r.estimated_cost_usd)
-            })
+        self.spend.lock().0.totals(now_secs(), window_secs)
     }
 
     /// Cost within the budget window (used for limit checks).
@@ -300,23 +285,8 @@ impl KeyCost {
         let (tokens_7d, cost_7d) = self.window_totals(BudgetWindow::Week.secs());
         let (tokens_30d, cost_30d) = self.window_totals(BudgetWindow::Month.secs());
 
-        // Breakdown by tool (all-time records kept in memory)
-        let records = self.records.lock();
-        let mut by_tool: std::collections::HashMap<String, ToolCost> =
-            std::collections::HashMap::new();
-        for r in &*records {
-            let key = format!("{}:{}", r.backend, r.tool);
-            let e = by_tool.entry(key.clone()).or_insert(ToolCost {
-                tool_key: key,
-                call_count: 0,
-                token_count: 0,
-                cost_usd: 0.0,
-            });
-            e.call_count += 1;
-            e.token_count += r.token_count;
-            e.cost_usd += r.estimated_cost_usd;
-        }
-        drop(records);
+        // All-time per-tool sums.
+        let (_, by_tool, _) = self.spend.lock().1.breakdown();
 
         KeyCostSnapshot {
             api_key_name: self.name.clone(),
@@ -334,15 +304,8 @@ impl KeyCost {
             },
             hard_limit_usd: self.budget.hard_limit_usd,
             budget_status: format!("{:?}", self.budget_status()),
-            by_tool: by_tool.into_values().collect(),
+            by_tool,
         }
-    }
-
-    /// Evict events older than 30 days (called periodically by [`CostTracker`]).
-    fn evict_old(&self) {
-        let cutoff = now_secs().saturating_sub(BudgetWindow::Month.secs());
-        let mut records = self.records.lock();
-        records.retain(|r| r.timestamp >= cutoff);
     }
 }
 
@@ -393,7 +356,7 @@ pub struct KeyCostSnapshot {
     pub hard_limit_usd: Option<f64>,
     /// Human-readable budget status.
     pub budget_status: String,
-    /// Per-tool breakdown (all-time records retained in memory).
+    /// All-time per-tool breakdown; tools past the row cap share `(other)`.
     pub by_tool: Vec<ToolCost>,
 }
 
@@ -438,6 +401,10 @@ pub struct CostTracker {
     /// reported as anyone's session, and kept as counters because no session
     /// end would ever free records.
     sessionless: [AtomicU64; 3],
+    /// Session-less spend by caller key (MIK-7653), for the caller's own report.
+    per_caller: caller::CallerCosts,
+    /// When the next idle-key sweep may run (MIK-8000).
+    next_key_sweep: AtomicU64,
     /// Default budget applied to keys with no explicit config.
     default_budget: BudgetConfig,
 }
@@ -450,33 +417,29 @@ impl CostTracker {
             per_session: DashMap::new(),
             per_key: DashMap::new(),
             sessionless: <[AtomicU64; 3]>::default(),
+            per_caller: caller::CallerCosts::default(),
+            next_key_sweep: AtomicU64::new(0),
             default_budget: BudgetConfig::default(),
         }
     }
 
-    /// Pre-register a budget for a named API key.
+    /// Pre-register a budget for a named API key, keeping any spend it has.
+    ///
+    /// One entry guard covers the lookup and the replacement, so the idle
+    /// sweep (which takes every shard lock) cannot drop the key in between.
     pub fn set_key_budget(&self, key_name: &str, budget: BudgetConfig) {
-        self.per_key
+        let mut entry = self
+            .per_key
             .entry(key_name.to_string())
-            .and_modify(|kc| {
-                // Swap the budget in-place on the existing Arc.
-                // We can't mutate through Arc so we replace the entry.
-                let _ = kc; // suppress unused warning
-            })
             .or_insert_with(|| Arc::new(KeyCost::new(key_name, budget.clone())));
-        // If the entry already existed we replace it entirely:
-        if let Some(mut entry) = self.per_key.get_mut(key_name) {
-            let existing = Arc::clone(&entry);
-            if !Arc::ptr_eq(&existing, &Arc::new(KeyCost::new(key_name, budget.clone()))) {
-                // Rebuild with new budget, preserving existing records
-                let records = existing.records.lock().clone();
-                let new_kc = KeyCost {
-                    records: parking_lot::Mutex::new(records),
-                    ..KeyCost::new(key_name, budget)
-                };
-                *entry = Arc::new(new_kc);
-            }
-        }
+        let spend = std::mem::take(&mut *entry.spend.lock());
+        let last_spend = entry.last_spend.load(Ordering::Relaxed);
+        *entry = Arc::new(KeyCost {
+            budgeted: true,
+            spend: parking_lot::Mutex::new(spend),
+            last_spend: AtomicU64::new(last_spend),
+            ..KeyCost::new(key_name, budget)
+        });
     }
 
     /// Record a tool-call cost event.
@@ -500,8 +463,7 @@ impl CostTracker {
         // Per-session. An empty id is no session (a 2026-07-28 request has
         // none): keying on it would pool every such caller into one bucket.
         if session_id.is_empty() {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let micro = (rec.estimated_cost_usd * 1_000_000.0) as u64;
+            let micro = tally::micro(rec.estimated_cost_usd);
             for (total, add) in self.sessionless.iter().zip([1, rec.token_count, micro]) {
                 total.fetch_add(add, Ordering::Relaxed);
             }
@@ -511,7 +473,7 @@ impl CostTracker {
                 .or_insert_with(|| {
                     Arc::new(SessionCost::new(session_id, api_key_name.map(String::from)))
                 })
-                .record(rec.clone());
+                .record(&rec);
         }
 
         // Per-key (if we have a key name)
@@ -519,8 +481,33 @@ impl CostTracker {
             self.per_key
                 .entry(key_name.to_string())
                 .or_insert_with(|| Arc::new(KeyCost::new(key_name, self.default_budget.clone())))
-                .record(rec);
+                .record(&rec, rec.timestamp);
+            // The entry guard is dropped above: `retain` takes every shard lock.
+            if tally::sweep_due(&self.next_key_sweep, rec.timestamp) {
+                self.per_key.retain(|_, key| !key.idle(rec.timestamp));
+            }
         }
+    }
+
+    /// Add one session-less call to `caller_key`'s own breakdown. The call
+    /// is already in the aggregate and key totals through [`Self::record`],
+    /// so this touches neither.
+    pub fn record_caller(
+        &self,
+        caller_key: &str,
+        backend: &str,
+        tool: &str,
+        token_count: u64,
+        price_per_million: f64,
+    ) {
+        let rec = CostRecord::new(backend, tool, token_count, price_per_million);
+        self.per_caller.record(caller_key, &rec, rec.timestamp);
+    }
+
+    /// `caller_key`'s session-less breakdown, `None` when it has none.
+    #[must_use]
+    pub fn caller_snapshot(&self, caller_key: &str) -> Option<SessionCostSnapshot> {
+        self.per_caller.snapshot(caller_key, now_secs())
     }
 
     /// Check whether a key has exceeded its budget.
@@ -600,15 +587,6 @@ impl CostTracker {
         }
     }
 
-    /// Evict old per-key records (>30 days) to bound memory.
-    ///
-    /// Call this periodically (e.g., hourly) from a background task.
-    pub fn evict_old_records(&self) {
-        for entry in &self.per_key {
-            entry.evict_old();
-        }
-    }
-
     /// Remove a session (called when the MCP session is terminated). Its totals
     /// move into the aggregate-only counters, so ending a session never lowers
     /// the operator's usage total.
@@ -648,6 +626,24 @@ pub struct AggregateCost {
     pub total_cost_usd: f64,
 }
 
+#[cfg(test)]
+impl CostTracker {
+    /// Entries `key_name` holds in memory: what another answered call can grow.
+    pub(crate) fn key_retained(&self, key_name: &str) -> usize {
+        self.per_key.get(key_name).map_or(0, |key| {
+            let spend = key.spend.lock();
+            spend.0.len() + spend.1.len()
+        })
+    }
+
+    /// Entries `session_id` holds in memory.
+    pub(crate) fn session_retained(&self, session_id: &str) -> usize {
+        self.per_session
+            .get(session_id)
+            .map_or(0, |session| session.by_tool.lock().len())
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn now_secs() -> u64 {
@@ -658,6 +654,9 @@ fn now_secs() -> u64 {
 }
 
 // ── Cost governance submodules ────────────────────────────────────────────────
+
+pub mod caller;
+mod tally;
 
 #[cfg(feature = "cost-governance")]
 pub mod config;

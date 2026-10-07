@@ -100,7 +100,7 @@ impl MetaMcp {
                 // error is what stops the retry re-running a side effect that
                 // may already have committed (ADR-012 consequence 1).
                 GuardOutcome::CachedError(error) => {
-                    audit::note_cached();
+                    audit::note_cached_failure(&error);
                     // A refusal keeps its provenance across the replay as well
                     // as across the bridge boundary. Served as a generic error
                     // it would skip the delivery-refusal projection and count
@@ -202,7 +202,12 @@ impl MetaMcp {
             Err(e) => {
                 let managed = caller_credential.managed.as_ref();
                 match self
-                    .answer_refused_fill((server, tool), e, managed, checked_at)
+                    .answer_refused_fill(
+                        (server, tool),
+                        e,
+                        managed,
+                        (checked_at, self.hint_surface(caller)),
+                    )
                     .await
                 {
                     Ok((value, _)) => Some(value),

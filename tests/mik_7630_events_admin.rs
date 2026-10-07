@@ -8,6 +8,8 @@
 //! admin answer (404 where 200 is expected). Linux-only for `SSL_CERT_FILE`.
 #![cfg(all(unix, not(target_vendor = "apple")))]
 
+use gateway::gateway_bin;
+
 #[path = "mik_7630_events/delivery.rs"]
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]
 mod delivery;
@@ -487,15 +489,12 @@ async fn the_cli_lists_and_replays_through_the_admin_route() {
         let (url, home) = (url.clone(), home.clone());
         async move {
             tokio::task::spawn_blocking(move || {
-                std::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+                gateway_bin::command(&home, gateway_bin::Inherit::Nothing)
                     .args(["events", "dead-letters"])
                     .args(&args)
                     .args(["--url", &url])
-                    .env_clear()
                     .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-                    .env("HOME", &home)
                     .env("MCP_GATEWAY_TOKEN", token)
-                    .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|p| ("LLVM_PROFILE_FILE", p)))
                     .output()
                     .expect("run the CLI")
             })
@@ -615,4 +614,36 @@ async fn an_oversize_dead_letter_is_refused_on_replay() {
     tokio::time::sleep(SETTLE).await;
     assert!(rx.events().is_empty(), "an oversize body is never POSTed");
     assert_eq!(dead_letters(root.path()).len(), 1);
+}
+
+/// MIK-7820.FIX.2: a dead letter whose subscription is suspended is refused
+/// on replay (`subscription_suspended`) and stays listed. One failed attempt
+/// both exhausts the event and suspends the subscription here.
+#[tokio::test]
+async fn a_replay_into_a_suspended_subscription_is_refused() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let events =
+        json!({"retry_max_attempts": 1, "suspend_window": "60s", "suspend_min_attempts": 1});
+    let gw = start(root.path(), &rx, events).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    rx.event_default(EventReply::Status(503));
+    fire(&gw, "d-susp", "o/r").await;
+    let id = dead_with_reason(root.path(), "exhausted").await[0]["event_id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let root_path = root.path().to_path_buf();
+    let suspended = wait_until(DEADLINE, || {
+        delivery::records(&root_path, "subs")[0]["active"] == json!(false)
+    })
+    .await;
+    assert!(suspended, "the failed attempt suspends the subscription");
+    rx.event_default(EventReply::Status(200));
+    let (status, body) = gw
+        .admin(Some(ADMIN), "POST", &format!("{LIST}/{id}/replay"))
+        .await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["reason"], "subscription_suspended", "{body}");
+    assert_eq!(dead_letters(root.path()).len(), 1, "the dead letter stays");
 }

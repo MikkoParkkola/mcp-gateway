@@ -48,10 +48,19 @@ impl Backend {
 
         let http_client = crate::oauth::client::destination::http_client(destination)?;
 
+        #[cfg(test)]
+        let seam = self.oauth_test_seam.lock().clone();
+        #[cfg(test)]
+        let storage = match &seam {
+            Some(seam) => TokenStorage::new(seam.storage_dir.clone()),
+            None => TokenStorage::default_location(),
+        };
+        #[cfg(not(test))]
+        let storage = TokenStorage::default_location();
+
         // Get or create token storage
         let storage = Arc::new(
-            TokenStorage::default_location()
-                .map_err(|e| Error::OAuth(format!("Failed to create token storage: {e}")))?,
+            storage.map_err(|e| Error::OAuth(format!("Failed to create token storage: {e}")))?,
         );
 
         // Create OAuth client
@@ -70,7 +79,14 @@ impl Backend {
                 callback_path: oauth_config.callback_path.clone(),
                 token_refresh_buffer_secs: oauth_config.token_refresh_buffer_secs,
             },
-        );
+        )
+        .with_login_gate(Arc::clone(&self.login_gate));
+
+        #[cfg(test)]
+        let oauth = match seam {
+            Some(seam) => oauth.with_open_browser(seam.open_browser),
+            None => oauth,
+        };
 
         Ok(Some(oauth))
     }

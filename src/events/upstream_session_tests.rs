@@ -22,6 +22,7 @@ fn shared_with(ineligible: crate::events::backend_source::Ineligible) -> Arc<Sha
         stop: CancellationToken::new(),
         gate: Arc::default(),
         ineligible,
+        tools: Mutex::default(),
     })
 }
 
@@ -208,30 +209,52 @@ async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
     assert_eq!(hub.store.subscriptions().len(), 2, "control: both held");
     assert!(!shared.stop.is_cancelled());
 
-    // A reload restores eligibility before the withdrawal gets the lifecycle
-    // lock (a subscribe holds it): nothing is withdrawn.
+    // T19 (MIK-7969): eligibility returns before the withdrawal gets the
+    // lifecycle lock (a subscribe holds it). Nothing pending is sent, nothing
+    // is withdrawn, and the listener keeps running and delivering.
     let held = hub.lifecycle.lock().await;
     refused.store(true, std::sync::atomic::Ordering::SeqCst);
     state.note(changed(), false);
     tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
-    state.flush(&weak);
+    assert!(state.flush(&weak), "the flush saw the backend ineligible");
     assert!(
         intake.try_recv().is_err(),
         "an ineligible backend still delivered"
     );
-    assert!(shared.stop.is_cancelled(), "its listener was not stopped");
+    let ending = tokio::spawn({
+        let (shared, weak) = (Arc::clone(&shared), weak.clone());
+        async move { super::end_ineligible(&shared, &weak).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !shared.stop.is_cancelled(),
+        "stopped before the locked recheck"
+    );
     refused.store(false, std::sync::atomic::Ordering::SeqCst);
     drop(held);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !ending.await.expect("task"),
+        "a restored backend's listener was ended"
+    );
+    assert!(
+        !shared.stop.is_cancelled(),
+        "a restored listener was stopped"
+    );
     assert_eq!(
         hub.store.subscriptions().len(),
         2,
         "a withdrawal outlived the restore and deleted subscriptions"
     );
+    state.note(changed(), false);
+    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
+    assert!(!state.flush(&weak));
+    assert!(intake.try_recv().is_ok(), "delivery resumes once restored");
 
-    // Still ineligible when the lock is had: the listener-only one goes.
+    // Still ineligible when the lock is had: the listener stops and the
+    // listener-only subscription goes.
     refused.store(true, std::sync::atomic::Ordering::SeqCst);
-    super::end_ineligible(&shared, &weak);
+    assert!(super::end_ineligible(&shared, &weak).await);
+    assert!(shared.stop.is_cancelled(), "its listener was not stopped");
     let left = after_withdrawal(&hub).await;
     assert_eq!(
         left,
@@ -270,7 +293,8 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     let dir = tempfile::tempdir().expect("dir");
     let reload = Reload::new(dir.path());
     let registry = Arc::clone(&reload.registry);
-    let ineligible = crate::events::upstream_live_ineligible(Arc::clone(&reload.live));
+    let ineligible =
+        crate::events::upstream_live_ineligible(Arc::clone(&reload.live), Arc::clone(&registry));
 
     // Reload 1 adds `b`, eligible (Streamable HTTP).
     reload.to(true).await;
@@ -357,6 +381,59 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     assert_eq!(left, ["backend.b.tools_changed"]);
 }
 
+/// MIK-7969 H2: every arm of the tick decision. Only a live read of the SSE
+/// handshake that the shared predicate confirms ends the listener; the
+/// predicate is not read otherwise.
+#[test]
+fn a_tick_ends_the_listener_only_on_a_confirmed_switch_to_sse() {
+    use super::{OnTick, on_tick};
+    let unread = || -> bool { panic!("the predicate was read for a non-SSE transport") };
+    assert_eq!(on_tick(Some(true), unread), OnTick::Keep, "streamable");
+    assert_eq!(
+        on_tick(None, unread),
+        OnTick::Keep,
+        "undetected is not refused"
+    );
+    assert_eq!(on_tick(Some(false), || true), OnTick::EndIneligible);
+    assert_eq!(
+        on_tick(Some(false), || false),
+        OnTick::Keep,
+        "eligible again by the time it is asked"
+    );
+}
+
+/// MIK-7969 H2 + T11: a session recovery that switches the installed
+/// transport in place is seen by the next tick, through the backend's live
+/// read, with no notification on the stream.
+#[test]
+fn a_tick_sees_an_in_place_switch_through_the_live_read() {
+    use super::{OnTick, on_tick};
+    let backend = crate::backend::Backend::new(
+        "b",
+        serde_yaml::from_str("http_url: http://127.0.0.1:9/mcp").expect("config"),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    );
+    let transport = crate::transport::HttpTransport::new(
+        "http://127.0.0.1:9/mcp",
+        std::collections::HashMap::new(),
+        Duration::from_secs(1),
+        true,
+    )
+    .expect("transport");
+    backend.install_http_for_test(&transport);
+    transport.set_detected(Some(true));
+    assert_eq!(
+        on_tick(backend.connected_streamable(), || true),
+        OnTick::Keep
+    );
+    transport.set_detected(Some(false));
+    assert_eq!(
+        on_tick(backend.connected_streamable(), || true),
+        OnTick::EndIneligible
+    );
+}
+
 /// MIK-7950 FIX.3: the default catalogue cache TTL, which the session now
 /// re-reads at, is the 300 s the fixed interval was; a zero TTL re-reads at
 /// most once a second and a huge one at least daily, without overflow.
@@ -391,9 +468,12 @@ async fn a_refill_in_flight_at_the_session_end_is_announced() {
     }));
     let shared = shared();
     let mut state = State::new(&shared, Era::Modern);
+    // The refill serves a notice the hub has not heard of.
+    state.refill_announces = true;
     let (release, released) = tokio::sync::oneshot::channel::<()>();
     let refill: Refill = Box::pin(async move {
         let _ = released.await;
+        true
     });
     let ending = finish_refill(
         &mut state,
@@ -460,6 +540,9 @@ async fn a_uri_watched_after_the_session_started_is_read_at_once() {
         "the newly watched URI's catalogue was not read"
     );
 }
+
+#[path = "upstream_session_debt_tests.rs"]
+mod debt;
 
 fn changed(kind: NoteKind) -> UpstreamNote {
     UpstreamNote::Notice { kind, uri: None }

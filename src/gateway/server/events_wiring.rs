@@ -51,8 +51,8 @@ pub(super) fn install(
                     names
                 }
             }),
-            registry,
-            crate::events::upstream_live_ineligible(Arc::clone(live_config)),
+            Arc::clone(&registry),
+            crate::events::upstream_live_ineligible(Arc::clone(live_config), registry),
         );
     }
     if config.events.sources.operational {

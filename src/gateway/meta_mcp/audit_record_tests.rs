@@ -172,6 +172,7 @@ fn context<'a>(
         caller_key: None,
         verified_identity: who.identity.as_ref(),
         is_admin: false,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
@@ -445,6 +446,8 @@ async fn a_replay_whose_record_fails_is_withheld() {
 }
 
 // MIK-7116.MIN.1 attribution, which reads the firewall's `arg_keys`.
+#[cfg(feature = "firewall")]
+mod chain_replay;
 #[cfg(feature = "firewall")]
 mod tenants;
 

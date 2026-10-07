@@ -47,6 +47,7 @@ pub(super) fn spawn_stderr_tail(
     let task = tokio::spawn(async move {
         let mut reader = BufReader::new(stderr);
         let mut buf = Vec::with_capacity(RAW_LINE_BYTES);
+        let mut in_block = false;
         loop {
             buf.clear();
             let limit = RAW_LINE_BYTES as u64;
@@ -59,11 +60,11 @@ pub(super) fn spawn_stderr_tail(
                         if tail.len() == TAIL_LINES {
                             tail.pop_front();
                         }
-                        tail.push_back(buf.clone());
+                        tail.push_back(sanitize::captured_line(&mut in_block, &buf));
                     }
                     // Published first, so a held pipe cannot lose the prefix.
                     if n == RAW_LINE_BYTES && !buf.ends_with(b"\n") {
-                        discard_rest_of_line(&mut reader).await;
+                        discard_rest_of_line(&mut reader, &mut in_block, &buf).await;
                     }
                 }
             }
@@ -72,18 +73,30 @@ pub(super) fn spawn_stderr_tail(
     (task, tail)
 }
 
-/// Skip to the end of an overlong line in bounded chunks.
-async fn discard_rest_of_line(reader: &mut BufReader<ChildStderr>) {
-    let mut scratch = Vec::with_capacity(RAW_LINE_BYTES);
+/// Skip to the end of an overlong line in bounded chunks, still tracking key
+/// block markers in it: a `-----BEGIN` past the limit masks the body after it.
+async fn discard_rest_of_line(
+    reader: &mut BufReader<ChildStderr>,
+    in_block: &mut bool,
+    stored: &[u8],
+) {
+    let carry = sanitize::MARKER_CARRY;
+    let mut scratch = Vec::with_capacity(carry + RAW_LINE_BYTES);
+    scratch.extend_from_slice(&stored[stored.len().saturating_sub(carry)..]);
     loop {
-        scratch.clear();
         match (&mut *reader)
             .take(RAW_LINE_BYTES as u64)
             .read_until(b'\n', &mut scratch)
             .await
         {
-            Ok(n) if n == RAW_LINE_BYTES && !scratch.ends_with(b"\n") => {}
-            _ => return,
+            Ok(0) | Err(_) => return,
+            Ok(n) => {
+                sanitize::track_block(in_block, &scratch);
+                if n < RAW_LINE_BYTES || scratch.ends_with(b"\n") {
+                    return;
+                }
+                scratch.drain(..scratch.len() - carry);
+            }
         }
     }
 }
@@ -138,12 +151,21 @@ pub(super) async fn reply_or_eof<T>(
 pub(super) struct StartState {
     eof: parking_lot::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     exited: std::sync::atomic::AtomicBool,
+    /// The last early exit's stderr tail, already sanitized: the raw bytes
+    /// never outlive `early_exit_error`.
+    shown_stderr: parking_lot::Mutex<Vec<String>>,
     // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
     #[cfg(all(test, unix))]
     failure: parking_lot::Mutex<Option<(&'static str, Option<&'static str>)>>,
 }
 
 impl StartState {
+    /// Forget the last start's shown stderr, before anything can fail: a
+    /// start that cannot even spawn must not show an older exit's tail.
+    pub(super) fn forget_shown_stderr(&self) {
+        self.shown_stderr.lock().clear();
+    }
+
     pub(super) fn begin(&self, eof: tokio::sync::watch::Receiver<bool>) {
         *self.eof.lock() = Some(eof);
         // A class describes the last start only.
@@ -168,6 +190,15 @@ impl StdioTransport {
     #[cfg(all(test, unix))]
     pub(super) fn start_failure_class(&self) -> Option<(&'static str, Option<&'static str>)> {
         *self.start.failure.lock()
+    }
+
+    /// The last early exit's stderr tail, sanitized, for
+    /// `doctor --start-stdio --show-stderr` only (MIK-7978): never logged and
+    /// never in an error. Empty unless the last start exited early.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn last_failure_stderr(&self) -> Vec<String> {
+        self.start.shown_stderr.lock().clone()
     }
 
     /// The `initialize` request, raced against this start's stdout closing.
@@ -238,7 +269,11 @@ impl StdioTransport {
             // Something still holds the pipe; keep what was read so far.
             abort.abort();
         }
-        let (class, needle) = classify(&tail.lock());
+        let (class, needle) = {
+            let tail = tail.lock();
+            *self.start.shown_stderr.lock() = sanitize::sanitize(&tail);
+            classify(&tail)
+        };
         let command = self.diagnostic_command();
         let what = match status {
             Some(status) => format!("exited before initialize ({status})"),
@@ -258,6 +293,9 @@ impl StdioTransport {
         Error::Transport(format!("stdio backend {command} {what}: {cause}"))
     }
 }
+
+#[path = "stdio_stderr_sanitize.rs"]
+mod sanitize;
 
 // Unix-only (W-L5): the tests drive `sh -c` scripts as stdio backends.
 #[cfg(all(test, unix))]

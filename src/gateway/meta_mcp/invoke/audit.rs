@@ -15,7 +15,7 @@ use crate::protocol::tasks::TaskTransition;
 use crate::security::audit::{
     AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationTarget,
 };
-use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
+use crate::security::transparency_log::CorrelationKey;
 use crate::{Error, Result};
 
 impl AuditWho {
@@ -159,6 +159,32 @@ pub(crate) fn note_cached() {
     note(|notes| notes.cached = true);
 }
 
+/// MIK-7636: the member a stored failure carries when its call was noted
+/// uninspected. Never on the wire: a replay answers `code`, `message` and
+/// `data` only.
+const UNINSPECTED_MARKER: &str = "_gatewayUninspected";
+
+/// MIK-7636: `failure` as an idempotency key stores it, marked when this call
+/// was noted uninspected so its replay records the same.
+pub(crate) fn stored_failure(mut failure: Value) -> Value {
+    let uninspected = NOTES
+        .try_with(|notes| notes.borrow().uninspected)
+        .unwrap_or(false);
+    if uninspected && let Some(object) = failure.as_object_mut() {
+        object.insert(UNINSPECTED_MARKER.to_owned(), Value::Bool(true));
+    }
+    failure
+}
+
+/// MIK-7636: a keyed replay of the stored `failure`, noted as cached and, when
+/// its first call was, uninspected.
+pub(crate) fn note_cached_failure(failure: &Value) {
+    note_cached();
+    if failure.get(UNINSPECTED_MARKER).and_then(Value::as_bool) == Some(true) {
+        note(|notes| notes.uninspected = true);
+    }
+}
+
 /// Run one invocation, returning its output and what its gates noted.
 pub(crate) async fn with_dispatch_scope<F: std::future::Future>(
     future: F,
@@ -190,10 +216,14 @@ impl DispatchNotes {
     /// live call's record gives it, with the code the task commits. The
     /// settlement result is built from a committed code alone, so a bare
     /// `-32001`/`-32004` reads as `denied` in `from_result`: without a refusal
-    /// a gate noted it is the peer's own answer, an `error` (MIK-7735).
+    /// a gate noted it is the peer's own answer, an `error` (MIK-7735). The
+    /// same holds for a bare `-32602`, which `from_result` reads as `invalid`
+    /// (MIK-7960).
     fn settled_outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
         match (self.outcome(outcome), self.refusal) {
-            (AuditOutcome::Denied(code), None) => AuditOutcome::Error(code),
+            (AuditOutcome::Denied(code) | AuditOutcome::Invalid(code), None) => {
+                AuditOutcome::Error(code)
+            }
             (AuditOutcome::Error(code), Some(AuditOutcome::Denied(_))) => {
                 AuditOutcome::Denied(code)
             }
@@ -339,9 +369,10 @@ impl MetaMcp {
 /// A delivered result as a receipt reads it. A `gateway_invoke` answer wraps
 /// the backend value as one pretty-printed text block, whose escapes (`\n` as
 /// two characters) are not the text the caller reads: it is read decoded, as
-/// the receipt was staged from the backend value. Only a block that is exactly
-/// that printing is decoded; any other text, JSON or not, is read as
-/// delivered (decoding would drop a number in it).
+/// the receipt was staged from the backend value, whatever its JSON type
+/// (MIK-7939). Only a block that is exactly that printing is decoded; any
+/// other text, JSON or not, is read as delivered (decoding it would drop a
+/// number written in the text).
 #[cfg(feature = "firewall")]
 pub(super) fn delivered_value(delivered: &Value) -> std::borrow::Cow<'_, Value> {
     let one_block = delivered.get("structuredContent").is_none()
@@ -350,9 +381,8 @@ pub(super) fn delivered_value(delivered: &Value) -> std::borrow::Cow<'_, Value> 
             .and_then(Value::as_array)
             .is_some_and(|content| content.len() == 1);
     let text = delivered.pointer("/content/0/text").and_then(Value::as_str);
-    let wrapped = (one_block.then(|| invoke_value(delivered)).flatten()).filter(|decoded| {
-        decoded.is_object() && text == serde_json::to_string_pretty(decoded).ok().as_deref()
-    });
+    let wrapped = (one_block.then(|| invoke_value(delivered)).flatten())
+        .filter(|decoded| text == serde_json::to_string_pretty(decoded).ok().as_deref());
     wrapped.map_or(
         std::borrow::Cow::Borrowed(delivered),
         std::borrow::Cow::Owned,
@@ -450,30 +480,12 @@ impl MetaMcp {
         let tool = args.get("tool").and_then(Value::as_str).unwrap_or_default();
         let outcome = facts.outcome();
         let response_hash = facts.response_hash().map(str::to_string);
-        // MIK-7215.CONTROL.3/.3a: the caller's W3C trace id spans the whole
-        // call, the session id is the legacy fallback, and the id minted for
-        // this invocation keys the case where neither exists.
+        // MIK-7215.CONTROL.3/.3a: see `CorrelationKey::ladder`.
         let otel_trace_id = args
             .get("_meta")
             .and_then(crate::protocol::trace::TraceContext::from_meta)
             .and_then(|tc| tc.trace_id().map(str::to_string));
-        // The modern HTTP route carries "no session" as `Some("")`; an empty
-        // id is no key, or every stateless call would correlate as one.
-        let session_id = session_id.filter(|session| !session.is_empty());
-        let key = match (otel_trace_id.as_deref(), session_id) {
-            (Some(otel), _) => CorrelationKey {
-                id: otel,
-                source: CorrelationSource::OtelTraceId,
-            },
-            (None, Some(session)) => CorrelationKey {
-                id: session,
-                source: CorrelationSource::SessionId,
-            },
-            (None, None) => CorrelationKey {
-                id: trace_id,
-                source: CorrelationSource::TraceId,
-            },
-        };
+        let key = CorrelationKey::ladder(otel_trace_id.as_deref(), session_id, trace_id);
         let envelope = AuditEnvelope {
             trace_id: Some(trace_id.to_string()),
             otel_trace_id: otel_trace_id.clone(),

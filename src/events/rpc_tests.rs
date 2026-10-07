@@ -141,7 +141,7 @@ async fn unsubscribe_waits_out_a_claimed_attempt() {
 fn credentials_other_than_api_keys_bound_the_grant() {
     use crate::security::audit::CredentialKind;
     let now = Utc::now();
-    let granted = Some(now + chrono::Duration::hours(1));
+    let hour = Some(chrono::Duration::hours(1));
     let ends = now + chrono::Duration::minutes(5);
     let credential = |kind, expires_at| Credential {
         kind,
@@ -149,6 +149,10 @@ fn credentials_other_than_api_keys_bound_the_grant() {
         api_key: None,
         expires_at,
         binding: None,
+    };
+    let grant = |held: &Credential, ttl| Grant {
+        ttl,
+        until: credential_ceiling(held, &json!({})).expect("granted"),
     };
     for kind in [
         CredentialKind::KeyServerToken,
@@ -158,29 +162,35 @@ fn credentials_other_than_api_keys_bound_the_grant() {
     ] {
         let held = credential(kind, Some(ends));
         assert_eq!(
-            bounded_by(&held, &json!({}), granted).expect("granted"),
+            grant(&held, hour).expires_at(now),
             Some(ends),
             "{kind:?}: cut at the credential's expiry"
         );
         assert_eq!(
-            bounded_by(&held, &json!({}), None).expect("granted"),
+            grant(&held, None).expires_at(now),
             Some(ends),
             "{kind:?}: an unbounded grant is bounded too"
         );
-        let refused = bounded_by(&held, &json!({"ttlMs": null}), None).expect_err("refused");
+        assert_eq!(
+            grant(&held, hour).expires_at(now + chrono::Duration::hours(2)),
+            Some(ends),
+            "{kind:?}: a late commit never runs past the credential"
+        );
+        let refused = credential_ceiling(&held, &json!({"ttlMs": null})).expect_err("refused");
         assert_eq!(refused.code, -32602, "{kind:?}: ttlMs null refused");
         let later = credential(kind, Some(now + chrono::Duration::hours(2)));
         assert_eq!(
-            bounded_by(&later, &json!({}), granted).expect("ok"),
-            granted
+            grant(&later, hour).expires_at(now),
+            Some(now + chrono::Duration::hours(1))
         );
     }
     let key = credential(CredentialKind::ApiKey, None);
     assert_eq!(
-        bounded_by(&key, &json!({"ttlMs": null}), None).expect("ok"),
+        credential_ceiling(&key, &json!({"ttlMs": null})).expect("ok"),
         None,
         "an API key is re-checked live instead"
     );
+    assert_eq!(grant(&key, None).expires_at(now), None, "no expiry");
 }
 
 /// Operator-scoped types (backend health, the kill switch) are listed and
@@ -239,4 +249,156 @@ fn canonical_is_the_libraries_jcs_within_2_pow_53() {
             "{value}"
         );
     }
+}
+
+/// The T16 hub: upstream events on `u` (unset key, never connected), `s`
+/// (explicit SSE) and `c` (stdio), with the live services a commit reads.
+async fn t16_hub() -> (
+    Arc<EventsHub>,
+    crate::config::EventsConfig,
+    tempfile::TempDir,
+) {
+    use crate::backend::{Backend, BackendRegistry};
+    use crate::config::{Config, EventsConfig, FailsafeConfig};
+
+    let config: Config = serde_yaml::from_str(
+        "backends:\n  u:\n    http_url: http://127.0.0.1:9/mcp\n  \
+         s:\n    http_url: http://127.0.0.1:9/sse\n    streamable_http: false\n  \
+         c:\n    command: echo\n",
+    )
+    .expect("config");
+    let dir = tempfile::tempdir().expect("dir");
+    let mut events = EventsConfig::default();
+    events.sources.backend_notifications = true;
+    let hub = EventsHub::open(&events, dir.path()).expect("hub");
+    let registry = Arc::new(BackendRegistry::new());
+    for (name, raw) in &config.backends {
+        assert!(registry.register(Arc::new(Backend::new(
+            name,
+            raw.clone(),
+            &FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ))));
+    }
+    let live = Arc::new(crate::config_reload::LiveConfig::new(config));
+    hub.install_backend_source_with_upstream(
+        Arc::new(|| vec!["u".to_owned(), "s".to_owned(), "c".to_owned()]),
+        Arc::clone(&registry),
+        upstream::live_ineligible(Arc::clone(&live), registry),
+    );
+    let services = super::super::Services {
+        live,
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        audit: None,
+        provenance: None,
+        #[cfg(feature = "cost-governance")]
+        budget: None,
+        credentials: super::super::LiveCredentials::default(),
+    };
+    assert!(hub.runtime.services.set(Arc::new(services)).is_ok());
+    (hub, events, dir)
+}
+
+/// T16 (MIK-7969 H1/G2): the commit, under the lifecycle lock, admits an
+/// upstream event only over a transport a live connection detected or one
+/// that needs none. Unresolved (stopped, or never connected) answers the
+/// backend error; a refusal names its reason; a removed backend is unknown.
+#[tokio::test]
+async fn the_commit_admits_only_a_detected_or_unneeded_transport() {
+    let (hub, events, _dir) = t16_hub().await;
+    let code = |name: &str| hub.upstream_admits(name).err().map(|e| e.code);
+    assert_eq!(
+        code("backend.u.resources_changed"),
+        Some(-32000),
+        "unresolved"
+    );
+    assert_eq!(code("backend.s.prompts_changed"), Some(-32014), "refused");
+    assert_eq!(
+        code("backend.c.resources_changed"),
+        None,
+        "stdio needs none"
+    );
+    assert_eq!(code("backend.u.tools_changed"), None, "gateway-generated");
+    assert_eq!(
+        code("backend.gone.resources_changed"),
+        Some(-32011),
+        "removed"
+    );
+
+    // The commit itself runs the check: nothing is stored.
+    let record: Subscription = serde_json::from_value(json!({
+        "v": 1, "id": "sub_t16", "principal": "p", "url": "https://p.example/cb",
+        "name": "backend.u.resources_changed", "arguments": {}, "secret": "unused",
+        "previous_secret": null, "previous_until": null,
+        "granted_at": Utc::now(), "expires_at": null, "active": true,
+        "failed_since": null, "last_delivery_at": null, "last_error": null
+    }))
+    .expect("record");
+    let caps = Caps {
+        per_principal: 10,
+        global: 10,
+    };
+    let policy = crate::events::tail_policy(&events);
+    let outcome = hub
+        .commit_started(
+            &record,
+            Grant {
+                ttl: None,
+                until: None,
+            },
+            false,
+            (caps, chrono::Duration::zero(), policy),
+            Utc::now(),
+        )
+        .await;
+    assert_eq!(outcome.err().map(|e| e.code), Some(-32000));
+    assert!(hub.store.subscriptions().is_empty(), "no row was committed");
+}
+
+/// T16: refused between the commit check and the start is never a silent start.
+#[tokio::test]
+async fn the_commit_admits_no_silent_start_after_its_check() {
+    let (hub, _events, _dir) = t16_hub().await;
+    let mut started = std::collections::HashSet::new();
+    let refused = hub
+        .start_key(&mut started, "p", "backend.s.resources_changed", &json!({}))
+        .await;
+    assert_eq!(
+        refused.err().map(|e| e.code),
+        Some(-32011),
+        "no source offers it"
+    );
+    let source = hub
+        .sources
+        .read()
+        .iter()
+        .find(|s| s.kind() == super::super::types::SourceKind::BackendNotification)
+        .cloned()
+        .expect("upstream source");
+    let first = |name: &'static str| {
+        let source = Arc::clone(&source);
+        async move { source.on_first_subscriber("k", "p", name, &json!({})).await }
+    };
+    assert_eq!(
+        first("backend.s.resources_changed")
+            .await
+            .err()
+            .map(|e| e.code),
+        Some(-32012),
+        "an ineligible backend gets no silent start"
+    );
+    assert!(
+        first("backend.s.tools_changed").await.is_ok(),
+        "tools_changed needs no listener"
+    );
+    assert_eq!(
+        first("backend.gone.resources_changed")
+            .await
+            .err()
+            .map(|e| e.code),
+        Some(-32011),
+        "a backend removed since the check gets no silent start"
+    );
+    assert!(first("backend.gone.tools_changed").await.is_ok());
 }

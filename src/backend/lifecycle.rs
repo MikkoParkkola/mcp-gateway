@@ -25,6 +25,12 @@ use crate::transport::{HttpTransport, Transport};
 
 use crate::{Error, Result};
 
+/// A transport start, erased to `dyn Future`: the start future is deep enough
+/// that proving the dispatch future `Send` through it overflows the trait
+/// solver (E0275). The erasure restarts that proof.
+type StartFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Arc<dyn Transport>>> + Send + 'a>>;
+
 /// Consecutive unserved probe answers the gateway tolerates before it treats
 /// the peer as faulty (MIK-7217, OUTBOUND.2).
 ///
@@ -94,10 +100,16 @@ impl Backend {
             stopped: std::sync::atomic::AtomicBool::new(false),
             budgets: super::ShutdownBudgets::default(),
             starts_in_flight: std::sync::atomic::AtomicUsize::new(0),
+            events_resolution: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            events_resolutions: std::sync::atomic::AtomicUsize::new(0),
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
+            login_gate: Arc::default(),
             destination: std::sync::OnceLock::new(),
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            oauth_test_seam: parking_lot::Mutex::new(None),
         }
     }
 
@@ -139,6 +151,13 @@ impl Backend {
     pub(super) async fn ensure_entry_started(&self, key: &PoolKey) -> Result<Arc<dyn Transport>> {
         const MAX_RACE_RETRIES: u8 = 3;
 
+        // MIK-7982 C1: the login this caller would wait behind, captured
+        // before it queues on the start lock.
+        let cohort = self.login_gate.cohort();
+        // The cancel epoch it set out at, captured with the cohort: a restart
+        // that cancels while this start queues or discovers refuses its login.
+        let set_out = self.login_gate.epoch();
+
         for _attempt in 0..MAX_RACE_RETRIES {
             let entry = self.pooled_entry(key)?;
             // NOTE: deliberately does NOT touch the idle clocks. `last_used` means
@@ -158,7 +177,19 @@ impl Backend {
                 }
             }
 
-            let _start_guard = entry.start_lock.lock().await;
+            // MIK-7982 C2: a non-interactive caller (the health probe) never
+            // queues behind a start in flight, which may be a login holding
+            // this lock for minutes; it answers at once instead.
+            let _start_guard = if crate::oauth::login_gate::interactive() {
+                entry.start_lock.lock().await
+            } else {
+                entry
+                    .start_lock
+                    .try_lock()
+                    .map_err(|_| Error::AuthorizationRequired {
+                        backend: self.name.clone(),
+                    })?
+            };
 
             {
                 let transport = entry.transport.read();
@@ -169,8 +200,15 @@ impl Backend {
                 }
             }
 
-            // Start transport for this slot.
-            let transport = self.start_entry(key, &entry).await?;
+            // The login this caller queued behind ended without a token: it
+            // shares that end rather than opening a login of its own.
+            if let Some(outcome) = cohort.outcome() {
+                return Err(outcome.to_error(&self.name));
+            }
+
+            // Start transport for this slot, erased (see `StartFuture`).
+            let start: StartFuture<'_> = Box::pin(self.start_entry(key, &entry));
+            let transport = crate::oauth::login_gate::set_out(set_out, start).await?;
 
             // Reconcile: did the evictor remove this exact entry while we
             // were building its transport?

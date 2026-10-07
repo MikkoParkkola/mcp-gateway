@@ -140,7 +140,7 @@ impl super::Gateway {
     /// tempdir), so a test never reads or writes the developer's own.
     #[cfg(test)]
     pub(super) fn with_data_dir(mut self, dir: PathBuf) -> Self {
-        self.data_dir = Some(dir);
+        self.test_seams.data_dir = Some(dir);
         self
     }
 
