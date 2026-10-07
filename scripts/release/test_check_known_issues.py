@@ -372,6 +372,11 @@ def test_any_spelling_that_renders_known_issues_is_the_section():
         assert run(head, "--release", "--tag", "v4.0.0") == 0, head
 
 
+def test_a_later_release_in_the_title_itself_fails_the_check():
+    for head in ("## Known issues [4.0.1][next]\n", "## Known issues &lt;fixed in 4.0.1&gt;\n"):
+        assert run(head, "--check") == 1, head
+
+
 def test_a_level_one_or_formatted_setext_title_is_the_section():
     for head in ("# Known issues\n", "*Known issues*\n---\n"):
         assert run(f"{head}\n- Fixed in 4.0.1.\n", "--check") == 1, head
