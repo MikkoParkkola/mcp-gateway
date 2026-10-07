@@ -120,3 +120,26 @@ fn credentials_in_a2a_url_are_refused_without_echoing_them() {
     assert!(error.contains("headers"), "{error}");
     assert!(!error.contains("hunter2-secret"), "{error}");
 }
+
+fn response(body: Vec<u8>) -> reqwest::Response {
+    reqwest::Response::from(
+        axum::http::Response::builder()
+            .status(200)
+            .body(body)
+            .expect("fixture response builds"),
+    )
+}
+
+#[tokio::test]
+async fn a_body_over_the_cap_is_refused_and_one_at_it_is_read() {
+    let over = vec![b' '; MAX_BODY_BYTES + 1];
+    let error = read_capped_json(response(over), "reply").await.unwrap_err();
+    assert!(error.to_string().contains("exceeds"), "{error}");
+
+    let mut at = vec![b' '; MAX_BODY_BYTES - 2];
+    at.extend_from_slice(b"{}");
+    assert_eq!(
+        read_capped_json(response(at), "reply").await.unwrap(),
+        json!({})
+    );
+}
