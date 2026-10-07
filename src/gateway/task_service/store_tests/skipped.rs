@@ -48,12 +48,12 @@ fn truncate_inside(record: &Path, member: &str, offset: usize) {
 }
 
 /// Append a second, later copy of a top-level member, as damage could: the
-/// strict parse refuses the duplicate, and the member walk must keep the
-/// first value that reads rather than the last one seen.
-fn append_duplicate(record: &Path, member: &str) {
+/// strict parse refuses the duplicate, and the member walk must not lose a
+/// value it read earlier to the later copy.
+fn append_duplicate(record: &Path, member: &str, value: &str) {
     let mut bytes = fs::read(record).unwrap();
     assert_eq!(bytes.pop(), Some(b'}'), "the record ends with its brace");
-    bytes.extend_from_slice(format!(",\"{member}\":null}}").as_bytes());
+    bytes.extend_from_slice(format!(",\"{member}\":{value}}}").as_bytes());
     fs::write(record, bytes).unwrap();
 }
 
@@ -115,7 +115,7 @@ async fn an_unrestorable_record_keeps_its_binding() {
         if case == "duplicate_admission" {
             // A later `"admission":null` must not erase the valid one read
             // first, or a retry of the key runs the backend again.
-            append_duplicate(&record, "admission");
+            append_duplicate(&record, "admission", "null");
         } else if case == "trailing" {
             // Whole and valid, then bytes after its closing brace: the strict
             // parse refuses it, the member walk still reads the key.
@@ -160,6 +160,7 @@ async fn a_newer_or_rebound_record_still_refuses() {
         "newer_broken_model",
         "newer_truncated",
         "newer_then_null_version",
+        "current_then_newer_version",
         "rebound_broken",
         "duplicate_broken",
     ] {
@@ -177,7 +178,11 @@ async fn a_newer_or_rebound_record_still_refuses() {
         } else if case == "newer_then_null_version" {
             // A later junk copy must not hide the newer version read first.
             rewrite(&record, |v| v["version"] = json!(999));
-            append_duplicate(&record, "version");
+            append_duplicate(&record, "version", "null");
+        } else if case == "current_then_newer_version" {
+            // A newer copy after a readable current one is still a newer
+            // build's row: the walk keeps the highest version it reads.
+            append_duplicate(&record, "version", "999");
         } else if case.starts_with("newer") {
             rewrite(&record, |v| {
                 v["version"] = json!(999);
