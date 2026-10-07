@@ -168,42 +168,41 @@ fn an_add_inside_the_day_reset_window_is_kept() {
 /// MIK-7903 (MIK-7763C.1): a check that runs after a call's spend is added,
 /// before its reservation would be released, sees the call once.
 ///
-/// The hook fires inside `settle` right after the adds and starts call B's
-/// check on another thread, then waits up to 500 ms for its answer. With the
-/// release in the same step under the ledger lock, B waits for the lock and
-/// then sees only the spend; otherwise B answers inside that wait, sees the
-/// spend and the reservation together and is refused. The wait keeps a
-/// settle that adds outside the lock from winning the race by luck.
+/// The hook fires inside `settle` right after the adds. It records whether
+/// the ledger is held at that point, which does not depend on scheduling,
+/// and starts call B's check on another thread. With the release in the
+/// same step under the ledger lock, B waits and then sees only the spend;
+/// otherwise it can see the spend and the reservation together and is
+/// refused.
 #[test]
 fn a_check_during_a_settle_counts_the_call_once() {
-    use std::sync::Mutex;
-    use std::sync::mpsc::{Receiver, channel};
-    use std::time::Duration;
+    use std::sync::{Mutex, TryLockError};
+    use std::thread::JoinHandle;
 
     for scope in [Scope::Global, Scope::Tool, Scope::Key] {
         // GIVEN: room for exactly two calls, and call A admitted
         let enforcer = enforcer(scope, 2);
         let a = enforcer.check(TOOL, Some(KEY));
         assert!(a.allowed, "{scope:?}: call A is admitted");
-        let slot: Arc<Mutex<Option<(Option<bool>, Receiver<bool>)>>> = Arc::default();
+        let slot: Arc<Mutex<Option<(bool, JoinHandle<bool>)>>> = Arc::default();
         let (inner, hook_slot) = (Arc::clone(&enforcer), Arc::clone(&slot));
         AFTER_SPEND_ADDED.with(|hook| {
             *hook.borrow_mut() = Some(Box::new(move || {
-                let (tx, rx) = channel();
-                std::thread::spawn(move || tx.send(inner.check(TOOL, Some(KEY)).allowed));
-                // Give B time to check inside the settle. If the settle holds
-                // the ledger, B blocks and this wait runs out; if not, B
-                // answers here, before the hold is released.
-                let early = rx.recv_timeout(Duration::from_millis(500)).ok();
-                *hook_slot.lock().unwrap() = Some((early, rx));
+                let held = matches!(inner.ledger.try_lock(), Err(TryLockError::WouldBlock));
+                let b = std::thread::spawn(move || inner.check(TOOL, Some(KEY)).allowed);
+                *hook_slot.lock().unwrap() = Some((held, b));
             }));
         });
         // WHEN: A settles while B checks; A's hold outlives B's answer
         enforcer.settle(a.hold.as_deref(), TOOL, Some(KEY), a.cost_usd);
-        let (early, rx) = slot.lock().unwrap().take().expect("the hook ran");
-        let b = early.unwrap_or_else(|| rx.recv().unwrap());
-        // THEN: B fits, because A counts once (spent), not twice (spent + held)
-        assert!(b, "{scope:?}: call B was refused");
+        let (held, b) = slot.lock().unwrap().take().expect("the hook ran");
+        // THEN: the spend was added under the ledger lock, and B fits,
+        // because A counts once (spent), not twice (spent + held)
+        assert!(
+            held,
+            "{scope:?}: the spend was added outside the ledger lock"
+        );
+        assert!(b.join().unwrap(), "{scope:?}: call B was refused");
         drop(a);
     }
 }
