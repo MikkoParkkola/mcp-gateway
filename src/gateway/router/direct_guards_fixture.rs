@@ -46,6 +46,9 @@ pub(crate) enum Answer {
     /// The first `tools/call` asks the client a question (`input_required`);
     /// every later call succeeds. Drives a bridged input round (T3c).
     AskOnce,
+    /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
+    /// `resultType`, `ttlMs` and `cacheScope` itself (MIK-8022).
+    ModernList,
 }
 
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
@@ -66,13 +69,16 @@ impl Transport for CountingBackend {
     ) -> crate::Result<JsonRpcResponse> {
         let id = RequestId::Number(1);
         if method == "tools/list" {
-            return Ok(JsonRpcResponse::success(
-                id,
-                json!({"tools": [{"name": "read", "inputSchema": {
-                    "type": "object",
-                    "properties": {"cmd": {"type": "string"}}
-                }}]}),
-            ));
+            let mut result = json!({"tools": [{"name": "read", "inputSchema": {
+                "type": "object",
+                "properties": {"cmd": {"type": "string"}}
+            }}]});
+            if matches!(self.answer, Answer::ModernList) {
+                result["resultType"] = json!("complete");
+                result["ttlMs"] = json!(5000);
+                result["cacheScope"] = json!("private");
+            }
+            return Ok(JsonRpcResponse::success(id, result));
         }
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         if matches!(self.answer, Answer::AskOnce) {
@@ -98,7 +104,7 @@ impl Transport for CountingBackend {
             });
         }
         match &self.answer {
-            Answer::Ok => Ok(JsonRpcResponse::success(
+            Answer::Ok | Answer::ModernList => Ok(JsonRpcResponse::success(
                 id,
                 json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
             )),
