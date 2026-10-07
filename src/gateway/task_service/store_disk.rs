@@ -216,17 +216,14 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
             tracing::warn!(path = %shown_path, "stored tasks exceed the per-principal cap");
             return Err(StoreError::Capacity);
         }
-        match restored {
-            Some((record, task)) => {
-                loaded.entries.insert(task_id, Entry { task, record });
-            }
-            None => {
-                tracing::warn!(
-                    path = %shown_path,
-                    "task record skipped: its task does not restore; its key stays taken; the file stays and counts against the store limits until an operator removes or repairs it"
-                );
-                loaded.reserved.push((admission, task_id));
-            }
+        if let Some((record, task)) = restored {
+            loaded.entries.insert(task_id, Entry { task, record });
+        } else {
+            tracing::warn!(
+                path = %shown_path,
+                "task record skipped: its task does not restore; its key stays taken; the file stays and counts against the store limits until an operator removes or repairs it"
+            );
+            loaded.reserved.push((admission, task_id));
         }
     }
     Ok(loaded)
