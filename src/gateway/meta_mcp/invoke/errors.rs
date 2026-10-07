@@ -6,8 +6,10 @@ use serde_json::{Value, json};
 
 use super::audit;
 use crate::gateway::recovery::{
-    ErrorCategory, MetaSurface, RecoveryContext, attach_recovery, recovery_for_surface,
+    ErrorCategory, MetaSurface, RecoveryContext, Revive, SurfaceRequest, attach_recovery,
+    recovery_for_surface,
 };
+use crate::gateway::router::CallerStanding;
 use crate::{Error, Result};
 
 // ============================================================================
@@ -55,15 +57,26 @@ pub(super) fn dispatch_error_result(
 }
 
 impl super::MetaMcp {
-    /// The meta-tools this gateway's callers can see, for recovery hints: a
-    /// Code Mode gateway exposes only `gateway_search` and `gateway_execute`,
-    /// and `exposed_meta_tools` can hide either mode's discovery tool.
-    pub(super) fn hint_surface(&self) -> MetaSurface {
-        let surface = if self.code_mode_enabled {
-            MetaSurface::CodeMode
-        } else {
-            MetaSurface::Standard
-        };
+    /// The meta-tools `caller` can see, for recovery hints: Code Mode (the
+    /// gateway's or this request's `?codemode=`) exposes only `gateway_search`
+    /// and `gateway_execute`, and `exposed_meta_tools` can hide either mode's
+    /// discovery tool. `gateway_revive_server` is offered only when this caller
+    /// may list and call it, by the predicate `tools/list` uses (MIK-7974).
+    pub(super) fn hint_surface(
+        &self,
+        caller: &super::super::MetaMcpCallerContext<'_>,
+    ) -> MetaSurface {
+        const REVIVE: &str = "gateway_revive_server";
+        let surface =
+            if self.code_mode_enabled || caller.surface_request == SurfaceRequest::CodeMode {
+                MetaSurface::CodeMode
+            } else if self.meta_tool_exposure.is_exposed(REVIVE)
+                && CallerStanding::of_admin_flag(caller.is_admin).permits(REVIVE)
+            {
+                MetaSurface::Standard(Revive::Offered)
+            } else {
+                MetaSurface::Standard(Revive::Hidden)
+            };
         match surface.discovery_tool() {
             Some(tool) if !self.meta_tool_exposure.is_exposed(tool) => MetaSurface::Undiscoverable,
             _ => surface,
@@ -229,3 +242,7 @@ pub(super) fn classify_from_detail(detail: Option<&str>) -> ErrorCategory {
 
     ErrorCategory::Validation
 }
+
+#[cfg(test)]
+#[path = "hint_surface_tests.rs"]
+mod hint_surface_tests;

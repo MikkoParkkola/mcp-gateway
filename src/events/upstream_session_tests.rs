@@ -209,30 +209,52 @@ async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
     assert_eq!(hub.store.subscriptions().len(), 2, "control: both held");
     assert!(!shared.stop.is_cancelled());
 
-    // A reload restores eligibility before the withdrawal gets the lifecycle
-    // lock (a subscribe holds it): nothing is withdrawn.
+    // T19 (MIK-7969): eligibility returns before the withdrawal gets the
+    // lifecycle lock (a subscribe holds it). Nothing pending is sent, nothing
+    // is withdrawn, and the listener keeps running and delivering.
     let held = hub.lifecycle.lock().await;
     refused.store(true, std::sync::atomic::Ordering::SeqCst);
     state.note(changed(), false);
     tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
-    state.flush(&weak);
+    assert!(state.flush(&weak), "the flush saw the backend ineligible");
     assert!(
         intake.try_recv().is_err(),
         "an ineligible backend still delivered"
     );
-    assert!(shared.stop.is_cancelled(), "its listener was not stopped");
+    let ending = tokio::spawn({
+        let (shared, weak) = (Arc::clone(&shared), weak.clone());
+        async move { super::end_ineligible(&shared, &weak).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !shared.stop.is_cancelled(),
+        "stopped before the locked recheck"
+    );
     refused.store(false, std::sync::atomic::Ordering::SeqCst);
     drop(held);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !ending.await.expect("task"),
+        "a restored backend's listener was ended"
+    );
+    assert!(
+        !shared.stop.is_cancelled(),
+        "a restored listener was stopped"
+    );
     assert_eq!(
         hub.store.subscriptions().len(),
         2,
         "a withdrawal outlived the restore and deleted subscriptions"
     );
+    state.note(changed(), false);
+    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
+    assert!(!state.flush(&weak));
+    assert!(intake.try_recv().is_ok(), "delivery resumes once restored");
 
-    // Still ineligible when the lock is had: the listener-only one goes.
+    // Still ineligible when the lock is had: the listener stops and the
+    // listener-only subscription goes.
     refused.store(true, std::sync::atomic::Ordering::SeqCst);
-    super::end_ineligible(&shared, &weak);
+    assert!(super::end_ineligible(&shared, &weak).await);
+    assert!(shared.stop.is_cancelled(), "its listener was not stopped");
     let left = after_withdrawal(&hub).await;
     assert_eq!(
         left,
@@ -271,7 +293,8 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     let dir = tempfile::tempdir().expect("dir");
     let reload = Reload::new(dir.path());
     let registry = Arc::clone(&reload.registry);
-    let ineligible = crate::events::upstream_live_ineligible(Arc::clone(&reload.live));
+    let ineligible =
+        crate::events::upstream_live_ineligible(Arc::clone(&reload.live), Arc::clone(&registry));
 
     // Reload 1 adds `b`, eligible (Streamable HTTP).
     reload.to(true).await;
@@ -356,6 +379,59 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
 
     let left = after_withdrawal(&hub).await;
     assert_eq!(left, ["backend.b.tools_changed"]);
+}
+
+/// MIK-7969 H2: every arm of the tick decision. Only a live read of the SSE
+/// handshake that the shared predicate confirms ends the listener; the
+/// predicate is not read otherwise.
+#[test]
+fn a_tick_ends_the_listener_only_on_a_confirmed_switch_to_sse() {
+    use super::{OnTick, on_tick};
+    let unread = || -> bool { panic!("the predicate was read for a non-SSE transport") };
+    assert_eq!(on_tick(Some(true), unread), OnTick::Keep, "streamable");
+    assert_eq!(
+        on_tick(None, unread),
+        OnTick::Keep,
+        "undetected is not refused"
+    );
+    assert_eq!(on_tick(Some(false), || true), OnTick::EndIneligible);
+    assert_eq!(
+        on_tick(Some(false), || false),
+        OnTick::Keep,
+        "eligible again by the time it is asked"
+    );
+}
+
+/// MIK-7969 H2 + T11: a session recovery that switches the installed
+/// transport in place is seen by the next tick, through the backend's live
+/// read, with no notification on the stream.
+#[test]
+fn a_tick_sees_an_in_place_switch_through_the_live_read() {
+    use super::{OnTick, on_tick};
+    let backend = crate::backend::Backend::new(
+        "b",
+        serde_yaml::from_str("http_url: http://127.0.0.1:9/mcp").expect("config"),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    );
+    let transport = crate::transport::HttpTransport::new(
+        "http://127.0.0.1:9/mcp",
+        std::collections::HashMap::new(),
+        Duration::from_secs(1),
+        true,
+    )
+    .expect("transport");
+    backend.install_http_for_test(&transport);
+    transport.set_detected(Some(true));
+    assert_eq!(
+        on_tick(backend.connected_streamable(), || true),
+        OnTick::Keep
+    );
+    transport.set_detected(Some(false));
+    assert_eq!(
+        on_tick(backend.connected_streamable(), || true),
+        OnTick::EndIneligible
+    );
 }
 
 /// MIK-7950 FIX.3: the default catalogue cache TTL, which the session now
@@ -465,131 +541,8 @@ async fn a_uri_watched_after_the_session_started_is_read_at_once() {
     );
 }
 
-/// MIK-8007: a refill that did not fill is retried once, no sooner than the
-/// backend's list-fill cooldown, and silently; a failed retry is not retried
-/// again; the debt outlives the session that took it on.
-#[test]
-fn a_failed_refill_is_retried_once_after_the_cooldown() {
-    let shared = shared();
-    let due = || shared.tools.lock().due;
-    let mut state = State::new(&shared, Era::Modern);
-    // A notice the hub has not heard of, due now.
-    *shared.tools.lock() = ToolsDebt {
-        due: Some(Instant::now()),
-        retrying: false,
-        unannounced: true,
-    };
-    assert!(state.take_due_refill(), "the notice's refill is due");
-    state.refill_ended(false);
-    assert!(
-        state.tools_pending,
-        "a refill that did not fill still announces"
-    );
-    state.tools_pending = false;
-    let retry = due().expect("the failed refill is retried");
-    assert!(retry + Duration::from_secs(1) >= Instant::now() + REFILL_RETRY);
-    // A new session keeps the retry and its time.
-    let mut state = State::new(&shared, Era::Modern);
-    assert!(!state.take_due_refill(), "no retry inside the cooldown");
-    shared.tools.lock().due = Some(Instant::now());
-    assert!(state.take_due_refill());
-    state.refill_ended(false);
-    assert!(!state.tools_pending, "the retry is silent");
-    assert_eq!(due(), None, "a failed retry is not retried again");
-    // A newer notice joining a retry earns its own.
-    shared.tools.lock().due = Some(Instant::now());
-    state.refill_ended(false);
-    {
-        let mut debt = shared.tools.lock();
-        assert!(debt.retrying, "armed");
-        debt.due = Some(Instant::now());
-        debt.unannounced = true;
-    }
-    assert!(state.take_due_refill());
-    state.refill_ended(false);
-    assert!(state.tools_pending, "the joined notice is announced");
-    assert!(
-        due().is_some(),
-        "the joined notice's failed refill is retried"
-    );
-}
-
-/// MIK-8007: a silent retry keeps the tool list a reader filled after the
-/// failed refill; only a refill serving a notice drops it.
-#[tokio::test]
-async fn a_silent_retry_keeps_a_readers_fill() {
-    let dir = tempfile::tempdir().expect("dir");
-    let reload = Reload::new(dir.path());
-    reload.to(true).await;
-    let backend = reload.registry.get("b").expect("b registered");
-    let shared = shared();
-    let mut state = State::new(&shared, Era::Modern);
-    for (unannounced, kept) in [(false, true), (true, false)] {
-        backend.fill_tools_for_test().await;
-        assert!(backend.has_cached_tools(), "the reader's fill is cached");
-        *shared.tools.lock() = ToolsDebt {
-            due: Some(Instant::now()),
-            retrying: true,
-            unannounced,
-        };
-        // Left unpolled: only the start's own effect on the cache is seen.
-        assert!(start_due_refill(&mut state, &backend).is_some(), "due");
-        assert_eq!(
-            backend.has_cached_tools(),
-            kept,
-            "cache kept with unannounced = {unannounced}"
-        );
-    }
-}
-
-/// MIK-8007: a backend tools notice owes a refill, due within a tick, that
-/// the hub has not heard of yet.
-#[test]
-fn a_tools_notice_owes_a_refill_due_within_a_tick() {
-    let shared = shared();
-    shared
-        .need
-        .lock()
-        .add(&Interest::ToolsChanged)
-        .expect("room");
-    let mut state = State::new(&shared, Era::Legacy);
-    let noted = Instant::now();
-    state.note(changed(NoteKind::ToolsChanged), false);
-    let debt = shared.tools.lock();
-    let due = debt.due.expect("the notice's refill is owed");
-    assert!(
-        due <= Instant::now() + TICK && due >= noted,
-        "due within a tick"
-    );
-    assert!(debt.unannounced, "the hub has not heard of it");
-}
-
-/// MIK-8007: a backend gone from the config owes no tools notice; one added
-/// again later starts afresh.
-#[tokio::test]
-async fn a_removed_backend_owes_no_tools_notice() {
-    let shared = shared();
-    shared.tools.lock().due = Some(Instant::now());
-    let dir = tempfile::tempdir().expect("dir");
-    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
-    let task = tokio::spawn(run(
-        Arc::clone(&shared),
-        Arc::new(crate::backend::BackendRegistry::new()),
-        Arc::downgrade(&hub),
-    ));
-    let cleared = tokio::time::timeout(Duration::from_secs(5), async {
-        while shared.tools.lock().due.is_some() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await;
-    shared.stop.cancel();
-    task.await.expect("task");
-    assert!(
-        cleared.is_ok(),
-        "a removed backend still owed a tools refill"
-    );
-}
+#[path = "upstream_session_debt_tests.rs"]
+mod debt;
 
 fn changed(kind: NoteKind) -> UpstreamNote {
     UpstreamNote::Notice { kind, uri: None }

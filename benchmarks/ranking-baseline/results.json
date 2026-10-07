@@ -1,6 +1,6 @@
 {
   "criterion": "MIK-3274.RANKING.3",
-  "tool_inventory_size": 137,
+  "tool_inventory_size": 119,
   "corpus_size": 114,
   "candidate_pool_size": 137,
   "overall_top1_hit_rate": 0.7543859649122807,

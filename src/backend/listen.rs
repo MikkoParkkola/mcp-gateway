@@ -5,9 +5,11 @@
 //! visibility widens. Everything runs on the shared slot.
 
 use std::collections::HashSet;
-use std::sync::Weak;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Weak};
 
+use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use serde_json::json;
 
 use super::Backend;
@@ -38,6 +40,10 @@ pub(crate) struct ListenTarget {
     pub handle: Weak<dyn UpstreamListen>,
     pub era: Option<Era>,
 }
+
+/// The admitted start a subscribe runs to learn the HTTP transport, shared
+/// by every subscribe waiting on it; `true` when the slot started.
+pub(super) type Resolution = Shared<BoxFuture<'static, bool>>;
 
 /// The backend's last read resource URIs, and whether the read can be
 /// trusted as the whole catalogue.
@@ -78,6 +84,81 @@ impl Backend {
             .read()
             .as_ref()
             .is_some_and(|current| Weak::ptr_eq(current, handle))
+    }
+
+    /// The HTTP transport the shared slot's live connection detected (see
+    /// [`UpstreamListen::detected_streamable`]); `None` while the slot holds
+    /// no transport, or before the one it holds has published its handle.
+    pub(crate) fn connected_streamable(&self) -> Option<bool> {
+        let entry = self.shared_entry();
+        let installed = entry.transport.read();
+        let installed = installed.as_ref()?;
+        let handle = entry.listen.read().as_ref()?.upgrade()?;
+        // A handle left by a stopped or replaced transport names another
+        // allocation: only the installed transport's answer counts.
+        std::ptr::addr_eq(Arc::as_ptr(installed), Arc::as_ptr(&handle))
+            .then(|| handle.detected_streamable())
+            .flatten()
+    }
+
+    /// Install `transport` in the shared slot as a start publishes one.
+    #[cfg(test)]
+    pub(crate) fn install_http_for_test(&self, transport: &Arc<crate::transport::HttpTransport>) {
+        let entry = self.shared_entry();
+        let erased: Arc<dyn crate::transport::Transport> = Arc::clone(transport) as _;
+        *entry.transport.write() = Some(erased);
+        *entry.listen.write() = Some(handle_of(transport));
+    }
+
+    /// Start the shared slot as a client request would, so an events
+    /// subscribe can learn the HTTP transport (MIK-7969), and wait for it at
+    /// most the backend timeout. `true` when the slot started.
+    ///
+    /// One start runs per backend however many subscribes wait. It is a
+    /// spawned task, so a subscribe that stops waiting never cancels it: it
+    /// settles, and is counted, under its own handling.
+    pub(crate) async fn resolve_for_events(self: &Arc<Self>) -> bool {
+        let resolution = {
+            let mut running = self.events_resolution.lock();
+            if let Some(resolution) = running.as_ref() {
+                resolution.clone()
+            } else {
+                let backend = Arc::clone(self);
+                #[cfg(test)]
+                self.events_resolutions.fetch_add(1, Ordering::SeqCst);
+                let task = tokio::spawn(async move {
+                    let started = backend
+                        .admitted_start()
+                        .await
+                        .inspect_err(|error| {
+                            tracing::debug!(backend = %backend.name, %error, "events: start failed");
+                        })
+                        .is_ok();
+                    // Held while this one was stored, so it is this one cleared.
+                    *backend.events_resolution.lock() = None;
+                    started
+                });
+                let resolution = async move { task.await.unwrap_or(false) }.boxed().shared();
+                *running = Some(resolution.clone());
+                resolution
+            }
+        };
+        tokio::time::timeout(self.config.timeout, resolution)
+            .await
+            .unwrap_or(false)
+    }
+
+    /// The start a client request runs, without the request: the slot's
+    /// admission (an open circuit or a rate limit refuses), then the start,
+    /// whose failure the slot counts (`start_recorded`).
+    async fn admitted_start(&self) -> Result<()> {
+        let key = PoolKey::Shared;
+        self.pooled_entry(&key)?.failsafe.admit(&self.name)?;
+        let activity = self.begin_activity(&key)?;
+        let entry = Arc::clone(activity.entry());
+        self.start_recorded(&key, &entry, std::time::Instant::now())
+            .await
+            .map(drop)
     }
 
     /// Read the shared resource catalogue; `fresh` discards the cached list
