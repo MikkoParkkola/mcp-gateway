@@ -975,6 +975,10 @@ jobs:
         run: python3 scripts/release/test_check_nfr_demo_1_recordings.py
       - name: Test the bot-review sweep (review-summary findings)
         run: python3 scripts/release/test_botreview_sweep.py
+      - name: Test the Known issues gate
+        run: python3 scripts/release/test_check_known_issues.py
+      - name: Known issues name no later release
+        run: python3 scripts/release/check_known_issues.py --check
       - name: Test the keyless read-only admission check (MIK-7752)
         run: python3 scripts/release/test_check_keyless_read_only.py
       - name: The published C6 mutation sample still reproduces
@@ -1009,6 +1013,11 @@ jobs:
         run: python3 scripts/release/check_scope_acceptance.py --check
       - name: Require completed acceptance in publishing context
         run: python3 scripts/release/check_scope_acceptance.py --publish-check
+      - name: Known issues is empty at a final tag
+        # The container publish depends on this job; release.yml's copy cannot gate it.
+        # A prerelease tag may carry known gaps; the script reads the tag itself.
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: python3 scripts/release/check_known_issues.py --release
 
   capability-pins:
     name: Capability pin counts and drift

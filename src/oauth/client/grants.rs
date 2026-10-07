@@ -85,8 +85,7 @@ impl OAuthClient {
             token_response.scope,
         );
 
-        self.storage
-            .save(&self.credential_key()?, &self.resource_url, &token)?;
+        self.save_issued(&token).await?;
         *self.current_token.write() = Some(token.clone());
 
         info!(backend = %self.backend_name, "Token renewed via client_credentials");
@@ -244,63 +243,135 @@ impl OAuthClient {
         ))
     }
 
-    /// Refresh an access token
-    pub(super) async fn refresh_token(&self, refresh_token: &str) -> Result<String> {
+    /// Refresh an access token: at most one exchange per stored credential in
+    /// the process, with the stored refresh token, never with one an earlier
+    /// exchange may have consumed (MIK-8018).
+    ///
+    /// The stored record is the only source of the refresh token: a missing
+    /// record, or one without a refresh token (spent, or never issued), needs a
+    /// login, and an in-memory copy is never a fallback.
+    pub(super) async fn refresh_token(&self) -> Result<String> {
+        use super::refresh_flight::{Exchange, Flight, Outcome, fingerprint_hex, retire_unsettled};
         let auth_meta = self
             .auth_metadata
             .as_ref()
             .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
+        let key = self.credential_key()?;
+        let token_path = self.storage.token_path(&key, &self.resource_url);
+        let flight = Flight::of(&token_path);
+        let guard = std::sync::Arc::clone(&flight.lock).lock_owned().await;
+        let across = super::refresh_flight::hold_across_processes(&token_path).await?;
 
+        let stored = self.storage.load(&key, &self.resource_url);
+        if let Some(access) = self.adopt_if_fresher(stored.as_ref()) {
+            return Ok(access);
+        }
+        let required = || Error::AuthorizationRequired {
+            backend: self.backend_name.clone(),
+        };
+        let Some(sent) = stored
+            .as_ref()
+            .and_then(|record| record.refresh_token.clone())
+        else {
+            warn!(backend = %self.backend_name, "No stored refresh token; a login is needed");
+            return Err(required());
+        };
+        if flight.is_spent(&sent) {
+            warn!(backend = %self.backend_name, "Refusing to resend a spent refresh token");
+            return Err(required());
+        }
+        let mut state = self.storage.load_refresh_state(&key, &self.resource_url);
+        let marker = fingerprint_hex(&sent);
+        if state.rotates && state.in_flight.as_deref() == Some(marker.as_str()) {
+            let at = (key.as_str(), self.resource_url.as_str());
+            retire_unsettled(&flight, &self.storage, at, &self.backend_name, &sent, state);
+            return Err(required());
+        }
+        self.reload_registered_client_id(&key);
         let client_id = self
             .client_id
             .read()
             .clone()
             .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
-
-        let params = self.refresh_params(refresh_token, &client_id);
-
-        let response = self
-            .client_for(&auth_meta.token_endpoint)?
-            .post(&auth_meta.token_endpoint)
-            .form(&params)
-            .send()
-            .await
-            .map_err(|e| oauth_request_error("Token refresh failed", &e))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            self.purge_client_id_if_invalid(&body);
-            return Err(Error::OAuth(safe_oauth_http_error(
-                "Token refresh failed",
-                status,
-                &body,
-            )));
+        let params = self.refresh_params(&sent, &client_id);
+        let http = self.refresh_client_for(&auth_meta.token_endpoint)?;
+        // Written before sending, so a process that stops mid-exchange leaves
+        // a mark the next refresh reads (FU-A.4). Without it, nothing is sent.
+        state.in_flight = Some(marker);
+        if let Err(error) = self
+            .storage
+            .save_refresh_state(&key, &self.resource_url, &state)
+        {
+            warn!(backend = %self.backend_name, %error, "Could not mark the refresh in flight; not refreshing");
+            return Err(error);
         }
+        let exchange = Exchange {
+            guard,
+            flight,
+            http,
+            endpoint: auth_meta.token_endpoint.clone(),
+            params,
+            sent,
+            storage: std::sync::Arc::clone(&self.storage),
+            key,
+            resource_url: self.resource_url.clone(),
+            backend: self.backend_name.clone(),
+            state,
+            destination: self.destination,
+            route: self.refresh_route,
+            across,
+        };
+        let outcome = exchange
+            .spawn()
+            .await
+            .map_err(|e| Error::OAuth(format!("Token refresh task failed: {e}")))?;
+        match outcome {
+            Outcome::Refreshed(token) => {
+                let access = token.access_token.clone();
+                *self.current_token.write() = Some(token);
+                info!(backend = %self.backend_name, "Token refreshed successfully");
+                Ok(access)
+            }
+            Outcome::Rejected { status, body } => {
+                self.purge_client_id_if_invalid(&body);
+                Err(Error::OAuth(safe_oauth_http_error(
+                    "Token refresh failed",
+                    status,
+                    &body,
+                )))
+            }
+            Outcome::NotSent(error) | Outcome::Uncertain(error) => Err(error),
+        }
+    }
 
-        let token_response: TokenResponse = response.json().await.map_err(|e| {
-            Error::OAuth(safe_reqwest_message("Failed to parse refresh response", &e))
-        })?;
+    /// Save a token a login or a client-credentials grant issued, under the
+    /// credential's refresh flight (MIK-8018 FU-A.1): never interleaved with
+    /// an exchange's save or compare-and-clear of the same record.
+    async fn save_issued(&self, token: &TokenInfo) -> Result<()> {
+        let key = self.credential_key()?;
+        let token_path = self.storage.token_path(&key, &self.resource_url);
+        let flight = super::refresh_flight::Flight::of(&token_path);
+        let _guard = flight.lock.lock().await;
+        let _across = super::refresh_flight::hold_across_processes(&token_path).await?;
+        self.storage.save(&key, &self.resource_url, token)
+    }
 
-        let token = TokenInfo::from_response(
-            token_response.access_token,
-            token_response.token_type,
-            // No new refresh token means keep the one sent (RFC 6749 section 6);
-            // dropping it would end headless renewal at the next expiry (MIK-8021).
-            token_response
-                .refresh_token
-                .or_else(|| Some(refresh_token.to_string())),
-            token_response.expires_in,
-            token_response.scope,
-        );
-
-        // Store and cache
-        self.storage
-            .save(&self.credential_key()?, &self.resource_url, &token)?;
-        *self.current_token.write() = Some(token.clone());
-
-        info!(backend = %self.backend_name, "Token refreshed successfully");
-        Ok(token.access_token)
+    /// The stored token instead of a refresh, when it is unexpired and either
+    /// differs from this client's cached one or this client's has expired
+    /// (MIK-8018 FU-A.3): another client already refreshed.
+    fn adopt_if_fresher(&self, stored: Option<&TokenInfo>) -> Option<String> {
+        let stored = stored.filter(|token| !token.is_expired())?;
+        let fresher = self.current_token.read().as_ref().is_none_or(|cached| {
+            cached.is_expired()
+                || cached.access_token != stored.access_token
+                || cached.expires_at != stored.expires_at
+                || cached.refresh_token != stored.refresh_token
+        });
+        if fresher {
+            self.adopt_stored_login()
+        } else {
+            None
+        }
     }
 
     /// Build the OAuth 2.0 authorization-request URL (RFC 6749 §4.1.1 + PKCE
@@ -432,19 +503,23 @@ impl OAuthClient {
             .storage
             .load(&key, &self.resource_url)
             .filter(|token| !token.is_expired())?;
-        // The login that stored this token may have registered afresh: a
-        // dynamically registered id held here is replaced by the stored one,
-        // or a refresh would present the old id. A configured id stays.
+        self.reload_registered_client_id(&key);
+        let access = token.access_token.clone();
+        *self.current_token.write() = Some(token);
+        Some(access)
+    }
+
+    /// The login or refresh that stored this credential may have registered
+    /// afresh: a dynamically registered id held here is replaced by the stored
+    /// one, or a refresh would present the old id. A configured id stays.
+    fn reload_registered_client_id(&self, key: &str) {
         if *self.client_id_source.read() == Some(super::ClientIdSource::Registered)
-            && let Some(stored) = self.storage.load_client_id(&key, &self.resource_url)
+            && let Some(stored) = self.storage.load_client_id(key, &self.resource_url)
         {
             *self.client_id.write() = Some(stored);
         } else {
             self.restore_persisted_client_id();
         }
-        let access = token.access_token.clone();
-        *self.current_token.write() = Some(token);
-        Some(access)
     }
 
     /// [`Self::authorize`], ended early by `cancel` (a restart or shutdown of
@@ -561,8 +636,7 @@ impl OAuthClient {
             .await?;
 
         // Store and cache the token
-        self.storage
-            .save(&self.credential_key()?, &self.resource_url, &token)?;
+        self.save_issued(&token).await?;
         *self.current_token.write() = Some(token.clone());
 
         Ok(token.access_token)

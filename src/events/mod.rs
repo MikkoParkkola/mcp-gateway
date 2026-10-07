@@ -35,8 +35,6 @@ mod schedule_source;
 mod services;
 mod store;
 mod task_source;
-#[cfg(test)]
-mod test_pause;
 mod types;
 mod upstream;
 mod upstream_listener;
@@ -89,10 +87,10 @@ pub(crate) struct EventsHub {
     receipts: tokio::sync::Mutex<()>,
     /// Test-only: one subscribe pauses between its commit and its audit.
     #[cfg(test)]
-    after_commit: test_pause::Slot,
+    after_commit: crate::test_pause::Slot,
     /// Test-only: one burial pauses between its store call and its receipts.
     #[cfg(test)]
-    before_receipts: test_pause::Slot,
+    before_receipts: crate::test_pause::Slot,
 }
 
 /// One producer of events (design §4). The core knows sources only through
@@ -209,9 +207,9 @@ impl EventsHub {
             catalogue_gate: parking_lot::Mutex::new(()),
             receipts: tokio::sync::Mutex::new(()),
             #[cfg(test)]
-            after_commit: test_pause::Slot::default(),
+            after_commit: crate::test_pause::Slot::default(),
             #[cfg(test)]
-            before_receipts: test_pause::Slot::default(),
+            before_receipts: crate::test_pause::Slot::default(),
         }))
     }
 

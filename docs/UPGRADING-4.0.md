@@ -185,6 +185,7 @@ backend" and "fails a capability file" first.**
 | 158 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 | 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
+| 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`, except those on lines the change deletes (a removed backend's entry, or a field an edit drops), which the command names by line number. On a file with comments, a change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. A file without comments is rewritten as before. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3412,9 +3413,11 @@ TTL has passed with no request is reaped at the next sweep, not a full TTL later
 When a session ends, by its owner's `DELETE /mcp` or by the reaper, the state kept under its id
 is reclaimed: routing profile, workflow state, cost bucket, last-tool entry, cached-token counter
 and spec-preview promotions. Before, these were never removed and grew with every session. The
-ended session's calls, tokens and cost stay in the operator's aggregate totals. A second pass
-two minutes after the end removes state that a call still in flight wrote under the ended id; a
-call that runs longer than that (a backend `timeout` above two minutes) can still leave an entry.
+ended session's calls, tokens and cost stay in the operator's aggregate totals. A call still in
+flight when the session ends, or one that starts after it (a task worker, an input-round resume, a
+call released from a confirmation), holds the session until it finishes; when it does, the state
+it wrote under the ended id is removed too, however long it ran. A second pass two minutes after
+the end stays as a backstop.
 
 **Action:** none. A client that relied on a session being replaced after 30 minutes should send
 `DELETE /mcp` instead.
@@ -4226,6 +4229,28 @@ build loads with both at 0.
 
 Library users: code that builds `EnforcerSnapshot` or `PersistedCosts` with a
 struct literal adds the two fields.
+
+## 161. CLI config writes keep comments, or refuse
+
+**Startup:** no notice
+
+`mcp-gateway add`, `remove`, `setup wizard` and `cap discover --write-config`
+(including the `--shadow` adoption) used to re-serialise `gateway.yaml`
+whenever the change was not a single block-style backend, which dropped every
+comment in the file, including the credential warning `init` writes.
+
+They now edit the file as text, one backend at a time, and write it once.
+Comments on lines the change deletes go with them (a removed backend's entry,
+or a field an edit drops), and the command names those comment lines. When a
+change cannot be written as text (a flow-style `backends:` mapping, or a
+comment inside a changed value) and the file has comments, the command writes
+nothing, exits non-zero, and names the line numbers of the comments a rewrite
+would drop. It never prints their text, which could hold a quoted secret. A
+file without comments is rewritten as before.
+
+`--force` keeps the old behaviour only for a change that cannot be written as
+text: it names the same lines, then rewrites the file without them, for
+example `mcp-gateway remove old-server --force`.
 
 ## Upgrading from 3.5.x: a walkthrough
 

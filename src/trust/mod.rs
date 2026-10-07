@@ -34,6 +34,9 @@ pub use assistant::{
     TrustAssistantPromptKind, TrustCardAssistant, TrustCardAssistantPlan,
 };
 pub use claim_capture::{ClaimCaptureSink, ClientClaim, derive_claim};
+pub(crate) use descriptor::SharedProjections;
+#[cfg(test)]
+pub(crate) use descriptor::memo_counters;
 pub use descriptor::{
     TOOL_DESCRIPTOR_TRUST_CARD_KEY, ToolDescriptorTrustCard, cbom_digest_sha256,
     project_tool_descriptor_trust_card, project_tool_descriptors_trust_cards,
