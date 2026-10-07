@@ -791,7 +791,10 @@ fn a_kept_receipt_never_runs_together_values_delivered_as_keys() {
             kept.iter().all(|fp| allowed.contains(fp)),
             "only fingerprints of a key as delivered are kept"
         );
-        let own = [&a, &b].iter().flat_map(|t| d.fingerprints(t));
-        assert!(own.all(|fp| kept.contains(&fp)), "each key's fps stay");
+        let own: Vec<u64> = [&a, &b].iter().flat_map(|t| d.fingerprints(t)).collect();
+        assert!(
+            own.iter().all(|fp| kept.contains(fp)),
+            "each key's fps stay"
+        );
     }
 }
