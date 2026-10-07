@@ -22,6 +22,11 @@ pub(super) type Rows<'a> = (
     &'a AtomicU64,
 );
 
+/// Drop the unbudgeted rows of earlier days; budgeted rows always stay.
+pub(super) fn sweep_stale(map: &DashMap<String, DailyAccumulator>, limits: &HashMap<String, f64>) {
+    map.retain(|row, day| limits.contains_key(row) || day.is_current());
+}
+
 /// Add `micro` to `name`'s entry and return that entry's running total. A
 /// budgeted name always has its own. Any other name has one only while `map`
 /// holds fewer than [`MAX_UNBUDGETED_ROWS`] unbudgeted entries, and only if it is no longer than the cost tracker's row-name limit; past
@@ -54,7 +59,7 @@ pub(super) fn add_capped(
     if !own && short {
         let today = super::current_day();
         if swept.fetch_max(today, Ordering::Relaxed) < today {
-            map.retain(|row, day| limits.contains_key(row) || day.is_current());
+            sweep_stale(map, limits);
             own = unbudgeted() < MAX_UNBUDGETED_ROWS;
         }
     }

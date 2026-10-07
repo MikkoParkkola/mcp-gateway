@@ -616,7 +616,7 @@ impl BudgetEnforcer {
                 (&self.tool_daily, &budgets.per_tool),
                 (&self.key_daily, &budgets.per_key),
             ] {
-                map.retain(|name, day| limits.contains_key(name) || day.is_current());
+                rows::sweep_stale(map, limits);
             }
             self.swept_day
                 .fetch_max(today, std::sync::atomic::Ordering::Relaxed);
