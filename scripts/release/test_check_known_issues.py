@@ -94,6 +94,8 @@ def test_only_beta_and_rc_tags_are_prereleases():
         "v4.0.0-rc",
         "v4.0.0-rc.1+build.7",
         "v4.0.0-beta.1+build-7",
+        "v4.0.1-rc.1",
+        "v5.0.0-beta.1",
     ):
         assert run(notes(ITEM), "--release", "--tag", tag) == 1, tag
 
@@ -104,7 +106,13 @@ def test_another_version_containing_the_digits_is_not_the_later_release():
 
 
 def test_the_later_release_is_found_at_any_word_boundary():
-    for line in ("- Fixed in v4.0.1.\n", "- (4.0.1)\n", "- Due 4.0.1, maybe.\n"):
+    for line in (
+        "- Fixed in v4.0.1.\n",
+        "- (4.0.1)\n",
+        "- Due 4.0.1, maybe.\n",
+        "- Fixed in 4.0.1-rc.1.\n",
+        "- Fixed in 4.0.1+build.7.\n",
+    ):
         assert run(notes("\n" + line), "--check") == 1, line
 
 
