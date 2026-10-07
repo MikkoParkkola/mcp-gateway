@@ -94,10 +94,18 @@ impl MetaMcp {
         // MCP backend tools (cached only)
         for backend in self.backends.all() {
             // INV-2 (MIK-6742): skip isolated backends on a multi-user gateway.
-            if !backend.has_cached_tools()
-                || !profile.backend_allowed(&backend.name)
+            // A backend this caller's scope does not admit is skipped before
+            // the fill below can ask it anything (MIK-7962).
+            if !profile.backend_allowed(&backend.name)
+                || !scope.authorizer.admits_backend(&backend.name)
                 || self.meta_route_isolation_refused(&backend)
             {
+                continue;
+            }
+            // A cold or stale slot is filled behind this read, never by it, as
+            // discovery does (MIK-7962); this read serves what is cached.
+            self.refresh_shared_behind_read(&backend);
+            if !backend.has_cached_tools() {
                 continue;
             }
             let cache_guard = backend.get_cached_tools_snapshot();

@@ -126,6 +126,7 @@ root_doc_allowlist=(
   ".trivyignore"
   "Cargo.lock"
   "Cargo.toml"
+  "clippy.toml"
   "Dockerfile"
   "LICENSE"
   "LICENSE-MIT"

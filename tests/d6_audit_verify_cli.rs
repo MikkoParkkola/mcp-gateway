@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! D6: `mcp-gateway audit verify` over a rotated log, as a process. Covers
 //! the CLI wiring the library tests cannot: the early exit when the active
-//! file is missing, and the `--archive` flag.
+//! file is missing, the `--archive` flag, and `--anchor` (MIK-7713).
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
@@ -50,6 +50,10 @@ fn write_log(path: &Path) {
 }
 
 fn verify(dir: &Path, log: &Path, archive: bool) -> (bool, String) {
+    verify_with(dir, log, archive, None)
+}
+
+fn verify_with(dir: &Path, log: &Path, archive: bool, anchor: Option<&Path>) -> (bool, String) {
     let config = dir.join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(&config, "auth:\n  enabled: false\n")
         .unwrap();
@@ -60,6 +64,9 @@ fn verify(dir: &Path, log: &Path, archive: bool) -> (bool, String) {
         .arg(log);
     if archive {
         cmd.arg("--archive");
+    }
+    if let Some(anchor) = anchor {
+        cmd.arg("--anchor").arg(anchor);
     }
     let out = cmd.output().expect("audit verify runs");
     let text = format!(
@@ -103,4 +110,40 @@ fn audit_verify_archive_accepts_a_copy_without_hwm() {
     let (ok, text) = verify(dir.path(), &log, true);
     assert!(ok, "{text}");
     assert!(text.contains("archive copy"), "names the mode: {text}");
+}
+
+/// MIK-7713: `--anchor` as a process, live and archive. A valid anchor
+/// passes; a missing or malformed one, or a wiped log, exits 1 naming why.
+#[test]
+fn audit_verify_checks_the_log_against_an_anchor() {
+    for archive in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("transparency.jsonl");
+        write_log(&log);
+        let anchor = dir.path().join("anchor.hwm");
+        std::fs::copy(dir.path().join("transparency.jsonl.hwm"), &anchor).unwrap();
+        let (ok, text) = verify_with(dir.path(), &log, archive, Some(&anchor));
+        assert!(ok, "{text}");
+
+        let missing = dir.path().join("missing.hwm");
+        let (ok, text) = verify_with(dir.path(), &log, archive, Some(&missing));
+        assert!(!ok && text.contains("anchor"), "missing anchor: {text}");
+        let malformed = dir.path().join("malformed.hwm");
+        std::fs::write(&malformed, "not a high-water mark\n").unwrap();
+        let (ok, text) = verify_with(dir.path(), &log, archive, Some(&malformed));
+        assert!(!ok && text.contains("anchor"), "malformed anchor: {text}");
+
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if name.starts_with("transparency.jsonl") {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+        let (ok, text) = verify_with(dir.path(), &log, archive, Some(&anchor));
+        assert!(
+            !ok && text.contains("behind its anchor"),
+            "wiped log: {text}"
+        );
+    }
 }
