@@ -55,6 +55,31 @@ pub(super) fn is_config_event_for(event: &Event, named_config_path: &std::path::
     is_config_event(event, &config_watch_paths(named_config_path.to_path_buf()))
 }
 
+/// The notify callback: wake the rewatch task and queue a reload, as `event`
+/// warrants. Runs on notify's thread, so it must not block or call `watch`.
+///
+/// An event on a path of the chain may have moved it: a link unlinked and
+/// re-created is an event on the named path itself. An access (open, read,
+/// close) cannot, and the reload's own read must not wake the task again. A
+/// write to any other file in a watched directory cannot either, and is not
+/// worth resolving the config's path for (MIK-8013). A rescan means events
+/// were lost, possibly an edit to the config itself, so it reloads too.
+pub(super) fn handle_watch_event(
+    event: &Event,
+    names: &watch_chain::ChainNames,
+    named_config_path: &std::path::Path,
+    wake: &tokio::sync::watch::Sender<()>,
+    reload: &tokio::sync::mpsc::Sender<ReloadTrigger>,
+) {
+    if matches!(event.kind, EventKind::Access(_)) || !names.concerns(event) {
+        return;
+    }
+    wake.send_replace(());
+    if event.need_rescan() || is_config_event_for(event, named_config_path) {
+        let _ = reload.try_send(ReloadTrigger::ConfigFile);
+    }
+}
+
 // ============================================================================
 // File watcher
 // ============================================================================
@@ -191,21 +216,13 @@ impl ConfigWatcher {
         let watcher = RecommendedWatcher::new(
             move |result: std::result::Result<Event, notify::Error>| {
                 let Ok(event) = result else { return };
-
-                // An event on a path of the chain may have moved it: a link
-                // unlinked and re-created is an event on the named path
-                // itself. An access (open, read, close) cannot, and the
-                // reload's own read must not wake the task again. A write to
-                // any other file in a watched directory cannot either, and is
-                // not worth resolving the config's path for (MIK-8013). The
-                // task decides; this thread must not block or call `watch`.
-                if matches!(event.kind, EventKind::Access(_)) || !closure_names.concerns(&event) {
-                    return;
-                }
-                wake_tx.send_replace(());
-                if is_config_event_for(&event, &closure_config_path) {
-                    let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
-                }
+                handle_watch_event(
+                    &event,
+                    &closure_names,
+                    &closure_config_path,
+                    &wake_tx,
+                    &event_tx,
+                );
             },
             NotifyConfig::default().with_poll_interval(Duration::from_secs(2)),
         )

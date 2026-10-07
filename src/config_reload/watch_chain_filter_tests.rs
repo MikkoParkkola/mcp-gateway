@@ -46,6 +46,41 @@ fn a_rescan_wakes_on_an_unrelated_path() {
     assert!(names.concerns(&unrelated.set_flag(Flag::Rescan)));
 }
 
+/// What the notify callback does with one event, for a config whose chain
+/// is resolved: (woke the task, queued a reload).
+fn callback_on(event: &notify::Event, cfg: &std::path::Path) -> (bool, bool) {
+    let names = ChainNames::default();
+    names.set(Some(BTreeSet::from([canonical(cfg)])));
+    let (wake, woken) = tokio::sync::watch::channel(());
+    let (reload, mut reloads) = tokio::sync::mpsc::channel(4);
+    super::super::watcher::handle_watch_event(event, &names, cfg, &wake, &reload);
+    (woken.has_changed().unwrap(), reloads.try_recv().is_ok())
+}
+
+/// An edit to the config wakes the task and reloads; on Linux a file beside
+/// it does neither; a rescan does both whatever path it carries.
+#[test]
+fn the_callback_wakes_and_reloads_for_the_config_and_rescans_only() {
+    use notify::event::{CreateKind, DataChange, Event, EventKind, Flag, ModifyKind};
+    let root = tempfile::tempdir().expect("root");
+    let cfg = root.path().join("gateway.yaml");
+    std::fs::write(&cfg, "a: 1\n").unwrap();
+    let beside = canonical(root.path()).join("perf.data");
+
+    let edit = Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
+        .add_path(canonical(&cfg));
+    assert_eq!(callback_on(&edit, &cfg), (true, true));
+
+    let unrelated = Event::new(EventKind::Create(CreateKind::File)).add_path(beside.clone());
+    let off_linux = !cfg!(target_os = "linux");
+    assert_eq!(callback_on(&unrelated, &cfg), (off_linux, false));
+
+    let rescan = Event::new(EventKind::Other)
+        .add_path(beside)
+        .set_flag(Flag::Rescan);
+    assert_eq!(callback_on(&rescan, &cfg), (true, true));
+}
+
 /// A plain file's chain names the file, canonical, and nothing beside it.
 #[test]
 fn a_plain_file_names_itself() {

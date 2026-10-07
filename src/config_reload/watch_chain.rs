@@ -30,6 +30,12 @@ const MAX_HOPS: usize = 40;
 /// How often a chain that cannot be resolved is tried again without an event.
 pub(super) const CHAIN_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How often a resolved chain is resolved again without an event. Events
+/// off the chain no longer wake the task (MIK-8013), so a link changed in the
+/// moment between a resolve and its names landing would otherwise go unheard
+/// until the next event on the chain.
+const CHAIN_REFRESH: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// A resolved chain: the directories to watch, the file it ends at, and the
 /// paths whose change can move it.
 pub(super) struct Chain {
@@ -182,8 +188,7 @@ pub(super) fn startup_dirs(named: &Path) -> BTreeSet<PathBuf> {
 /// yet, or the last resolve failed) wakes on every event, as before.
 ///
 /// A link changed between a resolve reading it and the set landing is heard
-/// only at the next event on the chain: the window is the time between two
-/// statements of the task.
+/// at the next event on the chain, or at the latest [`CHAIN_REFRESH`] later.
 #[derive(Default)]
 pub(super) struct ChainNames {
     names: Mutex<Option<BTreeSet<PathBuf>>>,
@@ -341,6 +346,9 @@ pub(super) fn spawn_rewatch_task(
         let mut broken = false;
         let mut retry = tokio::time::interval(retry_every);
         retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut refresh =
+            tokio::time::interval_at(tokio::time::Instant::now() + CHAIN_REFRESH, CHAIN_REFRESH);
+        refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // Env files are polled by content, never watched (#1286): a watch
         // goes stale when a link in the path is retargeted.
         let mut env_poll = tokio::time::interval(env_poll_every);
@@ -354,6 +362,7 @@ pub(super) fn spawn_rewatch_task(
                     }
                 }
                 _ = retry.tick(), if broken => {}
+                _ = refresh.tick() => {}
                 _ = env_poll.tick() => {
                     // No memo: a file that differs is re-triggered every tick
                     // until a reload succeeds; the debounce coalesces them.
