@@ -434,6 +434,15 @@ def test_a_numeric_build_of_this_release_is_not_a_later_release():
     assert run(notes("\n- Seen in 4.0.0+4.0.1.\n"), "--check") == 0
 
 
+def test_two_code_spans_joined_by_a_plus_are_two_versions():
+    assert run(notes("\n- Seen in `4.0.0`+`4.0.1`.\n"), "--check") == 1
+
+
+def test_an_empty_section_under_a_quoted_tag_title_holds_at_a_tag():
+    head = '## Known iss<span title="a>b">u</span>es\n'
+    assert run(head, "--release", "--tag", "v4.0.0") == 0
+
+
 def test_a_hyphen_range_to_a_later_release_fails_the_check():
     assert run(notes("\n- Seen in 4.0.0-4.0.1.\n"), "--check") == 1
 
