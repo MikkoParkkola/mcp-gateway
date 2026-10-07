@@ -52,7 +52,12 @@ pub use guard::{
 /// finds it. Revisit if an operator reports either half of the failure — a
 /// retry outside the window that duplicated a side effect, or memory pressure
 /// from entries held this long.
-pub const COMPLETED_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+///
+/// Two seconds short of the sync admission's retention (MIK-7991): this
+/// entry completes first and must expire first, and the admission's clock
+/// counts whole seconds, so a margin of equal length could still leave it
+/// the later of the two.
+pub const COMPLETED_TTL: Duration = Duration::from_secs(24 * 60 * 60 - 2);
 
 /// Timeout for in-flight markers (5 minutes).
 ///

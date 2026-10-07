@@ -514,3 +514,73 @@ async fn an_in_process_keyed_repeat_is_replayed_by_the_invoke_path_guard() {
         answers[1]
     );
 }
+
+/// MIK-7991 (F1): a keyed call whose round is lost settles its key with the
+/// gateway's uncertainty notice. The sync admission's clock is wall time, so a
+/// forward step can expire its entry before this guard's, and the re-issue
+/// then reaches this guard, which replays the notice. That is the gateway's own
+/// text, so the replay stages no receipt and another caller may send it.
+#[tokio::test]
+async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
+    use crate::security::firewall::{CollusionAction, CollusionConfig, RelayCaller};
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "alpha",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(Arc::new(super::Scripted(Err("stream lost".into()))));
+    let _ = registry.register(Arc::clone(&backend));
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+            collusion: CollusionConfig {
+                action: CollusionAction::Block,
+                sources: vec!["alpha:*".to_string()],
+                ..CollusionConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let mut meta = MetaMcp::new(registry);
+    meta.set_firewall(Some(Arc::clone(&firewall)));
+    let meta = idempotent(meta);
+    let who = api_key_caller();
+    let retry = keyed("lost-round-notice");
+    let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        retry: &retry,
+        ..context(&AllowAll, &who)
+    };
+    let mut answers = Vec::new();
+    for _ in 0..2 {
+        let (answer, staged) = meta
+            .collecting_staged(meta.invoke_tool(&args_for(None), None, &ctx))
+            .await;
+        staged.commit(true);
+        answers.push(answer.expect("answered"));
+    }
+    let notice = answers[1]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        notice.contains("may have reached the backend"),
+        "base: the replay serves the notice: {}",
+        answers[1]
+    );
+    let params = json!({"name": "read", "arguments": {"text": notice}});
+    let verdict = firewall.check_relay(
+        RelayCaller::Keyed("other-caller"),
+        "alpha",
+        "read",
+        &params,
+        ("s", "other"),
+    );
+    assert!(
+        verdict.allowed,
+        "the replayed notice is in a receipt: {}",
+        answers[1]
+    );
+}
