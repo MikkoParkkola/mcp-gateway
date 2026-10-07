@@ -88,12 +88,40 @@ pub(crate) enum Charge {
 #[derive(Debug)]
 pub(crate) struct PollFailed;
 
+/// One read of the capability catalogue (MIK-8037).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Catalogue {
+    /// Every REST capability in it, read-only or not.
+    pub targets: Vec<Target>,
+    /// Every capability name in it, REST-served or not: a capability not
+    /// here was not read, which is not the same as reclassified.
+    pub present: std::collections::HashSet<String>,
+    /// Every capability directory loaded, after the startup scan completed.
+    pub complete: bool,
+    /// The catalogue generation it was read at.
+    pub generation: u64,
+}
+
 /// What the gateway lends the source: the capability catalogue, the live
 /// grant check and the enforced poll.
 #[async_trait::async_trait]
 pub(crate) trait WatchHost: Send + Sync {
     /// Every REST capability now, read-only or not.
     fn targets(&self) -> Vec<Target>;
+    /// The catalogue now, read once.
+    fn catalogue(&self) -> Catalogue {
+        let targets = self.targets();
+        Catalogue {
+            present: targets.iter().map(|t| t.capability.clone()).collect(),
+            targets,
+            complete: true,
+            generation: 0,
+        }
+    }
+    /// The catalogue generation now: it moves at every catalogue write.
+    fn catalogue_generation(&self) -> u64 {
+        0
+    }
     /// Whether `holder` may invoke `target` now (the `tools/list` predicate).
     fn may_invoke(&self, holder: &Holder, target: &Target) -> bool;
     /// Call `target` as `holder` with every control a `tools/call` gets, and

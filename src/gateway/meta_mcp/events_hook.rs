@@ -210,6 +210,18 @@ impl MetaMcp {
         apply_webhook_refresh(hub, &capabilities, &registry);
     }
 
+    /// The catalogue as the events watch source sees it, read once
+    /// (MIK-8037). Empty and complete without a capability backend.
+    pub(crate) fn watch_catalogue(&self) -> crate::events::watch_source::Catalogue {
+        let targets = self.watch_targets();
+        crate::events::watch_source::Catalogue {
+            present: targets.iter().map(|t| t.capability.clone()).collect(),
+            targets,
+            complete: true,
+            generation: 0,
+        }
+    }
+
     /// Every REST-only capability as the events watch source sees it: its
     /// read-only classification (data, MIK-7216.IDEM.1) and whose credential
     /// a call needs. Empty without a capability backend.

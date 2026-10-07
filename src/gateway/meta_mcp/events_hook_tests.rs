@@ -332,3 +332,61 @@ async fn a_partial_reload_withdraws_a_route_a_read_capability_dropped() {
         "the unread directory's subscription is kept"
     );
 }
+
+/// MIK-8037 `WATCHGONE.3`: the watch catalogue reads completeness with its
+/// contents: incomplete until the startup scan completes, incomplete after a
+/// reload that could not read a directory (and without that directory's
+/// capabilities), complete once every directory loads again. `present` names
+/// every capability read, REST-served or not.
+#[tokio::test]
+async fn the_watch_catalogue_reports_a_partial_load() {
+    let root = tempfile::tempdir().expect("root");
+    let store = tempfile::tempdir().expect("store");
+    let (d1, d2) = (root.path().join("d1"), root.path().join("d2"));
+    for (dir, cap) in [(&d1, "alpha"), (&d2, "beta")] {
+        std::fs::create_dir_all(dir).expect("dir");
+        std::fs::write(dir.join(format!("{cap}.yaml")), capability(cap)).expect("write");
+    }
+    let (caps, _registry, meta) = wired(&[&d1, &d2], store.path()).await;
+    assert!(
+        !meta.watch_catalogue().complete,
+        "the scan is still running"
+    );
+    caps.mark_initial_scan_complete();
+    let whole = meta.watch_catalogue();
+    assert!(whole.complete, "every directory read");
+    assert!(whole.present.contains("alpha") && whole.present.contains("beta"));
+    std::fs::remove_dir_all(&d2).expect("make d2 unreadable");
+    caps.reload().await.expect("partial reload");
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(partial.present.contains("alpha") && !partial.present.contains("beta"));
+    std::fs::create_dir_all(&d2).expect("dir");
+    std::fs::write(d2.join("beta.yaml"), capability("beta")).expect("write");
+    caps.reload().await.expect("complete reload");
+    assert!(
+        meta.watch_catalogue().complete,
+        "every directory read again"
+    );
+}
+
+/// MIK-8037: every catalogue write moves the generation the watch source
+/// compares before it revokes: a reload, an unload and a registration.
+#[tokio::test]
+async fn every_catalogue_write_moves_the_generation() {
+    let root = tempfile::tempdir().expect("root");
+    let store = tempfile::tempdir().expect("store");
+    std::fs::write(root.path().join("alpha.yaml"), capability("alpha")).expect("write");
+    let (caps, _registry, _meta) = wired(&[root.path()], store.path()).await;
+    let start = caps.catalogue_generation();
+    caps.reload().await.expect("reload");
+    let reloaded = caps.catalogue_generation();
+    assert!(reloaded > start, "a reload");
+    assert!(caps.unload_capability("alpha"), "unloaded");
+    let unloaded = caps.catalogue_generation();
+    assert!(unloaded > reloaded, "an unload");
+    caps.load_from_directory(root.path().to_str().expect("utf8"))
+        .await
+        .expect("register");
+    assert!(caps.catalogue_generation() > unloaded, "a registration");
+}

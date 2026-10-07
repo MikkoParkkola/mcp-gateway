@@ -91,6 +91,12 @@ impl CapabilityBackend {
         }
     }
 
+    /// The catalogue generation: it moves at every catalogue write
+    /// (MIK-8037).
+    pub(crate) fn catalogue_generation(&self) -> u64 {
+        0
+    }
+
     /// The capabilities and whether every directory loaded, read under one
     /// lock, so a reload cannot change one without the other (MIK-8028).
     pub(crate) fn catalogue_snapshot(&self) -> (Vec<super::CapabilityDefinition>, bool) {
