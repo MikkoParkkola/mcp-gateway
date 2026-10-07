@@ -18,8 +18,8 @@
 //! variables are removed, so an operator's own overrides never reach a test, and
 //! an inherited `RUST_LOG` keeps the port banner visible.
 //!
-//! Known gap (MIK-8001): product paths that call `dirs::home_dir()` directly,
-//! not `crate::home_dir`, still resolve the real home on Windows.
+//! Every product home lookup goes through `crate::home_dir`, so the override
+//! reaches all of them; `clippy.toml` refuses a direct `dirs` call (MIK-8001).
 #![allow(dead_code, reason = "each test crate uses part of this helper")]
 
 use std::path::Path;
