@@ -96,9 +96,9 @@ impl Drop for KeyHold {
     }
 }
 
-/// How long after a session ends its in-flight calls may still write state
-/// under its id. Longer than the backend request timeout, so a call that began
-/// before the end has finished by the second cleanup pass.
+/// When the second cleanup pass runs after a session ends. A backstop only:
+/// a call that writes after the end, however long it runs, holds the session
+/// and reruns the end handlers itself when it finishes ([`SessionHold`]).
 pub const END_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// How long an identity's derived state outlives its last observed request.
