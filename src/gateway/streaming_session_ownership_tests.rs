@@ -252,3 +252,19 @@ fn removing_a_session_does_not_fingerprint_it_again() {
     assert!(!m.has_session("gw-gone"), "the session was removed");
     assert_eq!(FINGERPRINTS.with(std::cell::Cell::get), 0);
 }
+
+/// Only the session's owner can remove it: another owner's DELETE leaves it in
+/// place, and the owner's removes it and gets the removed id back.
+#[test]
+fn only_the_owner_removes_a_session() {
+    let m = mux();
+    let id = m
+        .get_or_create_session_id_scoped(None, &cred("alice"), None)
+        .expose_secret()
+        .to_owned();
+    assert!(m.remove_session_for(&id, &cred("mallory")).is_none());
+    assert!(m.has_session(&id), "another owner removed the session");
+    let removed = m.remove_session_for(&id, &cred("alice"));
+    assert_eq!(removed.as_ref().map(SessionId::expose_secret), Some(id.as_str()));
+    assert!(!m.has_session(&id), "the owner's DELETE left the session");
+}
