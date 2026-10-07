@@ -109,6 +109,44 @@ async fn an_agent_cannot_read_or_cancel_another_agents_task() {
 }
 
 #[tokio::test]
+async fn an_agent_cannot_update_another_agents_task_and_its_owner_can_cancel_it() {
+    // Held, so the task is still working when its owner cancels it.
+    let (mock, gate) = MockBackend::holding(Answer::ok());
+    let mut gate = ReleasedOnDrop(gate);
+    let (state, _store, token_a, token_b) = agent_gateway(&mock).await;
+    let id = task_id(&post(&state, &token_a, task_invoke(8341, "upd-a", json!({}))).await);
+    gate.0.wait_for_dispatch().await;
+
+    let update = |rpc| task_method(rpc, "tasks/update", json!({ "taskId": id }));
+    let foreign = post(&state, &token_b, update(8342)).await;
+    std::assert_eq!(
+        foreign.pointer("/error/message").and_then(Value::as_str),
+        Some("no such task"),
+        "agent B's tasks/update on agent A's task is answered as absent: {foreign}"
+    );
+    let own = post(&state, &token_a, update(8343)).await;
+    assert!(
+        own.get("error").is_none(),
+        "agent A updates its own task: {own}"
+    );
+
+    let cancel = post(
+        &state,
+        &token_a,
+        task_method(8344, "tasks/cancel", json!({ "taskId": id })),
+    )
+    .await;
+    assert!(
+        cancel.get("error").is_none(),
+        "agent A cancels its own task: {cancel}"
+    );
+    std::assert_eq!(
+        status_of(&get_task(&state, &token_a, &id).await),
+        "cancelled"
+    );
+}
+
+#[tokio::test]
 async fn an_agent_reusing_another_agents_idempotency_key_gets_its_own_task() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store, token_a, token_b) = agent_gateway(&mock).await;
