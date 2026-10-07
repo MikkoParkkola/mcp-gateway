@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use crate::config::Config;
+use crate::config_persistence::{CommentLoss, Unwritten};
 
 use super::{ReloadContext, ReloadOutcome};
 
@@ -36,6 +37,47 @@ impl std::error::Error for ConfigWriteError {}
 impl From<String> for ConfigWriteError {
     fn from(message: String) -> Self {
         Self::Failed(message)
+    }
+}
+
+/// Why a guarded read-modify-write did not happen: a [`ConfigWriteError`],
+/// or, under [`CommentLoss::Refuse`], a write that would drop the file's
+/// comments.
+#[derive(Debug)]
+pub(crate) enum MutateError {
+    Write(ConfigWriteError),
+    /// The message names the comments a full rewrite would drop.
+    CommentLoss(String),
+}
+
+impl From<ConfigWriteError> for MutateError {
+    fn from(e: ConfigWriteError) -> Self {
+        Self::Write(e)
+    }
+}
+
+impl From<String> for MutateError {
+    fn from(message: String) -> Self {
+        Self::Write(ConfigWriteError::Failed(message))
+    }
+}
+
+impl From<Unwritten> for MutateError {
+    fn from(e: Unwritten) -> Self {
+        match e {
+            Unwritten::Failed(message) => message.into(),
+            Unwritten::CommentLoss(message) => Self::CommentLoss(message),
+        }
+    }
+}
+
+impl From<MutateError> for ConfigWriteError {
+    /// Only [`CommentLoss::Refuse`] refuses, and no public caller asks for it.
+    fn from(e: MutateError) -> Self {
+        match e {
+            MutateError::Write(e) => e,
+            MutateError::CommentLoss(message) => Self::Failed(message),
+        }
     }
 }
 
@@ -114,19 +156,81 @@ pub async fn mutate_config_and_reload<T, E, F>(
 where
     F: FnOnce(&mut Config) -> std::result::Result<T, E>,
 {
+    mutate_config_and_reload_with(path, reload_context, CommentLoss::Rewrite, mutate)
+        .await
+        .map_err(Into::into)
+}
+
+/// An error's detail as the caller may show it. A load or reload error can
+/// quote the offending value, which may be a secret, so under
+/// [`CommentLoss::Refuse`] (the web UI) the detail is withheld.
+fn detail(e: &dyn std::fmt::Display, mode: CommentLoss) -> String {
+    match mode {
+        CommentLoss::Rewrite => e.to_string(),
+        CommentLoss::Refuse => {
+            "the file does not parse or validate (detail withheld: it can quote a \
+             configured value)"
+                .to_owned()
+        }
+    }
+}
+
+/// A failed load, with [`detail`] by `mode`.
+pub(super) fn load_failure(path: &Path, e: &dyn std::fmt::Display, mode: CommentLoss) -> String {
+    format!("Failed to load {}: {}", path.display(), detail(e, mode))
+}
+
+/// A write whose reload failed, with [`detail`] by `mode`.
+pub(super) fn reload_failure(e: &dyn std::fmt::Display, mode: CommentLoss) -> String {
+    format!("Config written but reload failed: {}", detail(e, mode))
+}
+
+/// [`mutate_config_and_reload`] in `mode`: the web UI refuses a write that
+/// would drop the file's comments, and a write that changes nothing writes
+/// nothing (a live gateway still reloads).
+pub(crate) async fn mutate_config_and_reload_with<T, E, F>(
+    path: &Path,
+    reload_context: Option<&ReloadContext>,
+    mode: CommentLoss,
+    mutate: F,
+) -> std::result::Result<ConfigMutation<T, E>, MutateError>
+where
+    F: FnOnce(&mut Config) -> std::result::Result<T, E>,
+{
     if let Some(ctx) = reload_context {
-        return ctx.mutate_and_reload_outcome(path, mutate).await;
+        return ctx
+            .mutate_locked(path, super::RELOAD_LOCK_WAIT, mode, mutate)
+            .await;
     }
 
     // No live gateway to reload, so no reload lock exists to hold. This path is
     // the CLI acting on a config file nothing else is serving.
     let mut config = crate::config_persistence::load_existing_or_default(path)
-        .map_err(|e| ConfigWriteError::Failed(format!("Failed to load {}: {e}", path.display())))?;
+        .map_err(|e| load_failure(path, &e, mode))?;
     match mutate(&mut config) {
         Ok(value) => {
-            crate::config_persistence::write_config(path, &config)?;
+            crate::config_persistence::write_config_with(path, &config, mode)?;
             Ok(ConfigMutation::Applied(value, None))
         }
         Err(rejection) => Ok(ConfigMutation::Rejected(rejection)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CommentLoss, load_failure, reload_failure};
+
+    #[test]
+    fn the_web_ui_never_sees_a_loader_detail() {
+        let quoting = "invalid type: found string \"#secret\"";
+        let path = std::path::Path::new("gateway.yaml");
+        for message in [
+            load_failure(path, &quoting, CommentLoss::Refuse),
+            reload_failure(&quoting, CommentLoss::Refuse),
+        ] {
+            assert!(!message.contains("#secret"), "{message}");
+        }
+        // The CLI keeps the detail: its user can read the file anyway.
+        assert!(reload_failure(&quoting, CommentLoss::Rewrite).contains("#secret"));
     }
 }

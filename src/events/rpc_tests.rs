@@ -102,11 +102,9 @@ fn callback_urls_must_be_absolute_https_with_a_host() {
 
 /// An unsubscribe answers only after an attempt already claimed for the
 /// key has settled, whether or not this call removed the subscription (T23).
-#[tokio::test]
-async fn unsubscribe_waits_out_a_claimed_attempt() {
-    let dir = tempfile::tempdir().expect("dir");
-    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
-    let caller = Caller {
+/// A non-admin principal `p` holding no credential.
+fn plain_caller() -> Caller {
+    Caller {
         principal: Some("p".to_owned()),
         read_key: None,
         credential: Credential {
@@ -118,7 +116,14 @@ async fn unsubscribe_waits_out_a_claimed_attempt() {
         },
         visible_backends: std::collections::HashSet::new(),
         admin: false,
-    };
+    }
+}
+
+#[tokio::test]
+async fn unsubscribe_waits_out_a_claimed_attempt() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let caller = plain_caller();
     let url = "https://h.example/cb";
     let id = subscription_id("p", url, "e", &json!({}));
     hub.runtime.busy.lock().insert(id.clone());
@@ -350,6 +355,10 @@ async fn the_commit_admits_only_a_detected_or_unneeded_transport() {
             false,
             (caps, chrono::Duration::zero(), policy),
             Utc::now(),
+            (
+                &plain_caller(),
+                &url::Url::parse("https://p.example/cb").expect("url"),
+            ),
         )
         .await;
     assert_eq!(outcome.err().map(|e| e.code), Some(-32000));
