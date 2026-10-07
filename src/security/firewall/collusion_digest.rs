@@ -337,7 +337,10 @@ impl DeliveryDigest {
     /// step's own adjacency, as a receipt kept it before its cap was
     /// deferred, which another step's leaf between them in the answer does
     /// not undo. Only fingerprints come from it, deduplicated and capped by
-    /// count, never kept text.
+    /// count, never kept text. Copies stay in it, so a span across two copies
+    /// (`X\nX`) is excused: base receipted it too, and counting copies here
+    /// loses a run the step delivered (step `[P, pad, P, S]`, answer
+    /// `[P, Z, S]`).
     fn step_runs_kgrams(
         &self,
         detector: &CollusionDetector,

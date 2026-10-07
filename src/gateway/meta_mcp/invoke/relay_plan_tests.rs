@@ -684,6 +684,10 @@ async fn interleaved_short_fields_keep_their_step_run() {
         "the vineyard gate opens at six for the pickers",
         "dog on premises, ring twice at the side porch!",
     );
+    assert!(
+        p.len() < 48 && s.len() < 48,
+        "premise: each field under a k-gram"
+    );
     let row = json!({"a": p, "b": s});
     let answer = plan_answer(&json!({"x": p, "y": OTHER_PROSE, "z": s}));
     deliver_step(&meta, &row, &answer).await;
@@ -731,6 +735,10 @@ async fn a_repeated_field_keeps_its_step_run_when_interleaved() {
         "the vineyard gate opens at six for the pickers",
         "dog on premises, ring twice at the side porch!",
     );
+    assert!(
+        p.len() < 48 && s.len() < 48,
+        "premise: each field under a k-gram"
+    );
     let step = json!({"a": p, "b": filler("pad", 60), "c": p, "d": s});
     let answer = plan_answer(&json!({"x": p, "y": OTHER_PROSE, "z": s}));
     deliver_step(&meta, &step, &answer).await;
@@ -755,6 +763,10 @@ async fn short_fields_delivered_reordered_keep_the_delivered_run() {
     let (p, s) = (
         "the vineyard gate opens at six for the pickers",
         "dog on premises, ring twice at the side porch!",
+    );
+    assert!(
+        p.len() < 48 && s.len() < 48,
+        "premise: each field under a k-gram"
     );
     let delivered = json!({"x": p, "y": s});
     deliver_step(&meta, &json!({"a": s, "b": p}), &plan_answer(&delivered)).await;
