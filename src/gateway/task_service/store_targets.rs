@@ -214,19 +214,43 @@ impl Shared {
         // content is the gateway's own error. Every live row was admitted
         // with room for it ([`fallback_bytes`]).
         let recorded = !writes.is_empty();
-        let attempt = (event.clone(), targets.clone(), false, author, writes);
+        let attempt = (
+            event.clone(),
+            targets.clone(),
+            false,
+            author,
+            writes.clone(),
+        );
         match self.settle_attempt(&task, &record, attempt, at) {
             Err(StoreError::Capacity) => {}
             settled => return settled,
         }
-        // MIK-7993 r5b: the record of what the gateway wrote never costs the
-        // result its place. Without it the result is stored as before, its
-        // gateway members receipted like backend text.
-        if recorded {
-            let attempt = (event, targets, false, author, WriteRecord::default());
+        // MIK-7993 F1 (lead ruling c): a row with no room for its record keeps
+        // its result without the members the record would have exempted, so
+        // the gateway's own text is never stored unrecorded and never
+        // receipted as backend text on a later read.
+        if recorded && let TaskTransition::Complete(mut result) = event {
+            let stripped = crate::gateway::gateway_writes::strip_recorded(&mut result, &writes);
+            let attempt = (
+                TaskTransition::Complete(result),
+                targets,
+                false,
+                author,
+                WriteRecord::default(),
+            );
             match self.settle_attempt(&task, &record, attempt, at) {
                 Err(StoreError::Capacity) => {}
-                settled => return settled,
+                settled => {
+                    if settled.is_ok() && !stripped.is_empty() {
+                        tracing::warn!(
+                            task_id = %task.id(),
+                            stripped = ?stripped,
+                            "task result stored without the gateway members its write \
+                             record would have exempted: the row had no room for the record"
+                        );
+                    }
+                    return settled;
+                }
             }
         }
         self.settle_attempt(

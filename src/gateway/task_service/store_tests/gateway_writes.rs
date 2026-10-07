@@ -30,6 +30,8 @@ fn result() -> Value {
     json!({
         "content": [{"type": "text", "text": "the backend's answer"}],
         "_cost_warnings": ["the gateway's advice"],
+        "_cost_suggestion": {"message": "a cheaper tool answers the same", "alternative": "beta:read"},
+        "trace_id": "gw-trace-0000-0000-0000-000000000001",
     })
 }
 
@@ -92,26 +94,104 @@ async fn a_row_without_gateway_writes_has_no_member() {
     assert!(row.get("gatewayWrites").is_none(), "{row}");
 }
 
-/// r5b: when the record would push the row past its budget, the result is
-/// stored without it; the task completes, never falls back to a failure.
+/// The record the gateway keeps for [`result`]: its three advice members,
+/// noted as the dispatch notes them.
+async fn real_writes() -> WriteRecord {
+    use crate::gateway::gateway_writes::{Layer, note, recorded};
+    crate::gateway::meta_mcp::invoke::relay::collecting(async {
+        let value = result();
+        note(Layer::Value, &["_cost_warnings"], &value);
+        note(Layer::Value, &["_cost_suggestion"], &value);
+        note(Layer::Value, &["trace_id"], &value);
+        recorded()
+    })
+    .await
+}
+
+/// [`settled`] with a given record.
+async fn settled_with(
+    root: &Path,
+    limits: StoreLimits,
+    writes: WriteRecord,
+) -> (std::path::PathBuf, String) {
+    let path = root.join("tasks");
+    let store = TaskStore::open(&path, limits)
+        .await
+        .expect("the store opens");
+    let one = task();
+    let created = store
+        .create(PreparedTask::for_test(&one, OWNER, 1))
+        .await
+        .expect("the task is created");
+    store
+        .settle_bounded_by(
+            OWNER,
+            one.id(),
+            created.revision,
+            (TaskTransition::Complete(result()), None, writes),
+            ErrorAuthor::Gateway,
+            at(5),
+        )
+        .await
+        .expect("the task settles");
+    store.close().await.unwrap();
+    (path, one.id().to_owned())
+}
+
+/// F1 (lead ruling c), row 2: a row with room for its record stores the
+/// result unchanged, the gateway's members and their record both kept.
 #[tokio::test]
-async fn the_write_record_never_costs_the_result_its_room() {
+async fn a_row_with_room_keeps_its_result_and_its_record() {
     let dir = tempfile::tempdir().unwrap();
-    let (bare, bare_id) = settled(dir.path(), StoreLimits::default(), 0).await;
+    let writes = real_writes().await;
+    assert_eq!(writes_len(&writes), 3, "premise: three notes");
+    let (path, id) = settled_with(dir.path(), StoreLimits::default(), writes).await;
+    let row = record_file(&path, &id);
+    assert_eq!(
+        row["gatewayWrites"].as_array().map(Vec::len),
+        Some(3),
+        "{row}"
+    );
+    let stored = row["model"]["task"].to_string();
+    for member in ["_cost_warnings", "_cost_suggestion", "trace_id"] {
+        assert!(stored.contains(member), "{member} was not stored: {row}");
+    }
+}
+
+/// F1 (lead ruling c), row 1: a row with no room for its record stores the
+/// result without the members the record would have exempted, so no
+/// gateway text is stored unrecorded (and so never receipted as backend
+/// text). The backend's text stays and the task completes.
+#[tokio::test]
+async fn a_row_with_no_room_for_its_record_stores_no_gateway_member() {
+    let dir = tempfile::tempdir().unwrap();
+    let (bare, bare_id) =
+        settled_with(dir.path(), StoreLimits::default(), WriteRecord::default()).await;
     let room = encoded_len(&record_file(&bare, &bare_id));
     let tight = StoreLimits {
-        record_bytes: room + 512,
+        record_bytes: room + 120,
         ..StoreLimits::default()
     };
     let other = tempfile::tempdir().unwrap();
-    let (path, id) = settled(other.path(), tight, 200).await;
+    let (path, id) = settled_with(other.path(), tight, real_writes().await).await;
     let row = record_file(&path, &id);
     assert!(row.get("gatewayWrites").is_none(), "{row}");
-    assert_eq!(
-        row["model"]["task"]["status"], "completed",
-        "the result was stored: {row}"
-    );
-    assert!(row.to_string().contains("the backend's answer"), "{row}");
+    assert_eq!(row["model"]["task"]["status"], "completed", "{row}");
+    let stored = row["model"]["task"].to_string();
+    assert!(stored.contains("the backend's answer"), "{row}");
+    for member in ["_cost_warnings", "_cost_suggestion", "trace_id"] {
+        assert!(
+            !stored.contains(member),
+            "{member} stored unrecorded: {row}"
+        );
+    }
+}
+
+fn writes_len(writes: &WriteRecord) -> usize {
+    serde_json::to_value(writes)
+        .ok()
+        .and_then(|v| v.as_array().map(Vec::len))
+        .unwrap_or(0)
 }
 
 /// r5c: a write record of any shape never makes its row unreadable; the row

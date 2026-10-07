@@ -507,21 +507,54 @@ pub(crate) fn without<'v>(value: &'v Value, record: &WriteRecord) -> Cow<'v, Val
     Cow::Borrowed(value)
 }
 
-#[cfg(feature = "firewall")]
-fn remove_owned(value: &mut Value, writes: &[Written], layer: Layer) {
+/// Remove each `layer` member of `writes` that still holds what was written;
+/// the names of those removed (their noted kinds).
+fn remove_owned(value: &mut Value, writes: &[Written], layer: Layer) -> Vec<String> {
+    let mut removed = Vec::new();
     for w in writes.iter().filter(|w| w.layer == layer) {
         let Some((last, parent)) = w.dest.split_last() else {
             continue;
         };
         let owned = member(value, &w.dest).and_then(digest) == Some(w.digest);
-        if owned && let Some(map) = member_mut(value, parent).and_then(Value::as_object_mut) {
-            map.remove(last);
+        if owned
+            && let Some(map) = member_mut(value, parent).and_then(Value::as_object_mut)
+            && map.remove(last).is_some()
+        {
+            removed.push(w.kind.join("."));
         }
     }
+    removed
+}
+
+/// MIK-7993 F1 (lead ruling c): `result` without every member `record` would
+/// exempt, wherever a stored result carries the noted value: the answer
+/// itself, its `structuredContent`, and the JSON text of its first content
+/// block. For a row that cannot hold its record, so the gateway's own text is
+/// never stored unrecorded and never receipted as backend text. Returns the
+/// names of the members removed.
+pub(crate) fn strip_recorded(result: &mut Value, record: &WriteRecord) -> Vec<String> {
+    let mut stripped = remove_owned(result, &record.0, Layer::Answer);
+    stripped.extend(remove_owned(result, &record.0, Layer::Value));
+    if let Some(structured) = result.get_mut("structuredContent") {
+        stripped.extend(remove_owned(structured, &record.0, Layer::Value));
+    }
+    if let Some(text) = result.pointer_mut("/content/0/text")
+        && let Some(mut decoded) = text
+            .as_str()
+            .and_then(|t| serde_json::from_str::<Value>(t).ok())
+    {
+        let removed = remove_owned(&mut decoded, &record.0, Layer::Value);
+        if !removed.is_empty() {
+            *text = Value::String(decoded.to_string());
+            stripped.extend(removed);
+        }
+    }
+    stripped.sort();
+    stripped.dedup();
+    stripped
 }
 
 /// [`member`], mutable: the same segment rules.
-#[cfg(feature = "firewall")]
 fn member_mut<'v>(value: &'v mut Value, path: &[String]) -> Option<&'v mut Value> {
     path.iter().try_fold(value, |at, segment| match at {
         Value::Object(map) => map.get_mut(segment),
