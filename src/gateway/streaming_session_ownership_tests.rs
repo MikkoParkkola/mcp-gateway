@@ -214,9 +214,10 @@ fn streams_subscribing_at_once_to_an_unopened_session_share_one_channel() {
     }
 }
 
-/// `MIK-8014.PERF.2a`: the fingerprint is held with the id, so a session that
-/// ended and was opened again under the same id is logged as the new session,
-/// not by a value left over from the old one.
+/// `MIK-8014.PERF.2a`: the fingerprint is held with the id it was made from.
+/// A session that ended and was opened again under the same id is logged as
+/// that id, and a second session of the same owner is never logged with the
+/// first one's fingerprint.
 #[test]
 fn a_reused_id_is_fingerprinted_as_the_new_session() {
     use crate::gateway::session_id::session_fp;
@@ -224,13 +225,16 @@ fn a_reused_id_is_fingerprinted_as_the_new_session() {
     drop(m.seed_session("gw-reused"));
     m.remove_session("gw-reused");
     drop(m.seed_session("gw-reused"));
-    let resumed =
-        m.get_or_create_session_id_scoped(Some("gw-reused"), &SessionOwner::Anonymous, None);
-    assert_eq!(
-        resumed.expose_secret(),
-        "gw-reused",
-        "the reused id resumed"
-    );
-    assert_eq!(resumed.fp(), session_fp("gw-reused"));
-    assert_eq!(resumed.to_string(), session_fp("gw-reused"));
+    drop(m.seed_session("gw-other"));
+    for raw in ["gw-reused", "gw-other"] {
+        let resumed = m.get_or_create_session_id_scoped(Some(raw), &SessionOwner::Anonymous, None);
+        assert_eq!(resumed.expose_secret(), raw, "the named session resumed");
+        assert_eq!(
+            resumed.fp(),
+            session_fp(raw),
+            "{raw} carries another id's fingerprint"
+        );
+        assert_eq!(resumed.to_string(), session_fp(raw));
+    }
+    assert_ne!(session_fp("gw-reused"), session_fp("gw-other"));
 }

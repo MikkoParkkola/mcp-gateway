@@ -455,7 +455,9 @@ impl NotificationMultiplexer {
         }
         let id = format!("gw-{}", Uuid::new_v4());
         let session = self.insert_session(&mut sessions, &id, owner.clone());
-        info!(session_id = %session_fp(&id), "Created new streaming session");
+        // The id's fingerprint, made once when it was inserted (PERF.2a).
+        let fp = session.id.fp();
+        info!(session_id = %fp, "Created new streaming session");
         session
     }
 

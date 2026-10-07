@@ -58,3 +58,26 @@ async fn a_resumed_session_is_not_fingerprinted_again() {
         "two requests on a held session computed its fingerprint again"
     );
 }
+
+/// With logging on, so every log argument is evaluated, a new session is
+/// fingerprinted exactly once: when its id is made, not again for the
+/// creation line or the request line.
+#[tokio::test]
+async fn a_new_session_is_fingerprinted_once_with_logging_on() {
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router_with(std::sync::Arc::clone(&state), None);
+    let (_captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
+
+    FINGERPRINTS.with(|n| n.set(0));
+    let (status, headers) = ping(router, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        headers.contains_key("mcp-session-id"),
+        "no session was made"
+    );
+    assert_eq!(
+        FINGERPRINTS.with(std::cell::Cell::get),
+        1,
+        "a new session was fingerprinted more than once"
+    );
+}
