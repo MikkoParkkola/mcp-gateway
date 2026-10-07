@@ -97,10 +97,11 @@ fn a_second_written_copy_waits_for_the_receipt() {
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             let mut second = std::pin::pin!(reached.notified());
             while futures::FutureExt::now_or_never(second.as_mut()).is_none() {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "the second copy never waited on the receipt"
-                );
+                if std::time::Instant::now() >= deadline {
+                    // Free a copy that pauses late, so this fails, never hangs.
+                    release.notify_one();
+                    panic!("the second copy never waited on the receipt");
+                }
                 std::thread::yield_now();
             }
             release.notify_one();
