@@ -388,6 +388,19 @@ fn a_backend_refusing_git_dependencies_keeps_its_refusal() {
 }
 
 #[test]
+fn odd_backend_keys_neither_panic_nor_unlock_a_setting() {
+    // A multibyte character across the prefix boundary is not a prefix match
+    // (and must not panic on the byte slice). An empty backend value still
+    // names the setting: npm skips the empty value and falls back to its
+    // default, which for strict-ssl is `true`, the safe side.
+    let operator = env_pairs(&[("npm_config_strict_ssl", "false")]);
+    let multibyte = HashMap::from([("npm_config\u{e9}strict_ssl".to_string(), "true".to_string())]);
+    assert_eq!(forwarded_npm_config(operator.clone(), &multibyte), operator);
+    let empty = HashMap::from([("npm_config_strict-ssl".to_string(), String::new())]);
+    assert!(forwarded_npm_config(operator, &empty).is_empty());
+}
+
+#[test]
 fn a_backend_naming_an_unforwarded_setting_changes_nothing() {
     // Suppression is limited to settings the gateway would otherwise forward.
     let backend = HashMap::from([
