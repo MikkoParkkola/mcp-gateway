@@ -52,6 +52,9 @@ pub(crate) enum Answer {
     ModernList,
     /// A two-page `tools/list` whose pages carry these `ttlMs` hints.
     Paged(Option<u64>, Option<u64>),
+    /// A two-page `tools/list` whose first page carries this `ttlMs` hint and
+    /// whose last page is unreadable (its `tools` is not an array).
+    Unreadable(Option<u64>),
     /// Like `Ok`, claiming `cacheScope: "public"` for the call's answer.
     PublicScope,
 }
@@ -92,6 +95,16 @@ impl Transport for CountingBackend {
                         result["ttlMs"] = json!(hint);
                     }
                 }
+                Answer::Unreadable(hint) => {
+                    if params.as_ref().and_then(|p| p.get("cursor")).is_some() {
+                        result["tools"] = json!("not a list");
+                    } else {
+                        result["nextCursor"] = json!("page-2");
+                        if let Some(hint) = hint {
+                            result["ttlMs"] = json!(hint);
+                        }
+                    }
+                }
                 _ => {}
             }
             return Ok(JsonRpcResponse::success(id, result));
@@ -120,7 +133,7 @@ impl Transport for CountingBackend {
             });
         }
         match &self.answer {
-            Answer::Ok | Answer::Paged(..) => Ok(JsonRpcResponse::success(
+            Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) => Ok(JsonRpcResponse::success(
                 id,
                 json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
             )),
