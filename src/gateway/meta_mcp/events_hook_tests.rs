@@ -231,8 +231,9 @@ async fn a_startup_scan_that_cannot_read_a_directory_keeps_its_subscriptions() {
     caps.mark_initial_scan_complete();
     meta.reconcile_events_after_scan();
     settled(|| !subscribed(store.path(), "gone")).await;
-    // Past the webhook decision, which follows in the same call.
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // The sentinel went under the reconcile's catalogue gate; taking the
+    // gate waits for the webhook decision that follows under the same hold.
+    drop(meta.events().expect("hub").catalogue_lock());
     assert!(!subscribed(store.path(), "gone"), "the reconcile ran");
     assert!(
         subscribed(store.path(), "beta"),
