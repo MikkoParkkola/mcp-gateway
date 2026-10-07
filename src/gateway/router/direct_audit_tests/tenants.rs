@@ -195,13 +195,14 @@ async fn direct_cached_error_replay_is_marked_cached() {
 /// uninspected; its keyed replay is a cached delivery of a value no gate read.
 #[tokio::test]
 async fn direct_replayed_chain_refusal_keeps_its_uninspected_attribution() {
-    // With a tenant named, and with none (GH2555.2).
+    // With no tenant named first (GH2555.2), so that case fails on its own,
+    // then with one.
     let untenanted = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
         "params": {"name": "t", "arguments": {},
                    "_meta": {(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): "k-chain"}}});
     for call in [
-        direct_call("cust-1", Some("k-chain")),
         untenanted.to_string(),
+        direct_call("cust-1", Some("k-chain")),
     ] {
         let fx = fixture(Setup {
             tenant_limit: Some(0),
@@ -229,7 +230,7 @@ async fn direct_replayed_chain_refusal_keeps_its_uninspected_attribution() {
         assert_eq!(first["attribution"], "uninspected", "{first}");
         assert_eq!(
             replay["attribution"], "cached_delivery_uninspected",
-            "{replay}"
+            "call {call}: {replay}"
         );
     }
 }

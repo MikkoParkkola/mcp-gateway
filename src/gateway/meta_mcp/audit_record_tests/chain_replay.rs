@@ -71,8 +71,9 @@ fn chained_meta(dir: &tempfile::TempDir) -> MetaMcp {
 /// a value no gate read.
 #[tokio::test]
 async fn a_replayed_chain_refusal_keeps_its_uninspected_attribution() {
-    // With a tenant named, and with none (GH2555.2).
-    for arguments in [json!({"customer_id": "cust-1"}), json!({})] {
+    // With no tenant named first (GH2555.2), so that case fails on its own,
+    // then with one.
+    for arguments in [json!({}), json!({"customer_id": "cust-1"})] {
         let dir = tempfile::tempdir().unwrap();
         let meta = chained_meta(&dir);
         let who = api_key_caller();
@@ -102,7 +103,7 @@ async fn a_replayed_chain_refusal_keeps_its_uninspected_attribution() {
         assert_eq!(
             all[1]["attribution"],
             json!("cached_delivery_uninspected"),
-            "{}",
+            "arguments {arguments}: {}",
             all[1]
         );
     }
