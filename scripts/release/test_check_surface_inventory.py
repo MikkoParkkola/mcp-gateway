@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+"""Plain-assert checks for check_surface_inventory.py (MIK-8044).
+
+Runs the real check over the repository, so CI fails while any surface item
+is unclassified, and proves the check fails on each kind of gap.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import check_surface_inventory as inv  # noqa: E402
+
+DOC = """# x
+## Surface: env
+| Item | Class | Reason | Migration | Defined at |
+|---|---|---|---|---|
+| `A` | KEEP | needed | - | src/a.rs:1 |
+| `B` | INTERNAL | test hook | test-only | src/b.rs:2 |
+## Notes
+| `C` | BOGUS | outside any surface table, ignored | - | x |
+"""
+EXTRACTED = {"env": [inv.Entry("A", "src/a.rs", 1), inv.Entry("B", "src/b.rs", 9)]}
+
+
+def check(doc: str, extracted=None) -> list[str]:
+    full = {s: [] for s in inv.SURFACES}
+    full.update(extracted if extracted is not None else EXTRACTED)
+    return inv.check(doc, full)
+
+
+def test_complete_doc_passes() -> None:
+    assert check(DOC) == [], check(DOC)
+
+
+def test_missing_row_fails() -> None:
+    errors = check(DOC, {"env": EXTRACTED["env"] + [inv.Entry("D", "src/d.rs", 4)]})
+    assert any("unclassified 'D'" in e for e in errors), errors
+
+
+def test_stale_row_fails() -> None:
+    errors = check(DOC, {"env": EXTRACTED["env"][:1]})
+    assert any("'B' no longer exists" in e for e in errors), errors
+
+
+def test_bad_class_fails() -> None:
+    errors = check(DOC.replace("| KEEP |", "| MAYBE |"))
+    assert any("class 'MAYBE'" in e for e in errors), errors
+
+
+def test_non_keep_without_migration_fails() -> None:
+    errors = check(DOC.replace("| test-only |", "| - |"))
+    assert any("no migration story" in e for e in errors), errors
+
+
+def test_wrong_file_fails() -> None:
+    errors = check(DOC.replace("src/b.rs:2", "src/z.rs:2"))
+    assert any("is defined in src/b.rs" in e for e in errors), errors
+
+
+def test_duplicate_row_fails() -> None:
+    dup = DOC.replace("| `B` |", "| `A` | KEEP | x | - | src/a.rs:1 |\n| `B` |")
+    assert any("listed twice" in e for e in check(dup)), check(dup)
+
+
+def test_backend_keys_match_strict_keys_oracle() -> None:
+    """Direct `backends.<name>` children equal the hand list in strict_keys.rs."""
+    code = (inv.SRC / "config/strict_keys.rs").read_text(encoding="utf-8")
+    want = set()
+    for const in ("KNOWN_BACKEND_KEYS", "A2A_BACKEND_KEYS"):
+        body = re.search(rf"const {const}: &\[&str\] = &\[(.*?)\];", code, re.S).group(1)
+        want |= set(re.findall(r'"([^"]+)"', re.sub(r"//[^\n]*", "", body)))
+    retired = {"idle_timeout", "circuit_breaker"}
+    got = {
+        e.id.split(".")[2]
+        for e in inv.extract_config()
+        if e.id.startswith("backends.<name>.") and e.id.count(".") == 2
+    }
+    assert got - retired == want, (sorted(got - retired - want), sorted(want - got))
+
+
+def test_cli_root_globals_carry_their_env() -> None:
+    cli = {e.id: e for e in inv.extract_cli()}
+    assert "env MCP_GATEWAY_CONFIG" in cli["mcp-gateway --config"].note
+    assert "mcp-gateway serve --stdio" in cli
+
+
+def test_repository_inventory_is_complete() -> None:
+    assert inv.main([]) == 0, "docs/design/surface-4.0.md misses surface items; see stderr"
+
+
+if __name__ == "__main__":
+    failed = 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            try:
+                fn()
+                print(f"ok   {name}")
+            except AssertionError as exc:
+                failed += 1
+                print(f"FAIL {name}: {exc}")
+    sys.exit(1 if failed else 0)

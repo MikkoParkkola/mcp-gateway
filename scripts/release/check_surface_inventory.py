@@ -327,7 +327,7 @@ def generic(ty: str) -> tuple[str, list[str]]:
 
 
 def rename(name: str, rule: str | None) -> str:
-    if not rule or rule == "snake_case":
+    if not rule or (rule == "snake_case" and name.islower()):
         return name
     words = re.findall(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])", name) if "_" not in name else name.split("_")
     words = [w.lower() for w in words]
