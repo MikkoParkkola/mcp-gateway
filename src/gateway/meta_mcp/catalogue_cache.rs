@@ -74,7 +74,10 @@ pub(super) fn build_catalogue(key: MetaListKey, exposure: &MetaToolExposure) -> 
 // ponytail: a linear scan; 64 keys of a few bytes each compare in well under
 // a microsecond. A map if the bound ever needs to grow by orders.
 #[derive(Default)]
-pub(super) struct MetaCatalogues(Mutex<VecDeque<(MetaListKey, Arc<[Tool]>)>>);
+pub(super) struct MetaCatalogues(Mutex<VecDeque<HeldCatalogue>>);
+
+/// A key and the catalogue built for it.
+type HeldCatalogue = (MetaListKey, Arc<[Tool]>);
 
 /// Keys held per instance. Past it the oldest is dropped, so a gateway whose
 /// counts drift over a long run keeps caching its current lists.
