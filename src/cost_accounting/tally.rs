@@ -58,7 +58,7 @@ impl ToolTally {
             tracing::warn!(
                 max_rows = MAX_TOOL_ROWS,
                 max_name_bytes = MAX_ROW_NAME_BYTES,
-                "A cost breakdown reached its row limit; further tools in it are counted under (other)"
+                "A cost breakdown reached its row or name-size limit; further tools in it are counted under (other)"
             );
         }
         for (total, add) in self.overflow.iter_mut().zip(counts) {

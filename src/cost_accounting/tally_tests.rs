@@ -139,7 +139,7 @@ fn a_name_pair_past_the_byte_limit_counts_in_other() {
 
 #[test]
 fn a_tally_logs_its_first_overflow_once() {
-    const LINE: &str = "reached its row limit";
+    const LINE: &str = "reached its row or name-size limit";
     let records = crate::test_log_capture::records(|| {
         let mut tally = ToolTally::default();
         for i in 0..MAX_TOOL_ROWS {
