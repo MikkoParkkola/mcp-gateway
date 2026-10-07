@@ -466,15 +466,16 @@ fn drain_deadline(accepted: i64) -> Duration {
 #[test]
 fn the_drain_deadline_budgets_slack_per_wave() {
     let one = drain_deadline(ADMISSION_CAP);
+    let next = one + PER_PROMPT + WAVE_SLACK;
     assert_eq!(drain_deadline(1), one, "a partial wave is a wave");
     assert_eq!(
-        drain_deadline(ADMISSION_CAP + 1) - one,
-        PER_PROMPT + WAVE_SLACK,
+        drain_deadline(ADMISSION_CAP + 1),
+        next,
         "one call past a wave opens the next, with its own slack"
     );
     assert_eq!(
-        drain_deadline(2 * ADMISSION_CAP) - one,
-        PER_PROMPT + WAVE_SLACK,
+        drain_deadline(2 * ADMISSION_CAP),
+        next,
         "each further wave brings its own slack"
     );
     assert_eq!(
