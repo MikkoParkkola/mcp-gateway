@@ -79,11 +79,10 @@ impl ClientChannel for Silent {
 
 static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
 
-/// Run one call under the legacy session `SESSION`.
-async fn call(meta: &MetaMcp) -> crate::Result<Value> {
-    let retry = crate::protocol::mrtr::RetryFields::default();
+/// A keyless legacy caller: no caller key, as on stdio or HTTP with auth off.
+fn keyless_legacy(retry: &crate::protocol::mrtr::RetryFields) -> MetaMcpCallerContext<'_> {
     let declared = classify_request(None, None).declared_capabilities();
-    let context = MetaMcpCallerContext {
+    MetaMcpCallerContext {
         task: None,
         signing: None,
         execution: None,
@@ -103,13 +102,30 @@ async fn call(meta: &MetaMcp) -> crate::Result<Value> {
         is_admin: false,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: declared,
-        retry: &retry,
+        retry,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &Silent,
-    };
+    }
+}
+
+/// Run one call under the legacy session `SESSION`.
+async fn call(meta: &MetaMcp) -> crate::Result<Value> {
+    let retry = crate::protocol::mrtr::RetryFields::default();
     let args = json!({"server": "svc", "tool": "act", "arguments": {}});
-    meta.invoke_tool(&args, Some(SESSION), &context).await
+    meta.invoke_tool(&args, Some(SESSION), &keyless_legacy(&retry))
+        .await
+}
+
+/// MIK-7997: the A/B arm and the prefetch hints key on the caller key only.
+/// A session id, legacy or stdio, never stands in for a missing key.
+#[test]
+fn a_keyless_caller_has_no_experiment_key_under_any_session() {
+    let retry = crate::protocol::mrtr::RetryFields::default();
+    let context = keyless_legacy(&retry);
+    for session in [SESSION, "stdio-session"] {
+        assert_eq!(context.experiment_key(Some(session)), None, "{session}");
+    }
 }
 
 #[tokio::test]
@@ -146,7 +162,11 @@ async fn a_call_in_flight_when_its_session_ends_leaves_no_state_after_the_grace_
 
     let cost = || meta.cost_tracker.session_snapshot(SESSION).is_some();
     assert!(cost(), "the call wrote its cost under the ended session");
-    assert_eq!(tracker.key_count(), 1, "and its last tool");
+    assert_eq!(
+        tracker.key_count(),
+        0,
+        "a keyless caller records no last tool"
+    );
     #[cfg(feature = "spec-preview")]
     assert!(
         meta.session_promoted.contains_key(SESSION),
