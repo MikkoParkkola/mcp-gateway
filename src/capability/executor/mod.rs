@@ -475,6 +475,7 @@ impl CapabilityExecutor {
 
         // Merge static_params (capability-defined fixed values) with caller params.
         // Caller-supplied values always win on key collision.
+        let body_nulls = params::admitted_nulls(&capability.schema.input, params);
         let merged = config.merge_with_static_params(params);
         let effective_params =
             params::with_path_defaults(config, &capability.schema.input, merged.as_ref());
@@ -533,7 +534,7 @@ impl CapabilityExecutor {
         // Add body for POST/PUT/PATCH
         let method_upper = config.method.to_uppercase();
         if matches!(method_upper.as_str(), "POST" | "PUT" | "PATCH") {
-            request = self.attach_request_body(request, config, params)?;
+            request = self.attach_request_body(request, config, params, &body_nulls)?;
         }
 
         let timeout = Duration::from_secs(provider.timeout);
@@ -742,44 +743,6 @@ impl CapabilityExecutor {
                 (k.clone(), v_str)
             })
             .collect()
-    }
-
-    /// Attach the request body for POST/PUT/PATCH methods.
-    ///
-    /// When `config.body_content_type` is `"text/plain"` and a `body` template
-    /// is present the template is substituted and the resulting string is sent
-    /// verbatim (no JSON encoding).  This is required for databases such as
-    /// `SurrealDB` whose `/sql` endpoint only accepts raw SQL as `text/plain`.
-    fn attach_request_body(
-        &self,
-        mut request: reqwest::RequestBuilder,
-        config: &RestConfig,
-        params: &Value,
-    ) -> Result<reqwest::RequestBuilder> {
-        let use_plain_text = config.body_content_type.eq_ignore_ascii_case("text/plain");
-
-        if let Some(ref body_template) = config.body {
-            if use_plain_text {
-                // Substitute into the template and send as a raw string body.
-                // The template must be a JSON string value; after substitution
-                // we send the string contents (not JSON-encoded).
-                let raw = match body_template {
-                    Value::String(s) => self.substitute_string(s, params)?,
-                    other => self.substitute_value(other, params)?.to_string(),
-                };
-                request = request
-                    .header(reqwest::header::CONTENT_TYPE, "text/plain")
-                    .body(raw);
-            } else {
-                let body = self.substitute_value(body_template, params)?;
-                request = request.json(&body);
-            }
-        } else if !params.is_null() && params.as_object().is_some_and(|o| !o.is_empty()) {
-            // No body template — use input params directly as body.
-            // Enables LLM APIs where the input IS the request body.
-            request = request.json(params);
-        }
-        Ok(request)
     }
 }
 
