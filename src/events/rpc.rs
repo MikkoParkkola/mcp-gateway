@@ -497,20 +497,14 @@ impl EventsHub {
         // At most two passes: a cached opt-in can vanish (tail eviction)
         // between the read above and the commit; the store then refuses
         // and the callback is challenged before a second commit.
+        let (policy, by) = ((caps, grace, tail), (caller, &url));
         for _pass in 0..2 {
             if !verified {
                 self.challenge(caller, &descriptor.name, &url, &id, &key)
                     .await?;
             }
             let outcome = self
-                .commit_started(
-                    &record,
-                    grant,
-                    !verified,
-                    (caps, grace, tail),
-                    now,
-                    (caller, &url),
-                )
+                .commit_started(&record, grant, !verified, policy, now, by)
                 .await;
             match outcome? {
                 Ok((_, expires_at)) => {
