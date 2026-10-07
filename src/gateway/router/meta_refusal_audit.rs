@@ -19,7 +19,7 @@ use crate::protocol::RequestId;
 use crate::security::audit::{
     AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationRoute, InvocationTarget,
 };
-use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
+use crate::security::transparency_log::CorrelationKey;
 
 use super::AppState;
 use super::helpers::build_error_response;
@@ -137,25 +137,12 @@ impl<'a> Refused<'a> {
         let attribution =
             DispatchNotes::default().attribution(&state.meta_mcp, refusal.tenants, None);
         let session = self.session_id.to_string();
-        // The meta writer's correlation ladder: caller trace id, session, then
-        // the trace id minted here. The modern route carries "no session" as
-        // "", which is no key: every stateless call would correlate as one.
+        // The meta writer's correlation ladder; a modern call's session is
+        // `""`, so it falls to the minted trace id (MIK-7640).
         let written = log
             .append_bounded(move |log| {
-                let key = match (otel_trace_id.as_deref(), session.as_str()) {
-                    (Some(otel), _) => CorrelationKey {
-                        id: otel,
-                        source: CorrelationSource::OtelTraceId,
-                    },
-                    (None, "") => CorrelationKey {
-                        id: &trace_id,
-                        source: CorrelationSource::TraceId,
-                    },
-                    (None, session) => CorrelationKey {
-                        id: session,
-                        source: CorrelationSource::SessionId,
-                    },
-                };
+                let key =
+                    CorrelationKey::ladder(otel_trace_id.as_deref(), Some(&session), &trace_id);
                 log.log_invocation_attributed(
                     key,
                     &envelope,

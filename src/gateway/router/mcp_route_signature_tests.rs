@@ -129,7 +129,43 @@ fn merged_argument(tail: &str) -> Option<&str> {
 }
 
 fn registered_mcp_handlers() -> Vec<String> {
-    registered_in(&read("src/gateway/router/mod.rs")).expect("the MCP routes are resolvable")
+    let table = resolve_routes(
+        &read("src/gateway/router/mod.rs"),
+        &read("src/gateway/routes.rs"),
+    )
+    .expect("every routes:: name is declared");
+    registered_in(&table).expect("the MCP routes are resolvable")
+}
+
+/// `table` with each `routes::NAME` replaced by its quoted value from the
+/// one declaration in `routes.rs`, so MCP registrations are selected by
+/// value and a new MCP constant is checked without editing this scanner.
+/// A name the declaration does not define fails.
+fn resolve_routes(table: &str, declaration: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(table.len());
+    let mut rest = table;
+    while let Some(at) = rest.find("routes::") {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at + "routes::".len()..];
+        let end = tail
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(tail.len());
+        let name = &tail[..end];
+        let value = declaration
+            .lines()
+            .find_map(|line| {
+                let (declared, value) = line.trim().split_once(" = ")?;
+                (declared == name).then_some(())?;
+                value.strip_prefix('"')?.strip_suffix("\",")
+            })
+            .ok_or_else(|| format!("routes::{name} is not declared"))?;
+        out.push('"');
+        out.push_str(value);
+        out.push('"');
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    Ok(out)
 }
 
 /// The declared return type in a signature: the `where` clause cut off
@@ -267,4 +303,16 @@ fn an_unreviewed_merged_router_fails_closed() {
         registered_in(&reviewed),
         Ok(vec!["meta_mcp_handler".to_owned()])
     );
+}
+
+/// MIK-8002 test 5: a `routes::` constant resolves to its value, so an MCP
+/// path is found through a constant; an undeclared name fails.
+#[test]
+fn routes_constants_resolve_by_value() {
+    let declaration = "    MCP = \"/mcp\",\n    HEALTH = \"/health\",\n";
+    let table = ".route(\n    routes::MCP,\n    post(handlers::meta_mcp_handler),\n)\n.route(routes::HEALTH, get(h))";
+    let resolved = resolve_routes(table, declaration).unwrap();
+    assert!(resolved.contains("\"/mcp\""), "{resolved}");
+    assert_eq!(registered_in(&resolved).unwrap(), vec!["meta_mcp_handler"]);
+    assert!(resolve_routes(".route(routes::NOPE, get(h))", declaration).is_err());
 }
