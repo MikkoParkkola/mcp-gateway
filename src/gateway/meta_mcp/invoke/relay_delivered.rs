@@ -461,4 +461,40 @@ mod tests {
             receipt_copy(&answered(), GatewayStamps::Legacy, AnswerShape::Literal).expect("a copy");
         assert_eq!(copy["_meta"][KEY_SERVER_INFO]["name"], "named", "{copy}");
     }
+
+    /// MIK-7998.DECODE.1: escapes read as the caller reads them, a literal
+    /// backslash and a surrogate pair included.
+    #[test]
+    fn unescape_reads_a_print_as_the_caller_reads_it() {
+        assert_eq!(unescape(r#"a\nb \"q\" c\\n"#), "a\nb \"q\" c\\n");
+        assert_eq!(unescape(r"\t\r\/\b\f"), "\t\r/\u{8}\u{c}");
+        assert_eq!(unescape(r"é 𝄞"), "\u{e9} \u{1D11E}");
+    }
+
+    /// MIK-7998.DECODE.1: a malformed escape or an unpaired surrogate is kept
+    /// as written, never dropped.
+    #[test]
+    fn unescape_keeps_a_malformed_escape_as_written() {
+        for kept in [r"\x", r"\u12", r"\uq1w2", r"\ud834 x", r"\udd1e", "end\\"] {
+            assert_eq!(unescape(kept), kept, "{kept}");
+        }
+    }
+
+    /// MIK-7998: the gateway's own print is read decoded; a block its final
+    /// pass rewrote, JSON or not, is read as rewritten text.
+    #[test]
+    fn only_a_block_that_is_not_the_gateways_print_is_rewritten() {
+        use super::super::audit::rewritten_text;
+        let wrap = |text: &str| json!({"content": [{"type": "text", "text": text}]});
+        let printed = serde_json::to_string_pretty(&json!({"a": "x\ny"})).unwrap();
+        assert_eq!(rewritten_text(&wrap(&printed)), None);
+        let broken = printed.replace("y\"", "[REDACTED]");
+        let block = wrap(&broken);
+        assert_eq!(rewritten_text(&block), Some(broken.as_str()));
+        let compact = serde_json::to_string(&json!({"a": 1})).unwrap();
+        assert!(rewritten_text(&wrap(&compact)).is_some());
+        let structured =
+            json!({"content": [{"type": "text", "text": "x"}], "structuredContent": {}});
+        assert_eq!(rewritten_text(&structured), None);
+    }
 }
