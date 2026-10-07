@@ -800,3 +800,5 @@ fn an_eviction_that_fails_part_way_still_reports_the_ones_it_made() {
 }
 #[path = "store_pending_crash_tests.rs"]
 mod crash;
+#[path = "store_revive_tests.rs"]
+mod revive;
