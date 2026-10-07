@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use super::client::{A2aClient, Endpoint, Reply};
-use super::delegation::{CancelGuard, PARKED_TTL, Parked, Pending, spawn_cancel};
+use super::delegation::{CancelGuard, PARKED_TTL, Parked, Pending, SWEEP_EVERY, spawn_cancel};
 use super::translator::{
     TOOL_NAME, card_to_tool, error_result, reply_to_result, status_text, task_to_result,
 };
@@ -43,8 +43,6 @@ const ASK_KEY: &str = "a2a_reply";
 /// agent's answer is usually one poll away.
 const FIRST_POLL: Duration = Duration::from_millis(250);
 const LONGEST_POLL: Duration = Duration::from_secs(5);
-/// How often parked questions are checked for expiry.
-const SWEEP_EVERY: Duration = Duration::from_secs(30);
 
 pub(crate) struct A2aTransport {
     client: A2aClient,
@@ -116,11 +114,16 @@ impl A2aTransport {
                 let Some(transport) = weak.upgrade() else {
                     return;
                 };
-                for pending in transport.parked.drain_expired(std::time::Instant::now()) {
-                    transport.cancel(pending);
-                }
+                transport.sweep(std::time::Instant::now());
             }
         });
+    }
+
+    /// Cancel the task of every question expired at `now`.
+    fn sweep(&self, now: std::time::Instant) {
+        for pending in self.parked.drain_expired(now) {
+            self.cancel(pending);
+        }
     }
 
     /// One best-effort `CancelTask` for a parked task.

@@ -13,9 +13,24 @@ use std::time::{Duration, Instant};
 
 use super::client::{A2aClient, Endpoint};
 
-/// How long an unanswered question stays redeemable. Longer than the gateway's
-/// own 300 s continuation, so a live sealed envelope never outlives its token.
-pub(crate) const PARKED_TTL: Duration = Duration::from_secs(600);
+/// How long an unanswered question stays redeemable: the gateway's 300 s
+/// continuation plus a margin, so a live sealed envelope never outlives its
+/// token. With the sweep below, an abandoned question's task is canceled
+/// within [`ABANDONED_CANCEL_BOUND`] (the promise A2A.9 and the release notes
+/// make).
+pub(crate) const PARKED_TTL: Duration = Duration::from_secs(315);
+/// How often parked questions are checked for expiry.
+pub(crate) const SWEEP_EVERY: Duration = Duration::from_secs(15);
+/// The latest an abandoned parked task is canceled, after it was asked.
+pub(crate) const ABANDONED_CANCEL_BOUND: Duration = Duration::from_secs(330);
+
+// Checked at build time: the token expires after the TTL and the sweep finds
+// it at most one interval later, within the promised bound; and it outlives
+// the gateway's 300 s continuation, so an answer in time is never refused.
+const _: () = assert!(
+    PARKED_TTL.as_secs() + SWEEP_EVERY.as_secs() <= ABANDONED_CANCEL_BOUND.as_secs()
+        && PARKED_TTL.as_secs() > 300
+);
 /// The most questions one agent backend holds open at once.
 pub(crate) const PARKED_CAP: usize = 1024;
 

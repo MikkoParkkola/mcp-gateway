@@ -249,20 +249,22 @@ async fn a2a_8_an_input_round_through_the_gateway_funnel() {
         json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
     };
 
-    let (_, asked) = common::post(&state, frame("a2a-8-ask", &[]), &[]).await;
+    let asked = post_as(&state, "/mcp", frame("a2a-8-ask", &[]), None, Some("alice")).await;
     let result = &asked["result"];
     assert_eq!(result["resultType"], "input_required", "{asked}");
     let envelope = result["requestState"].clone();
     assert!(envelope.is_string(), "{asked}");
 
     let accept = json!({ ASK_KEY: {"action": "accept", "content": {"reply": "Helsinki"}} });
-    let (_, answered) = common::post(
+    let answered = post_as(
         &state,
+        "/mcp",
         frame(
             "a2a-8-retry",
             &[("requestState", envelope), ("inputResponses", accept)],
         ),
-        &[],
+        None,
+        Some("alice"),
     )
     .await;
     assert!(
@@ -272,4 +274,133 @@ async fn a2a_8_an_input_round_through_the_gateway_funnel() {
     let sends = stub::sends(&log);
     assert_eq!(sends.len(), 2, "{answered}");
     assert_eq!(sends[1].body["params"]["message"]["taskId"], "task-2");
+}
+
+/// POST `body` to `uri` as the bearer `key` and/or the verified `subject`
+/// (the extension the identity layer would insert).
+async fn post_as(
+    state: &std::sync::Arc<super::common::AppState>,
+    uri: &str,
+    body: Value,
+    key: Option<&str>,
+    subject: Option<&str>,
+) -> Value {
+    use super::common::{Body, Request, ServiceExt, create_router};
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28");
+    if let Some(key) = key {
+        builder = builder.header("authorization", format!("Bearer {key}"));
+    }
+    if let Some(method) = body.get("method").and_then(Value::as_str) {
+        builder = builder.header("mcp-method", method);
+    }
+    if let Some(name) = body.pointer("/params/name").and_then(Value::as_str) {
+        builder = builder.header("mcp-name", name);
+    }
+    let mut request = builder
+        .body(Body::from(serde_json::to_vec(&body).expect("body")))
+        .expect("request");
+    if let Some(subject) = subject {
+        request
+            .extensions_mut()
+            .insert(mcp_gateway::key_server::oidc::VerifiedIdentity {
+                subject: subject.to_owned(),
+                email: format!("{subject}@a2a.test"),
+                name: None,
+                groups: Vec::new(),
+                issuer: "https://idp.a2a.test".to_owned(),
+            });
+    }
+    let response = create_router(std::sync::Arc::clone(state))
+        .oneshot(request)
+        .await
+        .expect("router answers");
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body reads");
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+}
+
+/// MIK-8063 D2: on the per-backend route the agent's question is bound to the
+/// authenticated caller who was asked. A second caller holding a leaked
+/// token is refused and nothing reaches the agent; the asked caller resumes.
+#[tokio::test]
+async fn a2a_8_a_leaked_token_is_refused_to_another_caller_on_the_backend_route() {
+    use super::common;
+    let (base, log) = stub::serve(asking_then("for alice")).await;
+    let mut alice = common::api_key("key-alice", 0, None);
+    alice.name = "alice".into();
+    let mut bob = common::api_key("key-bob", 0, None);
+    bob.name = "bob".into();
+    let fixture = common::Fixture {
+        auth: common::auth_with(vec![alice, bob], None),
+        ..common::Fixture::default()
+    };
+    let (state, _store) = common::state(fixture).await;
+    assert!(
+        state
+            .backends
+            .register(std::sync::Arc::new(backend(&base, None, &[])))
+    );
+    let call = |extra: &[(&str, Value)], key: &str| {
+        let mut params = first_call();
+        for (name, value) in extra {
+            params[*name] = value.clone();
+        }
+        params["_meta"] = json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {"elicitation": {}},
+            "io.modelcontextprotocol/clientInfo": {"name": "a2a-rows", "version": "1"},
+        });
+        params["_meta"][mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
+    };
+
+    let asked = post_as(
+        &state,
+        "/mcp/agent",
+        call(&[], "d2-ask"),
+        Some("key-alice"),
+        None,
+    )
+    .await;
+    assert_eq!(asked["result"]["resultType"], "input_required", "{asked}");
+    let token = asked["result"]["requestState"].clone();
+    let accept = json!({ ASK_KEY: {"action": "accept", "content": {"reply": "Helsinki"}} });
+    let answer = [("requestState", token), ("inputResponses", accept)];
+
+    let stolen = post_as(
+        &state,
+        "/mcp/agent",
+        call(&answer, "d2-bob"),
+        Some("key-bob"),
+        None,
+    )
+    .await;
+    assert!(
+        stolen.get("error").is_some(),
+        "another caller is refused: {stolen}"
+    );
+    assert_eq!(
+        stub::sends(&log).len(),
+        1,
+        "the refused retry never reached the agent"
+    );
+
+    let resumed = post_as(
+        &state,
+        "/mcp/agent",
+        call(&answer, "d2-alice"),
+        Some("key-alice"),
+        None,
+    )
+    .await;
+    assert!(
+        resumed.to_string().contains("for alice"),
+        "the asked caller resumes: {resumed}"
+    );
+    assert_eq!(stub::sends(&log).len(), 2);
 }

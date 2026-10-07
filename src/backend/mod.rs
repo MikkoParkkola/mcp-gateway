@@ -296,6 +296,13 @@ impl Backend {
         )
     }
 
+    /// Whether this backend is an A2A agent (MIK-8063): its input rounds must
+    /// be bound to the caller who was asked. Read from the transport's name,
+    /// which every build has, so no feature gate is needed here.
+    pub(crate) fn is_a2a(&self) -> bool {
+        self.config.transport.transport_type() == "a2a"
+    }
+
     /// Start a WebSocket transport under `destination`, the policy the start
     /// read when it marked the backend.
     async fn start_websocket(
