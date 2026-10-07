@@ -1832,6 +1832,28 @@ CASES += [
      _TRUSTED_HEAD, "    continue-on-error: true\n" + _TRUSTED_HEAD, CAUGHT),
 ]
 
+# MIK-7850: the ranking corpus compare runs every ref and fails on a mismatch.
+_CORPUS_NAME = "      - name: Ranking corpus regenerates byte for byte (MIK-7850)\n"
+_CORPUS_CMP = '          python3 benchmarks/ranking-baseline/gen_corpus.py "$tree" | cmp - benchmarks/ranking-baseline/corpus.json\n'
+_CORPUS_STEP = (
+    _CORPUS_NAME
+    + "        run: |\n"
+    + "          set -euo pipefail\n"
+    + "          git fetch --no-tags --depth=1 origin f241b464acf6007a88ebc2b576c0825350b018a1\n"
+    + "          tree=$(mktemp -d)\n"
+    + '          git archive FETCH_HEAD capabilities | tar -x -C "$tree"\n'
+    + _CORPUS_CMP
+)
+CASES += [
+    ("corpus-compare-deleted", "ci.yml", _CORPUS_STEP, "", CAUGHT),
+    ("corpus-compare-masked", "ci.yml", _CORPUS_CMP, _CORPUS_CMP[:-1] + " || true\n", CAUGHT),
+    ("corpus-compare-continues-on-error", "ci.yml",
+     _CORPUS_NAME, _CORPUS_NAME + "        continue-on-error: true\n", CAUGHT),
+    ("corpus-compare-without-pipefail", "ci.yml",
+     "          set -euo pipefail\n          git fetch --no-tags --depth=1 origin f241b464",
+     "          git fetch --no-tags --depth=1 origin f241b464", CAUGHT),
+]
+
 def verdict(directory, workflow, before, after):
     """Apply one mutation to the copied workflows and run the suite against it."""
     path = directory / workflow
