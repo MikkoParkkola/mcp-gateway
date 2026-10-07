@@ -81,3 +81,40 @@ async fn a_new_session_is_fingerprinted_once_with_logging_on() {
         "a new session was fingerprinted more than once"
     );
 }
+
+/// A stream that resumes a held session reads its fingerprint as well.
+#[tokio::test]
+async fn a_stream_on_a_held_session_is_not_fingerprinted_again() {
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router_with(std::sync::Arc::clone(&state), None);
+    let (_, headers) = ping(router.clone(), None).await;
+    let id = headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .expect("a legacy request is answered with its minted session")
+        .to_owned();
+
+    FINGERPRINTS.with(|n| n.set(0));
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri("/mcp")
+        .header("accept", "text/event-stream")
+        .header("mcp-session-id", id.as_str())
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok()),
+        Some(id.as_str()),
+        "the stream resumed the session it named"
+    );
+    assert_eq!(
+        FINGERPRINTS.with(std::cell::Cell::get),
+        0,
+        "a stream on a held session computed its fingerprint again"
+    );
+}
