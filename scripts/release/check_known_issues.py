@@ -88,16 +88,26 @@ HTML = re.compile(
 REFERENCE = re.compile(r"^ {0,3}\[")
 
 
-def title_letters(text):
-    """The letters `text` renders: entities decoded, inline Markdown dropped,
-    and nothing else kept, so markup inside a word cannot split it."""
-    return re.sub(r"[^a-z]", "", INLINE_NOISE.sub("", html.unescape(text)).lower())
+def title_letters(text, keep="a-z"):
+    """The letters (or `keep` characters) `text` renders: entities decoded,
+    inline Markdown dropped, and nothing else kept, so markup inside a word
+    cannot split it."""
+    return re.sub(f"[^{keep}]", "", INLINE_NOISE.sub("", html.unescape(text)).lower())
 
 
-def title_readings(text):
+def title_readings(text, keep="a-z"):
     """title_letters of `text`, as written and with quoted-attribute tags
     dropped first; a title either reading holds counts (fail closed)."""
-    return (title_letters(text), title_letters(QUOTED_TAG.sub("", text)))
+    return (title_letters(text, keep), title_letters(QUOTED_TAG.sub("", text), keep))
+
+
+def paragraph(lines, i):
+    """Line i joined with the paragraph lines directly above it: a setext
+    title may span several lines."""
+    start = i
+    while start > 0 and lines[start - 1].strip():
+        start -= 1
+    return " ".join(lines[start : i + 1])
 
 
 def is_title(text):
@@ -119,16 +129,15 @@ def starts_section(lines, i):
     """True when line i opens a Known issues section.
 
     Liberal on purpose, and checked before fences and raw HTML: a doubtful
-    start only makes the gate read more. A setext start is a title of one or
-    two lines over a dash underline, so a wrapped title still counts.
+    start only makes the gate read more. A setext start is a title paragraph
+    of any number of lines over a dash underline, so a wrapped title counts.
     """
     if atx_start(lines[i]):
         return True
     underline = UNDERLINE.match(lines[i + 1]) if i + 1 < len(lines) else None
     if not underline or not lines[i].strip():
         return False
-    two = lines[i - 1] + " " + lines[i] if i else lines[i]
-    return is_title(lines[i]) or is_title(two)
+    return is_title(lines[i]) or is_title(paragraph(lines, i))
 
 
 def ends_section(lines, i):
@@ -179,25 +188,30 @@ def known_issues(text):
     for i, line in enumerate(lines):
         if starts_section(lines, i):
             inside, underline = True, not atx_start(line)
-            above = lines[i - 1] if i else ""
-            title = line if is_title(line) else f"{above} {line}"
+            title = line if is_title(line) else paragraph(lines, i)
             # Content too: a title with both a code span and a tag (which
             # renders depends on span boundaries this reader does not
-            # decide), or leftover letters.
-            extra = ("`" in title and "<" in title) or any(
-                TITLE in r and r.replace(TITLE, "", 1) for r in title_readings(title)
+            # decide), a title only its letters spell, or leftover letters
+            # or digits (an issue number).
+            alnum = title_readings(title, "a-z0-9")
+            extra = (
+                ("`" in title and "<" in title)
+                or not any(TITLE in r for r in alnum)
+                or any(TITLE in r and r.replace(TITLE, "", 1) for r in alnum)
             )
             if extra or later_releases(title):
                 # A start line that says more than the title (a bullet read
                 # as one, or a version in an annotation, read from the raw
                 # text) is content too, so nothing it says is dropped. A
-                # wrapped title is kept whole: both of its lines.
+                # wrapped title is kept whole: every line of it.
                 body.append(title)
             continue
         if underline:
             underline = False
             continue
-        if inside and not fence and HTML.match(line):
+        # Raw HTML, or a comment left open after text: either can hide a
+        # heading, so the section reads on to the end of the notes.
+        if inside and not fence and (HTML.match(line) or line.rfind("<!--") > line.rfind("-->")):
             sticky = True
         if fence or FENCE.match(line):
             fence = step_fence(fence, line)
@@ -224,7 +238,8 @@ def later_releases(line):
 
     Markdown decides what renders (a code span keeps its markup), so the line
     is read four ways and a version any reading shows counts (fail closed).
-    Both decode entities and drop backslash escapes, emphasis and code marks,
+    All decode entities and drop backslash escapes, emphasis, strikethrough
+    and code marks,
     so 4\\.0\\.1 and 4.0.&#49; count. The second also drops inline tags, link
     targets and brackets (tags before decoding, so &lt;b&gt; stays text), so
     4.0.<em>1</em> and 4.0.[1](url) count. The third first drops tags read
@@ -234,10 +249,12 @@ def later_releases(line):
     """
     found = []
     readings = (
-        re.sub(r"[\\`*_]", "", html.unescape(line)),
-        re.sub(r"[\\`*_\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", line))),
-        re.sub(r"[\\`*_\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", QUOTED_TAG.sub("", line)))),
-        re.sub(r"[\\*_]", "", html.unescape(line)).replace("`", " "),
+        re.sub(r"[\\`*_~]", "", html.unescape(line)),
+        re.sub(r"[\\`*_~\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", line))),
+        re.sub(
+            r"[\\`*_~\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", QUOTED_TAG.sub("", line)))
+        ),
+        re.sub(r"[\\*_~]", "", html.unescape(line)).replace("`", " "),
     )
     for text in readings:
         found += [
@@ -251,9 +268,13 @@ def later_releases(line):
 
 
 def problems(section, release):
+    # A comment may span lines and split a version, so the section is also
+    # read with every comment removed across line breaks.
+    joined = re.sub(r"<!--.*?(?:-->|$)", "", "\n".join(section), flags=re.S)
+    lines = section + [line for line in joined.splitlines() if line not in section]
     found = [
         f"Known issues names a later release ({', '.join(later)}): {line.strip()}"
-        for line in section
+        for line in lines
         if (later := later_releases(line))
     ]
     content = [line for line in section if line.strip()]
