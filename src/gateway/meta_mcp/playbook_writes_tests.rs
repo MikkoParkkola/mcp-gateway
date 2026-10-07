@@ -113,6 +113,7 @@ async fn a_carry_follows_the_engines_reading_of_its_mappings() {
                    completed: Vec<&str>,
                    output: Option<crate::playbook::PlaybookOutput>| {
         let (meta, caller) = (&meta, &caller);
+        let completed: Vec<String> = completed.into_iter().map(str::to_owned).collect();
         crate::gateway::meta_mcp::invoke::relay::collecting(async move {
             let invoker = MetaMcpInvoker {
                 meta,
@@ -140,7 +141,6 @@ async fn a_carry_follows_the_engines_reading_of_its_mappings() {
                 }
                 invoker.steps.lock().push((record, whole));
             }
-            let completed: Vec<String> = completed.into_iter().map(str::to_owned).collect();
             invoker.carry_writes(output.as_ref(), &completed);
             let stored = serde_json::to_value(recorded()).expect("serializes");
             stored
