@@ -279,7 +279,11 @@ impl OAuthClient {
         let token = TokenInfo::from_response(
             token_response.access_token,
             token_response.token_type,
-            token_response.refresh_token,
+            // No new refresh token means keep the one sent (RFC 6749 section 6);
+            // dropping it would end headless renewal at the next expiry (MIK-8021).
+            token_response
+                .refresh_token
+                .or_else(|| Some(refresh_token.to_string())),
             token_response.expires_in,
             token_response.scope,
         );
