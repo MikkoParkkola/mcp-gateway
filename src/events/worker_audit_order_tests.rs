@@ -12,19 +12,6 @@ use super::{
     DeadReason, EventsHub, Settle, counting_callback, logged_services, offer, queued, queued_event,
 };
 
-fn audit_log(dir: &std::path::Path) -> Arc<crate::security::TransparencyLogger> {
-    Arc::new(
-        crate::security::TransparencyLogger::open(Arc::new(
-            crate::security::TransparencyLogConfig {
-                enabled: true,
-                path: dir.join("audit.jsonl").to_string_lossy().into_owned(),
-                ..crate::security::TransparencyLogConfig::default()
-            },
-        ))
-        .expect("log"),
-    )
-}
-
 /// The audit lines for `event_id`, in log order, as their `action`.
 fn actions_for(dir: &std::path::Path, event_id: &str) -> Vec<String> {
     std::fs::read_to_string(dir.join("audit.jsonl"))
@@ -66,6 +53,15 @@ fn gone() -> Settle {
     }
 }
 
+/// A pending record as stored, read from its file: `due` offers one record
+/// per subscription, so a second one is read here.
+fn stored(dir: &std::path::Path, event_id: &str) -> crate::events::outbox::OutboxRecord {
+    let file = dir
+        .join("outbox")
+        .join(crate::events::outbox::OutboxRecord::file(event_id));
+    serde_json::from_slice(&std::fs::read(file).expect("read")).expect("record")
+}
+
 /// .2: claims the audit log refused sent nothing, so they do not count
 /// toward `retry_max_attempts`. Once the log recovers the record is sent,
 /// not buried `exhausted`.
@@ -73,15 +69,14 @@ fn gone() -> Settle {
 async fn an_audit_outage_does_not_use_up_the_attempts() {
     use std::sync::atomic::Ordering;
     let dir = tempfile::tempdir().expect("dir");
-    let log = audit_log(dir.path());
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         retry_max_attempts: 2,
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
-    let mut services = logged_services(dir.path());
-    services.audit = Some(Arc::clone(&log));
+    let services = logged_services(dir.path());
+    let log = services.audit.clone().expect("log");
     let (port, accepted) = counting_callback().await;
     offer(&hub, &["webhook.c.r.received"]);
     queued(&hub, port, "evt_outage");
@@ -167,7 +162,7 @@ async fn an_eviction_by_another_burial_follows_the_first_burials_receipt() {
     let services = Arc::new(logged_services(dir.path()));
     queued(&hub, 9, "evt_x");
     queued_event(&hub, "evt_y");
-    let (x, y) = (pending(&hub, "evt_x"), pending(&hub, "evt_y"));
+    let (x, y) = (stored(dir.path(), "evt_x"), stored(dir.path(), "evt_y"));
     let (reached, release) = hub.before_receipts.arm();
     let first = tokio::spawn({
         let (hub, services) = (Arc::clone(&hub), Arc::clone(&services));
