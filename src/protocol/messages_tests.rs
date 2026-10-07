@@ -455,3 +455,54 @@ fn an_error_response_still_serializes_no_result() {
         serde_json::from_value(serde_json::json!({"jsonrpc": "2.0", "id": 1})).unwrap();
     assert!(typed.result.is_none() && typed.error.is_none());
 }
+
+/// MIK-8019.PARSE.1: a present `method` is a call, null included. A plain
+/// `Option` maps JSON null to `None`, which let this frame through as a
+/// response; both answer shapes are refused before result/error handling.
+#[test]
+fn response_deser_rejects_frame_with_null_method() {
+    for frame in [
+        r#"{"jsonrpc":"2.0","id":7,"method":null,"result":{"content":[]}}"#,
+        r#"{"jsonrpc":"2.0","id":7,"method":null,"error":{"code":-32000,"message":"x"}}"#,
+        r#"{"jsonrpc":"2.0","id":7,"method":[1,{"a":null}],"result":{}}"#,
+        r#"{"jsonrpc":"2.0","id":7,"method":{"x":[]},"result":{}}"#,
+    ] {
+        let error = serde_json::from_str::<JsonRpcResponse>(frame)
+            .expect_err("a frame carrying `method` is not a response");
+        assert!(
+            error.to_string().contains("frame carries `method`"),
+            "{frame} must fail on the method refusal, not elsewhere: {error}"
+        );
+        // The `Value` path (`from_value`) refuses it too.
+        let value: serde_json::Value = serde_json::from_str(frame).expect("JSON");
+        let error = serde_json::from_value::<JsonRpcResponse>(value)
+            .expect_err("from_value: a frame carrying `method` is not a response");
+        assert!(
+            error.to_string().contains("frame carries `method`"),
+            "{frame} via from_value: {error}"
+        );
+    }
+}
+
+/// MIK-8019.SAME.1: the untagged message enum is what the stdio reader, the
+/// SSE decoder and the listen classifier parse with. No variant may accept
+/// the frame: a later relaxation of a request's `method` type must not
+/// quietly reclassify it.
+#[test]
+fn message_enum_refuses_a_null_method_frame_outright() {
+    let frame = r#"{"jsonrpc":"2.0","id":7,"method":null,"result":{}}"#;
+    let outcome = serde_json::from_str::<JsonRpcMessage>(frame);
+    assert!(outcome.is_err(), "classified as {:?}", outcome.ok());
+}
+
+/// MIK-8019.KEEP.1: `"result": null` is a result, and a frame with no
+/// `method` member is a response, as before.
+#[test]
+fn a_null_result_and_a_method_free_frame_still_parse() {
+    let null_result: JsonRpcResponse =
+        serde_json::from_str(r#"{"jsonrpc":"2.0","id":7,"result":null}"#).expect("null result");
+    assert_eq!(null_result.result, Some(serde_json::Value::Null));
+    let plain: JsonRpcResponse =
+        serde_json::from_str(r#"{"jsonrpc":"2.0","id":7,"result":{}}"#).expect("plain response");
+    assert!(plain.result.is_some());
+}

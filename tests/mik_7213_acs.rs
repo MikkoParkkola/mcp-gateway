@@ -400,13 +400,34 @@ mod http {
 
     #[tokio::test]
     async fn ac_cache_1_a_non_cacheable_result_carries_no_cache_fields() {
-        // The fields belong to five results. Putting them on everything would
-        // tell a client it may cache a tool call.
-        let (_, body) = post_modern("server/discover", 4).await;
-        assert!(
-            body["result"].get("ttlMs").is_none(),
-            "discovery's cache scope is decided with its own document, not here: {body}"
+        // The fields belong to five results and discovery. Putting them on
+        // everything would tell a client it may cache a tool call. (`ping`, the
+        // obvious probe, was removed in this revision and answers -32601.)
+        let name = "gateway_list_servers";
+        let mut request = modern("tools/call", 4);
+        request["params"]["name"] = json!(name);
+        request["params"]["arguments"] = json!({});
+        let mut owned = modern_headers("tools/call");
+        owned.push(("mcp-name", name.to_string()));
+        let borrowed: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let (_, body) = post(request, &borrowed).await;
+        assert!(body["result"].is_object(), "tools/call must answer: {body}");
+        // A tool error is a result object too; only a successful call probes
+        // what the shaper does to an ordinary answer.
+        assert_ne!(
+            body["result"]["isError"], true,
+            "the call must succeed: {body}"
         );
+        assert!(
+            body["result"]["content"].is_array(),
+            "a successful call carries content: {body}"
+        );
+        for key in ["ttlMs", "cacheScope"] {
+            assert!(
+                body["result"].get(key).is_none(),
+                "a tool call must not carry the cache hint {key}: {body}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -602,9 +623,18 @@ fn ac_cache_3_the_deciding_function_names_the_table() {
 
 #[test]
 fn ac_cache_3_the_wire_field_is_filled_from_the_table() {
-    let text = source("src/gateway/router/handlers/modern_response.rs");
+    // The pair has one writer, which the shaper calls with each method's own
+    // name: the scope is the table's answer for that method at both sites.
+    let writer = source("src/protocol/cacheable.rs");
+    let body = writer
+        .split("pub(crate) fn write_cache_hints(")
+        .nth(1)
+        .expect("the shared writer exists");
+    let body = body.split("\n}\n").next().unwrap_or_default();
+    let shaper = source("src/gateway/router/handlers/modern_response.rs");
     assert!(
-        text.contains("scope_for_method(method)"),
+        body.contains("scope_for_method(method)")
+            && shaper.contains("write_cache_hints(object, method, ttl)"),
         "the `cacheScope` a client receives must come from the table, not from \
          one method's answer applied to five"
     );

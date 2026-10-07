@@ -94,8 +94,11 @@ pub fn project_tool_descriptor_trust_card(
 }
 
 /// The tool as published; the fallback keeps the two required fields when
-/// the tool cannot be serialised whole.
+/// the tool cannot be serialised whole. Every serialisation of a tool in this
+/// module goes through here, so the test counter sees each one.
 fn descriptor_of(tool: &Tool) -> Value {
+    #[cfg(test)]
+    TOOL_SERIALISATIONS.with(|n| n.set(n.get() + 1));
     serde_json::to_value(tool).unwrap_or_else(|_| {
         json!({
             "name": tool.name.clone(),
@@ -122,12 +125,21 @@ fn with_card(mut descriptor: Value, card: Value) -> Value {
     descriptor
 }
 
-/// Computed references by server identity, then tool name. A reference is a
-/// pure function of the server identity and the tool, and an entry is reused
-/// only while the tool serialises to exactly the descriptor it was computed
-/// from, so a tool changed under the same name is recomputed, never served
-/// stale (MIK-7916).
-type CardMemo = HashMap<(String, String), HashMap<String, (Value, Value)>>;
+/// Projected descriptors by server id, then server name, then tool name. A
+/// projection is a pure function of the server identity and the tool, and an
+/// entry is reused only while the tool equals, every field named in
+/// [`same_tool`], the one it was projected from. A tool changed under the same name
+/// is re-projected, never served stale (MIK-7916). The identity is the whole
+/// tool, not a hash: a collision would serve another tool's card.
+#[derive(Default)]
+struct CardMemo {
+    /// (server id, server name) pairs held, bounded by `MEMO_SERVERS`.
+    servers: usize,
+    by_id: HashMap<String, HashMap<String, ToolCards>>,
+}
+
+/// One server identity's memo: tool name to (tool as projected, descriptor).
+type ToolCards = HashMap<String, (Tool, Value)>;
 
 // ponytail: a full map keeps its residents and computes newcomers uncached,
 // so a churning catalog can lose its saving; an LRU if that ever shows.
@@ -139,10 +151,41 @@ fn card_memo() -> &'static Mutex<CardMemo> {
     MEMO.get_or_init(Mutex::default)
 }
 
+impl CardMemo {
+    /// The cards held for one server identity, made room for if the
+    /// `MEMO_SERVERS` bound on (id, name) pairs allows; `None` when it is
+    /// full and the identity is new. Looked up by `&str`, so a held identity
+    /// allocates no key.
+    fn cards_for(&mut self, server_id: &str, server_name: &str) -> Option<&mut ToolCards> {
+        let held = self
+            .by_id
+            .get(server_id)
+            .is_some_and(|names| names.contains_key(server_name));
+        if !held {
+            if self.servers >= MEMO_SERVERS {
+                return None;
+            }
+            self.servers += 1;
+        }
+        held_or_default(held_or_default(&mut self.by_id, server_id), server_name);
+        // The count is kept by hand beside the maps it counts; an eviction
+        // added later must keep the two in step.
+        debug_assert_eq!(
+            self.servers,
+            self.by_id.values().map(HashMap::len).sum::<usize>(),
+            "the pair count drifted from the memo"
+        );
+        self.by_id
+            .get_mut(server_id)
+            .and_then(|names| names.get_mut(server_name))
+    }
+}
+
 /// Project `TrustCard` references into a list of live MCP tool descriptors.
 ///
-/// Every `tools/list` lists the same catalog, so each reference is computed
-/// once per tool version rather than once per request.
+/// Every `tools/list` lists the same catalog, so each descriptor is projected
+/// once per tool version; a repeat list compares each tool and hands back a
+/// copy, with no serialisation.
 #[must_use]
 pub fn project_tool_descriptors_trust_cards(
     server_id: &str,
@@ -150,33 +193,91 @@ pub fn project_tool_descriptors_trust_cards(
     tools: &[Tool],
 ) -> Vec<Value> {
     let mut memo = card_memo().lock().unwrap_or_else(PoisonError::into_inner);
-    let key = (server_id.to_string(), server_name.to_string());
-    if memo.len() >= MEMO_SERVERS && !memo.contains_key(&key) {
+    let Some(cards) = memo.cards_for(server_id, server_name) else {
         return tools
             .iter()
             .map(|tool| project_tool_descriptor_trust_card(server_id, server_name, tool))
             .collect();
-    }
-    let cards = memo.entry(key).or_default();
+    };
     tools
         .iter()
-        .map(|tool| {
-            let Ok(descriptor) = serde_json::to_value(tool) else {
-                return project_tool_descriptor_trust_card(server_id, server_name, tool);
-            };
-            let card = match cards.get(&tool.name) {
-                Some((seen, card)) if *seen == descriptor => card.clone(),
-                _ => {
-                    let card = computed_card(server_id, server_name, tool);
-                    if cards.len() < MEMO_TOOLS_PER_SERVER || cards.contains_key(&tool.name) {
-                        cards.insert(tool.name.clone(), (descriptor.clone(), card.clone()));
-                    }
-                    card
+        .map(|tool| match cards.get(&tool.name) {
+            Some((seen, projected)) if same_tool(seen, tool) => projected.clone(),
+            _ => {
+                let projected = project_tool_descriptor_trust_card(server_id, server_name, tool);
+                if cards.len() < MEMO_TOOLS_PER_SERVER || cards.contains_key(&tool.name) {
+                    cards.insert(tool.name.clone(), (tool.clone(), projected.clone()));
                 }
-            };
-            with_card(descriptor, card)
+                projected
+            }
         })
         .collect()
+}
+
+/// Whether a memoised projection of `seen` describes `tool`, field for field.
+///
+/// The destructure names every field and has no `..`, so a field added to
+/// [`Tool`] fails to compile here until the memo compares it: a field the memo
+/// skipped would serve a card computed for other content. Each schema is
+/// walked once, by [`same_json`], which is equality that also tells `-0.0`
+/// from `0.0` (`serde_json` holds them equal yet serialises and digests them
+/// apart). Maps are `BTreeMap`s (no `preserve_order`), so equal maps serialise
+/// alike; `equal_maps_serialise_alike` pins that.
+fn same_tool(seen: &Tool, tool: &Tool) -> bool {
+    let Tool {
+        name,
+        title,
+        description,
+        input_schema,
+        output_schema,
+        annotations,
+        role,
+        projection,
+    } = seen;
+    *name == tool.name
+        && *title == tool.title
+        && *description == tool.description
+        && *annotations == tool.annotations
+        && *role == tool.role
+        && *projection == tool.projection
+        && same_json(input_schema, &tool.input_schema)
+        && match (output_schema, &tool.output_schema) {
+            (Some(a), Some(b)) => same_json(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+}
+
+/// `==` that also tells `-0.0` from `0.0`.
+fn same_json(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => {
+            x == y && x.as_f64().map(f64::is_sign_negative) == y.as_f64().map(f64::is_sign_negative)
+        }
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same_json(x, y))
+        }
+        // Both maps iterate in key order (no `preserve_order`), so equal maps
+        // pair up entry by entry; were the order ever insertion order, a zip
+        // would only miss more, never hit stale.
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y)
+                    .all(|((kx, vx), (ky, vy))| kx == ky && same_json(vx, vy))
+        }
+        _ => a == b,
+    }
+}
+
+/// `entry(key.to_owned()).or_default()` that allocates the key only when it
+/// is absent, so finding a held key costs no allocation.
+fn held_or_default<'a, V: Default>(map: &'a mut HashMap<String, V>, key: &str) -> &'a mut V {
+    if !map.contains_key(key) {
+        map.insert(key.to_owned(), V::default());
+    }
+    map.get_mut(key)
+        .expect("present: inserted above when absent")
 }
 
 /// Build a JSON-RPC `tools/list` result with projected `TrustCard` references.
@@ -191,6 +292,8 @@ pub fn tools_list_result_with_trust_cards(tools: Vec<Value>) -> Value {
 thread_local! {
     /// Test-only: `TrustCard` references computed on this thread.
     static CARD_COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Test-only: tools serialised into a descriptor on this thread.
+    static TOOL_SERIALISATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -201,6 +304,32 @@ mod tests {
 
     fn computations() -> usize {
         CARD_COMPUTATIONS.with(std::cell::Cell::get)
+    }
+
+    fn serialisations() -> usize {
+        TOOL_SERIALISATIONS.with(std::cell::Cell::get)
+    }
+
+    /// MIK-7916 AC3: a repeat list serialises no tool; a changed tool is
+    /// serialised exactly once. The second half keeps the first honest: a
+    /// projection that never serialised anything would pass "zero" alone.
+    #[test]
+    fn a_hit_serialises_no_tool_and_a_miss_exactly_one() {
+        let (id, name) = ("backend:memo-serialise", "memo-serialise");
+        let mut tools = catalog(name);
+        let _ = project_tool_descriptors_trust_cards(id, name, &tools);
+        let start = serialisations();
+        let _ = project_tool_descriptors_trust_cards(id, name, &tools);
+        assert_eq!(serialisations() - start, 0, "a hit list serialised a tool");
+
+        tools[2].description = Some("changed".to_string());
+        let start = serialisations();
+        let _ = project_tool_descriptors_trust_cards(id, name, &tools);
+        assert_eq!(
+            serialisations() - start,
+            1,
+            "one changed tool, one serialisation"
+        );
     }
 
     /// A catalog under a server identity no other test uses, so a shared
@@ -289,6 +418,193 @@ mod tests {
         assert_eq!(
             other[0],
             project_tool_descriptor_trust_card("backend:x", "y\0memo-nul", &tools[0])
+        );
+    }
+
+    /// MIK-7916 review: `serde_json` numbers compare `-0.0 == 0.0` yet
+    /// serialise apart, so an equality hit on that change would publish the
+    /// old schema. A schema whose only change is the sign of a zero re-projects.
+    #[test]
+    fn a_schema_changed_only_in_the_sign_of_zero_misses_the_memo() {
+        let (id, name) = ("backend:memo-signed-zero", "memo-signed-zero");
+        let mut zero = tool();
+        zero.input_schema["properties"]["query"]["default"] = json!(0.0);
+        let mut negative = zero.clone();
+        negative.input_schema["properties"]["query"]["default"] = json!(-0.0);
+        let _ = project_tool_descriptors_trust_cards(id, name, std::slice::from_ref(&zero));
+        let listed =
+            project_tool_descriptors_trust_cards(id, name, std::slice::from_ref(&negative));
+        assert_eq!(
+            serde_json::to_string(&listed[0]).unwrap(),
+            serde_json::to_string(&project_tool_descriptor_trust_card(id, name, &negative))
+                .unwrap(),
+            "the listing must serialise exactly as a fresh projection of the changed tool"
+        );
+    }
+
+    /// MIK-7916 review: the sign of zero is told apart wherever a schema can
+    /// hold a number: the output schema, inside an array, and in both
+    /// directions of the change.
+    #[test]
+    fn the_sign_of_zero_misses_the_memo_in_every_schema_position() {
+        type Place = fn(&mut Tool, f64);
+        let places: [(&str, Place); 3] = [
+            ("output schema", |t, z| {
+                t.output_schema = Some(json!({"type": "number", "default": z}));
+            }),
+            ("array element", |t, z| {
+                t.input_schema["properties"]["query"]["enum"] = json!([1.0, z]);
+            }),
+            ("input schema", |t, z| {
+                t.input_schema["properties"]["query"]["default"] = json!(z);
+            }),
+        ];
+        for (place, set) in places {
+            for (from, to) in [(0.0, -0.0), (-0.0, 0.0)] {
+                let (id, name) = (
+                    format!("backend:memo-zero-{place}-{from}"),
+                    format!("memo-zero-{place}-{from}"),
+                );
+                let (mut before, mut after) = (tool(), tool());
+                set(&mut before, from);
+                set(&mut after, to);
+                let _ =
+                    project_tool_descriptors_trust_cards(&id, &name, std::slice::from_ref(&before));
+                let listed =
+                    project_tool_descriptors_trust_cards(&id, &name, std::slice::from_ref(&after));
+                assert_eq!(
+                    serde_json::to_string(&listed[0]).unwrap(),
+                    serde_json::to_string(&project_tool_descriptor_trust_card(
+                        id.as_str(),
+                        name.as_str(),
+                        &after
+                    ))
+                    .unwrap(),
+                    "{place}, {from} to {to}: the listing must describe the changed tool"
+                );
+            }
+        }
+    }
+
+    /// MIK-7916 review: the memo treats equal schemas as interchangeable, which
+    /// holds only while equal maps serialise alike. `serde_json`'s
+    /// `preserve_order` feature would break that (insertion order), so a
+    /// feature flip fails here instead of serving cards digested from other
+    /// bytes.
+    #[test]
+    fn equal_maps_serialise_alike() {
+        let mut first = serde_json::Map::new();
+        first.insert("zeta".to_string(), json!(1));
+        first.insert("alpha".to_string(), json!(2));
+        let mut second = serde_json::Map::new();
+        second.insert("alpha".to_string(), json!(2));
+        second.insert("zeta".to_string(), json!(1));
+        let (first, second) = (Value::Object(first), Value::Object(second));
+        assert_eq!(
+            serde_json::to_string(&first).unwrap(),
+            serde_json::to_string(&second).unwrap(),
+            "equal maps inserted in another order must serialise identically"
+        );
+        assert!(
+            same_json(&first, &second),
+            "same_json pairs entries in key order, so insertion order must not matter"
+        );
+    }
+
+    /// MIK-7916 AC3: the memo is keyed on the whole tool. A change to any one
+    /// field, however small, misses and re-projects; a hand-picked subset of
+    /// fields would serve a card computed for other content.
+    #[test]
+    fn a_change_to_any_single_field_misses_the_memo() {
+        use crate::projection::{ActorSpec, ProjectionSpec, Role};
+        use crate::protocol::ToolAnnotations;
+
+        type Change = fn(&mut Tool);
+        let edits: [(&str, Change); 8] = [
+            ("title", |t| {
+                t.title = Some("Other title".to_string());
+            }),
+            ("description count", |t| {
+                t.description = Some("Search local docs (3 servers)".to_string());
+            }),
+            ("input schema", |t| {
+                t.input_schema["properties"]["limit"] = json!({"type": "integer"});
+            }),
+            // Same length, same value, another key: only the key tells them apart.
+            ("property renamed", |t| {
+                let props = t.input_schema["properties"].as_object_mut().unwrap();
+                let query = props.remove("query").unwrap();
+                props.insert("q".to_string(), query);
+            }),
+            ("output schema", |t| {
+                t.output_schema = Some(json!({"type": "object"}));
+            }),
+            ("annotations hint", |t| {
+                t.annotations = Some(ToolAnnotations {
+                    read_only_hint: Some(true),
+                    ..ToolAnnotations::default()
+                });
+            }),
+            ("role", |t| {
+                t.role = Some(Role::Selector);
+            }),
+            ("projection", |t| {
+                t.projection = Some(ProjectionSpec {
+                    actor: Some(ActorSpec::default()),
+                    ..ProjectionSpec::default()
+                });
+            }),
+        ];
+        for (field, change) in edits {
+            let (id, name) = (
+                format!("backend:memo-field-{field}"),
+                format!("memo-field-{field}"),
+            );
+            let original = tool();
+            let _ =
+                project_tool_descriptors_trust_cards(&id, &name, std::slice::from_ref(&original));
+            let mut changed = original.clone();
+            change(&mut changed);
+            let start = computations();
+            let listed =
+                project_tool_descriptors_trust_cards(&id, &name, std::slice::from_ref(&changed));
+            assert_eq!(
+                computations() - start,
+                1,
+                "{field}: a changed tool must re-project"
+            );
+            assert_eq!(
+                listed[0],
+                project_tool_descriptor_trust_card(id.as_str(), name.as_str(), &changed),
+                "{field}: the listing must describe the changed tool"
+            );
+        }
+    }
+
+    /// MIK-7916 review: the server bound counts (id, name) pairs, not ids,
+    /// and a full memo still serves the pairs it holds. A local memo, so no
+    /// other test's identities share the count.
+    #[test]
+    fn the_server_bound_counts_identity_pairs() {
+        let mut memo = CardMemo::default();
+        for i in 0..MEMO_SERVERS {
+            assert!(
+                memo.cards_for("backend:shared", &format!("name-{i}"))
+                    .is_some(),
+                "pair {i} is under the bound"
+            );
+        }
+        assert!(
+            memo.cards_for("backend:shared", "one-more").is_none(),
+            "a new name under a held id is a new pair"
+        );
+        assert!(
+            memo.cards_for("backend:other", "name-0").is_none(),
+            "a new id is a new pair"
+        );
+        assert!(
+            memo.cards_for("backend:shared", "name-0").is_some(),
+            "a held pair is still served when full"
         );
     }
 

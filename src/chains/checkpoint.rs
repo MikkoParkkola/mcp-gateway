@@ -71,7 +71,7 @@ impl ChainCheckpointStore {
     ///
     /// Returns `Error::Config` if the home directory cannot be determined.
     pub fn default_store() -> Result<Self> {
-        let home = dirs::home_dir()
+        let home = crate::home_dir::home_dir()
             .ok_or_else(|| Error::Config("Cannot determine home directory".into()))?;
         Self::new(home.join(".mcp-gateway").join("chains"))
     }

@@ -497,7 +497,9 @@ impl MetaMcp {
         {
             let message = super::signing::wire_error_message(&error);
             if let Some(reservation) = idem_reservation.as_mut() {
-                reservation.fail(&json!({"code": error.to_rpc_code(), "message": message}));
+                reservation.fail(&audit::stored_failure(
+                    json!({"code": error.to_rpc_code(), "message": message}),
+                ));
             }
             return Err(error);
         }

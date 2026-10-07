@@ -189,6 +189,14 @@ const FLOOR_TYPO_TOP1: f64 = 0.333;
 /// `tag_query` derivation top-1 floor; baseline 12/20.
 const FLOOR_TAG_QUERY_TOP1: f64 = 0.600;
 
+/// Production capabilities the floors were last measured against. Adding or
+/// removing a capability changes the candidate pool, so this is bumped only
+/// after re-running against the floors. It lives here, not in `corpus.json`:
+/// that file's `tool_inventory_size` is what `gen_corpus.py` derived from the
+/// frozen 119-tool tree (FREEZE.md), and editing it would stop the generator
+/// reproducing the corpus byte for byte (MIK-7850.TESTS.2).
+const POOL_SIZE_AT_LAST_MEASUREMENT: usize = 137;
+
 /// Fail with a message that names the metric, both numbers and the freeze
 /// record, so a red run explains itself without opening this file.
 fn assert_floor(metric: &str, measured: f64, floor: f64) {
@@ -231,10 +239,10 @@ async fn mik_3274_ranking_3_baseline() {
     let pool = load_candidate_pool().await;
     assert_eq!(
         pool.len(),
-        corpus.tool_inventory_size,
-        "candidate pool size drifted from the corpus's recorded tool_inventory_size \
+        POOL_SIZE_AT_LAST_MEASUREMENT,
+        "candidate pool size drifted from POOL_SIZE_AT_LAST_MEASUREMENT \
          (capabilities/ changed): re-measure against the frozen floors, then bump \
-         tool_inventory_size; do not regenerate the held-out queries"
+         the constant; do not regenerate the held-out queries or edit corpus.json"
     );
 
     // Fresh ranker, no usage history recorded: isolates pure text-relevance

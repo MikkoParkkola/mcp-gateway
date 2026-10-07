@@ -40,6 +40,9 @@ mod proxy_scope_tests;
 mod proxy_session_tests;
 pub mod recovery;
 mod router;
+pub(crate) mod routes;
+#[cfg(test)]
+mod routes_tests;
 /// The one constructor that turns a verified identity into a grant subject,
 /// re-exported so the `MIK-7334.CATALOGUE.1` prefix cells can drive it WITHOUT
 /// `router` itself becoming crate-visible. Same shape as

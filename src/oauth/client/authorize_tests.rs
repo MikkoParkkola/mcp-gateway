@@ -25,6 +25,15 @@ type Forms = Arc<Mutex<Vec<HashMap<String, String>>>>;
 /// A token endpoint on loopback. `Some(token)` answers with that access token;
 /// `None` refuses every request with `invalid_grant`.
 async fn token_endpoint(answer: Option<&'static str>) -> (String, Forms) {
+    token_endpoint_issuing(answer, Some("r-next")).await
+}
+
+/// As [`token_endpoint`], answering with `refresh` as the refresh token, or
+/// with none at all, as a server that keeps its refresh tokens does.
+async fn token_endpoint_issuing(
+    answer: Option<&'static str>,
+    refresh: Option<&'static str>,
+) -> (String, Forms) {
     use axum::{Form, Json, Router, http::StatusCode, response::IntoResponse, routing::post};
     let forms: Forms = Arc::default();
     let seen = Arc::clone(&forms);
@@ -34,13 +43,17 @@ async fn token_endpoint(answer: Option<&'static str>) -> (String, Forms) {
             seen.lock().unwrap().push(form);
             async move {
                 match answer {
-                    Some(token) => Json(serde_json::json!({
-                        "access_token": token,
-                        "token_type": "Bearer",
-                        "expires_in": 3600,
-                        "refresh_token": "r-next"
-                    }))
-                    .into_response(),
+                    Some(token) => {
+                        let mut body = serde_json::json!({
+                            "access_token": token,
+                            "token_type": "Bearer",
+                            "expires_in": 3600,
+                        });
+                        if let Some(refresh) = refresh {
+                            body["refresh_token"] = refresh.into();
+                        }
+                        Json(body).into_response()
+                    }
                     None => (
                         StatusCode::BAD_REQUEST,
                         Json(serde_json::json!({ "error": "invalid_grant" })),
@@ -315,6 +328,55 @@ async fn get_token_refreshes_an_expired_token() {
     assert_eq!(forms[0]["refresh_token"], "r1");
 }
 
+/// MIK-8021.KEEPRT.1: a server that answers a refresh without a new refresh
+/// token means "keep the one you have" (RFC 6749 section 6). The kept token
+/// must survive in memory and in storage, so the next expiry refreshes again
+/// instead of sending the user through a login.
+#[tokio::test]
+async fn a_refresh_without_a_new_refresh_token_keeps_the_old_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, forms) = token_endpoint_issuing(Some("access-b"), None).await;
+    let client = client(dir.path(), Some(&issuer));
+    *client.current_token.write() = Some(token("access-old", Some("r1"), Expiry::Expired));
+
+    assert_eq!(client.get_token().await.unwrap(), "access-b");
+    let cached = client.current_token.read().clone().expect("a cached token");
+    assert_eq!(cached.refresh_token.as_deref(), Some("r1"), "cached");
+    let key = client.credential_key().unwrap();
+    let stored = client.storage.load(&key, RESOURCE).expect("a stored token");
+    assert_eq!(stored.refresh_token.as_deref(), Some("r1"), "stored");
+
+    // The next expiry refreshes headlessly with the kept token.
+    client.current_token.write().as_mut().unwrap().expires_at = Some(1);
+    assert_eq!(client.get_token().await.unwrap(), "access-b");
+    let forms = forms.lock().unwrap().clone();
+    assert_eq!(forms.len(), 2, "{forms:?}");
+    assert_eq!(forms[1]["refresh_token"], "r1");
+}
+
+/// MIK-8021.KEEPRT.2: a server that rotates is still followed.
+#[tokio::test]
+async fn a_refresh_with_a_new_refresh_token_stores_the_new_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, forms) = token_endpoint(Some("access-b")).await;
+    let client = client(dir.path(), Some(&issuer));
+    *client.current_token.write() = Some(token("access-old", Some("r1"), Expiry::Expired));
+
+    assert_eq!(client.get_token().await.unwrap(), "access-b");
+    let cached = client.current_token.read().clone().expect("a cached token");
+    assert_eq!(cached.refresh_token.as_deref(), Some("r-next"), "cached");
+    let key = client.credential_key().unwrap();
+    let stored = client.storage.load(&key, RESOURCE).expect("a stored token");
+    assert_eq!(stored.refresh_token.as_deref(), Some("r-next"), "stored");
+
+    // The next refresh sends the rotated token, never the replaced one.
+    client.current_token.write().as_mut().unwrap().expires_at = Some(1);
+    assert_eq!(client.get_token().await.unwrap(), "access-b");
+    let forms = forms.lock().unwrap().clone();
+    assert_eq!(forms.len(), 2, "{forms:?}");
+    assert_eq!(forms[1]["refresh_token"], "r-next");
+}
+
 /// No authorization server known: the refresh cannot run, the fall-back to
 /// authorize cannot either, and nothing is keyed to an issuer that does not exist.
 #[tokio::test]
@@ -377,6 +439,80 @@ async fn an_unparseable_authorization_endpoint_is_refused_before_any_browser_ope
     assert_eq!(*opened.lock().unwrap(), 0, "no browser is opened");
 }
 
+/// A loopback port nothing listens on, for a callback the test must see freed.
+async fn free_port() -> u16 {
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    probe.local_addr().unwrap().port()
+}
+
+/// The callback listener on `port` is gone: the port binds again. An aborted
+/// listener drops on its next poll, so this allows it a moment.
+async fn assert_port_released(port: u16) {
+    let released = async {
+        while tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .is_err()
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), released)
+        .await
+        .expect("the callback listener is released");
+}
+
+/// A client whose callback listens on a known port, and whose browser opens
+/// without anyone approving: `opened` fires once the URL is handed over.
+async fn unanswered_client(dir: &std::path::Path) -> (OAuthClient, u16, Arc<tokio::sync::Notify>) {
+    let mut client = client(dir, Some("https://as.example"));
+    let port = free_port().await;
+    client.callback_port = Some(port);
+    let opened = Arc::new(tokio::sync::Notify::new());
+    let signal = Arc::clone(&opened);
+    client.open_browser = Box::new(move |_| {
+        signal.notify_one();
+        true
+    });
+    (client, port, opened)
+}
+
+/// MIK-7982.BOUND.1: an authorization nobody completes ends on its own when
+/// the 300 s authorization window passes, naming the backend and telling the
+/// caller to retry, and its callback port is free afterwards.
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_authorization_ends_at_the_window_and_frees_the_port() {
+    let dir = tempfile::tempdir().unwrap();
+    let (client, port, _opened) = unanswered_client(dir.path()).await;
+
+    let outcome = tokio::time::timeout(Duration::from_secs(301), client.authorize()).await;
+
+    let error = outcome
+        .expect("an unanswered authorization must end on its own within the 300 s window")
+        .expect_err("no callback arrived, so there is no token");
+    let text = error.to_string();
+    assert!(
+        text.contains(BACKEND) && text.contains("300s") && text.contains("retry"),
+        "the error names the backend, the window and the remedy: {text}"
+    );
+    assert_port_released(port).await;
+}
+
+/// MIK-7982.BOUND.3 (root cause F2): an authorization whose future is dropped
+/// mid-wait (a cancelled or timed-out caller) closes its callback listener
+/// rather than leaving it running detached.
+#[tokio::test]
+async fn a_dropped_authorization_closes_its_callback_listener() {
+    let dir = tempfile::tempdir().unwrap();
+    let (client, port, opened) = unanswered_client(dir.path()).await;
+
+    tokio::select! {
+        _ = client.authorize() => panic!("nobody approved, so the flow cannot finish"),
+        () = opened.notified() => {}
+    }
+
+    assert_port_released(port).await;
+}
+
 impl OAuthClient {
     /// A live (one-hour) token in place, as a completed flow would leave it,
     /// for a transport test that needs `get_token` to answer without a flow.
@@ -389,4 +525,62 @@ impl OAuthClient {
             None,
         ));
     }
+}
+
+/// MIK-7982 (delta review): a client holding a dynamically registered id that
+/// takes up a login another client of its backend stored also takes up the id
+/// that login stored. Keeping its own would present a stale id on refresh.
+#[tokio::test]
+async fn taking_up_a_shared_login_takes_up_its_registered_client_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let issuer = "https://as.example";
+    let client = client(dir.path(), Some(issuer))
+        .with_login_gate(Arc::new(crate::oauth::login_gate::LoginGate::default()));
+    *client.client_id.write() = Some("stale-registered-id".to_string());
+    *client.client_id_source.write() = Some(ClientIdSource::Registered);
+    let key = storage_key(BACKEND, issuer);
+    let shared = token("shared-access", None, Expiry::Live);
+    client.storage.save(&key, RESOURCE, &shared).unwrap();
+    client
+        .storage
+        .save_client_id(&key, RESOURCE, "fresh-registered-id")
+        .unwrap();
+
+    let access = client.authorize_shared(true, None).await.unwrap();
+
+    assert_eq!(access, "shared-access", "the stored login is taken up");
+    assert_eq!(
+        client.client_id.read().as_deref(),
+        Some("fresh-registered-id"),
+        "the shared login's registered id replaces the stale one"
+    );
+}
+
+/// MIK-7982.BOUND.1: when the window passes, the callback listener is closed
+/// before the wait returns, not on a later poll of an aborted task: the port
+/// binds again with no await in between.
+#[tokio::test(start_paused = true)]
+async fn the_window_closes_the_callback_listener_before_the_wait_returns() {
+    let server = crate::oauth::callback::start_callback_server(
+        "window-state".to_string(),
+        Some("127.0.0.1"),
+        None,
+        None,
+    )
+    .await
+    .expect("the callback listener binds");
+    let port = url::Url::parse(&server.callback_url)
+        .ok()
+        .and_then(|url| url.port())
+        .expect("the callback URL names the port the listener holds");
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    let ended = server.wait_within(Duration::from_secs(1), &cancel).await;
+
+    assert!(
+        matches!(ended, Err(crate::oauth::callback::Unanswered::Window)),
+        "nobody called back, so the window ends the wait"
+    );
+    std::net::TcpListener::bind(("127.0.0.1", port))
+        .expect("the window's end closes the callback listener before it returns");
 }

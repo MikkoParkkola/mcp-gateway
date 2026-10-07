@@ -102,6 +102,11 @@ impl Backend {
         self.close_pooled_transports(transports, self.budgets.close_stage)
             .await;
 
+        // A start waiting on an interactive login would hold its callback
+        // listener past shutdown: end the login first, within the drain
+        // budget, so the start can finish and the port is free (MIK-7982).
+        let _ = tokio::time::timeout(self.budgets.drain, self.login_gate.close()).await;
+
         self.await_starts_in_flight(self.budgets.drain).await;
 
         // Transports that `force_restart` replaced while they were in use are

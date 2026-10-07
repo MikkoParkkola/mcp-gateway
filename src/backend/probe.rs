@@ -63,9 +63,15 @@ impl Backend {
         }
 
         // `ensure_started` now respawns reliably because `is_connected()` does a
-        // real liveness check (Fix C).
-        if let Err(e) = self.ensure_started().await {
-            let _ = self.force_restart().await;
+        // real liveness check (Fix C). Run non-interactive (MIK-7982 C2): the
+        // probe never begins a login and never queues behind a start in flight,
+        // which may be one; either answers `AuthorizationRequired` at once,
+        // which is no fault to rebuild and which the health loop skips.
+        let started = crate::oauth::login_gate::non_interactive(self.ensure_started()).await;
+        if let Err(e) = started {
+            if !e.is_authorization_wait() {
+                self.rebuild_from_probe().await;
+            }
             return Err(e);
         }
 
@@ -88,7 +94,8 @@ impl Backend {
         // question it is right to refuse.
         let method = self.liveness_method().await;
 
-        let answer = match tokio::time::timeout(timeout, transport.request(method, None)).await {
+        let request = crate::oauth::login_gate::non_interactive(transport.request(method, None));
+        let answer = match tokio::time::timeout(timeout, request).await {
             Ok(answer) => answer,
             Err(_elapsed) => {
                 warn!(
@@ -98,7 +105,7 @@ impl Backend {
                     "Health probe timed out; rebuilding transport"
                 );
                 self.unserved_consecutive.store(0, Ordering::SeqCst);
-                let _ = self.force_restart().await;
+                self.rebuild_from_probe().await;
                 return Err(Error::BackendTimeout(self.name.clone()));
             }
         };
@@ -119,10 +126,12 @@ impl Backend {
                 }
                 Ok(())
             }
+            // The token step wanted a login: skip the tick, keep the login.
+            Err(e) if e.is_authorization_wait() => Err(e),
             Err(e) => {
                 warn!(backend = %self.name, error = %e, "Health probe failed; rebuilding transport");
                 self.unserved_consecutive.store(0, Ordering::SeqCst);
-                let _ = self.force_restart().await;
+                self.rebuild_from_probe().await;
                 Err(e)
             }
         }
@@ -213,11 +222,17 @@ impl Backend {
         // afterwards, spending the tolerance once and never again.
         self.unserved_consecutive.store(0, Ordering::SeqCst);
         self.trip_circuit_breaker("health probe unserved");
-        let _ = self.force_restart().await;
+        self.rebuild_from_probe().await;
         Err(Error::JsonRpc {
             code,
             message: format!("health probe to {method} was not served"),
             data: None,
         })
+    }
+
+    /// The probe's rebuild: a forced restart run non-interactive, so it
+    /// neither ends a login in flight nor opens one (MIK-7982).
+    async fn rebuild_from_probe(&self) {
+        let _ = crate::oauth::login_gate::non_interactive(self.force_restart()).await;
     }
 }

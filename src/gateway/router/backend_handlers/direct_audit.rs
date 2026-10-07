@@ -15,7 +15,7 @@ use crate::protocol::RequestId;
 use crate::security::audit::{
     AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationRoute, InvocationTarget,
 };
-use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
+use crate::security::transparency_log::CorrelationKey;
 
 use super::super::AppState;
 use super::super::helpers::build_http_error_response;
@@ -313,16 +313,7 @@ pub(super) async fn record(
     // answers 503 instead of pinning a runtime worker.
     let written = log
         .append_bounded(move |log| {
-            let key = match otel.as_deref() {
-                Some(otel) => CorrelationKey {
-                    id: otel,
-                    source: CorrelationSource::OtelTraceId,
-                },
-                None => CorrelationKey {
-                    id: &trace_id,
-                    source: CorrelationSource::TraceId,
-                },
-            };
+            let key = CorrelationKey::ladder(otel.as_deref(), None, &trace_id);
             let target = InvocationTarget {
                 route: InvocationRoute::Direct,
                 server: &srv,

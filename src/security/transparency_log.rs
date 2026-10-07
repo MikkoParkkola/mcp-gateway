@@ -96,14 +96,18 @@ pub(crate) mod rotation_fault {
 pub(crate) mod segments;
 #[path = "transparency_log_verify.rs"]
 mod verify;
+// MIK-7713: verify against an off-host copy of `.hwm`.
+#[path = "transparency_log_anchor.rs"]
+mod anchor;
 // MIK-7116.MIN.1: invocation records carrying tenant attribution.
 #[path = "transparency_log_attributed.rs"]
 mod attributed;
+pub use anchor::verify_audit_log;
 #[cfg(test)]
 pub(crate) use verify::verify_segments;
 pub use verify::{
-    VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries, verify_audit_log,
-    verify_log, verify_log_signed,
+    VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries, verify_log,
+    verify_log_signed,
 };
 
 use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
@@ -520,7 +524,7 @@ impl TransparencyLogger {
 /// Expand a leading `~/` in `s` to the user's home directory.
 fn expand_tilde(s: &str) -> PathBuf {
     if let Some(rest) = s.strip_prefix("~/")
-        && let Some(home) = dirs::home_dir()
+        && let Some(home) = crate::home_dir::home_dir()
     {
         return home.join(rest);
     }
@@ -730,6 +734,9 @@ fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "transparency_log_anchor_tests.rs"]
+mod anchor_tests;
+#[cfg(test)]
 #[path = "transparency_log_attributed_tests.rs"]
 mod attributed_tests;
 #[cfg(test)]
@@ -747,6 +754,9 @@ mod hwm_missing_tests;
 #[cfg(test)]
 #[path = "transparency_log_lease_tests.rs"]
 mod lease_tests;
+#[cfg(test)]
+#[path = "transparency_log_overflow_tests.rs"]
+mod overflow_tests;
 #[cfg(test)]
 #[path = "transparency_log_reader_tests.rs"]
 mod reader_tests;

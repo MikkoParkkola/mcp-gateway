@@ -47,16 +47,19 @@ pub struct SessionLifecycle {
     /// Keys a running task call is writing under, with how many such calls.
     /// A sweep passes them over: a caller whose task is still running is not
     /// idle, however long ago its last request was (MIK-7828.FIX.2).
-    /// Lock order: `sweeping`, then `held`, then `tracked`; never the reverse.
-    /// [`KeyHold`]'s drop takes `tracked` and then `held` one after the
-    /// other, never both at once, so it is outside this order.
+    /// Lock order: `held`, then `tracked`, then `callbacks`; never the
+    /// reverse. `ended` and `ended_pending` are leaves, taken alone. `reap`
+    /// holds `held` and `tracked` while it decides on one key, removes it and
+    /// runs its handlers, so neither a hold nor a renewal can land between the
+    /// decision and the freeing (MIK-7746). [`KeyHold`]'s drop takes `tracked`
+    /// and then `held` one after the other, never both at once, so it is
+    /// outside this order.
     held: parking_lot::Mutex<std::collections::HashMap<String, usize>>,
-    /// Held by `reap` from choosing the expired keys until their handlers
-    /// have run, and by `hold` while it registers. A hold cannot start between
-    /// a key being chosen and its state being freed, so nothing a held call
-    /// writes is freed by a sweep that chose the key before the hold.
-    /// Handlers run under it and must not take a hold.
-    sweeping: parking_lot::Mutex<()>,
+    /// Test seam: run by `reap` before each key's critical section, with no
+    /// registry lock held, so a test can renew a key between the sweep's
+    /// snapshot and its turn.
+    #[cfg(test)]
+    between_keys: parking_lot::Mutex<Option<Box<dyn FnMut() + Send>>>,
 }
 
 /// A running call's claim on its caller key; see [`SessionLifecycle::hold`].
@@ -121,7 +124,9 @@ impl SessionLifecycle {
     /// Register a named cleanup callback.
     ///
     /// The callback receives the session ID string when a session disconnects.
-    /// Name is used for debug logging only.
+    /// Name is used for debug logging only. A callback must not call any
+    /// method of this registry, nor take a lock that a caller of one holds:
+    /// it runs under the registry's locks, which are not reentrant.
     pub fn register(
         &self,
         name: impl Into<String>,
@@ -147,12 +152,18 @@ impl SessionLifecycle {
     /// Fire all registered callbacks for the given session ID.
     ///
     /// Called by the notification multiplexer when a session is reaped
-    /// or by the DELETE /mcp handler.
+    /// or by the DELETE /mcp handler. The cleanup handlers run even for a key
+    /// the idle sweep already reclaimed, so they must be idempotent.
     pub fn on_disconnect(&self, session_id: &str) {
         // Whatever brought us here, this key is done: drop its deadline so a
-        // later reap cannot fire the handlers for it a second time.
-        self.untrack(session_id);
-        self.fire_cleanup(session_id);
+        // later reap cannot fire the handlers for it a second time. The
+        // handlers run under the lock that dropped it, so a renewal waits
+        // for them and its writes outlive them (MIK-7746).
+        {
+            let mut tracked = self.tracked.write();
+            tracked.remove(session_id);
+            self.fire_cleanup(session_id);
+        }
         self.fire_ended(session_id);
         self.ended_pending
             .write()
@@ -177,14 +188,9 @@ impl SessionLifecycle {
     /// removed the key. Removing it a second time cannot remove the entry
     /// reaping took — that one is gone — so the only thing a second removal can
     /// delete is a deadline some other caller re-registered in between, taking
-    /// a live caller's state with it.
-    ///
-    /// **Residual, stated rather than implied**: `reap` skips a key re-tracked
-    /// after it was chosen, but one re-tracked while its handlers are already
-    /// running still loses that state, because [`Self::track`] does not wait
-    /// for a sweep (it runs on every request). A key taken by [`Self::hold`] is not
-    /// exposed to it: a hold waits for a running sweep to finish (`sweeping`).
-    /// A plain [`Self::track`] still is, and the reaper does run in production.
+    /// a live caller's state with it. Both callers run it under the
+    /// `tracked` write lock that removed the key, so a [`Self::track`] for it
+    /// waits until the handlers are done.
     fn fire_cleanup(&self, session_id: &str) {
         let cbs = self.callbacks.read();
         if cbs.is_empty() {
@@ -211,6 +217,12 @@ impl SessionLifecycle {
     /// second deadline for a key already tracked kept the older one, so a
     /// refreshed caller was reclaimed on its previous deadline while still
     /// live — and the handlers, which free things, ran twice for one key.
+    ///
+    /// A caller renews BEFORE it writes state under the key: a renewal waits
+    /// for a running cleanup of the key, so only a write that follows it is
+    /// sure to outlive that cleanup (MIK-7746). Caller keys only: state keyed
+    /// by a session id is freed by the session-end handlers, which a renewal
+    /// does not order against.
     pub fn track(&self, key: impl Into<String>, expires_at: u64) {
         self.tracked.write().insert(key.into(), expires_at);
     }
@@ -219,10 +231,10 @@ impl SessionLifecycle {
     /// renew its deadline. Taken around a task's backend call, which can run
     /// far past [`IDLE_TTL`] with no request from its caller in between. A
     /// key not yet tracked is tracked from the moment the guard drops.
-    /// Registering waits for a sweep that is running its handlers, which is
-    /// why handlers must stay in-memory and short.
+    /// Registering waits while a sweep runs any key's handlers (`held` is
+    /// taken across each key's section), which is why handlers must stay
+    /// in-memory and short.
     pub(crate) fn hold(self: &Arc<Self>, key: &str) -> KeyHold {
-        let _sweeping = self.sweeping.lock();
         *self.held.lock().entry(key.to_owned()).or_default() += 1;
         KeyHold {
             lifecycle: Arc::clone(self),
@@ -256,30 +268,39 @@ impl SessionLifecycle {
         for id in due {
             self.fire_ended(&id);
         }
-        // Until the handlers below have run: see `sweeping`.
-        let _sweeping = self.sweeping.lock();
-        let expired: Vec<String> = {
+        // Candidates only: each key is decided again under the locks that
+        // free it, so a key renewed or held since this snapshot is skipped.
+        let candidates: Vec<String> = {
             let held = self.held.lock();
-            let mut tracked = self.tracked.write();
-            let expired: Vec<String> = tracked
+            self.tracked
+                .read()
                 .iter()
                 .filter(|(key, expires_at)| now > **expires_at && !held.contains_key(*key))
                 .map(|(key, _)| key.clone())
-                .collect();
-            for key in &expired {
-                tracked.remove(key);
-            }
-            expired
+                .collect()
         };
         let mut reclaimed = 0;
-        for key in expired {
-            // Already removed above. `on_disconnect` would remove it again, and
-            // a second removal can only take an entry someone re-registered.
-            // A key a request re-tracked since it was chosen belongs to a live
-            // caller again: its state stays, and its new deadline decides.
-            if self.tracked.read().contains_key(&key) {
+        for key in candidates {
+            #[cfg(test)]
+            if let Some(hook) = self.between_keys.lock().as_mut() {
+                hook();
+            }
+            // One key at a time (MIK-7746): its handlers run under the locks
+            // that decided and removed it, so a hold or a renewal for it waits
+            // until they are done and whatever it writes next outlives them.
+            // The sweep holds the locks one key at a time, so a renewal of
+            // another key waits only while some key's handlers run.
+            let held = self.held.lock();
+            let mut tracked = self.tracked.write();
+            let due = tracked
+                .get(&key)
+                .is_some_and(|expires_at| now > *expires_at && !held.contains_key(&key));
+            if !due {
                 continue;
             }
+            tracked.remove(&key);
+            // Removed here, not by `on_disconnect`: a second removal could
+            // only take an entry someone re-registered.
             self.fire_cleanup(&key);
             reclaimed += 1;
         }
@@ -600,24 +621,124 @@ mod tests {
         assert_eq!(sweep.join().expect("sweep"), 1);
     }
 
-    /// A key a request re-tracks after the sweep chose it is not reclaimed:
-    /// the first handler to run re-tracks the other expired key.
+    /// A key a request re-tracks after the sweep's snapshot is not reclaimed:
+    /// each key is decided again under the locks that free it. Before the
+    /// first key's turn, `b` is renewed; whichever key comes first, only `a`
+    /// is reclaimed.
     #[test]
     fn a_key_retracked_after_the_sweep_chose_it_keeps_its_state() {
         let lifecycle = Arc::new(SessionLifecycle::new());
         let fired = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let (seen, renew) = (Arc::clone(&fired), Arc::downgrade(&lifecycle));
-        lifecycle.register("renews-the-other", move |key| {
+        let seen = Arc::clone(&fired);
+        lifecycle.register("records", move |key| {
             seen.lock().expect("seen").push(key.to_owned());
-            let other = if key == "a" { "b" } else { "a" };
-            if let Some(lifecycle) = renew.upgrade() {
-                lifecycle.track(other, u64::MAX);
-            }
         });
+        let renew = Arc::downgrade(&lifecycle);
+        let mut first = true;
+        *lifecycle.between_keys.lock() = Some(Box::new(move || {
+            if std::mem::take(&mut first)
+                && let Some(lifecycle) = renew.upgrade()
+            {
+                lifecycle.track("b", u64::MAX);
+            }
+        }));
         lifecycle.track("a", 0);
         lifecycle.track("b", 0);
-        assert_eq!(lifecycle.reap(1), 1, "both keys reclaimed: {fired:?}");
-        assert_eq!(fired.lock().expect("seen").len(), 1);
-        assert_eq!(lifecycle.tracked_count(), 1);
+        assert_eq!(lifecycle.reap(1), 1, "only a reclaimed: {fired:?}");
+        assert_eq!(*fired.lock().expect("seen"), ["a"]);
+        assert_eq!(lifecycle.tracked_count(), 1, "b keeps its renewed deadline");
+    }
+
+    /// Likewise a hold taken after the snapshot: the held key is skipped.
+    #[test]
+    fn a_key_held_after_the_sweep_chose_it_keeps_its_state() {
+        let lifecycle = Arc::new(SessionLifecycle::new());
+        let fired = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = Arc::clone(&fired);
+        lifecycle.register("records", move |key| {
+            seen.lock().expect("seen").push(key.to_owned());
+        });
+        let holds = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let (taker, kept) = (Arc::downgrade(&lifecycle), Arc::clone(&holds));
+        *lifecycle.between_keys.lock() = Some(Box::new(move || {
+            let first = kept.lock().is_empty();
+            if first && let Some(lifecycle) = taker.upgrade() {
+                let hold = lifecycle.hold("b");
+                kept.lock().push(hold);
+            }
+        }));
+        lifecycle.track("a", 0);
+        lifecycle.track("b", 0);
+        assert_eq!(lifecycle.reap(1), 1, "only a reclaimed: {fired:?}");
+        assert_eq!(*fired.lock().expect("seen"), ["a"]);
+        *lifecycle.between_keys.lock() = None;
+        holds.lock().clear();
+    }
+
+    /// A caller that renews while its old deadline's handler is running and
+    /// then writes fresh state keeps that state (MIK-7746). The handler waits
+    /// up to 500 ms for the renewer to have written before it wipes. If a
+    /// renewal can land during the handler, the write is wiped; if the renewal
+    /// waits for the handler, the wait times out and the write comes after
+    /// the wipe. A runner slower than the wait can hide the defect, never
+    /// fail a correct registry.
+    #[test]
+    fn a_renewal_during_the_reap_keeps_the_state_it_writes() {
+        assert_a_renewal_during_the_handlers_keeps_its_state(|lifecycle| {
+            assert_eq!(lifecycle.reap(1), 1);
+        });
+    }
+
+    /// The same for a real disconnect: its handlers run under the lock that
+    /// dropped the deadline.
+    #[test]
+    fn a_renewal_during_a_disconnect_keeps_the_state_it_writes() {
+        assert_a_renewal_during_the_handlers_keeps_its_state(|lifecycle| {
+            lifecycle.on_disconnect("caller");
+        });
+    }
+
+    fn assert_a_renewal_during_the_handlers_keeps_its_state(end: impl FnOnce(&SessionLifecycle)) {
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+        let lifecycle = Arc::new(SessionLifecycle::new());
+        let store = Arc::new(parking_lot::Mutex::new(Vec::<&str>::new()));
+        let (entered_tx, entered_rx) = channel::<()>();
+        let (written_tx, written_rx) = channel::<()>();
+        let written_rx = parking_lot::Mutex::new(written_rx);
+        let wiped = Arc::clone(&store);
+        let probe = Arc::downgrade(&lifecycle);
+        lifecycle.register("hints", move |_key| {
+            // Whatever the scheduler does, the handler runs under the lock
+            // a renewal takes.
+            let lifecycle = probe.upgrade().expect("the registry is alive");
+            assert!(
+                lifecycle.tracked.try_read().is_none(),
+                "a cleanup handler ran outside the lock a renewal takes"
+            );
+            let _ = entered_tx.send(());
+            let _ = written_rx.lock().recv_timeout(Duration::from_millis(500));
+            wiped.lock().clear();
+        });
+        lifecycle.track("caller", 0);
+
+        let renewer = std::thread::spawn({
+            let (lifecycle, store) = (Arc::clone(&lifecycle), Arc::clone(&store));
+            move || {
+                entered_rx.recv().expect("the handler started");
+                lifecycle.track("caller", u64::MAX);
+                store.lock().push("fresh");
+                let _ = written_tx.send(());
+            }
+        });
+        end(&lifecycle);
+        renewer.join().expect("renewer");
+
+        assert_eq!(
+            *store.lock(),
+            ["fresh"],
+            "a caller renewed while its old deadline was reaped lost its fresh state"
+        );
+        assert_eq!(lifecycle.tracked_count(), 1, "and its new deadline stays");
     }
 }

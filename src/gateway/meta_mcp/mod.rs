@@ -1592,13 +1592,11 @@ impl MetaMcp {
             self.change_feed(),
         );
 
-        // Field names and placement are the specification's, transcribed from
-        // the `DiscoverResult` example rather than invented: `supportedVersions`
-        // (not `protocolVersions`), and `serverInfo` inside `_meta` under its
-        // reverse-DNS key rather than at the top level. A first cut used the
-        // obvious names, and every test passed — because the tests asserted the
-        // same invented names. A wire format that agrees with itself is not a
-        // wire format anyone else can read.
+        // Field names and placement are the specification's (`DiscoverResult`),
+        // never invented: `supportedVersions`, `serverInfo` under its reverse-DNS
+        // `_meta` key, and the required `ttlMs` and `cacheScope`, whose absence
+        // made a 2026-07-28 client load no tools (MIK-8009). A wire format that
+        // agrees only with its own tests is not one anyone else can read.
         // Discovery advertises what this gateway can actually serve, which is
         // the legacy negotiation list plus the modern revisions when the switch
         // that serves them is on. Leaving the modern revision out made enabling
@@ -1632,14 +1630,22 @@ impl MetaMcp {
         );
 
         let capabilities = self.capabilities_with_events(capabilities);
-        serde_json::json!({
+        let mut document = serde_json::json!({
             "resultType": "complete",
             "supportedVersions": versions,
             "capabilities": capabilities,
             "_meta": {
                 "io.modelcontextprotocol/serverInfo": handshake.server_info,
             },
-        })
+        });
+        if let Some(object) = document.as_object_mut() {
+            crate::protocol::cacheable::write_cache_hints(
+                object,
+                "server/discover",
+                crate::protocol::cacheable::LIST_TTL_MS,
+            );
+        }
+        document
     }
 
     /// Handle `initialize` with version negotiation and optional profile binding.
@@ -1891,6 +1897,8 @@ impl MetaMcp {
     /// When the `spec-preview` feature is active and the params contain a `query`
     /// key, delegates to the filtered handler (SEP-1821).  Otherwise falls back to
     /// the standard session-aware handler so baseline behaviour is unchanged.
+    /// The filtered handler may spawn a cache fill, so call it inside a Tokio
+    /// runtime.
     pub fn handle_tools_list_with_params(
         &self,
         id: RequestId,

@@ -403,7 +403,7 @@ async fn a_replayed_refusal_records_only_the_delivered_tenants() {
 /// settles its key as a terminal failure (`reservation.fail`, `invoke.rs`).
 /// The repeat is served that stored error without reaching the backend, and
 /// its record is a cached delivery with the request's tenants and no data
-/// classes.
+/// classes, marked uninspected as the refusal was (MIK-7636).
 #[tokio::test]
 async fn a_replayed_refused_receipt_is_recorded_as_a_cached_delivery() {
     let dir = tempfile::tempdir().unwrap();
@@ -462,7 +462,11 @@ async fn a_replayed_refused_receipt_is_recorded_as_a_cached_delivery() {
     let all = records(&dir);
     assert_eq!(all.len(), 2, "{all:?}");
     let hit = &all[1];
-    assert_eq!(hit["attribution"], json!("cached_delivery"), "{hit}");
+    assert_eq!(
+        hit["attribution"],
+        json!("cached_delivery_uninspected"),
+        "{hit}"
+    );
     assert_eq!(hit["tenants"], sorted(&["cust-1"]), "{hit}");
     assert!(hit.get("data_classes").is_none(), "{hit}");
 }
