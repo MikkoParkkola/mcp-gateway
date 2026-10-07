@@ -184,6 +184,7 @@ backend" and "fails a capability file" first.**
 | 157 | `webhooks.base_path` may not overlap a gateway route | Move the receiver to a path outside `/mcp`, `/ui`, `/dashboard`, `/accounts/v1`, `/auth`, `/.well-known` and the probe paths |
 | 158 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
+| 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4202,6 +4203,29 @@ count:
 
 Library users: `CostTracker::evict_old_records` is removed. Nothing called it
 in the gateway, and there is nothing left to evict.
+
+## 160. The budget enforcer's day rows are bounded
+
+**Startup:** no notice
+
+With cost governance on, the budget enforcer kept a per-tool and a per-key day
+row for every name that ever spent and never removed one. Now:
+
+- A tool or key with a budget always keeps its own row, so budget checks are
+  unchanged.
+- Other names get their own row up to about 256 per map (calls racing on a
+  first insert can add a few more). Past that, or for a name
+  longer than 256 bytes, their spend is counted in `tool_overflow_usd` or
+  `key_overflow_usd`. It still counts toward the global daily budget.
+- Rows from an earlier day without a budget are removed on a later spend.
+
+`EnforcerSnapshot` and the saved `costs.json` (`PersistedCosts`) carry the two
+overflow totals; the admin cost stats show them as `tool_overflow_spend_usd`
+and `key_overflow_spend_usd`. A file saved by an earlier
+build loads with both at 0.
+
+Library users: code that builds `EnforcerSnapshot` or `PersistedCosts` with a
+struct literal adds the two fields.
 
 ## Upgrading from 3.5.x: a walkthrough
 

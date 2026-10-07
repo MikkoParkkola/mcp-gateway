@@ -59,6 +59,11 @@ pub(crate) struct OutboxRecord {
     pub firewall: Option<String>,
     /// Attempts started so far.
     pub attempt: u32,
+    /// Of those, claims that sent nothing because the audit log refused
+    /// them: they number the audit records but not the attempt limit.
+    /// Absent on older records.
+    #[serde(default)]
+    pub unsent: u32,
     pub next_attempt_at: DateTime<Utc>,
     pub first_attempt_at: Option<DateTime<Utc>>,
     /// Fan-out time: the per-subscription delivery order.
@@ -74,6 +79,12 @@ pub(crate) struct OutboxRecord {
 }
 
 impl OutboxRecord {
+    /// Attempts that could have reached the callback: what the attempt
+    /// limit and the backoff count.
+    pub(crate) fn sends(&self) -> u32 {
+        self.attempt.saturating_sub(self.unsent)
+    }
+
     /// The body bytes, or `None` for a record whose body does not decode.
     pub(crate) fn body(&self) -> Option<Vec<u8>> {
         base64::engine::general_purpose::STANDARD
