@@ -98,7 +98,7 @@ src/gateway/router/backend_handlers.rs	passthrough_identity_key	1	standard	borde
 src/gateway/router/backend_handlers.rs	sign_and_record	1	standard	borderline	sign_and_record	Signs a direct delivery and stages it for relay detection
 src/gateway/router/backend_handlers/costs.rs	costs_handler	1	critical	a	costs_handler	/api/costs answers 403 unless the client is admin.
 src/gateway/router/backend_handlers/direct_audit.rs	record	1	critical	borderline	record	Withholds the answer with 503 when the audit write fails under FailClosed.
-src/gateway/router/backend_handlers/direct_audit.rs	audited_call_judged	1	standard	borderline	audited_call_judged	Runs a direct call inside the read guard that judges what it returns
+src/gateway/router/backend_handlers/direct_audit.rs	audited_call_judged	1	critical	d	audited_call_judged	Replaces a direct answer with the audit-unavailable refusal when its delivery record fails, inside the read guard that judges it
 src/gateway/router/backend_handlers/direct_list.rs	drain	1	critical	c,d	drain	Drops withheld (blocked) tools and drops a result that arrives beside an error (#1441).
 src/gateway/router/backend_handlers/direct_list.rs	retain_invocable	1	critical	a	retain_invocable	Filters tools/list down to the tools the caller may invoke.
 src/gateway/router/backend_handlers/key_check.rs	key_refusal	1	critical	borderline	key_refusal	R2 refusal of undeclared argument keys; a schema control rather than plain authorization.
@@ -314,7 +314,7 @@ src/oauth/client/destination.rs	http_client	1	standard	borderline	http_client	In
 src/oauth/client/destination.rs	client_for	1	critical	b,d	OAuthClient::client_for	Refuses a cleartext http:// OAuth endpoint off this machine; uses the unproxied client only for configured loopback.
 src/oauth/client/destination.rs	finish	1	critical	b,d	finish	Installs the OAuth redirect policy: refuses a cleartext loopback hop through the environment proxy and an over-long chain.
 src/oauth/client/destination.rs	loopback_client	1	standard	borderline	loopback_client	Builds the unproxied loopback OAuth client; a wrong builder would skip the redirect policy.
-src/oauth/client/destination.rs	refresh_client_for	1	critical	b,d	OAuthClient::refresh_client_for	Refuses a cleartext token endpoint off this machine; the refresh client follows no redirect and pins the destination policy
+src/oauth/client/destination.rs	refresh_client_for	1	critical	b,d	OAuthClient::refresh_client_for	Refuses a cleartext token endpoint off this machine; the owned refresh client follows no redirect and pins the destination policy, a supplied client is used as configured
 src/oauth/client/destination.rs	loopback_cleartext	1	critical	b,d	OAuthClient::loopback_cleartext	Decides the cleartext loopback exception client_for and refresh_client_for rest on
 src/oauth/client/grants.rs	authorize_until	1	critical	b	OAuthClient::authorize_until	Issuer check enforced before redeeming the authorization code
 src/oauth/client/grants.rs	authorize	1	standard	borderline	OAuthClient::authorize	Forwards to authorize_until; a mistake would skip its issuer check
@@ -335,11 +335,11 @@ src/oauth/client/mod.rs	storage_key	1	standard	borderline	storage_key	Issuer-key
 src/oauth/client/refresh_flight.rs	is_spent	1	critical	d	Flight::is_spent	Decides whether a refresh token may be sent again
 src/oauth/client/refresh_flight.rs	spend	3	critical	d	spend	Marks a possibly consumed refresh token spent and compare-and-clears it from storage
 src/oauth/client/refresh_flight.rs	run	1	critical	d	Exchange::run	Decides a refresh token is possibly consumed (no settled answer, or a supplied client's refusal) and spends it
-src/oauth/client/refresh_flight.rs	send	1	critical	d	Exchange::send	Classifies the exchange: only a connect error with redirects off counts as not sent; a redirect is never followed
+src/oauth/client/refresh_flight.rs	send	1	critical	d	Exchange::send	Classifies the exchange: not sent only on the owned client (redirects off); through a supplied client a connect error is unsettled; a redirect answer is never followed
 src/oauth/client/refresh_flight.rs	refused_target	1	critical	d	refused_target	Refuses a redirect target by literal or by what its name resolves to (SSRF)
 src/oauth/client/refresh_flight.rs	retire_unsettled	1	standard	borderline	retire_unsettled	Spends a token whose exchange never settled before a restart
 src/oauth/client/refresh_flight.rs	redirect_error	1	standard	borderline	Exchange::redirect_error	Keeps a refused redirect target typed as an SSRF refusal
-src/oauth/client/refresh_flight.rs	names_an_oauth_error	1	standard	borderline	names_an_oauth_error	Tells an OAuth refusal (token not consumed) from an unsettled outcome
+src/oauth/client/refresh_flight.rs	names_an_oauth_error	1	critical	d	names_an_oauth_error	Decides an OAuth refusal (token not consumed, kept for reuse) from an unsettled outcome (token spent)
 src/oauth/metadata.rs	discover	1	critical	b	AuthorizationServerMetadata::discover	RFC 8414 issuer must match the discovery base
 src/oauth/storage.rs	is_expired	1	critical	d	TokenInfo::is_expired	Expiry decision (60s buffer) gating reuse of a cached token
 src/oauth/storage.rs	create_secret_tmp	1	standard	borderline	TokenStorage::create_secret_tmp	Creates a private (0600/DACL) temp file via create_new_private
