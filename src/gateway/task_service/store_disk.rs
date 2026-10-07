@@ -98,8 +98,9 @@ pub(super) struct Loaded {
 }
 
 /// The parts of a record read before, and independently of, the strict
-/// parse, each on its own: one malformed field never hides another. Enough to
+/// parse, each on its own: one malformed member never hides another. Enough to
 /// refuse a newer build's row and to keep a damaged row's key.
+#[derive(Default)]
 struct Envelope {
     version: Option<u64>,
     admission: Option<AdmissionRecord>,
@@ -107,17 +108,52 @@ struct Envelope {
 }
 
 impl Envelope {
+    /// Walks the record's top-level members in file order and keeps each one
+    /// that reads. A syntax error ends the walk but keeps what came before it:
+    /// a record cut off inside `model`, which is written after `admission`,
+    /// still yields its version and its key.
     fn read(bytes: &[u8]) -> Self {
-        let value = serde_json::from_slice::<serde_json::Value>(bytes).ok();
-        let field = |pointer: &str| value.as_ref().and_then(|value| value.pointer(pointer));
-        Self {
-            version: field("/version").and_then(serde_json::Value::as_u64),
-            admission: field("/admission")
-                .and_then(|admission| AdmissionRecord::deserialize(admission).ok()),
-            task_id: field("/model/task/taskId")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned),
+        let mut envelope = Self::default();
+        let _ = serde::Deserializer::deserialize_map(
+            &mut serde_json::Deserializer::from_slice(bytes),
+            Members(&mut envelope),
+        );
+        envelope
+    }
+}
+
+struct Members<'e>(&'e mut Envelope);
+
+impl<'de> serde::de::Visitor<'de> for Members<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a task record")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut members: A) -> Result<(), A::Error> {
+        while let Some(key) = members.next_key::<String>()? {
+            match key.as_str() {
+                "version" => {
+                    self.0.version = members.next_value::<serde_json::Value>()?.as_u64();
+                }
+                "admission" => {
+                    let admission = members.next_value::<serde_json::Value>()?;
+                    self.0.admission = AdmissionRecord::deserialize(admission).ok();
+                }
+                "model" => {
+                    let model = members.next_value::<serde_json::Value>()?;
+                    self.0.task_id = model
+                        .pointer("/task/taskId")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned);
+                }
+                _ => {
+                    members.next_value::<serde::de::IgnoredAny>()?;
+                }
+            }
         }
+        Ok(())
     }
 }
 
