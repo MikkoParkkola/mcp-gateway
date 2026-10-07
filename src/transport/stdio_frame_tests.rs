@@ -162,3 +162,190 @@ async fn a_configured_smaller_limit_refuses_a_frame_the_default_accepts() {
     assert!(frames(&input).await[0].is_ok());
     assert!(frames_within(&input, 65_536).await[0].is_err());
 }
+
+/// Stopping a backend ends its whole process group, not just the leader.
+///
+/// A launcher backend (`npx`, `npm exec`, a wrapper script) is a tree: the
+/// direct child is the launcher and the server is a descendant. These rows pin
+/// that `close()` reaches the descendants, including when the leader is already
+/// gone and reaped. Cases contributed with #3419.
+#[cfg(unix)]
+mod tree_kill {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::super::StdioTransport;
+    use crate::transport::Transport as _;
+
+    /// The backend's answer to `initialize` (request id 1), quoted for `printf`.
+    const INITIALIZE_REPLY: &str =
+        r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
+
+    /// A backend that answers `initialize` and starts a descendant, recording the
+    /// leader's pid and then the descendant's. With `exit_after_handshake` the
+    /// leader exits on its own once `notifications/initialized` arrives, while
+    /// the descendant keeps stdout open, so the transport never sees EOF.
+    fn tree_backend(workspace: &Path, exit_after_handshake: bool) -> (String, PathBuf) {
+        let server = workspace.join("tree-server.sh");
+        let pidfile = workspace.join("pids");
+        let pids = pidfile.display().to_string();
+        let mut script = String::new();
+        script.push_str(&format!("echo $$ > \"{pids}\"\n"));
+        script.push_str("sh -c 'sleep 1000' &\n");
+        script.push_str(&format!("echo $! >> \"{pids}\"\n"));
+        script.push_str("while IFS= read -r request; do\ncase \"$request\" in\n");
+        script.push_str("    *'\"method\":\"initialize\"'*)\n");
+        script.push_str(&format!(
+            "        printf '%s\\n' {INITIALIZE_REPLY}\n        ;;\n"
+        ));
+        if exit_after_handshake {
+            script.push_str("    *'notifications/initialized'*)\n        exit 0\n        ;;\n");
+        }
+        script.push_str("esac\ndone\n");
+        std::fs::write(&server, script).expect("write tree backend");
+        ("sh tree-server.sh".to_string(), pidfile)
+    }
+
+    fn start_tree_transport(workspace: &Path, command: &str) -> Arc<StdioTransport> {
+        StdioTransport::new(
+            command,
+            HashMap::new(),
+            Some(workspace.to_string_lossy().into_owned()),
+            Duration::from_secs(5),
+            None,
+        )
+    }
+
+    fn pid_is_alive(pid: u32) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    /// Wait for a pid to disappear, then report whether it did.
+    async fn wait_until_gone(pid: u32, within: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + within;
+        while tokio::time::Instant::now() < deadline {
+            if !pid_is_alive(pid) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        !pid_is_alive(pid)
+    }
+
+    fn read_pids(pidfile: &Path) -> (u32, u32) {
+        let raw = std::fs::read_to_string(pidfile).expect("backend recorded its pids");
+        let pids: Vec<u32> = raw
+            .split_whitespace()
+            .filter_map(|value| value.parse().ok())
+            .collect();
+        assert_eq!(
+            pids.len(),
+            2,
+            "expected a leader and a descendant, got {pids:?}"
+        );
+        (pids[0], pids[1])
+    }
+
+    /// Reap the leader once it has exited, the way the liveness check does.
+    async fn reap_leader(transport: &StdioTransport, leader: u32) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline {
+            let _ = transport.is_connected();
+            if !pid_is_alive(leader) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn close_kills_the_whole_backend_process_group() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let (command, pidfile) = tree_backend(workspace.path(), false);
+        let transport = start_tree_transport(workspace.path(), &command);
+        transport.start().await.expect("start");
+        let (leader, descendant) = read_pids(&pidfile);
+        assert!(
+            pid_is_alive(descendant),
+            "precondition: descendant is running"
+        );
+
+        transport.close().await.expect("close");
+
+        assert!(
+            wait_until_gone(descendant, Duration::from_secs(5)).await,
+            "descendant pid {descendant} survived close(): the group was not signalled"
+        );
+        assert!(
+            wait_until_gone(leader, Duration::from_secs(5)).await,
+            "leader pid {leader} survived close()"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_after_the_leader_exited_still_kills_the_group() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let (command, pidfile) = tree_backend(workspace.path(), false);
+        let transport = start_tree_transport(workspace.path(), &command);
+        transport.start().await.expect("start");
+        let (leader, descendant) = read_pids(&pidfile);
+
+        // End the leader behind the transport's back and let the liveness check
+        // reap it, so the child handle no longer names a live process while the
+        // descendant still runs.
+        std::process::Command::new("kill")
+            .args(["-9", &leader.to_string()])
+            .status()
+            .expect("kill leader");
+        reap_leader(&transport, leader).await;
+        assert!(
+            !pid_is_alive(leader),
+            "precondition: the leader is gone and reaped"
+        );
+        assert!(
+            pid_is_alive(descendant),
+            "precondition: the descendant outlives its leader"
+        );
+
+        transport
+            .close()
+            .await
+            .expect("close on an exited leader must not error");
+
+        assert!(
+            wait_until_gone(descendant, Duration::from_secs(5)).await,
+            "descendant pid {descendant} survived a close() that found the leader already reaped"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_kills_a_descendant_that_outlived_a_self_exiting_leader() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let (command, pidfile) = tree_backend(workspace.path(), true);
+        let transport = start_tree_transport(workspace.path(), &command);
+        transport.start().await.expect("start");
+        let (leader, descendant) = read_pids(&pidfile);
+
+        reap_leader(&transport, leader).await;
+        assert!(
+            !pid_is_alive(leader),
+            "precondition: the leader exited on its own"
+        );
+        assert!(
+            pid_is_alive(descendant),
+            "precondition: the descendant is still running with stdout open"
+        );
+
+        transport.close().await.expect("close");
+
+        assert!(
+            wait_until_gone(descendant, Duration::from_secs(5)).await,
+            "descendant pid {descendant} outlived its own leader and close() did not reach it"
+        );
+    }
+}
