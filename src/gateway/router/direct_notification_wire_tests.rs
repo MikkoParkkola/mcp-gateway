@@ -292,6 +292,32 @@ async fn a_client_cancel_never_reaches_the_backend() {
     assert_eq!(auths(&gw, NOTE).len(), 1, "the control notification");
 }
 
+/// MIK-8072 (codex P2): a dropped cancel mints no per-user credential and
+/// writes no `idp_mint` record; control: the same caller's ordinary
+/// notification does, so the check can see a mint.
+#[tokio::test]
+async fn a_dropped_cancel_mints_no_credential() {
+    let gw = gateway(PropagationStrategyKind::SignedAssertion).await;
+    let minted = |gw: &Gateway| {
+        gw._audit
+            .iter()
+            .map(|f| std::fs::read_to_string(f.path()).unwrap_or_default())
+            .any(|log| log.contains("idp_mint"))
+    };
+    let cancel = json!({ "jsonrpc": "2.0", "method": "notifications/cancelled",
+        "params": { "requestId": 1 } });
+    assert_eq!(
+        send(&gw, &cancel, Some("gamma"), None).await,
+        StatusCode::ACCEPTED
+    );
+    assert!(!minted(&gw), "a dropped cancel minted a credential");
+    assert_eq!(
+        send(&gw, &note(), Some("gamma"), None).await,
+        StatusCode::ACCEPTED
+    );
+    assert!(minted(&gw), "control: a forwarded notification mints");
+}
+
 /// Neither strategy's forwarded credential reaches a trace span on the HTTP
 /// notification path.
 #[tokio::test]
