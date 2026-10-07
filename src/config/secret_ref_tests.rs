@@ -281,7 +281,7 @@ fn malformed_template_name_refused() {
     .expect_err("a ${...} that is not a variable reference must be refused");
     let msg = err.to_string();
     assert!(
-        msg.contains("backends.a.headers.Authorization") && msg.contains("github_token"),
+        msg.contains("backends.a.headers.Authorization") && !msg.contains("github_token"),
         "got: {msg}"
     );
 }
