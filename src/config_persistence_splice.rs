@@ -371,8 +371,58 @@ fn apply_delta(raw: &mut Mapping, old: &Mapping, new: &Mapping) {
     }
 }
 
-#[cfg(test)]
+/// The one backend that differs between `before` and `config`: added,
+/// removed, or edited in place.
+pub(super) fn changed_backend(before: &Config, config: &Config) -> Option<String> {
+    let value = |b: &crate::config::BackendConfig| serde_json::to_value(b).ok();
+    let mut changed = before
+        .backends
+        .iter()
+        .filter(|(name, b)| {
+            config
+                .backends
+                .get(*name)
+                .is_none_or(|c| value(*b) != value(c))
+        })
+        .map(|(name, _)| name)
+        .chain(
+            config
+                .backends
+                .keys()
+                .filter(|name| !before.backends.contains_key(*name)),
+        );
+    let name = changed.next()?.clone();
+    changed.next().is_none().then_some(name)
+}
 
+/// The refusal for a write that would drop the comments in `text`. Any `#`
+/// counts: a false one only refuses a write the splice could not keep.
+pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
+    const SHOWN: usize = 5;
+    let comments: Vec<String> = text
+        .lines()
+        .enumerate()
+        .filter_map(|(n, l)| {
+            l.find('#')
+                .map(|at| format!("line {}: {}", n + 1, &l[at..]))
+        })
+        .collect();
+    let rest = comments.len().saturating_sub(SHOWN);
+    let more = if rest == 0 {
+        String::new()
+    } else {
+        format!(" (and {rest} more)")
+    };
+    format!(
+        "Not saved: this edit cannot be written into {} as a text change (flow style, or a \
+         comment inside the changed value), and a full rewrite would drop its comments: {}{more}. \
+         Edit the file by hand, or use `mcp-gateway add` / `remove`.",
+        path.display(),
+        comments[..comments.len().min(SHOWN)].join("; ")
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::{edit_entry, inline_comment, remove_entry, splice};
 

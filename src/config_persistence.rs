@@ -72,50 +72,97 @@ pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
 ///
 /// Returns `Err` on validation, serialisation, or I/O failure.
 pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
-    config
-        .validate_with_env(&config.env_overlay())
-        .map_err(|e| format!("Failed to validate config: {e}"))?;
-    if let Some(edited) = text_keeping_comments(path, config) {
-        return write_yaml(path, &edited);
-    }
-    let yaml =
-        serde_yaml::to_string(config).map_err(|e| format!("Failed to serialize config: {e}"))?;
-    write_yaml(path, &yaml)
+    write_config_with(path, config, CommentLoss::Rewrite)
+        .map(|_| ())
+        .map_err(|e| crate::config_reload::ConfigWriteError::from(e).to_string())
 }
 
 #[path = "config_persistence_splice.rs"]
 mod splice;
 
-/// The file at `path` with `config`'s one changed backend edited into its
-/// text, keeping the file's comments, when `config` differs from what the
-/// file loads as by exactly one backend added or removed. `None` sends
-/// [`write_config`] to the full re-serialisation.
-///
-/// The file is loaded through the strict loader from a single read, and that
-/// exact text is the one edited: a file that does not load, or that another
-/// writer changed into something more than one backend away, is rewritten in
-/// full instead. An edit landing after that read is overwritten by the rename,
-/// as the full rewrite overwrites it.
-fn text_keeping_comments(path: &Path, config: &Config) -> Option<String> {
-    let (before, text) = Config::load_literal_with_text(path).ok()?;
-    let name = sole_changed_backend(&before, config)?;
-    splice::with_backend_edited(&text, &before, config, &name)
+/// What a write does when it cannot keep the file's comments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CommentLoss {
+    /// Re-serialise the whole file (CLI, setup import).
+    Rewrite,
+    /// Write nothing and say what would be lost (web UI backend edits), and
+    /// skip a write that would change nothing.
+    Refuse,
 }
 
-/// The one backend name in exactly one of `before` and `config`.
-fn sole_changed_backend(before: &Config, config: &Config) -> Option<String> {
-    let mut changed = before
-        .backends
-        .keys()
-        .filter(|name| !config.backends.contains_key(*name))
-        .chain(
-            config
-                .backends
-                .keys()
-                .filter(|name| !before.backends.contains_key(*name)),
-        );
-    let name = changed.next()?.clone();
-    changed.next().is_none().then_some(name)
+/// A config write that did not happen.
+#[derive(Debug)]
+pub(crate) enum Unwritten {
+    Write(crate::config_reload::ConfigWriteError),
+    /// Refused under [`CommentLoss::Refuse`]; the message names the comments.
+    CommentLoss(String),
+}
+
+impl From<crate::config_reload::ConfigWriteError> for Unwritten {
+    fn from(e: crate::config_reload::ConfigWriteError) -> Self {
+        Self::Write(e)
+    }
+}
+
+impl From<String> for Unwritten {
+    fn from(message: String) -> Self {
+        Self::Write(message.into())
+    }
+}
+
+impl From<Unwritten> for crate::config_reload::ConfigWriteError {
+    /// Only [`CommentLoss::Refuse`] refuses, and no public caller asks for it.
+    fn from(e: Unwritten) -> Self {
+        match e {
+            Unwritten::Write(e) => e,
+            Unwritten::CommentLoss(message) => Self::Failed(message),
+        }
+    }
+}
+
+/// [`write_config`] with an explicit answer to a write that would drop the
+/// file's comments. `Ok(false)`: under [`CommentLoss::Refuse`], `config` is
+/// what the file already loads as, so nothing was written.
+///
+/// The file is loaded through the strict loader from a single read, and that
+/// exact text is the one edited when `config` differs from it by exactly one
+/// backend added, removed or edited. A file that does not load, or that
+/// another writer changed into something more than one backend away, is
+/// rewritten in full, or refused. An edit landing after that read is
+/// overwritten by the rename, as the full rewrite overwrites it.
+pub(crate) fn write_config_with(
+    path: &Path,
+    config: &Config,
+    mode: CommentLoss,
+) -> Result<bool, Unwritten> {
+    config
+        .validate_with_env(&config.env_overlay())
+        .map_err(|e| format!("Failed to validate config: {e}"))?;
+    let current = Config::load_literal_with_text(path).ok();
+    if let Some((before, text)) = &current {
+        let value = |c: &Config| serde_json::to_value(c).ok();
+        if mode == CommentLoss::Refuse && value(before) == value(config) {
+            return Ok(false);
+        }
+        if let Some(edited) = splice::changed_backend(before, config)
+            .and_then(|name| splice::with_backend_edited(text, before, config, &name))
+        {
+            write_yaml(path, &edited)?;
+            return Ok(true);
+        }
+    }
+    if mode == CommentLoss::Refuse {
+        let text = current
+            .map(|(_, text)| text)
+            .or_else(|| std::fs::read_to_string(path).ok());
+        if let Some(text) = text.filter(|t| t.contains('#')) {
+            return Err(Unwritten::CommentLoss(splice::comment_loss(path, &text)));
+        }
+    }
+    let yaml =
+        serde_yaml::to_string(config).map_err(|e| format!("Failed to serialize config: {e}"))?;
+    write_yaml(path, &yaml)?;
+    Ok(true)
 }
 
 /// How many times a rename is retried before the write is reported failed.
