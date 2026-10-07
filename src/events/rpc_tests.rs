@@ -343,6 +343,10 @@ async fn the_commit_admits_only_a_detected_or_unneeded_transport() {
     let outcome = hub
         .commit_started(
             &record,
+            Grant {
+                ttl: None,
+                until: None,
+            },
             false,
             (caps, chrono::Duration::zero(), policy),
             Utc::now(),
