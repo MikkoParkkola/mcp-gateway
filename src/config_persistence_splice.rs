@@ -450,7 +450,7 @@ pub(super) fn changed_backends(before: &Config, config: &Config) -> Vec<String> 
 /// `text` with every backend that differs between `before` and `config`
 /// spliced in one at a time, each step through [`with_backend_edited`] and
 /// its proof. `None` when a step cannot be spliced, when several backends
-/// differ and `scope` is `Splice::One` or one of them is not an addition, or
+/// differ and `scope` is `Splice::One` or one of them is a removal, or
 /// when `config` differs from `before` outside `backends`.
 pub(super) fn with_backends_edited(
     text: &str,
@@ -459,15 +459,16 @@ pub(super) fn with_backends_edited(
     scope: super::Splice,
 ) -> Option<String> {
     let names = changed_backends(before, config);
-    // Several changes are spliced only under `Splice::Additions` and only when
-    // all are additions (setup and discovery import). A removal among several
-    // is what a stale `config` looks like after another writer added a
-    // backend, and under `Splice::One` an extra addition is what it looks like
-    // after another writer removed one. Either takes the ordinary path:
+    // Several changes are spliced only under `Splice::NoRemoval` and only when
+    // none is a removal (setup and discovery add backends, and discovery
+    // replaces a same-named one). A removal among several is what a stale
+    // `config` looks like after another writer added a backend, and under
+    // `Splice::One` an extra addition is what it looks like after another
+    // writer removed one. Either takes the ordinary path:
     // refused when comments would be lost, otherwise the full rewrite, last
     // writer wins (MIK-8042 tracks a base-revision check).
     if names.len() > 1
-        && (scope == super::Splice::One || names.iter().any(|n| before.backends.contains_key(n)))
+        && (scope == super::Splice::One || names.iter().any(|n| !config.backends.contains_key(n)))
     {
         return None;
     }

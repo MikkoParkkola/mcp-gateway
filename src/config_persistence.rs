@@ -132,8 +132,8 @@ pub(crate) fn write_config_with(
 /// Write `config` to `path` for a CLI command, keeping the file's comments.
 ///
 /// The file's text is edited in place when `config` differs from it in
-/// `backends` alone: one backend added, removed or edited, or several added
-/// (setup and discovery import). A write that would drop comments is refused
+/// `backends` alone: one backend added, removed or edited, or several added or
+/// edited (setup and discovery import). A write that would drop comments is refused
 /// unless `force`; a forced one rewrites the file in full and returns the
 /// refusal it overrode, which names the comment lines it dropped. A `config`
 /// that is what the file already loads as writes nothing.
@@ -151,9 +151,9 @@ pub fn write_config_preserving(
         Unwritten::CommentLoss(message) => message,
         Unwritten::Failed(message) => format!("Failed to write {}: {message}", path.display()),
     };
-    match write_spliced(path, config, CommentLoss::Refuse, Splice::Additions) {
+    match write_spliced(path, config, CommentLoss::Refuse, Splice::NoRemoval) {
         Err(Unwritten::CommentLoss(refusal)) if force => {
-            write_spliced(path, config, CommentLoss::Rewrite, Splice::Additions)
+            write_spliced(path, config, CommentLoss::Rewrite, Splice::NoRemoval)
                 .map_err(message)?;
             Ok(Some(refusal))
         }
@@ -167,8 +167,9 @@ enum Splice {
     /// Exactly one: the web UI and the `config_reload` API change one backend
     /// per write, so two differences mean another writer got in between.
     One,
-    /// Several when every one is an addition (CLI setup and discovery import).
-    Additions,
+    /// Several when none is a removal (CLI setup and discovery import, which
+    /// adds backends and replaces a same-named one).
+    NoRemoval,
 }
 
 /// [`write_config_with`] with the splice limited to `scope`.

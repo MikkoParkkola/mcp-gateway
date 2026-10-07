@@ -450,6 +450,22 @@ fn discover_write_keeps_comments() {
     assert!(after.contains("# keep me"), "{after}");
 }
 
+/// Discovery replaces a same-named backend: that edit, beside an addition,
+/// is spliced with the file's comments kept, not refused.
+#[test]
+fn discover_write_that_replaces_a_backend_keeps_comments() {
+    let (home, path) = two_client_servers(Some("# keep me\nbackends:\n  one:\n    command: x\n"));
+    let p = path.to_str().unwrap();
+    let args = ["cap", "discover", "--write-config", "--config-path", p];
+    let config = wrote(home.path(), &path, &args);
+    assert!(config.backends.contains_key("one") && config.backends.contains_key("two"));
+    let after = std::fs::read_to_string(&path).expect("read");
+    assert!(
+        after.contains("# keep me") && !after.contains("command: x"),
+        "{after}"
+    );
+}
+
 #[test]
 fn discover_write_that_would_drop_comments_is_refused() {
     let (home, path) = two_client_servers(Some(FLOW));
