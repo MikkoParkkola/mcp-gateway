@@ -22,33 +22,33 @@ use crate::protocol::era::{Era, EraObservation, EraSource, METHOD_NOT_FOUND_CODE
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
-const DISCOVER: &str = "server/discover";
+pub(super) const DISCOVER: &str = "server/discover";
 /// A failure bound, never a synchronisation delay: nothing waits this long when the code works.
-const WAIT: Duration = Duration::from_secs(20);
+pub(super) const WAIT: Duration = Duration::from_secs(20);
 
 /// What a peer answers `server/discover` with.
 #[derive(Clone, Copy)]
-enum Answer {
+pub(super) enum Answer {
     Modern,
     MethodNotFound,
 }
 
 /// A peer whose `server/discover` can be held mid-flight once armed.
-struct Peer {
+pub(super) struct Peer {
     answer: Answer,
     /// While false, `server/discover` answers at once (the priming probe).
-    hold: AtomicBool,
+    pub(super) hold: AtomicBool,
     started: std::sync::Mutex<Option<oneshot::Sender<()>>>,
     release: std::sync::Mutex<Option<oneshot::Receiver<()>>>,
 }
 
-struct Handles {
-    started: oneshot::Receiver<()>,
-    release: oneshot::Sender<()>,
+pub(super) struct Handles {
+    pub(super) started: oneshot::Receiver<()>,
+    pub(super) release: oneshot::Sender<()>,
 }
 
 impl Peer {
-    fn new(answer: Answer) -> (Arc<Self>, Handles) {
+    pub(super) fn new(answer: Answer) -> (Arc<Self>, Handles) {
         let (started_tx, started) = oneshot::channel();
         let (release, release_rx) = oneshot::channel();
         let peer = Arc::new(Self {
