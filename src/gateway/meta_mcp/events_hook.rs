@@ -277,7 +277,7 @@ fn apply_webhook_refresh(
     registry: &Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>,
 ) {
     let _gate = hub.catalogue_lock();
-    let Some(refreshed) = refresh_from_snapshot(hub, capabilities, registry) else {
+    let Some(refreshed) = refresh_from_snapshot(capabilities, registry) else {
         return;
     };
     let kept = |name: &str| {
@@ -388,7 +388,7 @@ fn startup_refresh(
         (Some(capabilities), Some(registry)) => {
             // Covered by this refresh, held or not.
             let _ = capabilities.take_held_reload();
-            match refresh_from_snapshot(hub, capabilities, registry) {
+            match refresh_from_snapshot(capabilities, registry) {
                 Some(refreshed) if refreshed.complete => {
                     // A route this refresh removed was registered by the
                     // scan and taken away by a reload: withdrawn now, as a
@@ -426,16 +426,14 @@ struct Refreshed {
 
 /// Under the catalogue gate the caller holds: re-register the webhook routes
 /// from one snapshot of the catalogue and its completeness. `None` when the
-/// refresh is refused because it narrows a live event type, or a retired one
-/// stored subscriptions still name (T52, MIK-8038); the previous routes then
-/// stay live and nothing is withdrawn.
+/// refresh is refused because it narrows a live event type (T52); the
+/// previous routes then stay live and nothing is withdrawn.
 fn refresh_from_snapshot(
-    hub: &EventsHub,
     capabilities: &crate::capability::CapabilityBackend,
     registry: &Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>,
 ) -> Option<Refreshed> {
     let (catalogue, complete) = capabilities.catalogue_snapshot();
-    match hub.refresh_webhooks(registry, &catalogue) {
+    match crate::events::refresh_webhooks(registry, &catalogue) {
         Ok(removed) => Some(Refreshed {
             complete,
             removed,

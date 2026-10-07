@@ -11,7 +11,7 @@ use crate::capability::{CapabilityDefinition, WebhookDefinition};
 use crate::gateway::WebhookRegistry;
 
 /// What subscribers rely on in one webhook event type.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 struct Shape {
     filters: BTreeSet<String>,
     fields: BTreeSet<String>,
@@ -42,26 +42,16 @@ fn first_incompatible(
         .map(|(name, _)| name.clone())
 }
 
-/// The last shape of each webhook type whose route is gone while stored
-/// subscriptions to it remain (MIK-8038): a partial load kept them, or
-/// their withdraw failed. A restore is judged against it as against a live
-/// route. In memory; changed only under the hub's catalogue gate.
-#[derive(Debug, Default)]
-pub(crate) struct Retired(BTreeMap<String, Shape>);
-
 /// Re-register the webhook routes of `capabilities`, unless the reload
-/// narrows a live event type, or a retired one that `subscribed` still
-/// names. Returns the event types the reload removed: their subscriptions
-/// are deleted (design §9).
+/// narrows a live event type. Returns the event types the reload removed:
+/// their subscriptions are deleted (design §9).
 ///
 /// # Errors
-/// The name of the event type the reload would narrow; the registry and
-/// `retired` are then left as they were.
+/// The name of the event type the reload would narrow; the registry is
+/// then left as it was.
 pub(crate) fn refresh_webhooks(
     registry: &Arc<parking_lot::RwLock<WebhookRegistry>>,
     capabilities: &[CapabilityDefinition],
-    retired: &mut Retired,
-    subscribed: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     let old: BTreeMap<String, Shape> = registry
         .read()
@@ -79,32 +69,11 @@ pub(crate) fn refresh_webhooks(
             })
         })
         .collect();
-    let mut judged: BTreeMap<String, Shape> = retired
-        .0
-        .iter()
-        .filter(|(name, _)| subscribed.contains(*name) && !old.contains_key(*name))
-        .map(|(name, shape)| (name.clone(), shape.clone()))
-        .collect();
-    judged.extend(
-        old.iter()
-            .map(|(name, shape)| (name.clone(), shape.clone())),
-    );
-    if let Some(name) = first_incompatible(&judged, &new) {
+    if let Some(name) = first_incompatible(&old, &new) {
         return Err(name);
     }
     registry.write().replace_capabilities(capabilities);
-    let gone = removed(&old, &new);
-    // Kept while a subscription outlives the route; a type offered again
-    // is judged by its live route from now on.
-    retired
-        .0
-        .retain(|name, _| subscribed.contains(name) && !new.contains_key(name));
-    for name in &gone {
-        if subscribed.contains(name) {
-            retired.0.insert(name.clone(), old[name].clone());
-        }
-    }
-    Ok(gone)
+    Ok(removed(&old, &new))
 }
 
 /// The event names `old` has and `new` does not.
