@@ -294,3 +294,48 @@ async fn close_returns_while_a_write_is_stuck_on_a_peer_that_stopped_reading() {
         "the stuck request did not end in an error after close(): {ended:?}"
     );
 }
+
+/// MIK-8079: `close()` returns even when a reader that escaped the process
+/// group (a daemonized descendant still holding stdin) keeps a write stuck.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
+    use crate::transport::Transport as _;
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("escaped.pid");
+    let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
+    let script = format!(
+        "while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
+         *'notifications/initialized'*) setsid sleep 1000 <&0 >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         esac\ndone\n",
+        pid = pidfile.display()
+    );
+    std::fs::write(dir.path().join("escape.sh"), script).unwrap();
+    let transport = super::StdioTransport::new(
+        "sh escape.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(30),
+        None,
+    );
+    transport.start().await.expect("start");
+    let big = serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+    let stuck = {
+        let transport = std::sync::Arc::clone(&transport);
+        tokio::spawn(async move { transport.request("tools/call", Some(big)).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(10), transport.close()).await;
+    let escaped = std::fs::read_to_string(&pidfile).unwrap_or_default();
+    let _ = std::process::Command::new("kill")
+        .args(["-9", escaped.trim()])
+        .status();
+    stuck.abort();
+    assert!(
+        closed.is_ok(),
+        "close() hung on a write an escaped reader keeps stuck"
+    );
+}

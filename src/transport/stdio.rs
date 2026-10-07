@@ -746,7 +746,7 @@ impl Transport for StdioTransport {
         if let Some(ref mut child) = *self.child.lock().await {
             let _ = Box::into_pin(child.kill()).await;
         }
-        *self.writer.lock().await = None;
+        tree::clear_writer(&self.writer).await;
 
         Ok(())
     }
