@@ -387,6 +387,18 @@ def test_a_later_release_split_by_inline_html_or_link_markup_fails_the_check():
         assert run(notes("\n" + line), "--check") == 1, line
 
 
+def test_a_later_release_inside_literal_markup_fails_the_check():
+    # Code spans, escaped links and undefined references render their markup,
+    # so a version inside it is visible.
+    for line in (
+        "- See `[next](4.0.1)`.\n",
+        "- See `<em>4.0.1</em>`.\n",
+        "- See \\[next\\](4.0.1).\n",
+        "- See [next][4.0.1].\n",
+    ):
+        assert run(notes("\n" + line), "--check") == 1, line
+
+
 def test_a_later_release_on_a_wordy_wrapped_titles_first_line_fails_the_check():
     assert run("Known issues fixed in 4.0.1\ncontinued\n---\n", "--check") == 1
 
