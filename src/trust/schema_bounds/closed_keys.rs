@@ -108,6 +108,15 @@ enum Req<'a> {
     Any(Vec<Req<'a>>),
 }
 
+/// What is known about a level before its keys are judged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Level {
+    /// Nothing: whether it matches any object is still to be checked.
+    Unchecked,
+    /// It can match an object (`Walk::node` checked it).
+    Open,
+}
+
 #[derive(Debug, Clone)]
 enum Verdict<'a> {
     Refuse,
@@ -156,6 +165,11 @@ impl<'a> Walk<'a> {
         if !self.charge(depth) {
             return Vec::new();
         }
+        // A scalar has no keys, so its result is empty: nothing to remember.
+        // Its visit is charged above, as before (`MIK-8014.PERF.3a`).
+        if !(value.is_object() || value.is_array()) {
+            return Vec::new();
+        }
         let key = (
             std::ptr::from_ref(schema) as usize,
             std::ptr::from_ref(value) as usize,
@@ -195,18 +209,22 @@ impl<'a> Walk<'a> {
         depth: usize,
     ) -> Vec<KeyFault> {
         let mut faults = Vec::new();
+        // Whether an undecided key is let through: a property of the level,
+        // so decided at most once for it, on its first undecided key.
+        let mut open = None;
         for (name, item) in map {
             let at = if path.is_empty() {
                 name.clone()
             } else {
                 format!("{path}.{name}")
             };
-            match self.verdict(root, schema, name, depth, false) {
+            // `node` has already found this level able to match an object.
+            match self.verdict_at(root, schema, name, depth, false, Level::Open) {
                 Verdict::Accept(req) => faults.extend(self.value(item, &req, &at, depth + 1)),
                 Verdict::Undecided
-                    if self.standard
-                        || is_free_map(schema)
-                        || ref_to_free_map(root, schema, depth) => {}
+                    if *open.get_or_insert_with(|| {
+                        self.standard || is_free_map(schema) || ref_to_free_map(root, schema, depth)
+                    }) => {}
                 Verdict::Undecided | Verdict::Refuse | Verdict::MatchesNothing => {
                     faults.push(KeyFault::Undeclared(at));
                 }
@@ -257,6 +275,20 @@ impl<'a> Walk<'a> {
         hops: usize,
         in_any: bool,
     ) -> Verdict<'a> {
+        self.verdict_at(root, schema, key, hops, in_any, Level::Unchecked)
+    }
+
+    /// [`Self::verdict`], told whether `schema` is already known to match an
+    /// object, so a level judged once per key is checked once per walk node.
+    fn verdict_at(
+        &mut self,
+        root: &'a Value,
+        schema: &'a Value,
+        key: &str,
+        hops: usize,
+        in_any: bool,
+        level: Level,
+    ) -> Verdict<'a> {
         if !self.charge(hops) {
             return Verdict::Refuse;
         }
@@ -269,7 +301,7 @@ impl<'a> Walk<'a> {
         if in_any && (is_free_map(schema) || ref_to_free_map(root, schema, hops)) {
             return Verdict::Accept(Req::Free);
         }
-        if matches_nothing(map) {
+        if level == Level::Unchecked && matches_nothing(map) {
             return Verdict::MatchesNothing;
         }
         let root = if map.get("$id").is_some_and(Value::is_string) {
