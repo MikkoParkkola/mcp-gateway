@@ -3,6 +3,7 @@
 """The release notes' Known issues section names no later release, and is empty at a tag."""
 
 import importlib.util
+import os
 import pathlib
 import sys
 import tempfile
@@ -30,6 +31,9 @@ ITEM = "\nThese ship in 4.0.0.\n\n- A replayed webhook can get through (MIK-7854
 
 
 def run(text, *args):
+    # The tag comes from the runner when --tag is absent; on an rc tag the
+    # strict cases below would otherwise pass and the suite would go red.
+    os.environ.pop("GITHUB_REF_NAME", None)
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp, "notes.md")
         path.write_text(text, encoding="utf-8")
@@ -72,6 +76,34 @@ def test_an_empty_or_absent_section_passes_the_release_gate():
 
 def test_the_release_gate_also_refuses_a_later_release():
     assert run(notes("\n- Fixed in 4.0.1.\n"), "--release") == 1
+
+
+def test_a_prerelease_tag_may_ship_known_gaps():
+    # docs/release/v4.0.0-prerelease-channel.md: open items ship as known gaps
+    # in a beta's release notes.
+    for tag in ("v4.0.0-beta.1", "v4.0.0-rc.2"):
+        assert run(notes(ITEM), "--release", "--tag", tag) == 0, tag
+
+
+def test_a_prerelease_tag_still_refuses_a_later_release():
+    assert run(notes("\n- Fixed in 4.0.1.\n"), "--release", "--tag", "v4.0.0-rc.1") == 1
+
+
+def test_the_prerelease_tag_is_read_from_the_runner():
+    os.environ["GITHUB_REF_NAME"] = "v4.0.0-beta.3"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp, "notes.md")
+            path.write_text(notes(ITEM), encoding="utf-8")
+            assert check.main(["--notes", str(path), "--release"]) == 0
+    finally:
+        os.environ.pop("GITHUB_REF_NAME", None)
+
+
+def test_a_final_tag_or_any_other_ref_keeps_the_section_empty():
+    # A branch name with a dash is not a prerelease; only a v-semver tag is.
+    for tag in ("v4.0.0", "v4.0.0+build.1", "docs/ranking-1-release-line", "4.0.0-rc.1"):
+        assert run(notes(ITEM), "--release", "--tag", tag) == 1, tag
 
 
 def test_an_unreadable_file_fails_closed():
