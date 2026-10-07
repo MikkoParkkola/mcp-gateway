@@ -71,7 +71,7 @@ pub use hash::{compute_capability_hash, rewrite_with_pin, strip_sha256_line};
 pub use loader::CapabilityLoader;
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
 pub use parser::{parse_capability, parse_capability_file, validate_capability};
-pub(crate) use read_only_call::read_only_call_as;
+pub(crate) use read_only_call::{read_only_call_as, served_over_rest};
 pub(crate) use schema_validator::undeclared_key_refusal;
 pub use schema_validator::{
     SchemaValidationResult, ValidationViolation, validate_arguments, validate_output,
