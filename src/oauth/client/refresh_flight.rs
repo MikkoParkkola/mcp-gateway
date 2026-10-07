@@ -94,6 +94,11 @@ pub(super) async fn hold_across_processes(token_path: &Path) -> crate::Result<Ex
     }
 }
 
+/// The most one exchange may take, answer body included. Above an owned
+/// client's own 30 s request timeout plus the 5 s redirect lookup, so it
+/// only ever ends an exchange through a supplied client.
+const EXCHANGE_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// How often a credential held by another process is tried again.
 const LOCK_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 
@@ -154,8 +159,29 @@ impl Exchange {
         tokio::spawn(self.run())
     }
 
+    fn limit(&self) -> std::time::Duration {
+        #[cfg(test)]
+        {
+            if let Some(limit) = *self.flight.exchange_limit.lock() {
+                return limit;
+            }
+        }
+        EXCHANGE_LIMIT
+    }
+
     async fn run(mut self) -> Outcome {
-        let outcome = self.send().await;
+        let limit = self.limit();
+        // A supplied client may have no timeout: an endpoint that takes the
+        // request and never answers would hold the credential, and every later
+        // refresh and login save, for good. Unanswered means possibly consumed.
+        let outcome = tokio::time::timeout(limit, self.send())
+            .await
+            .unwrap_or_else(|_| {
+                Outcome::Uncertain(Error::OAuth(format!(
+                    "Token refresh got no answer within {} s",
+                    limit.as_secs()
+                )))
+            });
         // The marker stays when a possibly consumed token could not be retired
         // from storage: a later refresh, even after a restart, retires it then.
         // A supplied client may follow a redirect, so even an OAuth refusal
