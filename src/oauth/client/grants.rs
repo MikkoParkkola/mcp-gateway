@@ -12,6 +12,12 @@ use url::Url;
 
 use super::{OAuthClient, TokenResponse, generate_pkce, generate_state, validate_issuer};
 
+/// How long a login waits for the person at the browser (MIK-7982). Not the
+/// backend's request `timeout`: an interactive login with MFA routinely takes
+/// longer than one request may.
+pub(crate) const OAUTH_AUTHORIZATION_WINDOW: std::time::Duration =
+    std::time::Duration::from_secs(300);
+
 impl OAuthClient {
     /// Attempt client-credentials grant (headless re-auth, no browser required).
     ///
@@ -343,6 +349,117 @@ impl OAuthClient {
     /// Returns an error if any step of the OAuth authorization flow fails
     /// (callback server, client registration, browser auth, or code exchange).
     pub async fn authorize(&self) -> Result<String> {
+        self.authorize_until(&tokio_util::sync::CancellationToken::new(), None)
+            .await
+    }
+
+    /// This client sharing `gate` with every other client of its backend.
+    #[must_use]
+    pub(crate) fn with_login_gate(
+        mut self,
+        gate: std::sync::Arc<crate::oauth::login_gate::LoginGate>,
+    ) -> Self {
+        self.login_gate = Some(gate);
+        self
+    }
+
+    /// Authorize through the backend's login gate (MIK-7982): lead a login if
+    /// none is in flight, or wait on the one that is and share its end. The
+    /// leader records the end on the gate itself, so a caller that gave up
+    /// loses nothing: this runs inside the start's detached OAuth task. A
+    /// caller that is not `interactive` never begins or joins one.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::authorize_until`]; a joiner gets the led login's typed
+    /// outcome, or an OAuth error if the led login stored no token;
+    /// [`Error::AuthorizationRequired`] when not `interactive`.
+    pub(crate) async fn authorize_shared(
+        &self,
+        interactive: bool,
+        since: Option<u64>,
+    ) -> Result<String> {
+        use crate::oauth::login_gate::Begin;
+        if !interactive {
+            return Err(Error::AuthorizationRequired {
+                backend: self.backend_name().to_string(),
+            });
+        }
+        let Some(gate) = &self.login_gate else {
+            return self.authorize().await;
+        };
+        // A bounded caller's deadline must read this wait as a login's, even
+        // once a dropped lead has released the gate (MIK-7982 C3).
+        crate::oauth::login_gate::Provenance::mark_waited();
+        match gate.begin(since) {
+            Begin::Refused => Err(Error::AuthorizationCancelled {
+                backend: self.backend_name().to_string(),
+            }),
+            Begin::Lead(mut lead) => {
+                // A login that ended while this client was being built may
+                // already have stored a token: use it, open no second login.
+                if let Some(access) = self.adopt_stored_login() {
+                    lead.end(None);
+                    return Ok(access);
+                }
+                let listeners = lead.take_listeners_guard();
+                let result = self.authorize_until(lead.cancel_token(), listeners).await;
+                lead.end(result.as_ref().err());
+                result
+            }
+            Begin::Join(attempt) => {
+                if let Some(outcome) = attempt.finished().await {
+                    return Err(outcome.to_error(self.backend_name()));
+                }
+                self.adopt_stored_login().ok_or_else(|| {
+                    Error::OAuth("the shared login completed but stored no token".to_string())
+                })
+            }
+        }
+    }
+
+    /// The gate's cancel epoch, captured by a start before it discovers
+    /// anything (`None` when ungated).
+    pub(crate) fn login_epoch(&self) -> Option<u64> {
+        self.login_gate.as_ref().map(|gate| gate.epoch())
+    }
+
+    /// Take up a live token another client of this backend stored, with the
+    /// client id it registered (a refresh needs both). `None` if there is none.
+    fn adopt_stored_login(&self) -> Option<String> {
+        let key = self.credential_key().ok()?;
+        let token = self
+            .storage
+            .load(&key, &self.resource_url)
+            .filter(|token| !token.is_expired())?;
+        // The login that stored this token may have registered afresh: a
+        // dynamically registered id held here is replaced by the stored one,
+        // or a refresh would present the old id. A configured id stays.
+        if *self.client_id_source.read() == Some(super::ClientIdSource::Registered)
+            && let Some(stored) = self.storage.load_client_id(&key, &self.resource_url)
+        {
+            *self.client_id.write() = Some(stored);
+        } else {
+            self.restore_persisted_client_id();
+        }
+        let access = token.access_token.clone();
+        *self.current_token.write() = Some(token);
+        Some(access)
+    }
+
+    /// [`Self::authorize`], ended early by `cancel` (a restart or shutdown of
+    /// the backend). The callback wait is bounded by
+    /// [`OAUTH_AUTHORIZATION_WINDOW`] either way (MIK-7982).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::authorize`], plus [`Error::AuthorizationIncomplete`] when
+    /// the window passes and [`Error::AuthorizationCancelled`] on `cancel`.
+    pub(crate) async fn authorize_until(
+        &self,
+        cancel: &tokio_util::sync::CancellationToken,
+        listeners: Option<tokio_util::sync::DropGuard>,
+    ) -> Result<String> {
         let auth_meta = self
             .auth_metadata
             .as_ref()
@@ -356,20 +473,41 @@ impl OAuthClient {
 
         // Start callback server FIRST to get the actual callback URL
         // This must happen BEFORE client registration so we know the port
-        let callback_server = callback::start_callback_server(
+        let mut callback_server = callback::start_callback_server(
             state.clone(),
             self.callback_host.as_deref(),
             self.callback_port,
             self.callback_path.as_deref(),
         )
         .await?;
+        if let Some(guard) = listeners {
+            callback_server.hold_until_closed(guard);
+        }
         let callback_url = callback_server.callback_url.clone();
+        let cancelled = || Error::AuthorizationCancelled {
+            backend: self.backend_name().to_string(),
+        };
 
-        // Now ensure we have a client ID, passing the actual callback URL for registration
-        let client_id = match self.ensure_client_id_with_redirect(&callback_url).await {
+        // Now ensure we have a client ID, passing the actual callback URL for
+        // registration. A cancel during registration ends it there: no
+        // browser opens, and the listener is closed before this returns.
+        let registered = tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(cancelled()),
+            registered = self.ensure_client_id_with_redirect(&callback_url) => registered,
+        };
+        // A cancel that lands as registration completes still wins.
+        let registered = registered.and_then(|id| {
+            if cancel.is_cancelled() {
+                Err(cancelled())
+            } else {
+                Ok(id)
+            }
+        });
+        let client_id = match registered {
             Ok(client_id) => client_id,
             Err(e) => {
-                callback_server.stop();
+                callback_server.stop().await;
                 return Err(e);
             }
         };
@@ -393,7 +531,19 @@ impl OAuthClient {
         }
 
         // Wait for callback
-        let (actual_callback_url, callback_result) = callback_server.wait_for_callback().await?;
+        let (actual_callback_url, callback_result) = callback_server
+            .wait_within(OAUTH_AUTHORIZATION_WINDOW, cancel)
+            .await
+            .map_err(|unanswered| {
+                let backend = self.backend_name().to_string();
+                match unanswered {
+                    callback::Unanswered::Window => Error::AuthorizationIncomplete {
+                        backend,
+                        window_secs: OAUTH_AUTHORIZATION_WINDOW.as_secs(),
+                    },
+                    callback::Unanswered::Cancelled => Error::AuthorizationCancelled { backend },
+                }
+            })??;
 
         // RFC 9207, before the code is redeemed: a code that came from another
         // authorization server must not be sent to this one's token endpoint.

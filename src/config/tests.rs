@@ -66,3 +66,6 @@ fn envfile_19d_child_resolves_against_dirs_home_dir() {
 
 #[path = "frame_limit_tests.rs"]
 mod frame_limit_tests;
+
+#[path = "webhook_base_path_tests.rs"]
+mod webhook_base_path_tests;
