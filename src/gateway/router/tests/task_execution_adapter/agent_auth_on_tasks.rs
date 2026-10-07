@@ -47,8 +47,7 @@ async fn an_agent_creates_and_reads_its_own_task_with_gateway_auth_on() {
         "agent A's task creation must be admitted: {created}"
     );
     let id = task_id(&created);
-    let done = poll_until_terminal(&state, &token_a, &id).await;
-    std::assert_eq!(status_of(&done), "completed", "{done}");
+    assert_carries_the_backend_result(&poll_until_terminal(&state, &token_a, &id).await);
 }
 
 /// N2: agent B can neither read nor cancel agent A's task; A can read it.
@@ -81,6 +80,46 @@ async fn an_agent_cannot_reach_another_agents_task_with_gateway_auth_on() {
         error_code(&cancel, "agent B's tasks/cancel on agent A's task"),
         -32602,
         "{cancel}"
+    );
+}
+
+/// N2, held leg: while A's task is still working, B's update is answered as
+/// absent and A's own update and cancel are served.
+#[tokio::test]
+async fn an_agent_cannot_update_another_agents_task_with_gateway_auth_on() {
+    let (mock, gate) = MockBackend::holding(Answer::ok());
+    let mut gate = ReleasedOnDrop(gate);
+    let (state, _store, token_a, token_b) = auth_on_agents(&mock).await;
+    let created = post(&state, &token_a, task_invoke(80561, "n2-held", json!({}))).await;
+    assert!(created.get("error").is_none(), "{created}");
+    let id = task_id(&created);
+    gate.0.wait_for_dispatch().await;
+
+    let update = |rpc| task_method(rpc, "tasks/update", json!({ "taskId": id }));
+    let foreign = post(&state, &token_b, update(80562)).await;
+    std::assert_eq!(
+        foreign.pointer("/error/message").and_then(Value::as_str),
+        Some("no such task"),
+        "agent B's tasks/update on agent A's task is answered as absent: {foreign}"
+    );
+    let own = post(&state, &token_a, update(80563)).await;
+    assert!(
+        own.get("error").is_none(),
+        "agent A updates its own task: {own}"
+    );
+    let cancel = post(
+        &state,
+        &token_a,
+        task_method(80564, "tasks/cancel", json!({ "taskId": id })),
+    )
+    .await;
+    assert!(
+        cancel.get("error").is_none(),
+        "agent A cancels its own task: {cancel}"
+    );
+    std::assert_eq!(
+        status_of(&get_task(&state, &token_a, &id).await),
+        "cancelled"
     );
 }
 
