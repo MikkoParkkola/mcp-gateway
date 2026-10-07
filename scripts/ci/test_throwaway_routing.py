@@ -229,6 +229,10 @@ def heavy_jobs_skip_throwaway(rc: list) -> None:
             rc.append(f"{workflow}: job {job_id} missing or renamed from {name!r}")
             continue
         cond = str(job.get("if", "true"))
+        if job_id == "build-gate" and "always()" not in cond:
+            # Without always(), a failed scope skips the required `build`,
+            # and a skipped required check reads as passing.
+            rc.append("docker.yml: build-gate lost always()")
         for kind in ("throwaway", "fork", "branch", "into-main", "push"):
             ctx = event(kind, None)
             ctx["needs"] = {}
