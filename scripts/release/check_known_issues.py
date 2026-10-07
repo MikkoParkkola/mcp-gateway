@@ -35,10 +35,16 @@ PRERELEASE_TAG = re.compile(r"^v4\.0\.0-(beta|rc)\.\d+$")
 HEADING = re.compile(r"^ {0,3}##[ \t]+known issues(?:[ \t]+#*)?[ \t]*$", re.IGNORECASE)
 SECTION_END = re.compile(r"^ {0,3}#{1,2}(?:[ \t]|$)")
 # Setext: a paragraph line underlined with = (level 1) or - (level 2). A list
-# item or an indented code line cannot be one, and after a blank line the
-# underline is a thematic break, not a heading.
+# item, indented code, an ATX heading, a quote, a fence or a thematic break
+# cannot be one, and after a blank line the underline is a thematic break.
 UNDERLINE = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
-NOT_A_PARAGRAPH = re.compile(r"^(?: {4}|\t| {0,3}(?:[-+*]|\d+[.)])(?:[ \t]|$))")
+NOT_A_PARAGRAPH = re.compile(
+    r"^(?: {4}|\t| {0,3}(?:(?:[-+*]|\d+[.)]|#{1,6})(?:[ \t]|$)|>|```|~~~"
+    r"|([-*_])[ \t]*(?:\1[ \t]*){2,}$))"
+)
+# A fenced block's lines are text, never headings; it closes on a run of the
+# same character at least as long as the one that opened it.
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 
 
 def setext_level(line, underline):
@@ -52,8 +58,18 @@ def setext_level(line, underline):
 def known_issues(text):
     """Every Known issues section's lines, each up to the next level 1-2 heading."""
     lines = text.splitlines()
-    body, inside, underline = [], False, False
+    body, inside, underline, fence = [], False, False, ""
     for i, line in enumerate(lines):
+        opener = FENCE.match(line)
+        if fence or opener:
+            run = opener.group(1) if opener else ""
+            if not fence:
+                fence = run
+            elif run[:1] == fence[0] and len(run) >= len(fence) and line.strip() == run:
+                fence = ""
+            if inside:
+                body.append(line)
+            continue
         if underline:
             underline = False
             continue
