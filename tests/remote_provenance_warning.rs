@@ -4,8 +4,10 @@
 //! startup WARN and in `doctor`. The config leaves `remote_server_signing` out
 //! entirely, so what loads is the shipped default.
 
+use stdio_session::gateway_bin;
+
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use mcp_gateway::config::Config;
 use serde_json::Value;
@@ -51,14 +53,14 @@ async fn a_stdio_start_warns_about_an_unverified_remote_backend() {
 fn doctor_reports_an_unverified_remote_backend() {
     let home = tempfile::tempdir().expect("temporary home");
     write_config(home.path());
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-    command
-        .env_clear()
-        .env("HOME", home.path())
-        .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .stdin(Stdio::null())
-        .args(["doctor", "--config", "gateway.yaml", "--format", "json"]);
+    let mut command = gateway_bin::command(home.path(), gateway_bin::Inherit::Nothing);
+    command.current_dir(home.path()).stdin(Stdio::null()).args([
+        "doctor",
+        "--config",
+        "gateway.yaml",
+        "--format",
+        "json",
+    ]);
     // A cleared environment loses the Windows system root the process needs to start.
     if let Some(root) = std::env::var_os("SystemRoot") {
         command.env("SystemRoot", root);

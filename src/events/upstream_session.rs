@@ -82,13 +82,22 @@ fn event_name(backend: &str, kind: NoteKind) -> String {
 /// the listener served. `tools_changed` stays, since the gateway announces it
 /// itself.
 ///
-/// The withdrawal runs under the lifecycle lock a subscribe commits under, and
-/// only if the backend is still ineligible there: a reload that restores it
-/// first keeps its subscriptions, and one admitted after the restore lands
-/// after the withdrawal, so it is never deleted by it.
-fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) {
+/// The check and the withdrawal run under the lifecycle lock a subscribe
+/// commits under, and the listener stops only if the backend is still
+/// ineligible there: a reload or a transport switch that restores it first
+/// keeps the listener and its subscriptions, and one admitted after the
+/// restore lands after the withdrawal, so it is never deleted by it. `true`
+/// when the listener was stopped.
+async fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) -> bool {
+    let Some(hub) = hub.upgrade() else {
+        shared.stop.cancel();
+        return true;
+    };
+    let started = hub.lifecycle.lock().await;
+    if !shared.is_ineligible() {
+        return false;
+    }
     shared.stop.cancel();
-    let Some(hub) = hub.upgrade() else { return };
     let names: Vec<String> = [
         Kind::ResourceUpdated,
         Kind::ResourcesChanged,
@@ -97,15 +106,10 @@ fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) {
     .into_iter()
     .map(|kind| format!("backend.{}.{}", shared.name, kind.suffix()))
     .collect();
-    let (name, ineligible) = (shared.name.clone(), Arc::clone(&shared.ineligible));
-    tokio::spawn(async move {
-        let started = hub.lifecycle.lock().await;
-        if ineligible().contains(&name) {
-            hub.withdraw(&names);
-        }
-        drop(started);
-        hub.reconcile_stops_in_background();
-    });
+    hub.withdraw(&names);
+    drop(started);
+    hub.reconcile_stops_in_background();
+    true
 }
 
 /// The task: reconnect until stopped.
@@ -119,8 +123,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         if shared.stop.is_cancelled() {
             return;
         }
-        if shared.is_ineligible() {
-            end_ineligible(&shared, &hub);
+        if shared.is_ineligible() && end_ineligible(&shared, &hub).await {
             return;
         }
         let Some(backend) = registry.get(&shared.name) else {
@@ -236,20 +239,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             }
             Ev::Wake | Ev::Tick => {}
         }
-        // Not while a finished refill's change is still unannounced: invalidating
-        // now would have the hub announce it over an emptied cache.
-        if refill.is_none()
-            && !state.tools_pending
-            && state.tools_due.is_some_and(|due| Instant::now() >= due)
-        {
-            // A notice arrived: drop the cached list and refill it before the
-            // hub hears, so the subscriber's re-read is fresh and nothing sees
-            // an emptied cache. At most once per tick however many notices
-            // came; a notice during a refill waits for the next one.
-            state.tools_due = None;
-            backend.invalidate_tools();
-            refill = Some(start_refill(backend, &shared.name));
-        }
+        start_due_refill(&mut state, backend, &mut refill);
         if !backend_still_current(backend, &target.handle) {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
             return finish_refill(&mut state, shared, backend, hub, refill, started).await;
@@ -262,8 +252,52 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             state.release(backend).await;
             return Outcome::Stopped;
         }
-        state.flush(hub);
+        let tick = on_tick(backend.connected_streamable(), || shared.is_ineligible());
+        if (state.flush(hub) || tick == OnTick::EndIneligible) && end_ineligible(shared, hub).await
+        {
+            state.release(backend).await;
+            return Outcome::Stopped;
+        }
     }
+}
+
+/// What a tick does about the backend's live transport (MIK-7969 H2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnTick {
+    Keep,
+    EndIneligible,
+}
+
+/// A listener runs only for a backend that was eligible when subscribed.
+/// Once its live connection reads the SSE handshake (`live`, as
+/// `Backend::connected_streamable` reads it), a quiet stream would never
+/// notice, so the tick asks the shared predicate (`refused`, the costlier
+/// read) whether the backend is now refused. An undetected transport is not
+/// a refusal: a stopped slot reconnects through the loop head.
+fn on_tick(live: Option<bool>, refused: impl FnOnce() -> bool) -> OnTick {
+    if live == Some(false) && refused() {
+        OnTick::EndIneligible
+    } else {
+        OnTick::Keep
+    }
+}
+
+/// A notice arrived: drop the cached tool list and refill it before the hub
+/// hears, so the subscriber's re-read is fresh and nothing sees an emptied
+/// cache. At most once per tick however many notices came; a notice during a
+/// refill waits for the next one. Not while a finished refill's change is
+/// still unannounced: invalidating then would have the hub announce it over
+/// an emptied cache.
+fn start_due_refill(state: &mut State<'_>, backend: &Arc<Backend>, refill: &mut Option<Refill>) {
+    if refill.is_some()
+        || state.tools_pending
+        || state.tools_due.is_none_or(|due| Instant::now() < due)
+    {
+        return;
+    }
+    state.tools_due = None;
+    backend.invalidate_tools();
+    *refill = Some(start_refill(backend, &state.shared.name));
 }
 
 /// The tools refill a notice starts. The shared fetch, so a reader of the list
@@ -332,7 +366,9 @@ async fn finish_refill(
     // announced when the transport was found replaced, and every notice
     // still inside its coalescing window: the session's state goes with it
     // (MIK-7898).
-    state.flush_at(hub, Instant::now() + WINDOW);
+    if state.flush_at(hub, Instant::now() + WINDOW) {
+        end_ineligible(shared, hub).await;
+    }
     state.ended(started)
 }
 
@@ -656,20 +692,20 @@ impl<'a> State<'a> {
     }
 
     /// Emit the coalescing windows that closed (§8), through the hub only.
-    fn flush(&mut self, hub: &Weak<EventsHub>) {
-        self.flush_at(hub, Instant::now());
+    /// `true` when the backend is now ineligible: nothing was sent, and the
+    /// caller ends the listener through [`end_ineligible`].
+    fn flush(&mut self, hub: &Weak<EventsHub>) -> bool {
+        self.flush_at(hub, Instant::now())
     }
 
     /// [`Self::flush`] of the windows closed by `at`.
-    fn flush_at(&mut self, hub: &Weak<EventsHub>, at: Instant) {
+    fn flush_at(&mut self, hub: &Weak<EventsHub>, at: Instant) -> bool {
         // Re-checked at every delivery: a reload can make the backend
-        // ineligible while its listener runs (MIK-7894). Nothing pending is
-        // sent, the task ends, and the upstream subscriptions are withdrawn.
+        // ineligible while its listener runs (MIK-7894).
         let due = self.coalescer.due(at);
         if (self.tools_pending || !due.is_empty()) && self.shared.is_ineligible() {
             self.tools_pending = false;
-            end_ineligible(self.shared, hub);
-            return;
+            return true;
         }
         if std::mem::take(&mut self.tools_pending)
             && let Some(hub) = hub.upgrade()
@@ -677,9 +713,11 @@ impl<'a> State<'a> {
             hub.backend_tools_changed(&self.shared.name);
         }
         if due.is_empty() {
-            return;
+            return false;
         }
-        let Some(hub) = hub.upgrade() else { return };
+        let Some(hub) = hub.upgrade() else {
+            return false;
+        };
         for (kind, uri) in due {
             if !self.shared.need.lock().emits(kind, uri.as_deref()) {
                 continue;
@@ -702,6 +740,7 @@ impl<'a> State<'a> {
                 lifecycle_key: None,
             });
         }
+        false
     }
 }
 

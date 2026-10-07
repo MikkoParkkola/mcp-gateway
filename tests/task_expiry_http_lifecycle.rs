@@ -15,8 +15,8 @@ mod helper;
 use serde_json::{Value, json};
 
 use helper::{
-    COMPLETION_BOUND, EXPIRY_BOUND, Gateway, POLL_GAP, durable_records, free_port, serve_backend,
-    task_invoke, tasks_get, write_config,
+    COMPLETION_BOUND, EXPIRY_BOUND, Gateway, POLL_GAP, durable_records, serve_backend, task_invoke,
+    tasks_get, write_config,
 };
 
 const KEY: &str = "task-expiry-http-lifecycle";
@@ -68,14 +68,13 @@ async fn a_configured_expiry_interval_reaps_a_real_task_and_shutdown_releases_th
     let mock = serve_backend().await;
     let temp_root = tempfile::tempdir().expect("a private root for config, store and logs");
     let root = temp_root.path();
-    let port = free_port();
-    let config = write_config(root, port, &mock.url);
+    let config = write_config(root, &mock.url);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("bounded HTTP client");
 
-    let mut first = Gateway::start(root, &config, port, "gateway-1.log");
+    let mut first = Gateway::start(root, &config, "gateway-1.log");
     first.wait_until_ready(&client).await;
 
     let created = first.post(&client, &task_invoke(1, KEY)).await;
@@ -225,7 +224,7 @@ async fn a_configured_expiry_interval_reaps_a_real_task_and_shutdown_releases_th
     );
     drop(first);
 
-    let mut second = Gateway::start(root, &config, port, "gateway-2.log");
+    let mut second = Gateway::start(root, &config, "gateway-2.log");
     second.wait_until_ready(&client).await;
 
     let replayed = second.post(&client, &tasks_get(4, &first_id)).await;

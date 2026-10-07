@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Real stdio startup admission, including the optional-directory control.
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use serde_json::json;
 use std::process::Stdio;
 use std::time::Duration;
@@ -22,25 +25,19 @@ async fn startup(invalid_account: bool) -> (std::process::Output, bool) {
         ),
     )
     .unwrap();
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+    let mut command = tokio::process::Command::from(gateway_bin::command(
+        temp.path(),
+        gateway_bin::Inherit::Environment,
+    ));
     command
         .args(["--config", config.to_str().unwrap(), "serve", "--stdio"])
         .current_dir(temp.path())
-        .env("HOME", temp.path())
         .env("XDG_CONFIG_HOME", temp.path().join("config"))
         .env("XDG_DATA_HOME", temp.path().join("data"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    for (name, _) in std::env::vars_os() {
-        if name.to_string_lossy().starts_with("MCP_GATEWAY_") {
-            command.env_remove(name);
-        }
-    }
-    // Windows resolves home through the Known Folder API, not HOME: the
-    // debug build's override isolates the child's default task store too.
-    command.env("MCP_GATEWAY_TEST_HOME_DIR", temp.path());
     let mut child = command.spawn().expect("spawn shipped binary");
     let request = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"stdio-account-test","version":"1"}}});
     let mut stdin = child.stdin.take().unwrap();

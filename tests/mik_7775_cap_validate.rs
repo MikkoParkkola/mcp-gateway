@@ -4,7 +4,10 @@
 //! runs, so an author sees a warning (CAP-011, CAP-012) before deploying and a
 //! structural error fails the command.
 
-use std::process::{Command, Output, Stdio};
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
+use std::process::{Output, Stdio};
 
 const VALID: &str = "name: probe_cap
 description: Reads one endpoint.
@@ -19,11 +22,8 @@ fn cap_validate(yaml: &str) -> (Output, String) {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("probe_cap.yaml");
     std::fs::write(&file, yaml).expect("write capability");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+    let mut command = gateway_bin::command(dir.path(), gateway_bin::Inherit::Environment);
     command
-        .env("HOME", dir.path())
-        .env("USERPROFILE", dir.path())
-        .env("MCP_GATEWAY_TEST_HOME_DIR", dir.path())
         .stdin(Stdio::null())
         .arg("cap")
         .arg("validate")

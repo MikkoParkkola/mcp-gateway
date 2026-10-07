@@ -528,8 +528,9 @@ fn validate_property(
 
 // ── Type coercion ─────────────────────────────────────────────────────────────
 
-/// Whether a property's `type` is `"null"` or a list that names it.
-fn admits_null(prop_schema: Option<&Value>) -> bool {
+/// Whether a property's `type` is `"null"` or a list that names it. The
+/// executor fills a JSON body by the same rule (MIK-7970).
+pub(crate) fn admits_null(prop_schema: Option<&Value>) -> bool {
     match prop_schema.and_then(|p| p.get("type")) {
         Some(Value::String(ty)) => ty == "null",
         Some(Value::Array(types)) => types.iter().any(|t| t == "null"),

@@ -49,6 +49,8 @@ pub(crate) struct OwnedCallerContext {
     /// The creating or resuming request's caller key, which the A/B arm and the
     /// hints key on (G4). Derived from that live request, never from a record.
     caller_key: Option<String>,
+    /// The creating or resuming request's meta-tool surface (MIK-7974).
+    surface_request: crate::gateway::recovery::SurfaceRequest,
     /// Classifier revision captured at admission. Borrowed into the rebuilt
     /// caller at dispatch. Not persisted on the durable task record.
     protocol_revision: Option<String>,
@@ -101,6 +103,7 @@ impl OwnedCallerContext {
             input_capabilities,
             session_id,
             caller_key: None,
+            surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
             protocol_revision,
             retry: RetryFields {
                 attestation,
@@ -118,6 +121,19 @@ impl OwnedCallerContext {
         self
     }
 
+    /// The request's meta-tool surface, so the task's hints follow it.
+    ///
+    /// Intended: a retry under the same idempotency key gets the task its key
+    /// already created, with hints for the creating request's surface, as every
+    /// idempotent replay returns the stored answer unchanged (MIK-7974).
+    pub(crate) fn with_surface_request(
+        mut self,
+        surface_request: crate::gateway::recovery::SurfaceRequest,
+    ) -> Self {
+        self.surface_request = surface_request;
+        self
+    }
+
     pub(crate) fn dispatch_log(&self) -> &std::sync::Arc<DispatchLog> {
         &self.dispatch_log
     }
@@ -132,6 +148,20 @@ impl OwnedCallerContext {
 
     pub(crate) fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref()
+    }
+
+    /// Hold the caller key for the length of one backend call, so an idle
+    /// sweep cannot reclaim it under a call that outlasts `IDLE_TTL`
+    /// (MIK-7828.FIX.2). Only an HTTP host tracks caller keys.
+    pub(crate) fn hold_caller_key(
+        &self,
+        host: &LiveHost,
+    ) -> Option<crate::gateway::session_lifecycle::KeyHold> {
+        let LiveHost::Http(state) = host else {
+            return None;
+        };
+        let key = self.caller_key.as_deref()?;
+        Some(state.session_lifecycle.as_ref()?.hold(key))
     }
 
     /// Rebuild the dispatch funnel.
@@ -218,6 +248,7 @@ impl OwnedCallerContext {
             caller_key: self.caller_key.as_deref(),
             verified_identity: self.verified_identity.as_ref(),
             is_admin: self.is_admin,
+            surface_request: self.surface_request,
             input_capabilities: self.input_capabilities,
             confirmation: ConfirmationChannel::Unavailable,
             retry,
