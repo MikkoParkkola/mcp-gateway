@@ -381,6 +381,15 @@ def test_an_empty_wrapped_setext_title_passes_at_a_tag():
     assert run("Known\nissues\n---\n", "--release", "--tag", "v4.0.0") == 0
 
 
+def test_a_later_release_on_a_wrapped_titles_first_line_fails_the_check():
+    assert run("Fixed in 4.0.1: Known\nissues\n---\n", "--check") == 1
+
+
+def test_a_range_ending_in_a_later_release_fails_the_check():
+    for line in ("- Seen 4.0.0-4.0.1.\n", "- Seen `4.0.0`-`4.0.1`.\n"):
+        assert run(notes("\n" + line), "--check") == 1, line
+
+
 def test_a_later_release_in_the_title_itself_fails_the_check():
     for head in ("## Known issues [4.0.1][next]\n", "## Known issues &lt;fixed in 4.0.1&gt;\n"):
         assert run(head, "--check") == 1, head
