@@ -57,6 +57,11 @@ struct State {
     subscribed: Arc<Mutex<Vec<String>>>,
     /// While set, `tools/list` answers only after a minute (MIK-7937).
     hang_tools: Arc<std::sync::atomic::AtomicBool>,
+    /// Once set, the peer is a legacy HTTP+SSE server behind the same URL
+    /// (see [`HttpPeer::redeploy_as_sse`]).
+    sse: Arc<std::sync::atomic::AtomicBool>,
+    /// SSE handshakes (`GET` naming the message endpoint) served since then.
+    sse_handshakes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Runs `f` when dropped: how the peer learns a client let go of a body.
@@ -83,36 +88,56 @@ impl HttpPeer {
             streams: Arc::default(),
             subscribed: Arc::default(),
             hang_tools: Arc::default(),
+            sse: Arc::default(),
+            sse_handshakes: Arc::default(),
         };
         let post_state = state.clone();
         let get_state = state.clone();
-        let app = axum::Router::new().route(
-            "/",
-            axum::routing::post(move |axum::Json(frame): axum::Json<Value>| {
-                let state = post_state.clone();
-                async move {
-                    if frame["method"] == "tools/list"
-                        && state.hang_tools.load(std::sync::atomic::Ordering::SeqCst)
-                    {
-                        // Logged on arrival, so a test sees the request it is
-                        // holding; the answer, a minute later or on release,
-                        // is logged too.
-                        log(&state, Seen::Frame(frame.clone()));
-                        let held = std::time::Instant::now();
-                        while state.hang_tools.load(std::sync::atomic::Ordering::SeqCst)
-                            && held.elapsed() < std::time::Duration::from_secs(60)
-                        {
-                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let messages_state = state.clone();
+        let app = axum::Router::new()
+            .route(
+                "/",
+                axum::routing::post(move |axum::Json(frame): axum::Json<Value>| {
+                    let state = post_state.clone();
+                    async move {
+                        if state.sse.load(std::sync::atomic::Ordering::SeqCst) {
+                            log(&state, Seen::Frame(frame.clone()));
+                            return redeployed_post(&frame);
                         }
+                        if frame["method"] == "tools/list"
+                            && state.hang_tools.load(std::sync::atomic::Ordering::SeqCst)
+                        {
+                            // Logged on arrival, so a test sees the request it is
+                            // holding; the answer, a minute later or on release,
+                            // is logged too.
+                            log(&state, Seen::Frame(frame.clone()));
+                            let held = std::time::Instant::now();
+                            while state.hang_tools.load(std::sync::atomic::Ordering::SeqCst)
+                                && held.elapsed() < std::time::Duration::from_secs(60)
+                            {
+                                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                            }
+                        }
+                        answer(&state, frame)
                     }
-                    answer(&state, frame)
-                }
-            })
-            .get(move |headers: HeaderMap| {
-                let state = get_state.clone();
-                async move { get_stream(&state, &headers) }
-            }),
-        );
+                })
+                .get(move |headers: HeaderMap| {
+                    let state = get_state.clone();
+                    async move {
+                        if state.sse.load(std::sync::atomic::Ordering::SeqCst) {
+                            return sse_handshake(&state);
+                        }
+                        get_stream(&state, &headers)
+                    }
+                }),
+            )
+            .route(
+                "/messages",
+                axum::routing::post(move |axum::Json(frame): axum::Json<Value>| {
+                    let state = messages_state.clone();
+                    async move { answer(&state, frame) }
+                }),
+            );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind peer");
@@ -164,6 +189,23 @@ impl HttpPeer {
         self.state
             .hang_tools
             .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Redeploy as a legacy HTTP+SSE server behind the same URL, leaving
+    /// open streams open and quiet: every later `POST /` answers 404 (the
+    /// session is gone) or, for `initialize`, 405, so a client's session
+    /// recovery falls back to SSE, whose `GET /` names `/messages`.
+    pub fn redeploy_as_sse(&self) {
+        self.state
+            .sse
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// SSE handshakes served since [`Self::redeploy_as_sse`].
+    pub fn sse_handshakes(&self) -> usize {
+        self.state
+            .sse_handshakes
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// URIs the client is subscribed to (legacy).
@@ -386,6 +428,32 @@ fn listen(state: &State, id: &Value, frame: &Value) -> Response {
             },
         );
     })
+}
+
+/// A redeployed peer's answer to a `POST /`: the old session is gone, and a
+/// new `initialize` is refused as the wrong transport.
+fn redeployed_post(frame: &Value) -> Response {
+    if frame["method"] == "initialize" {
+        axum::http::StatusCode::METHOD_NOT_ALLOWED.into_response()
+    } else {
+        axum::http::StatusCode::NOT_FOUND.into_response()
+    }
+}
+
+/// A redeployed peer's `GET /`: the legacy SSE handshake, held open.
+fn sse_handshake(state: &State) -> Response {
+    state
+        .sse_handshakes
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let body = async_stream::stream! {
+        yield Ok::<_, std::io::Error>("event: endpoint\ndata: /messages\n\n".to_owned());
+        std::future::pending::<()>().await;
+    };
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+        axum::body::Body::from_stream(body),
+    )
+        .into_response()
 }
 
 fn get_stream(state: &State, headers: &HeaderMap) -> Response {

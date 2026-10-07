@@ -8,6 +8,7 @@ use serde_json::Value;
 use tracing::debug;
 
 use super::{INVOKE_TARGET, classify_from_detail, dispatch_error_result, withheld_side_effect};
+use super::{LostRoundRoute, settle_lost_round};
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::suggestions;
 use crate::gateway::meta_mcp::MetaMcp;
@@ -59,7 +60,10 @@ pub(super) fn attach_tool_error_recovery(
             },
             surface,
         );
-        attach_recovery(value, hint)
+        let value = attach_recovery(value, hint);
+        // MIK-7939: the hint is the gateway's text, never a receipt's.
+        super::gateway_writes::note(super::gateway_writes::Layer::Value, &["recovery"], &value);
+        value
     } else {
         value
     }
@@ -72,9 +76,12 @@ impl MetaMcp {
         &self,
         e: Error,
         managed: Option<&crate::personal_accounts::ManagedLease>,
-        idem_reservation: &mut Option<IdempotencyReservation>,
+        (idem_reservation, execution): (
+            &mut Option<IdempotencyReservation>,
+            Option<&crate::gateway::meta_mcp::admission::SyncLease>,
+        ),
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
-        (server, tool): (&str, &str),
+        (server, tool, surface): (&str, &str, MetaSurface),
     ) -> Result<Value> {
         // A11-c: a 401 on a managed credential forces at most one
         // refresh, then either asks the user to reconnect (an offer,
@@ -104,15 +111,27 @@ impl MetaMcp {
         // reservation left in the `Option` would be picked up by that
         // commit and re-inserted as a completed entry, which makes the
         // release a no-op and the key permanently wrong.
-        if e.is_pre_dispatch()
-            && let Some(mut reservation) = idem_reservation.take()
-        {
-            reservation.release();
+        if e.is_pre_dispatch() {
+            if let Some(mut reservation) = idem_reservation.take() {
+                reservation.release();
+            }
+            // The outer lease was marked before this call; a refusal the
+            // backend never saw is not retained there either, or a keyed
+            // retry replays a stale refusal and its hint (MIK-7974).
+            if let Some(execution) = execution {
+                execution.withdraw_dispatch();
+            }
+        }
+        // MIK-7979: a lost round settles with the uncertainty notice, and the
+        // reservation leaves the `Option` for the same reason as above: the
+        // commit and the final completion below would overwrite it.
+        if settle_lost_round(&e, idem_reservation.as_mut(), LostRoundRoute::Meta) {
+            *idem_reservation = None;
         }
         // The error budget already counted this failure (the shared
         // accounting stage).  The idempotency reservation is left
-        // for the commit below unless the refusal was pre-dispatch.
-        Ok(dispatch_error_result(&e, tool, server, self.hint_surface()))
+        // for the commit below unless it was released or settled above.
+        Ok(dispatch_error_result(&e, tool, server, surface))
     }
 
     #[cfg(feature = "cost-governance")]
@@ -135,6 +154,11 @@ impl MetaMcp {
                 "_cost_warnings".to_string(),
                 serde_json::json!(cost_warnings),
             );
+            super::gateway_writes::note(
+                super::gateway_writes::Layer::Value,
+                &["_cost_warnings"],
+                result,
+            );
         }
 
         if let Some(ref enforcer) = self.budget_enforcer {
@@ -156,6 +180,11 @@ impl MetaMcp {
                             "savings_per_call": suggestion.savings_per_call,
                             "alternative_cost": suggestion.alternative_cost,
                         }),
+                    );
+                    super::gateway_writes::note(
+                        super::gateway_writes::Layer::Value,
+                        &["_cost_suggestion"],
+                        result,
                     );
                 }
             }

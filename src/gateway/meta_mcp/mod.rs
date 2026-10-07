@@ -11,10 +11,9 @@
 //! - `support.rs` — free functions: tag collection, ranking helpers, `MetaMcpInvoker`, augment
 //! - `surfaced.rs` — `with_surfaced_tools`, `resolve_surfaced_tool`, `list_servers`
 
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+use std::{collections::HashMap, sync::Arc};
 
 #[cfg(feature = "spec-preview")]
 use dashmap::DashMap;
@@ -23,8 +22,6 @@ use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use crate::attestation::signer::BnautAttestationSigner;
-use crate::backend::BackendRegistry;
-use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
 use crate::config::SurfacedToolConfig;
 use crate::config_reload::ReloadContext;
@@ -46,14 +43,14 @@ use crate::protocol::{ChainSource, JsonRpcResponse, LoggingLevel, RequestId, neg
 use crate::ranking::SearchRanker;
 use crate::routing_profile::{ProfileRegistry, SessionProfileStore};
 use crate::security::message_signing::{MessageSigner, NonceStore};
-use crate::stats::UsageStats;
-use crate::tool_registry::ToolRegistry;
 use crate::transition::TransitionTracker;
 use crate::trust::{
     project_tool_descriptor_trust_card, project_tool_descriptors_trust_cards,
     tools_list_result_with_trust_cards,
 };
 use crate::{Error, Result};
+use crate::{backend::BackendRegistry, cache::ResponseCache};
+use crate::{stats::UsageStats, tool_registry::ToolRegistry};
 
 use super::meta_mcp_helpers::{
     build_code_mode_tools, build_discovery_preamble, build_initialize_result,
@@ -202,6 +199,8 @@ pub struct MetaMcpCallerContext<'a> {
     /// Whether the caller holds admin: meta-tools with admin-only PARAMETERS cannot be gated by
     /// the tool-name allow-list in `router::authorization`, which knows only whole tools.
     pub is_admin: bool,
+    /// The meta-tool surface this request asked for; recovery hints follow it (MIK-7974).
+    pub(crate) surface_request: crate::gateway::recovery::SurfaceRequest,
     /// What this caller declared on **this** request.
     ///
     /// A parsed set rather than a single "may be asked for input" bit, because MRTR.9 refuses per
@@ -321,6 +320,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             stdio_nonce: self.stdio_nonce,
             caller_key: self.caller_key,
             is_admin: self.is_admin,
+            surface_request: self.surface_request,
             input_capabilities: self.input_capabilities,
             confirmation: self.confirmation.clone(),
             retry,
@@ -1590,13 +1590,11 @@ impl MetaMcp {
             self.change_feed(),
         );
 
-        // Field names and placement are the specification's, transcribed from
-        // the `DiscoverResult` example rather than invented: `supportedVersions`
-        // (not `protocolVersions`), and `serverInfo` inside `_meta` under its
-        // reverse-DNS key rather than at the top level. A first cut used the
-        // obvious names, and every test passed — because the tests asserted the
-        // same invented names. A wire format that agrees with itself is not a
-        // wire format anyone else can read.
+        // Field names and placement are the specification's (`DiscoverResult`),
+        // never invented: `supportedVersions`, `serverInfo` under its reverse-DNS
+        // `_meta` key, and the required `ttlMs` and `cacheScope`, whose absence
+        // made a 2026-07-28 client load no tools (MIK-8009). A wire format that
+        // agrees only with its own tests is not one anyone else can read.
         // Discovery advertises what this gateway can actually serve, which is
         // the legacy negotiation list plus the modern revisions when the switch
         // that serves them is on. Leaving the modern revision out made enabling
@@ -1630,14 +1628,22 @@ impl MetaMcp {
         );
 
         let capabilities = self.capabilities_with_events(capabilities);
-        serde_json::json!({
+        let mut document = serde_json::json!({
             "resultType": "complete",
             "supportedVersions": versions,
             "capabilities": capabilities,
             "_meta": {
                 "io.modelcontextprotocol/serverInfo": handshake.server_info,
             },
-        })
+        });
+        if let Some(object) = document.as_object_mut() {
+            crate::protocol::cacheable::write_cache_hints(
+                object,
+                "server/discover",
+                crate::protocol::cacheable::LIST_TTL_MS,
+            );
+        }
+        document
     }
 
     /// Handle `initialize` with version negotiation and optional profile binding.
@@ -1889,6 +1895,8 @@ impl MetaMcp {
     /// When the `spec-preview` feature is active and the params contain a `query`
     /// key, delegates to the filtered handler (SEP-1821).  Otherwise falls back to
     /// the standard session-aware handler so baseline behaviour is unchanged.
+    /// The filtered handler may spawn a cache fill, so call it inside a Tokio
+    /// runtime.
     pub fn handle_tools_list_with_params(
         &self,
         id: RequestId,

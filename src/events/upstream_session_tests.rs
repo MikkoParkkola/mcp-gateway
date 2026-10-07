@@ -22,6 +22,7 @@ fn shared_with(ineligible: crate::events::backend_source::Ineligible) -> Arc<Sha
         stop: CancellationToken::new(),
         gate: Arc::default(),
         ineligible,
+        tools: Mutex::default(),
     })
 }
 
@@ -144,7 +145,7 @@ async fn emission_waits_for_the_snapshot_to_list_the_uri() {
         .lock()
         .add(&Interest::ResourceUpdated("file:///a".to_owned()))
         .expect("room");
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, Era::Legacy);
     let changed = || UpstreamNote::Notice {
         kind: NoteKind::ResourceUpdated,
         uri: Some("file:///a".to_owned()),
@@ -196,7 +197,7 @@ async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
     // The backend's listener-only subscription and the one the gateway also
     // announces itself.
     admit_both(&hub);
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, Era::Legacy);
     let changed = || UpstreamNote::Notice {
         kind: NoteKind::ResourcesChanged,
         uri: None,
@@ -208,30 +209,52 @@ async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
     assert_eq!(hub.store.subscriptions().len(), 2, "control: both held");
     assert!(!shared.stop.is_cancelled());
 
-    // A reload restores eligibility before the withdrawal gets the lifecycle
-    // lock (a subscribe holds it): nothing is withdrawn.
+    // T19 (MIK-7969): eligibility returns before the withdrawal gets the
+    // lifecycle lock (a subscribe holds it). Nothing pending is sent, nothing
+    // is withdrawn, and the listener keeps running and delivering.
     let held = hub.lifecycle.lock().await;
     refused.store(true, std::sync::atomic::Ordering::SeqCst);
     state.note(changed(), false);
     tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
-    state.flush(&weak);
+    assert!(state.flush(&weak), "the flush saw the backend ineligible");
     assert!(
         intake.try_recv().is_err(),
         "an ineligible backend still delivered"
     );
-    assert!(shared.stop.is_cancelled(), "its listener was not stopped");
+    let ending = tokio::spawn({
+        let (shared, weak) = (Arc::clone(&shared), weak.clone());
+        async move { super::end_ineligible(&shared, &weak).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !shared.stop.is_cancelled(),
+        "stopped before the locked recheck"
+    );
     refused.store(false, std::sync::atomic::Ordering::SeqCst);
     drop(held);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !ending.await.expect("task"),
+        "a restored backend's listener was ended"
+    );
+    assert!(
+        !shared.stop.is_cancelled(),
+        "a restored listener was stopped"
+    );
     assert_eq!(
         hub.store.subscriptions().len(),
         2,
         "a withdrawal outlived the restore and deleted subscriptions"
     );
+    state.note(changed(), false);
+    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
+    assert!(!state.flush(&weak));
+    assert!(intake.try_recv().is_ok(), "delivery resumes once restored");
 
-    // Still ineligible when the lock is had: the listener-only one goes.
+    // Still ineligible when the lock is had: the listener stops and the
+    // listener-only subscription goes.
     refused.store(true, std::sync::atomic::Ordering::SeqCst);
-    super::end_ineligible(&shared, &weak);
+    assert!(super::end_ineligible(&shared, &weak).await);
+    assert!(shared.stop.is_cancelled(), "its listener was not stopped");
     let left = after_withdrawal(&hub).await;
     assert_eq!(
         left,
@@ -270,7 +293,8 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     let dir = tempfile::tempdir().expect("dir");
     let reload = Reload::new(dir.path());
     let registry = Arc::clone(&reload.registry);
-    let ineligible = crate::events::upstream_live_ineligible(Arc::clone(&reload.live));
+    let ineligible =
+        crate::events::upstream_live_ineligible(Arc::clone(&reload.live), Arc::clone(&registry));
 
     // Reload 1 adds `b`, eligible (Streamable HTTP).
     reload.to(true).await;
@@ -309,7 +333,7 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     tokio::time::sleep(Duration::from_millis(2600)).await;
     assert!(!task.is_finished(), "control: an eligible listener ended");
     assert!(!shared.stop.is_cancelled());
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, Era::Legacy);
     let changed = || UpstreamNote::Notice {
         kind: NoteKind::ResourcesChanged,
         uri: None,
@@ -357,6 +381,59 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
     assert_eq!(left, ["backend.b.tools_changed"]);
 }
 
+/// MIK-7969 H2: every arm of the tick decision. Only a live read of the SSE
+/// handshake that the shared predicate confirms ends the listener; the
+/// predicate is not read otherwise.
+#[test]
+fn a_tick_ends_the_listener_only_on_a_confirmed_switch_to_sse() {
+    use super::{OnTick, on_tick};
+    let unread = || -> bool { panic!("the predicate was read for a non-SSE transport") };
+    assert_eq!(on_tick(Some(true), unread), OnTick::Keep, "streamable");
+    assert_eq!(
+        on_tick(None, unread),
+        OnTick::Keep,
+        "undetected is not refused"
+    );
+    assert_eq!(on_tick(Some(false), || true), OnTick::EndIneligible);
+    assert_eq!(
+        on_tick(Some(false), || false),
+        OnTick::Keep,
+        "eligible again by the time it is asked"
+    );
+}
+
+/// MIK-7969 H2 + T11: a session recovery that switches the installed
+/// transport in place is seen by the next tick, through the backend's live
+/// read, with no notification on the stream.
+#[test]
+fn a_tick_sees_an_in_place_switch_through_the_live_read() {
+    use super::{OnTick, on_tick};
+    let backend = crate::backend::Backend::new(
+        "b",
+        serde_yaml::from_str("http_url: http://127.0.0.1:9/mcp").expect("config"),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    );
+    let transport = crate::transport::HttpTransport::new(
+        "http://127.0.0.1:9/mcp",
+        std::collections::HashMap::new(),
+        Duration::from_secs(1),
+        true,
+    )
+    .expect("transport");
+    backend.install_http_for_test(&transport);
+    transport.set_detected(Some(true));
+    assert_eq!(
+        on_tick(backend.connected_streamable(), || true),
+        OnTick::Keep
+    );
+    transport.set_detected(Some(false));
+    assert_eq!(
+        on_tick(backend.connected_streamable(), || true),
+        OnTick::EndIneligible
+    );
+}
+
 /// MIK-7950 FIX.3: the default catalogue cache TTL, which the session now
 /// re-reads at, is the 300 s the fixed interval was; a zero TTL re-reads at
 /// most once a second and a huge one at least daily, without overflow.
@@ -391,9 +468,12 @@ async fn a_refill_in_flight_at_the_session_end_is_announced() {
     }));
     let shared = shared();
     let mut state = State::new(&shared, Era::Modern);
+    // The refill serves a notice the hub has not heard of.
+    state.refill_announces = true;
     let (release, released) = tokio::sync::oneshot::channel::<()>();
     let refill: Refill = Box::pin(async move {
         let _ = released.await;
+        true
     });
     let ending = finish_refill(
         &mut state,
@@ -459,4 +539,181 @@ async fn a_uri_watched_after_the_session_started_is_read_at_once() {
         state.snapshot_retry_at > started,
         "the newly watched URI's catalogue was not read"
     );
+}
+
+#[path = "upstream_session_debt_tests.rs"]
+mod debt;
+
+fn changed(kind: NoteKind) -> UpstreamNote {
+    UpstreamNote::Notice { kind, uri: None }
+}
+
+/// MIK-7898 SESS.1: a notice still inside its coalescing window when the
+/// session ends is delivered, not dropped with the session's state.
+#[tokio::test]
+async fn a_coalesced_notice_is_delivered_when_the_session_ends() {
+    let dir = tempfile::tempdir().expect("dir");
+    let reload = Reload::new(dir.path());
+    reload.to(true).await;
+    let backend = reload.registry.get("b").expect("b registered");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    shared
+        .need
+        .lock()
+        .add(&Interest::ResourcesChanged)
+        .expect("room");
+    let mut state = State::new(&shared, Era::Legacy);
+    state.note(changed(NoteKind::ResourcesChanged), false);
+    let _ = finish_refill(&mut state, &shared, &backend, &weak, None, Instant::now()).await;
+    assert!(
+        intake.try_recv().is_ok(),
+        "the notice in its window was dropped with the session"
+    );
+}
+
+/// MIK-7898 SESS.3: a notice of a kind the peer's acknowledgement did not
+/// honour is not delivered. Control: the honoured kind is.
+#[tokio::test]
+async fn a_kind_the_acknowledgement_did_not_honour_is_not_delivered() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    for interest in [Interest::ResourcesChanged, Interest::PromptsChanged] {
+        shared.need.lock().add(&interest).expect("room");
+    }
+    let mut state = State::new(&shared, Era::Modern);
+    let honoured = KindSet {
+        resources_changed: true,
+        ..KindSet::default()
+    };
+    state.note(
+        UpstreamNote::Ack {
+            kinds: honoured,
+            uris: Vec::new(),
+        },
+        false,
+    );
+    state.note(changed(NoteKind::PromptsChanged), false);
+    state.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(
+        intake.try_recv().is_err(),
+        "a kind the peer did not acknowledge was delivered"
+    );
+    state.note(changed(NoteKind::ResourcesChanged), false);
+    state.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(intake.try_recv().is_ok(), "control: the honoured kind");
+}
+
+/// MIK-7899 CLASS.1: a listen the peer answers with `-32601` ends the session
+/// as `Unsupported` (the long backoff); a refused replacement ends nothing.
+#[test]
+fn a_refused_listen_ends_the_session_as_unsupported() {
+    let shared = shared();
+    let mut state = State::new(&shared, Era::Modern);
+    assert!(!state.note(UpstreamNote::Unsupported, true));
+    assert!(matches!(state.ended(Instant::now()), Outcome::Ended { .. }));
+    assert!(state.note(UpstreamNote::Unsupported, false));
+    assert!(matches!(state.ended(Instant::now()), Outcome::Unsupported));
+}
+
+/// MIK-7898 SESS.3: a `resources/updated` for a URI the acknowledgement did
+/// not list is not delivered. Control: a listed URI is.
+#[tokio::test]
+async fn a_uri_the_acknowledgement_did_not_list_is_not_delivered() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    let (a, b) = ("file:///a".to_owned(), "file:///b".to_owned());
+    for uri in [&a, &b] {
+        shared
+            .need
+            .lock()
+            .add(&Interest::ResourceUpdated(uri.clone()))
+            .expect("room");
+    }
+    shared
+        .snapshot
+        .lock()
+        .read([a.clone(), b.clone()].into(), true);
+    let mut state = State::new(&shared, Era::Modern);
+    state.note(
+        UpstreamNote::Ack {
+            kinds: KindSet::default(),
+            uris: vec![a.clone()],
+        },
+        false,
+    );
+    let updated = |uri: &str| UpstreamNote::Notice {
+        kind: NoteKind::ResourceUpdated,
+        uri: Some(uri.to_owned()),
+    };
+    state.note(updated(&b), false);
+    state.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(intake.try_recv().is_err(), "an unlisted URI was delivered");
+    state.note(updated(&a), false);
+    state.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(intake.try_recv().is_ok(), "control: the listed URI");
+}
+
+/// MIK-7898 SESS.3: on a modern stream a notice before the acknowledgement,
+/// the first listen's or a replacement's, is not delivered; a legacy stream,
+/// which has none, is not gated.
+#[tokio::test]
+async fn a_notice_before_the_acknowledgement_is_not_delivered() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    shared
+        .need
+        .lock()
+        .add(&Interest::ResourcesChanged)
+        .expect("room");
+    let mut modern = State::new(&shared, Era::Modern);
+    modern.note(changed(NoteKind::ResourcesChanged), false);
+    modern.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(
+        intake.try_recv().is_err(),
+        "before the first acknowledgement"
+    );
+    let all = KindSet {
+        resources_changed: true,
+        ..KindSet::default()
+    };
+    modern.note(
+        UpstreamNote::Ack {
+            kinds: all,
+            uris: Vec::new(),
+        },
+        false,
+    );
+    modern.note(changed(NoteKind::ResourcesChanged), true);
+    modern.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(
+        intake.try_recv().is_err(),
+        "a replacement before its acknowledgement"
+    );
+    // Its acknowledgement makes the replacement current: its notices count.
+    modern.note(
+        UpstreamNote::Ack {
+            kinds: all,
+            uris: Vec::new(),
+        },
+        true,
+    );
+    modern.note(changed(NoteKind::ResourcesChanged), false);
+    modern.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(intake.try_recv().is_ok(), "the promoted replacement");
+    let mut legacy = State::new(&shared, Era::Legacy);
+    legacy.note(changed(NoteKind::ResourcesChanged), false);
+    legacy.flush_at(&weak, Instant::now() + WINDOW);
+    assert!(intake.try_recv().is_ok(), "control: a legacy stream");
 }

@@ -34,6 +34,10 @@ pub(super) struct Shared {
     /// The backends the live config makes unable to offer upstream events,
     /// read at each use (MIK-7894).
     pub ineligible: super::backend_source::Ineligible,
+    /// The backend tools notices not yet served. Kept across sessions, so one
+    /// that ends first does not drop them (MIK-8007). Not across a task stop:
+    /// that ends the interest they were owed to.
+    pub tools: Mutex<super::upstream_session::ToolsDebt>,
 }
 
 impl Shared {
@@ -232,6 +236,7 @@ impl UpstreamListeners {
             stop: self.stop.child_token(),
             gate: Arc::clone(self.gates.lock().entry(backend.to_owned()).or_default()),
             ineligible: Arc::clone(&self.ineligible),
+            tools: Mutex::default(),
         });
         tokio::spawn(super::upstream_session::run(
             Arc::clone(&shared),

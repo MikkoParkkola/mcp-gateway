@@ -11,6 +11,9 @@
 
 #![cfg(unix)]
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -57,21 +60,10 @@ async fn mcp(Json(body): Json<Value>) -> Response {
     Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
 }
 
-fn free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-    listener.local_addr().expect("its address").port()
-}
-
 fn gateway_command(root: &std::path::Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-            command.env_remove(key);
-        }
-    }
+    let mut command = gateway_bin::command(&root.join("home"), gateway_bin::Inherit::Environment);
     command
         .current_dir(root)
-        .env("HOME", root.join("home"))
         .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
         .stdin(Stdio::null());
     command
@@ -96,20 +88,27 @@ async fn post(
 
 /// Poll `/health` until the gateway answers, failing with its log if it exits
 /// or misses `READY_BOUND`.
+/// Read the port the child bound (`-p 0`) from its log, wait for `/health`
+/// on it, and return its base URL.
 async fn wait_ready(
     http: &reqwest::Client,
-    base: &str,
     child: &mut tokio::process::Child,
     log: &std::path::Path,
-) {
+) -> String {
     let logs = || std::fs::read_to_string(log).unwrap_or_default();
     let deadline = tokio::time::Instant::now() + READY_BOUND;
-    while !http
-        .get(format!("{base}/health"))
-        .send()
-        .await
-        .is_ok_and(|r| r.status().is_success())
-    {
+    loop {
+        if let Some(port) = gateway_bin::logged_port(log) {
+            let base = format!("http://127.0.0.1:{port}");
+            if http
+                .get(format!("{base}/health"))
+                .send()
+                .await
+                .is_ok_and(|r| r.status().is_success())
+            {
+                return base;
+            }
+        }
         if let Some(status) = child.try_wait().expect("child status") {
             panic!("serve exited before ready ({status})\n{}", logs());
         }
@@ -155,12 +154,11 @@ async fn add_url_reaches_a_streamable_http_server() {
         String::from_utf8_lossy(&added.stdout)
     );
 
-    let port = free_port();
     let log = root.join("serve.log");
     let out = std::fs::File::create(&log).expect("serve log");
     let err = out.try_clone().expect("log handle");
     let mut child = tokio::process::Command::from(gateway_command(&root))
-        .args(["-c", "gateway.yaml", "-p", &port.to_string(), "serve"])
+        .args(["-c", "gateway.yaml", "-p", "0", "serve"])
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err))
         .kill_on_drop(true)
@@ -168,9 +166,8 @@ async fn add_url_reaches_a_streamable_http_server() {
         .expect("serve spawns");
     let logs = || std::fs::read_to_string(&log).unwrap_or_default();
 
-    let base = format!("http://127.0.0.1:{port}");
     let http = http_client();
-    wait_ready(&http, &base, &mut child, &log).await;
+    let base = wait_ready(&http, &mut child, &log).await;
 
     let mcp_url = format!("{base}/mcp");
     let init = post(

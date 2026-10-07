@@ -79,8 +79,8 @@ pub enum ConfirmationOutcome {
     /// decision, taken from [`ConfirmationPolicy`] — a legacy request proceeds,
     /// a modern one is refused.
     Unsupported,
-    /// The question was never delivered: no live session could carry it, so
-    /// nobody was asked. Handled like [`Self::Unsupported`] by the policy; it
+    /// The question was never delivered: no live session could carry it, or
+    /// every copy was withheld at write, so nobody was asked. Handled like [`Self::Unsupported`] by the policy; it
     /// differs only in that a refusal here provably asked no one.
     Undelivered,
 }
@@ -296,6 +296,15 @@ pub async fn require_destructive_confirmation(
                 action = action_desc,
                 "Destructive meta-tool invoked without active SSE session; \
                  no operator could be asked"
+            );
+            ConfirmationOutcome::Undelivered
+        }
+        // Every queued copy was withheld at write, so no one saw it: unasked,
+        // like no session, never a prompt that may have been seen (MIK-7918).
+        Err(SamplingError::SendFailed) => {
+            warn!(
+                action = action_desc,
+                "Elicitation confirmation withheld from the stream; no operator was asked"
             );
             ConfirmationOutcome::Undelivered
         }

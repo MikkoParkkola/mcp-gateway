@@ -118,9 +118,31 @@ pub fn safe_request_error_for(
 }
 
 /// HTTP status without an untrusted body, except the session-expiry signal.
+///
+/// MIK-7979: a 4xx the server answered with is `TransportPermanent`, so a
+/// same-key retry is served that answer rather than told the outcome is
+/// undetermined, and nothing retries a refusal. The exceptions stay
+/// `Transport`: 400 and 404 (with or without a marker) and any status whose
+/// body carries the session-expiry marker, because the HTTP transport reads an
+/// expired session from `Transport` text and re-initializes (#247); 401, 403
+/// and 407 (credential refusals, typed or re-initialized elsewhere); 408 and
+/// 429 (transient: retrying is the right answer). A 5xx does not prove the work
+/// did not run, so it stays `Transport` too.
+///
+/// This list is not `refused_as_wrong_transport`'s and must not be aligned
+/// with it: that one asks "is this the wrong transport?", and a 400 or 404 can
+/// mean so while still having to stay re-initializable here.
 #[must_use]
 pub fn safe_http_status_error(status: StatusCode, body: &str) -> Error {
-    Error::Transport(safe_status_text(status, body))
+    let text = safe_status_text(status, body);
+    let answered = status.is_client_error()
+        && !matches!(status.as_u16(), 400 | 401 | 403 | 404 | 407 | 408 | 429)
+        && !carries_session_expiry(body);
+    if answered {
+        Error::TransportPermanent(text)
+    } else {
+        Error::Transport(text)
+    }
 }
 
 /// A11-g: a credential refusal the backend answers the same way however often
@@ -251,6 +273,32 @@ mod tests {
                     "{status} is never typed, with or without a session-expiry body"
                 );
             }
+        }
+    }
+
+    /// MIK-7979: a 4xx the server answered (other than the session-expiry,
+    /// timeout and rate-limit codes) is `TransportPermanent`, so its
+    /// settlement replays the answer; a 5xx and the transient or overloaded
+    /// codes stay `Transport`.
+    #[test]
+    fn a_4xx_answer_is_typed_as_answered() {
+        for status in [405_u16, 409, 410, 413, 415, 422] {
+            let code = StatusCode::from_u16(status).expect("valid status");
+            let error = status_refusal(typed(status), code, "refused");
+            assert!(
+                matches!(error, Error::TransportPermanent(_)),
+                "{status}: {error:?}"
+            );
+            let expired = status_refusal(typed(status), code, "session not found");
+            assert!(
+                matches!(expired, Error::Transport(_)),
+                "{status} with a session-expiry body stays re-initializable: {expired:?}"
+            );
+        }
+        for status in [400_u16, 404, 407, 408, 429, 500, 502, 503] {
+            let code = StatusCode::from_u16(status).expect("valid status");
+            let error = status_refusal(typed(status), code, "refused");
+            assert!(matches!(error, Error::Transport(_)), "{status}: {error:?}");
         }
     }
 

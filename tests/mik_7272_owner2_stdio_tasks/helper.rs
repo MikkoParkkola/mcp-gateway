@@ -12,6 +12,9 @@
     reason = "shared by two test targets that each use a subset"
 )]
 
+#[path = "../common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -393,16 +396,12 @@ impl StdioGateway {
     pub fn spawn(root: &Path, config: &Path, log_name: &str) -> Self {
         let log = root.join(log_name);
         let err = std::fs::File::create(&log).expect("stdio child log");
-        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-        for (key, _) in std::env::vars_os() {
-            if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-                command.env_remove(key);
-            }
-        }
+        let mut command = tokio::process::Command::from(gateway_bin::command(
+            root,
+            gateway_bin::Inherit::Environment,
+        ));
         let mut child = command
             .current_dir(root)
-            .env("HOME", root)
-            .env("MCP_GATEWAY_TEST_HOME_DIR", root)
             .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
             .arg("--config")
             .arg(config)
@@ -516,23 +515,13 @@ impl HttpGateway {
         let log = root.join(log_name);
         let out = std::fs::File::create(&log).expect("http child log");
         let err = out.try_clone().expect("log handle clones");
-        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-        for (key, _) in std::env::vars_os() {
-            if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-                command.env_remove(key);
-            }
-        }
+        let mut command = tokio::process::Command::from(gateway_bin::command(
+            root,
+            gateway_bin::Inherit::Environment,
+        ));
         command.env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state-http"));
-        if let Ok(filter) = std::env::var("RUST_LOG") {
-            command.env(
-                "RUST_LOG",
-                format!("{filter},mcp_gateway::gateway::server::support=info"),
-            );
-        }
         let child = command
             .current_dir(root)
-            .env("HOME", root)
-            .env("MCP_GATEWAY_TEST_HOME_DIR", root)
             .arg("--config")
             .arg(config)
             .stdin(Stdio::null())

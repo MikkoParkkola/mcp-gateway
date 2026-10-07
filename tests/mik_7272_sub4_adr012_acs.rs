@@ -510,13 +510,13 @@ async fn a_settled_dispatched_error_keeps_its_key() {
 /// row is the only thing that observes it.
 #[tokio::test]
 async fn pre_dispatch_failure_releases_its_key() {
-    // A port nothing listens on: bind it to learn an address that is free, then
-    // give it up. Connecting is refused before a byte of the request is written.
-    let closed = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind ephemeral port");
+    // Bound for the whole test, never listening: connecting is refused before a
+    // byte is written, and no parallel test can take the port (MIK-7984).
+    let closed = tokio::net::TcpSocket::new_v4().expect("socket");
+    closed
+        .bind("127.0.0.1:0".parse().unwrap())
+        .expect("bind without listening");
     let address = closed.local_addr().expect("local addr");
-    drop(closed);
 
     let (state, _store_dir) = route_state().await;
     register_route_backend(
@@ -586,11 +586,8 @@ async fn a_post_dispatch_transport_failure_keeps_its_key() {
         StatusCode::OK,
         "the retry must be served the stored terminal, which is an answer: {second}"
     );
-    assert_eq!(
-        second.pointer("/error/message"),
-        first.pointer("/error/message"),
-        "the served terminal must carry the error the first caller saw"
-    );
+    // Until the ADR-012 amendment of 2026-10-06: assert_eq!(second.pointer("/error/message"), first.pointer("/error/message"));
+    assert_told_uncertain(&first, &second);
 }
 
 /// Row 2c — the same guarantee on the *other* forward arm: a pass-through
@@ -637,11 +634,14 @@ async fn a_passthrough_forward_failure_keeps_its_key() {
         StatusCode::OK,
         "the retry must be served the stored terminal: {second}"
     );
-    assert_eq!(
-        second.pointer("/error/message"),
-        first.pointer("/error/message"),
-        "the served terminal must carry the error the first caller saw"
-    );
+    // Until the ADR-012 amendment of 2026-10-06: assert_eq!(second.pointer("/error/message"), first.pointer("/error/message"));
+    assert_told_uncertain(&first, &second);
+}
+
+fn assert_told_uncertain(first: &Value, second: &Value) {
+    let told = second["error"]["message"].to_string();
+    assert!(told.contains("outcome is unknown"), "{second}");
+    assert_eq!(second["error"]["code"], first["error"]["code"], "{second}");
 }
 
 /// Row 3 — an unannotated `tools/call` that times out reaches the backend
