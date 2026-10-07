@@ -33,6 +33,8 @@ async fn ping(router: axum::Router, session: Option<&str>) -> (StatusCode, Heade
 async fn a_resumed_session_is_not_fingerprinted_again() {
     let (state, _store) = test_router_app_state().await;
     let router = create_router_with(std::sync::Arc::clone(&state), None);
+    // Logging on, so a digest taken inside a log argument is counted too.
+    let (_captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
 
     let (status, headers) = ping(router.clone(), None).await;
     assert_eq!(status, StatusCode::OK);
@@ -66,7 +68,7 @@ async fn a_resumed_session_is_not_fingerprinted_again() {
 async fn a_new_session_is_fingerprinted_once_with_logging_on() {
     let (state, _store) = test_router_app_state().await;
     let router = create_router_with(std::sync::Arc::clone(&state), None);
-    let (_captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
+    let (captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
 
     FINGERPRINTS.with(|n| n.set(0));
     let (status, headers) = ping(router, None).await;
@@ -80,6 +82,10 @@ async fn a_new_session_is_fingerprinted_once_with_logging_on() {
         1,
         "a new session was fingerprinted more than once"
     );
+    // Both lines that name the session were written, so their arguments ran.
+    let text = captured.text();
+    assert!(text.contains("Created new streaming session"), "{text}");
+    assert!(text.contains("Meta-MCP request"), "{text}");
 }
 
 /// A stream that resumes a held session reads its fingerprint as well.
@@ -87,6 +93,8 @@ async fn a_new_session_is_fingerprinted_once_with_logging_on() {
 async fn a_stream_on_a_held_session_is_not_fingerprinted_again() {
     let (state, _store) = test_router_app_state().await;
     let router = create_router_with(std::sync::Arc::clone(&state), None);
+    // Logging on, so a digest taken inside a log argument is counted too.
+    let (_captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
     let (_, headers) = ping(router.clone(), None).await;
     let id = headers
         .get("mcp-session-id")
