@@ -559,3 +559,6 @@ async fn a_route_removed_before_the_first_pass_is_withdrawn_by_it() {
 
 #[path = "events_hook_shape_tests.rs"]
 mod shape_tests;
+
+#[path = "events_hook_partial_tests.rs"]
+mod partial_tests;
