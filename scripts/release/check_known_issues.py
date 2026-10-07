@@ -14,6 +14,11 @@ applies to it. The tag is --tag, else $GITHUB_REF_NAME; anything that is not a
 v4.0.0-beta.N or v4.0.0-rc.N tag, a branch name included, is held to the
 final-tag rule.
 
+The section is read line by line and fails closed: a doubtful heading counts
+as a start and never as an end, so an odd Markdown shape can only make the
+gate read more of the notes. End a section with a plain "## Heading" at
+column 0.
+
 Exit 0 when the gate holds, 1 otherwise (an unreadable notes file included).
 """
 
@@ -33,7 +38,7 @@ LATER_RELEASE_TOKEN = re.compile(r"(?<![\d.])4\.0\.1(?!\.?\d)")
 PRERELEASE_TAG = re.compile(r"^v4\.0\.0-(beta|rc)\.\d+$")
 # ATX headings: up to three spaces of indent, optional closing hashes.
 HEADING = re.compile(r"^ {0,3}##[ \t]+known issues(?:[ \t]+#*)?[ \t]*$", re.IGNORECASE)
-SECTION_END = re.compile(r"^ {0,3}#{1,2}(?:[ \t]|$)")
+SECTION_END = re.compile(r"^#{1,2}(?:[ \t]|$)")
 # Setext: a paragraph line underlined with = (level 1) or - (level 2). A list
 # item, indented code, an ATX heading, a quote, a fence or a thematic break
 # cannot be one, and after a blank line the underline is a thematic break.
@@ -56,39 +61,41 @@ HTML_BLOCKS = tuple(
         (r"^ {0,3}<\?", r"\?>"),
         (r"^ {0,3}<![a-z]", r">"),
         (r"^ {0,3}<!\[CDATA\[", r"\]\]>"),
+        # Any other tag opens a block that runs to the next blank line.
+        (r"^ {0,3}</?[a-z]", r"\A\s*\Z"),
     )
 )
-# A link reference definition is not paragraph text, so it is never a heading.
-REFERENCE = re.compile(r"^ {0,3}\[[^\]]+\]:")
+# A link reference definition is not paragraph text, so it is never a heading;
+# any line that opens with a bracket is read as one.
+REFERENCE = re.compile(r"^ {0,3}\[")
 
 
 def starts_section(lines, i):
     """True when line i opens a Known issues section.
 
     Liberal on purpose, and checked before fences and HTML blocks: a doubtful
-    start only makes the gate read more. A setext start is the whole paragraph
-    over a dash underline, so a title wrapped over two lines still counts.
+    start only makes the gate read more. A setext start is a title of one or
+    two lines over a dash underline, so a wrapped title still counts.
     """
     if HEADING.match(lines[i]):
         return True
     underline = UNDERLINE.match(lines[i + 1]) if i + 1 < len(lines) else None
     if not underline or underline.group(1)[0] != "-" or not lines[i].strip():
         return False
-    first = i
-    while first > 0 and lines[first - 1].strip():
-        first -= 1
-    return " ".join(" ".join(lines[first : i + 1]).split()).lower() == "known issues"
+    two = lines[i - 1] + " " + lines[i] if i else lines[i]
+    return "known issues" in (" ".join(text.split()).lower() for text in (lines[i], two))
 
 
 def ends_section(lines, i):
     """True when the setext heading on line i may end a section.
 
     Stop rule: this is a line reader, not a Markdown parser, so it does not try
-    to decide every form. A section ends only on the plain form: one line of
-    paragraph text at column 0 after a blank line. Every other form (a heading
-    that spans lines, an indented line, a lazy continuation) stays section
-    text, so the gate can only read too much, never too little. Starts stay
-    liberal: starts_section decides them.
+    to decide every form. A section ends only on a plain form: an ATX # or ##
+    at column 0, or one line of paragraph text at column 0 after a blank line,
+    neither inside a fence or HTML block, and the text not opening with a
+    bracket. Every other form stays section text, so the gate can only read
+    too much, never too little. Starts stay liberal: starts_section decides
+    them.
     """
     line = lines[i]
     return (
