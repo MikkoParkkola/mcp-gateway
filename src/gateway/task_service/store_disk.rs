@@ -197,7 +197,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
             (None, _) => {
                 tracing::warn!(
                     path = %shown_path,
-                    "task record skipped: nothing in it can be read; its key is not kept"
+                    "task record skipped: nothing in it can be read; its key is not kept; the file stays and counts against the store limit until an operator removes or repairs it"
                 );
                 loaded.unreadable += 1;
                 continue;
@@ -223,7 +223,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
             None => {
                 tracing::warn!(
                     path = %shown_path,
-                    "task record skipped: its task does not restore; its key stays taken"
+                    "task record skipped: its task does not restore; its key stays taken; the file stays and counts against the store limits until an operator removes or repairs it"
                 );
                 loaded.reserved.push((admission, task_id));
             }
