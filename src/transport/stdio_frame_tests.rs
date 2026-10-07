@@ -230,3 +230,41 @@ async fn a_dropped_request_leaves_no_partial_frame_for_the_next_caller() {
         frames.len()
     );
 }
+
+/// MIK-8079: `close()` is not held up by a write stuck on a peer that stopped
+/// reading; ending the tree breaks that write.
+#[cfg(unix)]
+#[tokio::test]
+async fn close_returns_while_a_write_is_stuck_on_a_peer_that_stopped_reading() {
+    use crate::transport::Transport as _;
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
+    let script = format!(
+        "while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
+         *'notifications/initialized'*) exec sleep 1000 ;;\n\
+         esac\ndone\n"
+    );
+    std::fs::write(dir.path().join("deaf.sh"), script).unwrap();
+    let transport = super::StdioTransport::new(
+        "sh deaf.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(30),
+        None,
+    );
+    transport.start().await.expect("start");
+    let big = serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+    let stuck = {
+        let transport = std::sync::Arc::clone(&transport);
+        tokio::spawn(async move { transport.request("tools/call", Some(big)).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!stuck.is_finished(), "precondition: the write is stuck");
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(5), transport.close()).await;
+    assert!(closed.is_ok(), "close() waited behind a stuck write");
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(5), stuck).await;
+    assert!(ended.is_ok(), "the stuck request never ended after close()");
+}
