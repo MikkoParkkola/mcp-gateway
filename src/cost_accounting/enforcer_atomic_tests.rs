@@ -269,9 +269,14 @@ fn a_cost_below_one_micro_leaves_no_ledger_rows() {
     let enforcer = BudgetEnforcer::new(cfg, registry);
     // WHEN: one admitted call settles and another is dropped unsettled
     let settled = enforcer.check(TOOL, Some(KEY));
+    let dropped = enforcer.check(TOOL, Some("other_key"));
+    assert!(
+        settled.allowed && dropped.allowed && settled.cost_usd > 0.0 && dropped.cost_usd > 0.0,
+        "both calls are admitted at a positive cost"
+    );
     enforcer.settle(settled.hold.as_deref(), TOOL, Some(KEY), settled.cost_usd);
     drop(settled);
-    drop(enforcer.check(TOOL, Some("other_key")));
+    drop(dropped);
     // THEN: the ledger holds no rows
     let pending = locked(&enforcer.ledger);
     assert!(
