@@ -214,7 +214,11 @@ async fn a_direct_request_is_refused_as_mcp_refuses_it() {
             slipped.push(format!("{label}: {got} calls={reached} {body}"));
         }
     }
-    assert!(slipped.is_empty(), "not refused as /mcp:\n{}", slipped.join("\n"));
+    assert!(
+        slipped.is_empty(),
+        "not refused as /mcp:\n{}",
+        slipped.join("\n")
+    );
 }
 
 /// R1, the rollback gate: with `server.modern_protocol: false` a modern
