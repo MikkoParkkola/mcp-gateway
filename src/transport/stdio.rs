@@ -723,11 +723,11 @@ impl Transport for StdioTransport {
         // leave the cached flag stale-true. A stale-true flag makes
         // `Backend::ensure_started` a no-op and dispatches requests into a dead
         // pipe — the core reason a tripped breaker never recovered. Confirm real
-        // liveness with a non-blocking waitpid. `try_lock` keeps this sync
+        // liveness with a non-reaping peek. `try_lock` keeps this sync
         // method from blocking; on lock contention we trust the flag.
         if let Ok(mut guard) = self.child.try_lock()
             && let Some(child) = guard.as_mut()
-            && let Ok(Some(_status)) = child.try_wait()
+            && tree::leader_exited(child.as_mut())
         {
             // Child has exited; reconcile the cached flag so callers and future
             // checks see the truth.

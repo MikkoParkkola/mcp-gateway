@@ -42,6 +42,32 @@ pub(super) fn spawn_in_own_tree(cmd: Command) -> Result<Box<dyn ChildWrapper>> {
     })
 }
 
+/// Whether the backend's leader has exited, WITHOUT reaping it (MIK-8080).
+///
+/// The leader's pid is its process-group id. Reaping it here would free that id
+/// while `close()`, `Drop` and the read-error path still signal the stored
+/// group, so after a pid wraparound they could kill an unrelated group. Left a
+/// zombie, the leader keeps the id reserved until teardown kills and reaps the
+/// whole group.
+#[cfg(unix)]
+pub(super) fn leader_exited(child: &mut dyn ChildWrapper) -> bool {
+    use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
+    let Some(pid) = child
+        .id()
+        .and_then(|id| Pid::from_raw(i32::try_from(id).ok()?))
+    else {
+        return true; // already reaped: nothing is left to signal
+    };
+    let peek = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+    !matches!(waitid(WaitId::Pid(pid), peek), Ok(None))
+}
+
+/// A Job object, not a reusable group id, owns the tree here.
+#[cfg(not(unix))]
+pub(super) fn leader_exited(child: &mut dyn ChildWrapper) -> bool {
+    matches!(child.try_wait(), Ok(Some(_)))
+}
+
 /// Default longest JSON-RPC frame a stdio peer may send (16 MiB). Without a
 /// bound, a peer that never sends a newline grows the gateway's buffer without
 /// limit. A backend raises or lowers it with `max_frame_bytes`.
