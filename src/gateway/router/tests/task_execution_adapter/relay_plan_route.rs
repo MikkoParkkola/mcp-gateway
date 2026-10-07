@@ -3,6 +3,8 @@
 //! MIK-7887.RECEIPT.2 at the POST route: a `gateway_execute` plan whose answer
 //! the router's response pass redacts keeps each step's receipt for the text
 //! the caller still got, through the route's own restage and final rebuild.
+//! A `gateway_invoke` answer the pass rewrites keeps its receipt too
+//! (MIK-7998).
 use super::super::*;
 use super::support::*;
 use pretty_assertions::assert_eq;
@@ -120,5 +122,46 @@ async fn a_redacted_plan_answer_keeps_each_steps_delivered_text() {
     assert_eq!(
         relayed_a["error"]["code"], -32002,
         "step A's unredacted text kept its receipt: {relayed_a}"
+    );
+}
+
+/// A note whose lines are each shorter than a k-gram: only the text as the
+/// caller reads it, real newlines included, matches it.
+fn note() -> String {
+    (0..40)
+        .map(|i| format!("row {i:02}: late pears, north slope"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// MIK-7998.DECODE.1: the redactor's database-URL match runs to the next
+/// whitespace, so in the wrapper's pretty print it takes the note's closing
+/// quote with it and the block is no longer JSON. The receipt still holds
+/// the note as the caller reads it.
+#[tokio::test]
+async fn a_rewritten_invoke_wrapper_keeps_its_decoded_receipt() {
+    let note = note();
+    let answer = text(&format!("{note} postgres://ledger:pw@db.local/orchard"));
+    let mock = MockBackend::answering(Answer::Sequence(vec![answer, text("ok"), text("ok")]));
+    let (state, _store) = plan_state(&mock).await;
+
+    let read = post(&state, "key-a", sync_invoke(1, json!({}))).await;
+    let block = read["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        block.contains("REDACTED") && serde_json::from_str::<Value>(block).is_err(),
+        "base: the redaction broke the wrapper's JSON: {read}"
+    );
+
+    let control = post(&state, "key-a", sync_invoke(2, json!({"text": note}))).await;
+    assert!(
+        control.get("error").is_none(),
+        "control: the holder's own relay is excused: {control}"
+    );
+    let relayed = post(&state, "key-b", sync_invoke(3, json!({"text": note}))).await;
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "the receipt read the escaped wrapper, not the note: {relayed}"
     );
 }
