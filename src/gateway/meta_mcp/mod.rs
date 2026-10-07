@@ -75,6 +75,8 @@ mod caller_forward;
 mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;
+#[cfg(all(test, feature = "cost-governance"))]
+mod cost_test_support;
 mod confirmation;
 #[cfg(test)]
 mod declared_label_carry_tests;

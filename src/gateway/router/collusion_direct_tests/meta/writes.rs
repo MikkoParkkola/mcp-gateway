@@ -43,30 +43,9 @@ const CATEGORY: &str =
 /// to `dear` gets the gateway's `_cost_suggestion` naming the category.
 #[cfg(feature = "cost-governance")]
 fn suggest(fx: &mut Fixture, dear: &str, cheap: &str) {
-    use crate::cost_accounting::config::CostGovernanceConfig;
-    let mut cfg = CostGovernanceConfig {
-        enabled: true,
-        ..Default::default()
-    };
-    cfg.tool_costs.insert(dear.to_string(), 1.0);
-    cfg.tool_costs.insert(cheap.to_string(), 0.1);
-    cfg.alternatives = Some(
-        [(
-            CATEGORY.to_string(),
-            vec![dear.to_string(), cheap.to_string()],
-        )]
-        .into_iter()
-        .collect(),
-    );
-    let registry = Arc::new(crate::cost_accounting::registry::CostRegistry::new(&cfg));
-    let enforcer = Arc::new(crate::cost_accounting::enforcer::BudgetEnforcer::new(
-        cfg,
-        Arc::clone(&registry),
-    ));
     let state = Arc::get_mut(&mut fx.state).expect("state is unique");
     let meta = Arc::get_mut(&mut state.meta_mcp).expect("meta is unique");
-    meta.budget_enforcer = Some(enforcer);
-    meta.cost_registry = Some(registry);
+    meta.suggest_cheaper_for_test(CATEGORY, dear, cheap);
 }
 
 /// MIK-7991.CACHE.1: a response-cache hit serves the cost suggestion the
@@ -226,11 +205,12 @@ const WITHHELD: &str = "Side effect executed; the response was withheld by a pos
 /// Response signing on: an external `gateway_invoke` then waits for signing
 /// admission, so the sync admission leaves its key to the invoke path's own
 /// idempotency guard, whose replay arm the rows below drive (MIK-7991).
-fn signing(meta: &mut MetaMcp) {
+fn signing(mut meta: MetaMcp) -> MetaMcp {
     use crate::security::message_signing::MessageSigner;
     let key = b"collusion-meta-signing-key-0123456789abcdef".to_vec();
     let signer = MessageSigner::new(key, None, "collusion-meta".into());
     meta.enable_message_signing(signer, Duration::from_secs(300), false);
+    meta
 }
 
 /// MIK-7991 (notice): a keyed read that anomaly screening refuses after
@@ -241,8 +221,9 @@ fn signing(meta: &mut MetaMcp) {
 #[tokio::test]
 async fn meta_replayed_gateway_notice_is_not_receipted() {
     let fx = meta_fixture_with(Setup::default(), None, |meta| {
-        signing(meta);
+        let mut meta = signing(meta);
         meta.enable_response_inspection_action_mode();
+        meta
     })
     .await;
     fx.answer_read(Read::Injected);
@@ -281,6 +262,41 @@ async fn meta_signed_replay_leaves_the_cost_suggestion_out() {
     let own = cost_suggestion(&first);
     let reads = fx.reads();
     let (_, replay) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
+    assert_eq!(
+        fx.reads(),
+        reads,
+        "base: the re-issue is a replay: {replay}"
+    );
+    assert_eq!(
+        cost_suggestion(&replay),
+        own,
+        "the replay serves it unchanged"
+    );
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 1);
+    let relay = format!("{PROSE} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
+}
+
+/// MIK-7991 r4 (R10): a surfaced tool is called by its own name, so its
+/// replay by the sync admission stages the stored result itself, not a
+/// `gateway_invoke` wrapper; the suggestion the gateway wrote stays out of
+/// that receipt as well, and the backend's text stays in it.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn meta_surfaced_replay_leaves_the_cost_suggestion_out() {
+    let surfaced = |meta: MetaMcp| {
+        meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+            server: "alpha".to_string(),
+            tool: "read".to_string(),
+        }])
+    };
+    let mut fx = meta_fixture_with(Setup::default(), None, surfaced).await;
+    suggest(&mut fx, "read", "send");
+    let key = keyed("key-7991-surfaced");
+    let (_, first) = post(&fx, Some("a"), "read", &json!({}), &key).await;
+    let own = cost_suggestion(&first);
+    let reads = fx.reads();
+    let (_, replay) = post(&fx, Some("a"), "read", &json!({}), &key).await;
     assert_eq!(
         fx.reads(),
         reads,
