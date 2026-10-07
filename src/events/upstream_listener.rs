@@ -20,6 +20,12 @@ use super::types::RpcError;
 use super::upstream_need::{Full, Interest, Need, Snapshot, Verdict};
 use crate::backend::BackendRegistry;
 
+/// How often ended listeners are checked for a backend that can be listened
+/// to again (MIK-7944 D6.EVENTS_MISC.6).
+/// ponytail: up to this long between a backend turning eligible and its
+/// listener starting; a push from reload and transport detection would cut it.
+const REVIVE_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// What one backend's task and the event source share.
 pub(super) struct Shared {
     pub name: String,
@@ -44,6 +50,22 @@ impl Shared {
     /// Whether the live config now refuses this backend's upstream events.
     pub(super) fn is_ineligible(&self) -> bool {
         (self.ineligible)().contains(&self.name)
+    }
+}
+
+/// An ended entry for `backend` (its task stopped, or never started, while the
+/// backend could not be listened to) is replaced, not reused, when it is
+/// listened to again. The replacement inherits the interest still counted
+/// (the `tools_changed` keys kept meanwhile), so their removal later balances
+/// against it.
+fn take_ended(map: &mut HashMap<String, Arc<Shared>>, backend: &str) -> Need {
+    match map.get(backend).filter(|s| s.stop.is_cancelled()) {
+        Some(ended) => {
+            let carried = std::mem::take(&mut *ended.need.lock());
+            map.remove(backend);
+            carried
+        }
+        None => Need::default(),
     }
 }
 
@@ -102,7 +124,7 @@ impl UpstreamListeners {
         hub: Weak<EventsHub>,
         ineligible: super::backend_source::Ineligible,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        let listeners = Arc::new(Self {
             registry,
             hub,
             ineligible,
@@ -111,7 +133,25 @@ impl UpstreamListeners {
             stop: CancellationToken::new(),
             #[cfg(test)]
             starts: std::sync::atomic::AtomicUsize::new(0),
-        })
+        });
+        // Weak: a strong reference here would keep `Drop` from ever
+        // cancelling the listeners. No runtime (a plain unit test): no sweep.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let (weak, stop) = (Arc::downgrade(&listeners), listeners.stop.clone());
+            runtime.spawn(async move {
+                loop {
+                    tokio::select! {
+                        () = stop.cancelled() => return,
+                        () = tokio::time::sleep(REVIVE_EVERY) => {}
+                    }
+                    let Some(listeners) = weak.upgrade() else {
+                        return;
+                    };
+                    listeners.revive();
+                }
+            });
+        }
+        listeners
     }
 
     /// Count one more live key for `backend`, starting its task when it is
@@ -121,15 +161,7 @@ impl UpstreamListeners {
     /// [`Full`] when the backend's URI budget is spent.
     pub(crate) fn add(&self, backend: &str, interest: &Interest) -> Result<(), Full> {
         let mut map = self.backends.lock();
-        // A task a reload ended (its backend became ineligible) is replaced,
-        // not reused, if the interest returns. The replacement inherits the
-        // interest still counted (the `tools_changed` keys the reload kept),
-        // so their removal later balances against it.
-        let mut carried = Need::default();
-        if let Some(ended) = map.get(backend).filter(|s| s.stop.is_cancelled()) {
-            carried = std::mem::take(&mut *ended.need.lock());
-            map.remove(backend);
-        }
+        let carried = take_ended(&mut map, backend);
         let shared = Arc::clone(
             map.entry(backend.to_owned())
                 .or_insert_with(|| self.start(backend, carried)),
@@ -147,6 +179,54 @@ impl UpstreamListeners {
             }
         }
         Ok(())
+    }
+
+    /// Count a key for a backend that cannot be listened to now (absent or
+    /// refused), starting nothing: the entry is an ended one, which the
+    /// revive sweep starts once the backend can be (MIK-7944
+    /// D6.EVENTS_MISC.6). On a backend whose task runs it counts there.
+    pub(crate) fn hold(&self, backend: &str, interest: &Interest) {
+        let mut map = self.backends.lock();
+        let shared = map.entry(backend.to_owned()).or_insert_with(|| {
+            let ended = self.entry(backend, Need::default());
+            ended.stop.cancel();
+            ended
+        });
+        // `tools_changed` has no URI budget, so it is always counted.
+        if matches!(shared.need.lock().add(interest), Ok(true)) && !shared.stop.is_cancelled() {
+            shared.wake.send_modify(|n| *n += 1);
+        }
+    }
+
+    /// One revive pass: start every ended entry whose backend can be
+    /// listened to again. Eligibility is read once, before the map lock; a
+    /// backend refused again before its task runs is stopped at that task's
+    /// loop head. Collect and replace share one hold of the map lock that
+    /// `add` and `remove` take, so no key changes in between.
+    fn revive(&self) {
+        let refused = (self.ineligible)();
+        let mut map = self.backends.lock();
+        let due: Vec<String> = map
+            .iter()
+            .filter(|(name, shared)| self.revivable(name, shared, &refused))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in due {
+            let carried = take_ended(&mut map, &name);
+            tracing::debug!(backend = %name, "upstream listener: revived");
+            let shared = self.start(&name, carried);
+            map.insert(name, shared);
+        }
+    }
+
+    /// An ended entry, of a registered backend that is not refused.
+    fn revivable(
+        &self,
+        name: &str,
+        shared: &Shared,
+        refused: &std::collections::BTreeSet<String>,
+    ) -> bool {
+        shared.stop.is_cancelled() && self.knows(name) && !refused.contains(name)
     }
 
     /// Count one key fewer; the last one stops the task.
@@ -217,8 +297,18 @@ impl UpstreamListeners {
         #[cfg(test)]
         self.starts
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let shared = self.entry(backend, need);
+        tokio::spawn(super::upstream_session::run(
+            Arc::clone(&shared),
+            Arc::clone(&self.registry),
+            self.hub.clone(),
+        ));
+        shared
+    }
+
+    fn entry(&self, backend: &str, need: Need) -> Arc<Shared> {
         let (wake, _) = watch::channel(0);
-        let shared = Arc::new(Shared {
+        Arc::new(Shared {
             name: backend.to_owned(),
             need: Mutex::new(need),
             snapshot: Mutex::new(Snapshot::default()),
@@ -227,13 +317,7 @@ impl UpstreamListeners {
             gate: Arc::clone(self.gates.lock().entry(backend.to_owned()).or_default()),
             ineligible: Arc::clone(&self.ineligible),
             tools: Mutex::default(),
-        });
-        tokio::spawn(super::upstream_session::run(
-            Arc::clone(&shared),
-            Arc::clone(&self.registry),
-            self.hub.clone(),
-        ));
-        shared
+        })
     }
 }
 
