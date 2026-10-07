@@ -327,6 +327,12 @@ fn edit_block(
         let comment = inline_comment(value_text);
         let value = &value_text[..value_text.len() - comment.map_or(0, str::len)];
         let block = value.trim().is_empty();
+        // A tag or anchor before a value (`!!str "a # b"`) hides its quote
+        // from the scanner, so a "comment" found after it may be the rest of
+        // the old value; carrying that would leave it on disk.
+        if comment.is_some() && value.trim_start().starts_with(['!', '&']) {
+            return None;
+        }
         match (was, now) {
             // A removed key takes its own line's comment; one inside its
             // value cannot be kept.
@@ -571,6 +577,13 @@ mod tests {
         let original = "backends:\n  svc:\n    description: \"a # b\"\n";
         let old = "description: \"a # b\"\n";
         assert_eq!(edited(original, old, "description: c\n"), None);
+    }
+
+    #[test]
+    fn a_tagged_value_with_a_hash_refuses() {
+        let original = "backends:\n  svc:\n    env:\n      TOKEN: !!str \"old # secret\"\n";
+        let old = "env:\n  TOKEN: \"old # secret\"\n";
+        assert_eq!(edited(original, old, "env:\n  TOKEN: new\n"), None);
     }
 
     #[test]
