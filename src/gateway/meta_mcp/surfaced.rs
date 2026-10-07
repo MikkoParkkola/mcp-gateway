@@ -235,6 +235,9 @@ impl MetaMcp {
             let admitted = if hidden {
                 0
             } else {
+                // Filled behind this read, as discovery does (MIK-7962);
+                // `tools_known` reports the cold slot meanwhile.
+                self.refresh_shared_behind_read(&b);
                 b.get_cached_tools_snapshot()
                     .iter()
                     .filter(|t| self.may_invoke(&b.name, &t.name, scope, session_id).is_ok())

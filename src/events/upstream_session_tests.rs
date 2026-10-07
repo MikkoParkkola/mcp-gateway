@@ -22,6 +22,7 @@ fn shared_with(ineligible: crate::events::backend_source::Ineligible) -> Arc<Sha
         stop: CancellationToken::new(),
         gate: Arc::default(),
         ineligible,
+        tools: Mutex::default(),
     })
 }
 
@@ -467,9 +468,12 @@ async fn a_refill_in_flight_at_the_session_end_is_announced() {
     }));
     let shared = shared();
     let mut state = State::new(&shared, Era::Modern);
+    // The refill serves a notice the hub has not heard of.
+    state.refill_announces = true;
     let (release, released) = tokio::sync::oneshot::channel::<()>();
     let refill: Refill = Box::pin(async move {
         let _ = released.await;
+        true
     });
     let ending = finish_refill(
         &mut state,
@@ -536,6 +540,9 @@ async fn a_uri_watched_after_the_session_started_is_read_at_once() {
         "the newly watched URI's catalogue was not read"
     );
 }
+
+#[path = "upstream_session_debt_tests.rs"]
+mod debt;
 
 fn changed(kind: NoteKind) -> UpstreamNote {
     UpstreamNote::Notice { kind, uri: None }

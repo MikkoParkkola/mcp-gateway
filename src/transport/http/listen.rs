@@ -677,6 +677,58 @@ mod tests {
         assert_eq!(note, None);
     }
 
+    /// The note a listen answered with one complete JSON body delivers.
+    async fn note_for_json_answer(
+        body: impl Fn(&Value) -> String + Send + 'static,
+    ) -> Option<UpstreamNote> {
+        let url = peer(move |id| {
+            let body = body(id);
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                 content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        })
+        .await;
+        let mut stream = transport(&url).listen(req()).await.expect("opened");
+        tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
+            .await
+            .expect("the stream ends")
+    }
+
+    /// An untrusted upstream's single answer is capped at `FRAME_CAP`: the
+    /// answer that reaches the session as `Unsupported` at exactly the cap is
+    /// dropped unread one byte over it.
+    #[tokio::test]
+    async fn a_json_answer_over_the_frame_cap_is_not_classified() {
+        fn sized(id: &Value, size: usize) -> String {
+            let answer = |message: &str| {
+                json!({"jsonrpc": "2.0", "id": id,
+                    "error": {"code": -32601, "message": message}})
+                .to_string()
+            };
+            let body = answer(&"x".repeat(size - answer("").len()));
+            assert_eq!(body.len(), size);
+            body
+        }
+        let at_cap = note_for_json_answer(|id| sized(id, FRAME_CAP)).await;
+        assert_eq!(at_cap, Some(UpstreamNote::Unsupported));
+        let over = note_for_json_answer(|id| sized(id, FRAME_CAP + 1)).await;
+        assert_eq!(over, None);
+    }
+
+    /// A single answer carrying another request's id is not this listen's.
+    #[tokio::test]
+    async fn a_json_answer_for_another_id_is_not_classified() {
+        let note = note_for_json_answer(|_| {
+            json!({"jsonrpc": "2.0", "id": "another-listen",
+                "error": {"code": -32601, "message": "Method not found"}})
+            .to_string()
+        })
+        .await;
+        assert_eq!(note, None);
+    }
+
     /// MIK-8019.SAME.1: a null-method frame carrying this listen's id is not a
     /// response of the listen, so it is not projected into a note.
     #[test]

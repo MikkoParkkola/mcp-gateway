@@ -178,7 +178,7 @@ async fn windows_child_environment_scenario() {
     // HOME and TMPDIR come from the parent when it has them, and otherwise
     // from the same fallbacks production uses.
     let home = std::env::var_os("HOME")
-        .or_else(|| dirs::home_dir().map(std::path::PathBuf::into_os_string))
+        .or_else(|| crate::home_dir::home_dir().map(std::path::PathBuf::into_os_string))
         .expect("a home directory");
     let tmpdir =
         std::env::var_os("TMPDIR").unwrap_or_else(|| std::env::temp_dir().into_os_string());
