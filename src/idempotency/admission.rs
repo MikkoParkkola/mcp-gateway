@@ -84,6 +84,10 @@ struct State {
     metadata_bytes: usize,
     result_bytes: usize,
     generation: u64,
+    /// Stored task rows whose key could not be read (MIK-8052). While any
+    /// exists, a NEW identity is refused: it could be one of those rows' retry.
+    /// Identities already held answer as before.
+    sealed: usize,
 }
 
 struct Entry {
@@ -218,6 +222,14 @@ impl ExecutionAdmission {
     /// Call only after current authorization, with a stable verified principal
     /// and sanitized operation/representation descriptors. No backend work occurs
     /// here. A Task lease is only a reservation, never a durable acknowledgement.
+    /// Seal or unseal NEW identities: `rows` is how many stored task rows hold
+    /// a key nobody can read (MIK-8052). Set by the task service at open and
+    /// after each re-read of those rows, always after any repaired row's
+    /// binding is imported, so a key never falls between the two.
+    pub(crate) fn set_sealed(&self, rows: usize) {
+        self.state.lock().sealed = rows;
+    }
+
     pub(crate) fn admit(self: &Arc<Self>, request: Request<'_>) -> Result<Admission, Refusal> {
         self.admit_round(request, "")
     }
@@ -272,6 +284,9 @@ impl ExecutionAdmission {
                 } => Admission::Replay(Arc::clone(bytes)),
                 Status::Completed { bytes: None, .. } => Admission::Unavailable,
             });
+        }
+        if state.sealed > 0 {
+            return Ok(Admission::Unavailable);
         }
         now.checked_add(RETENTION_SECS)
             .ok_or(Refusal::ExpiryOverflow)?;

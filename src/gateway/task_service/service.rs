@@ -91,6 +91,9 @@ impl TaskService {
             let _ = store.close().await;
             return Err(ServiceError::Unavailable);
         }
+        // Set apart from the import, which returns early on an empty batch: a
+        // store whose only rows are sealed imports nothing and must still seal.
+        admission.set_sealed(store.skipped_records().sealed);
         Ok(Self { store, admission })
     }
 

@@ -87,14 +87,17 @@ pub(super) fn acquire_lease(lease: &Path) -> Result<ExclusiveFileLock, StoreErro
 }
 
 /// What `load` found: the tasks it restored, the rows whose task does not
-/// restore but whose admission block still reads, and how many rows nothing
-/// could be read from.
+/// restore but whose admission block still reads, and the rows whose key could
+/// not be read.
 pub(super) struct Loaded {
     pub(super) entries: BTreeMap<String, Entry>,
     /// Their keys stay taken: a retry finds the original task id, which reads
     /// as not found, and never starts a second task (MIK-8023).
     pub(super) reserved: Vec<(AdmissionRecord, String)>,
-    pub(super) unreadable: usize,
+    /// File names of rows whose key could not be read. While any is listed,
+    /// admission refuses every NEW keyed call: one of them could be this row's
+    /// retry (MIK-8052).
+    pub(super) sealed: BTreeSet<String>,
 }
 
 /// The parts of a record read before, and independently of, the strict
@@ -103,8 +106,93 @@ pub(super) struct Loaded {
 #[derive(Default)]
 struct Envelope {
     version: Option<u64>,
-    admission: Option<AdmissionRecord>,
+    admission: AdmissionRead,
     task_id: Option<String>,
+}
+
+/// How a row's admission block read. Only one strictly read copy names a key
+/// the store may keep; anything else leaves the key unknown, and an unknown key
+/// seals new keyed admissions until the file is repaired or removed (MIK-8052).
+#[derive(Default)]
+enum AdmissionRead {
+    /// The walk never reached a copy.
+    #[default]
+    Missing,
+    Read(AdmissionRecord),
+    /// A copy that did not read, or a second copy.
+    Unreadable,
+}
+
+/// One `admission` member, read without ever failing on well-formed JSON, so
+/// the walk goes on to the members after it: a bad block must not hide a later
+/// `version` from the newer-build refusal. A block with a repeated field, or
+/// one that is not an admission record, reads as `None`.
+struct AdmissionCopy(Option<AdmissionRecord>);
+
+impl<'de> serde::Deserialize<'de> for AdmissionCopy {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(AdmissionCopyVisitor)
+    }
+}
+
+struct AdmissionCopyVisitor;
+
+impl<'de> serde::de::Visitor<'de> for AdmissionCopyVisitor {
+    type Value = AdmissionCopy;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("any JSON value")
+    }
+
+    /// A repeated field is caught as it arrives: reading the block as a whole
+    /// `Value` would let a later copy silently replace the one the writer wrote.
+    fn visit_map<A: serde::de::MapAccess<'de>>(
+        self,
+        mut map: A,
+    ) -> Result<AdmissionCopy, A::Error> {
+        let mut fields = serde_json::Map::new();
+        let mut repeated = false;
+        while let Some(key) = map.next_key::<String>()? {
+            let value = map.next_value::<serde_json::Value>()?;
+            repeated |= fields.insert(key, value).is_some();
+        }
+        let record = (!repeated)
+            .then(|| AdmissionRecord::deserialize(serde_json::Value::Object(fields)).ok())
+            .flatten();
+        Ok(AdmissionCopy(record))
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(
+        self,
+        mut seq: A,
+    ) -> Result<AdmissionCopy, A::Error> {
+        while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+        Ok(AdmissionCopy(None))
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<AdmissionCopy, E> {
+        Ok(AdmissionCopy(None))
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<AdmissionCopy, E> {
+        Ok(AdmissionCopy(None))
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<AdmissionCopy, E> {
+        Ok(AdmissionCopy(None))
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<AdmissionCopy, E> {
+        Ok(AdmissionCopy(None))
+    }
+
+    fn visit_str<E>(self, _: &str) -> Result<AdmissionCopy, E> {
+        Ok(AdmissionCopy(None))
+    }
+
+    fn visit_unit<E>(self) -> Result<AdmissionCopy, E> {
+        Ok(AdmissionCopy(None))
+    }
 }
 
 impl Envelope {
@@ -132,9 +220,10 @@ impl<'de> serde::de::Visitor<'de> for Members<'_> {
     }
 
     /// A duplicated member is damage too, and no later copy may undo what an
-    /// earlier one gave: the key and task id keep the first copy that reads
-    /// (any readable binding is the safe side), the version keeps the highest
-    /// (a newer build's row must refuse whichever copy says so).
+    /// earlier one gave: the task id keeps the first copy that reads, the
+    /// version keeps the highest (a newer build's row must refuse whichever copy
+    /// says so), and a second admission copy leaves the key unreadable, since
+    /// either copy could be the one the writer wrote (MIK-8052).
     fn visit_map<A: serde::de::MapAccess<'de>>(self, mut members: A) -> Result<(), A::Error> {
         while let Some(key) = members.next_key::<String>()? {
             match key.as_str() {
@@ -143,9 +232,11 @@ impl<'de> serde::de::Visitor<'de> for Members<'_> {
                     self.0.version = self.0.version.max(version);
                 }
                 "admission" => {
-                    let admission = members.next_value::<serde_json::Value>()?;
-                    let admission = AdmissionRecord::deserialize(admission).ok();
-                    self.0.admission = self.0.admission.take().or(admission);
+                    let copy = members.next_value::<AdmissionCopy>()?.0;
+                    self.0.admission = match (&self.0.admission, copy) {
+                        (AdmissionRead::Missing, Some(record)) => AdmissionRead::Read(record),
+                        _ => AdmissionRead::Unreadable,
+                    };
                 }
                 "model" => {
                     let model = members.next_value::<serde_json::Value>()?;
@@ -178,7 +269,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
     let mut loaded = Loaded {
         entries: BTreeMap::new(),
         reserved: Vec::new(),
-        unreadable: 0,
+        sealed: BTreeSet::new(),
     };
     let mut identities = BTreeSet::new();
     let mut principals: BTreeMap<String, usize> = BTreeMap::new();
@@ -206,7 +297,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
         // of damaged rows is still refused before it is all read.
         fits(
             limits,
-            loaded.entries.len() + loaded.reserved.len() + loaded.unreadable,
+            loaded.entries.len() + loaded.reserved.len() + loaded.sealed.len(),
         )?;
         let bytes = read_bounded(&mut file, limits.record_bytes).inspect_err(|error| {
             if *error == StoreError::Capacity {
@@ -226,7 +317,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
             (
                 None,
                 Envelope {
-                    admission: Some(admission),
+                    admission: AdmissionRead::Read(admission),
                     task_id,
                     ..
                 },
@@ -238,11 +329,11 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
                 (admission, named)
             }
             (None, _) => {
-                tracing::warn!(
+                tracing::error!(
                     path = %shown_path,
-                    "task record skipped: nothing in it can be read; its key is not kept; the file stays and counts against the store limit until an operator removes or repairs it"
+                    "task record skipped: its idempotency key cannot be read, so every new keyed call is refused (409) until an operator repairs or removes this file; that clears without a restart"
                 );
-                loaded.unreadable += 1;
+                loaded.sealed.insert(name.to_owned());
                 continue;
             }
         };

@@ -303,6 +303,11 @@ impl ExecutionAdmission {
                 Status::Completed { .. } => TaskAdmission::Unavailable,
             });
         }
+        // A stored row whose key could not be read may be this request's
+        // original: no new task until that row is repaired or removed (MIK-8052).
+        if state.sealed > 0 {
+            return Ok(TaskAdmission::Unavailable);
+        }
         now.checked_add(RETENTION_SECS)
             .ok_or(Refusal::ExpiryOverflow)?;
         if state.entries.len() >= SLOT_LIMIT {

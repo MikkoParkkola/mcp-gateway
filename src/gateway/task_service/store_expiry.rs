@@ -50,7 +50,7 @@ impl TaskStore {
         let state = self.0.state();
         super::SkippedRecords {
             reserved: state.reserved.len(),
-            unreadable: state.unreadable,
+            sealed: state.sealed.len(),
         }
     }
 

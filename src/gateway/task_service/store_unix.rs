@@ -14,14 +14,17 @@ use crate::fs_lock::DirPin;
 pub(super) use std::fs::rename;
 
 /// Open a record without following a symlink, so the thing judged and the thing
-/// read are the same file.
+/// read are the same file. Non-blocking, so a FIFO wearing a record's name is
+/// judged and refused instead of waiting for a writer (`MIK-8052.AC4`); the flag
+/// has no effect on reading a regular file.
 #[cfg(unix)]
 pub(super) fn open_record(path: &Path) -> Result<fs::File, StoreError> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let shown_path = path.display();
+    let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
     fs::OpenOptions::new()
         .read(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
+        .custom_flags(flags.bits().cast_signed())
         .open(path)
         .map_err(|error| {
             tracing::warn!(%error, path = %shown_path, "task record could not be opened as a private regular file");

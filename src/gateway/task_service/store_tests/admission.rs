@@ -601,6 +601,8 @@ enum Damage {
     MistypedAdmission,
     /// A later, well-formed decoy copy of `identityDigest` inside `admission`.
     NestedDuplicate,
+    /// A second, later `admission` member: either copy could be the writer's.
+    RepeatedAdmission,
 }
 
 fn damage(record: &std::path::Path, how: &Damage) {
@@ -624,6 +626,10 @@ fn damage(record: &std::path::Path, how: &Damage) {
                 &text[end..]
             )
         }
+        Damage::RepeatedAdmission => {
+            let end = text.rfind('}').expect("a record object");
+            format!("{},\"admission\":null{}", &text[..end], &text[end..])
+        }
     };
     assert_ne!(damaged, text, "the fixture must change the record");
     std::fs::write(record, damaged).unwrap();
@@ -640,6 +646,7 @@ async fn an_unreadable_admission_never_frees_its_key() {
         ("before_admission", Damage::BeforeAdmission),
         ("mistyped_admission", Damage::MistypedAdmission),
         ("nested_duplicate", Damage::NestedDuplicate),
+        ("repeated_admission", Damage::RepeatedAdmission),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tasks");

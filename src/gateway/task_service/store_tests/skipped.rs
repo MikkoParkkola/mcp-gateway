@@ -101,7 +101,6 @@ async fn an_unrestorable_record_keeps_its_binding() {
         "version_zero",
         "truncated",
         "trailing",
-        "duplicate_admission",
         "duplicate_model",
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -113,11 +112,9 @@ async fn an_unrestorable_record_keeps_its_binding() {
                 .unwrap()
                 .to_owned()
         };
-        if case == "duplicate_admission" {
-            // A later `"admission":null` must not erase the valid one read
-            // first, or a retry of the key runs the backend again.
-            append_duplicate(&record, "admission", "null");
-        } else if case == "duplicate_model" {
+        // A duplicated admission block no longer keeps a key: either copy could
+        // be the writer's, so it seals (store_tests/admission.rs, MIK-8052).
+        if case == "duplicate_model" {
             // A later model naming another task must not rebind the key to it.
             append_duplicate(&record, "model", r#"{"task":{"taskId":"another"}}"#);
         } else if case == "trailing" {
@@ -316,7 +313,7 @@ async fn skipped_rows_are_reported_by_class() {
         });
     });
     let rendered = handle.render();
-    for (class, count) in [("reserved", " 1"), ("unreadable", " 0")] {
+    for (class, count) in [("reserved", " 1"), ("sealed", " 0")] {
         assert!(
             rendered.lines().any(|line| line.starts_with(&format!(
                 "mcp_task_store_skipped_records{{class=\"{class}\"}}"
