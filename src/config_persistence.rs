@@ -111,10 +111,11 @@ impl From<String> for Unwritten {
 /// the file already loads as writes nothing.
 ///
 /// The file is loaded through the strict loader from a single read, and that
-/// exact text is the one edited when `config` differs from it by exactly one
-/// backend added, removed or edited. A file that does not load, or that
-/// another writer changed into something more than one backend away, is
-/// rewritten in full, or refused. An edit landing after that read is
+/// exact text is the one edited when `config` differs from it only in
+/// `backends`: each backend added, removed or edited is spliced in turn, and
+/// the file is written once. A file that does not load, a change outside
+/// `backends`, or a backend the splice cannot express is rewritten in full,
+/// or refused. An edit landing after that read is
 /// overwritten by the rename, as the full rewrite overwrites it.
 ///
 /// # Errors
@@ -131,9 +132,7 @@ pub fn write_config_with(path: &Path, config: &Config, mode: CommentLoss) -> Res
         if mode == CommentLoss::Refuse && value(before) == value(config) {
             return Ok(());
         }
-        if let Some(edited) = splice::changed_backend(before, config)
-            .and_then(|name| splice::with_backend_edited(text, before, config, &name))
-        {
+        if let Some(edited) = splice::with_backends_edited(text, before, config) {
             return Ok(write_yaml(path, &edited)?);
         }
     }

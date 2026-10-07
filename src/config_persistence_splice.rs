@@ -422,9 +422,9 @@ fn apply_delta(raw: &mut Mapping, old: &Mapping, new: &Mapping) {
     }
 }
 
-/// The one backend that differs between `before` and `config`: added,
-/// removed, or edited in place.
-pub(super) fn changed_backend(before: &Config, config: &Config) -> Option<String> {
+/// Every backend that differs between `before` and `config` (added, removed,
+/// or edited in place), sorted so a multi-backend splice is deterministic.
+pub(super) fn changed_backends(before: &Config, config: &Config) -> Vec<String> {
     let value = |b: &crate::config::BackendConfig| serde_json::to_value(b).ok();
     let mut changed = before
         .backends
@@ -442,8 +442,29 @@ pub(super) fn changed_backend(before: &Config, config: &Config) -> Option<String
                 .keys()
                 .filter(|name| !before.backends.contains_key(*name)),
         );
-    let name = changed.next()?.clone();
-    changed.next().is_none().then_some(name)
+    let mut names: Vec<String> = changed.cloned().collect();
+    names.sort();
+    names
+}
+
+/// `text` with every backend that differs between `before` and `config`
+/// spliced in one at a time, each step through [`with_backend_edited`] and
+/// its proof. `None` when a step cannot be spliced, or when `config` differs
+/// from `before` outside `backends`.
+pub(super) fn with_backends_edited(text: &str, before: &Config, config: &Config) -> Option<String> {
+    let mut text = text.to_owned();
+    let mut done = before.clone();
+    for name in changed_backends(before, config) {
+        let mut next = done.clone();
+        match config.backends.get(&name) {
+            Some(backend) => next.backends.insert(name.clone(), backend.clone()),
+            None => next.backends.remove(&name),
+        };
+        text = with_backend_edited(&text, &done, &next, &name)?;
+        done = next;
+    }
+    let value = |c: &Config| serde_json::to_value(c).ok();
+    (value(&done) == value(config)).then_some(text)
 }
 
 /// The refusal for a write that would drop the comments in `text`. Any `#`
@@ -465,9 +486,8 @@ pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
         format!(" (and {rest} more)")
     };
     format!(
-        "Not saved: this edit cannot be written into {} as a text change (flow style, a \
-         comment inside the changed value, or more than one backend changed), and a full \
-         rewrite would drop its comments: {}{more}. \
+        "Not saved: this edit cannot be written into {} as a text change (flow style, or a \
+         comment inside the changed value), and a full rewrite would drop its comments: {}{more}. \
          Edit the file by hand, or run the CLI command again with `--force` to rewrite \
          the file without its comments.",
         path.display(),
