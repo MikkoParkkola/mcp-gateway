@@ -21,7 +21,7 @@ use super::upstream_need::{Full, Interest, Need, Snapshot, Verdict};
 use crate::backend::BackendRegistry;
 
 /// How often ended listeners are checked for a backend that can be listened
-/// to again (MIK-7944 D6.EVENTS_MISC.6).
+/// to again (MIK-7944 `D6.EVENTS_MISC.6`).
 /// ponytail: up to this long between a backend turning eligible and its
 /// listener starting; a push from reload and transport detection would cut it.
 const REVIVE_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
@@ -190,7 +190,7 @@ impl UpstreamListeners {
     /// Count a key for a backend that cannot be listened to now (absent or
     /// refused), starting nothing: the entry is an ended one, which the
     /// revive sweep starts once the backend can be (MIK-7944
-    /// D6.EVENTS_MISC.6). On a backend whose task runs it counts there.
+    /// `D6.EVENTS_MISC.6`). On a backend whose task runs it counts there.
     pub(crate) fn hold(&self, backend: &str, interest: &Interest) {
         let mut map = self.backends.lock();
         let shared = map.entry(backend.to_owned()).or_insert_with(|| {
