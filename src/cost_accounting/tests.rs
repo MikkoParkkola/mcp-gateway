@@ -70,8 +70,8 @@ fn session_cost_groups_by_backend_and_tool() {
 // ── KeyCost ───────────────────────────────────────────────────────
 
 /// Record `rec` on `kc` at the current time.
-fn spend(kc: &KeyCost, rec: CostRecord) {
-    kc.record(&rec, now_secs());
+fn spend(kc: &KeyCost, rec: &CostRecord) {
+    kc.record(rec, now_secs());
 }
 
 #[test]
@@ -80,8 +80,8 @@ fn key_cost_window_totals_exclude_old_records() {
     // Insert a record manually with a very old timestamp
     let mut old_rec = CostRecord::new("s", "t", 9_999, 15.0);
     old_rec.timestamp = 1; // epoch + 1 second — definitely older than 24 h
-    spend(&kc, old_rec);
-    spend(&kc, CostRecord::new("s", "t", 100, 15.0));
+    spend(&kc, &old_rec);
+    spend(&kc, &CostRecord::new("s", "t", 100, 15.0));
 
     let (tokens, _) = kc.window_totals(BudgetWindow::Day.secs());
     // Only the recent record should count
@@ -97,7 +97,7 @@ fn key_cost_budget_status_ok_when_no_limit() {
             ..Default::default()
         },
     );
-    spend(&kc, CostRecord::new("s", "t", 1_000_000, 15.0)); // $15
+    spend(&kc, &CostRecord::new("s", "t", 1_000_000, 15.0)); // $15
     assert_eq!(kc.budget_status(), BudgetStatus::Ok);
 }
 
@@ -112,7 +112,7 @@ fn key_cost_budget_status_warning_at_80_percent() {
         },
     );
     // $8.5 = 85 % of $10 → Warning
-    spend(&kc, CostRecord::new("s", "t", 566_667, 15.0)); // ≈ $8.50
+    spend(&kc, &CostRecord::new("s", "t", 566_667, 15.0)); // ≈ $8.50
     let status = kc.budget_status();
     assert!(matches!(status, BudgetStatus::Warning { .. }));
 }
@@ -127,7 +127,7 @@ fn key_cost_budget_status_exceeded_at_100_percent() {
             window: BudgetWindow::Day,
         },
     );
-    spend(&kc, CostRecord::new("s", "t", 100_000, 15.0)); // $1.50
+    spend(&kc, &CostRecord::new("s", "t", 100_000, 15.0)); // $1.50
     assert!(matches!(kc.budget_status(), BudgetStatus::Exceeded { .. }));
 }
 
@@ -136,8 +136,8 @@ fn key_cost_keeps_no_bucket_for_spend_past_the_month() {
     let kc = KeyCost::new("k5", BudgetConfig::default());
     let mut old = CostRecord::new("s", "t", 100, 15.0);
     old.timestamp = 1;
-    spend(&kc, old);
-    spend(&kc, CostRecord::new("s", "t", 50, 15.0));
+    spend(&kc, &old);
+    spend(&kc, &CostRecord::new("s", "t", 50, 15.0));
     // One hour bucket (the current one); the old spend lives on only in the
     // all-time per-tool row.
     assert_eq!(kc.spend.lock().0.len(), 1);
@@ -331,7 +331,7 @@ fn a_key_idle_for_a_month_reports_zero_windows_but_keeps_its_tool_rows() {
     let kc = KeyCost::new("idle", BudgetConfig::default());
     let mut old = CostRecord::new("srv", "t", 7, 15.0);
     old.timestamp = now_secs() - 31 * 86_400;
-    spend(&kc, old);
+    spend(&kc, &old);
     // THEN: every window reads zero; the all-time row is still there
     let snap = kc.snapshot();
     assert_eq!(
