@@ -388,6 +388,26 @@ fn evict_expired_removes_only_stale_entries() {
     assert!(matches!(cache.check("fresh"), CheckOutcome::Completed(_)));
 }
 
+/// MIK-7991 review (Codex P2): the direct route settles into this cache with
+/// no sync admission in front of it, so a completed entry is owed its replay
+/// for the whole documented day; a retry one second before it ends must not
+/// run the side effect again.
+#[test]
+fn a_completed_entry_still_replays_one_second_before_the_day_ends() {
+    let cache = IdempotencyCache::new();
+    let stored = Instant::now()
+        .checked_sub(Duration::from_secs(24 * 60 * 60 - 1))
+        .unwrap();
+    cache.entries.insert(
+        "k".to_string(),
+        Entry::new(IdempotencyState::Completed(json!(1), stored), ""),
+    );
+    assert!(
+        matches!(cache.check("k"), CheckOutcome::Completed(_)),
+        "a retry inside the day re-executed instead of replaying"
+    );
+}
+
 // ── enforce ───────────────────────────────────────────────────────────────
 
 #[test]
