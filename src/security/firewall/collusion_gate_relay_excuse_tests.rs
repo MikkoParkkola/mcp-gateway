@@ -90,6 +90,11 @@ fn a_callers_own_split_copy_is_never_a_relay() {
             );
             deliver(&fw, &a, &tool, &text, false);
             deliver(&fw, &b, &tool, &text, true);
+            // Control: the same text is a relay for a caller without it.
+            assert!(
+                reported(&fw, &format!("c{i}"), &text),
+                "text {i} undetectable"
+            );
             reported(&fw, &b, &text)
         })
         .collect();

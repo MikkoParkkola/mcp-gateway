@@ -484,11 +484,16 @@ fn saturated_fingerprint_never_flags() {
 #[test]
 fn short_text_has_no_fingerprints() {
     let d = detector();
-    assert!(d.fingerprints(&"x".repeat(47)).is_empty());
-    assert!(!d.fingerprints(&secret()[..48]).is_empty());
+    assert!(d.kgram_hashes(&"x".repeat(47)).is_empty());
+    assert_eq!(d.kgram_hashes(&secret()[..48]).len(), 1);
     // k-grams count characters, not bytes: 48 two-byte chars are one k-gram.
-    assert_eq!(d.fingerprints(&"\u{e9}".repeat(48)).len(), 1);
-    assert!(d.fingerprints(&"\u{e9}".repeat(47)).is_empty());
+    assert_eq!(d.kgram_hashes(&"\u{e9}".repeat(48)).len(), 1);
+    assert!(d.kgram_hashes(&"\u{e9}".repeat(47)).is_empty());
+    // A fingerprint is a sampled k-gram, so whether one k-gram is kept
+    // depends on its hash alone.
+    for text in [secret()[..48].to_string(), "\u{e9}".repeat(48)] {
+        assert_eq!(d.fingerprints(&text), sample(&d.kgram_hashes(&text)));
+    }
 }
 
 #[test]
