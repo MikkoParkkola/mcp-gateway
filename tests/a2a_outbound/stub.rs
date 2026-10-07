@@ -30,16 +30,32 @@ pub const RPC_PATH: &str = "/a2a";
 /// The A2A 1.0 well-known card path.
 pub const CARD_PATH: &str = "/.well-known/agent-card.json";
 
-/// Why `body` is not an A2A 1.0 `SendMessage`, or `None` when it is.
-pub fn send_message_violation(headers: &HeaderMap, body: &Value) -> Option<String> {
+/// Why `body` is not a valid A2A 1.0 request, or `None` when it is.
+pub fn request_violation(headers: &HeaderMap, body: &Value) -> Option<String> {
     if headers.get("a2a-version").and_then(|v| v.to_str().ok()) != Some("1.0") {
         return Some("missing or wrong A2A-Version header".into());
     }
     if body.get("jsonrpc").and_then(Value::as_str) != Some("2.0") || body.get("id").is_none() {
         return Some("not a JSON-RPC 2.0 request".into());
     }
-    if body.get("method").and_then(Value::as_str) != Some("SendMessage") {
-        return Some(format!("unexpected method {:?}", body.get("method")));
+    match body.get("method").and_then(Value::as_str) {
+        Some("SendMessage") => send_message_violation(body),
+        Some("GetTask" | "CancelTask") => {
+            let named = body
+                .pointer("/params/id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.is_empty());
+            (!named).then(|| "params.id missing or empty".into())
+        }
+        other => Some(format!("unexpected method {other:?}")),
+    }
+}
+
+/// Why a `SendMessage` body is off-spec, or `None`.
+fn send_message_violation(body: &Value) -> Option<String> {
+    // The bridge must learn the task id before it waits, so it never blocks.
+    if body.pointer("/params/configuration/returnImmediately") != Some(&Value::Bool(true)) {
+        return Some("configuration.returnImmediately must be true".into());
     }
     let Some(message) = body.pointer("/params/message") else {
         return Some("params.message missing".into());
@@ -82,6 +98,34 @@ pub enum Answer {
     Result(Value),
     /// An HTTP 307 to this location.
     Redirect(String),
+    /// One step per `SendMessage` or `GetTask`, in order; the last step
+    /// repeats. `CancelTask` is always answered and consumes nothing.
+    Script(Arc<Mutex<std::collections::VecDeque<Step>>>),
+}
+
+/// One scripted answer.
+#[derive(Clone)]
+pub enum Step {
+    Reply(Value),
+    /// Never answer: the request stays in flight until the caller gives up.
+    Hang,
+}
+
+/// A script of `steps`, played one per request.
+pub fn script(steps: Vec<Step>) -> Answer {
+    Answer::Script(Arc::new(Mutex::new(steps.into())))
+}
+
+fn next_step(steps: &Mutex<std::collections::VecDeque<Step>>) -> Step {
+    let mut steps = steps.lock().expect("script");
+    if steps.len() > 1 {
+        steps.pop_front().expect("non-empty")
+    } else {
+        steps
+            .front()
+            .cloned()
+            .expect("a script has at least one step")
+    }
 }
 
 /// How one stub agent behaves.
@@ -152,22 +196,38 @@ fn card(agent: &Agent, base: &str) -> Value {
     })
 }
 
-fn rpc(agent: &Agent, headers: &HeaderMap, body: &Value) -> Response {
+async fn rpc(agent: &Agent, headers: &HeaderMap, body: &Value) -> Response {
     let id = body.get("id").cloned().unwrap_or(Value::Null);
     let tenant_missing = agent.tenant.as_ref().is_some_and(|tenant| {
         body.pointer("/params/tenant").and_then(Value::as_str) != Some(tenant.as_str())
     });
-    let violation = send_message_violation(headers, body)
+    let violation = request_violation(headers, body)
         .or_else(|| tenant_missing.then(|| "params.tenant does not match the card".to_owned()));
     if let Some(why) = violation {
         return axum::Json(json!({"jsonrpc": "2.0", "id": id,
             "error": {"code": -32602, "message": why}}))
         .into_response();
     }
+    let reply = |result: &Value| {
+        axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response()
+    };
+    if body.get("method").and_then(Value::as_str) == Some("CancelTask") {
+        let task = body.pointer("/params/id").cloned().unwrap_or_default();
+        return reply(&json!({"id": task, "status": {"state": "TASK_STATE_CANCELED"}}));
+    }
     match &agent.answer {
-        Answer::Result(result) => {
-            axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response()
-        }
+        Answer::Result(result) => reply(result),
+        Answer::Script(steps) => match next_step(steps) {
+            // Scripts are written as `SendMessage` results (`{task}` or
+            // `{message}`); `GetTask` answers with the bare task.
+            Step::Reply(result)
+                if body.get("method").and_then(Value::as_str) == Some("GetTask") =>
+            {
+                reply(result.get("task").unwrap_or(&result))
+            }
+            Step::Reply(result) => reply(&result),
+            Step::Hang => std::future::pending().await,
+        },
         Answer::Redirect(location) => (
             StatusCode::TEMPORARY_REDIRECT,
             [(axum::http::header::LOCATION, location.clone())],
@@ -201,13 +261,13 @@ pub async fn serve(agent: Agent) -> (String, Log) {
             RPC_PATH,
             post(
                 move |headers: HeaderMap, axum::Json(body): axum::Json<Value>| async move {
-                    let response = rpc(&rpc_agent, &headers, &body);
+                    // Logged on arrival, so a request that hangs is still seen.
                     rpc_log.lock().expect("log").push(Seen {
                         path: RPC_PATH.into(),
-                        headers,
-                        body,
+                        headers: headers.clone(),
+                        body: body.clone(),
                     });
-                    response
+                    rpc(&rpc_agent, &headers, &body).await
                 },
             ),
         );
@@ -248,7 +308,20 @@ pub fn sends(log: &Log) -> Vec<Seen> {
     log.lock()
         .expect("log")
         .iter()
-        .filter(|seen| seen.path == RPC_PATH)
+        .filter(|seen| {
+            seen.path == RPC_PATH
+                && seen.body.get("method").and_then(Value::as_str) == Some("SendMessage")
+        })
         .cloned()
+        .collect()
+}
+
+/// The bodies of every request with JSON-RPC `method`, in order.
+pub fn calls(log: &Log, method: &str) -> Vec<Value> {
+    log.lock()
+        .expect("log")
+        .iter()
+        .filter(|seen| seen.body.get("method").and_then(Value::as_str) == Some(method))
+        .map(|seen| seen.body.clone())
         .collect()
 }
