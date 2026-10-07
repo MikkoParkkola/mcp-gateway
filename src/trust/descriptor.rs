@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `TrustCard` projection helpers for live MCP tool descriptors.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -280,6 +280,54 @@ fn held_or_default<'a, V: Default>(map: &'a mut HashMap<String, V>, key: &str) -
     }
     map.get_mut(key)
         .expect("present: inserted above when absent")
+}
+
+/// Whole lists already projected, by the `Arc` they arrived in, oldest first:
+/// (server id, server name, list, projection).
+type HeldList = (String, String, Arc<[Tool]>, Vec<Value>);
+
+/// Lists held. Past it the oldest is dropped, and a list no longer held takes
+/// the per-tool path, which recomputes nothing for unchanged tools.
+const HELD_LISTS: usize = 64;
+
+fn held_lists() -> &'static Mutex<VecDeque<HeldList>> {
+    static HELD: OnceLock<Mutex<VecDeque<HeldList>>> = OnceLock::new();
+    HELD.get_or_init(Mutex::default)
+}
+
+/// [`project_tool_descriptors_trust_cards`] for a list its caller shares: the
+/// same `Arc` again is recognised by address, and its projection is copied
+/// with no compare (MIK-7916).
+///
+/// The `Arc` is held with its projection, so its address cannot be reused by
+/// another list while the entry stands. A list matches only under the server
+/// identity it was projected for.
+#[must_use]
+pub fn project_tool_descriptors_trust_cards_shared(
+    server_id: &str,
+    server_name: &str,
+    tools: &Arc<[Tool]>,
+) -> Vec<Value> {
+    {
+        let held = held_lists().lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((.., projected)) = held.iter().find(|(id, name, seen, _)| {
+            Arc::ptr_eq(seen, tools) && id == server_id && name == server_name
+        }) {
+            return projected.clone();
+        }
+    }
+    let projected = project_tool_descriptors_trust_cards(server_id, server_name, tools);
+    let mut held = held_lists().lock().unwrap_or_else(PoisonError::into_inner);
+    if held.len() == HELD_LISTS {
+        held.pop_front();
+    }
+    held.push_back((
+        server_id.to_owned(),
+        server_name.to_owned(),
+        Arc::clone(tools),
+        projected.clone(),
+    ));
+    projected
 }
 
 /// Test-only: (cards computed, exact tool compares) on this thread, for tests

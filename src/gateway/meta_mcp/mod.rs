@@ -46,7 +46,7 @@ use crate::security::message_signing::{MessageSigner, NonceStore};
 use crate::transition::TransitionTracker;
 use crate::trust::{
     project_tool_descriptor_trust_card, project_tool_descriptors_trust_cards,
-    tools_list_result_with_trust_cards,
+    project_tool_descriptors_trust_cards_shared, tools_list_result_with_trust_cards,
 };
 use crate::{Error, Result};
 use crate::{backend::BackendRegistry, cache::ResponseCache};
@@ -56,10 +56,7 @@ use super::meta_mcp_helpers::{
     build_code_mode_tools, build_discovery_preamble, build_initialize_result,
     build_routing_instructions, extract_client_version, extract_required_str,
 };
-use super::meta_mcp_tool_defs::{
-    MetaToolExposure, MetaToolGates, ToolTotal, build_meta_tools_filtered,
-    require_gateway_invoke_nonce,
-};
+use super::meta_mcp_tool_defs::{MetaToolExposure, ToolTotal};
 use super::meta_mcp_tool_total::tool_total;
 use super::webhooks::WebhookRegistry;
 #[cfg(test)]
@@ -464,6 +461,8 @@ pub struct MetaMcp {
     /// Consulted on both `tools/list` and `tools/call`. The default exposes every
     /// meta-tool, so an existing deployment is unaffected.
     pub(super) meta_tool_exposure: MetaToolExposure,
+    /// Meta catalogues already built, shared by identity (MIK-7916).
+    meta_catalogues: catalogue_cache::MetaCatalogues,
     /// List `gateway_get_stats`, from `MetaMcpConfig::expose_stats_tool`.
     ///
     /// Enumeration only: the handler answers whoever calls it by name either
@@ -672,6 +671,7 @@ impl MetaMcp {
             surfaced_tools: Vec::new(),
             surfaced_tools_map: HashMap::new(),
             meta_tool_exposure: MetaToolExposure::expose_all(),
+            meta_catalogues: catalogue_cache::MetaCatalogues::default(),
             expose_stats_tool: false,
             prompts_resources_fetch_timeout: std::time::Duration::from_secs(10),
             #[cfg(feature = "spec-preview")]
@@ -810,6 +810,8 @@ impl MetaMcp {
     #[must_use]
     pub fn with_exposed_meta_tools(mut self, names: &[String]) -> Self {
         self.meta_tool_exposure = MetaToolExposure::from_names(names);
+        // The exposure is the one build input outside the catalogue key.
+        self.meta_catalogues = catalogue_cache::MetaCatalogues::default();
         self
     }
 
@@ -1777,60 +1779,6 @@ impl MetaMcp {
         )
     }
 
-    /// The meta-tools this caller is served, after the operator allow-list and
-    /// the caller's standing have both had their say.
-    ///
-    /// The single authority for "what does this caller get to see": `tools/list`
-    /// builds its answer here, and the gateway-owned guides are projected
-    /// through the same set (`resources::try_serve_guide`) so no served text
-    /// can name a tool the same caller's catalogue withholds.
-    ///
-    /// `counts` feed the descriptions: `tools/list` passes the caller's
-    /// admitted counts; the guide projection reads names only.
-    pub(super) fn meta_tools_for(
-        &self,
-        standing: CallerStanding,
-        counts: (ToolTotal, usize),
-    ) -> Vec<crate::protocol::Tool> {
-        let mut tools = if self.code_mode_enabled {
-            self.meta_tool_exposure.filter(build_code_mode_tools())
-        } else {
-            let (tool_count, server_count) = counts;
-            build_meta_tools_filtered(
-                MetaToolGates {
-                    // The collector is always attached, so its presence was
-                    // never a gate. The operator opt-in is.
-                    stats: self.expose_stats_tool,
-                    reload: self.get_reload_context().is_some(),
-                    // Follows `cost_governance.enabled`, which is what decides
-                    // whether a registry is attached at all. Without the
-                    // feature there is nothing to report.
-                    #[cfg(feature = "cost-governance")]
-                    cost_report: self.cost_registry.is_some(),
-                    #[cfg(not(feature = "cost-governance"))]
-                    cost_report: false,
-                    // Attachment, not configuration: the registry is set after
-                    // construction and never over stdio, so this is read here
-                    // rather than passed in.
-                    webhook_status: self.get_webhook_registry().is_some(),
-                    playbooks: !self.playbook_engine.read().is_empty(),
-                    profiles: self.profile_registry.has_configured_profiles(),
-                },
-                tool_count,
-                server_count,
-                &self.meta_tool_exposure,
-            )
-        };
-        if self.signing_enabled() && self.require_nonce {
-            require_gateway_invoke_nonce(&mut tools);
-        }
-        // The admin axis, applied to disclosure by the same predicate that
-        // gates dispatch in `handle_tools_call`. Listing a tool the caller is
-        // then refused is a catalogue entry that exists only to be denied.
-        tools.retain(|tool| standing.permits(&tool.name));
-        tools
-    }
-
     /// Session-aware variant of `handle_tools_list` used by the router.
     pub fn handle_tools_list_for_session(
         &self,
@@ -1842,7 +1790,7 @@ impl MetaMcp {
         let standing = CallerStanding::from(scope);
         let tools = self.meta_tools_for(standing, self.admitted_counts(scope, session_id));
         let mut tool_descriptors =
-            project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
+            project_tool_descriptors_trust_cards_shared("gateway:meta", "mcp-gateway", &tools);
 
         // Append surfaced tools (skip in Code Mode — it uses a fixed 2-tool schema).
         if !self.code_mode_enabled {
