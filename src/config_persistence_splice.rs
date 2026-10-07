@@ -753,8 +753,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).expect("read"), current);
     }
 
-    /// The one public writer: `Ok(None)` when it keeps the comments, the
-    /// refusal as `Err` without `force`, and as `Ok(Some(_))` with it.
+    /// The one public writer: `Ok` when it keeps the comments, otherwise the
+    /// refusal as `Err`, naming the lines and leaving the file untouched.
     #[test]
     fn the_preserving_writer_reports_each_outcome() {
         use crate::config::Config;
@@ -765,14 +765,15 @@ mod tests {
         std::fs::write(&path, flow).expect("write");
         let two: Config = serde_yaml::from_str("backends:\n  a: {command: a}\n  b: {command: b}\n")
             .expect("config");
-        let refusal = write_config_preserving(&path, &two, false).expect_err("refused");
-        assert!(refusal.contains("line 1"), "{refusal}");
+        let refusal = write_config_preserving(&path, &two).expect_err("refused");
+        assert!(
+            refusal.starts_with("Not saved:") && refusal.contains("line 1"),
+            "{refusal}"
+        );
         assert_eq!(std::fs::read_to_string(&path).expect("read"), flow);
-        let forced = write_config_preserving(&path, &two, true).expect("forced");
-        assert_eq!(forced, Some(refusal));
         let block = "backends:\n  a:  # kept by hand\n    command: a\n";
         std::fs::write(&path, block).expect("write");
-        assert_eq!(write_config_preserving(&path, &two, false), Ok(None));
+        assert_eq!(write_config_preserving(&path, &two), Ok(()));
         assert!(
             std::fs::read_to_string(&path)
                 .expect("read")

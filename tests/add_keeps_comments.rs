@@ -218,8 +218,8 @@ fn several_backends_at_once_keep_comments() {
     let mut config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
     config.backends.insert("one".into(), echo_backend());
     config.backends.insert("two".into(), echo_backend());
-    let kept = mcp_gateway::config_persistence::write_config_preserving(&path, &config, false);
-    assert_eq!(kept, Ok(None));
+    let kept = mcp_gateway::config_persistence::write_config_preserving(&path, &config);
+    assert_eq!(kept, Ok(()));
     let written = std::fs::read_to_string(&path).expect("read");
     assert!(written.contains("# kept by hand"), "{written}");
     let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
@@ -240,7 +240,7 @@ fn a_stale_multi_change_is_refused_not_spliced() {
     stale.backends.insert("b".into(), echo_backend());
     let current = format!("{NOTED}  c:\n    command: c\n");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, &current).expect("write");
-    let refusal = write_config_preserving(&path, &stale, false).expect_err("refused");
+    let refusal = write_config_preserving(&path, &stale).expect_err("refused");
     assert!(
         refusal.starts_with("Not saved") && refusal.contains("--force"),
         "{refusal}"

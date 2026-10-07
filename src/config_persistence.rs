@@ -133,32 +133,20 @@ pub(crate) fn write_config_with(
 ///
 /// The file's text is edited in place when `config` differs from it in
 /// `backends` alone: one backend added, removed or edited, or several added or
-/// edited (setup and discovery import). A write that would drop comments is refused
-/// unless `force`; a forced one rewrites the file in full and returns the
-/// refusal it overrode, which names the comment lines it dropped. A `config`
-/// that is what the file already loads as writes nothing.
+/// edited (setup and discovery import). A write that would drop comments is
+/// refused, and the refusal names the comment lines; [`write_config`] is the
+/// full rewrite (`--force`). A `config` that is what the file already loads
+/// as writes nothing.
 ///
 /// # Errors
 ///
 /// The refusal, or a validation, serialisation or I/O failure, as a message
 /// ready to print.
-pub fn write_config_preserving(
-    path: &Path,
-    config: &Config,
-    force: bool,
-) -> Result<Option<String>, String> {
-    let message = |e: Unwritten| match e {
+pub fn write_config_preserving(path: &Path, config: &Config) -> Result<(), String> {
+    write_spliced(path, config, CommentLoss::Refuse, Splice::NoRemoval).map_err(|e| match e {
         Unwritten::CommentLoss(message) => message,
         Unwritten::Failed(message) => format!("Failed to write {}: {message}", path.display()),
-    };
-    match write_spliced(path, config, CommentLoss::Refuse, Splice::NoRemoval) {
-        Err(Unwritten::CommentLoss(refusal)) if force => {
-            write_spliced(path, config, CommentLoss::Rewrite, Splice::NoRemoval)
-                .map_err(message)?;
-            Ok(Some(refusal))
-        }
-        result => result.map(|()| None).map_err(message),
-    }
+    })
 }
 
 /// How many backends one splice may change.

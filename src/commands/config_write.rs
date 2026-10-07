@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use mcp_gateway::config::Config;
-use mcp_gateway::config_persistence::write_config_preserving;
+use mcp_gateway::config_persistence::{write_config, write_config_preserving};
 
 /// What a CLI write does when it cannot keep the file's comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,7 +36,13 @@ pub fn comment_loss(force: bool) -> CommentLoss {
 /// that went with that entry.
 pub fn write(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), String> {
     let before = std::fs::read_to_string(path).unwrap_or_default();
-    if let Some(refusal) = write_config_preserving(path, config, mode == CommentLoss::Rewrite)? {
+    if let Err(refusal) = write_config_preserving(path, config) {
+        if mode == CommentLoss::Refuse {
+            return Err(refusal);
+        }
+        // A validation or I/O failure fails the rewrite the same way.
+        write_config(path, config)
+            .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
         eprintln!(
             "Warning: --force rewrites {} in full. Without it this write is refused:\n  {refusal}",
             path.display()
