@@ -101,13 +101,29 @@ def title_readings(text, keep="a-z"):
     return (title_letters(text, keep), title_letters(QUOTED_TAG.sub("", text), keep))
 
 
-def paragraph(lines, i):
-    """Line i joined with the paragraph lines directly above it: a setext
-    title may span several lines."""
+def is_text(line):
+    """True when `line` can only be paragraph text: not blank, and no list,
+    quote, heading, fence, raw HTML or comment opener."""
+    return bool(
+        line.strip()
+        and not NOT_A_PARAGRAPH.match(line)
+        and not FENCE.match(line)
+        and not HTML.match(line)
+        and "<!--" not in line
+    )
+
+
+def title_lines(lines, i):
+    """The readings of a setext title ending on line i: the line, the line
+    joined with the one above, and, when line i is paragraph text, the whole
+    run of paragraph text above it (a title may span several lines)."""
+    two = lines[i - 1] + " " + lines[i] if i else lines[i]
+    if not is_text(lines[i]):
+        return (lines[i], two)
     start = i
-    while start > 0 and lines[start - 1].strip():
+    while start > 0 and is_text(lines[start - 1]):
         start -= 1
-    return " ".join(lines[start : i + 1])
+    return (lines[i], two, " ".join(lines[start : i + 1]))
 
 
 def is_title(text):
@@ -137,7 +153,7 @@ def starts_section(lines, i):
     underline = UNDERLINE.match(lines[i + 1]) if i + 1 < len(lines) else None
     if not underline or not lines[i].strip():
         return False
-    return is_title(lines[i]) or is_title(paragraph(lines, i))
+    return any(is_title(text) for text in title_lines(lines, i))
 
 
 def ends_section(lines, i):
@@ -188,7 +204,7 @@ def known_issues(text):
     for i, line in enumerate(lines):
         if starts_section(lines, i):
             inside, underline = True, not atx_start(line)
-            title = line if is_title(line) else paragraph(lines, i)
+            title = next(text for text in title_lines(lines, i) + (line,) if is_title(text))
             # Content too: a title with both a code span and a tag (which
             # renders depends on span boundaries this reader does not
             # decide), a title only its letters spell, or leftover letters
@@ -237,9 +253,9 @@ def later_releases(line):
     """The versions `line` renders that are later than this release.
 
     Markdown decides what renders (a code span keeps its markup), so the line
-    is read four ways and a version any reading shows counts (fail closed).
-    All decode entities and drop backslash escapes, emphasis, strikethrough
-    and code marks,
+    is read four ways, each with and without tildes, and a version any reading
+    shows counts (fail closed).
+    All decode entities and drop backslash escapes, emphasis and code marks,
     so 4\\.0\\.1 and 4.0.&#49; count. The second also drops inline tags, link
     targets and brackets (tags before decoding, so &lt;b&gt; stays text), so
     4.0.<em>1</em> and 4.0.[1](url) count. The third first drops tags read
@@ -249,13 +265,16 @@ def later_releases(line):
     """
     found = []
     readings = (
-        re.sub(r"[\\`*_~]", "", html.unescape(line)),
-        re.sub(r"[\\`*_~\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", line))),
+        re.sub(r"[\\`*_]", "", html.unescape(line)),
+        re.sub(r"[\\`*_\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", line))),
         re.sub(
-            r"[\\`*_~\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", QUOTED_TAG.sub("", line)))
+            r"[\\`*_\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", QUOTED_TAG.sub("", line)))
         ),
-        re.sub(r"[\\*_~]", "", html.unescape(line)).replace("`", " "),
+        re.sub(r"[\\*_]", "", html.unescape(line)).replace("`", " "),
     )
+    # Strikethrough (~ or ~~) may split a version, but a tilde may also mark
+    # one (release~4.0.1), so each reading is also read with tildes dropped.
+    readings += tuple(text.replace("~", "") for text in readings)
     for text in readings:
         found += [
             match.group(0)
