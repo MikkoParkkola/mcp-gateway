@@ -10,7 +10,6 @@
 use std::time::Duration;
 
 use crate::oauth::client::token_server_fixture::{Answer, TokenServer};
-use crate::oauth::storage::RefreshState;
 
 use super::*;
 
@@ -219,25 +218,33 @@ async fn a_capability_refresh_left_in_flight_is_not_resent() {
     );
 }
 
-/// RESTSAVE.1: the token directory turns read-only before the refresh. The
-/// rotated token cannot be saved, and the refresh token it replaced is not
-/// sent again.
+/// RESTSAVE.1: the token directory turns read-only while the server holds the
+/// rotated answer. The rotated token cannot be saved, and the refresh token it
+/// replaced is not sent again.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_capability_refresh_that_cannot_be_saved_is_not_replayed() {
     use std::os::unix::fs::PermissionsExt as _;
-    let server = TokenServer::start(&[]).await;
+    let server = TokenServer::start(&[Answer::HoldThenRotate]).await;
     let dir = tempfile::tempdir().unwrap();
     store_expired(dir.path(), "r1");
     let mode = |m| std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(m));
     mode(0o500).unwrap();
-    if std::fs::write(dir.path().join("probe"), b"").is_ok() {
-        mode(0o700).unwrap();
+    let privileged = std::fs::write(dir.path().join("probe"), b"").is_ok();
+    mode(0o700).unwrap();
+    if privileged {
         eprintln!("skipped: a privileged user can write a read-only directory");
         return;
     }
 
-    let _ = fetch(&executor(dir.path()), &server).await;
+    let first = tokio::spawn({
+        let (server, first) = (Arc::clone(&server), executor(dir.path()));
+        async move { fetch(&first, &server).await }
+    });
+    server.arrivals(1, Duration::from_secs(5)).await;
+    mode(0o500).unwrap();
+    server.release.notify_one();
+    let _ = first.await.unwrap();
     let _ = fetch(&executor(dir.path()), &server).await;
     mode(0o700).unwrap();
     assert_eq!(

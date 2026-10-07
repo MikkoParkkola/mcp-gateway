@@ -523,6 +523,48 @@ impl crate::oauth::client::RefreshCaller for ProviderRefresh<'_> {
     }
 }
 
+fn expand_home_dir(path: &str) -> Result<std::path::PathBuf> {
+    if let Some(rest) = path.strip_prefix("~/") {
+        match crate::home_dir::home_dir() {
+            Some(home) => Ok(home.join(rest)),
+            None => Err(Error::Config(
+                "Cannot expand ~ in file credential path: HOME not set".to_string(),
+            )),
+        }
+    } else {
+        Ok(std::path::PathBuf::from(path))
+    }
+}
+
+fn extract_json_field(json: &Value, field: &str, path: &std::path::Path) -> Result<String> {
+    let mut current = json;
+    for segment in field.split('.') {
+        current = current.get(segment).ok_or_else(|| {
+            Error::Config(format!(
+                "Field '{}' not found in credential file '{}'",
+                field,
+                path.display()
+            ))
+        })?;
+    }
+    match current {
+        Value::String(s) => Ok(s.clone()),
+        Value::Number(n) => Ok(n.to_string()),
+        _ => Err(Error::Config(format!(
+            "Field '{}' in '{}' must be a string or number, got {}",
+            field,
+            path.display(),
+            match current {
+                Value::Bool(_) => "boolean",
+                Value::Array(_) => "array",
+                Value::Object(_) => "object",
+                Value::Null => "null",
+                _ => "unknown",
+            }
+        ))),
+    }
+}
+
 #[cfg(test)]
 #[path = "oauth_refresh_tests.rs"]
 mod oauth_refresh_tests;
@@ -550,6 +592,7 @@ mod tests {
     fn executor_with(token_storage: Option<Arc<TokenStorage>>) -> CapabilityExecutor {
         CapabilityExecutor {
             client: reqwest::Client::new(),
+            refresh: super::super::client::build_refresh(None),
             cache: ResponseCache::new(),
             token_storage,
             oauth_tokens: RwLock::new(DashMap::new()),
