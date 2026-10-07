@@ -46,7 +46,12 @@ async fn post(
     if !merged.is_empty() {
         params["_meta"] = Value::Object(merged);
     }
-    let name = params["name"].as_str().map(str::to_owned);
+    // The body field `Mcp-Name` mirrors, chosen by the method as `/mcp`
+    // checks it (`uri` on `resources/read`): a request `/mcp` would refuse
+    // is relayed unshaped.
+    let name = crate::protocol::headers::mcp_name_body_field(method)
+        .and_then(|field| params[field].as_str())
+        .map(str::to_owned);
     let mut request = axum::http::Request::builder()
         .method("POST")
         .uri(format!("/mcp/{backend}"))
