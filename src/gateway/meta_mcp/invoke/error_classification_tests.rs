@@ -60,12 +60,26 @@ fn rate_limit_phrasings_all_match() {
         "rate limit exceeded",
         "Rate-Limit hit",
         "ratelimit reached",
-        "request throttled by upstream",
         "HTTP 429",
     ] {
         assert!(
             matches!(classify_from_detail(Some(s)), ErrorCategory::RateLimited),
             "expected RateLimited for {s:?}"
+        );
+    }
+}
+
+/// MIK-7677: a throttle phrase without a `429` or rate-limit co-signal is
+/// not a rate limit, so it gets no "retry after a short delay" hint.
+#[test]
+fn a_bare_throttle_phrase_is_not_rate_limited() {
+    for s in [
+        "request throttled by upstream",
+        "request throttled: upstream out of capacity",
+    ] {
+        assert!(
+            !matches!(classify_from_detail(Some(s)), ErrorCategory::RateLimited),
+            "expected not RateLimited for {s:?}"
         );
     }
 }

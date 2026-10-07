@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `events/list`, `events/subscribe`, `events/unsubscribe` (design §6.2-6.4).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -10,8 +11,9 @@ use serde_json::{Value, json};
 use super::EventsHub;
 use super::governance::{Attribution, Lifecycle};
 use super::records::{Credential, Subscription};
-use super::store::{CapHit, Caps};
+use super::store::{CapHit, Caps, Grant};
 use super::types::{EventDescriptor, RpcError, Visibility};
+use super::upstream::{self, Ineligible, Judged, Kind};
 
 /// Who is calling, as the transport resolved it. Owned, so it can be held
 /// across the verification POST.
@@ -154,18 +156,76 @@ impl EventsHub {
     }
 
     /// The configured backends that cannot offer upstream-notification
-    /// events, under the live config; none while that source is off.
-    fn ineligible_backends(
-        &self,
-    ) -> std::collections::BTreeMap<String, super::upstream::Ineligible> {
+    /// events, under the live config and connections; none while that source
+    /// is off.
+    fn ineligible_backends(&self) -> BTreeMap<String, Ineligible> {
+        upstream::refused(self.judged_backends())
+    }
+
+    /// Every configured backend that cannot offer upstream-notification
+    /// events yet, refused or unresolved (MIK-7969).
+    fn judged_backends(&self) -> BTreeMap<String, Judged> {
         let Some(services) = self.runtime.services.get() else {
-            return std::collections::BTreeMap::new();
+            return BTreeMap::new();
         };
         if !self.config.sources.backend_notifications {
-            return std::collections::BTreeMap::new();
+            return BTreeMap::new();
         }
-        let multi_user = super::upstream::multi_user(services.live.running());
-        super::upstream::ineligible_backends(&services.live.get(), multi_user)
+        let multi_user = upstream::multi_user(services.live.running());
+        let registry = self.runtime.backends.get();
+        let detected = |name: &str| registry?.get(name)?.connected_streamable();
+        upstream::judged_backends(&services.live.get(), multi_user, &detected)
+    }
+
+    /// An upstream-notification event of a backend whose HTTP transport no
+    /// live connection has detected: start the backend as a client request
+    /// would, bounded by its timeout, then judge the transport it connected
+    /// with (MIK-7969). A failed start answers the backend error, never an
+    /// SSE refusal.
+    async fn resolve_upstream(&self, name: &str) -> Result<(), RpcError> {
+        let Some((backend, kind)) = upstream::parse_name(name) else {
+            return Ok(());
+        };
+        if kind == Kind::ToolsChanged {
+            return Ok(());
+        }
+        match self.judged_backends().get(backend) {
+            None => return Ok(()),
+            // Refused already: answer it before anything reads the backend.
+            Some(Judged::Refused(_)) => {}
+            Some(Judged::Unresolved) => {
+                let Some(handle) = self.runtime.backends.get().and_then(|r| r.get(backend)) else {
+                    return Err(RpcError::not_found());
+                };
+                if !handle.resolve_for_events().await {
+                    return Err(RpcError::backend_unavailable());
+                }
+            }
+        }
+        self.upstream_admits(name)
+    }
+
+    /// Whether an upstream-notification subscription to `name` may commit:
+    /// its backend is configured and offers the events over a transport a
+    /// live connection detected, or needs none (stdio, WebSocket). Run under
+    /// the lifecycle lock, so a stop or a switch to SSE since the subscribe
+    /// resolved it refuses the commit (MIK-7969).
+    fn upstream_admits(&self, name: &str) -> Result<(), RpcError> {
+        let Some((backend, kind)) = upstream::parse_name(name) else {
+            return Ok(());
+        };
+        if kind == Kind::ToolsChanged || !self.config.sources.backend_notifications {
+            return Ok(());
+        }
+        match self.judged_backends().remove(backend) {
+            Some(Judged::Refused(reason)) => {
+                Err(RpcError::unsupported_backend_events(name, reason.as_str()))
+            }
+            Some(Judged::Unresolved) => Err(RpcError::backend_unavailable()),
+            // Removed since the subscribe saw it.
+            None if self.source_offering(name).is_none() => Err(RpcError::not_found()),
+            None => Ok(()),
+        }
     }
 }
 
@@ -294,12 +354,9 @@ fn callback_url(raw: Option<&Value>) -> Result<url::Url, RpcError> {
         .ok_or_else(|| RpcError::invalid("delivery.url"))
 }
 
-/// The granted expiry for a `ttlMs` (design §6.3, TTL).
-fn granted_expiry(
-    hub: &EventsHub,
-    params: &Value,
-    now: DateTime<Utc>,
-) -> Result<Option<DateTime<Utc>>, RpcError> {
+/// The granted length for a `ttlMs` (design §6.3, TTL); `None` is no
+/// expiry. It becomes a time only at the commit ([`Grant`]).
+fn granted_ttl(hub: &EventsHub, params: &Value) -> Result<Option<chrono::Duration>, RpcError> {
     let config = &hub.config;
     let ttl = match params.get("ttlMs") {
         None => config.default_ttl,
@@ -310,28 +367,25 @@ fn granted_expiry(
             std::time::Duration::from_millis(ms).clamp(config.min_ttl, config.max_ttl)
         }
     };
-    let ttl = chrono::Duration::from_std(ttl).map_err(|_| RpcError::invalid("ttlMs"))?;
-    Ok(Some(now + ttl))
+    chrono::Duration::from_std(ttl)
+        .map(Some)
+        .map_err(|_| RpcError::invalid("ttlMs"))
 }
 
 /// A subscription made with a credential other than an API key ends no later
 /// than the credential (design F9): `ttlMs: null` is refused for it, and the
 /// grant is cut at the credential's own expiry when it has one.
-fn bounded_by(
+fn credential_ceiling(
     credential: &Credential,
     params: &Value,
-    granted: Option<DateTime<Utc>>,
 ) -> Result<Option<DateTime<Utc>>, RpcError> {
     if !credential.bounded() {
-        return Ok(granted);
+        return Ok(None);
     }
     if params.get("ttlMs").is_some_and(Value::is_null) {
         return Err(RpcError::invalid("ttlMs"));
     }
-    Ok(match (granted, credential.expires_at) {
-        (Some(granted), Some(ends)) => Some(granted.min(ends)),
-        (granted, ends) => granted.or(ends),
-    })
+    Ok(credential.expires_at)
 }
 
 fn to_wire_time(at: Option<DateTime<Utc>>) -> Value {
@@ -376,11 +430,6 @@ impl EventsHub {
             None => return Err(RpcError::invalid("delivery.mode")),
         }
         let arguments = checked_arguments(&descriptor, params.get("arguments"))?;
-        if let Some(source) = self.source_offering(&descriptor.name) {
-            source
-                .authorize(&principal, &descriptor.name, &arguments)
-                .await?;
-        }
         let url = callback_url(delivery.get("url"))?;
         let secret = delivery
             .get("secret")
@@ -388,9 +437,12 @@ impl EventsHub {
             .unwrap_or_default();
         let key = super::client::decode_whsec(secret)
             .ok_or_else(|| RpcError::invalid("delivery.secret"))?;
+        // Checked before any challenge; fixed to a time only at the commit.
+        let grant = Grant {
+            ttl: granted_ttl(self, &params)?,
+            until: credential_ceiling(&caller.credential, &params)?,
+        };
         let now = Utc::now();
-        let expires_at = granted_expiry(self, &params, now)?;
-        let expires_at = bounded_by(&caller.credential, &params, expires_at)?;
         let id = subscription_id(&principal, url.as_str(), &descriptor.name, &arguments);
         let caps = Caps {
             per_principal: self.config.max_subscriptions_per_principal,
@@ -402,6 +454,15 @@ impl EventsHub {
                 .map_err(cap_refusal)?;
         }
 
+        // After the cheap refusals and before any callback traffic, since it
+        // may start the backend; and before the source's own check, which may
+        // read the backend's resource catalogue.
+        self.resolve_upstream(&descriptor.name).await?;
+        if let Some(source) = self.source_offering(&descriptor.name) {
+            source
+                .authorize(&principal, &descriptor.name, &arguments)
+                .await?;
+        }
         let tail = super::tail_policy(&self.config);
         let mut verified = self.store.is_verified(&principal, url.as_str(), now, tail);
         let existing = self.store.get(&id).filter(|s| s.live(now));
@@ -425,8 +486,9 @@ impl EventsHub {
             // inside the store's commit, never from this earlier read.
             previous_secret: None,
             previous_until: None,
+            // Provisional: the store's commit sets both.
             granted_at: now,
-            expires_at,
+            expires_at: grant.expires_at(now),
             active: true,
             failed_since: None,
             last_delivery_at: None,
@@ -441,10 +503,10 @@ impl EventsHub {
                     .await?;
             }
             let outcome = self
-                .commit_started(&record, !verified, (caps, grace, tail), now)
+                .commit_started(&record, grant, !verified, (caps, grace, tail), now)
                 .await;
             match outcome? {
-                Ok(admission) => {
+                Ok((admission, expires_at)) => {
                     self.subscribed(caller, admission, &id, &descriptor.name, &url)
                         .await;
                     // A refresh may have reactivated a suspended row.
@@ -472,12 +534,14 @@ impl EventsHub {
     async fn commit_started(
         self: &Arc<Self>,
         record: &Subscription,
+        grant: Grant,
         fresh: bool,
-        (caps, grace, tail): (Caps, chrono::Duration, super::store::TailPolicy),
+        policy: (Caps, chrono::Duration, super::store::TailPolicy),
         now: DateTime<Utc>,
-    ) -> Result<Result<super::store::Admission, CapHit>, RpcError> {
+    ) -> Result<Result<super::store::Admitted, CapHit>, RpcError> {
         let attempt = record.clone();
         let mut started = self.lifecycle.lock().await;
+        self.upstream_admits(&record.name)?;
         let begun = self
             .start_key(
                 &mut started,
@@ -487,7 +551,7 @@ impl EventsHub {
             )
             .await?;
         let outcome = blocking(self, move |store| {
-            store.admit(attempt, fresh, caps, grace, now, tail)
+            store.admit_granted(attempt, grant, fresh, policy, now)
         })
         .await;
         if !matches!(outcome, Ok(Ok(_)))

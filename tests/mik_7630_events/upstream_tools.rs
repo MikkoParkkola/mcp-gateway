@@ -221,3 +221,44 @@ async fn a_notice_during_a_refill_is_served_by_the_next_one() {
     .await;
     expect_events(&receiver, &tools, &name, 1).await;
 }
+
+/// MIK-8007: a tools notice still owed when the session ends (it came during
+/// a refill) is served once the backend is listened to again, not dropped
+/// with the session.
+#[tokio::test]
+async fn a_notice_owed_when_the_session_ends_is_still_served() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receiver = Receiver::start(dir.path()).await;
+    let peer = HttpPeer::start(Era::Modern).await;
+    let (_gw, _name, _tools) = tools_session(dir.path(), &receiver, &peer).await;
+    let lists_before = tools_lists(&peer);
+    peer.hang_tools_list();
+    peer.push(TOOLS_CHANGED, json!({}));
+    eventually("the first refill reached the backend", || {
+        tools_lists(&peer) > lists_before
+    })
+    .await;
+    peer.push(TOOLS_CHANGED, json!({}));
+    // Let the second notice be noted, then end the session mid-refill.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    peer.drop_streams();
+    tokio::time::sleep(QUIET).await;
+    peer.release_tools_list();
+    eventually("the owed notice was served after the session ended", || {
+        tools_lists(&peer) > lists_before + 1
+    })
+    .await;
+    // Served once: a later session owes nothing.
+    let served = tools_lists(&peer);
+    peer.drop_streams();
+    eventually("the backend is listened to again", || {
+        !peer.open_listens().is_empty()
+    })
+    .await;
+    tokio::time::sleep(QUIET).await;
+    assert_eq!(
+        tools_lists(&peer),
+        served,
+        "a served notice was refilled again"
+    );
+}

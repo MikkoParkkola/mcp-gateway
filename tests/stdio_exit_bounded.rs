@@ -8,6 +8,9 @@
 //! to wait on that pool thread for ever. Driven through the shipped binary.
 #![cfg(unix)]
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -62,7 +65,10 @@ fn command(dir: &tempfile::TempDir) -> tokio::process::Command {
 fn command_with(dir: &tempfile::TempDir, yaml: &str) -> tokio::process::Command {
     let path = dir.path().join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+    let mut command = tokio::process::Command::from(gateway_bin::command(
+        dir.path(),
+        gateway_bin::Inherit::Environment,
+    ));
     command
         .args([
             "--config",
@@ -73,21 +79,13 @@ fn command_with(dir: &tempfile::TempDir, yaml: &str) -> tokio::process::Command 
             "--stdio",
         ])
         .current_dir(dir.path())
-        .env("HOME", dir.path())
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_DATA_HOME", dir.path().join("data"))
-        .env("MCP_GATEWAY_TEST_HOME_DIR", dir.path())
         .env_remove("RUST_LOG")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    for (name, _) in std::env::vars_os() {
-        if name.to_string_lossy().starts_with("MCP_GATEWAY_") && name != "MCP_GATEWAY_TEST_HOME_DIR"
-        {
-            command.env_remove(name);
-        }
-    }
     command
 }
 

@@ -1,0 +1,36 @@
+name: Rustdoc links
+
+# Builds the public API docs and fails on an intra-doc link that resolves to
+# nothing (MIK-8008). Its own workflow, not a ci.yml job: a `throwaway/` PR
+# must run this (it is how a planted broken link is shown red), while ci.yml
+# runs nothing but `Tests (throwaway)` on one
+# (scripts/ci/test_throwaway_routing.py). Every feature is built, so a
+# public item behind an opt-in feature is checked too; private-only items are
+# out of scope: no --document-private-items.
+on:
+  pull_request:
+  push:
+    branches: [main, docs/ranking-1-release-line]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rustdoc:
+    name: Rustdoc intra-doc links (MIK-8008)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Build the docs with broken links denied
+        env:
+          RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
+        run: cargo doc --no-deps --locked --all-features

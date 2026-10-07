@@ -72,6 +72,26 @@ pub fn assessed_methods() -> &'static [(&'static str, CacheScope)] {
     SCOPE_TABLE
 }
 
+/// How long a client may consider a list or discovery result fresh. A
+/// freshness hint, not a promise: `listChanged` notifications remain the
+/// authority on change, and this only stops a client re-listing on every turn.
+pub const LIST_TTL_MS: u64 = 60_000;
+
+/// Write the `CacheableResult` pair onto a result: `ttlMs` as given and
+/// `cacheScope` from `method`'s assessed scope. The one place the pair is
+/// written, so the modern shaper and discovery cannot drift apart on it.
+pub(crate) fn write_cache_hints(
+    result: &mut serde_json::Map<String, Value>,
+    method: &str,
+    ttl_ms: u64,
+) {
+    result.insert("ttlMs".to_string(), serde_json::json!(ttl_ms));
+    result.insert(
+        "cacheScope".to_string(),
+        Value::String(scope_for_method(method).as_str().to_string()),
+    );
+}
+
 /// What `method`'s result may claim on the wire.
 ///
 /// An unlisted method is private. That is the direction the burden runs in
@@ -92,18 +112,17 @@ fn scope_off(object: &Value) -> bool {
         .is_some_and(|scope| scope.as_str() != Some("private"))
 }
 
-/// The retained-result slot of a raw task envelope: an object with a string
-/// `taskId`, or with a `taskId` of any other type beside a `status` (a
-/// malformed backend's envelope, MIK-7702), whose `result` is an object. Only
-/// this one top-level slot is followed; nested tool data is never touched.
+/// The retained-result slot of a raw task envelope: an object with a `taskId`
+/// of any type (a malformed backend's may not be a string, MIK-7702) beside a
+/// `status` the typed task wire accepts, whose `result` is an object. A
+/// `taskId` and `result` alone are tool data (MIK-7734): every envelope this
+/// gateway writes has a status. Only this one top-level slot is followed;
+/// nested tool data is never touched.
 fn task_result_slot(result: &Value) -> Option<&Value> {
-    let task_id = result.get("taskId")?;
-    if !task_id.is_string() {
-        // Only a status the typed task wire accepts makes it an envelope.
-        // A string only: serde also reads a unit variant from `{"completed": null}`.
-        let status = result.get("status")?.as_str()?;
-        serde_json::from_value::<crate::protocol::tasks::TaskStatus>(status.into()).ok()?;
-    }
+    result.get("taskId")?;
+    // A string only: serde also reads a unit variant from `{"completed": null}`.
+    let status = result.get("status")?.as_str()?;
+    serde_json::from_value::<crate::protocol::tasks::TaskStatus>(status.into()).ok()?;
     result.get("result").filter(|slot| slot.is_object())
 }
 
@@ -185,19 +204,20 @@ pub(crate) fn serialize_delivered_error_data<S: serde::Serializer>(
     }
 }
 
-/// Clamp the `result` and `error.data` of one JSON-RPC response; requests and
-/// notifications (no `id`) pass unchanged.
+/// Clamp the `result` and `error.data` of one JSON-RPC response; requests
+/// (a string `method`, MIK-7734) and notifications (no `id`) pass unchanged.
+/// A `method` that is not a string makes no request, so `"method": null` on a
+/// response cannot opt it out of the clamp.
 fn clamp_response_envelope(payload: &mut Value) {
-    if payload.get("id").is_some()
-        && let Some(result) = payload.get_mut("result")
-    {
+    if payload.get("id").is_none() || payload.get("method").is_some_and(Value::is_string) {
+        return;
+    }
+    if let Some(result) = payload.get_mut("result") {
         clamp_delivered_scope(result);
     }
     // Error data is not a cacheable result, but it claims no scope either
     // (MIK-7702).
-    if payload.get("id").is_some()
-        && let Some(data) = payload.pointer_mut("/error/data")
-    {
+    if let Some(data) = payload.pointer_mut("/error/data") {
         clamp_top_level(data);
     }
 }
