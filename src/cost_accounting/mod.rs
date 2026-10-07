@@ -423,36 +423,23 @@ impl CostTracker {
         }
     }
 
-    /// Pre-register a budget for a named API key.
+    /// Pre-register a budget for a named API key, keeping any spend it has.
+    ///
+    /// One entry guard covers the lookup and the replacement, so the idle
+    /// sweep (which takes every shard lock) cannot drop the key in between.
     pub fn set_key_budget(&self, key_name: &str, budget: BudgetConfig) {
-        self.per_key
+        let mut entry = self
+            .per_key
             .entry(key_name.to_string())
-            .and_modify(|kc| {
-                // Swap the budget in-place on the existing Arc.
-                // We can't mutate through Arc so we replace the entry.
-                let _ = kc; // suppress unused warning
-            })
-            .or_insert_with(|| {
-                Arc::new(KeyCost {
-                    budgeted: true,
-                    ..KeyCost::new(key_name, budget.clone())
-                })
-            });
-        // If the entry already existed we replace it entirely:
-        if let Some(mut entry) = self.per_key.get_mut(key_name) {
-            let existing = Arc::clone(&entry);
-            if !Arc::ptr_eq(&existing, &Arc::new(KeyCost::new(key_name, budget.clone()))) {
-                // Rebuild with new budget, moving the existing spend across
-                let spend = std::mem::take(&mut *existing.spend.lock());
-                let new_kc = KeyCost {
-                    budgeted: true,
-                    spend: parking_lot::Mutex::new(spend),
-                    last_spend: AtomicU64::new(existing.last_spend.load(Ordering::Relaxed)),
-                    ..KeyCost::new(key_name, budget)
-                };
-                *entry = Arc::new(new_kc);
-            }
-        }
+            .or_insert_with(|| Arc::new(KeyCost::new(key_name, budget.clone())));
+        let spend = std::mem::take(&mut *entry.spend.lock());
+        let last_spend = entry.last_spend.load(Ordering::Relaxed);
+        *entry = Arc::new(KeyCost {
+            budgeted: true,
+            spend: parking_lot::Mutex::new(spend),
+            last_spend: AtomicU64::new(last_spend),
+            ..KeyCost::new(key_name, budget)
+        });
     }
 
     /// Record a tool-call cost event.
