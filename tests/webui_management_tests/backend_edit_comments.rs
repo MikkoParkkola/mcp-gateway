@@ -199,15 +199,25 @@ async fn a_transport_switch_keeps_unrelated_comments() {
     );
 }
 
-/// A refusal on `route`: 409 naming `comment` and the file byte-identical.
+/// A refusal on `route`: 409 naming the line of `comment`, never its text
+/// (a `#` can sit inside a quoted secret), and the file byte-identical.
 async fn refused(yaml: &str, name: &str, body: Value, comment: &str) {
+    let line = 1 + yaml
+        .lines()
+        .position(|l| l.contains(comment))
+        .expect("the fixture holds the comment");
     for route in [Route::Live, Route::File] {
         let (router, path, _keep) = served(yaml, route).await;
         let (status, answer) = patch(&router, name, body.clone()).await;
         assert_eq!(status, StatusCode::CONFLICT, "{route:?}: {answer}");
+        let answer = answer.to_string();
         assert!(
-            answer.to_string().contains(comment),
-            "{route:?}: names {comment:?}: {answer}"
+            answer.contains(&format!("line {line}")),
+            "{route:?}: names line {line}: {answer}"
+        );
+        assert!(
+            !answer.contains(comment),
+            "{route:?}: echoes file text: {answer}"
         );
         assert_eq!(read(&path), yaml, "{route:?}: the file was written");
     }
@@ -247,6 +257,19 @@ async fn a_misread_comment_is_refused_not_dropped() {
         "svc",
         json!({"description": "new"}),
         "# keep",
+    )
+    .await;
+}
+
+/// A `#` inside a quoted secret counts as a possible comment, and the
+/// refusal names its line without echoing the secret.
+#[tokio::test]
+async fn a_refusal_never_echoes_a_quoted_secret() {
+    refused(
+        "# top\nbackends: {a: {command: x, env: {TOKEN: \"#s3cr3t\"}}}\n",
+        "a",
+        json!({"description": "new"}),
+        "#s3cr3t",
     )
     .await;
 }

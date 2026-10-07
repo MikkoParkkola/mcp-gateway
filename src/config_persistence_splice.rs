@@ -429,16 +429,16 @@ pub(super) fn changed_backend(before: &Config, config: &Config) -> Option<String
 }
 
 /// The refusal for a write that would drop the comments in `text`. Any `#`
-/// counts: a false one only refuses a write the splice could not keep.
+/// counts: a false one only refuses a write the splice could not keep. It
+/// names line numbers only: a `#` inside a quoted value (`TOKEN: "#secret"`)
+/// would otherwise put a credential into an API answer.
 pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
     const SHOWN: usize = 5;
     let comments: Vec<String> = text
         .lines()
         .enumerate()
-        .filter_map(|(n, l)| {
-            l.find('#')
-                .map(|at| format!("line {}: {}", n + 1, &l[at..]))
-        })
+        .filter(|(_, l)| l.contains('#'))
+        .map(|(n, _)| format!("line {}", n + 1))
         .collect();
     let rest = comments.len().saturating_sub(SHOWN);
     let more = if rest == 0 {
