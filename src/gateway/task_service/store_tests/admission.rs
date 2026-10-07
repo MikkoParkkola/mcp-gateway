@@ -591,3 +591,78 @@ async fn a_refused_kept_key_refuses_the_open_and_releases_the_store() {
         other => panic!("the index must be unchanged by the refused import, got {other:?}"),
     }
 }
+
+/// MIK-8052: the damage done to a settled row's bytes, each a way its
+/// admission member stops reading unambiguously.
+enum Damage {
+    /// Syntax damage in `dispatched`, the member written before `admission`.
+    BeforeAdmission,
+    /// `admission` present but not an admission block.
+    MistypedAdmission,
+    /// A later, well-formed decoy copy of `identityDigest` inside `admission`.
+    NestedDuplicate,
+}
+
+fn damage(record: &std::path::Path, how: &Damage) {
+    let text = String::from_utf8(std::fs::read(record).unwrap()).unwrap();
+    let damaged = match how {
+        Damage::BeforeAdmission => text.replacen("\"dispatched\":", "\"dispatched\":@", 1),
+        Damage::MistypedAdmission => {
+            let mut value: Value = serde_json::from_str(&text).unwrap();
+            value["admission"] = json!(null);
+            serde_json::to_string(&value).unwrap()
+        }
+        Damage::NestedDuplicate => {
+            // The block holds only scalars, so its first closing brace ends it.
+            let start = text.find("\"admission\":{").expect("an admission block");
+            let end = start + text[start..].find('}').unwrap();
+            // A well-formed digest, so only the duplicate is wrong.
+            let decoy = "0".repeat(64);
+            format!(
+                "{},\"identityDigest\":\"{decoy}\"{}",
+                &text[..end],
+                &text[end..]
+            )
+        }
+    };
+    assert_ne!(damaged, text, "the fixture must change the record");
+    std::fs::write(record, damaged).unwrap();
+}
+
+/// `MIK-8052.AC1`: a row whose admission member cannot be read unambiguously
+/// must not hand its key to a new task. The store still opens (`MIK-8023.LOAD.1`),
+/// and a retry of the row's key is never admitted as a fresh owner, so its
+/// backend never runs twice.
+#[tokio::test]
+async fn an_unreadable_admission_never_frees_its_key() {
+    for (case, how) in [
+        ("before_admission", Damage::BeforeAdmission),
+        ("mistyped_admission", Damage::MistypedAdmission),
+        ("nested_duplicate", Damage::NestedDuplicate),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks");
+        let store = open(&path).await;
+        let (id, _) = settled_task(&store, &services(), "k-8052").await;
+        store.close().await.unwrap();
+        damage(&path.join(format!("{id}.json")), &how);
+
+        let admission = services();
+        let service = match super::super::service::TaskService::open(
+            &path,
+            super::super::store::StoreLimits::default(),
+            Arc::clone(&admission),
+        )
+        .await
+        {
+            Ok(service) => service,
+            Err(error) => panic!("{case}: one damaged row stopped the store: {error:?}"),
+        };
+        let retry = admission.admit_task(task_request("oidc:acme:alice", "k-8052"));
+        assert!(
+            !matches!(retry, Ok(TaskAdmission::Owned(_))),
+            "{case}: a retry of the damaged row's key was admitted as a new task"
+        );
+        service.close().await.unwrap();
+    }
+}
