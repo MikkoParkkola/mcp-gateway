@@ -149,3 +149,34 @@ async fn a_chain_task_row_records_each_steps_gateway_writes_under_the_step() {
         );
     }
 }
+
+/// r2a: a state-only round the worker resumes on its own is not the stored
+/// answer, so its notes are not recorded; only the final round's are.
+#[tokio::test]
+async fn a_state_only_rounds_notes_are_not_recorded() {
+    let mock = MockBackend::answering(Answer::Sequence(vec![
+        super::input_round::state_only("s-1"),
+        text("the final answer"),
+    ]));
+    let (state, store) = relay_state(&mock).await;
+    let created = post(
+        &state,
+        "key-a",
+        super::input_round::create(1, "writes-state-only"),
+    )
+    .await;
+    let task = task_id(&created);
+    let settled = poll_until_terminal(&state, "key-a", &task).await;
+    assert_eq!(status_of(&settled), "completed", "premise: {settled}");
+    assert_eq!(mock.calls(), 2, "premise: the state-only round was resumed");
+    let row = row(&store, &task);
+    assert!(
+        written(&row, &["requestState"]).is_empty(),
+        "a resumed round's continuation was recorded: {row}"
+    );
+    assert_eq!(
+        written(&row, &["trace_id"]).len(),
+        1,
+        "only the final round's trace_id: {row}"
+    );
+}
