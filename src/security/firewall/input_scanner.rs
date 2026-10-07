@@ -19,6 +19,9 @@ use serde_json::{Map, Value};
 
 use super::{Finding, FindingLocation, ScanType, Severity};
 
+/// A free-text key list and the published overlay it was parsed from.
+type ParsedKeys = (Arc<crate::config::EnvOverlay>, Arc<[String]>);
+
 /// Pre-compiled input pattern scanner.
 ///
 /// Shell injection and path traversal findings are `Severity::High` (→ block
@@ -33,7 +36,7 @@ pub struct InputScanner {
     /// parsed from. Reused only while the overlay in force is that same `Arc`:
     /// a published overlay is never mutated (`LiveEnv::set` swaps a new one
     /// in), and holding it keeps its address from being reused by a later one.
-    free_text: Mutex<Option<(Arc<crate::config::EnvOverlay>, Arc<[String]>)>>,
+    free_text: Mutex<Option<ParsedKeys>>,
     shell: RegexSet,
     path: RegexSet,
     sql: RegexSet,
