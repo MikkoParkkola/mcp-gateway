@@ -182,6 +182,7 @@ backend" and "fails a capability file" first.**
 | 155 | A caller signed in through the key server (an `/auth/token` token or a delegated OIDC bearer) has a principal of the form `kst:<sha256 hex>` or `oidc:<sha256 hex>`, no longer 12 hex characters | Update any log or audit query that matched these callers' 12-hex principal |
 | 156 | A REST capability body field that is a pure placeholder (`"{cursor}"`) now sends an explicit `null` the property's schema admits (`type: [string, "null"]`); 3.x left the field out. A null the schema does not admit is still left out, and query and path parameters are unchanged | To keep the field out, leave the argument out instead of sending `null`; a static param or URL default for the same name still fills it, as before |
 | 157 | `webhooks.base_path` may not overlap a gateway route | Move the receiver to a path outside `/mcp`, `/ui`, `/dashboard`, `/accounts/v1`, `/auth`, `/.well-known` and the probe paths |
+| 158 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1622,8 +1623,9 @@ gateway restarts and starts a fresh log, verify passes on it, and nothing in the
 shows an earlier log existed. A log stored only in that directory cannot prove it existed.
 Forward audit records off-host: `control_plane.export` writes a local NDJSON file, and the
 protection holds only once an agent running as another account ships that file to a store (a
-SIEM, for example) where the gateway account cannot delete or alter records already landed. An
-off-host anchor is not built in 4.0.
+SIEM, for example) where the gateway account cannot delete or alter records already landed. To
+detect a wipe or rollback, keep a copy of `<log>.hwm` off the host and verify with
+`audit verify --anchor` (item 158).
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
@@ -4149,6 +4151,33 @@ equal to, under or over any route the gateway listener registers, and a path axu
 as written (`/`, a trailing `/`, an empty, `.` or `..` segment, `{`, `}`, or a segment starting
 with `:` or `*`). The default `/webhooks` is unaffected, and a disabled receiver is not
 checked. Choose a path outside the gateway's own routes.
+
+## 158. `audit verify --anchor` checks the log against an off-host anchor
+
+**Startup:** no notice
+
+Nothing on the host proves an audit log once existed after its sealed segments
+and `.hwm` are deleted and the active file is cut to empty, or after the log is
+rolled back and `.hwm` rewritten to match. Keep a copy of `<log>.hwm` off the
+host and pass it to `mcp-gateway audit verify --anchor <file>`: the log must
+still hold the record the copy names, or verification fails, in live and
+archive mode.
+
+- An anchor that is missing, torn, unparseable or fails its MAC is refused
+  (exit 1), never ignored. An anchor written with a shared secret is refused
+  when no secret is configured.
+- An anchor inside a range that retention expired fails with "predates the
+  retained range": verify with a newer anchor. An anchor at the last record
+  of the newest expired segment passes only for a signed log (a
+  `shared_secret` set): without one, the expiry record that vouches for it
+  can be forged. Take anchors more often than retention expires segments.
+- `verify_audit_log` gains a fourth parameter, `anchor: Option<&Path>`. With an
+  anchor, a log with no file left is a failed verdict (`ok == false` at the
+  anchor's counter) rather than a `NotFound` error.
+
+Independently, a log whose oldest surviving segment opens with a
+`prev_entry_hash` other than the `prev_segment_final_hash` it links to now
+fails verification. The gateway never writes such a log.
 
 ## Upgrading from 3.5.x: a walkthrough
 

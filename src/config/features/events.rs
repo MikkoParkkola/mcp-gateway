@@ -131,7 +131,7 @@ pub struct EventsConfig {
     pub max_outbox: usize,
     /// Pending outbox records one subscription may hold.
     pub max_outbox_per_subscription: usize,
-    /// Inbound delivery ids remembered per webhook route.
+    /// Inbound delivery ids remembered per webhook route. Nonzero.
     pub seen_max_per_route: usize,
     /// Verification records kept after their last subscription ended.
     pub max_verified_tail: usize,
@@ -150,9 +150,9 @@ pub struct EventsConfig {
     /// Dead-letter retention.
     #[serde(with = "humantime_serde")]
     pub dead_letter_retention: Duration,
-    /// Dead-letter count cap.
+    /// Dead-letter count cap. Nonzero.
     pub dead_letter_max_records: usize,
-    /// Dead-letter byte cap.
+    /// Dead-letter byte cap. Nonzero.
     pub dead_letter_max_bytes: u64,
     /// Verification POSTs per destination host per minute, across principals.
     pub verification_per_host_per_minute: u32,
@@ -242,6 +242,8 @@ impl EventsConfig {
                 self.max_subscriptions_per_principal,
             ),
             ("queue_depth", self.queue_depth),
+            ("seen_max_per_route", self.seen_max_per_route),
+            ("dead_letter_max_records", self.dead_letter_max_records),
             ("max_in_flight", self.max_in_flight),
             ("max_outbox", self.max_outbox),
             (
@@ -266,6 +268,9 @@ impl EventsConfig {
         ];
         if let Some((name, _)) = caps.iter().find(|(_, v)| *v == 0) {
             return fail(&format!("{name} must be nonzero"));
+        }
+        if self.dead_letter_max_bytes == 0 {
+            return fail("dead_letter_max_bytes must be nonzero");
         }
         let timings = [
             ("retry_base", self.retry_base),
@@ -334,6 +339,38 @@ mod tests {
         };
         assert!(config.validate().is_err());
         assert_eq!(parse_cidr("10.0.0.0/8").map(|(_, l)| l), Some(8));
+    }
+
+    /// MIK-7854.EVENTS.2: the route dedupe and dead-letter caps refuse zero.
+    #[test]
+    fn dedupe_and_dead_letter_caps_refuse_zero() {
+        let zeroed = [
+            (
+                "seen_max_per_route",
+                EventsConfig {
+                    seen_max_per_route: 0,
+                    ..EventsConfig::default()
+                },
+            ),
+            (
+                "dead_letter_max_records",
+                EventsConfig {
+                    dead_letter_max_records: 0,
+                    ..EventsConfig::default()
+                },
+            ),
+            (
+                "dead_letter_max_bytes",
+                EventsConfig {
+                    dead_letter_max_bytes: 0,
+                    ..EventsConfig::default()
+                },
+            ),
+        ];
+        for (name, config) in zeroed {
+            let error = config.validate().expect_err(name).to_string();
+            assert!(error.contains(name), "{name}: {error}");
+        }
     }
 
     #[test]
