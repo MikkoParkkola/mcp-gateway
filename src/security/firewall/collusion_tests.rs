@@ -756,3 +756,39 @@ fn a_split_receipt_never_runs_a_value_into_a_key() {
         "the newline form, key included, is recorded"
     );
 }
+
+/// `RELAY-SPLIT-FP.2` (MIK-7773): a plan step's values that the final answer
+/// carries only as object keys are not run together in the kept receipt, as
+/// egress never runs keys together.
+#[test]
+fn a_kept_receipt_never_runs_together_values_delivered_as_keys() {
+    use super::super::collusion_digest::{Delivered, DeliveryDigest, delivery_parts};
+    let d = detector();
+    let (a, b) = (text(13, 20), text(17, 20));
+    assert!(
+        a.chars().count() >= super::K && b.chars().count() >= super::K,
+        "premise: keys long enough to read"
+    );
+    let (step, _) = DeliveryDigest::of_parts(&[a.as_str(), b.as_str()], 2, false);
+    let mut map = serde_json::Map::new();
+    map.insert(a.clone(), serde_json::Value::String("v".into()));
+    map.insert(b.clone(), serde_json::Value::String("w".into()));
+    let answer = serde_json::Value::Object(map);
+    let (leaves, values) = delivery_parts(&answer);
+    let delivered = Delivered::of_parts(leaves, values).expect("bounded");
+    let allowed: HashSet<u64> = [a.as_str(), b.as_str()]
+        .iter()
+        .flat_map(|t| d.kgram_hashes(t))
+        .collect();
+    assert!(
+        d.fingerprints(&format!("{a}{b}"))
+            .iter()
+            .any(|fp| !allowed.contains(fp)),
+        "premise: running the two together adds fingerprints"
+    );
+    let kept = step.retaining(&d, &delivered);
+    assert!(
+        kept.fingerprints(&d).iter().all(|fp| allowed.contains(fp)),
+        "only fingerprints of a key as delivered are kept"
+    );
+}
