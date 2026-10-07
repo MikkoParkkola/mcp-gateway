@@ -573,3 +573,78 @@ fn a_typed_null_result_delivers_to_the_frame_and_the_judge() {
         "the frame delivers the null result"
     );
 }
+
+/// A non-message session-stream item judged for `KEY`: its `data` and the
+/// whole tagged notification it is written as.
+fn stream_item(fw: &Firewall, data: Value, source: &str) -> Admission {
+    let note = crate::gateway::streaming::TaggedNotification {
+        source: source.to_string(),
+        event_type: "progress".to_string(),
+        data,
+        event_id: Some("e-1".to_string()),
+    };
+    let wrapper = serde_json::to_value(&note).expect("a notification serializes");
+    super::judge::admit_stream_item(
+        fw,
+        Some(KEY),
+        &note.data,
+        (note.event_type.as_str(), Some(&wrapper)),
+        None,
+    )
+}
+
+/// MIK-7942 D6.CATALOGUE.7: the stream item's `data` is scanned minus its
+/// `jsonrpc` and `id`; the wrapper scan must not walk `data` again and read
+/// that `id` back. Here `data.id` equals another tenant under a configured
+/// `id` key: the item is admitted with nothing attributed.
+#[test]
+fn a_stream_wrapper_does_not_rescan_the_data_id() {
+    let fw = firewall_with(CrossTenantReads::Block, &["customer_id", "id"]);
+    let _a = read_a(&fw);
+    let data = json!({ "jsonrpc": "2.0", "id": B, "method": "m" });
+    match stream_item(&fw, data, "gateway") {
+        Admission::Admitted(frame) => {
+            assert_eq!(frame.verdict(), None);
+            let named = frame.assessment().map(|a| a.attribution.tenants.clone());
+            assert!(
+                named.unwrap_or_default().is_empty(),
+                "nothing is attributed"
+            );
+        }
+        Admission::Blocked(e) => panic!("data.id was attributed: {e:?}"),
+    }
+}
+
+/// MIK-7942 D6.CATALOGUE.8 pin (green before and after): the response judge
+/// scans placeholders for `result`, so a configured key equal to `result`
+/// must still match a scalar result naming another tenant.
+#[test]
+fn a_scalar_result_under_a_result_key_is_attributed() {
+    let fw = firewall_with(CrossTenantReads::Block, &["customer_id", "result"]);
+    let _a = read_a(&fw);
+    let b = JsonRpcResponse::success(RequestId::Number(5), json!(B));
+    let frame = delivered(&fw, Some(KEY), Payload::Response(b), None, None);
+    assert_eq!(frame.verdict(), Some(ReadVerdict::Blocked));
+}
+
+/// MIK-7942 D6.CATALOGUE.7 pins (green before and after the fix): the wrapper
+/// still matches a configured key equal to `data` against a scalar `data`,
+/// and its own members (`source`) are still scanned.
+#[test]
+fn a_stream_wrapper_still_matches_its_own_members() {
+    for data in [json!(B), json!(7)] {
+        let fw = firewall_with(CrossTenantReads::Block, &["customer_id", "data"]);
+        let _a = read_a(&fw);
+        // A string or a number names a tenant other than A.
+        match stream_item(&fw, data.clone(), "gateway") {
+            Admission::Blocked(_) => {}
+            Admission::Admitted(frame) => panic!("a scalar data {data} was missed: {frame:?}"),
+        }
+    }
+    let fw = firewall_with(CrossTenantReads::Block, &["customer_id", "source"]);
+    let _a = read_a(&fw);
+    match stream_item(&fw, json!({ "note": "n" }), B) {
+        Admission::Blocked(_) => {}
+        Admission::Admitted(frame) => panic!("a source naming B was admitted: {frame:?}"),
+    }
+}

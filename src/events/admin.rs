@@ -141,6 +141,7 @@ impl EventsHub {
         let record = OutboxRecord {
             body_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
             attempt: 0,
+            unsent: 0,
             next_attempt_at: now,
             first_attempt_at: None,
             state: OutboxState::Pending,
