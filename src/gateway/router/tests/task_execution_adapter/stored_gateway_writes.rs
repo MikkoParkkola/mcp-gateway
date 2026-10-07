@@ -5,6 +5,7 @@
 //! out. Read straight from the row on disk, through the fixture's `TempDir`.
 use super::super::*;
 use super::support::*;
+use pretty_assertions::assert_eq;
 
 use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
 
