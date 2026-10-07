@@ -167,8 +167,17 @@ impl CardMemo {
             }
             self.servers += 1;
         }
-        let names = held_or_default(&mut self.by_id, server_id);
-        Some(held_or_default(names, server_name))
+        held_or_default(held_or_default(&mut self.by_id, server_id), server_name);
+        // The count is kept by hand beside the maps it counts; an eviction
+        // added later must keep the two in step.
+        debug_assert_eq!(
+            self.servers,
+            self.by_id.values().map(HashMap::len).sum::<usize>(),
+            "the pair count drifted from the memo"
+        );
+        self.by_id
+            .get_mut(server_id)
+            .and_then(|names| names.get_mut(server_name))
     }
 }
 
@@ -205,17 +214,37 @@ pub fn project_tool_descriptors_trust_cards(
         .collect()
 }
 
-/// Whether a memoised projection of `seen` describes `tool`: the whole tool
-/// through the derive, then the two schemas again with the sign of zero
-/// compared, because `serde_json` holds `-0.0 == 0.0` while serialising and
-/// digesting them apart. Maps are `BTreeMap`s (no `preserve_order`), so equal
-/// maps serialise alike and need no further check.
+/// Whether a memoised projection of `seen` describes `tool`, field for field.
+///
+/// The destructure names every field and has no `..`, so a field added to
+/// [`Tool`] fails to compile here until the memo compares it: a field the memo
+/// skipped would serve a card computed for other content. Each schema is
+/// walked once, by [`same_json`], which is equality that also tells `-0.0`
+/// from `0.0` (`serde_json` holds them equal yet serialises and digests them
+/// apart). Maps are `BTreeMap`s (no `preserve_order`), so equal maps serialise
+/// alike; `equal_maps_serialise_alike` pins that.
 fn same_tool(seen: &Tool, tool: &Tool) -> bool {
-    seen == tool
-        && same_json(&seen.input_schema, &tool.input_schema)
-        && match (&seen.output_schema, &tool.output_schema) {
+    let Tool {
+        name,
+        title,
+        description,
+        input_schema,
+        output_schema,
+        annotations,
+        role,
+        projection,
+    } = seen;
+    *name == tool.name
+        && *title == tool.title
+        && *description == tool.description
+        && *annotations == tool.annotations
+        && *role == tool.role
+        && *projection == tool.projection
+        && same_json(input_schema, &tool.input_schema)
+        && match (output_schema, &tool.output_schema) {
             (Some(a), Some(b)) => same_json(a, b),
-            _ => true,
+            (None, None) => true,
+            _ => false,
         }
 }
 
@@ -451,6 +480,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// MIK-7916 review: the memo treats equal schemas as interchangeable, which
+    /// holds only while equal maps serialise alike. `serde_json`'s
+    /// `preserve_order` feature would break that (insertion order), so a
+    /// feature flip fails here instead of serving cards digested from other
+    /// bytes.
+    #[test]
+    fn equal_maps_serialise_alike() {
+        let mut first = serde_json::Map::new();
+        first.insert("zeta".to_string(), json!(1));
+        first.insert("alpha".to_string(), json!(2));
+        let mut second = serde_json::Map::new();
+        second.insert("alpha".to_string(), json!(2));
+        second.insert("zeta".to_string(), json!(1));
+        assert_eq!(
+            serde_json::to_string(&Value::Object(first)).unwrap(),
+            serde_json::to_string(&Value::Object(second)).unwrap(),
+            "equal maps inserted in another order must serialise identically"
+        );
     }
 
     /// MIK-7916 AC3: the memo is keyed on the whole tool. A change to any one
