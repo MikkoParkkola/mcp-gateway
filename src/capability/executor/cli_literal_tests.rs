@@ -134,6 +134,17 @@ fn a_credential_with_no_digit_leaves_every_zero() {
     }
 }
 
+/// The digit check rejects only digitless needles: short forms with a digit
+/// before the exponent still match ("0e2" is zero, ".5" is one half).
+#[test]
+fn a_short_form_with_a_digit_still_matches() {
+    let mut value: Value = serde_json::from_str(r#"{"z": 0, "h": 0.5, "one": 1}"#).unwrap();
+    redact_value(&mut value, &["0e2".to_owned(), ".5".to_owned()]);
+    assert_eq!(value["z"], "[redacted]", "{value}");
+    assert_eq!(value["h"], "[redacted]", "{value}");
+    assert_eq!(value["one"], 1, "{value}");
+}
+
 /// A number secret with a fraction names no integer: "12345.5" redacts the
 /// float 12345.5 and leaves the integer 12345 its digits start with.
 #[test]
