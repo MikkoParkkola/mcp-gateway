@@ -575,7 +575,10 @@ async fn a_replay_restores_its_entrys_reading() {
     };
     assert!(reservation.complete_read(
         &json!({"ok": true}),
-        (Some(reading.clone()), Default::default())
+        (
+            Some(reading.clone()),
+            crate::gateway::gateway_writes::WriteRecord::default()
+        )
     ));
     let (replay, restored) =
         with_read_scope(Arc::clone(&fw), async { enforce(&cache, "k", "fp") }).await;

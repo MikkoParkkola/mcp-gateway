@@ -566,7 +566,13 @@ fn settle_direct_idempotency(
         let reading =
             crate::gateway::meta_mcp::invoke::cache_reads::reading(std::collections::BTreeSet::new);
         // The direct route writes nothing into the answer (MIK-7991).
-        reservation.complete_read(result, (reading, Default::default()));
+        reservation.complete_read(
+            result,
+            (
+                reading,
+                crate::gateway::gateway_writes::WriteRecord::default(),
+            ),
+        );
     }
 }
 

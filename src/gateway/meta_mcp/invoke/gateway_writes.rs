@@ -27,7 +27,7 @@ pub(crate) enum Layer {
 }
 
 /// One member the gateway wrote.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 struct Written {
     layer: Layer,
@@ -160,7 +160,7 @@ pub(crate) fn snapshot_since(mark: Mark) -> WriteRecord {
                     .list
                     .iter()
                     .filter(|written| written.seq >= mark.0)
-                    .cloned()
+                    .copied()
                     .collect()
             })
             .unwrap_or_default(),
@@ -179,7 +179,7 @@ pub(crate) fn restore(record: &WriteRecord) {
     let _ = GATEWAY_WRITES.try_with(|w| {
         let mut writes = w.borrow_mut();
         for written in &record.0 {
-            writes.push(written.clone());
+            writes.push(*written);
         }
     });
 }

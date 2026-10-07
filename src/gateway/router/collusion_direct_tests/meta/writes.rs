@@ -88,8 +88,8 @@ async fn meta_cache_hit_leaves_the_cost_suggestion_out_of_the_receipt() {
         "the hit serves the suggestion: {hit}"
     );
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 1);
-    let relay = format!("{PROSE} ");
-    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
+    let prose_copy = format!("{PROSE} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &prose_copy).await, 1);
 }
 
 /// MIK-7991 (replay): an idempotent replay of a successful read serves the
@@ -129,8 +129,8 @@ async fn meta_replay_leaves_the_cost_suggestion_out_of_the_receipt() {
         "the replay serves the suggestion: {replay}"
     );
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 1);
-    let relay = format!("{PROSE} ");
-    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
+    let prose_copy = format!("{PROSE} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &prose_copy).await, 1);
 }
 
 /// MIK-7991 (R5): an unkeyed read, a keyed response-cache hit on it (which
@@ -162,8 +162,8 @@ async fn meta_cache_hit_then_replay_leave_the_suggestion_out() {
     // Not the first send's text, or the response cache would answer it.
     let again = format!("{CATEGORY} ");
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), &again).await, 2);
-    let relay = format!("{PROSE} ");
-    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 2);
+    let prose_copy = format!("{PROSE} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &prose_copy).await, 2);
 }
 
 /// The `_cost_suggestion` a meta answer carries, read from the result or
@@ -248,6 +248,6 @@ async fn meta_surfaced_replay_leaves_the_cost_suggestion_out() {
         "the replay serves it unchanged"
     );
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 1);
-    let relay = format!("{PROSE} ");
-    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
+    let prose_copy = format!("{PROSE} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &prose_copy).await, 1);
 }

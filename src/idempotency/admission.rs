@@ -27,7 +27,9 @@ pub(crate) const RETENTION_SECS: u64 = 24 * 60 * 60;
 // clock counts whole wall-clock seconds, so the margin covers its truncation;
 // a forward wall-clock step can still expire this entry early, which is why
 // that path's replay arm keeps its own guard.
-const _: () = assert!(super::COMPLETED_TTL.as_secs() + 2 <= RETENTION_SECS);
+const _: () = {
+    assert!(super::COMPLETED_TTL.as_secs() + 2 <= RETENTION_SECS);
+};
 
 type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
