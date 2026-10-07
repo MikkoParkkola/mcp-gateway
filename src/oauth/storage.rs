@@ -168,7 +168,7 @@ impl TokenStorage {
     /// Returns an error if the home directory cannot be determined or the
     /// storage directory cannot be created.
     pub fn default_location() -> Result<Self> {
-        let home = dirs::home_dir()
+        let home = crate::home_dir::home_dir()
             .ok_or_else(|| Error::OAuth("Cannot determine home directory".to_string()))?;
 
         Self::new(home.join(".mcp-gateway").join("oauth"))
