@@ -60,9 +60,11 @@ pub(crate) trait CommitObserver: Send + Sync {
 /// permits could not see it.
 pub(crate) struct HandoffRegistry {
     accepted: Mutex<HashMap<String, watch::Sender<bool>>>,
-    /// Bumped after every removal. A generation rather than a count so that a
-    /// waiter cannot miss a release that was immediately followed by a new
-    /// accept: the value it compares against is the one it saw at subscribe.
+    /// Bumped after every removal, and when an owner moves its row on while
+    /// keeping the handoff ([`Handoff::row_moved`]). A generation rather than
+    /// a count so that a waiter cannot miss a release that was immediately
+    /// followed by a new accept: the value it compares against is the one it
+    /// saw at subscribe.
     released: watch::Sender<u64>,
 }
 
@@ -129,11 +131,22 @@ impl HandoffRegistry {
         self.accepted.lock().len()
     }
 
+    /// Test-only: tasks subscribed to `released` right now.
+    #[cfg(test)]
+    pub(crate) fn release_waiters(&self) -> usize {
+        self.released.receiver_count()
+    }
+
     /// The one ownership removal. Reached only from [`Handoff::drop`].
     fn release(&self, id: &str) {
         self.accepted.lock().remove(id);
         // After the removal and outside the lock: a waiter this wakes must find
         // the map already without the entry.
+        self.wake_waiters();
+    }
+
+    /// Wake every task subscribed to `released` to re-check what it waits on.
+    fn wake_waiters(&self) {
         self.released
             .send_modify(|generation| *generation = generation.wrapping_add(1));
     }
@@ -197,8 +210,9 @@ impl Handoff {
                 tokio::time::timeout_at(deadline, released.changed()).await,
                 Ok(Ok(()))
             ) {
-                // A winner's move to `working` fires no release, so the row
-                // is read once more before the timeout answers.
+                // The deadline is the backstop: an owner moving its row on
+                // wakes waiters through `row_moved`, so the row is read once
+                // more before the timeout answers.
                 return if keep_waiting() {
                     Acceptance::Busy
                 } else {
@@ -206,6 +220,15 @@ impl Handoff {
                 };
             }
         }
+    }
+
+    /// Wake every update waiting in [`Self::accept_when_free`]: this owner
+    /// moved its row out of `input_required` and keeps the handoff, so no
+    /// release will come (MIK-7662). Call it only after that write is in the
+    /// readable state; a wake sent earlier finds the row unchanged and the
+    /// waiter sleeps to its deadline.
+    pub(crate) fn row_moved(&self) {
+        self.executor.handoffs.wake_waiters();
     }
 
     pub(crate) fn executor(&self) -> &Arc<TaskExecutor> {
@@ -306,4 +329,33 @@ pub(crate) trait UpstreamRecovery: Send + Sync {
     /// One bounded read-only query. No retry loop, no polling across a process
     /// boundary, and no write of any kind upstream.
     async fn query(&self, handle: &UpstreamHandle, deadline: Duration) -> UpstreamAnswer;
+}
+
+#[cfg(test)]
+mod row_moved_tests {
+    use super::{Arc, Duration, HandoffRegistry};
+
+    /// Mutant: the row-moved wake treated as a release. It is only a wake: a
+    /// drain keeps waiting while the handoff is still owned, and ends when the
+    /// owner releases it.
+    #[tokio::test]
+    async fn a_row_moved_wake_leaves_a_drain_waiting() {
+        let registry = Arc::new(HandoffRegistry::new());
+        let _cancel = registry.try_insert("task").expect("nobody owns it");
+        let joining = {
+            let registry = Arc::clone(&registry);
+            tokio::spawn(async move { registry.join().await })
+        };
+        tokio::task::yield_now().await;
+        registry.wake_waiters();
+        tokio::task::yield_now().await;
+        assert!(!joining.is_finished(), "the handoff is still owned");
+        assert_eq!(registry.len(), 1);
+
+        registry.release("task");
+        tokio::time::timeout(Duration::from_secs(5), joining)
+            .await
+            .expect("the drain ends once the handoff is released")
+            .expect("the drain joins");
+    }
 }
