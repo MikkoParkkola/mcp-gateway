@@ -425,9 +425,12 @@ fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
 /// Non-periodic ASCII text cut into 20-character pieces, shorter than a
 /// fingerprint's k-gram, so a word is split at most piece edges.
 fn split_copy(words: usize) -> (String, Vec<String>) {
-    let flat: String = (0..words)
-        .map(|i| format!("w{} ", i * 7_919 % 10_007))
-        .collect();
+    let mut flat = String::new();
+    for i in 0..words {
+        flat.push('w');
+        flat.push_str(&(i * 7_919 % 10_007).to_string());
+        flat.push(' ');
+    }
     let pieces = flat
         .as_bytes()
         .chunks(20)
