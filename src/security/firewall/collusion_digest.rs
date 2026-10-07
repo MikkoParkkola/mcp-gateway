@@ -257,19 +257,23 @@ impl DeliveryDigest {
             }
             counts
         });
+        let listed: Vec<bool> = self
+            .segments
+            .iter()
+            .map(|s| s.whole && delivered.leaves.contains(s.text.as_str()))
+            .collect();
         let keep: Vec<bool> = self
             .segments
             .iter()
-            .map(|s| {
-                s.whole
-                    && match left.as_mut() {
-                        Some(left) => left.get_mut(s.text.as_str()).is_some_and(|n| {
-                            let unused = *n > 0;
-                            *n = n.saturating_sub(1);
-                            unused
-                        }),
-                        None => delivered.leaves.contains(s.text.as_str()),
-                    }
+            .zip(&listed)
+            .map(|(s, &on)| {
+                on && left.as_mut().is_none_or(|left| {
+                    left.get_mut(s.text.as_str()).is_some_and(|n| {
+                        let unused = *n > 0;
+                        *n = n.saturating_sub(1);
+                        unused
+                    })
+                })
             })
             .collect();
         if self.retained.is_empty() && keep.iter().all(|&k| k) {
@@ -277,6 +281,12 @@ impl DeliveryDigest {
         }
         let original = self.fingerprints(detector);
         let found = delivered.kgrams(detector);
+        // A removed leaf splits its run, and re-winnowing the pieces can drop
+        // minima of text still delivered: the original runs' fingerprints stay
+        // too, wherever their k-gram is in a delivered leaf or spans adjacent
+        // delivered leaves. Every verbatim copy counts for adjacency, the ones
+        // the cap budget leaves out included (MIK-7992).
+        let across = self.kgrams_where(detector, &listed);
         let mut retained = Vec::new();
         let mut segments = Vec::with_capacity(self.segments.len());
         let mut gap = false;
@@ -297,30 +307,41 @@ impl DeliveryDigest {
                 gap = true;
             }
         }
-        let mut kept = Self {
-            segments,
-            retained: Vec::new(),
-            sensitive: self.sensitive,
-            deferred: self.deferred,
-        };
-        // A removed leaf splits its run, and re-winnowing the pieces can drop
-        // minima of text still delivered: the original runs' fingerprints stay
-        // too, wherever their k-gram is in a delivered leaf or spans adjacent
-        // kept leaves.
-        let across = kept.run_kgrams(detector);
         retained.extend(
             original
                 .into_iter()
                 .filter(|fp| found.contains(fp) || across.contains(fp)),
         );
-        kept.retained = retained;
-        kept
+        // Copies retain the same fingerprints many times over; one each, so
+        // the deferred cap on their count never drops a distinct one for a
+        // repeat (MIK-7992).
+        let mut seen = HashSet::new();
+        retained.retain(|fp| seen.insert(*fp));
+        Self {
+            segments,
+            retained,
+            sensitive: self.sensitive,
+            deferred: self.deferred,
+        }
     }
 
-    /// Every k-gram hash of each run of this digest's segments.
-    fn run_kgrams(&self, detector: &CollusionDetector) -> HashSet<u64> {
-        self.runs()
-            .iter()
+    /// Every k-gram hash of each run of the segments `listed` marks; a
+    /// segment left out stands as a seam.
+    fn kgrams_where(&self, detector: &CollusionDetector, listed: &[bool]) -> HashSet<u64> {
+        let mut runs: Vec<Vec<&str>> = Vec::new();
+        let mut gap = false;
+        for (segment, &on) in self.segments.iter().zip(listed) {
+            if !on {
+                gap = true;
+                continue;
+            }
+            match runs.last_mut() {
+                Some(run) if !(gap || segment.gap_before) => run.push(&segment.text),
+                _ => runs.push(vec![&segment.text]),
+            }
+            gap = false;
+        }
+        runs.iter()
             .flat_map(|run| detector.kgram_hashes(&run.join("\n")))
             .collect()
     }
