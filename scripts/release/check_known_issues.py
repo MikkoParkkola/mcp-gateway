@@ -34,16 +34,34 @@ PRERELEASE_TAG = re.compile(r"^v4\.0\.0-(beta|rc)\.\d+$")
 # ATX headings: up to three spaces of indent, optional closing hashes.
 HEADING = re.compile(r"^ {0,3}##[ \t]+known issues(?:[ \t]+#*)?[ \t]*$", re.IGNORECASE)
 SECTION_END = re.compile(r"^ {0,3}#{1,2}(?:[ \t]|$)")
+# Setext: a paragraph line underlined with = (level 1) or - (level 2). A list
+# item or an indented code line cannot be one, and after a blank line the
+# underline is a thematic break, not a heading.
+UNDERLINE = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
+NOT_A_PARAGRAPH = re.compile(r"^(?: {4}|\t| {0,3}(?:[-+*]|\d+[.)])(?:[ \t]|$))")
+
+
+def setext_level(line, underline):
+    """1 or 2 when `line` over `underline` is a setext heading, else 0."""
+    match = UNDERLINE.match(underline)
+    if not match or not line.strip() or NOT_A_PARAGRAPH.match(line):
+        return 0
+    return 1 if match.group(1)[0] == "=" else 2
 
 
 def known_issues(text):
     """Every Known issues section's lines, each up to the next level 1-2 heading."""
-    body, inside = [], False
-    for line in text.splitlines():
-        if HEADING.match(line):
-            inside = True
-        elif SECTION_END.match(line):
-            inside = False
+    lines = text.splitlines()
+    body, inside, underline = [], False, False
+    for i, line in enumerate(lines):
+        if underline:
+            underline = False
+            continue
+        level = setext_level(line, lines[i + 1] if i + 1 < len(lines) else "")
+        if HEADING.match(line) or (level == 2 and line.strip().lower() == "known issues"):
+            inside, underline = True, bool(level)
+        elif SECTION_END.match(line) or level:
+            inside, underline = False, bool(level)
         elif inside:
             body.append(line)
     return body
