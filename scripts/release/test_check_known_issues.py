@@ -81,8 +81,31 @@ def test_the_release_gate_also_refuses_a_later_release():
 def test_a_prerelease_tag_may_ship_known_gaps():
     # docs/release/v4.0.0-prerelease-channel.md: open items ship as known gaps
     # in a beta's release notes.
-    for tag in ("v4.0.0-beta.1", "v4.0.0-rc.2", "v4.0.0-rc.1+build-7"):
+    for tag in ("v4.0.0-beta.1", "v4.0.0-rc.2", "v4.0.0-rc.12"):
         assert run(notes(ITEM), "--release", "--tag", tag) == 0, tag
+
+
+def test_only_beta_and_rc_tags_are_prereleases():
+    # Same policy as check_scope_acceptance.py PRERELEASE_400: any other
+    # suffix, build metadata included, is held to the final-tag rule.
+    for tag in (
+        "v4.0.0-alpha.1",
+        "v4.0.0-hotfix",
+        "v4.0.0-rc",
+        "v4.0.0-rc.1+build.7",
+        "v4.0.0-beta.1+build-7",
+    ):
+        assert run(notes(ITEM), "--release", "--tag", tag) == 1, tag
+
+
+def test_another_version_containing_the_digits_is_not_the_later_release():
+    for line in ("- Needs 14.0.1 of the toolchain.\n", "- Seen with 4.0.10 clients.\n"):
+        assert run(notes("\n" + line), "--check") == 0, line
+
+
+def test_the_later_release_is_found_at_any_word_boundary():
+    for line in ("- Fixed in v4.0.1.\n", "- (4.0.1)\n", "- Due 4.0.1, maybe.\n"):
+        assert run(notes("\n" + line), "--check") == 1, line
 
 
 def test_a_prerelease_tag_still_refuses_a_later_release():
