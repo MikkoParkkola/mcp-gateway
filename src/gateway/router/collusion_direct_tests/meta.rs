@@ -12,7 +12,7 @@ pub(super) async fn meta_fixture(
     setup: Setup,
     cache: Option<Arc<crate::cache::ResponseCache>>,
 ) -> Fixture {
-    meta_fixture_with(setup, cache, |_| {}).await
+    meta_fixture_with(setup, cache, |meta| meta).await
 }
 
 /// [`meta_fixture`] with `configure` applied to the Meta-MCP before it is
@@ -20,7 +20,7 @@ pub(super) async fn meta_fixture(
 async fn meta_fixture_with(
     setup: Setup,
     cache: Option<Arc<crate::cache::ResponseCache>>,
-    configure: impl FnOnce(&mut MetaMcp),
+    configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fixture {
     let mut fx = fixture(setup).await;
     let st = Arc::get_mut(&mut fx.state).expect("state is unique");
@@ -28,8 +28,7 @@ async fn meta_fixture_with(
     let mut meta = MetaMcp::with_features(Arc::clone(&st.backends), cache, None, None, ttl);
     meta.set_firewall(st.firewall.clone());
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
-    configure(&mut meta);
-    st.meta_mcp = Arc::new(meta);
+    st.meta_mcp = Arc::new(configure(meta));
     fx
 }
 
