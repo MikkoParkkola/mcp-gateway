@@ -226,14 +226,13 @@ impl MetaMcp {
         // Read first: once `true` it stays true, so it always covers the
         // snapshot read after it.
         let scanned = capabilities.initial_scan_complete();
-        let (catalogue, every_directory, generation, refused) =
-            capabilities.catalogue_snapshot_at();
-        // A capability the account gate refused was read: its absence is
-        // confirmed, not unread.
+        let (catalogue, every_directory, generation, absent) = capabilities.catalogue_snapshot_at();
+        // A capability the account gate refused, or an unload removed, was
+        // read: its absence is confirmed, not unread.
         let present = catalogue
             .iter()
             .map(|c| c.name.clone())
-            .chain(refused)
+            .chain(absent)
             .collect();
         let targets = catalogue
             .into_iter()

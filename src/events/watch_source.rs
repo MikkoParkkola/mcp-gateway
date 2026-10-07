@@ -93,8 +93,9 @@ pub(crate) struct PollFailed;
 pub(crate) struct Catalogue {
     /// Every REST capability in it, read-only or not.
     pub targets: Vec<Target>,
-    /// Every capability name in it, REST-served or not: a capability not
-    /// here was not read, which is not the same as reclassified.
+    /// Every capability name in it, REST-served or not, and every name read
+    /// yet absent (refused, or unloaded): a capability not here was not
+    /// read, which is not the same as reclassified.
     pub present: std::collections::HashSet<String>,
     /// Every capability directory loaded, after the startup scan completed.
     pub complete: bool,
