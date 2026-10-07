@@ -795,3 +795,6 @@ fn a_clean_call_and_a_blocked_relay_log_no_observed_warning() {
     );
     assert!(warnings.is_empty(), "{warnings:?}");
 }
+
+#[path = "collusion_gate_relay_excuse_tests.rs"]
+mod relay_excuse;

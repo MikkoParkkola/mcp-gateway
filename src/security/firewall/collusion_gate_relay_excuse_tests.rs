@@ -1,0 +1,116 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-8083: the same-source excuse holds whatever winnowing selects at the
+//! edges of a copy. Fingerprint selection near an edge depends on the text
+//! around the copy and on the process's hash seed, and the copy sits in
+//! different surroundings in each receipt and in the egress text; so each
+//! row runs over many distinct texts, and a defect that depends on the seed
+//! fails in nearly every run.
+
+use serde_json::{Value, json};
+
+use super::super::{CollusionAction, CollusionConfig, RelayCaller};
+use crate::security::firewall::{Firewall, FirewallConfig, ScanType};
+
+/// Distinct texts per row: about 1 in 70 hit the edge case before the fix.
+const TEXTS: usize = 1_000;
+
+fn observing() -> Firewall {
+    Firewall::from_config(
+        FirewallConfig {
+            collusion: CollusionConfig {
+                action: CollusionAction::Observe,
+                sources: vec!["alpha:*".to_string()],
+                ..CollusionConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    )
+}
+
+/// Text `i`: unique words, so no two texts share a k-gram.
+fn text(i: usize) -> String {
+    (0..60)
+        .map(|n| format!("x{i}y{} ", n * 7_919 % 10_007))
+        .collect()
+}
+
+/// `text` cut into 20-byte pieces (ASCII), under keys that sort in order.
+fn pieces(text: &str) -> Value {
+    let fields = text.as_bytes().chunks(20).enumerate().map(|(k, chunk)| {
+        let piece = String::from_utf8(chunk.to_vec()).expect("ascii");
+        (format!("p{k:03}"), Value::String(piece))
+    });
+    Value::Object(fields.collect())
+}
+
+/// Whether `who` forwarding `text`'s pieces is reported as a relay.
+fn reported(fw: &Firewall, who: &str, text: &str) -> bool {
+    let params = json!({
+        "name": "send",
+        "arguments": pieces(text),
+        "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"},
+    });
+    let verdict = fw.check_relay(
+        RelayCaller::Keyed(who),
+        "alpha",
+        "send",
+        &params,
+        ("s", who),
+    );
+    verdict
+        .findings
+        .iter()
+        .any(|f| f.scan_type == ScanType::CollusionRelay)
+}
+
+/// `who` delivered `text` from `alpha:{tool}`, flat or split over short fields.
+fn deliver(fw: &Firewall, who: &str, tool: &str, text: &str, split: bool) {
+    let result = if split {
+        json!({"content": [{"type": "text", "text": "split copy"}], "structuredContent": pieces(text)})
+    } else {
+        json!({"content": [{"type": "text", "text": text}]})
+    };
+    fw.record_delivery(RelayCaller::Keyed(who), "alpha", tool, &result);
+}
+
+/// MIK-8083: B was delivered the copy split, from the same source A read it
+/// flat from; B forwarding the pieces is its own copy, never a relay.
+#[test]
+fn a_callers_own_split_copy_is_never_a_relay() {
+    let fw = observing();
+    let refused: Vec<usize> = (0..TEXTS)
+        .filter(|&i| {
+            let (text, tool, a, b) = (
+                text(i),
+                format!("read{i}"),
+                format!("a{i}"),
+                format!("b{i}"),
+            );
+            deliver(&fw, &a, &tool, &text, false);
+            deliver(&fw, &b, &tool, &text, true);
+            reported(&fw, &b, &text)
+        })
+        .collect();
+    assert!(
+        refused.is_empty(),
+        "own copies reported as relays: {refused:?}"
+    );
+}
+
+/// MIK-8083 controls: a caller holding nothing from the source, or only the
+/// first half of the text, forwarding the whole text is still a relay.
+#[test]
+fn a_copy_the_caller_never_received_is_still_a_relay() {
+    let fw = observing();
+    let missed: Vec<usize> = (0..TEXTS / 10)
+        .filter(|&i| {
+            let (text, tool) = (text(i), format!("read{i}"));
+            deliver(&fw, &format!("a{i}"), &tool, &text, false);
+            deliver(&fw, &format!("h{i}"), &tool, &text[..text.len() / 2], false);
+            !reported(&fw, &format!("c{i}"), &text) || !reported(&fw, &format!("h{i}"), &text)
+        })
+        .collect();
+    assert!(missed.is_empty(), "relays not reported: {missed:?}");
+}
