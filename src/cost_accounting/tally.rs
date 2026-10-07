@@ -24,6 +24,11 @@ pub(crate) const OTHER: &str = "(other)";
 /// Hours of spend a key keeps: the 30-day window plus its partial cutoff hour.
 pub(crate) const BUCKET_HOURS: u64 = 720;
 
+/// Longest `backend` plus `tool` name, in bytes, that gets its own row; a
+/// longer pair counts in `(other)`. With R2 off a caller picks the tool name,
+/// so the row cap alone would bound rows but not bytes.
+pub(crate) const MAX_ROW_NAME_BYTES: usize = 256;
+
 /// `[calls, tokens, micro-USD]` per `(backend, tool)`, capped at
 /// [`MAX_TOOL_ROWS`] rows plus one overflow row.
 #[derive(Debug, Default)]
@@ -36,7 +41,8 @@ impl ToolTally {
     /// Add one call on `backend`/`tool`.
     pub(crate) fn add(&mut self, backend: &str, tool: &str, tokens: u64, micro: u64) {
         let key = (backend.to_string(), tool.to_string());
-        let row = if self.rows.contains_key(&key) || self.rows.len() < MAX_TOOL_ROWS {
+        let fits = backend.len() + tool.len() <= MAX_ROW_NAME_BYTES;
+        let row = if self.rows.contains_key(&key) || (fits && self.rows.len() < MAX_TOOL_ROWS) {
             self.rows.entry(key).or_default()
         } else {
             &mut self.overflow
@@ -53,23 +59,23 @@ impl ToolTally {
 
     /// Per-backend and per-tool rows, and `[calls, tokens, micro]` totals.
     pub(crate) fn breakdown(&self) -> (Vec<BackendCost>, Vec<ToolCost>, [u64; 3]) {
-        let overflow = (self.overflow[0] > 0).then_some(((OTHER, OTHER), &self.overflow));
+        // The overflow row is told apart by position, never by name: a real
+        // backend and tool may both be called "(other)".
+        let overflow = (self.overflow[0] > 0).then(|| (OTHER, OTHER.to_string(), &self.overflow));
         let rows = self
             .rows
             .iter()
-            .map(|((backend, tool), counters)| ((backend.as_str(), tool.as_str()), counters))
+            .map(|((backend, tool), counters)| {
+                (backend.as_str(), format!("{backend}:{tool}"), counters)
+            })
             .chain(overflow);
         let mut by_backend: HashMap<&str, BackendCost> = HashMap::new();
         let mut by_tool = Vec::with_capacity(self.len());
         let mut totals = [0u64; 3];
-        for ((backend, tool), &[calls, tokens, micro]) in rows {
+        for (backend, tool_key, &[calls, tokens, micro]) in rows {
             let cost = usd(micro);
             by_tool.push(ToolCost {
-                tool_key: if tool == OTHER && backend == OTHER {
-                    OTHER.to_string()
-                } else {
-                    format!("{backend}:{tool}")
-                },
+                tool_key,
                 call_count: calls,
                 token_count: tokens,
                 cost_usd: cost,

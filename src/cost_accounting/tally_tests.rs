@@ -95,3 +95,36 @@ fn only_the_first_caller_past_the_due_time_sweeps() {
     assert!(!sweep_due(&next, 100 + SWEEP_EVERY - 1));
     assert!(sweep_due(&next, 100 + SWEEP_EVERY));
 }
+
+#[test]
+fn a_real_tool_named_other_stays_apart_from_the_overflow_row() {
+    let mut tally = ToolTally::default();
+    // GIVEN: a real (other)/(other) pair, then 300 more tools to force overflow
+    tally.add(OTHER, OTHER, 1, 0);
+    for i in 0..300 {
+        tally.add("srv", &format!("t{i}"), 1, 0);
+    }
+    let (_, by_tool, _) = tally.breakdown();
+    // THEN: the real pair keeps its own key; the overflow row is separate
+    let calls = |key: &str| {
+        by_tool
+            .iter()
+            .find(|t| t.tool_key == key)
+            .map(|t| t.call_count)
+    };
+    assert_eq!(calls("(other):(other)"), Some(1));
+    assert_eq!(calls(OTHER), Some(300 - 255));
+}
+
+#[test]
+fn an_over_long_name_counts_in_other() {
+    let mut tally = ToolTally::default();
+    let long = "x".repeat(MAX_ROW_NAME_BYTES);
+    // GIVEN: one call whose names together pass the byte limit
+    tally.add("srv", &long, 1, 0);
+    // THEN: no row stores the name; the call is in (other)
+    let (_, by_tool, totals) = tally.breakdown();
+    assert_eq!(by_tool.len(), 1);
+    assert_eq!(by_tool[0].tool_key, OTHER);
+    assert_eq!(totals[0], 1);
+}
