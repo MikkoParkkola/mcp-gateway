@@ -127,8 +127,9 @@ fn only_the_settings_on_the_allowlist_are_forwarded() {
     // case-insensitively, and `NPM_CONFIG_ALLOW_GIT` is the spelling npm's own
     // documentation uses. Everything off the list stays behind, whether it is a
     // credential, the cache the gateway assigns, or simply unknown.
-    const CASES: [(&str, bool); 21] = [
+    const CASES: [(&str, bool); 27] = [
         ("npm_config_allow_git", true),
+        ("npm_config_offline", true),
         ("npm_config_prefer_offline", true),
         ("npm_config_cafile", true),
         ("npm_config_strict_ssl", true),
@@ -149,6 +150,13 @@ fn only_the_settings_on_the_allowlist_are_forwarded() {
         ("npm_config_keyfile", false),
         ("npm_config", false),
         ("npm_configfoo", false),
+        // Near misses: a suffix, a missing separator, padding, and a
+        // lookalike letter (dotless i) that ASCII folding leaves alone.
+        ("npm_config_cafile_extra", false),
+        ("npm_config_cafilex", false),
+        (" npm_config_cafile", false),
+        ("npm_config_caf\u{131}le", false),
+        ("npm_config_strict-ssl", false),
     ];
     for (key, expected) in CASES {
         let forwarded =
@@ -357,6 +365,24 @@ fn a_backend_hyphen_spelling_names_the_same_setting() {
             forwarded.is_empty(),
             "{configured:?} names npm's strict-ssl, so the operator's value must not be \
              forwarded beside it: {forwarded:?}"
+        );
+    }
+}
+
+#[test]
+fn a_backend_refusing_git_dependencies_keeps_its_refusal() {
+    // `allow_git` folds to `allow-git` too. A backend that opts out of git
+    // dependencies must not have an operator's `all` handed to it beside its
+    // own `none`: npm would read the operator's value last on Unix and fetch
+    // the git dependencies the backend refused.
+    for configured in ["npm_config_allow-git", "NPM_CONFIG_ALLOW-GIT"] {
+        let forwarded = forwarded_npm_config(
+            env_pairs(&[("npm_config_allow_git", "all")]),
+            &HashMap::from([(configured.to_string(), "none".to_string())]),
+        );
+        assert!(
+            forwarded.is_empty(),
+            "{configured:?} names npm's allow-git: {forwarded:?}"
         );
     }
 }
