@@ -434,3 +434,32 @@ async fn a_repair_over_its_owners_cap_keeps_the_seal() {
         service.close().await.unwrap();
     }
 }
+
+/// A startup whose import is refused leaves the caller's admission exactly as
+/// it found it: the seal it set for the store's sealed rows is taken back, so
+/// new keyed calls are not refused by a store that never opened.
+#[tokio::test]
+async fn a_refused_startup_import_leaves_the_seal_as_it_found_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let writer = services();
+    settled_task(&store, &writer, "k-held").await;
+    let (damaged, _) = settled_task(&store, &writer, "k-damaged").await;
+    store.close().await.unwrap();
+    damage(
+        &path.join(format!("{damaged}.json")),
+        &Damage::BeforeAdmission,
+    );
+    let admission = services();
+    // The caller's admission already holds the stored key, so the import is
+    // refused after the seal was set.
+    let held = admission.admit_task(task_request("oidc:acme:alice", "k-held"));
+    assert!(matches!(held, Ok(TaskAdmission::Owned(_))), "{held:?}");
+    let opened = TaskService::open(&path, StoreLimits::default(), Arc::clone(&admission)).await;
+    assert!(opened.is_err(), "a conflicting import refuses the startup");
+    assert!(
+        is_new_owner(&admission, "k-fresh"),
+        "a refused startup left new keyed calls sealed"
+    );
+}
