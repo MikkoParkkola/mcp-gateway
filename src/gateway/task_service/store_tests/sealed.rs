@@ -287,3 +287,48 @@ async fn a_refused_reread_keeps_the_seal_and_the_store() {
     assert!(!is_new_owner(&admission, "k-other"));
     service.close().await.unwrap();
 }
+
+/// A repaired row moves from the sealed rows to the reserved ones: it counts
+/// once against the record cap, before and after. With a cap of two, one
+/// repaired row leaves room for exactly one new task.
+#[tokio::test]
+async fn a_repaired_row_counts_once_against_the_record_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, rows, _admission, service) = sealed_service(dir.path(), &["k-cap"]).await;
+    service.close().await.unwrap();
+    let limits = StoreLimits {
+        records: 2,
+        ..StoreLimits::default()
+    };
+    let admission = services();
+    let service = TaskService::open(&path, limits, Arc::clone(&admission))
+        .await
+        .unwrap();
+    let (id, original) = &rows[0];
+    std::fs::write(path.join(format!("{id}.json")), original).unwrap();
+    service.reread_sealed().await;
+    assert_eq!(service.skipped_records().reserved, 1);
+    let writer = services();
+    settled_task(&service.store, &writer, "k-second").await;
+    let third = writer.admit_task(task_request("oidc:acme:alice", "k-third"));
+    let Ok(TaskAdmission::Owned(lease)) = third else {
+        panic!("admission itself is not capped here, got {third:?}");
+    };
+    let task = task();
+    let binding = lease.binding().clone();
+    let created = service
+        .store
+        .create(super::super::record::PreparedTask::admitted(
+            &task,
+            &binding,
+            lease.into_publication(),
+            "fixture",
+        ))
+        .await;
+    assert_eq!(
+        created.err(),
+        Some(super::super::store::StoreError::Capacity),
+        "the repaired row still holds its place"
+    );
+    service.close().await.unwrap();
+}
