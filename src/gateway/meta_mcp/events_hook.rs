@@ -73,6 +73,14 @@ impl MetaMcp {
         });
     }
 
+    /// Tests only: run the deferred startup webhook withdraw now (MIK-8027)
+    /// and wait for it, instead of after the grace period.
+    #[cfg(test)]
+    pub(crate) async fn run_deferred_webhook_withdraw(&self) {
+        // No deferred pass exists yet: the startup reconcile withdraws at once.
+        tokio::task::yield_now().await;
+    }
+
     /// The events hub, when events are on for this transport.
     pub(crate) fn events(&self) -> Option<&Arc<EventsHub>> {
         self.events.get()
