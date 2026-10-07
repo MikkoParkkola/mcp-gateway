@@ -518,3 +518,40 @@ async fn a_mapped_member_past_the_padding_stays_receipted() {
         "the padding pushed the mapped member out of the step's receipt"
     );
 }
+
+/// MIK-7992: the padding is copies of a leaf the plan also delivers, once.
+/// Each copy matches the delivered leaf verbatim, but only one copy was
+/// delivered: the others must not take the budget of the mapped member, so
+/// an answer under the receipt cap is receipted whole.
+#[tokio::test]
+async fn copies_of_a_delivered_leaf_do_not_crowd_out_a_mapped_member() {
+    let (meta, firewall) = relay_meta();
+    let copy = filler("rep", 30);
+    let copies = vec![copy.as_str(); 15];
+    let step = json!({"a": copies, "body": PROSE, "z": copies});
+    let answer = plan_answer(&json!({"summary": PROSE, "x": copy}));
+    let ((), staged) = meta
+        .collecting_staged(async {
+            plan_step(async {
+                meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), &step);
+            })
+            .await;
+            meta.rebuild_receipt_from_final(
+                Some(&answer),
+                GatewayStamps::Legacy,
+                AnswerShape::Literal,
+            );
+        })
+        .await;
+    staged.commit(true);
+    carol_holds(&firewall, "a", PROSE);
+
+    assert!(
+        refused(&firewall, "bob", PROSE),
+        "control: bob holds no copy"
+    );
+    assert!(
+        !refused(&firewall, "alice", PROSE),
+        "undelivered copies pushed the mapped member out of the step's receipt"
+    );
+}
