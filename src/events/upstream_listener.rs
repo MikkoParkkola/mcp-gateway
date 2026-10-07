@@ -96,6 +96,12 @@ impl EventsHub {
     }
 }
 
+tokio::task_local! {
+    /// Set inside an events delivery attempt once a catalogue lookup failed
+    /// or timed out; outside an attempt it is unset and every call reads.
+    pub(super) static FAILED_LOOKUP: std::cell::Cell<bool>;
+}
+
 impl UpstreamListeners {
     pub(crate) fn new(
         registry: Arc<BackendRegistry>,
@@ -200,6 +206,14 @@ impl UpstreamListeners {
         let Some(found) = self.registry.get(backend) else {
             return Ok(());
         };
+        // A delivery attempt that already waited on a lookup that failed does
+        // not wait again: it gets the verdict that failure gave (MIK-7921).
+        if FAILED_LOOKUP
+            .try_with(std::cell::Cell::get)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
         let read = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             found.read_resource_snapshot(false),
@@ -209,7 +223,12 @@ impl UpstreamListeners {
             Ok(Ok(snapshot)) if snapshot.complete && !snapshot.uris.contains(uri) => {
                 Err(RpcError::forbidden())
             }
-            _ => Ok(()),
+            Ok(Ok(_)) => Ok(()),
+            // An error is not absence (§7): admitted, as before.
+            _ => {
+                let _ = FAILED_LOOKUP.try_with(|failed| failed.set(true));
+                Ok(())
+            }
         }
     }
 

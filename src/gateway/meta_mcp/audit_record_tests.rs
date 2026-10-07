@@ -447,6 +447,8 @@ async fn a_replay_whose_record_fails_is_withheld() {
 
 // MIK-7116.MIN.1 attribution, which reads the firewall's `arg_keys`.
 #[cfg(feature = "firewall")]
+mod chain_replay;
+#[cfg(feature = "firewall")]
 mod tenants;
 
 /// MIK-7735. A backend's own `-32001` / `-32004` answer is the peer's

@@ -241,6 +241,50 @@ pub enum Error {
     #[error("OAuth error: {0}")]
     OAuth(String),
 
+    /// An interactive login nobody completed within the authorization window
+    /// (MIK-7982). Every start that waited on that login ends with it.
+    #[error(
+        "authorization for backend '{backend}' was not completed within {window_secs}s; \
+         retry to open a new login, then complete it in the browser"
+    )]
+    AuthorizationIncomplete {
+        /// The backend whose login it was.
+        backend: String,
+        /// The authorization window that passed.
+        window_secs: u64,
+    },
+
+    /// A login ended by a restart or shutdown of its backend before it
+    /// completed (MIK-7982).
+    #[error("authorization for backend '{backend}' was cancelled by a restart or shutdown; retry")]
+    AuthorizationCancelled {
+        /// The backend whose login it was.
+        backend: String,
+    },
+
+    /// A caller that never begins or waits on an interactive login (the
+    /// health probe) found a start in flight, which may be a login, and did
+    /// not wait on it (MIK-7982).
+    #[error(
+        "backend '{backend}' is starting (possibly waiting on an interactive login); not waited on"
+    )]
+    AuthorizationRequired {
+        /// The backend that needs the login.
+        backend: String,
+    },
+
+    /// A caller's own deadline passed while it waited on a login still in
+    /// progress: the person has not finished, the backend did not fail
+    /// (MIK-7982).
+    #[error(
+        "authorization for backend '{backend}' is still in progress; \
+         complete the login in the browser and retry"
+    )]
+    AuthorizationPending {
+        /// The backend whose login is in progress.
+        backend: String,
+    },
+
     /// TLS error: certificate loading, TLS acceptor setup, or handshake
     /// failure on the mTLS listener.
     ///
@@ -354,6 +398,12 @@ impl Error {
                 | Self::ToolNotFound(_)
                 | Self::TransportConnect(_)
                 | Self::BackendUnavailable(_)
+                // A login wait: the start never finished, so nothing was sent
+                // and the same-key retry after the login must run (MIK-7982).
+                | Self::AuthorizationIncomplete { .. }
+                | Self::AuthorizationCancelled { .. }
+                | Self::AuthorizationRequired { .. }
+                | Self::AuthorizationPending { .. }
         )
     }
 
@@ -376,6 +426,20 @@ impl Error {
         matches!(
             self,
             Self::RateLimited(_) | Self::IdentitySlotsExhausted { .. }
+        )
+    }
+
+    /// The backend is waiting on a person to log in, not failing: an
+    /// unfinished, cancelled, required or pending authorization. The one
+    /// predicate every breaker and cooldown site excludes (MIK-7982).
+    #[must_use]
+    pub(crate) fn is_authorization_wait(&self) -> bool {
+        matches!(
+            self,
+            Self::AuthorizationIncomplete { .. }
+                | Self::AuthorizationCancelled { .. }
+                | Self::AuthorizationRequired { .. }
+                | Self::AuthorizationPending { .. }
         )
     }
 
