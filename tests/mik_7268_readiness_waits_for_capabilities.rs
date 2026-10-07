@@ -12,6 +12,9 @@
 //! gate file, `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`, #2376), so that answer
 //! does not depend on the load being slower than the first probe.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -36,10 +39,10 @@ fn write_capabilities(dir: &Path) {
     }
 }
 
-fn spawn(directory: &Path, port: u16, scan_gate: &Path) -> Child {
+fn spawn(directory: &Path, scan_gate: &Path) -> Child {
     let caps = directory.join("caps");
     let config = json!({
-        "server": {"host": "127.0.0.1", "port": port},
+        "server": {"host": "127.0.0.1", "port": gateway_bin::ANY_PORT},
         "auth": {"enabled": true, "bearer_token": TOKEN, "public_paths": ["/health"]},
         // Relative to the child's cwd: HOME cannot isolate the store on Windows.
         "tasks": {"store_dir": "tasks"},
@@ -56,29 +59,28 @@ fn spawn(directory: &Path, port: u16, scan_gate: &Path) -> Child {
     )
     .expect("write gateway config");
     let log = std::fs::File::create(directory.join("gateway.log")).expect("gateway log");
-    Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
-        .env_clear()
-        .env("HOME", directory)
-        .env(HOLD_SCAN_ENV, scan_gate)
-        .env("XDG_CONFIG_HOME", directory.join(".config"))
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        // Winsock cannot initialise without SystemRoot (os error 10106); unset off Windows.
-        .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
-        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|p| ("LLVM_PROFILE_FILE", p)))
-        .current_dir(directory)
-        .arg("--config")
-        .arg(&config_path)
-        .arg("serve")
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log.try_clone().expect("clone log")))
-        .stderr(Stdio::from(log))
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn gateway")
+    Command::from(gateway_bin::command(
+        directory,
+        gateway_bin::Inherit::Nothing,
+    ))
+    .env(HOLD_SCAN_ENV, scan_gate)
+    .env("XDG_CONFIG_HOME", directory.join(".config"))
+    .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+    .current_dir(directory)
+    .arg("--config")
+    .arg(&config_path)
+    .arg("serve")
+    .stdin(Stdio::null())
+    .stdout(Stdio::from(log.try_clone().expect("clone log")))
+    .stderr(Stdio::from(log))
+    .kill_on_drop(true)
+    .spawn()
+    .expect("spawn gateway")
 }
 
-/// Poll `/readyz` unauthenticated until it answers 200, returning every
-/// answer seen before it. Connection refusals (not yet bound) are skipped.
+/// Poll `/readyz` unauthenticated until it answers 200, returning the base URL
+/// and every answer seen before it. The child binds [`gateway_bin::ANY_PORT`],
+/// so the port is read from its log first; refusals before that are skipped.
 /// The scan stays held for `HOLD_WINDOW` after the first "capabilities loading"
 /// answer, and a 200 inside that window fails the test: without the hold the
 /// 1000-file load finishes well inside it, so a removed or ignored hook fails
@@ -86,19 +88,25 @@ fn spawn(directory: &Path, port: u16, scan_gate: &Path) -> Child {
 async fn readyz_until_ready(
     client: &reqwest::Client,
     child: &mut Child,
-    url: &str,
     directory: &Path,
     scan_gate: &Path,
-) -> Vec<(u16, String)> {
-    let logs = || std::fs::read_to_string(directory.join("gateway.log")).unwrap_or_default();
+) -> (String, Vec<(u16, String)>) {
+    let log = directory.join("gateway.log");
+    let logs = || std::fs::read_to_string(&log).unwrap_or_default();
     let start = tokio::time::Instant::now();
     let mut seen = Vec::new();
     let mut held_since: Option<tokio::time::Instant> = None;
+    let mut url = None;
     loop {
         if let Some(status) = child.try_wait().expect("gateway status") {
             panic!("gateway exited {status}: {}", logs());
         }
-        if let Ok(response) = client.get(format!("{url}/readyz")).send().await {
+        if url.is_none() {
+            url = gateway_bin::logged_port(&log).map(|port| format!("http://127.0.0.1:{port}"));
+        }
+        if let Some(url) = &url
+            && let Ok(response) = client.get(format!("{url}/readyz")).send().await
+        {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
             if status == 503 && body == "capabilities loading" {
@@ -110,7 +118,7 @@ async fn readyz_until_ready(
                     scan_gate.exists(),
                     "the scan finished before its gate was released"
                 );
-                return seen;
+                return (url.clone(), seen);
             }
         }
         if held_since.is_some_and(|since| since.elapsed() >= HOLD_WINDOW) && !scan_gate.exists() {
@@ -130,19 +138,14 @@ async fn readyz_is_not_ready_until_every_capability_has_loaded() {
     let directory = tempfile::tempdir().expect("gateway directory");
     write_capabilities(&directory.path().join("caps"));
     std::fs::create_dir_all(directory.path().join("audit")).expect("audit dir");
-    let port = {
-        let reservation = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve port");
-        reservation.local_addr().expect("address").port()
-    };
     let scan_gate = directory.path().join("scan-gate");
-    let mut child = spawn(directory.path(), port, &scan_gate);
-    let url = format!("http://127.0.0.1:{port}");
+    let mut child = spawn(directory.path(), &scan_gate);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .expect("client");
 
-    let seen = readyz_until_ready(&client, &mut child, &url, directory.path(), &scan_gate).await;
+    let (url, seen) = readyz_until_ready(&client, &mut child, directory.path(), &scan_gate).await;
     assert!(
         seen.iter()
             .any(|(status, body)| *status == 503 && body == "capabilities loading"),

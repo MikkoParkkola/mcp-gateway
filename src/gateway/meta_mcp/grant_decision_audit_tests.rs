@@ -78,6 +78,7 @@ pub(super) fn context(who: &Who) -> MetaMcpCallerContext<'_> {
         caller_key: None,
         verified_identity: who.identity.as_ref(),
         is_admin: false,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
@@ -156,6 +157,22 @@ async fn grant_denial_writes_decision_record() {
     assert!(record.get("timestamp").is_some(), "{record}");
     assert_eq!(trace_of(&record), trace_of(&invocation), "{record}");
     assert!(trace_of(&record).is_some(), "{record}");
+    // MIK-7663.GH2409.4: `who` is built from the subject's authority and
+    // subject, the same pair the record's `subject` field carries.
+    assert_eq!(
+        record["who"]["authority"], record["subject"]["authority"],
+        "{record}"
+    );
+    assert_eq!(
+        record["who"]["subject"], record["subject"]["subject"],
+        "{record}"
+    );
+    assert_eq!(record["who"]["authority"], json!("api_key"), "{record}");
+    // Control for the empty-flush row below: a slot holding a note flushes.
+    assert!(
+        super::grant_audit::grant_bookkeeping_for_test().flushes_spawned >= 1,
+        "a slot holding a decision note spawns its flush"
+    );
 }
 
 /// T2. A matching grant is one `ok` record naming the grant.
@@ -203,6 +220,13 @@ async fn public_capability_writes_no_decision() {
         );
         only(invocations(&dir), "invocation record");
     }
+    // MIK-7663.GH2409.1: a slot that collected no decision note writes
+    // nothing, so it spawns no flush task.
+    assert_eq!(
+        super::grant_audit::grant_bookkeeping_for_test().flushes_spawned,
+        0,
+        "an empty slot spawns no flush"
+    );
 }
 
 /// T7. Under `FailClosed` a failed decision write withholds the answer;

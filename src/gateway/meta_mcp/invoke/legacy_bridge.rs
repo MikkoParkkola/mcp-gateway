@@ -253,7 +253,7 @@ impl MetaMcp {
                         &refused,
                         tool,
                         server,
-                        self.hint_surface(),
+                        self.hint_surface(caller),
                     ))));
                 }
                 Err(error) => {

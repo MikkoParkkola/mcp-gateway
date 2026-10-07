@@ -12,10 +12,11 @@
 //! ```text
 //! CostTracker  (one global Arc, shared via AppState + MetaMcp)
 //!   ├── per_session : DashMap<session_id, SessionCost>
-//!   └── per_key     : DashMap<api_key_name, KeyCost>
+//!   ├── per_key     : DashMap<api_key_name, KeyCost>
+//!   └── per_caller  : session-less spend by caller key (caller.rs)
 //! ```
 //!
-//! `record()` is the single write path; everything else is read-only.
+//! `record()` and `record_caller()` are the write paths; everything else is read-only.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -438,6 +439,8 @@ pub struct CostTracker {
     /// reported as anyone's session, and kept as counters because no session
     /// end would ever free records.
     sessionless: [AtomicU64; 3],
+    /// Session-less spend by caller key (MIK-7653), for the caller's own report.
+    per_caller: caller::CallerCosts,
     /// Default budget applied to keys with no explicit config.
     default_budget: BudgetConfig,
 }
@@ -450,6 +453,7 @@ impl CostTracker {
             per_session: DashMap::new(),
             per_key: DashMap::new(),
             sessionless: <[AtomicU64; 3]>::default(),
+            per_caller: caller::CallerCosts::default(),
             default_budget: BudgetConfig::default(),
         }
     }
@@ -521,6 +525,27 @@ impl CostTracker {
                 .or_insert_with(|| Arc::new(KeyCost::new(key_name, self.default_budget.clone())))
                 .record(rec);
         }
+    }
+
+    /// Add one session-less call to `caller_key`'s own breakdown. The call
+    /// is already in the aggregate and key totals through [`Self::record`],
+    /// so this touches neither.
+    pub fn record_caller(
+        &self,
+        caller_key: &str,
+        backend: &str,
+        tool: &str,
+        token_count: u64,
+        price_per_million: f64,
+    ) {
+        let rec = CostRecord::new(backend, tool, token_count, price_per_million);
+        self.per_caller.record(caller_key, &rec, rec.timestamp);
+    }
+
+    /// `caller_key`'s session-less breakdown, `None` when it has none.
+    #[must_use]
+    pub fn caller_snapshot(&self, caller_key: &str) -> Option<SessionCostSnapshot> {
+        self.per_caller.snapshot(caller_key, now_secs())
     }
 
     /// Check whether a key has exceeded its budget.
@@ -658,6 +683,8 @@ fn now_secs() -> u64 {
 }
 
 // ── Cost governance submodules ────────────────────────────────────────────────
+
+pub mod caller;
 
 #[cfg(feature = "cost-governance")]
 pub mod config;

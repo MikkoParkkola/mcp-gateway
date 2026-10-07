@@ -222,6 +222,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 session_id: None,
                 api_key_name: self.api_key_name,
                 trace_id: "",
+                caller_key: None,
             })
             .map_err(|e| crate::gateway::input_bridge::BridgeError::NotAdmitted {
                 message: e.to_string(),

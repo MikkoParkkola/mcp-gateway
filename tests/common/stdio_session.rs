@@ -6,6 +6,9 @@
 //! suite uses is dead in the other; that is the layout, not a defect.
 #![allow(dead_code)]
 
+#[path = "gateway_bin.rs"]
+pub(crate) mod gateway_bin;
+
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -31,22 +34,11 @@ pub struct StdioSession {
 
 impl StdioSession {
     pub fn spawn(home: &Path) -> Self {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-        command
-            .arg("serve")
-            .arg("--stdio")
-            .current_dir(home)
-            .env("HOME", home);
-        // The developer's own environment must not decide what this child
-        // connects to.
-        for (name, _) in std::env::vars() {
-            if name.starts_with("MCP_GATEWAY_") {
-                command.env_remove(name);
-            }
-        }
-        // Windows resolves home through the Known Folder API, not HOME: the
-        // debug build's override isolates the child's default task store too.
-        command.env("MCP_GATEWAY_TEST_HOME_DIR", home);
+        let mut command = Command::from(gateway_bin::command(
+            home,
+            gateway_bin::Inherit::Environment,
+        ));
+        command.arg("serve").arg("--stdio").current_dir(home);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -183,21 +175,15 @@ impl StdioSession {
     /// `EnvFilter::try_from_default_env()` wins over its `--log-level`, so an
     /// ambient value in the test environment could silence the lines read here.
     pub fn spawn_capturing_stderr(home: &Path) -> (Self, CapturedStderr) {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        let mut command = Command::from(gateway_bin::command(
+            home,
+            gateway_bin::Inherit::Environment,
+        ));
         command
             .arg("serve")
             .arg("--stdio")
             .current_dir(home)
-            .env("HOME", home)
             .env("RUST_LOG", "info");
-        for (name, _) in std::env::vars() {
-            if name.starts_with("MCP_GATEWAY_") {
-                command.env_remove(name);
-            }
-        }
-        // Windows resolves home through the Known Folder API, not HOME: the
-        // debug build's override isolates the child's default task store too.
-        command.env("MCP_GATEWAY_TEST_HOME_DIR", home);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

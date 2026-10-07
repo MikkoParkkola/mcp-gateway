@@ -8,12 +8,13 @@
 
 use std::path::Path;
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 fn gateway(home: &Path, args: &[&str]) {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+    let output = gateway_bin::command(home, gateway_bin::Inherit::Environment)
         .args(args)
         .current_dir(home)
-        .env("HOME", home)
-        .env("MCP_GATEWAY_TEST_HOME_DIR", home)
         .output()
         .expect("run mcp-gateway");
     assert!(

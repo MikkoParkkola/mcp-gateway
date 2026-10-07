@@ -205,6 +205,7 @@ async fn call(meta: &MetaMcp, client: &Client) -> crate::Result<Value> {
         agent_declared: None,
         grant_subject: None,
         is_admin: false,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: declared,
         retry: &retry,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,

@@ -43,6 +43,7 @@ impl MetaMcp {
             session_id,
             api_key_name: None,
             trace_id: "",
+            caller_key: None,
         })?;
         // #2445: a withheld tool is refused here, ahead of every replay layer.
         let backend = self.backends.get(server);
@@ -354,6 +355,11 @@ impl MetaMcp {
                             serde_json::to_value(&inspection.findings).unwrap_or_default(),
                         );
                     }
+                    super::gateway_writes::note(
+                        super::gateway_writes::Layer::Value,
+                        &["_security_findings"],
+                        &result,
+                    );
                 }
             }
         }

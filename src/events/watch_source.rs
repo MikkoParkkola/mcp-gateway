@@ -452,10 +452,11 @@ struct Run {
     charge: Charge,
 }
 
-/// `base` stretched or shrunk by up to a tenth, so pollers started together
-/// do not stay in step.
+/// `base` stretched by up to a tenth, so pollers started together do not stay
+/// in step. Never shrunk: two polls stay at least the interval apart, so the
+/// 60 s floor holds for the polls, not only the setting.
 fn jitter(base: Duration) -> Duration {
-    base.mul_f64(0.9 + rand::random::<f64>() / 5.0)
+    base.mul_f64(1.0 + rand::random::<f64>() / 10.0)
 }
 
 impl Run {
