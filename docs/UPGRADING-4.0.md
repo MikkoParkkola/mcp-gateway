@@ -181,6 +181,7 @@ backend" and "fails a capability file" first.**
 | 154 | A same-key retry after a lost round (a broken stream, a timeout, a reload stopping the backend mid-call, an HTTP 5xx, or a 400, 404, 407, 408, 429 or session-expiry answer) is served the uncertain-outcome notice instead of the original error; `BackendUnavailable` frees the key | A client that read a served error as "the work failed" treats the notice as "may have run" and checks before re-issuing under a new key |
 | 155 | A caller signed in through the key server (an `/auth/token` token or a delegated OIDC bearer) has a principal of the form `kst:<sha256 hex>` or `oidc:<sha256 hex>`, no longer 12 hex characters | Update any log or audit query that matched these callers' 12-hex principal |
 | 156 | A REST capability body field that is a pure placeholder (`"{cursor}"`) now sends an explicit `null` the property's schema admits (`type: [string, "null"]`); 3.x left the field out. A null the schema does not admit is still left out, and query and path parameters are unchanged | To keep the field out, leave the argument out instead of sending `null`; a static param or URL default for the same name still fills it, as before |
+| 157 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4135,6 +4136,29 @@ path parameters are unchanged, because they cannot carry a JSON null.
 
 To keep the field out, leave the argument out instead of sending `null`. A static param or a URL
 default for the same name still fills it, as before.
+
+## 157. Cost accounting keeps running sums
+
+**Startup:** no notice
+
+Per-key and per-session cost accounting kept one record per answered call and
+never trimmed it, so a caller without a credential (authentication off, or
+`/mcp` public as in the shipped presets) grew gateway memory once per request.
+It now keeps running sums, and what it holds no longer depends on the call
+count:
+
+- A key's 24h, 7d and 30d windows sum hourly buckets (at most 721). A window
+  counts its whole cutoff hour, so it can include up to one hour of older
+  spend at its edge. Budget enforcement is the cost-governance enforcer and is
+  unchanged.
+- Per-tool breakdowns (per key, per session and per session-less caller) keep
+  at most 256 rows; later tools share one `(other)` row, and every total stays
+  exact.
+- A key with no spend for 30 days and no budget set through `set_key_budget`
+  is dropped on a later call, and reads as a key that never spent.
+
+Library users: `CostTracker::evict_old_records` is removed. Nothing called it
+in the gateway, and there is nothing left to evict.
 
 ## Upgrading from 3.5.x: a walkthrough
 
