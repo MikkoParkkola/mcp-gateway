@@ -27,6 +27,7 @@ mod admission;
 mod durability;
 mod input_round;
 mod qualification;
+mod skipped;
 mod support;
 mod targets;
 #[cfg(windows)]

@@ -1,0 +1,134 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-8023: one unreadable record no longer stops the store from opening.
+//! A row that cannot be read is skipped in place, never moved or rewritten;
+//! the refusals that guard the trust boundary stay fatal.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use serde_json::{Value, json};
+
+use super::super::record::PreparedTask;
+use super::super::store::{StoreError, StoreLimits, TaskStore};
+use super::support::*;
+use super::{FOREIGN_NAME, OWNER};
+
+/// Two committed tasks; returns the path, the record to damage and the id of
+/// the task that stays intact.
+async fn two_tasks(root: &Path) -> (PathBuf, PathBuf, String) {
+    let path = root.join("tasks");
+    let store = open(&path).await;
+    let (damaged, kept) = (task(), task());
+    for (one, n) in [(&damaged, 1), (&kept, 2)] {
+        store
+            .create(PreparedTask::for_test(one, OWNER, n))
+            .await
+            .unwrap();
+    }
+    store.close().await.unwrap();
+    let record = path.join(format!("{}.json", damaged.id()));
+    (path, record, kept.id().to_owned())
+}
+
+fn rewrite(record: &Path, edit: impl FnOnce(&mut Value)) {
+    let mut value: Value = serde_json::from_slice(&fs::read(record).unwrap()).unwrap();
+    edit(&mut value);
+    fs::write(record, serde_json::to_vec(&value).unwrap()).unwrap();
+}
+
+/// Opens, keeps the intact task readable and leaves every file as it was.
+async fn assert_skipped(path: &Path, kept: &str, case: &str) -> TaskStore {
+    let before = files(path);
+    let store = match TaskStore::open(path, StoreLimits::default()).await {
+        Ok(store) => store,
+        Err(error) => panic!("{case}: one unreadable record stopped the store: {error:?}"),
+    };
+    assert!(store.get(OWNER, kept).is_ok(), "{case}: the intact task");
+    assert_eq!(files(path), before, "{case}: the store must move nothing");
+    store
+}
+
+#[tokio::test]
+async fn an_unparseable_record_is_skipped_and_the_rest_load() {
+    for case in ["syntax", "version_zero", "no_admission"] {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, record, kept) = two_tasks(dir.path()).await;
+        match case {
+            "syntax" => fs::write(&record, b"{broken").unwrap(),
+            "version_zero" => rewrite(&record, |v| v["version"] = json!(0)),
+            _ => rewrite(&record, |v| {
+                v.as_object_mut().unwrap().remove("admission");
+            }),
+        }
+        let store = assert_skipped(&path, &kept, case).await;
+        assert_eq!(
+            store.restored_bindings().len(),
+            1,
+            "{case}: no identity to keep"
+        );
+        store.close().await.unwrap();
+    }
+}
+
+/// A row whose admission block still reads keeps its binding even when the
+/// task inside it does not restore, so its idempotency key stays taken.
+#[tokio::test]
+async fn an_unrestorable_record_keeps_its_binding() {
+    for case in ["snapshot", "model"] {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, record, kept) = two_tasks(dir.path()).await;
+        let identity: String = {
+            let value: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+            value["admission"]["identityDigest"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        rewrite(&record, |v| {
+            if case == "snapshot" {
+                v["model"]["task"]["lastUpdatedAt"] = json!("2026-09-06T00:00:00Z");
+            } else {
+                v["model"] = json!("not a task");
+            }
+        });
+        let store = assert_skipped(&path, &kept, case).await;
+        let bindings = store.restored_bindings();
+        assert_eq!(bindings.len(), 2, "{case}: both bindings, one reserved");
+        assert!(
+            bindings.iter().any(|(b, _)| b.identity == identity),
+            "{case}: the damaged row's key stays taken"
+        );
+        store.close().await.unwrap();
+    }
+}
+
+/// Still fatal: a newer build's row (a downgrade, not damage), and a damaged
+/// row whose name or identity is not its own.
+#[tokio::test]
+async fn a_newer_or_rebound_record_still_refuses() {
+    for case in ["newer", "rebound_broken"] {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, record, _) = two_tasks(dir.path()).await;
+        if case == "newer" {
+            rewrite(&record, |v| {
+                v["version"] = json!(999);
+                v["aFieldFromTheFuture"] = json!(true);
+            });
+        } else {
+            rewrite(&record, |v| {
+                v["model"]["task"]["lastUpdatedAt"] = json!("2026-09-06T00:00:00Z");
+            });
+            fs::rename(&record, path.join(format!("{FOREIGN_NAME}.json"))).unwrap();
+        }
+        let before = files(&path);
+        assert!(
+            matches!(
+                TaskStore::open(&path, StoreLimits::default()).await,
+                Err(StoreError::CorruptRecord)
+            ),
+            "{case} must refuse readiness"
+        );
+        assert_eq!(files(&path), before, "{case} must preserve every file");
+    }
+}

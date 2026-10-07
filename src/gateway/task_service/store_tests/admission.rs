@@ -513,3 +513,37 @@ async fn task_published_hook_error_retry_is_existing() {
     }
     store.close().await.unwrap();
 }
+
+/// MIK-8023: a row whose task no longer restores keeps its key. A retry of
+/// that key finds the original task id, never a fresh task; the id reads as
+/// not found, because its row was skipped.
+#[tokio::test]
+async fn an_unrestorable_row_keeps_its_key_after_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (id, binding) = settled_task(&store, &services(), "k-8023").await;
+    store.close().await.unwrap();
+    let record = path.join(format!("{id}.json"));
+    let mut value: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    value["model"]["task"]["lastUpdatedAt"] = json!("2026-09-06T00:00:00Z");
+    std::fs::write(&record, serde_json::to_vec(&value).unwrap()).unwrap();
+
+    let reopened = match TaskStore::open(&path, super::super::store::StoreLimits::default()).await {
+        Ok(store) => store,
+        Err(error) => panic!("one unrestorable row stopped the store: {error:?}"),
+    };
+    let admission = services();
+    admission
+        .import_tasks(&reopened.restored_bindings())
+        .expect("the kept binding imports");
+    match admission.admit_task(task_request("oidc:acme:alice", "k-8023")) {
+        Ok(TaskAdmission::Existing { task_id, .. }) => assert_eq!(task_id, id),
+        other => panic!("a retry of the kept key must not start a task, got {other:?}"),
+    }
+    assert!(matches!(
+        reopened.get(binding.principal_digest(), &id),
+        Err(StoreError::NotFound)
+    ));
+    reopened.close().await.unwrap();
+}
