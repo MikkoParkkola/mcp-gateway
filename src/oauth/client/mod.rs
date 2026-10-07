@@ -586,6 +586,8 @@ fn open_browser(url: &str) -> bool {
 #[cfg(test)]
 mod authorize_tests;
 pub(crate) mod destination;
+#[cfg(test)]
+mod refresh_flight_tests;
 
 #[cfg(test)]
 impl OAuthClient {
