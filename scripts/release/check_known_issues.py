@@ -33,12 +33,14 @@ THIS_RELEASE = (4, 0, 0)
 # A version of this product as a whole token, major 4 or 5 (14.0.1 or a Node
 # 20.1 is another product's): any later than 4.0.0 is a deferral, 4.0.1,
 # 4.0.10, 4.1 and 5.0 alike. A pre-release or build suffix of 4.0.0 is not,
-# nor a number inside one (4.0.0+build-5.1). Other 4.x/5.x numbers (a model
+# nor a number inside one (4.0.0+build-5.1, see IN_SUFFIX). Other 4.x/5.x numbers (a model
 # version, a size) read as deferrals too: a false red, reworded away.
-VERSION_TOKEN = re.compile(r"(?<![\w.+-])v?([45])\.(\d+)(?:\.(\d+))?(?!\d|\.\d)")
+VERSION_TOKEN = re.compile(r"(?<![\w.])v?([45])\.(\d+)(?:\.(\d+))?(?!\d|\.\d)")
 # Same two forms as check_scope_acceptance.py PRERELEASE_400, these notes being
 # 4.0.0's; any other version or suffix, build metadata included, is held to the
 # final-tag rule.
+# Text that ends inside a version's pre-release or build suffix.
+IN_SUFFIX = re.compile(r"\d\.\d+\.\d+[-+][0-9a-z.-]*$", re.IGNORECASE)
 PRERELEASE_TAG = re.compile(r"^v4\.0\.0-(beta|rc)\.\d+$")
 # ATX level 1-2 headings: up to three spaces of indent; the title is compared as
 # words only (see is_title), so closing hashes and inline Markdown never hide it.
@@ -72,14 +74,18 @@ HTML = re.compile(
 REFERENCE = re.compile(r"^ {0,3}\[")
 
 
+def title_words(text):
+    """The words of `text`, its inline Markdown (see INLINE_NOISE) dropped."""
+    return re.sub(r"[^a-z]+", " ", INLINE_NOISE.sub(" ", text).lower()).split()
+
+
 def is_title(text):
     """True when `text`, reduced to its words, opens with "known issues".
 
     A prefix, not an exact match: whatever follows (a reference label, an
     annotation) only makes a doubtful start, and a start fails closed.
     """
-    words = re.sub(r"[^a-z]+", " ", INLINE_NOISE.sub(" ", text).lower()).split()
-    return words[:2] == ["known", "issues"]
+    return title_words(text)[:2] == ["known", "issues"]
 
 
 def atx_start(line):
@@ -152,6 +158,10 @@ def known_issues(text):
     for i, line in enumerate(lines):
         if starts_section(lines, i):
             inside, underline = True, not atx_start(line)
+            if len(title_words(line)) > 2:
+                # A start line that says more than the title (a bullet read
+                # as one) is content too, so nothing it says is dropped.
+                body.append(line)
             continue
         if underline:
             underline = False
@@ -184,6 +194,7 @@ def later_releases(line):
         match.group(0)
         for match in VERSION_TOKEN.finditer(line)
         if tuple(int(part or 0) for part in match.groups()) > THIS_RELEASE
+        and not IN_SUFFIX.search(line[: match.start()])
     ]
 
 
