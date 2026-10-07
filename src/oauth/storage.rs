@@ -56,17 +56,17 @@ fn default_token_type() -> String {
 
 /// What a credential's refreshes have shown, kept beside its token (MIK-8018).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RefreshState {
+pub(crate) struct RefreshState {
     /// A refresh answer once carried a refresh token different from the one
     /// sent: the server rotates, so a refresh token whose exchange had an
     /// unknown outcome may already be consumed.
     #[serde(default)]
-    pub rotates: bool,
+    pub(crate) rotates: bool,
     /// SHA-256 (hex) of the refresh token an exchange was started with and has
     /// not settled; set before sending, cleared when the exchange settles. Left
     /// set by a process that died mid-exchange.
     #[serde(default)]
-    pub in_flight: Option<String>,
+    pub(crate) in_flight: Option<String>,
 }
 
 impl RefreshState {
@@ -307,7 +307,11 @@ impl TokenStorage {
     /// rather than retrying one that may be consumed. The next settled refresh
     /// rewrites the file.
     #[must_use]
-    pub fn load_refresh_state(&self, backend_name: &str, resource_url: &str) -> RefreshState {
+    pub(crate) fn load_refresh_state(
+        &self,
+        backend_name: &str,
+        resource_url: &str,
+    ) -> RefreshState {
         let path = self.refresh_state_path(backend_name, resource_url);
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
@@ -328,7 +332,7 @@ impl TokenStorage {
     /// # Errors
     ///
     /// Returns an error if the state cannot be serialized or written to disk.
-    pub fn save_refresh_state(
+    pub(crate) fn save_refresh_state(
         &self,
         backend_name: &str,
         resource_url: &str,
