@@ -521,6 +521,31 @@ def test_a_comment_opener_read_as_a_title_line_still_opens_the_comment():
     assert run(text.replace("The 4.0.1 numbers come later.", "Later."), "--check") == 1
 
 
+def test_a_list_item_over_a_thematic_break_is_section_content():
+    text = "## Known issues\n\n- Known issues\n---\n"
+    assert run(text, "--release", "--tag", "v4.0.0") == 1
+
+
+def test_a_tag_spanning_lines_does_not_hide_a_version():
+    assert run(notes('\n- Fixed in 4.0.<em\n  title="x">1</em>.\n'), "--check") == 1
+
+
+def test_a_prerelease_to_later_release_range_fails_the_check():
+    for line in ("- Affected: v4.0.0-rc.1-v4.0.1.", "- Affected: 4.0.0-rc.1-4.0.1."):
+        assert run(notes(f"\n{line}\n"), "--check") == 1, line
+
+
+def test_a_tab_indented_marker_continues_a_title_paragraph():
+    text = "Known\n \t# issues\nfor 4.0\n---\n\n- Open.\n"
+    assert run(text, "--release", "--tag", "v4.0.0") == 1
+
+
+def test_an_atx_title_keeps_the_line_above_out():
+    text = "# Notes\n\nSee 4.0.1 later.\n## Known issues\n\n## Performance\n"
+    assert run(text, "--check") == 0
+    assert run(text, "--release", "--tag", "v4.0.0") == 0
+
+
 def test_a_hyphen_range_to_a_later_release_fails_the_check():
     assert run(notes("\n- Seen in 4.0.0-4.0.1.\n"), "--check") == 1
 
