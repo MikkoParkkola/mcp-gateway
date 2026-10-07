@@ -409,6 +409,50 @@ mod tests {
         );
     }
 
+    /// MIK-7916 review: the sign of zero is told apart wherever a schema can
+    /// hold a number: the output schema, inside an array, and in both
+    /// directions of the change.
+    #[test]
+    fn the_sign_of_zero_misses_the_memo_in_every_schema_position() {
+        type Place = fn(&mut Tool, f64);
+        let places: [(&str, Place); 3] = [
+            ("output schema", |t, z| {
+                t.output_schema = Some(json!({"type": "number", "default": z}));
+            }),
+            ("array element", |t, z| {
+                t.input_schema["properties"]["query"]["enum"] = json!([1.0, z]);
+            }),
+            ("input schema", |t, z| {
+                t.input_schema["properties"]["query"]["default"] = json!(z);
+            }),
+        ];
+        for (place, set) in places {
+            for (from, to) in [(0.0, -0.0), (-0.0, 0.0)] {
+                let (id, name) = (
+                    format!("backend:memo-zero-{place}-{from}"),
+                    format!("memo-zero-{place}-{from}"),
+                );
+                let (mut before, mut after) = (tool(), tool());
+                set(&mut before, from);
+                set(&mut after, to);
+                let _ =
+                    project_tool_descriptors_trust_cards(&id, &name, std::slice::from_ref(&before));
+                let listed =
+                    project_tool_descriptors_trust_cards(&id, &name, std::slice::from_ref(&after));
+                assert_eq!(
+                    serde_json::to_string(&listed[0]).unwrap(),
+                    serde_json::to_string(&project_tool_descriptor_trust_card(
+                        id.as_str(),
+                        name.as_str(),
+                        &after
+                    ))
+                    .unwrap(),
+                    "{place}, {from} to {to}: the listing must describe the changed tool"
+                );
+            }
+        }
+    }
+
     /// MIK-7916 AC3: the memo is keyed on the whole tool. A change to any one
     /// field, however small, misses and re-projects; a hand-picked subset of
     /// fields would serve a card computed for other content.
