@@ -658,7 +658,12 @@ fn receipt_with(
     value: &Value,
 ) -> Option<Receipt> {
     RELAY_RECEIPTS.try_with(|_| ()).ok()?;
-    let digest = fw.delivery_digest(server, tool, value)?;
+    // MIK-7994: capped without the members the gateway wrote on this call. A
+    // plan step's receipt is only retained later, never rebuilt, so text the
+    // cap drops here for the gateway's members is gone for good.
+    let mut value = value.clone();
+    super::gateway_writes::strip(&mut value, super::gateway_writes::Layer::Value);
+    let digest = fw.delivery_digest(server, tool, &value)?;
     Some(Receipt {
         key: who.key.to_owned(),
         keyed: who.keyed,

@@ -316,6 +316,23 @@ async fn parked_task_prompt_read_is_recorded() {
     );
 }
 
+/// MIK-7939 D6.RELAY.4: a backend's own JSON-RPC error on a task dispatch is
+/// delivered as the task's `isError` result, and that text is receipted at
+/// settlement like any delivered result, without a `tasks/get` read.
+#[tokio::test]
+async fn a_peer_task_error_is_receipted_at_settlement() {
+    // Only the task's call fails with PROSE (`FirstCallFails`): a relay probe that
+    // reached the backend is not delivered PROSE, so it is never exempt.
+    let mock = MockBackend::answering(Answer::FirstCallFails(PROSE.to_string()));
+    let (state, _store) = relay_state(&mock, 600).await;
+    start_task(&state, &mock, 1, "relay-d4", 1).await;
+    let answer = relay_until_refused(&state).await;
+    assert_eq!(
+        answer["error"]["code"], -32002,
+        "the peer's error text was not receipted: {answer}"
+    );
+}
+
 /// MIK-7939 D6.RELAY.10: a backend's primitive result is stored as a text
 /// block holding its JSON print. The receipt is the stored text, so relaying
 /// that text is caught. Densely escaped: no fingerprint window of the raw

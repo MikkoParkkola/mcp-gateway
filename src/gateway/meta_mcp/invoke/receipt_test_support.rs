@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7939 test support: a backend failure whose gateway hint is long enough
 //! to fingerprint, and that hint's own text, shared by the unit and route
-//! tests.
+//! tests; and (MIK-7994) prose no part of which matches another.
 
 use serde_json::Value;
 
@@ -34,4 +34,27 @@ pub(crate) fn own_hint_text(answer: &Value, backend: &str) -> String {
         .max_by_key(|piece| piece.len())
         .unwrap_or_else(|| panic!("base: the gateway attached a hint of its own: {answer}"))
         .to_owned()
+}
+
+/// `len` bytes of words that never repeat, so no 48-char fingerprint window
+/// of one part of the text matches another part.
+pub(crate) fn distinct_prose(len: usize) -> String {
+    let mut text = String::new();
+    let mut n: u64 = 1;
+    while text.len() < len {
+        n = n.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        // The high bits: an LCG's low bits cycle within 256 steps.
+        let mut bits = n >> 34;
+        let word: String = (0..6)
+            .map(|_| {
+                let letter = b'a' + u8::try_from(bits % 26).unwrap_or(0);
+                bits /= 26;
+                char::from(letter)
+            })
+            .collect();
+        text.push_str(&word);
+        text.push(' ');
+    }
+    text.truncate(len);
+    text
 }
