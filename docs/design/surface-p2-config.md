@@ -52,12 +52,12 @@ explicit value honoured as a hidden key, and each gets a red-first test of the d
 | P1 AUTO row | Derivation |
 |---|---|
 | `accounts.schema_version` | `accounts.v1`, the only accepted value, is the default |
-| `backends.<name>.oauth.token_refresh_buffer_secs` | unset: refresh at max(300 s, 10 % of the token lifetime) before expiry |
+| `backends.<name>.oauth.token_refresh_buffer_secs` | unset: refresh at max(300 s, 10 % of the token lifetime) before expiry. The lifetime is the stored token's expiry minus its issue time, kept with the token so it survives a restart; a token with no expiry uses 300 s |
 | `backends.<name>.protocol_version` | negotiated in `initialize` (already) |
 | `backends.<name>.streamable_http` | detected at connect (already) |
 | `key_server.oidc[].auto_discover` | OIDC discovery first, then `{issuer}/.well-known/jwks.json`; `jwks_uri` still overrides |
 | `meta_mcp.prompts_resources_fetch_timeout` | unset: min(the backend's `timeout`, 10 s) |
-| `--capabilities` on `skills generate` and `tool completions/inspect/invoke/list` (5 rows), `MCP_GATEWAY_CAPABILITIES` | derived from the loaded config's `capabilities.directories`; flag and variable stay as hidden overrides |
+| `--capabilities` on `skills generate` and `tool completions/inspect/invoke/list` (5 rows), `MCP_GATEWAY_CAPABILITIES` | derived from every entry of the loaded config's `capabilities.directories`, in order. Precedence: the flag, then the variable, then the config. Flag and variable stay as hidden overrides |
 | `validate --no-color` | colour follows the terminal and `NO_COLOR`; hidden flag |
 ## Kept as operator decisions (challenged and rejected as AUTO)
 
@@ -130,7 +130,7 @@ Each test is written first and seen failing on CI at its own assertion before th
 | P2b | every INTERNAL/AUTO row in the inventory is in the code's hidden-key table and nothing else is | the table does not exist |
 | P2b | a config setting a hidden key loads with the value applied, and `doctor` names the key | `doctor` does not list it |
 | P2c | through the real config loader: `url` with `http://`, `https://`, `ws://` and `wss://` builds the same backend as the matching 3.x key; `url` plus `http_url` and `url` plus `ws_url` are each a load error naming both; the cleartext-credential refusal fires on `url` exactly as on the alias | `url` is an unknown key |
-| P2c | each P1 AUTO row: unset gives the derived value; an explicit value is still applied | the derivations do not exist |
+| P2c | each P1 AUTO row that needs new code: unset gives the derived value; an explicit value is still applied. `protocol_version` and `streamable_http` already derive their value, so their tests are guards that pass before and after | the new derivations do not exist |
 | P2c | a 3.x config with `http_url` or `ws_url` loads unchanged | (guard: passes before and after) |
 | P2c | auth on with no `transparency_log` section loads with the log on; auth on with `enabled: false` still fails to load | the first fails to load today |
 | P2d | each REMOVE key fails the load with a message naming its replacement; `upgrade` output has no dead REMOVE key | most warn once or have no effect today (inventory rows say which) |
@@ -139,6 +139,7 @@ Each test is written first and seen failing on CI at its own assertion before th
 | P2f | the minimal config in QUICKSTART loads and serves a tool call (this also feeds SURF.7) | QUICKSTART still shows the longer config |
 | P2f | `init` output: `/mcp` answers without a token on loopback, the dashboard needs it, and `single_user` grants the solo OAuth principal, as before | (guard: passes before and after) |
 | P2f | the inventory check reads the reference, `gateway.example.yaml` and QUICKSTART and fails on any non-KEEP config key or variable they mention; the loader still accepts hidden keys | the check does not read the docs |
+| P2f | public schema parity: every property of `deploy/helm/mcp-gateway/values.schema.json` that feeds a gateway key (`server.cleartextHttp`, `auth.*`, `audit.*`, `logging.*`, `metrics.*`) maps to a KEEP inventory row, and the free-form `config` block stays free-form. No gateway.yaml JSON schema is published; the loader's accepted-key list (`src/config/strict_keys.rs`) is not public and keeps accepting hidden keys | the mapping is not checked |
 ## UPGRADING impact
 
 Each user-visible change gets one entry in `docs/UPGRADING-4.0.md`, numbered at packet time (base max + 1),
