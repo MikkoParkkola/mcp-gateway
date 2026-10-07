@@ -161,6 +161,20 @@ where
         .map_err(Into::into)
 }
 
+/// A failed load as the caller may show it. The loader's error can quote
+/// the offending value, which may be a secret, so under
+/// [`CommentLoss::Refuse`] (the web UI) the detail is withheld.
+pub(super) fn load_failure(path: &Path, e: &crate::Error, mode: CommentLoss) -> String {
+    match mode {
+        CommentLoss::Rewrite => format!("Failed to load {}: {e}", path.display()),
+        CommentLoss::Refuse => format!(
+            "Failed to load {}: the file does not parse or validate (detail withheld: \
+             it can quote a configured value)",
+            path.display()
+        ),
+    }
+}
+
 /// [`mutate_config_and_reload`] in `mode`: the web UI refuses a write that
 /// would drop the file's comments, and a write that changes nothing writes
 /// and reloads nothing.
@@ -182,7 +196,7 @@ where
     // No live gateway to reload, so no reload lock exists to hold. This path is
     // the CLI acting on a config file nothing else is serving.
     let mut config = crate::config_persistence::load_existing_or_default(path)
-        .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
+        .map_err(|e| load_failure(path, &e, mode))?;
     match mutate(&mut config) {
         Ok(value) => {
             crate::config_persistence::write_config_with(path, &config, mode)?;

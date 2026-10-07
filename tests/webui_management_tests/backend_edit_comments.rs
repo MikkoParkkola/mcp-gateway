@@ -274,6 +274,41 @@ async fn a_refusal_never_echoes_a_quoted_secret() {
     .await;
 }
 
+/// A file that stops loading after the gateway started: the load error can
+/// quote the offending value, so the 500 must not carry it.
+async fn load_error_hides_the_value(route: Route) {
+    let (router, path, _keep) = served(SVC, route).await;
+    write_owner_only(
+        &path,
+        "backends:\n  svc:\n    command: x\n    enabled: \"#secret\"\n",
+    )
+    .expect("write");
+    let (status, answer) = patch(&router, "svc", json!({"description": "new"})).await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{route:?}: {answer}"
+    );
+    let answer = answer.to_string();
+    assert!(answer.contains("Failed to load"), "{route:?}: {answer}");
+    assert!(
+        !answer.contains("#secret"),
+        "{route:?}: echoes the value: {answer}"
+    );
+}
+
+/// Site `ReloadContext::mutate_locked` (live gateway).
+#[tokio::test]
+async fn a_live_load_error_never_echoes_a_value() {
+    load_error_hides_the_value(Route::Live).await;
+}
+
+/// Site `mutate_config_and_reload_with` (no gateway running).
+#[tokio::test]
+async fn a_file_load_error_never_echoes_a_value() {
+    load_error_hides_the_value(Route::File).await;
+}
+
 /// T10: a tab-separated inline comment counts as a comment.
 #[tokio::test]
 async fn a_tab_separated_comment_is_not_lost_silently() {

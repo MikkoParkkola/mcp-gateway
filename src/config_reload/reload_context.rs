@@ -506,7 +506,7 @@ impl ReloadContext {
     {
         let _reload_guard = self.lock_reload_within(wait).await?;
         let mut config = crate::config_persistence::load_existing_or_default(path)
-            .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
+            .map_err(|e| super::write::load_failure(path, &e, mode))?;
         let value = match mutate(&mut config) {
             Ok(value) => value,
             Err(rejection) => return Ok(ConfigMutation::Rejected(rejection)),
