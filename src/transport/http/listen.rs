@@ -162,6 +162,14 @@ impl HttpTransport {
     }
 }
 
+#[cfg(test)]
+impl HttpTransport {
+    /// Stand in for a connect or a session recovery that detected `flavour`.
+    pub(crate) fn set_detected(&self, flavour: Option<bool>) {
+        *self.streamable_http.write() = flavour;
+    }
+}
+
 #[async_trait::async_trait]
 impl UpstreamListen for HttpTransport {
     async fn listen(
@@ -175,6 +183,10 @@ impl UpstreamListen for HttpTransport {
     async fn unsolicited(self: std::sync::Arc<Self>) -> std::result::Result<FrameStream, Refused> {
         let opened = self.open_session_stream().await?;
         refused_as("session stream", opened.map(FrameStream::new))
+    }
+
+    fn detected_streamable(&self) -> Option<bool> {
+        self.streamable()
     }
 }
 
@@ -345,6 +357,23 @@ mod tests {
                 tools_changed: false,
             },
             uris: vec!["file:///a".into()],
+        }
+    }
+
+    /// T11 (MIK-7969): the detected transport is read live, so a session
+    /// recovery that switched it in place is seen at the next read.
+    #[test]
+    fn the_detected_transport_is_read_live() {
+        let transport = HttpTransport::new(
+            "http://127.0.0.1:9/mcp",
+            std::collections::HashMap::new(),
+            std::time::Duration::from_secs(1),
+            true,
+        )
+        .expect("transport");
+        for flavour in [Some(false), Some(true), None] {
+            transport.set_detected(flavour);
+            assert_eq!(transport.detected_streamable(), flavour);
         }
     }
 

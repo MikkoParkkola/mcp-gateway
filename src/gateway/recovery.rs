@@ -133,15 +133,16 @@ pub struct RecoveryContext<'a> {
 /// the default message and suggestion come from this function.
 #[must_use]
 pub fn recovery_for(category: ErrorCategory, ctx: RecoveryContext<'_>) -> RecoveryHint {
-    recovery_for_surface(category, ctx, MetaSurface::Standard)
+    recovery_for_surface(category, ctx, MetaSurface::Standard(Revive::Offered))
 }
 
 /// The meta-tool surface the caller has, which decides the tools a hint may
 /// name: a hint that points at a tool the caller cannot see is a dead end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MetaSurface {
-    /// The full meta-tool set (`gateway_list_tools`, `gateway_revive_server`, ...).
-    Standard,
+    /// The full meta-tool set (`gateway_list_tools`, ...); whether it includes
+    /// `gateway_revive_server` depends on the caller (MIK-7974).
+    Standard(Revive),
     /// Code Mode: only `gateway_search` and `gateway_execute`.
     CodeMode,
     /// The operator's `exposed_meta_tools` hides this mode's discovery tool,
@@ -149,11 +150,39 @@ pub(crate) enum MetaSurface {
     Undiscoverable,
 }
 
+/// Whether a standard-surface caller can list and call `gateway_revive_server`:
+/// an admin meta-tool the operator's `exposed_meta_tools` can also hide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Revive {
+    Offered,
+    Hidden,
+}
+
+/// The meta-tool surface a request asked for. `CodeMode` is the per-request
+/// `?codemode=search_and_execute` override; `Configured` defers to the
+/// gateway's own Code Mode setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SurfaceRequest {
+    Configured,
+    CodeMode,
+}
+
+impl SurfaceRequest {
+    /// The request's surface from the HTTP handler's `?codemode=` check.
+    pub(crate) const fn from_url(code_mode_requested: bool) -> Self {
+        if code_mode_requested {
+            Self::CodeMode
+        } else {
+            Self::Configured
+        }
+    }
+}
+
 impl MetaSurface {
     /// The tool this surface discovers tools with, if the caller has one.
     pub(crate) const fn discovery_tool(self) -> Option<&'static str> {
         match self {
-            Self::Standard => Some("gateway_list_tools"),
+            Self::Standard(_) => Some("gateway_list_tools"),
             Self::CodeMode => Some("gateway_search"),
             Self::Undiscoverable => None,
         }
@@ -212,13 +241,15 @@ pub(crate) fn recovery_for_surface(
                 str::to_string,
             ),
             suggest: match surface {
-                MetaSurface::Standard => {
+                MetaSurface::Standard(Revive::Offered) => {
                     "Wait for the circuit breaker to recover (automatic) or use \
                       `gateway_revive_server` to reset it manually. \
                       Do not retry in a tight loop."
                         .to_string()
                 }
-                MetaSurface::CodeMode | MetaSurface::Undiscoverable => {
+                MetaSurface::Standard(Revive::Hidden)
+                | MetaSurface::CodeMode
+                | MetaSurface::Undiscoverable => {
                     "Wait for the circuit breaker to recover (automatic). \
                       Do not retry in a tight loop."
                         .to_string()
@@ -567,6 +598,24 @@ mod tests {
             recovery_for_surface(ErrorCategory::NotFound, ctx_for("t"), MetaSurface::CodeMode);
         assert!(
             hint.suggest.contains("`gateway_search`"),
+            "{}",
+            hint.suggest
+        );
+    }
+
+    #[test]
+    fn a_hidden_revive_is_not_named_by_a_breaker_hint() {
+        let hidden = MetaSurface::Standard(Revive::Hidden);
+        let hint = recovery_for_surface(ErrorCategory::CircuitBreakerTrip, ctx_for("t"), hidden);
+        assert!(
+            !hint.suggest.contains("gateway_revive_server"),
+            "{}",
+            hint.suggest
+        );
+        let offered = MetaSurface::Standard(Revive::Offered);
+        let hint = recovery_for_surface(ErrorCategory::CircuitBreakerTrip, ctx_for("t"), offered);
+        assert!(
+            hint.suggest.contains("`gateway_revive_server`"),
             "{}",
             hint.suggest
         );

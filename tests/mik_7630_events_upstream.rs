@@ -24,17 +24,21 @@ mod receiver;
 mod upstream_peer;
 #[path = "mik_7630_events/upstream_snapshot.rs"]
 mod upstream_snapshot;
+#[path = "mik_7630_events/upstream_sub.rs"]
+#[allow(dead_code, reason = "shared helpers; each binary uses a subset")]
+mod upstream_sub;
 #[path = "mik_7630_events/upstream_tools.rs"]
 mod upstream_tools;
 
 use std::path::Path;
 use std::time::Duration;
 
-use delivery::{DEADLINE, delivery_config, start_cfg, wait_until};
+use delivery::{DEADLINE, start_cfg, wait_until};
 use gateway::{ALICE, BOB, CAROL, Gateway, error};
-use receiver::{Received, Receiver, whsec};
+use receiver::{Receiver, whsec};
 use serde_json::{Value, json};
 use upstream_peer::{Era, HttpPeer, Seen, StdioPeer, URI_A, URI_B, URI_SECRET, WsPeer};
+use upstream_sub::{delivered, expect_events, sub, sub_params, unsub, upstream_config};
 
 const UPDATED: &str = "notifications/resources/updated";
 const RES_CHANGED: &str = "notifications/resources/list_changed";
@@ -42,35 +46,6 @@ const PROMPTS_CHANGED: &str = "notifications/prompts/list_changed";
 
 fn event(kind: &str) -> String {
     format!("backend.x.{kind}")
-}
-
-fn api_key(name: &str, key: &str, backends: &[&str]) -> Value {
-    json!({
-        "name": name,
-        "key_sha256": mcp_gateway::config::api_key_digest_spec(key.as_bytes()),
-        "backends": backends,
-    })
-}
-
-/// The I2 delivery config with backend `x` = `backend` added; alice and bob
-/// may reach `x`, carol may not.
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "call sites build the value inline with json!"
-)]
-fn upstream_config(root: &Path, backend: Value, extra: &[(&str, Value)]) -> Value {
-    let allow = json!({"callback_allow_private": ["127.0.0.0/8", "::1/128"]}); // localhost may be ::1
-    let mut cfg = delivery_config(root, &allow);
-    cfg["backends"] = json!({ "x": backend });
-    for (name, value) in extra {
-        cfg["backends"][*name] = value.clone();
-    }
-    cfg["auth"]["api_keys"] = json!([
-        api_key("alice", ALICE, &["x", "hooks"]),
-        api_key("bob", BOB, &["x"]),
-        api_key("carol", CAROL, &["hooks"]),
-    ]);
-    cfg
 }
 
 fn http_backend(peer: &HttpPeer) -> Value {
@@ -92,71 +67,6 @@ async fn start_listed(root: &Path, receiver: &Receiver, cfg: Value) -> Gateway {
         );
     }
     gw
-}
-
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "call sites build the value inline with json!"
-)]
-fn sub_params(name: &str, url: &str, secret: &str, arguments: Value) -> Value {
-    json!({
-        "name": name,
-        "arguments": arguments,
-        "delivery": {"mode": "webhook", "url": url, "secret": secret},
-    })
-}
-
-/// Subscribe `key` to `name`; the subscription id (panics on an error).
-async fn sub(gw: &Gateway, key: &str, name: &str, receiver: &Receiver, arguments: Value) -> String {
-    let answer = gw
-        .rpc(
-            Some(key),
-            "events/subscribe",
-            sub_params(name, &receiver.localhost_url(), &whsec(32), arguments),
-        )
-        .await;
-    answer["result"]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("subscribe to {name} answers an id: {answer}"))
-        .to_owned()
-}
-
-async fn unsub(gw: &Gateway, key: &str, name: &str, receiver: &Receiver, arguments: Value) {
-    let answer = gw
-        .rpc(
-            Some(key),
-            "events/unsubscribe",
-            json!({"name": name, "arguments": arguments,
-                   "delivery": {"url": receiver.localhost_url()}}),
-        )
-        .await;
-    assert!(
-        answer.get("error").is_none(),
-        "unsubscribe answers: {answer}"
-    );
-}
-
-/// Deliveries carrying event `name` for subscription `id`.
-fn delivered(receiver: &Receiver, id: &str, name: &str) -> Vec<Value> {
-    receiver
-        .events()
-        .iter()
-        .filter(|r: &&Received| r.header("x-mcp-subscription-id").as_deref() == Some(id))
-        .map(Received::json)
-        .filter(|body| body["name"] == name)
-        .collect()
-}
-
-/// Wait until subscription `id` has `n` deliveries of `name`; return them.
-async fn expect_events(receiver: &Receiver, id: &str, name: &str, n: usize) -> Vec<Value> {
-    let ok = wait_until(DEADLINE, || delivered(receiver, id, name).len() >= n).await;
-    let got = delivered(receiver, id, name);
-    assert!(
-        ok,
-        "expected {n} {name} deliveries for {id}, got {}",
-        got.len()
-    );
-    got
 }
 
 /// Settle time after which "nothing more arrived" is asserted: past the 1 s
@@ -752,7 +662,12 @@ async fn t39j_ineligible_backends_offer_no_upstream_events() {
         dir.path(),
         http_backend(&peer),
         &[
-            ("sse", json!({"http_url": sse_url})),
+            // An explicit `false` that never connected is refused (MIK-7969);
+            // an unset key is listed until a connect detects it.
+            (
+                "sse",
+                json!({"http_url": sse_url, "streamable_http": false}),
+            ),
             (
                 "idp",
                 json!({
@@ -766,6 +681,8 @@ async fn t39j_ineligible_backends_offer_no_upstream_events() {
     );
     let mut cfg = cfg;
     cfg["auth"]["api_keys"][0]["backends"] = json!(["x", "hooks", "sse", "idp"]);
+    // No boot connect, so `sse` is judged by its explicit value alone.
+    cfg["meta_mcp"]["warm_start"] = json!(["hooks"]);
     let gw = start_listed(dir.path(), &receiver, cfg).await;
     let names = gw.event_names(Some(ALICE), None).await;
     for backend in ["sse", "idp"] {

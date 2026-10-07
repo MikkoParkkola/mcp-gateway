@@ -2480,6 +2480,18 @@ class WorkflowWiring(unittest.TestCase):
         self.assertEqual(stray, set(), "a unit test left in the report-only job is swallowed off a tag")
         self.assertIn("release-script-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
 
+    def test_the_ranking_corpus_is_regenerated_and_compared_every_ref(self):
+        # MIK-7850: the held-out corpus must stay what gen_corpus.py derives
+        # from the frozen tree. A dropped step, or a compare whose failure is
+        # masked, lets a hand-edited corpus merge green.
+        compare = [block for block in steps("ci.yml", "release-script-tests")
+                   if any("gen_corpus.py" in command and "| cmp - benchmarks/ranking-baseline/corpus.json" in command
+                          for command in joined(block))]
+        self.assertEqual(len(compare), 1, "release-script-tests must regenerate and compare the ranking corpus once")
+        text = "\n".join(compare[0])
+        self.assertIn("set -euo pipefail", text, "the corpus compare must fail on any failed command")
+        self.assertNotRegex(text, r"\|\|\s*(true|:)|continue-on-error:\s*true", "the corpus compare must not swallow failures")
+
     def test_every_installed_cosign_is_past_the_verification_advisory(self):
         # Every cosign the workflows install signs or verifies the images and
         # charts users trust, and a verify step on a vulnerable pin can pass

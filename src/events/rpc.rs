@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `events/list`, `events/subscribe`, `events/unsubscribe` (design §6.2-6.4).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -12,6 +13,7 @@ use super::governance::{Attribution, Lifecycle};
 use super::records::{Credential, Subscription};
 use super::store::{CapHit, Caps};
 use super::types::{EventDescriptor, RpcError, Visibility};
+use super::upstream::{self, Ineligible, Judged, Kind};
 
 /// Who is calling, as the transport resolved it. Owned, so it can be held
 /// across the verification POST.
@@ -154,18 +156,76 @@ impl EventsHub {
     }
 
     /// The configured backends that cannot offer upstream-notification
-    /// events, under the live config; none while that source is off.
-    fn ineligible_backends(
-        &self,
-    ) -> std::collections::BTreeMap<String, super::upstream::Ineligible> {
+    /// events, under the live config and connections; none while that source
+    /// is off.
+    fn ineligible_backends(&self) -> BTreeMap<String, Ineligible> {
+        upstream::refused(self.judged_backends())
+    }
+
+    /// Every configured backend that cannot offer upstream-notification
+    /// events yet, refused or unresolved (MIK-7969).
+    fn judged_backends(&self) -> BTreeMap<String, Judged> {
         let Some(services) = self.runtime.services.get() else {
-            return std::collections::BTreeMap::new();
+            return BTreeMap::new();
         };
         if !self.config.sources.backend_notifications {
-            return std::collections::BTreeMap::new();
+            return BTreeMap::new();
         }
-        let multi_user = super::upstream::multi_user(services.live.running());
-        super::upstream::ineligible_backends(&services.live.get(), multi_user)
+        let multi_user = upstream::multi_user(services.live.running());
+        let registry = self.runtime.backends.get();
+        let detected = |name: &str| registry?.get(name)?.connected_streamable();
+        upstream::judged_backends(&services.live.get(), multi_user, &detected)
+    }
+
+    /// An upstream-notification event of a backend whose HTTP transport no
+    /// live connection has detected: start the backend as a client request
+    /// would, bounded by its timeout, then judge the transport it connected
+    /// with (MIK-7969). A failed start answers the backend error, never an
+    /// SSE refusal.
+    async fn resolve_upstream(&self, name: &str) -> Result<(), RpcError> {
+        let Some((backend, kind)) = upstream::parse_name(name) else {
+            return Ok(());
+        };
+        if kind == Kind::ToolsChanged {
+            return Ok(());
+        }
+        match self.judged_backends().get(backend) {
+            None => return Ok(()),
+            // Refused already: answer it before anything reads the backend.
+            Some(Judged::Refused(_)) => {}
+            Some(Judged::Unresolved) => {
+                let Some(handle) = self.runtime.backends.get().and_then(|r| r.get(backend)) else {
+                    return Err(RpcError::not_found());
+                };
+                if !handle.resolve_for_events().await {
+                    return Err(RpcError::backend_unavailable());
+                }
+            }
+        }
+        self.upstream_admits(name)
+    }
+
+    /// Whether an upstream-notification subscription to `name` may commit:
+    /// its backend is configured and offers the events over a transport a
+    /// live connection detected, or needs none (stdio, WebSocket). Run under
+    /// the lifecycle lock, so a stop or a switch to SSE since the subscribe
+    /// resolved it refuses the commit (MIK-7969).
+    fn upstream_admits(&self, name: &str) -> Result<(), RpcError> {
+        let Some((backend, kind)) = upstream::parse_name(name) else {
+            return Ok(());
+        };
+        if kind == Kind::ToolsChanged || !self.config.sources.backend_notifications {
+            return Ok(());
+        }
+        match self.judged_backends().remove(backend) {
+            Some(Judged::Refused(reason)) => {
+                Err(RpcError::unsupported_backend_events(name, reason.as_str()))
+            }
+            Some(Judged::Unresolved) => Err(RpcError::backend_unavailable()),
+            // Removed since the subscribe saw it.
+            None if self.source_offering(name).is_none() => Err(RpcError::not_found()),
+            None => Ok(()),
+        }
     }
 }
 
@@ -376,11 +436,6 @@ impl EventsHub {
             None => return Err(RpcError::invalid("delivery.mode")),
         }
         let arguments = checked_arguments(&descriptor, params.get("arguments"))?;
-        if let Some(source) = self.source_offering(&descriptor.name) {
-            source
-                .authorize(&principal, &descriptor.name, &arguments)
-                .await?;
-        }
         let url = callback_url(delivery.get("url"))?;
         let secret = delivery
             .get("secret")
@@ -402,6 +457,15 @@ impl EventsHub {
                 .map_err(cap_refusal)?;
         }
 
+        // After the cheap refusals and before any callback traffic, since it
+        // may start the backend; and before the source's own check, which may
+        // read the backend's resource catalogue.
+        self.resolve_upstream(&descriptor.name).await?;
+        if let Some(source) = self.source_offering(&descriptor.name) {
+            source
+                .authorize(&principal, &descriptor.name, &arguments)
+                .await?;
+        }
         let tail = super::tail_policy(&self.config);
         let mut verified = self.store.is_verified(&principal, url.as_str(), now, tail);
         let existing = self.store.get(&id).filter(|s| s.live(now));
@@ -478,6 +542,7 @@ impl EventsHub {
     ) -> Result<Result<super::store::Admission, CapHit>, RpcError> {
         let attempt = record.clone();
         let mut started = self.lifecycle.lock().await;
+        self.upstream_admits(&record.name)?;
         let begun = self
             .start_key(
                 &mut started,
