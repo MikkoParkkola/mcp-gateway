@@ -178,7 +178,7 @@ pub(super) fn task_intent_for_call(
     // owns its tasks as `credential:<principal>` (`route_task_owner`), and
     // checking the same string the record is admitted under keeps one
     // rendering of the caller (MIK-7967). With authentication off the owner
-    // is the gateway's own constant, never empty.
+    // is a validated agent's own key or the gateway's constant, never empty.
     if state.auth_config.enabled && req.owner.is_empty() {
         return Err(Box::new(JsonRpcResponse::error(
             Some(id),
