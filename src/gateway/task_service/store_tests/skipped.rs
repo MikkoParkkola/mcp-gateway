@@ -325,3 +325,42 @@ async fn skipped_rows_are_reported_by_class() {
         );
     }
 }
+
+/// `MIK-8052.AC4`: a FIFO wearing a record's name is refused as unsafe, and
+/// opening it never waits for a writer. The open runs on its own thread so a
+/// hang fails the bound instead of the suite; a writer is then attached so the
+/// stuck open, if any, returns.
+#[cfg(unix)]
+#[test]
+fn a_fifo_record_is_refused_without_waiting_for_a_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async { open(&path).await.close().await.unwrap() });
+    let fifo = path.join("task-00000000-0000-4000-8000-000000000000.json");
+    crate::test_fifo::make_fifo(&fifo);
+
+    let (done, opened) = std::sync::mpsc::channel();
+    let store_path = path.clone();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let outcome = runtime.block_on(TaskStore::open(&store_path, StoreLimits::default()));
+        let _ = done.send(outcome.map(|_| ()).err());
+    });
+    let outcome = opened.recv_timeout(std::time::Duration::from_secs(5));
+    if outcome.is_err() {
+        // Release the open blocked on the FIFO before failing.
+        let _ = fs::OpenOptions::new().write(true).open(&fifo);
+    }
+    assert_eq!(
+        outcome.ok(),
+        Some(Some(StoreError::UnsafeStore)),
+        "the open must refuse the FIFO at once"
+    );
+}
