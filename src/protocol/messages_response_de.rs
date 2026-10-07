@@ -25,7 +25,10 @@ impl<'de> Deserialize<'de> for JsonRpcResponse {
             #[serde(default, deserialize_with = "present")]
             result: Option<Value>,
             error: Option<JsonRpcError>,
-            method: Option<serde::de::IgnoredAny>,
+            /// Present, `null` included: a plain `Option` maps null to `None`,
+            /// which let `"method": null` through as a response (MIK-8019).
+            #[serde(default, deserialize_with = "present")]
+            method: Option<Value>,
         }
 
         let shadow = Shadow::deserialize(deserializer)?;
