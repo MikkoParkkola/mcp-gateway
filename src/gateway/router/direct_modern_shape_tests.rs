@@ -69,12 +69,20 @@ async fn post(
     serde_json::from_slice(&bytes).unwrap()
 }
 
+/// Request id 7, never the fixture transport's own 1, so a dropped restore
+/// of the caller's id shows.
+const ID: i64 = 7;
+
 async fn modern(fx: &Fx, backend: &str, method: &str, params: Value) -> Value {
-    post(fx, (backend, method), (true, 1), params, json!({})).await
+    let body = post(fx, (backend, method), (true, ID), params, json!({})).await;
+    assert_eq!(body["id"], ID, "the caller's id: {body}");
+    body
 }
 
 async fn legacy(fx: &Fx, backend: &str, method: &str, params: Value) -> Value {
-    post(fx, (backend, method), (false, 1), params, json!({})).await
+    let body = post(fx, (backend, method), (false, ID), params, json!({})).await;
+    assert_eq!(body["id"], ID, "the caller's id: {body}");
+    body
 }
 
 fn call_params() -> Value {

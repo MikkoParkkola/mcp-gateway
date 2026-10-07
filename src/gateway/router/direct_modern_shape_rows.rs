@@ -39,6 +39,13 @@ async fn a_modern_tools_call_carries_the_result_type() {
         assert!(body["result"]["content"].is_array(), "{backend}: {body}");
         let gone = missing(&body, false);
         assert!(gone.is_empty(), "{backend} missing {gone:?}: {body}");
+        // A call result is not cacheable: no cache pair.
+        for key in ["ttlMs", "cacheScope"] {
+            assert!(
+                body["result"].get(key).is_none(),
+                "{backend} gained {key}: {body}"
+            );
+        }
         assert!(
             body["result"]["_meta"][crate::protocol::meta::KEY_SERVER_INFO].is_object(),
             "{backend}: the gateway names itself: {body}"

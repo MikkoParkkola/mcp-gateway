@@ -316,6 +316,31 @@ async fn a_direct_receipt_leaves_out_the_gateway_server_info() {
     }
 }
 
+/// The strip removes the gateway's stamp only: the same text in the backend's
+/// own content is still the receiver's, so relaying it is still refused.
+#[tokio::test]
+async fn the_strip_keeps_backend_text() {
+    let (state, _store) = blocking_state().await;
+    let key = shared_key();
+    let (a, b) = (subject("alice"), subject("bob"));
+    let delivered = stamped_with_prose(json!({"content": [{"type": "text", "text": PROSE}]}));
+    crate::gateway::meta_mcp::invoke::relay::collecting(async {
+        stage_direct_delivery(
+            &state,
+            a.auth(&key),
+            ("alpha", "read"),
+            Some(&delivered),
+            GatewayStamps::Modern,
+        );
+        commit_direct_receipts(&state, true);
+    })
+    .await;
+    assert!(
+        refused(&state, b.auth(&key)),
+        "backend text was stripped too"
+    );
+}
+
 /// MIK-8022: the catalogue path takes the same stamps.
 #[tokio::test]
 async fn a_direct_catalogue_receipt_leaves_out_the_gateway_server_info() {
