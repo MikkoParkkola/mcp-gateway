@@ -732,8 +732,9 @@ async fn ws_a_live_token_is_never_rerouted_to_a_second_call() {
 #[test]
 fn a_null_method_frame_is_not_a_response() {
     let text = r#"{"jsonrpc":"2.0","id":7,"method":null,"result":{}}"#;
+    let outcome = McpFrame::from_text(text);
     assert!(
-        !matches!(McpFrame::from_text(text), Ok(McpFrame::Response(_))),
-        "a null-method frame must not classify as a response"
+        outcome.is_err(),
+        "a null-method frame is refused, not classified: {outcome:?}"
     );
 }

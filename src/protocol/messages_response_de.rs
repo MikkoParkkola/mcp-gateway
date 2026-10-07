@@ -59,8 +59,8 @@ where
     Value::deserialize(deserializer).map(Some)
 }
 
-/// Presence alone, `null` included, without building the value: refusing a
-/// frame costs no allocation however large its `method` member is.
+/// Presence alone, `null` included, without building a `Value` for the
+/// member: a large `method` is skipped, not copied, before the refusal.
 fn present_unread<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<serde::de::IgnoredAny>, D::Error>

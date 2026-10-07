@@ -79,6 +79,10 @@ async fn a_null_method_frame_is_not_delivered_as_the_calls_result() {
         }))
         .await;
     let (lines, reply) = session.read_until_id(2).await;
+    assert!(
+        !lines.iter().any(|line| line.contains("FORGED")),
+        "the forged frame reached the client on another line: {lines:?}"
+    );
     let reply = reply.unwrap_or_else(|| panic!("no reply to the call: {lines:?}"));
     // `gateway_invoke` returns the backend's result as JSON text in its own
     // first content block.
