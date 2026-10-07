@@ -4213,13 +4213,15 @@ row for every name that ever spent and never removed one. Now:
 
 - A tool or key with a budget always keeps its own row, so budget checks are
   unchanged.
-- Other names get their own row up to 256 per map. Past that, or for a name
+- Other names get their own row up to about 256 per map (calls racing on a
+  first insert can add a few more). Past that, or for a name
   longer than 256 bytes, their spend is counted in `tool_overflow_usd` or
   `key_overflow_usd`. It still counts toward the global daily budget.
 - Rows from an earlier day without a budget are removed on a later spend.
 
-The admin cost stats, `EnforcerSnapshot` and the saved `costs.json`
-(`PersistedCosts`) carry the two overflow totals. A file saved by an earlier
+`EnforcerSnapshot` and the saved `costs.json` (`PersistedCosts`) carry the two
+overflow totals; the admin cost stats show them as `tool_overflow_spend_usd`
+and `key_overflow_spend_usd`. A file saved by an earlier
 build loads with both at 0.
 
 Library users: code that builds `EnforcerSnapshot` or `PersistedCosts` with a
