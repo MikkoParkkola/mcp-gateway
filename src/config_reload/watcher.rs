@@ -63,7 +63,9 @@ pub(super) fn is_config_event_for(event: &Event, named_config_path: &std::path::
 /// close) cannot, and the reload's own read must not wake the task again. A
 /// write to any other file in a watched directory cannot either, and is not
 /// worth resolving the config's path for (MIK-8013). A rescan means events
-/// were lost, possibly an edit to the config itself, so it reloads too.
+/// were lost, possibly an edit to the config itself, so it reloads too. A
+/// removal or rename that passes is noted first, since it may have ended a
+/// directory's watch (MIK-8024).
 pub(super) fn handle_watch_event(
     event: &Event,
     names: &watch_chain::ChainNames,
@@ -74,6 +76,7 @@ pub(super) fn handle_watch_event(
     if matches!(event.kind, EventKind::Access(_)) || !names.concerns(event) {
         return;
     }
+    names.note_gone(event);
     wake.send_replace(());
     if event.need_rescan() || is_config_event_for(event, named_config_path) {
         let _ = reload.try_send(ReloadTrigger::ConfigFile);
