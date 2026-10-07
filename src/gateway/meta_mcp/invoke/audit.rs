@@ -390,13 +390,20 @@ pub(super) fn delivered_value(delivered: &Value) -> std::borrow::Cow<'_, Value> 
 }
 
 /// The text of a `gateway_invoke` answer whose block is not the gateway's own
-/// printing (MIK-7998): one text block, no `structuredContent`, that is not
+/// printing (MIK-7998): only the wrapper's members, one text block that is not
 /// exactly the pretty printing of what it parses to, or not JSON. The gateway
 /// prints every wrapper, so such a block was rewritten by its final pass.
 /// `None` for an answer [`delivered_value`] reads decoded.
 #[cfg(feature = "firewall")]
 pub(super) fn rewritten_text(delivered: &Value) -> Option<&str> {
-    if delivered.get("structuredContent").is_some() {
+    // Only the wrapper's own members: a native answer passed through (an
+    // interim one carries `inputRequests` and `requestState`) is read as
+    // delivered, its other members included.
+    let wrapper = delivered
+        .as_object()?
+        .keys()
+        .all(|key| matches!(key.as_str(), "content" | "isError" | "_meta"));
+    if !wrapper {
         return None;
     }
     let [block] = delivered.get("content")?.as_array()?.as_slice() else {

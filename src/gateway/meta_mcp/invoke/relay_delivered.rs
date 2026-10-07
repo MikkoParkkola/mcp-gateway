@@ -496,5 +496,12 @@ mod tests {
         let structured =
             json!({"content": [{"type": "text", "text": "x"}], "structuredContent": {}});
         assert_eq!(rewritten_text(&structured), None);
+        let interim = json!({"content": [{"type": "text", "text": "confirm?"}],
+            "resultType": "input_required", "inputRequests": {}, "requestState": "s"});
+        assert_eq!(
+            rewritten_text(&interim),
+            None,
+            "a native answer is read whole"
+        );
     }
 }
