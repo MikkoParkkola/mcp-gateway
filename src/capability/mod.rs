@@ -52,6 +52,7 @@ mod tenant_read_tests;
 pub mod validator;
 mod watcher;
 
+pub(crate) use backend::{Announce, LoadState};
 pub use backend::{CapabilityBackend, CapabilityBackendStatus, DirectoryLoad, RugPullRecord};
 pub use definition::ProtocolConfig;
 pub use definition::*;
@@ -69,6 +70,7 @@ pub use executor::jsonrpc::JsonRpcExecutor;
 pub use executor::rest::{ExecutionContext, ProtocolExecutor};
 pub use hash::{compute_capability_hash, rewrite_with_pin, strip_sha256_line};
 pub use loader::CapabilityLoader;
+pub(crate) use loader::FileFailures;
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
 pub use parser::{parse_capability, parse_capability_file, validate_capability};
 pub(crate) use read_only_call::{read_only_call_as, served_over_rest};

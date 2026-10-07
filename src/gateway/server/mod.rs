@@ -1386,12 +1386,12 @@ impl Gateway {
                             refused.extend(report.rejected);
                         }
                         Err(e) => {
-                            cap_backend_for_load.mark_initial_scan_failed(); // not fatal
                             debug!(directory = %dir, error = %e, "Failed to load capabilities");
                         }
                     }
                 }
 
+                cap_backend_for_load.reload_if_reloaded_during_scan().await;
                 if webhooks_enabled {
                     for cap in cap_backend_for_load.list_capabilities() {
                         if !cap.webhooks.is_empty() {

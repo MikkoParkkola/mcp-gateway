@@ -301,9 +301,7 @@ impl EventsHub {
         // deferred pass: a reload the scan did not see may be about to offer
         // them (MIK-8027). With webhooks off none can come back.
         if webhooks_on && !self.webhook_withdrawals_armed() {
-            let held = self
-                .absent_names(super::webhook_source::NAME_PREFIX, &offered)
-                .len();
+            let held = self.held_webhook_subscriptions();
             if held > 0 {
                 tracing::info!(
                     held,
@@ -373,6 +371,15 @@ impl EventsHub {
             tracing::info!(types = ?gone, "events: withdrawing unoffered webhook event types");
         }
         self.withdraw(&gone)
+    }
+
+    /// How many stored webhook subscriptions name a type the catalogue does
+    /// not offer: held, never sent, until withdrawn or offered again.
+    pub(crate) fn held_webhook_subscriptions(&self) -> usize {
+        let offered: std::collections::HashSet<String> =
+            self.catalogue().into_iter().map(|d| d.name).collect();
+        self.absent_names(super::webhook_source::NAME_PREFIX, &offered)
+            .len()
     }
 
     /// Stored subscriptions' event names under `prefix` that `offered` lacks.

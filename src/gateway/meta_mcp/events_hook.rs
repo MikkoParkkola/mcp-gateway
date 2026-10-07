@@ -67,15 +67,52 @@ impl MetaMcp {
             // type. Disk work, off the async workers; a removal that failed is
             // retried from the stored state, the worker held meanwhile.
             let retry = std::time::Duration::from_secs(5);
-            let first = startup_pass(Pass::First, &hub, capabilities.clone(), registry.clone());
+            let settled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let first = startup_pass(
+                Pass::First,
+                &hub,
+                &settled,
+                capabilities.clone(),
+                registry.clone(),
+            );
             hub.reconcile_until_done(Pass::First.label(), first, retry)
                 .await;
             // Unoffered webhook types wait out the grace period: a reload the
             // scan did not see may still offer them (MIK-8027).
-            tokio::time::sleep(withdraw_grace()).await;
-            let deferred = startup_pass(Pass::Deferred, &hub, capabilities, registry);
-            hub.reconcile_until_done(Pass::Deferred.label(), deferred, retry)
+            let mut wait = withdraw_grace();
+            tokio::time::sleep(wait).await;
+            let deferred = startup_pass(
+                Pass::Deferred,
+                &hub,
+                &settled,
+                capabilities.clone(),
+                registry,
+            );
+            hub.reconcile_until_done(Pass::Deferred.label(), deferred.clone(), retry)
                 .await;
+            // A partial catalogue or a refused refresh leaves unoffered types
+            // held: re-read the directories and rerun, backing off, until a
+            // pass is whole and applied (MIK-8050).
+            while !settled.load(std::sync::atomic::Ordering::Acquire) {
+                wait = (wait * 2).min(RERUN_CAP);
+                let held = hub.held_webhook_subscriptions();
+                tracing::warn!(
+                    held,
+                    retry_secs = wait.as_secs(),
+                    "events: the deferred startup withdraw found the capability catalogue \
+                     partial or its route refresh refused; re-reading and retrying"
+                );
+                tokio::time::sleep(wait).await;
+                if let Some(capabilities) = &capabilities
+                    && let Err(error) = capabilities
+                        .reload_announcing(crate::capability::Announce::OnChange)
+                        .await
+                {
+                    tracing::warn!(%error, "events: re-reading the capability directories failed");
+                }
+                hub.reconcile_until_done(Pass::Deferred.label(), deferred.clone(), retry)
+                    .await;
+            }
         });
     }
 
@@ -89,6 +126,7 @@ impl MetaMcp {
         let pass = startup_pass(
             Pass::Deferred,
             &hub,
+            &Arc::new(std::sync::atomic::AtomicBool::new(false)),
             self.get_capabilities(),
             self.get_webhook_registry(),
         );
@@ -280,13 +318,9 @@ fn apply_webhook_refresh(
     let Some(refreshed) = refresh_from_snapshot(hub, capabilities, registry) else {
         return;
     };
-    let kept = |name: &str| {
-        !refreshed.complete
-            && !refreshed
-                .present
-                .iter()
-                .any(|cap| name.starts_with(&format!("webhook.{cap}.")))
-    };
+    // Only a capability its directory's clean read proved absent is gone
+    // (MIK-8028, MIK-8050).
+    let kept = |name: &str| refreshed.load.keeps(name);
     let withdrawn = if hub.webhook_withdrawals_armed() {
         hub.withdraw_unoffered_webhooks(&kept)
     } else {
@@ -339,17 +373,22 @@ impl Pass {
 fn startup_pass(
     pass: Pass,
     hub: &Arc<EventsHub>,
+    settled: &Arc<std::sync::atomic::AtomicBool>,
     capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
     registry: Option<Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>>,
 ) -> Arc<dyn Fn() -> crate::events::CatalogueScan + Send + Sync> {
-    let hub = Arc::clone(hub);
+    let (hub, settled) = (Arc::clone(hub), Arc::clone(settled));
     Arc::new(move || {
         if matches!(pass, Pass::Deferred) {
             hub.arm_webhook_withdrawals();
         }
-        startup_refresh(&hub, capabilities.as_deref(), registry.as_ref())
+        settled.store(false, std::sync::atomic::Ordering::Release);
+        startup_refresh(&hub, &settled, capabilities.as_deref(), registry.as_ref())
     })
 }
+
+/// The longest wait between reruns of a deferred pass that has not settled.
+const RERUN_CAP: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// How long the startup reconcile leaves unoffered webhook types alone
 /// (MIK-8027). It must outlast the capability watcher's 0.5 s debounce, its
@@ -377,9 +416,11 @@ fn withdraw_grace() -> std::time::Duration {
 
 /// The startup reconcile's refresh, run under its catalogue gate: the routes
 /// follow the catalogue as it is now (MIK-7944), and only a whole catalogue
-/// whose refresh applied lets the reconcile withdraw webhook types.
+/// whose refresh applied lets the reconcile withdraw every unoffered webhook
+/// type. `settled` is set when it was whole and applied.
 fn startup_refresh(
     hub: &EventsHub,
+    settled: &std::sync::atomic::AtomicBool,
     capabilities: Option<&crate::capability::CapabilityBackend>,
     registry: Option<&Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>>,
 ) -> crate::events::CatalogueScan {
@@ -389,7 +430,7 @@ fn startup_refresh(
             // Covered by this refresh, held or not.
             let _ = capabilities.take_held_reload();
             match refresh_from_snapshot(hub, capabilities, registry) {
-                Some(refreshed) if refreshed.complete => {
+                Some(refreshed) if refreshed.load.complete => {
                     // A route this refresh removed was registered by the
                     // scan and taken away by a reload: withdrawn now, as a
                     // reload inside the grace period withdraws what it
@@ -402,26 +443,43 @@ fn startup_refresh(
                              subscription; the deferred pass retries it"
                         );
                     }
+                    settled.store(true, std::sync::atomic::Ordering::Release);
                     Complete
                 }
-                _ => Partial,
+                Some(refreshed) => {
+                    // The deferred pass withdraws by the same keep rule as a
+                    // hot reload: what a clean read proved gone goes, what a
+                    // failed directory may hold stays (MIK-8050). The first
+                    // pass withdraws no unoffered type (MIK-8027).
+                    if hub.webhook_withdrawals_armed()
+                        && !hub.withdraw_unoffered_webhooks(&|name| refreshed.load.keeps(name))
+                    {
+                        tracing::warn!(
+                            "events: the deferred startup withdraw could not remove a \
+                             subscription; it is retried"
+                        );
+                    }
+                    Partial
+                }
+                None => Partial,
             }
         }
         (Some(capabilities), None) if !capabilities.initial_scan_loaded_every_directory() => {
             Partial
         }
-        _ => Complete,
+        _ => {
+            settled.store(true, std::sync::atomic::Ordering::Release);
+            Complete
+        }
     }
 }
 
 /// One catalogue snapshot applied to the webhook routes.
 struct Refreshed {
-    /// Every directory loaded.
-    complete: bool,
+    /// What the snapshot proves about each directory.
+    load: crate::capability::LoadState,
     /// The event types the refresh removed from the routes.
     removed: Vec<String>,
-    /// The capabilities the snapshot holds.
-    present: Vec<String>,
 }
 
 /// Under the catalogue gate the caller holds: re-register the webhook routes
@@ -434,13 +492,9 @@ fn refresh_from_snapshot(
     capabilities: &crate::capability::CapabilityBackend,
     registry: &Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>,
 ) -> Option<Refreshed> {
-    let (catalogue, complete) = capabilities.catalogue_snapshot();
+    let (catalogue, load) = capabilities.catalogue_snapshot();
     match hub.refresh_webhooks(registry, &catalogue) {
-        Ok(removed) => Some(Refreshed {
-            complete,
-            removed,
-            present: catalogue.into_iter().map(|cap| cap.name).collect(),
-        }),
+        Ok(removed) => Some(Refreshed { load, removed }),
         Err(event) => {
             tracing::error!(
                 %event,
