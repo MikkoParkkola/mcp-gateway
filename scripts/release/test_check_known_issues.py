@@ -308,6 +308,18 @@ def test_an_indented_heading_in_a_list_fence_does_not_end_the_section():
     assert run(text, "--check") == 1
 
 
+def test_a_fence_after_an_inline_html_line_is_still_a_fence():
+    text = (
+        "## Known issues\n\n<span>Example output</span>\n```\n\n## Example\n```\n\n"
+        "- Fixed in 4.0.1.\n"
+    )
+    assert run(text, "--check") == 1
+
+
+def test_a_heading_with_extra_spaces_between_the_words_is_the_section():
+    assert run("## Known  issues\n\n- Fixed in 4.0.1.\n", "--check") == 1
+
+
 def test_every_tag_publish_path_runs_the_release_gate():
     # ci.yml's container publish and release.yml both fire on a v* tag; each
     # must refuse a non-empty section before it publishes.
