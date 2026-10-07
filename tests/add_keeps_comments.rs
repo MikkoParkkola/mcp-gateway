@@ -267,15 +267,20 @@ fn refused(home: &Path, path: &Path, before: &str, args: &[&str]) {
     );
 }
 
-/// `--force` takes the full rewrite. The flag does not exist on the base,
-/// so these rows go red there on clap's usage error, not on an assertion.
-fn forced(home: &Path, path: &Path, args: &[&str]) -> mcp_gateway::config::Config {
+/// A write that succeeded, and the config it left. With `--force` it must
+/// still name the commented line it drops (`MIK-CLI-COMMENTS.FORCE.1`). The
+/// flag does not exist on the base, so those rows go red there on clap's
+/// usage error, not on an assertion.
+fn wrote(home: &Path, path: &Path, args: &[&str]) -> mcp_gateway::config::Config {
     let output = run(home, args);
-    assert!(
-        output.status.success(),
-        "{args:?} failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{args:?} failed:\n{stderr}");
+    if args.contains(&"--force") {
+        assert!(
+            stderr.contains("line 1"),
+            "{args:?} must name the dropped line:\n{stderr}"
+        );
+    }
     mcp_gateway::config::Config::load_literal(Some(path)).expect("the rewrite loads")
 }
 
@@ -314,7 +319,7 @@ fn cli_add_with_force_rewrites() {
         p,
         "local",
     ];
-    let config = forced(home.path(), &path, &args);
+    let config = wrote(home.path(), &path, &args);
     assert!(config.backends.contains_key("a") && config.backends.contains_key("local"));
 }
 
@@ -329,7 +334,7 @@ fn cli_remove_that_would_drop_comments_is_refused() {
 fn cli_remove_with_force_rewrites() {
     let (home, path) = flow_home();
     let p = path.to_str().unwrap();
-    let config = forced(
+    let config = wrote(
         home.path(),
         &path,
         &["remove", "--force", "--config", p, "a"],
@@ -364,7 +369,7 @@ fn two_client_servers(yaml: Option<&str>) -> (tempfile::TempDir, std::path::Path
 fn setup_import_keeps_comments() {
     let (home, path) = two_client_servers(Some(NOTED_BLOCK));
     let p = path.to_str().unwrap();
-    let config = forced(
+    let config = wrote(
         home.path(),
         &path,
         &["setup", "wizard", "--yes", "--output", p],
@@ -382,7 +387,7 @@ fn setup_import_keeps_comments() {
 fn setup_on_a_fresh_home_keeps_the_init_warning() {
     let (home, path) = two_client_servers(None);
     let p = path.to_str().unwrap();
-    let config = forced(
+    let config = wrote(
         home.path(),
         &path,
         &["setup", "wizard", "--yes", "--output", p],
@@ -409,7 +414,7 @@ fn setup_import_with_force_rewrites() {
     let (home, path) = two_client_servers(Some(FLOW));
     let p = path.to_str().unwrap();
     let args = ["setup", "wizard", "--yes", "--force", "--output", p];
-    let config = forced(home.path(), &path, &args);
+    let config = wrote(home.path(), &path, &args);
     for name in ["a", "b", "one", "two"] {
         assert!(config.backends.contains_key(name), "{name} missing");
     }
@@ -420,7 +425,7 @@ fn discover_write_keeps_comments() {
     let (home, path) = two_client_servers(Some(NOTED_BLOCK));
     let p = path.to_str().unwrap();
     let args = ["cap", "discover", "--write-config", "--config-path", p];
-    let config = forced(home.path(), &path, &args);
+    let config = wrote(home.path(), &path, &args);
     assert!(config.backends.contains_key("one") && config.backends.contains_key("two"));
     let after = std::fs::read_to_string(&path).expect("read");
     assert!(after.contains("# keep me"), "{after}");
@@ -450,7 +455,7 @@ fn discover_write_with_force_rewrites() {
         "--config-path",
         p,
     ];
-    let config = forced(home.path(), &path, &args);
+    let config = wrote(home.path(), &path, &args);
     for name in ["a", "b", "one", "two"] {
         assert!(config.backends.contains_key(name), "{name} missing");
     }
