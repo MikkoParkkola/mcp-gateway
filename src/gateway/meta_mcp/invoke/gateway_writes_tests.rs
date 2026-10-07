@@ -339,3 +339,58 @@ async fn taking_since_a_mark_leaves_the_earlier_notes() {
     assert_eq!(dests(&taken), vec![path(&["_cost_warnings"])]);
     assert_eq!(dests(&left), vec![path(&["trace_id"])]);
 }
+
+/// `MIK-7993` r4 M1: the response-contract annotations the gateway writes,
+/// on both branches of the gate (no contract declared; a declared contract
+/// violated), are noted as its own; a backend member of the same name with
+/// other bytes is not.
+#[tokio::test]
+async fn the_contract_annotations_are_the_gateways() {
+    use std::sync::Arc;
+    let declared = crate::config::ToolContractConfig {
+        max_bytes: Some(1),
+        forbidden_patterns: Vec::new(),
+        action_mode: None,
+    };
+    for (tool, reason) in [("undeclared", "no_contract_declared"), ("declared", "")] {
+        let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::new(
+            crate::backend::BackendRegistry::new(),
+        ));
+        meta.set_response_contract(crate::config::ResponseContractConfig {
+            enabled: true,
+            action_mode: false,
+            fail_closed: true,
+            tools: [("declared".to_owned(), declared.clone())].into(),
+            ..Default::default()
+        });
+        scope(async {
+            let mut result = json!({"content": [{"type": "text", "text": "longer than one byte"}]});
+            meta.apply_response_contract_gate("alpha", tool, "t-1", &mut result)
+                .expect("observe mode annotates");
+            assert_eq!(
+                result["_contract_violation"], true,
+                "premise {tool}: {result}"
+            );
+            if !reason.is_empty() {
+                assert_eq!(
+                    result["_contract_reason"], reason,
+                    "premise {tool}: {result}"
+                );
+            }
+            let mut delivered = result.clone();
+            strip(&mut delivered, Layer::Value);
+            assert!(
+                delivered.get("_contract_violation").is_none(),
+                "{tool}: {delivered}"
+            );
+            assert!(
+                delivered.get("_contract_reason").is_none(),
+                "{tool}: {delivered}"
+            );
+            let mut backend = json!({"_contract_reason": "the backend's own"});
+            strip(&mut backend, Layer::Value);
+            assert_eq!(backend["_contract_reason"], "the backend's own", "{tool}");
+        })
+        .await;
+    }
+}
