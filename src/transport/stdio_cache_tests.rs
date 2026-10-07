@@ -342,6 +342,26 @@ fn a_backend_can_match_the_operator_spelling_for_spelling() {
 }
 
 #[test]
+fn a_backend_hyphen_spelling_names_the_same_setting() {
+    // npm folds every non-leading `_` after the prefix into `-`, so
+    // `npm_config_strict-ssl` is `strict-ssl` exactly as `npm_config_strict_ssl`
+    // is. Forwarding the operator's value beside it hands the child both, and
+    // npm keeps the one it reads last: on Unix `-` sorts before `_`, so the
+    // operator's `false` would silently turn off the backend's TLS check.
+    for configured in ["npm_config_strict-ssl", "NPM_CONFIG_STRICT-SSL"] {
+        let forwarded = forwarded_npm_config(
+            env_pairs(&[("npm_config_strict_ssl", "false")]),
+            &HashMap::from([(configured.to_string(), "true".to_string())]),
+        );
+        assert!(
+            forwarded.is_empty(),
+            "{configured:?} names npm's strict-ssl, so the operator's value must not be \
+             forwarded beside it: {forwarded:?}"
+        );
+    }
+}
+
+#[test]
 fn a_backend_naming_an_unforwarded_setting_changes_nothing() {
     // Suppression is limited to settings the gateway would otherwise forward.
     let backend = HashMap::from([
