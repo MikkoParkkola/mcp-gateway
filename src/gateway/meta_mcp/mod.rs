@@ -380,6 +380,9 @@ pub struct MetaMcp {
     pub(super) webhook_registry: RwLock<Option<Arc<parking_lot::RwLock<WebhookRegistry>>>>,
     pub(super) profile_registry: Arc<ProfileRegistry>,
     pub(super) session_profiles: Arc<SessionProfileStore>,
+    /// Where a call takes its session hold (MIK-7996); set by the wiring.
+    session_lifecycle:
+        std::sync::OnceLock<std::sync::Weak<crate::gateway::session_lifecycle::SessionLifecycle>>,
     pub(super) reload_context: RwLock<Option<Arc<ReloadContext>>>,
     /// End-user identity-propagation strategy (MIK-6704 / ADR-007). `Some` when
     /// at least one backend is configured for propagation; the dispatch path
@@ -651,6 +654,7 @@ impl MetaMcp {
             capability_budget_config: RwLock::new(CapabilityErrorBudgetConfig::default()),
             profile_registry: Arc::new(ProfileRegistry::default()),
             session_profiles: Arc::new(SessionProfileStore::new()),
+            session_lifecycle: std::sync::OnceLock::new(),
             reload_context: RwLock::new(None),
             identity_propagation: RwLock::new(None),
             backend_identity_propagation: RwLock::new(std::collections::HashMap::new()),
@@ -1656,6 +1660,8 @@ impl MetaMcp {
         era: crate::protocol::meta::Era,
         scope: InvokeScope<'_>,
     ) -> JsonRpcResponse {
+        // MIK-7996: the profile binding below is a session write.
+        let _session = self.hold_session(session_id);
         let client_version = extract_client_version(params);
         let negotiated_version = negotiate_version(client_version);
         // NFR.OBS.1. The session is served under this value from here on, and
@@ -2727,7 +2733,7 @@ mod session_cleanup_tests;
 
 #[cfg(test)]
 #[path = "session_inflight_tests.rs"]
-mod session_inflight_tests;
+pub(crate) mod session_inflight_tests;
 
 #[cfg(all(test, feature = "firewall"))]
 #[path = "dispatch_reads_tests.rs"]

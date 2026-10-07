@@ -162,9 +162,10 @@ These are recorded here, not fixed here. Each is routed through the 4.0 lane rul
   - Fixed: `MetaMcp::forget_session` (`gateway/meta_mcp/session_end.rs:24`) clears every store when
     a session ends, fired by an owned `DELETE /mcp` (`gateway/router/handlers.rs:339`) and by each
     reaper removal (`gateway/streaming.rs:170`); the reaper expires on last activity
-    (`gateway/streaming.rs:197`); an ended session's cost folds into the aggregate. A late write is
-    cleaned by a second pass 120 s after the end; a write later than that survives for the process
-    lifetime (bound on #2568, 4.0.1).
+    (`gateway/streaming.rs:197`); an ended session's cost folds into the aggregate. A call still
+    running at the end holds its session until its last write, and the last hold on an ended
+    session runs the end handlers again (MIK-7996, `gateway/session_lifecycle/session_hold.rs`), so
+    a late write never outlives its call. The pass 120 s after the end stays as a backstop.
   - Residual, outside G2: the cost bucket's per-call `records` vector still grows within one live
     session until that session ends.
 - **G3.** A security finding, routed privately to the release coordinator on 2026-09-30 and tracked
