@@ -12,8 +12,8 @@ use std::io::{self, IsTerminal};
 use std::path::Path;
 use std::process::ExitCode;
 
-#[cfg(feature = "config-export")]
 use super::config_write::CommentLoss;
+#[cfg(feature = "config-export")]
 use mcp_gateway::cli::{ConnectionMode, ExportTarget};
 #[cfg(test)]
 use mcp_gateway::config_persistence::{load_config_or_default, write_config};
