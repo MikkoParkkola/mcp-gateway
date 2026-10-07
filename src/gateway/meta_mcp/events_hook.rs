@@ -211,27 +211,24 @@ impl MetaMcp {
     }
 
     /// The catalogue as the events watch source sees it, read once
-    /// (MIK-8037). Empty and complete without a capability backend.
+    /// (MIK-8037): every REST-only capability with its read-only
+    /// classification (data, `MIK-7216.IDEM.1`) and whose credential a call
+    /// needs, every capability name read, whether the catalogue is whole, and
+    /// its generation. Empty and complete without a capability backend.
     pub(crate) fn watch_catalogue(&self) -> crate::events::watch_source::Catalogue {
-        let targets = self.watch_targets();
-        crate::events::watch_source::Catalogue {
-            present: targets.iter().map(|t| t.capability.clone()).collect(),
-            targets,
-            complete: true,
-            generation: 0,
-        }
-    }
-
-    /// Every REST-only capability as the events watch source sees it: its
-    /// read-only classification (data, MIK-7216.IDEM.1) and whose credential
-    /// a call needs. Empty without a capability backend.
-    pub(crate) fn watch_targets(&self) -> Vec<crate::events::watch_source::Target> {
-        use crate::events::watch_source::{CredentialUse, Target};
+        use crate::events::watch_source::{Catalogue, CredentialUse, Target};
         let Some(capabilities) = self.get_capabilities() else {
-            return Vec::new();
+            return Catalogue {
+                complete: true,
+                ..Catalogue::default()
+            };
         };
-        capabilities
-            .list_capabilities()
+        // Read first: once `true` it stays true, so it always covers the
+        // snapshot read after it.
+        let scanned = capabilities.initial_scan_complete();
+        let (catalogue, every_directory, generation) = capabilities.catalogue_snapshot_at();
+        let present = catalogue.iter().map(|c| c.name.clone()).collect();
+        let targets = catalogue
             .into_iter()
             .filter(crate::capability::served_over_rest)
             .map(|definition| Target {
@@ -247,7 +244,13 @@ impl MetaMcp {
                 backend: capabilities.name.clone(),
                 capability: definition.name,
             })
-            .collect()
+            .collect();
+        Catalogue {
+            targets,
+            present,
+            complete: scanned && every_directory,
+            generation,
+        }
     }
 }
 

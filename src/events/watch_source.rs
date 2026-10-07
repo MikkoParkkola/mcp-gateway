@@ -106,22 +106,17 @@ pub(crate) struct Catalogue {
 /// grant check and the enforced poll.
 #[async_trait::async_trait]
 pub(crate) trait WatchHost: Send + Sync {
+    /// The catalogue now, read once: its contents, completeness and
+    /// generation agree (MIK-8037).
+    fn catalogue(&self) -> Catalogue;
     /// Every REST capability now, read-only or not.
-    fn targets(&self) -> Vec<Target>;
-    /// The catalogue now, read once.
-    fn catalogue(&self) -> Catalogue {
-        let targets = self.targets();
-        Catalogue {
-            present: targets.iter().map(|t| t.capability.clone()).collect(),
-            targets,
-            complete: true,
-            generation: 0,
-        }
+    fn targets(&self) -> Vec<Target> {
+        self.catalogue().targets
     }
-    /// The catalogue generation now: it moves at every catalogue write.
-    fn catalogue_generation(&self) -> u64 {
-        0
-    }
+    /// The catalogue generation now: it moves at every catalogue write, so a
+    /// denial is trusted only when it has not moved since the read the
+    /// decision started from (MIK-8037).
+    fn catalogue_generation(&self) -> u64;
     /// Whether `holder` may invoke `target` now (the `tools/list` predicate).
     fn may_invoke(&self, holder: &Holder, target: &Target) -> bool;
     /// Call `target` as `holder` with every control a `tools/call` gets, and
@@ -134,6 +129,17 @@ pub(crate) trait WatchHost: Send + Sync {
         arguments: &Value,
         charge: Charge,
     ) -> Result<Value, PollFailed>;
+}
+
+/// The capability `name` watches, if it is a watch type.
+fn capability_of(name: &str) -> Option<&str> {
+    name.strip_prefix(PREFIX)?.strip_suffix(SUFFIX)
+}
+
+/// Whether `catalogue` could not read `name`'s capability: partial, and the
+/// capability not in it. Such an absence ends nothing (MIK-8037).
+fn unread(catalogue: &Catalogue, name: &str) -> bool {
+    !catalogue.complete && capability_of(name).is_none_or(|c| !catalogue.present.contains(c))
 }
 
 /// `watch.<capability>.changed` for `capability`.
@@ -363,7 +369,20 @@ impl EventSource for WatchSource {
         name: &str,
         arguments: &Value,
     ) -> Result<(), RpcError> {
-        let target = self.target(name).ok_or_else(RpcError::forbidden)?;
+        let catalogue = self.host.catalogue();
+        let Some(target) = catalogue
+            .targets
+            .iter()
+            .find(|t| t.read_only && event_name(&t.capability) == name)
+            .cloned()
+        else {
+            // Only a confirmed absence revokes; an unread one skips (MIK-8037).
+            return Err(if unread(&catalogue, name) {
+                RpcError::not_found()
+            } else {
+                RpcError::forbidden()
+            });
+        };
         if target.credential == CredentialUse::Account {
             return Err(RpcError {
                 code: -32014,
@@ -379,7 +398,14 @@ impl EventSource for WatchSource {
         // upgrade if many watch rows make fan-out measurable.
         let rows = Self::rows(&hub, principal, name, arguments);
         if rows.iter().any(|row| self.holder(row, &target).is_none()) {
-            return Err(RpcError::forbidden());
+            // A reload since the read may be the denial's cause: skip, keep.
+            return Err(
+                if self.host.catalogue_generation() == catalogue.generation {
+                    RpcError::forbidden()
+                } else {
+                    RpcError::not_found()
+                },
+            );
         }
         Ok(())
     }
@@ -572,15 +598,23 @@ impl Run {
                 && t.credential != CredentialUse::Account
                 && (t.credential == CredentialUse::Free) == (self.charge == Charge::Global)
         };
-        let found = self.host.targets().into_iter().find(watchable);
-        let target = if let Some(target) = found {
-            target
+        // A partial catalogue that could not read the capability ends
+        // nothing: the poll waits for the next complete one (MIK-8037).
+        let first = self.host.catalogue();
+        let found = first.targets.iter().find(|&t| watchable(t)).cloned();
+        let (target, generation) = if let Some(target) = found {
+            (target, first.generation)
+        } else if unread(&first, &self.name) {
+            return Step::Polled;
         } else {
             // Confirmed under the lock a subscribe commits under: a
             // capability watchable again by now keeps every subscription.
             let mut started = hub.lifecycle.lock().await;
-            if let Some(target) = self.host.targets().into_iter().find(watchable) {
-                target
+            let again = self.host.catalogue();
+            if let Some(target) = again.targets.iter().find(|&t| watchable(t)).cloned() {
+                (target, again.generation)
+            } else if unread(&again, &self.name) {
+                return Step::Polled;
             } else {
                 let (gone, owner) = (vec![self.name.clone()], Arc::clone(hub));
                 let _ = tokio::task::spawn_blocking(move || owner.withdraw(&gone)).await;
@@ -599,6 +633,7 @@ impl Run {
             return Step::Failed;
         };
         let mut chosen = None;
+        let mut denied = Vec::new();
         for row in rows {
             let passes = services
                 .admits_subscription(&row, Some(target.backend.as_str()))
@@ -619,8 +654,19 @@ impl Run {
                         chosen = Some(holder);
                     }
                 }
-                // Revoked before any call is made for it.
-                None => hub.revoke(&row).await,
+                None => denied.push(row),
+            }
+        }
+        if !denied.is_empty() {
+            // A reload since the read may be the denial's cause (the
+            // capability gone from the live catalogue): nothing is revoked
+            // or called, and the next poll decides afresh (MIK-8037).
+            if self.host.catalogue_generation() != generation {
+                return Step::Polled;
+            }
+            // Revoked before any call is made for them.
+            for row in &denied {
+                hub.revoke(row).await;
             }
         }
         let Some(holder) = chosen else {

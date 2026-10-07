@@ -168,6 +168,8 @@ pub struct CapabilityBackend {
     /// [`validate_oauth_isolation`] inside `call_tool_with_context`.
     multi_user: std::sync::atomic::AtomicBool,
     initial_scan: std::sync::atomic::AtomicU8,
+    /// Moves at every catalogue write, under the write lock (MIK-8037).
+    catalogue_generation: std::sync::atomic::AtomicU64,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -194,6 +196,7 @@ impl CapabilityBackend {
             rug_pull_state: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
             initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
+            catalogue_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -242,6 +245,7 @@ impl CapabilityBackend {
             // removal under the old epoch.
             self.executor.bump_policy_epoch();
             self.executor.bump_mcp_generation(name);
+            self.bump_catalogue_generation();
             true
         } else {
             false
@@ -427,6 +431,7 @@ impl CapabilityBackend {
             // With the swap, under the same lock: `catalogue_snapshot` never
             // sees one without the other.
             self.set_catalogue_partial(partial);
+            self.bump_catalogue_generation();
             self.executor.bump_policy_epoch();
             self.executor.stop_unloaded_mcp(&|name| {
                 !revoked.contains(name) && caps.index.contains_key(name)
@@ -685,6 +690,7 @@ impl CapabilityBackend {
         let mut caps = self.capabilities.write();
         let replaced = caps.contains(&name);
         caps.upsert(capability);
+        self.bump_catalogue_generation();
         if replaced {
             // A replacement is a live-policy change (MIK-7814): children
             // started under the old definition stop, and its cached answers

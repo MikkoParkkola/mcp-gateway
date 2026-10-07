@@ -92,18 +92,33 @@ impl CapabilityBackend {
     }
 
     /// The catalogue generation: it moves at every catalogue write
-    /// (MIK-8037).
+    /// (MIK-8037), so an equal value read twice means no write between.
     pub(crate) fn catalogue_generation(&self) -> u64 {
-        0
+        self.catalogue_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Called under the capabilities write lock, with the write.
+    pub(super) fn bump_catalogue_generation(&self) {
+        self.catalogue_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 
     /// The capabilities and whether every directory loaded, read under one
     /// lock, so a reload cannot change one without the other (MIK-8028).
     pub(crate) fn catalogue_snapshot(&self) -> (Vec<super::CapabilityDefinition>, bool) {
+        let (catalogue, complete, _) = self.catalogue_snapshot_at();
+        (catalogue, complete)
+    }
+
+    /// [`Self::catalogue_snapshot`] and the generation it was read at, all
+    /// under the one lock (MIK-8037).
+    pub(crate) fn catalogue_snapshot_at(&self) -> (Vec<super::CapabilityDefinition>, bool, u64) {
         let caps = self.capabilities.read();
         (
             caps.entries.clone(),
             self.initial_scan_loaded_every_directory(),
+            self.catalogue_generation(),
         )
     }
 }
