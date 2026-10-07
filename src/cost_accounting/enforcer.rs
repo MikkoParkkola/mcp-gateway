@@ -104,8 +104,8 @@ thread_local! {
     /// before the counter is cleared: a test lands an add there (MIK-7880).
     static AFTER_DAY_PUBLISH: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
-    /// Runs once on this thread inside a settle, right after the spend is
-    /// added: a test starts a competing check there (MIK-7903).
+    /// Runs once on this thread inside a settle, under the ledger lock, right
+    /// after the spend is added: it may start a check but never wait on one.
     static AFTER_SPEND_ADDED: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
     /// Runs once on this thread when a settle has let the ledger go, before it
