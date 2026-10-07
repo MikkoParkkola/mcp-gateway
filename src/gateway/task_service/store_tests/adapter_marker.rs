@@ -409,12 +409,25 @@ async fn marker_05_the_loader_accepts_supported_versions_and_fails_closed_on_oth
         let before = files(&path);
 
         let reopened = TaskStore::open(&path, StoreLimits::default()).await;
-        if version == "below" || version == "unsupported" {
+        // A newer build's row is a downgrade, not damage: it still refuses.
+        if version == "unsupported" {
             assert!(
                 matches!(reopened, Err(StoreError::CorruptRecord)),
-                "{version} is outside the supported range and must fail closed"
+                "{version} is newer than this build and must fail closed"
             );
             assert_eq!(files(&path), before, "{version} must preserve every file");
+            continue;
+        }
+        // Below the range is damage (MIK-8023): skipped where it lies, its key
+        // kept, its task not served.
+        if version == "below" {
+            let reopened = reopened.expect("a damaged row no longer stops the store");
+            assert!(reopened.get(binding.principal_digest(), task.id()).is_err());
+            let bindings = reopened.restored_bindings();
+            assert_eq!(bindings.len(), 1, "{version} keeps its key");
+            assert_eq!(bindings[0].0.identity, binding.identity());
+            assert_eq!(files(&path), before, "{version} must preserve every file");
+            reopened.close().await.unwrap();
             continue;
         }
 
