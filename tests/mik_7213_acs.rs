@@ -623,9 +623,18 @@ fn ac_cache_3_the_deciding_function_names_the_table() {
 
 #[test]
 fn ac_cache_3_the_wire_field_is_filled_from_the_table() {
-    let text = source("src/gateway/router/handlers/modern_response.rs");
+    // The pair has one writer, which the shaper calls with each method's own
+    // name: the scope is the table's answer for that method at both sites.
+    let writer = source("src/protocol/cacheable.rs");
+    let body = writer
+        .split("pub(crate) fn write_cache_hints(")
+        .nth(1)
+        .expect("the shared writer exists");
+    let body = body.split("\n}\n").next().unwrap_or_default();
+    let shaper = source("src/gateway/router/handlers/modern_response.rs");
     assert!(
-        text.contains("scope_for_method(method)"),
+        body.contains("scope_for_method(method)")
+            && shaper.contains("write_cache_hints(object, method, ttl)"),
         "the `cacheScope` a client receives must come from the table, not from \
          one method's answer applied to five"
     );
