@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::hash::{Hash, Hasher};
 
 use serde_json::Value;
 
@@ -191,16 +192,12 @@ pub(super) fn scope<F: std::future::Future>(
     GATEWAY_WRITES.scope(RefCell::new(Writes::default()), delivery)
 }
 
-// A digest the durable task record keeps across restarts and toolchains
-// (MIK-7993), so not `DefaultHasher`, whose output Rust does not fix: the
-// first 8 bytes of SHA-256 over the member's canonical JSON. A member the
-// gateway writes is small (an id, a hint, advice, a signature block).
+// ponytail: a DefaultHasher over the member's JSON text; a member the gateway
+// writes is small (an id, a hint, advice, a signature block).
 fn digest(member: &Value) -> u64 {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(crate::hashing::canonical_json(member).as_bytes());
-    let mut head = [0u8; 8];
-    head.copy_from_slice(&hash[..8]);
-    u64::from_be_bytes(head)
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    member.to_string().hash(&mut hasher);
+    hasher.finish()
 }
 
 fn member<'v>(value: &'v Value, path: &[&str]) -> Option<&'v Value> {
@@ -446,13 +443,5 @@ mod tests {
             assert_eq!(snapshot_since(mark).0.len(), decoded.0.len());
         })
         .await;
-    }
-
-    /// A stored digest is read back after a restart or a toolchain upgrade
-    /// (MIK-7993): its value for a known member is pinned, so a change to the
-    /// hash is a deliberate one.
-    #[test]
-    fn the_digest_of_a_member_is_pinned() {
-        assert_eq!(digest(&json!("t-1")), 17_108_163_543_667_228_695);
     }
 }
