@@ -546,6 +546,11 @@ def test_an_atx_title_keeps_the_line_above_out():
     assert run(text, "--release", "--tag", "v4.0.0") == 0
 
 
+def test_a_version_inside_build_metadata_is_not_a_range_end():
+    for line in ("- Seen in 4.0.0+build-4.0.1.", "- Seen in 4.0.0+build-v5.1."):
+        assert run(notes(f"\n{line}\n"), "--check") == 0, line
+
+
 def test_a_hyphen_range_to_a_later_release_fails_the_check():
     assert run(notes("\n- Seen in 4.0.0-4.0.1.\n"), "--check") == 1
 
