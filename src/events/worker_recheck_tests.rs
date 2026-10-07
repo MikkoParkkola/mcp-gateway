@@ -232,7 +232,7 @@ async fn an_attempt_waits_on_a_silent_catalogue_once() {
     );
 }
 
-/// MIK-7922: with the tenant-read guard on, admit_delivery writes its
+/// MIK-7922: with the tenant-read guard on, `admit_delivery` writes its
 /// `tenant_read` record before the second verdict; a source that refuses after
 /// that record gets no POST, the attempt ends `access_revoked`, and the dropped
 /// frame releases its read reservation.
@@ -343,7 +343,7 @@ async fn the_lookup_budget_is_per_attempt() {
 }
 
 /// Admits until the attempt's `tenant_read` record is in the audit log, then
-/// refuses: a check made before admit_delivery wrote that record admits, so a
+/// refuses: a check made before `admit_delivery` wrote that record admits, so a
 /// second verdict moved ahead of it would send (MIK-7922 TEST.3).
 struct AfterTenantRecord {
     log: std::path::PathBuf,

@@ -307,7 +307,11 @@ impl EventsHub {
         // that signs, so only sync steps sit between it and the send.
         match self.source_verdict(sub).await {
             // Access is read again after the verdict's own wait (MIK-7907):
-            // a grant lost meanwhile is refused like one lost before.
+            // a grant lost meanwhile is refused like one lost before. It must
+            // not yield: a reload landing inside it would follow the verdict
+            // unseen. Its one await, `TokenStore::live_jti`, completes at
+            // once in the only store there is (`InMemoryTokenStore`); a store
+            // that waits needs the verdict read again after this check.
             Verdict::Admits if !services.admits_subscription(sub, grant(record)).await => {
                 services.audit_outcome(&ended("access_revoked")).await;
                 self.revoke(sub).await;
