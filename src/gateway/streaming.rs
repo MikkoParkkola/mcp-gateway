@@ -346,6 +346,11 @@ impl NotificationMultiplexer {
     /// run while the other is wedged, and the divergence is invisible —
     /// nothing errors when a callback is simply never called.
     pub fn spawn_reaper_on(self: &Arc<Self>, lifecycle: Arc<SessionLifecycle>) {
+        // The one place the two meet, so every lifecycle that can end a
+        // session can also tell a call whether its session still exists
+        // (MIK-7996). A dropped multiplexer is a shutdown: every id is live.
+        let probe = Arc::downgrade(self);
+        lifecycle.set_liveness(move |id| probe.upgrade().is_none_or(|mux| mux.has_session(id)));
         let weak = Arc::downgrade(self);
         let ttl = self.config.session_ttl;
         let interval = self.config.session_reaper_interval;
