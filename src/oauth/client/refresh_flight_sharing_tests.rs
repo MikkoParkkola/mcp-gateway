@@ -67,7 +67,16 @@ async fn a_refresh_waits_for_another_process_holding_the_credential() {
         let client = Arc::clone(&client);
         async move { headless(&client).await }
     });
-    server.arrivals(1, Duration::from_secs(1)).await;
+    // Its first try failed (the test's own lease is the first attempt): it
+    // is waiting on the lock, and cannot have sent.
+    let lock_path = path.with_extension("refresh.lock");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while crate::fs_lock::lock_attempts(&lock_path) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the refresh reached the lock");
     assert_eq!(server.requests(), 0, "sent while another process held it");
     let rotated = token("a2", Some("r2"), false);
     client.storage.save(&key, RESOURCE, &rotated).unwrap();

@@ -251,7 +251,7 @@ impl OAuthClient {
     /// record, or one without a refresh token (spent, or never issued), needs a
     /// login, and an in-memory copy is never a fallback.
     pub(super) async fn refresh_token(&self) -> Result<String> {
-        use super::refresh_flight::{Exchange, Flight, Outcome, fingerprint_hex, spend};
+        use super::refresh_flight::{Exchange, Flight, Outcome, fingerprint_hex, retire_unsettled};
         let auth_meta = self
             .auth_metadata
             .as_ref()
@@ -283,26 +283,8 @@ impl OAuthClient {
         let mut state = self.storage.load_refresh_state(&key, &self.resource_url);
         let marker = fingerprint_hex(&sent);
         if state.rotates && state.in_flight.as_deref() == Some(marker.as_str()) {
-            // An exchange with this token never settled (the process stopped
-            // mid-exchange) on a server that rotates: it may be consumed. The
-            // marker stays unless the token was retired from storage, so a
-            // later start retires it again rather than sending it.
-            let retired = spend(
-                &flight,
-                &self.storage,
-                (&key, &self.resource_url),
-                &self.backend_name,
-                &sent,
-            );
-            if retired {
-                state.in_flight = None;
-                if let Err(error) =
-                    self.storage
-                        .save_refresh_state(&key, &self.resource_url, &state)
-                {
-                    warn!(backend = %self.backend_name, %error, "Could not settle the refresh state");
-                }
-            }
+            let at = (key.as_str(), self.resource_url.as_str());
+            retire_unsettled(&flight, &self.storage, at, &self.backend_name, &sent, state);
             return Err(required());
         }
         self.reload_registered_client_id(&key);

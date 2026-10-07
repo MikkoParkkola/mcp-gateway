@@ -73,15 +73,26 @@ impl Flight {
 
 /// Hold the credential at `token_path` against other gateway processes that
 /// share the storage directory, as [`Flight::lock`] holds it within this one:
-/// an `flock` on a sidecar, released by the OS if the process dies. Taken
-/// after the in-process lock, so one waiter per process blocks here.
+/// a lock on a sidecar file, released by the OS if the process dies. Taken
+/// after the in-process lock, so one waiter per process polls here. Polled,
+/// not blocked on: a cancelled caller leaves no thread waiting behind it.
 pub(super) async fn hold_across_processes(token_path: &Path) -> crate::Result<ExclusiveFileLock> {
     let lock_path = token_path.with_extension("refresh.lock");
-    tokio::task::spawn_blocking(move || ExclusiveFileLock::acquire(&lock_path))
-        .await
-        .map_err(|e| Error::OAuth(format!("The refresh lock task failed: {e}")))?
-        .map_err(|e| Error::OAuth(format!("Could not take the refresh lock: {e}")))
+    loop {
+        match ExclusiveFileLock::try_lease(&lock_path) {
+            Ok(Some(lock)) => return Ok(lock),
+            Ok(None) => tokio::time::sleep(LOCK_POLL).await,
+            Err(e) => {
+                return Err(Error::OAuth(format!(
+                    "Could not take the refresh lock: {e}"
+                )));
+            }
+        }
+    }
 }
+
+/// How often a credential held by another process is tried again.
+const LOCK_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// SHA-256 of a refresh token: what the spent set and the persisted in-flight
 /// marker hold, so neither keeps the secret itself.
@@ -321,6 +332,26 @@ pub(super) fn spend(
 
 /// How long a redirect target's name may take to resolve.
 const REDIRECT_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// An exchange with `sent` never settled (the process stopped mid-exchange)
+/// on a server that rotates: it may be consumed, so it is spent. The marker in
+/// `state` stays unless storage no longer holds `sent`, so a later start
+/// retires it again rather than sending it.
+pub(super) fn retire_unsettled(
+    flight: &Flight,
+    storage: &TokenStorage,
+    at: (&str, &str),
+    backend: &str,
+    sent: &str,
+    mut state: RefreshState,
+) {
+    if spend(flight, storage, at, backend, sent) {
+        state.in_flight = None;
+        if let Err(error) = storage.save_refresh_state(at.0, at.1, &state) {
+            warn!(backend = %backend, %error, "Could not settle the refresh state");
+        }
+    }
+}
 
 /// Why `destination` refuses a redirect to `target`, if it does: a literal
 /// through [`hop`], a name through the pinning resolver a followed hop would
