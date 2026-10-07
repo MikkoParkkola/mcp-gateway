@@ -483,3 +483,38 @@ async fn a_short_field_step_keeps_its_receipt_through_its_run() {
     assert!(relayed("bob"), "control: bob holds no copy of the row");
     assert!(!relayed("alice"), "the row was delivered unchanged");
 }
+
+/// MIK-7992: a playbook's output mapping delivers one member of a step whose
+/// other members the backend padded. Sorted, the delivered member sits in the
+/// middle of the step's leaves, past the receipt's head budget, and the caller
+/// still got it: it stays receipted.
+#[tokio::test]
+async fn a_mapped_member_past_the_padding_stays_receipted() {
+    let (meta, firewall) = relay_meta();
+    let step = json!({"a": filler("pad", 600), "body": PROSE, "z": filler("tail", 600)});
+    let answer = plan_answer(&json!({"summary": PROSE}));
+    let ((), staged) = meta
+        .collecting_staged(async {
+            plan_step(async {
+                meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), &step);
+            })
+            .await;
+            meta.rebuild_receipt_from_final(
+                Some(&answer),
+                GatewayStamps::Legacy,
+                AnswerShape::Literal,
+            );
+        })
+        .await;
+    staged.commit(true);
+    carol_holds(&firewall, "a", PROSE);
+
+    assert!(
+        refused(&firewall, "bob", PROSE),
+        "control: bob holds no copy"
+    );
+    assert!(
+        !refused(&firewall, "alice", PROSE),
+        "the padding pushed the mapped member out of the step's receipt"
+    );
+}
