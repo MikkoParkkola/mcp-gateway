@@ -436,9 +436,10 @@ fn split_copy(words: usize) -> (String, Vec<String>) {
     (flat, pieces)
 }
 
-/// `MIK-7773.SPLIT.1`: a copy delivered split mid-word over short fields
-/// records the flat text's fingerprints too, as egress reads the pieces run
-/// together, so its holder forwarding them is excused by its own receipt.
+/// `RELAY-SPLIT-FP.1` (MIK-7773): a copy delivered split mid-word over
+/// short fields records the flat text's fingerprints too, as egress reads
+/// the pieces run together, so its holder forwarding them is excused by its
+/// own receipt.
 #[test]
 fn a_split_delivery_records_the_flat_copys_fingerprints() {
     use std::collections::HashSet;
@@ -462,8 +463,9 @@ fn a_split_delivery_records_the_flat_copys_fingerprints() {
     assert!(wanted.iter().all(|fp| recorded.contains(fp)));
 }
 
-/// `MIK-7773.SPLIT.2`: a split copy near the record cap keeps both forms:
-/// none of its fingerprints is cut by the per-delivery bound.
+/// `RELAY-SPLIT-FP.1` (MIK-7773), near the cap: a split copy near the
+/// record cap keeps both forms, none of its fingerprints cut by the
+/// per-delivery bound.
 #[test]
 fn a_split_copy_near_the_cap_keeps_both_forms() {
     use std::time::Instant;
