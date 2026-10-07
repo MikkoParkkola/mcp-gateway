@@ -263,6 +263,32 @@ def test_a_fenced_sample_never_ends_the_section():
         assert run(tilde, "--check") == 1, sample
 
 
+LATE = "\n\n## Known issues\n\n- Fixed in 4.0.1.\n"
+
+
+# Each row puts something before the section that a fence or HTML block
+# reading could mistake for an opener: the section must still be found.
+def test_an_inline_triple_backtick_span_does_not_hide_the_section():
+    assert run("```code``` is an inline span." + LATE, "--check") == 1
+
+
+def test_a_nested_list_fence_does_not_hide_the_section():
+    assert run("- ~~~\n  sample\n  ~~~" + LATE, "--check") == 1
+
+
+def test_a_wrapped_setext_known_issues_title_is_the_section():
+    assert run("Known\nissues\n---\n\n- Fixed in 4.0.1.\n", "--check") == 1
+
+
+def test_a_title_in_a_pre_block_does_not_end_the_section():
+    text = "## Known issues\n\n<pre>\n\nTitle\n---\n</pre>\n\n- Fixed in 4.0.1.\n"
+    assert run(text, "--check") == 1
+
+
+def test_a_reference_definition_over_dashes_does_not_end_the_section():
+    assert run(over_dashes("- One.\n\n[details]: /url"), "--check") == 1
+
+
 def test_every_tag_publish_path_runs_the_release_gate():
     # ci.yml's container publish and release.yml both fire on a v* tag; each
     # must refuse a non-empty section before it publishes.
