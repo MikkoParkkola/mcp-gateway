@@ -372,6 +372,15 @@ def test_any_spelling_that_renders_known_issues_is_the_section():
         assert run(head, "--release", "--tag", "v4.0.0") == 0, head
 
 
+def test_an_escaped_or_encoded_later_release_fails_the_check():
+    for line in ("- Fixed in 4\\.0\\.1.\n", "- Fixed in 4.0.&#49;.\n", "- Fixed in 4.0.*1*.\n"):
+        assert run(notes("\n" + line), "--check") == 1, line
+
+
+def test_an_empty_wrapped_setext_title_passes_at_a_tag():
+    assert run("Known\nissues\n---\n", "--release", "--tag", "v4.0.0") == 0
+
+
 def test_a_later_release_in_the_title_itself_fails_the_check():
     for head in ("## Known issues [4.0.1][next]\n", "## Known issues &lt;fixed in 4.0.1&gt;\n"):
         assert run(head, "--check") == 1, head
