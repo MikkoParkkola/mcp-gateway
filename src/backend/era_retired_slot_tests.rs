@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use super::era_stale_probe_tests::{Answer, DISCOVER, Handles, Peer, WAIT};
+use super::era_stale_probe_tests::{Answer, DISCOVER, Handles, Peer, WAIT, run};
 use super::pool::PooledEntry;
 use super::slot_eviction_tests::{per_user_backend, slot};
 use super::*;
@@ -151,9 +151,21 @@ async fn the_reaper_leaves_busy_and_recent_slots_serving() {
 
 /// MIK-7643: a contradiction found its slot, then the revocation removed that
 /// slot before the era was judged. The discard is refused: a removed slot's
-/// answer must not erase the backend's verdict either.
-#[tokio::test]
-async fn a_contradiction_from_a_slot_revoked_before_the_discard_keeps_the_era() {
+/// answer must not erase the backend's verdict either, nor be reported as a trigger.
+#[test]
+fn a_contradiction_from_a_slot_revoked_before_the_discard_keeps_the_era() {
+    let records = run(a_contradiction_from_a_revoked_slot());
+    let triggers: Vec<_> = records
+        .iter()
+        .filter(|record| record["fields"]["reason"] == "trigger")
+        .collect();
+    assert!(
+        triggers.is_empty(),
+        "a refused discard reports no era trigger and starts no re-probe: {triggers:?}"
+    );
+}
+
+async fn a_contradiction_from_a_revoked_slot() {
     use crate::test_pause::within;
 
     let backend = per_user_backend("era-retired-discard");

@@ -158,7 +158,7 @@ async fn contradicted_and_probing(
     transport
 }
 
-fn run(body: impl std::future::Future<Output = ()>) -> Vec<Value> {
+pub(super) fn run(body: impl std::future::Future<Output = ()>) -> Vec<Value> {
     crate::test_log_capture::records(|| {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
