@@ -323,6 +323,11 @@ pub(super) fn spawn_rewatch_task(
 #[path = "watch_chain_tests.rs"]
 mod tests;
 
+// Linux-only (W-L9): the real-watcher rows run on inotify.
+#[cfg(all(test, target_os = "linux"))]
+#[path = "watch_chain_filter_tests.rs"]
+mod filter_tests;
+
 #[cfg(test)]
 mod plain_file_tests {
     /// A regular file ends the chain on every platform (#1142: on Windows the

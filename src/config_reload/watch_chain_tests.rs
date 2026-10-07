@@ -205,7 +205,7 @@ fn t14_the_named_config_path_keeps_its_directory_link() {
 
 // Linux-only (W-L9): the real-watcher rows run on inotify (see the module header).
 #[cfg(target_os = "linux")]
-mod real_watcher {
+pub(crate) mod real_watcher {
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
@@ -214,14 +214,14 @@ mod real_watcher {
     use super::*;
     use crate::config_reload::{ConfigWatcher, ReloadTrigger};
 
-    struct Harness {
-        chain: Arc<ChainWatch>,
-        events: tokio::sync::mpsc::Receiver<ReloadTrigger>,
-        shutdown: tokio::sync::broadcast::Sender<()>,
+    pub(crate) struct Harness {
+        pub(crate) chain: Arc<ChainWatch>,
+        pub(crate) events: tokio::sync::mpsc::Receiver<ReloadTrigger>,
+        pub(crate) shutdown: tokio::sync::broadcast::Sender<()>,
         task: tokio::task::JoinHandle<()>,
     }
 
-    fn start(named: &Path) -> Harness {
+    pub(crate) fn start(named: &Path) -> Harness {
         start_retrying_every(named, super::super::CHAIN_RETRY)
     }
 
@@ -263,14 +263,14 @@ mod real_watcher {
     impl Harness {
         /// Swallow triggers until a full second passes without one. A closed
         /// channel (every sender dropped, as after shutdown) is idle too.
-        async fn drain_idle(&mut self) {
+        pub(crate) async fn drain_idle(&mut self) {
             while let Ok(Some(_)) =
                 tokio::time::timeout(Duration::from_secs(1), self.events.recv()).await
             {}
         }
 
         /// At least one trigger within `secs`. A closed channel is none.
-        async fn triggered_within(&mut self, secs: u64) -> bool {
+        pub(crate) async fn triggered_within(&mut self, secs: u64) -> bool {
             matches!(
                 tokio::time::timeout(Duration::from_secs(secs), self.events.recv()).await,
                 Ok(Some(_))
@@ -278,12 +278,12 @@ mod real_watcher {
         }
 
         /// Wakes the rewatch task has finished handling.
-        fn wakes(&self) -> usize {
+        pub(crate) fn wakes(&self) -> usize {
             self.chain.wakes_handled.load(Ordering::SeqCst)
         }
 
         /// Wait until the task has handled more than `seen` wakes.
-        async fn wait_wakes_above(&self, seen: usize) {
+        pub(crate) async fn wait_wakes_above(&self, seen: usize) {
             tokio::time::timeout(Duration::from_secs(10), async {
                 while self.wakes() <= seen {
                     tokio::time::sleep(Duration::from_millis(20)).await;
