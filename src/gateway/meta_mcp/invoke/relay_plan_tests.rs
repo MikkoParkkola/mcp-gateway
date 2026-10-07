@@ -487,54 +487,59 @@ async fn a_short_field_step_keeps_its_receipt_through_its_run() {
 /// MIK-7994: a plan step's receipt is staged once and only kept later,
 /// never rebuilt, so the continuation the gateway wrote into the step
 /// must not take the cap's budget there: the end of the backend's prompt the
-/// plan delivers stays receipted.
+/// plan delivers stays receipted, whether the receipt is kept to the plan's
+/// answer or recorded as staged (`commit_with`, capped where it is recorded).
 #[tokio::test]
 async fn a_plan_steps_continuation_never_takes_its_receipts_budget() {
     use crate::gateway::meta_mcp::invoke::gateway_writes::{Layer, note};
-    let (meta, firewall) = relay_meta();
-    let prompt = crate::gateway::meta_mcp::invoke::receipt_test_support::distinct_prose(4800);
-    let step = json!({
-        "resultType": "input_required",
-        "inputRequests": { "confirm": {
-            "method": "elicitation/create",
-            "params": { "message": prompt, "requestedSchema": { "type": "object" } }
-        }},
-        "requestState": "e".repeat(4000)
-    });
-    let answer = plan_answer(&json!({"a": step}));
-    let ((), staged) = meta
-        .collecting_staged(async {
-            plan_step(async {
-                note(Layer::Value, &["requestState"], &step);
-                meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), &step);
+    for kept in [true, false] {
+        let (meta, firewall) = relay_meta();
+        let prompt = crate::gateway::meta_mcp::invoke::receipt_test_support::distinct_prose(4800);
+        let step = json!({
+            "resultType": "input_required",
+            "inputRequests": { "confirm": {
+                "method": "elicitation/create",
+                "params": { "message": prompt, "requestedSchema": { "type": "object" } }
+            }},
+            "requestState": "e".repeat(4000)
+        });
+        let answer = plan_answer(&json!({"a": step}));
+        let ((), staged) = meta
+            .collecting_staged(async {
+                plan_step(async {
+                    note(Layer::Value, &["requestState"], &step);
+                    meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), &step);
+                })
+                .await;
+                if kept {
+                    meta.rebuild_receipt_from_final(
+                        Some(&answer),
+                        GatewayStamps::Legacy,
+                        AnswerShape::Literal,
+                    );
+                }
             })
             .await;
-            meta.rebuild_receipt_from_final(
-                Some(&answer),
-                GatewayStamps::Legacy,
-                AnswerShape::Literal,
-            );
-        })
-        .await;
-    staged.commit(true);
-    carol_holds(&firewall, "a", &prompt);
+        staged.commit(true);
+        carol_holds(&firewall, "a", &prompt);
 
-    let head: String = prompt.chars().take(400).collect();
-    let tail: String = prompt.chars().skip(prompt.chars().count() - 400).collect();
-    for text in [&head, &tail] {
+        let head: String = prompt.chars().take(400).collect();
+        let tail: String = prompt.chars().skip(prompt.chars().count() - 400).collect();
+        for text in [&head, &tail] {
+            assert!(
+                refused(&firewall, "bob", text),
+                "control: bob holds no copy, so carol's makes his relay a match"
+            );
+        }
         assert!(
-            refused(&firewall, "bob", text),
-            "control: bob holds no copy, so carol's makes his relay a match"
+            !refused(&firewall, "alice", &head),
+            "control: alice holds the prompt's head (kept = {kept})"
+        );
+        assert!(
+            !refused(&firewall, "alice", &tail),
+            "the continuation pushed the prompt's tail out (kept = {kept})"
         );
     }
-    assert!(
-        !refused(&firewall, "alice", &head),
-        "control: alice holds the prompt's head"
-    );
-    assert!(
-        !refused(&firewall, "alice", &tail),
-        "the continuation pushed the prompt's tail out of the step's receipt"
-    );
 }
 
 /// MIK-7992: a playbook's output mapping delivers one member of a step whose
