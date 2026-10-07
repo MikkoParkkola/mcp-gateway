@@ -41,17 +41,14 @@ async fn surfaced_state_with(
     mock: &Arc<MockBackend>,
     kernel: Option<crate::context_integrity::ContextIntegrityKernel>,
 ) -> (Arc<AppState>, tempfile::TempDir) {
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec![format!("{BACKEND}:{TOOL}")],
-                ..CollusionConfig::default()
-            },
-            ..FirewallConfig::default()
+    let config = FirewallConfig {
+        collusion: CollusionConfig {
+            action: CollusionAction::Block,
+            sources: vec![format!("{BACKEND}:{TOOL}")],
+            ..CollusionConfig::default()
         },
-        None,
-    ));
+        ..FirewallConfig::default()
+    };
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,
@@ -60,7 +57,11 @@ async fn surfaced_state_with(
                 server: BACKEND.to_string(),
                 tool: TOOL.to_string(),
             }]);
-            meta.set_firewall(Some(firewall));
+            // As the gateway's own: its minted continuations are not read as
+            // credentials (#2210, MIK-8092).
+            let firewall =
+                Firewall::from_config(config, None).with_continuations(meta.continuation());
+            meta.set_firewall(Some(Arc::new(firewall)));
             match kernel {
                 Some(kernel) => meta.with_context_integrity_kernel(kernel),
                 None => meta,
