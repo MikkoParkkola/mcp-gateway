@@ -330,4 +330,14 @@ mod tests {
         assert!((t.total_cost_usd - 0.04).abs() < 1e-9);
         assert!((t.avg_cost_usd - 0.02).abs() < 1e-9);
     }
+
+    #[test]
+    fn a_file_saved_before_the_overflow_fields_still_loads() {
+        // MIK-8015: the overflow totals default to zero for an older file.
+        let old = r#"{"saved_at":1700000000,"tool_totals":{},"key_totals":{"k":1.5}}"#;
+        let costs: PersistedCosts = serde_json::from_str(old).expect("older file loads");
+        assert!((costs.key_totals["k"] - 1.5).abs() < 1e-9);
+        assert!(costs.tool_overflow_usd.abs() < 1e-12);
+        assert!(costs.key_overflow_usd.abs() < 1e-12);
+    }
 }

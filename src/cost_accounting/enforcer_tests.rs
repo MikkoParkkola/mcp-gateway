@@ -209,9 +209,8 @@ fn spend_past_the_cap_counts_in_other_and_a_budgeted_tool_still_blocks() {
     // THEN: the overflow is all in its own total, and the budgeted tool kept its own
     // entry, so its check still blocks
     let snap = e.snapshot();
-    // The cap counts entries: one per budgeted name plus the unbudgeted rows.
-    // "paid" had none yet, so the invented names filled its place as well.
-    let own = 1 + MAX_UNBUDGETED_ROWS;
+    // Exactly the cap of unbudgeted names got their own entries.
+    let own = MAX_UNBUDGETED_ROWS;
     #[allow(clippy::cast_precision_loss)]
     let overflow = (300 - own) as f64 * 0.01;
     let other = snap.tool_overflow_usd;
@@ -275,4 +274,32 @@ fn a_restore_applies_the_cap_and_keeps_the_saved_overflow() {
     let past_cap = (400 - MAX_UNBUDGETED_ROWS) as f64 * 0.01;
     assert!((snap.tool_overflow_usd - (0.5 + past_cap)).abs() < 1e-9);
     assert!((snap.global_daily_usd - (4.0 + 0.5)).abs() < 1e-9);
+}
+
+#[test]
+fn budgeted_names_arriving_after_the_cap_do_not_widen_it() {
+    // GIVEN: three budgeted keys that spend only after the cap is full
+    let budgets = [("b1", 9.0), ("b2", 9.0), ("b3", 9.0)];
+    let e = enforcer_with(true, None, &[], &budgets, &[]);
+    for i in 0..300 {
+        e.record_spend("t", Some(&format!("invented-{i}")), 0.01);
+    }
+    for (name, _) in budgets {
+        e.record_spend("t", Some(name), 0.01);
+    }
+    // THEN: the key map holds the cap plus the budgeted names, and the
+    // overflow holds the rest of the invented keys
+    assert_eq!(e.key_daily.len(), MAX_UNBUDGETED_ROWS + budgets.len());
+    #[allow(clippy::cast_precision_loss)]
+    let overflow = (300 - MAX_UNBUDGETED_ROWS) as f64 * 0.01;
+    assert!((e.snapshot().key_overflow_usd - overflow).abs() < 1e-9);
+}
+
+#[test]
+fn an_over_long_unbudgeted_name_counts_as_overflow() {
+    let e = enforcer_with(true, None, &[], &[], &[]);
+    let long = "x".repeat(super::super::tally::MAX_ROW_NAME_BYTES + 1);
+    e.record_spend(&long, None, 0.01);
+    assert!(e.tool_daily.is_empty());
+    assert!((e.snapshot().tool_overflow_usd - 0.01).abs() < 1e-9);
 }

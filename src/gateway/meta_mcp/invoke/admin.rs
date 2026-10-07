@@ -176,6 +176,9 @@ impl MetaMcp {
                 "tool_daily_spend": snap.tool_daily,
                 "tool_daily_limits": snap.tool_limits,
                 "key_daily_spend": snap.key_daily,
+                // Spend of unbudgeted names past the day maps' cap (MIK-8015).
+                "tool_overflow_spend_usd": snap.tool_overflow_usd,
+                "key_overflow_spend_usd": snap.key_overflow_usd,
             });
             if include_costs && let Value::Object(ref mut map) = response {
                 map.insert("cost_governance".to_string(), cost_section);
