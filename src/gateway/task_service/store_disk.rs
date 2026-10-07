@@ -131,22 +131,27 @@ impl<'de> serde::de::Visitor<'de> for Members<'_> {
         formatter.write_str("a task record")
     }
 
+    /// A duplicated member is damage too: the first copy that reads wins, so a
+    /// later junk copy never erases a kept key or hides a newer version.
     fn visit_map<A: serde::de::MapAccess<'de>>(self, mut members: A) -> Result<(), A::Error> {
         while let Some(key) = members.next_key::<String>()? {
             match key.as_str() {
                 "version" => {
-                    self.0.version = members.next_value::<serde_json::Value>()?.as_u64();
+                    let version = members.next_value::<serde_json::Value>()?.as_u64();
+                    self.0.version = self.0.version.or(version);
                 }
                 "admission" => {
                     let admission = members.next_value::<serde_json::Value>()?;
-                    self.0.admission = AdmissionRecord::deserialize(admission).ok();
+                    let admission = AdmissionRecord::deserialize(admission).ok();
+                    self.0.admission = self.0.admission.take().or(admission);
                 }
                 "model" => {
                     let model = members.next_value::<serde_json::Value>()?;
-                    self.0.task_id = model
+                    let task_id = model
                         .pointer("/task/taskId")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_owned);
+                    self.0.task_id = self.0.task_id.take().or(task_id);
                 }
                 _ => {
                     members.next_value::<serde::de::IgnoredAny>()?;
