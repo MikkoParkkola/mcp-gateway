@@ -348,8 +348,28 @@ def test_any_html_in_the_section_keeps_it_open_to_the_end():
 
 
 def test_a_title_with_inline_markdown_is_the_section():
-    for title in ("*Known issues*", "Known issues <!-- note -->", "[Known issues](#k)"):
+    for title in (
+        "*Known issues*",
+        "Known issues <!-- note -->",
+        "[Known issues](#k)",
+        "Known issues <!-- TODO: beta -> final -->",
+        "[Known issues][ki]",
+    ):
         assert run(f"## {title}\n\n- Fixed in 4.0.1.\n", "--check") == 1, title
+
+
+def test_a_level_one_or_formatted_setext_title_is_the_section():
+    for head in ("# Known issues\n", "*Known issues*\n---\n"):
+        assert run(f"{head}\n- Fixed in 4.0.1.\n", "--check") == 1, head
+
+
+def test_build_metadata_of_this_release_is_not_a_later_release():
+    assert run(notes("\n- Seen in 4.0.0+build-5.1.\n"), "--check") == 0
+
+
+def test_an_email_autolink_line_does_not_keep_the_section_open():
+    text = "## Known issues\n\n<ops@example.com>\n\n## Performance\n\n4.0.1 later.\n"
+    assert run(text, "--check") == 0
 
 
 def test_an_autolink_line_does_not_keep_the_section_open():
