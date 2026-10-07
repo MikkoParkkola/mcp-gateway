@@ -220,13 +220,22 @@ async fn an_update_losing_to_a_running_resume_is_refused_at_once() {
 /// `working`; the wake sent before the write commits.
 ///
 /// The loser parks while the winner owns the handoff and its write is held.
-/// The winner keeps the handoff through the resume, so the commit itself must
-/// wake the loser: it answers at once instead of at the 1 s wait.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// The winner keeps the handoff through the resume, whose backend call is
+/// held too, so nothing but the commit itself can wake the loser: it answers
+/// at once instead of at the 1 s wait.
+///
+/// Current-thread runtime on purpose: the loser subscribes, fails to take the
+/// handoff and reads the row with no await in between, so once this task sees
+/// the subscriber the loser has already read `input_required` and parked.
+#[tokio::test]
 async fn a_loser_parked_behind_a_resume_answers_when_the_resume_commits() {
-    let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (mock, mut gate) =
+        MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
     let (state, _store) = state_with(&mock).await;
-    let id = parked(&state, "wake-a").await;
+    let id = task_id(&post(&state, "key-a", create(1, "wake-a")).await);
+    gate.wait_for_dispatch().await;
+    gate.release();
+    wait_input_required(&state, &id).await;
 
     let (entered_tx, entered_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
@@ -270,12 +279,16 @@ async fn a_loser_parked_behind_a_resume_answers_when_the_resume_commits() {
     let lost = loser.await.expect("the loser joins");
     let waited = released.elapsed();
     std::assert_eq!(error_code(&lost), Some(-32602), "{lost}");
+    // Half the 1 s produce-seam wait: without the wake the loser sleeps it out.
     std::assert!(
         waited < Duration::from_millis(500),
         "the loser answers when the resume commits, not at the 1 s wait: {waited:?}"
     );
     let won = winner.await.expect("the winner joins");
     std::assert!(won.get("error").is_none(), "{won}");
+    // Only now does the resumed call reach the backend and settle.
+    gate.wait_for_dispatch().await;
+    gate.release_all();
     assert_carries_the_backend_result(&poll_until_terminal(&state, "key-a", &id).await);
 }
 
