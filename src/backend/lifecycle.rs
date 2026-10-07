@@ -73,6 +73,7 @@ impl Backend {
     ) -> Self {
         Self {
             name: name.to_string(),
+            metric_label: Arc::<str>::from(name).into(),
             config,
             runtime_plan,
             pool: {

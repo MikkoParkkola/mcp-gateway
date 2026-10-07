@@ -80,6 +80,9 @@ pub use runtime_launch::runtime_plan_for_backend;
 pub struct Backend {
     /// Backend name
     pub name: String,
+    /// `name` as the `backend` metric label, shared so that recording a
+    /// metric costs a reference count, not a copy of the name (MIK-8014.PERF.5).
+    metric_label: telemetry_metrics::SharedString,
     /// Configuration
     config: BackendConfig,
     /// Runtime plan compiled from the backend's configured runtime profile.
