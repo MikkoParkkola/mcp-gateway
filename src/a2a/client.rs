@@ -151,7 +151,7 @@ impl A2aClient {
         })
     }
 
-    /// One blocking `SendMessage`.
+    /// One `SendMessage` that returns once the agent has created its task.
     pub(crate) async fn send_message(
         &self,
         endpoint: &Endpoint,
@@ -160,7 +160,12 @@ impl A2aClient {
     ) -> Result<Reply<Box<SendMessageResponse>>> {
         let params = json!({
             "message": message,
-            "configuration": {"acceptedOutputModes": ["text/plain", "application/json"]},
+            // Return as soon as the task exists: the bridge must hold the task
+            // id while it waits, or a cancel during the wait reaches nothing.
+            "configuration": {
+                "acceptedOutputModes": ["text/plain", "application/json"],
+                "returnImmediately": true,
+            },
         });
         let envelope = self
             .rpc(endpoint, "SendMessage", params, extra_headers)

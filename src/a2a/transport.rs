@@ -38,8 +38,10 @@ const REPORTED_PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// The key the agent's question travels under in `inputRequests`.
 const ASK_KEY: &str = "a2a_reply";
-/// First and longest wait between `GetTask` polls of an unfinished task.
-const FIRST_POLL: Duration = Duration::from_secs(1);
+/// First and longest wait between `GetTask` polls of an unfinished task. The
+/// first is short: the send returns as soon as the task exists, so a quick
+/// agent's answer is usually one poll away.
+const FIRST_POLL: Duration = Duration::from_millis(250);
 const LONGEST_POLL: Duration = Duration::from_secs(5);
 /// How often parked questions are checked for expiry.
 const SWEEP_EVERY: Duration = Duration::from_secs(30);
@@ -263,7 +265,10 @@ impl A2aTransport {
                 .await;
             return Ok(JsonRpcResponse::success(
                 id,
-                error_result("the request for input was declined; the agent's task was canceled"),
+                error_result(
+                    "the request for input was declined; cancellation of the agent's task was \
+                     requested",
+                ),
             ));
         };
         let mut message = Message::user_text(reply);
@@ -287,12 +292,19 @@ impl A2aTransport {
             self.endpoint.clone(),
             extra_headers.to_vec(),
         );
+        // Before the agent names its task nothing can cancel it, so a failure
+        // here says the remote outcome is not known rather than guessing.
         let sent = self
             .unless_closed(
                 self.client
                     .send_message(&self.endpoint, message, extra_headers),
             )
-            .await?;
+            .await
+            .map_err(|error| {
+                Error::Transport(format!(
+                    "{error}; whether the A2A agent started the task is not known"
+                ))
+            })?;
         let mut task = match sent {
             Reply::AgentError { code, message } => return Ok(agent_error(id, code, &message)),
             Reply::Answer(reply) => match *reply {

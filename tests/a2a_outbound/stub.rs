@@ -53,6 +53,10 @@ pub fn request_violation(headers: &HeaderMap, body: &Value) -> Option<String> {
 
 /// Why a `SendMessage` body is off-spec, or `None`.
 fn send_message_violation(body: &Value) -> Option<String> {
+    // The bridge must learn the task id before it waits, so it never blocks.
+    if body.pointer("/params/configuration/returnImmediately") != Some(&Value::Bool(true)) {
+        return Some("configuration.returnImmediately must be true".into());
+    }
     let Some(message) = body.pointer("/params/message") else {
         return Some("params.message missing".into());
     };
