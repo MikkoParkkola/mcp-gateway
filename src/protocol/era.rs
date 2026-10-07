@@ -230,11 +230,29 @@ impl EraCache {
     /// unlikely: the second caller finds nothing cached and takes the arm that decides
     /// nothing.
     pub async fn discard_if(&self, contradicted: impl FnOnce(Era) -> bool) -> bool {
+        self.discard_if_serving(contradicted, |clear| {
+            clear();
+            true
+        })
+        .await
+    }
+
+    /// [`Self::discard_if`], with the clear handed to `serving`, which runs it only if the
+    /// evidence still comes from a peer in service and reports whether it did. Like the
+    /// `install` of [`Self::reprobe_with`], it checks and clears as one step under the
+    /// caller's own guard (MIK-7643).
+    pub(crate) async fn discard_if_serving(
+        &self,
+        contradicted: impl FnOnce(Era) -> bool,
+        serving: impl FnOnce(&mut dyn FnMut()) -> bool,
+    ) -> bool {
         let mut observation = self.observation.lock().await;
         if observation.source != EraSource::Probed || !contradicted(observation.era) {
             return false;
         }
-        *observation = EraObservation::never_probed();
+        if !serving(&mut || *observation = EraObservation::never_probed()) {
+            return false;
+        }
         tracing::info!(
             target: "mcp_gateway::observed",
             backend = %self.name,

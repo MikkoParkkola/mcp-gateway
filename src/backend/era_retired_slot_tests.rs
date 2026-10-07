@@ -11,8 +11,10 @@
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use super::era_stale_probe_tests::{Answer, DISCOVER, Handles, Peer, WAIT};
+use super::pool::PooledEntry;
 use super::slot_eviction_tests::{per_user_backend, slot};
 use super::*;
 use crate::protocol::era::{Era, METHOD_NOT_FOUND_CODE};
@@ -91,4 +93,58 @@ async fn a_reprobe_answer_before_the_revocation_is_stored() {
         Some(Era::Modern),
         "a later revocation leaves the stored era alone"
     );
+}
+
+/// The entry at `binding`, captured before a removal can take it out of the map.
+fn entry_of(backend: &Arc<Backend>, binding: &str) -> Arc<PooledEntry> {
+    Arc::clone(backend.pool.get(&slot(binding)).expect("the slot").value())
+}
+
+/// MIK-7643: both removal sites retire what they remove, before it leaves the
+/// map: a revoked busy slot and an idle slot the reaper takes.
+#[tokio::test]
+async fn every_removed_slot_is_retired() {
+    let backend = per_user_backend("era-retire-removal");
+    let (revoked, _) = Peer::new(Answer::Modern);
+    let (idle, _) = Peer::new(Answer::Modern);
+    backend.set_pooled_transport_for_test(&slot(BINDING), revoked);
+    backend.set_pooled_transport_for_test(&slot("idle:beta"), idle);
+    let revoked = entry_of(&backend, BINDING);
+    revoked.in_flight.fetch_add(1, Ordering::SeqCst);
+    let idle = entry_of(&backend, "idle:beta");
+    idle.last_used.store(0, Ordering::SeqCst);
+
+    assert_eq!(backend.evict_identity_slots("rev:"), 1);
+    assert_eq!(
+        backend.evict_idle_per_user_entries(Duration::from_secs(1)),
+        1
+    );
+
+    assert!(revoked.retired.load(Ordering::SeqCst), "the revoked slot");
+    assert!(idle.retired.load(Ordering::SeqCst), "the reaped slot");
+}
+
+/// MIK-7643 guard: the reaper retires only what it removes. A busy slot and a
+/// recently used one stay pooled and serving.
+#[tokio::test]
+async fn the_reaper_leaves_busy_and_recent_slots_serving() {
+    let backend = per_user_backend("era-retire-reaper");
+    let (busy, _) = Peer::new(Answer::Modern);
+    let (recent, _) = Peer::new(Answer::Modern);
+    backend.set_pooled_transport_for_test(&slot("busy:alpha"), busy);
+    backend.set_pooled_transport_for_test(&slot("recent:beta"), recent);
+    let busy = entry_of(&backend, "busy:alpha");
+    busy.last_used.store(0, Ordering::SeqCst);
+    busy.in_flight.fetch_add(1, Ordering::SeqCst);
+    let recent = entry_of(&backend, "recent:beta");
+    recent.touch();
+
+    assert_eq!(
+        backend.evict_idle_per_user_entries(Duration::from_secs(3600)),
+        0
+    );
+
+    for (who, entry) in [("busy", busy), ("recent", recent)] {
+        assert!(!entry.retired.load(Ordering::SeqCst), "{who} slot retired");
+    }
 }

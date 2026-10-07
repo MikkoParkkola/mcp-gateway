@@ -61,13 +61,17 @@ fn same(a: &Arc<dyn Transport>, b: &Arc<dyn Transport>) -> bool {
 /// it: a replacement takes the write guard, so it either happened before this check (the
 /// answer is refused) or waits for the write (the answer was about the peer then in service).
 /// Both halves are synchronous, which is what makes check and write one step.
+///
+/// Serving means pooled as well as holding it: a removed busy entry keeps its transport, and
+/// the pool marks it retired under that same write guard before it leaves the map (MIK-7643).
 pub(super) fn install_if_held(
     entry: &PooledEntry,
     transport: &Arc<dyn Transport>,
     store: &mut dyn FnMut(),
 ) -> bool {
     let slot = entry.transport.read();
-    let held = slot.as_ref().is_some_and(|held| same(held, transport));
+    let held = !entry.retired.load(std::sync::atomic::Ordering::SeqCst)
+        && slot.as_ref().is_some_and(|held| same(held, transport));
     if held {
         store();
     }
@@ -233,16 +237,16 @@ impl Backend {
         // arriving at once both find the stale verdict and each fan out a detached probe.
         let discarded = self
             .era
-            .discard_if(|era| {
-                // Re-checked under the era lock: a restart may have installed and resolved a new
-                // peer since the lookup above, and a contradiction from the old one must not
-                // erase that peer's verdict.
-                holds(&entry, transport)
-                    && match era {
-                        Era::Legacy => contradicts_legacy(code),
-                        Era::Modern => contradicts_modern(method, code),
-                    }
-            })
+            .discard_if_serving(
+                |era| match era {
+                    Era::Legacy => contradicts_legacy(code),
+                    Era::Modern => contradicts_modern(method, code),
+                },
+                // Re-checked under the era lock, and held through the clear: a restart may have
+                // installed and resolved a new peer since the lookup above, or the pool removed
+                // the slot, and a contradiction from the old one must not erase the verdict.
+                |clear| install_if_held(&entry, transport, clear),
+            )
             .await;
         if !discarded {
             return;

@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::super::Backend;
-use super::{PoolKey, now_unix_secs};
+use super::{PoolKey, PooledEntry, now_unix_secs};
 use crate::transport::Transport;
 
 impl Backend {
@@ -62,7 +62,7 @@ impl Backend {
         for key in candidates {
             // Under `stop`'s lock: shutdown takes this slot or drains its close.
             let mut cleanups = self.replaced_transport_cleanups.lock();
-            let Some((_, entry)) = self.pool.remove(&key) else {
+            let Some((_, entry)) = self.pool.remove_if(&key, |_, entry| retire(entry)) else {
                 // A concurrent reaper or eviction took it first; it is gone
                 // either way, which is what this call is for.
                 continue;
@@ -160,10 +160,11 @@ impl Backend {
                 // clock still reads stale - notably while it waits on the backend
                 // semaphore, where it holds the entry but has not touched it.
                 // Evicting then closes the transport underneath a live request.
-                !matches!(k, PoolKey::Shared)
+                let idle = !matches!(k, PoolKey::Shared)
                     && entry.in_flight.load(Ordering::SeqCst) == 0
                     && now_unix_secs().saturating_sub(entry.last_used.load(Ordering::Relaxed))
-                        >= cutoff
+                        >= cutoff;
+                idle && retire(entry)
             });
             if let Some((_, entry)) = removed {
                 let transport = entry.transport.write().take();
@@ -192,4 +193,14 @@ impl Backend {
         }
         closed
     }
+}
+
+/// Mark `entry` as no longer served, under its transport WRITE guard and while
+/// the pool's shard lock still holds it (MIK-7643). Called from both removal
+/// closures, so no reader ever sees an entry that has left the map but is not
+/// yet retired. Always `true`, for use as a removal predicate.
+fn retire(entry: &PooledEntry) -> bool {
+    let _slot = entry.transport.write();
+    entry.retired.store(true, Ordering::SeqCst);
+    true
 }

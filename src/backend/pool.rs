@@ -80,6 +80,12 @@ pub(crate) struct PooledEntry {
     /// happening right now". Without this counter a call outliving the idle
     /// deadline has its transport closed mid-flight.
     pub(crate) in_flight: AtomicUsize,
+    /// Set when the pool removed this entry, under its transport WRITE guard
+    /// and before the entry left the map (MIK-7643). A busy entry keeps its
+    /// transport after removal, so "holds the transport" alone no longer means
+    /// "the pool serves it"; an era answer checked under the READ guard either
+    /// landed while the entry was pooled or sees this.
+    pub(crate) retired: AtomicBool,
     pub(crate) failsafe: Failsafe,
     /// The four metadata caches, and the set derived from the first of them.
     ///
@@ -209,6 +215,7 @@ impl PooledEntry {
             last_used: AtomicU64::new(now_unix_secs()),
             stopped_when_idle: std::sync::atomic::AtomicBool::new(false),
             in_flight: AtomicUsize::new(0),
+            retired: AtomicBool::new(false),
             failsafe: Failsafe::new(name, failsafe_config),
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
