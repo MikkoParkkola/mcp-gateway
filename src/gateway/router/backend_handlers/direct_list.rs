@@ -55,7 +55,8 @@ pub(super) async fn drain(
     let mut unreadable = false;
     // The shortest valid freshness hint of any page: one stale page makes the
     // whole merged list as stale (MIK-8022). A missing or non-numeric hint
-    // says nothing and cannot erase another page's.
+    // says nothing and cannot erase another page's. An unreadable page makes
+    // the hint 0.
     let mut ttl: Option<u64> = None;
     let mut cursor: Option<Value> = None;
     for _ in 0..DIRECT_LIST_MAX_PAGES {
@@ -113,6 +114,9 @@ pub(super) async fn drain(
                         .is_none_or(|name| !withheld.contains(name))
                 });
                 let mut merged = json!({ "tools": tools });
+                // A partial list is answered, never offered for caching: a
+                // zero hint keeps the shaper from filling in its default.
+                let ttl = if unreadable { Some(0) } else { ttl };
                 if let Some(ttl) = ttl {
                     merged["ttlMs"] = json!(ttl);
                 }

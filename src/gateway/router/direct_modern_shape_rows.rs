@@ -164,6 +164,47 @@ async fn the_list_hint_is_the_shortest_page_hint_under_the_cap() {
     }
 }
 
+/// The names a listing answered.
+fn listed(body: &Value) -> Vec<&str> {
+    body["result"]["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect()
+}
+
+/// A partial catalogue (an unreadable page) is still answered, with a zero
+/// hint, whatever the readable page said: neither the default window nor a
+/// page's own hint may invite a client to cache it (codex P2 on #3327).
+#[tokio::test]
+async fn an_unreadable_page_gives_the_partial_list_a_zero_hint() {
+    for hint in [None, Some(9000)] {
+        let fx = fixture(Answer::Unreadable(hint), |_| {}).await;
+        let body = modern(&fx, "alpha", "tools/list", json!({})).await;
+        assert_eq!(listed(&body), ["read"], "{hint:?}: answered: {body}");
+        let gone = missing(&body, true);
+        assert!(gone.is_empty(), "{hint:?} missing {gone:?}: {body}");
+        assert_eq!(body["result"]["ttlMs"], 0, "{hint:?}: {body}");
+    }
+}
+
+/// The legacy answer to the same partial catalogue is unchanged: the
+/// listing alone, no hint.
+#[tokio::test]
+async fn a_legacy_partial_list_is_the_listing_alone() {
+    for hint in [None, Some(9000)] {
+        let fx = fixture(Answer::Unreadable(hint), |_| {}).await;
+        let body = legacy(&fx, "alpha", "tools/list", json!({})).await;
+        assert_eq!(listed(&body), ["read"], "{hint:?}: answered: {body}");
+        let keys: Vec<&String> = body["result"]
+            .as_object()
+            .map(|result| result.keys().collect())
+            .unwrap_or_default();
+        assert_eq!(keys, ["tools"], "{hint:?}: {body}");
+    }
+}
+
 /// A call carrying an idempotency key `key`, as request `id`.
 async fn keyed(
     fx: &super::super::direct_guards_fixture::Fx,
