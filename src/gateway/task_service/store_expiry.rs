@@ -77,6 +77,22 @@ impl TaskStore {
                 super::disk::Reread::Sealed => continue,
                 super::disk::Reread::Gone => None,
                 super::disk::Reread::Repaired(admission, id) => {
+                    // The load's per-principal cap holds for a repaired row too:
+                    // a seal never lifts over a directory startup would refuse.
+                    let held = {
+                        let state = self.0.state();
+                        state
+                            .entries
+                            .values()
+                            .map(|entry| &entry.record.admission)
+                            .chain(state.reserved.iter().map(|(kept, _)| kept))
+                            .filter(|kept| kept.principal_digest == admission.principal_digest)
+                            .count()
+                    };
+                    if held >= self.0.limits.per_principal {
+                        tracing::error!(record = %name, "repaired task record would exceed its owner's cap; it stays sealed");
+                        continue;
+                    }
                     if !import(binding_of(&admission), id.clone()) {
                         tracing::error!(record = %name, "repaired task record's key is refused by admission; it stays sealed");
                         continue;
@@ -89,10 +105,23 @@ impl TaskStore {
             state.sealed.remove(&name);
             state.reserved.extend(kept);
         }
-        let sealed = self.0.state().sealed.len();
-        #[allow(clippy::cast_precision_loss)]
-        telemetry_metrics::gauge!("mcp_task_store_skipped_records", "class" => "sealed")
-            .set(sealed as f64);
+        let (sealed, reserved) = {
+            let state = self.0.state();
+            if !state.sealed.is_empty() {
+                // Once per sweep while sealed: loud on purpose, names only.
+                let files: Vec<&str> = state.sealed.iter().map(String::as_str).collect();
+                tracing::error!(
+                    ?files,
+                    "task records with an unreadable key: new keyed calls are refused (409) until each file is repaired or removed"
+                );
+            }
+            (state.sealed.len(), state.reserved.len())
+        };
+        for (class, count) in [("sealed", sealed), ("reserved", reserved)] {
+            #[allow(clippy::cast_precision_loss)]
+            telemetry_metrics::gauge!("mcp_task_store_skipped_records", "class" => class)
+                .set(count as f64);
+        }
         sealed
     }
 

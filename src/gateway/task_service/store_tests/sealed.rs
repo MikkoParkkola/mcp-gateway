@@ -26,6 +26,8 @@ enum Damage {
     NestedDuplicate,
     /// A second, later `admission` member: either copy could be the writer's.
     RepeatedAdmission,
+    /// A readable decoy copy, then the original copy with damage inside it.
+    DecoyThenDamagedOriginal,
 }
 
 fn damage(record: &std::path::Path, how: &Damage) {
@@ -49,6 +51,18 @@ fn damage(record: &std::path::Path, how: &Damage) {
                 &text[end..]
             )
         }
+        Damage::DecoyThenDamagedOriginal => {
+            let start = text.find("\"admission\":{").expect("an admission block");
+            let open = start + "\"admission\":".len();
+            let end = open + text[open..].find('}').unwrap();
+            let mut decoy: Value = serde_json::from_str(&text[open..=end]).unwrap();
+            decoy["identityDigest"] = json!("0".repeat(64));
+            format!(
+                "{}\"admission\":{decoy},\"admission\":{{@{}",
+                &text[..start],
+                &text[open + 1..]
+            )
+        }
         Damage::RepeatedAdmission => {
             let end = text.rfind('}').expect("a record object");
             format!("{},\"admission\":null{}", &text[..end], &text[end..])
@@ -70,6 +84,10 @@ async fn an_unreadable_admission_never_frees_its_key() {
         ("mistyped_admission", Damage::MistypedAdmission),
         ("nested_duplicate", Damage::NestedDuplicate),
         ("repeated_admission", Damage::RepeatedAdmission),
+        (
+            "decoy_then_damaged_original",
+            Damage::DecoyThenDamagedOriginal,
+        ),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tasks");
@@ -264,9 +282,17 @@ async fn a_refused_reread_keeps_the_seal_and_the_store() {
     let record = path.join(format!("{}.json", rows[0].0));
     std::fs::remove_file(&record).unwrap();
     crate::test_fifo::make_fifo(&record);
-    tokio::time::timeout(std::time::Duration::from_secs(5), service.reread_sealed())
+    let reread = service.reread_sealed();
+    tokio::pin!(reread);
+    if tokio::time::timeout(std::time::Duration::from_secs(5), &mut reread)
         .await
-        .expect("the re-read never waits on a FIFO");
+        .is_err()
+    {
+        // Release the open blocked on the FIFO so teardown finishes, then fail.
+        let _ = std::fs::OpenOptions::new().write(true).open(&record);
+        reread.await;
+        panic!("the re-read waited on a FIFO");
+    }
     assert_eq!(service.skipped_records().sealed, 1, "a FIFO stays sealed");
     std::fs::remove_file(&record).unwrap();
     let mut value: Value = serde_json::from_slice(&rows[0].1).unwrap();
@@ -363,5 +389,34 @@ async fn a_repaired_key_is_never_free_while_the_seal_lifts() {
     );
     assert!(!new_owner, "the seal holds until it is lowered");
     assert_eq!(sealed, 0);
+    service.close().await.unwrap();
+}
+
+/// A repair that would take its owner over the per-principal cap keeps the
+/// seal, as startup would refuse that directory.
+#[tokio::test]
+async fn a_repair_over_its_owners_cap_keeps_the_seal() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let writer = services();
+    settled_task(&store, &writer, "k-intact").await;
+    let (damaged, _) = settled_task(&store, &writer, "k-damaged").await;
+    store.close().await.unwrap();
+    let record = path.join(format!("{damaged}.json"));
+    let original = std::fs::read(&record).unwrap();
+    damage(&record, &Damage::BeforeAdmission);
+    let limits = StoreLimits {
+        per_principal: 1,
+        ..StoreLimits::default()
+    };
+    let service = TaskService::open(&path, limits, services()).await.unwrap();
+    std::fs::write(&record, original).unwrap();
+    service.reread_sealed().await;
+    assert_eq!(
+        service.skipped_records().sealed,
+        1,
+        "the owner already holds its one row"
+    );
     service.close().await.unwrap();
 }

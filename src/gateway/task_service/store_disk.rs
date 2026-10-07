@@ -232,11 +232,15 @@ impl<'de> serde::de::Visitor<'de> for Members<'_> {
                     self.0.version = self.0.version.max(version);
                 }
                 "admission" => {
+                    // Unreadable until this copy has read in full: damage
+                    // inside a SECOND copy ends the walk, and must not leave
+                    // the first copy (which may be a decoy) standing.
+                    let first = matches!(self.0.admission, AdmissionRead::Missing);
+                    self.0.admission = AdmissionRead::Unreadable;
                     let copy = members.next_value::<AdmissionCopy>()?.0;
-                    self.0.admission = match (&self.0.admission, copy) {
-                        (AdmissionRead::Missing, Some(record)) => AdmissionRead::Read(record),
-                        _ => AdmissionRead::Unreadable,
-                    };
+                    if let (true, Some(record)) = (first, copy) {
+                        self.0.admission = AdmissionRead::Read(record);
+                    }
                 }
                 "model" => {
                     let model = members.next_value::<serde_json::Value>()?;
