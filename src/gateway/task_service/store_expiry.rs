@@ -23,11 +23,14 @@ impl TaskStore {
         &self,
     ) -> Vec<(crate::idempotency::admission::RestoredBinding, String)> {
         let state = self.0.state();
+        // A row skipped at load whose key is kept is imported like any other:
+        // a retry finds its task id, which reads as not found (MIK-8023).
         state
             .entries
             .iter()
-            .map(|(id, entry)| {
-                let admission = &entry.record.admission;
+            .map(|(id, entry)| (&entry.record.admission, id))
+            .chain(state.reserved.iter().map(|(admission, id)| (admission, id)))
+            .map(|(admission, id)| {
                 (
                     crate::idempotency::admission::RestoredBinding {
                         identity: admission.identity_digest.clone(),
@@ -40,6 +43,15 @@ impl TaskStore {
                 )
             })
             .collect()
+    }
+
+    /// The rows the load skipped, for the startup report (MIK-8023).
+    pub(crate) fn skipped_records(&self) -> super::SkippedRecords {
+        let state = self.0.state();
+        super::SkippedRecords {
+            reserved: state.reserved.len(),
+            unreadable: state.unreadable,
+        }
     }
 
     /// Every row a previous process left mid-flight, for startup recovery BEFORE
