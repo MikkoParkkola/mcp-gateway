@@ -15,9 +15,9 @@ pub(crate) fn backend_failure(prose: &str) -> String {
 
 /// The longest text of the `recovery` hint in `answer` (its tool value,
 /// read decoded when wrapped) that is none of `backend` and long enough
-/// that a receipt holding it would be found: a shared run of
-/// `K + 2W - 1` = 79 chars meets the default `min_matches` of 2, so a
-/// "not receipted" assertion on it cannot pass for being too short.
+/// that a receipt holding it would be found: a shared run of 79 chars keeps
+/// the default `min_matches` of 2 fingerprints 999 times in 1,000, so a
+/// "not receipted" assertion on it does not pass for being too short.
 pub(crate) fn own_hint_text(answer: &Value, backend: &str) -> String {
     let value = answer["content"][0]["text"]
         .as_str()
