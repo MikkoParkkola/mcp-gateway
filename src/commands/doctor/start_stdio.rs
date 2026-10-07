@@ -23,6 +23,22 @@ pub enum StdioProbe {
     Locate,
     /// Start each stdio backend and complete `initialize`.
     Start,
+    /// `Start`, and a start that exits early also shows the child's
+    /// sanitized stderr tail under a may-contain-secrets banner.
+    StartShowingStderr,
+}
+
+impl StdioProbe {
+    /// The probe `--start-stdio` and `--show-stderr` select. The CLI refuses
+    /// `--show-stderr` alone.
+    #[must_use]
+    pub const fn from_flags(start_stdio: bool, show_stderr: bool) -> Self {
+        match (start_stdio, show_stderr) {
+            (false, _) => Self::Locate,
+            (true, false) => Self::Start,
+            (true, true) => Self::StartShowingStderr,
+        }
+    }
 }
 
 /// The stdio row for `backend` under `probe`.
@@ -33,7 +49,9 @@ pub(super) async fn stdio_row(
 ) -> Option<CheckResult> {
     match probe {
         StdioProbe::Locate => super::check_stdio_backend(name, &backend.transport),
-        StdioProbe::Start => start_stdio_backend(name, backend).await,
+        StdioProbe::Start | StdioProbe::StartShowingStderr => {
+            start_stdio_backend(name, backend, probe).await
+        }
     }
 }
 
@@ -42,6 +60,7 @@ pub(super) async fn stdio_row(
 pub(super) async fn start_stdio_backend(
     name: &str,
     backend: &BackendConfig,
+    probe: StdioProbe,
 ) -> Option<CheckResult> {
     let TransportConfig::Stdio {
         command,
@@ -88,7 +107,11 @@ pub(super) async fn start_stdio_backend(
             CheckResult::pass(&label, "initialize completed").with_category("backend_stdio")
         }
         Ok(Err(error)) => {
-            CheckResult::fail(&label, error.to_string()).with_category("backend_stdio")
+            let mut detail = error.to_string();
+            if probe == StdioProbe::StartShowingStderr {
+                detail.push_str(&stderr_section(&transport.last_failure_stderr()));
+            }
+            CheckResult::fail(&label, detail).with_category("backend_stdio")
         }
         Err(_) => CheckResult::fail(
             &label,
@@ -96,6 +119,21 @@ pub(super) async fn start_stdio_backend(
         )
         .with_category("backend_stdio"),
     })
+}
+
+/// The `--show-stderr` lines, banner first: masking is best effort.
+fn stderr_section(lines: &[String]) -> String {
+    if lines.is_empty() {
+        return "\n  (no stderr captured)".to_string();
+    }
+    let mut section =
+        "\n  stderr tail (may contain secrets: masking is best effort, review before sharing):"
+            .to_string();
+    for line in lines {
+        section.push_str("\n    ");
+        section.push_str(line);
+    }
+    section
 }
 
 // Unix-only (W-L5): the probed backends are `sh -c` scripts, which Windows does not provide.
@@ -150,7 +188,7 @@ mod tests {
         // The clock is paused, so this is virtual time: the message names the
         // cap whichever bound fired, and only the elapsed time tells them apart.
         let began = tokio::time::Instant::now();
-        let result = start_stdio_backend("b", &backend)
+        let result = start_stdio_backend("b", &backend, StdioProbe::Start)
             .await
             .expect("a stdio row");
         let elapsed = began.elapsed();
@@ -175,7 +213,7 @@ mod tests {
             &format!("sh -c 'echo \"Error: Cannot find module x {sentinel}\" >&2; exit 3'"),
             &[],
         );
-        let row = start_stdio_backend("b", &backend)
+        let row = start_stdio_backend("b", &backend, StdioProbe::Start)
             .await
             .expect("a stdio row");
         assert!(!row.detail.contains(&sentinel), "{}", row.detail);
@@ -190,7 +228,7 @@ mod tests {
             r#"sh -c '[ "$NEEDS" = yes ] && { echo "x: command not found" >&2; exit 3; }; exit 9'"#,
             &[("NEEDS", "yes")],
         );
-        let result = start_stdio_backend("b", &backend)
+        let result = start_stdio_backend("b", &backend, StdioProbe::Start)
             .await
             .expect("a stdio row");
         assert_eq!(result.status, CheckStatus::Fail);
@@ -210,7 +248,7 @@ mod tests {
         let marker = dir.path().join("launched");
         let mut backend = stdio(&format!("sh -c 'touch {}'", marker.display()), &[]);
         backend.runtime_profile = Some("sandboxed".to_string());
-        let result = start_stdio_backend("b", &backend)
+        let result = start_stdio_backend("b", &backend, StdioProbe::Start)
             .await
             .expect("a row, not silence");
         assert_eq!(result.status, CheckStatus::Warn, "{}", result.detail);
@@ -245,9 +283,69 @@ mod tests {
             &format!("sh -c 'read l; echo {reply:?}; cat >/dev/null'"),
             &[],
         );
-        let result = start_stdio_backend("b", &backend)
+        let result = start_stdio_backend("b", &backend, StdioProbe::Start)
             .await
             .expect("a stdio row");
         assert_eq!(result.status, CheckStatus::Pass, "{}", result.detail);
+    }
+
+    /// MIK-7978 STDERR.3: `--show-stderr` adds the sanitized tail under a
+    /// banner; the credential in it stays masked.
+    #[tokio::test]
+    async fn show_stderr_adds_the_sanitized_tail_under_a_banner() {
+        let backend = stdio(
+            "sh -c 'echo \"Error: Cannot find module tail-7978\" >&2; \
+             echo \"Authorization: Bearer tok-7978\" >&2; exit 3'",
+            &[],
+        );
+        let shown = start_stdio_backend("b", &backend, StdioProbe::StartShowingStderr)
+            .await
+            .expect("a stdio row");
+        assert_eq!(shown.status, CheckStatus::Fail, "{}", shown.detail);
+        assert!(
+            shown.detail.contains("may contain secrets"),
+            "{}",
+            shown.detail
+        );
+        assert!(
+            shown.detail.contains("Error: Cannot find module tail-7978"),
+            "{}",
+            shown.detail
+        );
+        assert!(!shown.detail.contains("tok-7978"), "{}", shown.detail);
+        let hidden = start_stdio_backend("b", &backend, StdioProbe::Start)
+            .await
+            .expect("a stdio row");
+        assert!(!hidden.detail.contains("tail-7978"), "{}", hidden.detail);
+        assert!(
+            !hidden.detail.contains("may contain secrets"),
+            "{}",
+            hidden.detail
+        );
+    }
+
+    /// STDERR.3: `--show-stderr` needs `--start-stdio`, and the two select
+    /// the showing probe.
+    #[test]
+    fn show_stderr_requires_start_stdio() {
+        use clap::Parser as _;
+        use mcp_gateway::cli::{Cli, Command};
+        assert!(Cli::try_parse_from(["mcp-gateway", "doctor", "--show-stderr"]).is_err());
+        let cli = Cli::try_parse_from(["mcp-gateway", "doctor", "--start-stdio", "--show-stderr"])
+            .expect("both flags parse");
+        let Some(Command::Doctor {
+            start_stdio,
+            show_stderr,
+            ..
+        }) = cli.command
+        else {
+            panic!("not the doctor command");
+        };
+        assert_eq!(
+            StdioProbe::from_flags(start_stdio, show_stderr),
+            StdioProbe::StartShowingStderr
+        );
+        assert_eq!(StdioProbe::from_flags(true, false), StdioProbe::Start);
+        assert_eq!(StdioProbe::from_flags(false, false), StdioProbe::Locate);
     }
 }

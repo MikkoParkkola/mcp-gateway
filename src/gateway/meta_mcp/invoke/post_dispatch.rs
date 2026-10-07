@@ -76,9 +76,12 @@ impl MetaMcp {
         &self,
         e: Error,
         managed: Option<&crate::personal_accounts::ManagedLease>,
-        idem_reservation: &mut Option<IdempotencyReservation>,
+        (idem_reservation, execution): (
+            &mut Option<IdempotencyReservation>,
+            Option<&crate::gateway::meta_mcp::admission::SyncLease>,
+        ),
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
-        (server, tool): (&str, &str),
+        (server, tool, surface): (&str, &str, MetaSurface),
     ) -> Result<Value> {
         // A11-c: a 401 on a managed credential forces at most one
         // refresh, then either asks the user to reconnect (an offer,
@@ -108,10 +111,16 @@ impl MetaMcp {
         // reservation left in the `Option` would be picked up by that
         // commit and re-inserted as a completed entry, which makes the
         // release a no-op and the key permanently wrong.
-        if e.is_pre_dispatch()
-            && let Some(mut reservation) = idem_reservation.take()
-        {
-            reservation.release();
+        if e.is_pre_dispatch() {
+            if let Some(mut reservation) = idem_reservation.take() {
+                reservation.release();
+            }
+            // The outer lease was marked before this call; a refusal the
+            // backend never saw is not retained there either, or a keyed
+            // retry replays a stale refusal and its hint (MIK-7974).
+            if let Some(execution) = execution {
+                execution.withdraw_dispatch();
+            }
         }
         // MIK-7979: a lost round settles with the uncertainty notice, and the
         // reservation leaves the `Option` for the same reason as above: the
@@ -122,7 +131,7 @@ impl MetaMcp {
         // The error budget already counted this failure (the shared
         // accounting stage).  The idempotency reservation is left
         // for the commit below unless it was released or settled above.
-        Ok(dispatch_error_result(&e, tool, server, self.hint_surface()))
+        Ok(dispatch_error_result(&e, tool, server, surface))
     }
 
     #[cfg(feature = "cost-governance")]

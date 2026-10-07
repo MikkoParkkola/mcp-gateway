@@ -397,7 +397,7 @@ impl Backend {
     /// start here, on every transport: a failed spawn, upgrade or `initialize` is
     /// recorded on the slot's failsafe (F17) so the breaker names it, then returned
     /// as the pre-send refusal it is ([`super::lifecycle::pre_send_start_error`]).
-    async fn start_recorded(
+    pub(super) async fn start_recorded(
         &self,
         key: &super::pool::PoolKey,
         entry: &super::PooledEntry,
