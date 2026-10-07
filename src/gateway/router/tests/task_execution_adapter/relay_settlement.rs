@@ -176,7 +176,7 @@ async fn a_native_task_result_is_receipted_as_stored() {
 async fn a_hinted_task_failure_is_receipted_without_its_hint() {
     use crate::gateway::meta_mcp::invoke::receipt_test_support::{backend_failure, own_hint_text};
     use crate::gateway::recovery::{
-        ErrorCategory, MetaSurface, RecoveryContext, attach_recovery, recovery_for_surface,
+        ErrorCategory, MetaSurface, RecoveryContext, Revive, attach_recovery, recovery_for_surface,
     };
     let failure = backend_failure(PROSE);
     let failed = json!({"content": [{"type": "text", "text": failure}], "isError": true});
@@ -185,7 +185,7 @@ async fn a_hinted_task_failure_is_receipted_without_its_hint() {
     let hint = recovery_for_surface(
         ErrorCategory::BackendError,
         RecoveryContext::default(),
-        MetaSurface::Standard,
+        MetaSurface::Standard(Revive::Offered),
     );
     let hint = own_hint_text(&attach_recovery(failed.clone(), hint), PROSE);
     let mock = MockBackend::answering(Answer::Sequence(vec![failed, text("ok")]));

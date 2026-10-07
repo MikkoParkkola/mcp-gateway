@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use super::super::super::meta_mcp_helpers::did_you_mean;
 use super::{BudgetOutcome, MetaMcp, dispatch_error_result};
+use crate::gateway::recovery::MetaSurface;
 use crate::security::http_diagnostics::is_upstream_unauthorized;
 use crate::{Error, Result};
 
@@ -108,7 +109,7 @@ impl MetaMcp {
         (server, tool): (&str, &str),
         error: Error,
         managed: Option<&crate::personal_accounts::ManagedLease>,
-        checked_at: std::time::Instant,
+        (checked_at, surface): (std::time::Instant, MetaSurface),
     ) -> std::result::Result<(Value, Error), Error> {
         let error = match managed {
             Some(managed) if is_upstream_unauthorized(&error) => {
@@ -116,7 +117,7 @@ impl MetaMcp {
             }
             _ => error,
         };
-        let value = self.account_refused_fill(server, tool, &error, checked_at);
+        let value = self.account_refused_fill(server, tool, &error, (checked_at, surface));
         if crate::personal_accounts::refusal::marked(&error).is_some() {
             return Err(error);
         }
@@ -135,8 +136,15 @@ impl MetaMcp {
         parked: &parking_lot::Mutex<Option<Error>>,
     ) -> String {
         let parks = managed.is_some() && is_upstream_unauthorized(&error);
+        // Only the error text is used; the hinted value is dropped, so its
+        // surface is moot.
         let (Ok((_, error)) | Err(error)) = self
-            .answer_refused_fill(at, error, managed, checked_at)
+            .answer_refused_fill(
+                at,
+                error,
+                managed,
+                (checked_at, MetaSurface::Undiscoverable),
+            )
             .await;
         let message = error.to_string();
         if parks || crate::personal_accounts::refusal::marked(&error).is_some() {
@@ -156,7 +164,7 @@ impl MetaMcp {
         server: &str,
         tool: &str,
         error: &Error,
-        started: std::time::Instant,
+        (started, surface): (std::time::Instant, MetaSurface),
     ) -> Value {
         telemetry_metrics::counter!(
             "mcp_tool_invocations_total",
@@ -170,6 +178,6 @@ impl MetaMcp {
         )
         .record(started.elapsed().as_secs_f64());
         self.record_error_budget(server, tool, BudgetOutcome::of_error(error));
-        dispatch_error_result(error, tool, server, self.hint_surface())
+        dispatch_error_result(error, tool, server, surface)
     }
 }

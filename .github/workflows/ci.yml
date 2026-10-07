@@ -948,6 +948,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
         run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+      # The held-out ranking corpus must stay what gen_corpus.py derives from
+      # the frozen 119-tool tree (FREEZE.md); f241b464 carries that tree and is
+      # on the release line. One commit is fetched, the checkout stays shallow.
+      - name: Ranking corpus regenerates byte for byte (MIK-7850)
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin f241b464acf6007a88ebc2b576c0825350b018a1
+          tree=$(mktemp -d)
+          git archive FETCH_HEAD capabilities | tar -x -C "$tree"
+          python3 benchmarks/ranking-baseline/gen_corpus.py "$tree" | cmp - benchmarks/ranking-baseline/corpus.json
       - name: Test the counter (fail on parser regression)
         run: python3 scripts/release/test_count_release_criteria.py
       - name: Test supplemental acceptance checks
