@@ -43,8 +43,30 @@ pub struct EventsSourcesConfig {
     pub backend_notifications: bool,
     /// Task settlement (`task.settled`).
     pub task_settled: bool,
+    /// Change notifications for read-only REST capabilities
+    /// (`watch.<capability>.changed`). Off by default.
+    pub rest_watch: bool,
     /// Cron wake-ups (`schedule.tick`). Off by default.
     pub schedule: bool,
+}
+
+/// Bounds on `watch.<capability>.changed` pollers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EventsWatchConfig {
+    /// Pollers across all principals.
+    pub max_pollers: usize,
+    /// Pollers one principal holds alone (credentialed capabilities).
+    pub max_pollers_per_principal: usize,
+}
+
+impl Default for EventsWatchConfig {
+    fn default() -> Self {
+        Self {
+            max_pollers: 100,
+            max_pollers_per_principal: 10,
+        }
+    }
 }
 
 /// Bounds on `schedule.tick` timers (one per distinct cron, timezone, label).
@@ -72,6 +94,7 @@ impl Default for EventsSourcesConfig {
             operational: false,
             backend_notifications: true,
             task_settled: true,
+            rest_watch: false,
             schedule: false,
         }
     }
@@ -108,7 +131,7 @@ pub struct EventsConfig {
     pub max_outbox: usize,
     /// Pending outbox records one subscription may hold.
     pub max_outbox_per_subscription: usize,
-    /// Inbound delivery ids remembered per webhook route.
+    /// Inbound delivery ids remembered per webhook route. Nonzero.
     pub seen_max_per_route: usize,
     /// Verification records kept after their last subscription ended.
     pub max_verified_tail: usize,
@@ -127,9 +150,9 @@ pub struct EventsConfig {
     /// Dead-letter retention.
     #[serde(with = "humantime_serde")]
     pub dead_letter_retention: Duration,
-    /// Dead-letter count cap.
+    /// Dead-letter count cap. Nonzero.
     pub dead_letter_max_records: usize,
-    /// Dead-letter byte cap.
+    /// Dead-letter byte cap. Nonzero.
     pub dead_letter_max_bytes: u64,
     /// Verification POSTs per destination host per minute, across principals.
     pub verification_per_host_per_minute: u32,
@@ -137,6 +160,8 @@ pub struct EventsConfig {
     pub callback_allow_private: Vec<String>,
     /// Built-in sources.
     pub sources: EventsSourcesConfig,
+    /// `watch.<capability>.changed` poller bounds.
+    pub watch: EventsWatchConfig,
     /// `schedule.tick` timer bounds.
     pub schedule: EventsScheduleConfig,
     /// First retry delay; later ones grow by a factor of 3, with full jitter.
@@ -183,6 +208,7 @@ impl Default for EventsConfig {
             verification_per_host_per_minute: 10,
             callback_allow_private: Vec::new(),
             sources: EventsSourcesConfig::default(),
+            watch: EventsWatchConfig::default(),
             schedule: EventsScheduleConfig::default(),
             retry_base: Duration::from_secs(10),
             retry_max_attempts: 5,
@@ -216,6 +242,8 @@ impl EventsConfig {
                 self.max_subscriptions_per_principal,
             ),
             ("queue_depth", self.queue_depth),
+            ("seen_max_per_route", self.seen_max_per_route),
+            ("dead_letter_max_records", self.dead_letter_max_records),
             ("max_in_flight", self.max_in_flight),
             ("max_outbox", self.max_outbox),
             (
@@ -227,6 +255,11 @@ impl EventsConfig {
                 "max_verified_tail_per_principal",
                 self.max_verified_tail_per_principal,
             ),
+            ("watch.max_pollers", self.watch.max_pollers),
+            (
+                "watch.max_pollers_per_principal",
+                self.watch.max_pollers_per_principal,
+            ),
             ("schedule.max_timers", self.schedule.max_timers),
             (
                 "schedule.max_timers_per_principal",
@@ -235,6 +268,9 @@ impl EventsConfig {
         ];
         if let Some((name, _)) = caps.iter().find(|(_, v)| *v == 0) {
             return fail(&format!("{name} must be nonzero"));
+        }
+        if self.dead_letter_max_bytes == 0 {
+            return fail("dead_letter_max_bytes must be nonzero");
         }
         let timings = [
             ("retry_base", self.retry_base),
@@ -303,6 +339,38 @@ mod tests {
         };
         assert!(config.validate().is_err());
         assert_eq!(parse_cidr("10.0.0.0/8").map(|(_, l)| l), Some(8));
+    }
+
+    /// MIK-7854.EVENTS.2: the route dedupe and dead-letter caps refuse zero.
+    #[test]
+    fn dedupe_and_dead_letter_caps_refuse_zero() {
+        let zeroed = [
+            (
+                "seen_max_per_route",
+                EventsConfig {
+                    seen_max_per_route: 0,
+                    ..EventsConfig::default()
+                },
+            ),
+            (
+                "dead_letter_max_records",
+                EventsConfig {
+                    dead_letter_max_records: 0,
+                    ..EventsConfig::default()
+                },
+            ),
+            (
+                "dead_letter_max_bytes",
+                EventsConfig {
+                    dead_letter_max_bytes: 0,
+                    ..EventsConfig::default()
+                },
+            ),
+        ];
+        for (name, config) in zeroed {
+            let error = config.validate().expect_err(name).to_string();
+            assert!(error.contains(name), "{name}: {error}");
+        }
     }
 
     #[test]

@@ -393,20 +393,20 @@ impl Backend {
         result
     }
 
-    /// Start (or reuse) the slot's transport, recording a failed start on the
-    /// slot's failsafe like any other failed dispatch (F17). Both the request
-    /// and the notify path start here, on every transport, so a command that
-    /// cannot spawn, a refused or stalled upgrade and a failed `initialize` all
-    /// count toward the breaker, whose refusal then names the start error.
-    async fn start_recorded(
+    /// Start (or reuse) the slot's transport. Both the request and the notify path
+    /// start here, on every transport: a failed spawn, upgrade or `initialize` is
+    /// recorded on the slot's failsafe (F17) so the breaker names it, then returned
+    /// as the pre-send refusal it is ([`super::lifecycle::pre_send_start_error`]).
+    pub(super) async fn start_recorded(
         &self,
         key: &super::pool::PoolKey,
         entry: &super::PooledEntry,
         started_at: std::time::Instant,
     ) -> Result<std::sync::Arc<dyn crate::transport::Transport>> {
-        self.ensure_entry_started(key).await.inspect_err(|e| {
-            self.record_dispatch_error(entry, started_at.elapsed(), e, "Start");
-        })
+        let started = self.ensure_entry_started(key).await;
+        started
+            .inspect_err(|e| self.record_dispatch_error(entry, started_at.elapsed(), e, "Start"))
+            .map_err(|e| super::lifecycle::pre_send_start_error(&self.name, e))
     }
 
     /// Record a failed dispatch against the slot's failsafe, log it, and count

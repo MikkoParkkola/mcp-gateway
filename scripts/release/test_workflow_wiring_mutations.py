@@ -1717,6 +1717,63 @@ CASES += [
     ("full-burst-runs-another-test", "mrtr7b-full-burst.yml",
      "            mik_7479_full_burst_every_call_reaches_one_terminal_frame --nocapture",
      "            mik_7479_one_call_reaches_one_terminal_frame --nocapture", CAUGHT),
+    # MIK-7835: a source PR compiles on both declared toolchains, fatally.
+    ("release-compile-drops-the-dockerfile-row", "docker.yml",
+     "        source: [dockerfile, rust-version]\n", "        source: [rust-version]\n", CAUGHT),
+    ("release-compile-drops-the-rust-version-row", "docker.yml",
+     "        source: [dockerfile, rust-version]\n", "        source: [dockerfile]\n", CAUGHT),
+    ("release-compile-tolerated", "docker.yml",
+     "      - name: Compile as the image does (release, locked, default features)\n",
+     "      - name: Compile as the image does (release, locked, default features)\n"
+     "        continue-on-error: true\n", CAUGHT),
+    ("release-compile-not-selected-by-source", "docker.yml",
+     "            compile true \"source changed\"\n", "            echo \"source changed\"\n", CAUGHT),
+    ("release-compile-ungated-off", "docker.yml",
+     "    if: needs.scope.outputs.compile_check == 'true'\n", "    if: false\n", CAUGHT),
+    # MIK-7678: the recursion margin runs in a required job, fatally.
+    ("recursion-margin-dropped", "ci.yml", "        run: scripts/ci/check-recursion-margin.sh\n",
+     "        run: echo skipped\n", CAUGHT),
+    ("recursion-margin-tolerated", "ci.yml", "        run: scripts/ci/check-recursion-margin.sh\n",
+     "        continue-on-error: true\n        run: scripts/ci/check-recursion-margin.sh\n", CAUGHT),
+    # MIK-7952: the chart is published over the signed image, by this workflow's identity.
+    ("chart-publish-stops-waiting-for-the-image", "ci.yml",
+     "    name: Publish and sign the Helm chart\n    needs: docker-manifest\n",
+     "    name: Publish and sign the Helm chart\n    needs: docker-build\n", CAUGHT),
+    ("chart-publish-ignores-a-failed-manifest", "ci.yml",
+     "      && needs.docker-manifest.result == 'success'\n", "", CAUGHT),
+    ("chart-published-for-a-prerelease", "ci.yml",
+     "      && needs.docker-manifest.outputs.is_prerelease == 'false')\n", ")\n", CAUGHT),
+    ("chart-pins-the-movable-tag", "ci.yml",
+     'image="ghcr.io/mikkoparkkola/mcp-gateway@${SIGNED_LIST}"; repo=oci://ghcr.io/mikkoparkkola/charts\n',
+     'image="ghcr.io/mikkoparkkola/mcp-gateway:${GITHUB_REF_NAME#v}"; repo=oci://ghcr.io/mikkoparkkola/charts\n', CAUGHT),
+    ("chart-signed-as-a-fixed-identity", "ci.yml",
+     "          IDENTITY: https://github.com/${{ github.workflow_ref }}\n",
+     "          IDENTITY: https://github.com/MikkoParkkola\n", CAUGHT),
+    ("chart-publisher-not-run", "ci.yml",
+     '            scripts/release/publish_pinned_chart.sh "$image" "$repo"',
+     '            true "$image" "$repo"', CAUGHT),
+    ("chart-wrong-identity-check-dropped", "ci.yml",
+     '          if cosign verify --certificate-identity "$wrong"',
+     '          if false && cosign verify --certificate-identity "$wrong"', CAUGHT),
+    ("chart-wrong-identity-any-failure-passes", "ci.yml",
+     "          grep -q 'none of the expected identities matched'",
+     "          true || grep -q 'none of the expected identities matched'", CAUGHT),
+    # MIK-7484: the documented recipe serves a call, on the built image, fatally.
+    ("recipe-smoke-dropped", "docker.yml", "        run: scripts/dev/docker-smoke.sh\n",
+     "        run: echo skipped\n", CAUGHT),
+    ("recipe-smoke-tolerated", "docker.yml", "        run: scripts/dev/docker-smoke.sh\n",
+     "        continue-on-error: true\n        run: scripts/dev/docker-smoke.sh\n", CAUGHT),
+    ("recipe-smoke-builds-on-the-host", "docker.yml", '          MCP_GATEWAY_INIT_IN_IMAGE: "1"\n',
+     '          MCP_GATEWAY_INIT_IN_IMAGE: "0"\n', CAUGHT),
+    ("recipe-smoke-rebuilds-the-image", "docker.yml", '          MCP_GATEWAY_DOCKER_BUILD: "0"\n',
+     '          MCP_GATEWAY_DOCKER_BUILD: "1"\n', CAUGHT),
+    # MIK-7644: the Windows suite skips the full burst, and only the full burst.
+    ("windows-runs-the-full-burst", "ci.yml",
+     "--no-fail-fast -- --show-output --skip mik_7479_full_burst\n",
+     "--no-fail-fast -- --show-output\n", CAUGHT),
+    ("windows-skip-also-drops-the-per-pr-burst", "ci.yml",
+     "--no-fail-fast -- --show-output --skip mik_7479_full_burst\n",
+     "--no-fail-fast -- --show-output --skip mik_7479_full_burst --skip ac_mrtr_7b_every\n", CAUGHT),
 ]
 
 # Throwaway runs carry the release tooling's Python suites. The hosted job is
@@ -1773,6 +1830,28 @@ CASES += [
      "  # Same run on the self-hosted arm64 runner.", CAUGHT),
     ("trusted-throwaway-swallows-failures", "ci.yml",
      _TRUSTED_HEAD, "    continue-on-error: true\n" + _TRUSTED_HEAD, CAUGHT),
+]
+
+# MIK-7850: the ranking corpus compare runs every ref and fails on a mismatch.
+_CORPUS_NAME = "      - name: Ranking corpus regenerates byte for byte (MIK-7850)\n"
+_CORPUS_CMP = '          python3 benchmarks/ranking-baseline/gen_corpus.py "$tree" | cmp - benchmarks/ranking-baseline/corpus.json\n'
+_CORPUS_STEP = (
+    _CORPUS_NAME
+    + "        run: |\n"
+    + "          set -euo pipefail\n"
+    + "          git fetch --no-tags --depth=1 origin f241b464acf6007a88ebc2b576c0825350b018a1\n"
+    + "          tree=$(mktemp -d)\n"
+    + '          git archive FETCH_HEAD capabilities | tar -x -C "$tree"\n'
+    + _CORPUS_CMP
+)
+CASES += [
+    ("corpus-compare-deleted", "ci.yml", _CORPUS_STEP, "", CAUGHT),
+    ("corpus-compare-masked", "ci.yml", _CORPUS_CMP, _CORPUS_CMP[:-1] + " || true\n", CAUGHT),
+    ("corpus-compare-continues-on-error", "ci.yml",
+     _CORPUS_NAME, _CORPUS_NAME + "        continue-on-error: true\n", CAUGHT),
+    ("corpus-compare-without-pipefail", "ci.yml",
+     "          set -euo pipefail\n          git fetch --no-tags --depth=1 origin f241b464",
+     "          git fetch --no-tags --depth=1 origin f241b464", CAUGHT),
 ]
 
 def verdict(directory, workflow, before, after):

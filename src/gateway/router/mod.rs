@@ -30,6 +30,7 @@ use crate::security::firewall::Firewall;
 mod accounts;
 use crate::personal_accounts::AccountHandles;
 pub(crate) use accounts::{ConnectOffers, account_handles_of};
+pub(crate) use handlers::shape_modern_response;
 mod authorization;
 pub use authorization::CallerStanding;
 pub(crate) use authorization::{
@@ -50,6 +51,8 @@ pub(crate) mod helpers;
 mod origin_guard;
 #[cfg(feature = "firewall")]
 mod response_pass;
+mod watch_poll;
+pub(crate) use watch_poll::GatewayWatchHost;
 
 /// `true` when `host` names the loopback interface.
 ///

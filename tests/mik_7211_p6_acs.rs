@@ -52,11 +52,35 @@ mod source_checks {
         }
     }
 
-    /// Whether `text` names the key outside a line comment. Nothing is
-    /// stripped: test code counts too, so a file is excused only by name.
+    /// Whether `text` names the key outside a line comment, full-line or
+    /// trailing. Nothing else is stripped: test code counts too, so a file is
+    /// excused only by name.
     fn writes_the_key(text: &str) -> bool {
         text.lines()
-            .any(|l| !l.trim_start().starts_with("//") && l.contains("\"cacheScope\""))
+            .any(|l| code_part(l).contains("\"cacheScope\""))
+    }
+
+    /// `line` up to a `//` comment, if one starts outside a string literal
+    /// (so a URL in a string does not cut the line short).
+    fn code_part(line: &str) -> &str {
+        // `escaped`: the previous char was an unescaped `\` inside a string,
+        // so `"C:\\"` closes its string (escape parity, not the prior char).
+        let (mut in_string, mut escaped, mut prev) = (false, false, '\0');
+        for (i, c) in line.char_indices() {
+            match c {
+                '\\' if in_string && !escaped => {
+                    escaped = true;
+                    prev = c;
+                    continue;
+                }
+                '"' if !escaped => in_string = !in_string,
+                '/' if !in_string && prev == '/' => return &line[..i - 1],
+                _ => {}
+            }
+            escaped = false;
+            prev = c;
+        }
+        line
     }
 
     /// Cutting a file at its first `#[cfg(test)]` hid every production writer
@@ -72,8 +96,25 @@ mod source_checks {
         assert!(!writes_the_key("// \"cacheScope\" in a comment\n"));
     }
 
+    /// MIK-7860: a trailing comment naming the key is a comment, and a `//`
+    /// inside a string literal does not hide the key after it.
+    #[test]
+    fn a_trailing_comment_is_not_a_writer() {
+        assert!(!writes_the_key("let x = 1; // sets \"cacheScope\"\n"));
+        assert!(writes_the_key(
+            "let u = \"https://a.example\"; let _ = \"cacheScope\";\n"
+        ));
+        // An escaped backslash closes its string: the comment after it is cut,
+        // and a key after a URL that follows it still counts.
+        assert!(!writes_the_key("let p = \"C:\\\\\"; // \"cacheScope\"\n"));
+        assert!(writes_the_key(
+            "let p = \"C:\\\\\"; let u = \"https://a\"; let _ = \"cacheScope\";\n"
+        ));
+    }
+
     /// Test 7 (b). A drift check, and labelled as one: `"cacheScope"` is
-    /// written only by `shape_modern_response` and the clamp.
+    /// written only by `cacheable::write_cache_hints` (which the modern shaper
+    /// and discovery both call) and the clamp.
     #[test]
     fn only_the_shaper_and_the_clamp_name_the_key() {
         let mut files = Vec::new();
@@ -87,7 +128,6 @@ mod source_checks {
         // built without the literal; the wire tests below cover delivery.
         let allowed = [
             "src/gateway/router/handlers.rs",
-            "src/gateway/router/handlers/modern_response.rs",
             "src/protocol/cacheable.rs",
             "src/gateway/meta_mcp/chain_emission_tests.rs",
             // MIK-7910: pins that a bridged prompt reaches the client with its

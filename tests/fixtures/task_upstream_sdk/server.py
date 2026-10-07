@@ -167,7 +167,15 @@ class Counting:
 
 
 if __name__ == "__main__":
+    import socket
+
     import uvicorn
 
     app = Counting(mcp.http_app(path="/mcp"))
-    uvicorn.run(app, host="127.0.0.1", port=OPTIONS.port, log_level="warning")
+    # Bound here, not by uvicorn, so `--port 0` works: the test reads the
+    # OS-chosen port from this line instead of picking one and dropping it.
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", OPTIONS.port))
+    print(f"listening port {sock.getsockname()[1]}", flush=True)
+    server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
+    server.run(sockets=[sock])

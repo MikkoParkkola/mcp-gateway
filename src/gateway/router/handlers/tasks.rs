@@ -136,6 +136,8 @@ pub(super) struct TaskIntentRequest<'a> {
     pub session_id: Option<&'a str>,
     /// Protocol revision negotiated for this session.
     pub protocol_revision: Option<&'a str>,
+    /// The request's meta-tool surface, which the task's recovery hints follow.
+    pub surface_request: crate::gateway::recovery::SurfaceRequest,
 }
 
 /// Build a `'static` intent, or a refusal, or `None` for the ordinary path.
@@ -212,7 +214,8 @@ pub(super) fn task_intent_for_call(
             req.protocol_revision.map(str::to_owned),
             req.retry.attestation.clone(),
         )
-        .with_caller_key(Some(caller_key)),
+        .with_caller_key(Some(caller_key))
+        .with_surface_request(req.surface_request),
         // One builder, shared with the confirmation gate's read-only committed
         // lookup, and the SAME owner string the read arms use. Two renderings
         // of one caller is how an accepted retry's replay misses the task it
@@ -289,6 +292,7 @@ fn with_policy_caller<R>(
         caller_key: Some(caller_key.as_str()).filter(|key| !key.is_empty()),
         verified_identity: caller.verified_identity,
         is_admin: caller.is_admin,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: caller.input_capabilities,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         retry: &crate::protocol::mrtr::NO_RETRY,
@@ -436,13 +440,14 @@ pub(super) async fn tasks_update(
     state: &Arc<AppState>,
     owner: &str,
     id: RequestId,
-    params: Option<&Value>,
+    // The update request's own `?codemode=`, which the resumed call's hints follow.
+    (params, surface_request): (Option<&Value>, crate::gateway::recovery::SurfaceRequest),
     caller: &RecoveryCaller<'_>,
 ) -> JsonRpcResponse {
     let owner_text = TaskOwnerText::Http(owner.to_owned());
     route(state, &owner_text)
         .update(id, params, |owner| {
-            update_caller(state, owner, params, caller)
+            update_caller(state, owner, params, caller).with_surface_request(surface_request)
         })
         .await
 }
