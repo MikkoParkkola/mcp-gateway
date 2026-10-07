@@ -163,3 +163,24 @@ async fn a_capability_first_read_by_a_partial_read_is_kept_when_its_directory_fa
         "first read by a partial read: kept"
     );
 }
+
+/// MIK-8057 round 1 (P16): beta's file appears in `d1`, which read cleanly
+/// before, but does not parse. Nothing proves beta absent, so its
+/// subscription is kept until a clean read.
+#[tokio::test]
+async fn a_capability_whose_new_file_does_not_parse_is_kept() {
+    let (_root, store, d1, _d2, caps, meta) = two_dirs().await;
+    seed_subscription(store.path(), "gamma");
+    std::fs::write(d1.join("gamma.yaml"), "name: gamma\nwebhooks: [").expect("half-written");
+    reload(&caps, &meta).await;
+    assert!(
+        subscribed(store.path(), "gamma"),
+        "an unparseable file is not a deletion"
+    );
+    std::fs::remove_file(d1.join("gamma.yaml")).expect("gone for good");
+    reload(&caps, &meta).await;
+    assert!(
+        !subscribed(store.path(), "gamma"),
+        "a clean read proves it absent"
+    );
+}
