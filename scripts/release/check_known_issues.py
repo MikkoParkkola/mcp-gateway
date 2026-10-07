@@ -101,15 +101,22 @@ def title_readings(text, keep="a-z"):
     return (title_letters(text, keep), title_letters(QUOTED_TAG.sub("", text), keep))
 
 
+def opens_comment(line):
+    """True when `line` leaves an HTML comment open."""
+    return line.rfind("<!--") > line.rfind("-->")
+
+
 def is_text(line):
-    """True when `line` can only be paragraph text: not blank, and no list,
-    quote, heading, fence, raw HTML or comment opener."""
+    """True when `line` can be paragraph text: not blank, and, indent aside
+    (a continuation line may be indented), no list, quote, heading, fence,
+    raw HTML or open comment."""
+    bare = line.lstrip()
     return bool(
-        line.strip()
-        and not NOT_A_PARAGRAPH.match(line)
-        and not FENCE.match(line)
-        and not HTML.match(line)
-        and "<!--" not in line
+        bare
+        and not NOT_A_PARAGRAPH.match(bare)
+        and not FENCE.match(bare)
+        and not HTML.match(bare)
+        and not opens_comment(line)
     )
 
 
@@ -204,7 +211,9 @@ def known_issues(text):
     for i, line in enumerate(lines):
         if starts_section(lines, i):
             inside, underline = True, not atx_start(line)
-            title = next(text for text in title_lines(lines, i) + (line,) if is_title(text))
+            # The longest reading that holds the title, so text around it in
+            # the same heading is kept.
+            title = max((t for t in title_lines(lines, i) + (line,) if is_title(t)), key=len)
             # Content too: a title with both a code span and a tag (which
             # renders depends on span boundaries this reader does not
             # decide), a title only its letters spell, or leftover letters
@@ -221,13 +230,19 @@ def known_issues(text):
                 # text) is content too, so nothing it says is dropped. A
                 # wrapped title is kept whole: every line of it.
                 body.append(title)
+            # A start line may also open a fence or a comment; its state
+            # still changes, or what it hides would read as section ends.
+            if FENCE.match(line):
+                fence = step_fence(fence, line)
+            if HTML.match(line) or opens_comment(line):
+                sticky = True
             continue
         if underline:
             underline = False
             continue
         # Raw HTML, or a comment left open after text: either can hide a
         # heading, so the section reads on to the end of the notes.
-        if inside and not fence and (HTML.match(line) or line.rfind("<!--") > line.rfind("-->")):
+        if inside and not fence and (HTML.match(line) or opens_comment(line)):
             sticky = True
         if fence or FENCE.match(line):
             fence = step_fence(fence, line)
