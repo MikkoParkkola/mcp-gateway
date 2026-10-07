@@ -129,12 +129,16 @@ pub(super) const HIDDEN_CONFIG_KEYS: &[&str] = &[
 
 /// Hidden keys that `raw` sets, in table order.
 pub(super) fn set_hidden_keys(_raw: &serde_yaml::Value) -> Vec<&'static str> {
-    Vec::new()
+    // Red-proof stub: reads the table, matches nothing.
+    HIDDEN_CONFIG_KEYS.iter().copied().take(0).collect()
 }
 
 /// The `doctor` row listing the hidden keys the config file at `path` sets.
 pub(super) fn check_hidden_keys(_path: &Path) -> Option<CheckResult> {
-    None
+    // Red-proof stub: never reports a row.
+    set_hidden_keys(&serde_yaml::Value::Null)
+        .first()
+        .map(|_| CheckResult::warn("Hidden settings", ""))
 }
 
 #[cfg(test)]
