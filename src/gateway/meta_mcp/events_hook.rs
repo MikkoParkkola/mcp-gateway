@@ -68,12 +68,14 @@ impl MetaMcp {
             // retried from the stored state, the worker held meanwhile.
             let retry = std::time::Duration::from_secs(5);
             let first = startup_pass(Pass::First, &hub, capabilities.clone(), registry.clone());
-            hub.reconcile_until_done("first", first, retry).await;
+            hub.reconcile_until_done(Pass::First.label(), first, retry)
+                .await;
             // Unoffered webhook types wait out the grace period: a reload the
             // scan did not see may still offer them (MIK-8027).
             tokio::time::sleep(withdraw_grace()).await;
             let deferred = startup_pass(Pass::Deferred, &hub, capabilities, registry);
-            hub.reconcile_until_done("deferred", deferred, retry).await;
+            hub.reconcile_until_done(Pass::Deferred.label(), deferred, retry)
+                .await;
         });
     }
 
@@ -90,8 +92,12 @@ impl MetaMcp {
             self.get_capabilities(),
             self.get_webhook_registry(),
         );
-        hub.reconcile_until_done("deferred", pass, std::time::Duration::from_millis(10))
-            .await;
+        hub.reconcile_until_done(
+            Pass::Deferred.label(),
+            pass,
+            std::time::Duration::from_millis(10),
+        )
+        .await;
     }
 
     /// The events hub, when events are on for this transport.
@@ -293,6 +299,12 @@ fn apply_webhook_refresh(
             .filter(|name| !kept(name))
             .cloned()
             .collect();
+        if !gone.is_empty() {
+            tracing::info!(
+                withdrawn = gone.len(),
+                "events: a reload inside the startup grace period withdrew the types it removed"
+            );
+        }
         hub.withdraw(&gone)
     };
     if !withdrawn {
@@ -309,6 +321,16 @@ enum Pass {
     /// After the grace period: from now on an unoffered webhook type is
     /// withdrawn (MIK-8027).
     Deferred,
+}
+
+impl Pass {
+    /// The name its retry logs carry.
+    fn label(self) -> &'static str {
+        match self {
+            Self::First => "first",
+            Self::Deferred => "deferred",
+        }
+    }
 }
 
 /// One startup reconcile pass, as the refresh `reconcile_until_done` runs
