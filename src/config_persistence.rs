@@ -82,17 +82,18 @@ mod splice;
 
 /// What a write does when it cannot keep the file's comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CommentLoss {
-    /// Re-serialise the whole file (CLI, setup import).
+pub enum CommentLoss {
+    /// Re-serialise the whole file (a CLI write given `--force`, and the
+    /// public `config_reload` write API).
     Rewrite,
-    /// Write nothing and say what would be lost (web UI backend edits), and
-    /// skip a write that would change nothing.
+    /// Write nothing and say what would be lost (web UI backend edits and
+    /// CLI writes), and skip a write that would change nothing.
     Refuse,
 }
 
 /// A config write that did not happen.
 #[derive(Debug)]
-pub(crate) enum Unwritten {
+pub enum Unwritten {
     /// Validation, serialisation or I/O failed; the message says which.
     Failed(String),
     /// Refused under [`CommentLoss::Refuse`]; the message names the comments.
@@ -115,11 +116,12 @@ impl From<String> for Unwritten {
 /// another writer changed into something more than one backend away, is
 /// rewritten in full, or refused. An edit landing after that read is
 /// overwritten by the rename, as the full rewrite overwrites it.
-pub(crate) fn write_config_with(
-    path: &Path,
-    config: &Config,
-    mode: CommentLoss,
-) -> Result<(), Unwritten> {
+///
+/// # Errors
+///
+/// [`Unwritten::CommentLoss`] when `mode` refuses a write that would drop
+/// comments; [`Unwritten::Failed`] on validation, serialisation or I/O failure.
+pub fn write_config_with(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), Unwritten> {
     config
         .validate_with_env(&config.env_overlay())
         .map_err(|e| format!("Failed to validate config: {e}"))?;

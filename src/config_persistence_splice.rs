@@ -465,9 +465,11 @@ pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
         format!(" (and {rest} more)")
     };
     format!(
-        "Not saved: this edit cannot be written into {} as a text change (flow style, or a \
-         comment inside the changed value), and a full rewrite would drop its comments: {}{more}. \
-         Edit the file by hand, or use `mcp-gateway add` / `remove`.",
+        "Not saved: this edit cannot be written into {} as a text change (flow style, a \
+         comment inside the changed value, or more than one backend changed), and a full \
+         rewrite would drop its comments: {}{more}. \
+         Edit the file by hand, or run the CLI command again with `--force` to rewrite \
+         the file without its comments.",
         path.display(),
         comments[..comments.len().min(SHOWN)].join("; ")
     )

@@ -12,6 +12,7 @@ use mcp_gateway::{
         validate_capability_definition,
     },
     cli::CapCommand,
+    config_persistence::CommentLoss,
     discovery::{
         AutoDiscovery,
         shadow::{ShadowRemediationAction, ShadowScanReport, ShadowTrustStatus},
@@ -39,7 +40,19 @@ pub async fn run_cap_command(cmd: CapCommand, config: Option<&std::path::Path>) 
             config_path,
             shadow,
             gateway_config,
-        } => cap_discover(format, write_config, config_path, shadow, gateway_config).await,
+            force,
+        } => {
+            let mode = super::config_write::comment_loss(force);
+            cap_discover(
+                format,
+                write_config,
+                config_path,
+                shadow,
+                gateway_config,
+                mode,
+            )
+            .await
+        }
         CapCommand::Install {
             name,
             from_github,
@@ -307,6 +320,7 @@ async fn cap_discover(
     config_path: Option<std::path::PathBuf>,
     shadow: bool,
     gateway_config: Option<std::path::PathBuf>,
+    mode: CommentLoss,
 ) -> ExitCode {
     let discovery = AutoDiscovery::new();
     let structured_output = matches!(format.as_str(), "json" | "yaml");
@@ -322,6 +336,7 @@ async fn cap_discover(
                     gateway_config,
                     write_config,
                     config_path,
+                    mode,
                 )
                 .await;
             }
@@ -345,7 +360,7 @@ async fn cap_discover(
             print_discovered_servers(&servers, &format);
             if write_config {
                 say("\n📝 Writing discovered servers to config...");
-                match crate::write_discovered_to_config(&servers, config_path.as_deref()) {
+                match crate::write_discovered_to_config(&servers, config_path.as_deref(), mode) {
                     Ok(path) => {
                         say(&format!("✅ Config written to {}", path.display()));
                         say(&format!(
@@ -379,6 +394,7 @@ async fn cap_discover_shadow(
     gateway_config: Option<std::path::PathBuf>,
     write_config: bool,
     output_config_path: Option<std::path::PathBuf>,
+    mode: CommentLoss,
 ) -> ExitCode {
     // Resolve which gateway config to load. Try the provided path first, then
     // fall back to `gateway.yaml` in the current directory.
@@ -437,7 +453,7 @@ async fn cap_discover_shadow(
         }
 
         let apply_path = output_config_path.unwrap_or_else(|| compare_config_path.clone());
-        match crate::write_discovered_to_config(&adoptable_servers, Some(&apply_path)) {
+        match crate::write_discovered_to_config(&adoptable_servers, Some(&apply_path), mode) {
             Ok(path) => {
                 eprintln!(
                     "Adopted {} local shadow server(s) into {}",
