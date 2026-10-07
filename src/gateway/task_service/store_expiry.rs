@@ -112,7 +112,7 @@ impl TaskStore {
                 let files: Vec<&str> = state.sealed.iter().map(String::as_str).collect();
                 tracing::error!(
                     ?files,
-                    "task records with an unreadable key: new keyed calls are refused (409) until each file is repaired or removed"
+                    "task records with an unreadable key: new keyed calls are refused (409) until each file is repaired (its key is kept) or removed (its key is released)"
                 );
             }
             (state.sealed.len(), state.reserved.len())

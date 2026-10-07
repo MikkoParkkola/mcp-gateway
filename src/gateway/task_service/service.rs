@@ -87,13 +87,14 @@ impl TaskService {
         let store = TaskStore::open(path, limits)
             .await
             .map_err(|_| ServiceError::Unavailable)?;
+        // Sealed BEFORE the import, so no admission is ever answered without
+        // the seal; and apart from it, because the import returns early on an
+        // empty batch and a store whose only rows are sealed must still seal.
+        admission.set_sealed(store.skipped_records().sealed);
         if admission.import_tasks(&store.restored_bindings()).is_err() {
             let _ = store.close().await;
             return Err(ServiceError::Unavailable);
         }
-        // Set apart from the import, which returns early on an empty batch: a
-        // store whose only rows are sealed imports nothing and must still seal.
-        admission.set_sealed(store.skipped_records().sealed);
         Ok(Self { store, admission })
     }
 

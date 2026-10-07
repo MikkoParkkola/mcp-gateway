@@ -335,7 +335,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
             (None, _) => {
                 tracing::error!(
                     path = %shown_path,
-                    "task record skipped: its idempotency key cannot be read, so every new keyed call is refused (409) until an operator repairs or removes this file; that clears without a restart"
+                    "task record skipped: its idempotency key cannot be read, so every new keyed call is refused (409) until this file is repaired (its key is then kept) or removed (its key is then released, and a retry of it runs again); either clears without a restart"
                 );
                 loaded.sealed.insert(name.to_owned());
                 continue;
