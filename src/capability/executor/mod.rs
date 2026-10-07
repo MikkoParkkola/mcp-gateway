@@ -59,7 +59,7 @@ use client::send_with_retry;
 pub struct CapabilityExecutor {
     pub(super) client: Client,
     /// The client provider OAuth refreshes go through (MIK-8020).
-    pub(super) refresh: client::RefreshClient,
+    refresh: client::RefreshClient,
     pub(super) cache: ResponseCache,
     /// OAuth token storage
     pub(super) token_storage: Option<Arc<TokenStorage>>,
