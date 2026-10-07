@@ -236,24 +236,35 @@ async fn a_startup_scan_that_cannot_read_a_directory_keeps_its_subscriptions() {
     let store = tempfile::tempdir().expect("store");
     std::fs::write(dir.path().join("a.yaml"), capability("alpha")).expect("write");
     seed_subscription(store.path(), "beta");
-    // Withdrawn by the same reconcile, just before its webhook decision.
-    seed_named(store.path(), "gone", "backend.gone.tools_changed");
+    seed_sentinel(store.path());
     let (caps, registry, meta) = wired(&[dir.path()], store.path()).await;
 
     // Beta's directory failed to load.
     caps.mark_initial_scan_failed();
     caps.mark_initial_scan_complete();
-    meta.reconcile_events_after_scan();
-    settled(|| !subscribed(store.path(), "gone")).await;
-    // The sentinel went under the reconcile's catalogue gate; taking the
-    // gate waits for the webhook decision that follows under the same hold.
-    drop(meta.events().expect("hub").catalogue_lock());
-    assert!(!subscribed(store.path(), "gone"), "the reconcile ran");
+    first_pass(&meta, store.path()).await;
     assert!(
         subscribed(store.path(), "beta"),
         "the unread directory's subscription is kept"
     );
     assert_eq!(routes(&registry), ["alpha.push"]);
+}
+
+/// Run the startup reconcile and wait for its first pass. The store must
+/// hold the `gone` sentinel ([`seed_sentinel`]): it is withdrawn under the
+/// reconcile's catalogue gate, and taking the gate then waits for the
+/// webhook decision that follows under the same hold.
+async fn first_pass(meta: &MetaMcp, store: &std::path::Path) {
+    meta.reconcile_events_after_scan();
+    settled(|| !subscribed(store, "gone")).await;
+    drop(meta.events().expect("hub").catalogue_lock());
+    assert!(!subscribed(store, "gone"), "the startup reconcile ran");
+}
+
+/// A subscription to a backend no registry has: every startup reconcile
+/// withdraws it, just before its webhook decision.
+fn seed_sentinel(store: &std::path::Path) {
+    seed_named(store, "gone", "backend.gone.tools_changed");
 }
 
 /// MIK-8028 `PARTIAL.2`: the next complete reload withdraws a type that is
@@ -270,6 +281,8 @@ async fn the_next_complete_reload_withdraws_a_type_still_absent() {
     }
     let (caps, _registry, meta) = wired(&[&d1, &d2], store.path()).await;
     caps.mark_initial_scan_complete();
+    // Past the startup grace period (MIK-8027), as a running gateway is.
+    meta.run_deferred_webhook_withdraw().await;
 
     std::fs::remove_dir_all(&d2).expect("make d2 unreadable");
     caps.reload().await.expect("partial reload");
@@ -331,4 +344,215 @@ async fn a_partial_reload_withdraws_a_route_a_read_capability_dropped() {
         subscribed(store.path(), "beta"),
         "the unread directory's subscription is kept"
     );
+}
+
+/// Alpha scanned, a beta subscription stored, and the startup reconcile's
+/// first pass over: where every grace-period row (MIK-8027) starts.
+async fn after_first_pass() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    Arc<CapabilityBackend>,
+    Registry,
+    MetaMcp,
+) {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = tempfile::tempdir().expect("store");
+    std::fs::write(dir.path().join("a.yaml"), capability("alpha")).expect("write");
+    seed_subscription(store.path(), "beta");
+    seed_sentinel(store.path());
+    let (caps, registry, meta) = wired(&[dir.path()], store.path()).await;
+    caps.mark_initial_scan_complete();
+    first_pass(&meta, store.path()).await;
+    (dir, store, caps, registry, meta)
+}
+
+/// A hot reload and its notice, as the capability watcher delivers them.
+async fn reload(caps: &CapabilityBackend, meta: &MetaMcp) {
+    caps.reload().await.expect("reload");
+    meta.events_capabilities_reloaded("hooks");
+}
+
+/// MIK-8027 `RESID.1`: a reload inside the grace period that offers beta
+/// keeps the subscription the startup pass found unoffered.
+#[tokio::test]
+async fn a_type_a_reload_offers_inside_the_grace_period_keeps_its_subscription() {
+    let (dir, store, caps, registry, meta) = after_first_pass().await;
+    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    reload(&caps, &meta).await;
+    meta.run_deferred_webhook_withdraw().await;
+    assert!(
+        subscribed(store.path(), "beta"),
+        "beta's subscription outlives the startup pass"
+    );
+    assert_eq!(routes(&registry), ["alpha.push", "beta.push"]);
+}
+
+/// MIK-8027 `RESID.3`: a type nothing offers again is still withdrawn, by
+/// the deferred pass.
+#[tokio::test]
+async fn a_type_nothing_offers_again_is_withdrawn_by_the_deferred_pass() {
+    let (_dir, store, _caps, _registry, meta) = after_first_pass().await;
+    meta.run_deferred_webhook_withdraw().await;
+    assert!(!subscribed(store.path(), "beta"));
+}
+
+/// The deferred pass withdraws nothing from a partial catalogue.
+#[tokio::test]
+async fn the_deferred_pass_withdraws_nothing_from_a_partial_catalogue() {
+    let root = tempfile::tempdir().expect("root");
+    let store = tempfile::tempdir().expect("store");
+    let (d1, d2) = (root.path().join("d1"), root.path().join("d2"));
+    std::fs::create_dir_all(&d1).expect("d1");
+    std::fs::create_dir_all(&d2).expect("d2");
+    std::fs::write(d1.join("a.yaml"), capability("alpha")).expect("write");
+    seed_subscription(store.path(), "beta");
+    seed_sentinel(store.path());
+    let (caps, _registry, meta) = wired(&[&d1, &d2], store.path()).await;
+    caps.mark_initial_scan_complete();
+    first_pass(&meta, store.path()).await;
+
+    std::fs::remove_dir_all(&d2).expect("make d2 unreadable");
+    reload(&caps, &meta).await;
+    meta.run_deferred_webhook_withdraw().await;
+    assert!(
+        subscribed(store.path(), "beta"),
+        "a partial catalogue proves nothing about beta"
+    );
+}
+
+/// An unrelated reload inside the grace period withdraws nothing it did
+/// not remove; a later reload that offers beta keeps beta's subscription.
+#[tokio::test]
+async fn an_unrelated_reload_inside_the_grace_period_keeps_an_unoffered_type() {
+    let (dir, store, caps, registry, meta) = after_first_pass().await;
+    let alpha = capability("alpha") + "# edited\n";
+    std::fs::write(dir.path().join("a.yaml"), alpha).expect("edit alpha");
+    reload(&caps, &meta).await;
+    assert!(
+        subscribed(store.path(), "beta"),
+        "an unrelated reload keeps beta"
+    );
+    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    reload(&caps, &meta).await;
+    meta.run_deferred_webhook_withdraw().await;
+    assert!(subscribed(store.path(), "beta"));
+    assert_eq!(routes(&registry), ["alpha.push", "beta.push"]);
+}
+
+/// A type kept through the grace period is withdrawn by the deferred pass
+/// when nothing has offered it: a deferral, never a retention.
+#[tokio::test]
+async fn a_type_still_unoffered_at_the_deadline_is_withdrawn_then() {
+    let (dir, store, caps, _registry, meta) = after_first_pass().await;
+    let alpha = capability("alpha") + "# edited\n";
+    std::fs::write(dir.path().join("a.yaml"), alpha).expect("edit alpha");
+    reload(&caps, &meta).await;
+    assert!(
+        subscribed(store.path(), "beta"),
+        "kept inside the grace period"
+    );
+    meta.run_deferred_webhook_withdraw().await;
+    assert!(
+        !subscribed(store.path(), "beta"),
+        "withdrawn at the deadline"
+    );
+}
+
+/// A reload whose notice has not arrived is applied by the deferred pass,
+/// which refreshes the routes before it decides.
+#[tokio::test]
+async fn an_unannounced_reload_is_applied_by_the_deferred_pass() {
+    let (dir, store, caps, registry, meta) = after_first_pass().await;
+    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    caps.reload().await.expect("reload, notice still queued");
+    meta.run_deferred_webhook_withdraw().await;
+    assert!(subscribed(store.path(), "beta"));
+    assert_eq!(routes(&registry), ["alpha.push", "beta.push"]);
+}
+
+/// A refresh of beta inside the grace period answers `-32011` and leaves
+/// beta's stored row as it was.
+#[tokio::test]
+async fn a_refresh_inside_the_grace_period_answers_not_found_and_keeps_the_row() {
+    let (_dir, store, _caps, _registry, meta) = after_first_pass().await;
+    let row = store.path().join("subs").join("sub_beta.json");
+    let before = std::fs::read(&row).ok();
+    assert!(before.is_some(), "beta's row outlives the startup pass");
+    let caller = crate::events::Caller {
+        principal: Some("p".to_owned()),
+        read_key: None,
+        credential: crate::events::Credential {
+            kind: crate::security::audit::CredentialKind::None,
+            principal: String::new(),
+            api_key: None,
+            expires_at: None,
+            binding: None,
+        },
+        visible_backends: std::collections::HashSet::new(),
+        admin: false,
+    };
+    let params = serde_json::json!({ "name": "webhook.beta.push.received" });
+    let refused = meta
+        .events()
+        .expect("hub")
+        .subscribe(&caller, Some(&params))
+        .await
+        .expect_err("beta is not offered");
+    assert_eq!(refused.code, -32011);
+    assert_eq!(
+        std::fs::read(&row).ok(),
+        before,
+        "the refresh wrote nothing"
+    );
+}
+
+/// A reload inside the grace period that removes a route the startup scan
+/// registered withdraws its subscription at once, as outside it.
+#[tokio::test]
+async fn a_route_a_reload_removes_inside_the_grace_period_is_withdrawn_at_once() {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = tempfile::tempdir().expect("store");
+    std::fs::write(dir.path().join("a.yaml"), capability("alpha")).expect("write");
+    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    seed_subscription(store.path(), "beta");
+    seed_sentinel(store.path());
+    let (caps, _registry, meta) = wired(&[dir.path()], store.path()).await;
+    caps.mark_initial_scan_complete();
+    first_pass(&meta, store.path()).await;
+    assert!(subscribed(store.path(), "beta"), "beta is offered");
+
+    std::fs::remove_file(dir.path().join("b.yaml")).expect("remove beta");
+    reload(&caps, &meta).await;
+    assert!(
+        !subscribed(store.path(), "beta"),
+        "the removal withdraws it"
+    );
+}
+
+/// A route the startup scan registered and an unannounced reload removed
+/// before the first pass is withdrawn by that pass, as a reload inside the
+/// grace period withdraws what it removes: a narrower restore must not
+/// inherit the subscription.
+#[tokio::test]
+async fn a_route_removed_before_the_first_pass_is_withdrawn_by_it() {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = tempfile::tempdir().expect("store");
+    std::fs::write(dir.path().join("a.yaml"), capability("alpha")).expect("write");
+    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    seed_subscription(store.path(), "alpha");
+    seed_subscription(store.path(), "beta");
+    seed_sentinel(store.path());
+    let (caps, registry, meta) = wired(&[dir.path()], store.path()).await;
+    caps.mark_initial_scan_complete();
+    std::fs::remove_file(dir.path().join("b.yaml")).expect("remove beta");
+    caps.reload()
+        .await
+        .expect("reload, its notice not yet handled");
+    first_pass(&meta, store.path()).await;
+    assert_eq!(routes(&registry), ["alpha.push"]);
+    assert!(
+        !subscribed(store.path(), "beta"),
+        "the first pass withdraws the type its refresh removed"
+    );
+    assert!(subscribed(store.path(), "alpha"), "and nothing else");
 }
