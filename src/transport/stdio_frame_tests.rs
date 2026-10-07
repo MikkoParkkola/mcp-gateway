@@ -162,3 +162,71 @@ async fn a_configured_smaller_limit_refuses_a_frame_the_default_accepts() {
     assert!(frames(&input).await[0].is_ok());
     assert!(frames_within(&input, 65_536).await[0].is_err());
 }
+
+/// MIK-8079: a request dropped mid-write must not leave a partial frame on the
+/// shared stdin. The backend stops reading after the handshake so a large
+/// frame blocks on the full pipe, the caller gives up, and a later message is
+/// written; once the backend reads again, every line it got must be whole JSON.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dropped_request_leaves_no_partial_frame_for_the_next_caller() {
+    use crate::transport::Transport as _;
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("frames.log");
+    let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
+    let script = format!(
+        "while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
+         *'notifications/initialized'*) sleep 2; break ;;\n\
+         esac\ndone\n\
+         while IFS= read -r line; do printf '%s\\n' \"$line\" >> \"{log}\"; done\n",
+        log = log.display()
+    );
+    std::fs::write(dir.path().join("reader.sh"), script).unwrap();
+    let transport = super::StdioTransport::new(
+        "sh reader.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(5),
+        None,
+    );
+    transport.start().await.expect("start");
+
+    // Far over a pipe buffer, so the write blocks while the backend sleeps.
+    let big = serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+    let dropped = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        transport.request("tools/call", Some(big)),
+    )
+    .await;
+    assert!(
+        dropped.is_err(),
+        "precondition: the large request was still writing"
+    );
+
+    transport
+        .notify("notifications/roots/list_changed", None)
+        .await
+        .expect("a later message is written");
+
+    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+    let frames = std::fs::read_to_string(&log).unwrap_or_default();
+    let torn: Vec<String> = frames
+        .lines()
+        .filter(|line| serde_json::from_str::<serde_json::Value>(line).is_err())
+        .map(|line| line.chars().take(80).collect())
+        .collect();
+    assert!(
+        torn.is_empty(),
+        "the backend received {} torn frame(s), e.g. {:?}",
+        torn.len(),
+        torn.first()
+    );
+    assert!(
+        frames.contains("notifications/roots/list_changed"),
+        "the later message arrived: {} bytes logged",
+        frames.len()
+    );
+}
