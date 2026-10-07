@@ -72,10 +72,33 @@ impl CapabilityBackend {
     }
 
     /// Whether every configured directory loaded (meaningful once the scan
-    /// is complete): a failed one leaves the catalogue partial.
+    /// is complete): a failed one leaves the catalogue partial. A reload
+    /// rewrites this for the catalogue it installs (MIK-8028), so it always
+    /// describes the current catalogue.
     #[must_use]
     pub(crate) fn initial_scan_loaded_every_directory(&self) -> bool {
         self.initial_scan.load(std::sync::atomic::Ordering::Acquire) & FAILED == 0
+    }
+
+    /// Record whether the catalogue a reload is installing misses a
+    /// directory. Called under the capabilities write lock, with the swap.
+    pub(crate) fn set_catalogue_partial(&self, partial: bool) {
+        use std::sync::atomic::Ordering::AcqRel;
+        if partial {
+            self.initial_scan.fetch_or(FAILED, AcqRel);
+        } else {
+            self.initial_scan.fetch_and(!FAILED, AcqRel);
+        }
+    }
+
+    /// The capabilities and whether every directory loaded, read under one
+    /// lock, so a reload cannot change one without the other (MIK-8028).
+    pub(crate) fn catalogue_snapshot(&self) -> (Vec<super::CapabilityDefinition>, bool) {
+        let caps = self.capabilities.read();
+        (
+            caps.entries.clone(),
+            self.initial_scan_loaded_every_directory(),
+        )
     }
 }
 
