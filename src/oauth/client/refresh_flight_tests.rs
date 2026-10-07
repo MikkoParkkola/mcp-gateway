@@ -623,7 +623,9 @@ async fn a_token_spent_while_storage_refuses_writes_is_not_resent() {
     server.arrivals(1, Duration::from_secs(5)).await;
     set_mode(0o500);
     if std::fs::write(dir.path().join("probe"), b"").is_ok() {
-        // Privileged runner: a read-only directory still takes writes.
+        // Privileged runner: a read-only directory still takes writes, so
+        // the double fault cannot be staged here.
+        eprintln!("skipped: the storage directory stays writable (privileged runner)");
         set_mode(0o700);
         server.release.notify_one();
         return;
@@ -666,11 +668,20 @@ async fn a_login_save_waits_for_a_running_refresh() {
         let refresher = Arc::clone(&refresher);
         async move { headless(&refresher).await }
     });
-    gate.reached.notified().await;
+    tokio::time::timeout(Duration::from_secs(5), gate.reached.notified())
+        .await
+        .expect("the refresh reached its save");
     *flight.save_gate.lock() = None;
     let login = tokio::spawn(async move { login.try_client_credentials().await });
     server.arrivals(2, Duration::from_secs(5)).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // An unlocked save finishes well inside this window; a locked one never
+    // does while the refresh is parked.
+    let _ = tokio::time::timeout(Duration::from_secs(2), async {
+        while !login.is_finished() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
     assert!(
         !login.is_finished(),
         "the login saved past a running refresh"
