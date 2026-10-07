@@ -111,11 +111,10 @@ impl From<String> for Unwritten {
 /// the file already loads as writes nothing.
 ///
 /// The file is loaded through the strict loader from a single read, and that
-/// exact text is the one edited when `config` differs from it only in
-/// `backends`: each backend added, removed or edited is spliced in turn, and
-/// the file is written once. A file that does not load, a change outside
-/// `backends`, or a backend the splice cannot express is rewritten in full,
-/// or refused. An edit landing after that read is
+/// exact text is the one edited when `config` differs from it by exactly one
+/// backend added, removed or edited. A file that does not load, or that
+/// another writer changed into something more than one backend away, is
+/// rewritten in full, or refused. An edit landing after that read is
 /// overwritten by the rename, as the full rewrite overwrites it.
 ///
 /// # Errors
@@ -123,6 +122,26 @@ impl From<String> for Unwritten {
 /// [`Unwritten::CommentLoss`] when `mode` refuses a write that would drop
 /// comments; [`Unwritten::Failed`] on validation, serialisation or I/O failure.
 pub fn write_config_with(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), Unwritten> {
+    write_spliced(path, config, mode, Splice::One)
+}
+
+/// How many backends one splice may change.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Splice {
+    /// Exactly one: the web UI and the `config_reload` API change one backend
+    /// per write, so two differences mean another writer got in between.
+    One,
+    /// Several when every one is an addition (CLI setup and discovery import).
+    Additions,
+}
+
+/// [`write_config_with`] with the splice limited to `scope`.
+fn write_spliced(
+    path: &Path,
+    config: &Config,
+    mode: CommentLoss,
+    scope: Splice,
+) -> Result<(), Unwritten> {
     config
         .validate_with_env(&config.env_overlay())
         .map_err(|e| format!("Failed to validate config: {e}"))?;
@@ -132,7 +151,7 @@ pub fn write_config_with(path: &Path, config: &Config, mode: CommentLoss) -> Res
         if mode == CommentLoss::Refuse && value(before) == value(config) {
             return Ok(());
         }
-        if let Some(edited) = splice::with_backends_edited(text, before, config) {
+        if let Some(edited) = splice::with_backends_edited(text, before, config, scope) {
             return Ok(write_yaml(path, &edited)?);
         }
     }
