@@ -99,13 +99,13 @@ async fn a_subscribe_holds_the_catalogue_gate_through_its_admit() {
         move || drop(hub.catalogue_lock())
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert!(
-        !reload.is_finished(),
-        "a reload waits on the gate the subscribe holds"
-    );
+    // Read, then release before asserting: a failed assertion must not
+    // leave the paused subscribe holding the runtime at teardown.
+    let waited = !reload.is_finished();
     release.notify_one();
     within("the subscribe", subscribing)
         .await
         .expect("subscribe");
     within("the reload", reload).await.expect("reload");
+    assert!(waited, "a reload waits on the gate the subscribe holds");
 }
