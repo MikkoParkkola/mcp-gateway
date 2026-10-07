@@ -358,6 +358,20 @@ def test_a_title_with_inline_markdown_is_the_section():
         assert run(f"## {title}\n\n- Fixed in 4.0.1.\n", "--check") == 1, title
 
 
+def test_any_spelling_that_renders_known_issues_is_the_section():
+    # Entities, markup inside a word, a reference label and a level-one setext
+    # underline all render "Known issues"; each must still hold its items.
+    for head in (
+        "## [Known issues][known]\n",
+        "## Known&nbsp;issues\n",
+        "## Known issu&#101;s\n",
+        "## Known iss*ue*s\n",
+        "Known issues\n============\n",
+    ):
+        assert run(f"{head}\n- Open.\n", "--release", "--tag", "v4.0.0") == 1, head
+        assert run(head, "--release", "--tag", "v4.0.0") == 0, head
+
+
 def test_a_level_one_or_formatted_setext_title_is_the_section():
     for head in ("# Known issues\n", "*Known issues*\n---\n"):
         assert run(f"{head}\n- Fixed in 4.0.1.\n", "--check") == 1, head
