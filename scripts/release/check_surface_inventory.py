@@ -632,11 +632,15 @@ LIB_ITEM_RE = re.compile(
 
 
 def extract_lib(path: Path | None = None) -> list[Entry]:
+    # `#[macro_export]` puts a macro at the crate root from any module file.
+    files = [path] if path else sorted(SRC.rglob("*.rs"))
     path = path or SRC / "lib.rs"
     code, mask = prod_scan(path)
     out = []
-    for m in re.finditer(r"^#\[macro_export(?:\([^)]*\))?\][^\n]*\n(?:#\[[^\n]*\]\s*)*macro_rules!\s*(\w+)", code, re.M):
-        out.append(Entry(f"mcp_gateway::{m.group(1)}!", rel(path), line_of(code, m.start()), "exported macro"))
+    for f in files:
+        fcode = code if f == path else prod_scan(f)[0]
+        for m in re.finditer(r"^#\[macro_export(?:\([^)]*\))?\][^\n]*\n(?:#\[[^\n]*\]\s*)*macro_rules!\s*(\w+)", fcode, re.M):
+            out.append(Entry(f"mcp_gateway::{m.group(1)}!", rel(f), line_of(fcode, m.start()), "exported macro"))
     for m in LIB_ITEM_RE.finditer(code):
         kind, rest = m.group(2).split()[-1], " ".join(m.group(3).split())
         note = feature_of(m.group(1))
