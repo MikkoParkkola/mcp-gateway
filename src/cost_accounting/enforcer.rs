@@ -230,6 +230,10 @@ struct Pending {
 #[cfg(feature = "cost-governance")]
 impl Pending {
     fn add(&mut self, tool: &str, key: Option<&str>, micro: u64) {
+        // A zero hold is never released, so it must not create rows.
+        if micro == 0 {
+            return;
+        }
         self.global = self.global.saturating_add(micro);
         let slot = self.tools.entry(tool.to_string()).or_default();
         *slot = slot.saturating_add(micro);
