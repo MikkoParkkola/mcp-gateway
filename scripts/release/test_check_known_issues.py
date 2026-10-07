@@ -196,14 +196,63 @@ def test_a_setext_heading_ends_the_section_and_a_thematic_break_does_not():
     assert run(listed, "--check") == 1
 
 
-def test_only_paragraph_text_over_an_underline_is_a_setext_heading():
-    # An ATX heading, a thematic break, a quote or a fence line over "---"
-    # leaves the "---" a thematic break, so the section goes on.
-    for above in ("### Outstanding", "***", "> Quoted.", "```text"):
-        text = f"## Known issues\n\n{above}\n---\n\n- Fixed in 4.0.1.\n"
-        if above.startswith("```"):
-            text = text.replace("---\n", "---\n```\n", 1)
-        assert run(text, "--check") == 1, above
+def over_dashes(above):
+    """A Known issues section with `above` directly over "---", then a 4.0.1 item."""
+    return f"## Known issues\n\n{above}\n---\n\n- Fixed in 4.0.1.\n"
+
+
+# Each row puts a non-heading over "---": the "---" is a thematic break, so the
+# section goes on and its 4.0.1 item must be caught.
+def test_an_atx_heading_over_dashes_does_not_end_the_section():
+    assert run(over_dashes("### Outstanding"), "--check") == 1
+
+
+def test_a_thematic_break_over_dashes_does_not_end_the_section():
+    assert run(over_dashes("***"), "--check") == 1
+
+
+def test_a_fence_opener_over_dashes_does_not_end_the_section():
+    assert run(over_dashes("```text"), "--check") == 1
+
+
+def test_a_fence_closer_over_dashes_does_not_end_the_section():
+    assert run(over_dashes("```\nsample\n```"), "--check") == 1
+
+
+def test_a_quote_over_dashes_does_not_end_the_section():
+    assert run(over_dashes("> Quoted."), "--check") == 1
+
+
+def test_a_list_continuation_over_dashes_does_not_end_the_section():
+    assert run(over_dashes("- Item\n  continued"), "--check") == 1
+
+
+def test_a_lazy_list_line_over_dashes_does_not_end_the_section():
+    assert run(over_dashes("- Item\ncontinued"), "--check") == 1
+
+
+def test_a_lazy_quote_line_over_dashes_does_not_end_the_section():
+    assert run(over_dashes("> Quoted\ncontinued"), "--check") == 1
+
+
+def test_list_content_after_a_blank_over_dashes_does_not_end_the_section():
+    assert run(over_dashes("- Item\n\n  more"), "--check") == 1
+
+
+def test_a_title_in_an_html_comment_does_not_end_the_section():
+    text = "## Known issues\n\n<!--\n\nTitle\n---\n-->\n\n- Fixed in 4.0.1.\n"
+    assert run(text, "--check") == 1
+
+
+def test_a_setext_heading_after_a_blank_line_still_ends_the_section():
+    # Same shape as the rows above with paragraph text over "---".
+    assert run(over_dashes("- One.\n\nPerformance"), "--check") == 0
+
+
+def test_a_setext_heading_in_any_other_form_stays_in_the_section():
+    # Fail closed: a heading that is not one line after a blank, at column 0,
+    # is read as section text, so its 4.0.1 item is still caught.
+    assert run(over_dashes("- One.\n\nPerformance\nnumbers"), "--check") == 1
 
 
 def test_a_fenced_sample_never_ends_the_section():
