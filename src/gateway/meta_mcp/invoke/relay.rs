@@ -683,9 +683,11 @@ pub(crate) fn stage_with(
     target: (&str, &str),
     value: &Value,
 ) {
-    #[cfg(test)]
-    STAGED_FOR_TEST.with(|staged| staged.borrow_mut().push(value.clone()));
     if let Some(receipt) = receipt_with(fw, who, target, value) {
+        // Only a value a receipt was built from, so a row that sees nothing
+        // staged also catches receipt construction switched off.
+        #[cfg(test)]
+        STAGED_FOR_TEST.with(|staged| staged.borrow_mut().push(value.clone()));
         let _ = RELAY_RECEIPTS.try_with(|receipts| receipts.borrow_mut().push(receipt));
     }
 }

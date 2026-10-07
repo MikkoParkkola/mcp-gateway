@@ -378,7 +378,13 @@ async fn a_direct_receipt_is_built_without_the_gateway_stamp() {
         let _ = take_staged_for_test();
         let first = keyed(&fx, backend, (true, 1), "receipt").await;
         unstamped(&format!("{backend} fresh"), &first);
+        let dispatched = fx.calls.load(std::sync::atomic::Ordering::SeqCst);
         let again = keyed(&fx, backend, (true, 2), "receipt").await;
+        assert_eq!(
+            fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+            dispatched,
+            "{backend}: the replay dispatched again"
+        );
         unstamped(&format!("{backend} replay"), &again);
     }
     let fx = fixture_relayed(Answer::Ok).await;
