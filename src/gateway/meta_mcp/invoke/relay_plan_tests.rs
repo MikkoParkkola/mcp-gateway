@@ -608,3 +608,115 @@ async fn copies_of_a_delivered_leaf_do_not_crowd_out_a_mapped_member() {
         "undelivered copies pushed the mapped member out of the step's receipt"
     );
 }
+
+/// Stage `step` as one plan step of alice's and commit it against `answer`.
+async fn deliver_step(
+    meta: &std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>,
+    step: &Value,
+    answer: &Value,
+) {
+    let ((), staged) = meta
+        .collecting_staged(async {
+            plan_step(async {
+                meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), step);
+            })
+            .await;
+            meta.rebuild_receipt_from_final(
+                Some(answer),
+                GatewayStamps::Legacy,
+                AnswerShape::Literal,
+            );
+        })
+        .await;
+    staged.commit(true);
+}
+
+/// MIK-7992: two short fields the plan delivers next to each other, where
+/// the step holds the first one twice with padding between. The caller got
+/// them adjacent, so the run across them stays receipted.
+#[tokio::test]
+async fn short_fields_delivered_adjacent_keep_their_run() {
+    let (meta, firewall) = relay_meta();
+    let (p, s) = (
+        "row 01: late pears on the north slope, crate 17",
+        "row 02: grafting dates logged by Aino, frost 3x",
+    );
+    assert!(
+        p.len() < 48 && s.len() < 48,
+        "premise: each field under a k-gram"
+    );
+    let step = json!({"a": p, "b": filler("pad", 60), "c": p, "d": s});
+    let delivered = json!({"x": p, "y": s});
+    deliver_step(&meta, &step, &plan_answer(&delivered)).await;
+    firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "a", &delivered);
+
+    assert!(
+        relays_row(&firewall, "bob", &delivered),
+        "control: bob holds no copy of the row"
+    );
+    assert!(
+        !relays_row(&firewall, "alice", &delivered),
+        "the row was delivered adjacent"
+    );
+}
+
+/// Whether `who` sending `row` as a tool's arguments is refused as a relay.
+fn relays_row(firewall: &Firewall, who: &str, row: &Value) -> bool {
+    let params = json!({"name": "send", "arguments": row});
+    !firewall
+        .check_relay(
+            RelayCaller::Keyed(who),
+            "alpha",
+            "send",
+            &params,
+            ("s", who),
+        )
+        .allowed
+}
+
+/// MIK-7992: a step's two short fields delivered with another step's field
+/// between them. The run across them is the step's own; its fingerprints
+/// stay, as before the deferred cap.
+#[tokio::test]
+async fn interleaved_short_fields_keep_their_step_run() {
+    let (meta, firewall) = relay_meta();
+    let (p, s) = (
+        "the vineyard gate opens at six for the pickers",
+        "dog on premises, ring twice at the side porch!",
+    );
+    let row = json!({"a": p, "b": s});
+    let answer = plan_answer(&json!({"x": p, "y": OTHER_PROSE, "z": s}));
+    deliver_step(&meta, &row, &answer).await;
+    firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "a", &row);
+
+    assert!(
+        relays_row(&firewall, "bob", &row),
+        "control: bob holds no copy of the row"
+    );
+    assert!(
+        !relays_row(&firewall, "alice", &row),
+        "another step's field between them split the step's run"
+    );
+}
+
+/// MIK-7992: many undelivered copies of a delivered leaf, sorted before a
+/// member the plan delivers redacted. The copies must not crowd the
+/// member's surviving text out of the receipt's retained fingerprints.
+#[tokio::test]
+async fn copies_do_not_crowd_out_a_redacted_members_survivors() {
+    let (meta, firewall) = relay_meta();
+    let copy = filler("rep", 25);
+    let step = json!({"a": vec![copy.as_str(); 800], "body": format!("{PROSE} {SECRET}")});
+    let answer = plan_answer(&json!({"a": copy, "body": PROSE}));
+    deliver_step(&meta, &step, &answer).await;
+    carol_holds(&firewall, "a", PROSE);
+
+    assert!(
+        refused(&firewall, "bob", PROSE),
+        "control: bob holds no copy"
+    );
+    assert!(
+        !refused(&firewall, "alice", PROSE),
+        "repeated copies crowded the delivered text out of the receipt"
+    );
+}
