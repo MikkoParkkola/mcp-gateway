@@ -470,6 +470,13 @@ fn internal_invoke_args(server: &str, tool: &str, arguments: Value) -> Value {
 // Response augmentation
 // ============================================================================
 
+/// MIK-7939: the gateway wrote `path` of an invoke result; a relay receipt
+/// leaves it out.
+fn note_written(path: &'static [&'static str], result: &Value) {
+    use super::invoke::gateway_writes::{Layer, note};
+    note(Layer::Value, path, result);
+}
+
 /// Attach `predicted_next` to an invoke result when predictions are available.
 ///
 /// If `predictions` is empty the original `result` is returned unchanged,
@@ -481,6 +488,7 @@ pub(super) fn augment_with_predictions(mut result: Value, predictions: Vec<Value
     if let Value::Object(ref mut map) = result {
         map.insert("predicted_next".to_string(), Value::Array(predictions));
     }
+    note_written(&["predicted_next"], &result);
     result
 }
 
@@ -493,6 +501,7 @@ pub(super) fn augment_with_trace(mut result: Value, trace_id: &str) -> Value {
     if let Value::Object(ref mut map) = result {
         map.insert("trace_id".to_string(), json!(trace_id));
     }
+    note_written(&["trace_id"], &result);
     result
 }
 
@@ -565,6 +574,7 @@ pub(super) fn augment_with_provenance(
             );
         }
     }
+    note_written(&["_meta", "provenance"], &result);
     (result, signed_receipt)
 }
 

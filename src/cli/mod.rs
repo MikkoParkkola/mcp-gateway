@@ -516,6 +516,9 @@ pub enum Command {
         /// configured commands, with their side effects; off by default.
         #[arg(long)]
         start_stdio: bool,
+        /// With `--start-stdio`: also show a failed start's masked stderr tail.
+        #[arg(long, requires = "start_stdio")]
+        show_stderr: bool,
     },
 
     /// Apply pending post-upgrade migrations and update the version stamp

@@ -225,7 +225,9 @@ pub(crate) fn build_cost_report_tool() -> Tool {
         description: Some(
             "Return current session and API-key spend. Includes total cost, call count, \
          and breakdown by backend and tool. \
-         Per-key totals are shown for 24 h / 7 d / 30 d rolling windows."
+         Per-key totals are shown for 24 h / 7 d / 30 d rolling windows. \
+         A caller with no session gets its own spend under `caller`; it is kept in \
+         memory and resets after 24 h with no spend."
                 .to_string(),
         ),
         input_schema: serde_json::json!({

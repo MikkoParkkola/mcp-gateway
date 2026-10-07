@@ -19,6 +19,9 @@
 //! every `MCP_GATEWAY_*` variable removed, so `Config::fallback_config_path`
 //! finds nothing and the gateway boots on defaults alone.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -46,24 +49,14 @@ struct StdioSession {
 impl StdioSession {
     /// Spawns the shipped binary with no configuration reachable from anywhere.
     fn spawn(home: &std::path::Path) -> Self {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-        command
-            .arg("serve")
-            .arg("--stdio")
-            .current_dir(home)
-            .env("HOME", home);
-        // Every overlay, not a list of the ones that were thought of. The names
-        // this binary reads share a prefix, so naming seven of them left the
-        // demonstration as clean as whatever CI happened to export — and a
-        // configured child proves nothing about booting on defaults.
-        for (name, _) in std::env::vars() {
-            if name.starts_with("MCP_GATEWAY_") {
-                command.env_remove(name);
-            }
-        }
-        // Windows resolves home through the Known Folder API, not HOME: the
-        // debug build's override isolates the child's default task store too.
-        command.env("MCP_GATEWAY_TEST_HOME_DIR", home);
+        let mut command = Command::from(gateway_bin::command(
+            home,
+            gateway_bin::Inherit::Environment,
+        ));
+        command.arg("serve").arg("--stdio").current_dir(home);
+        // `gateway_bin` drops every inherited `MCP_GATEWAY_*` overlay, not a
+        // list of the ones that were thought of: a configured child proves
+        // nothing about booting on defaults.
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

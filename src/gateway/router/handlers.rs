@@ -31,9 +31,8 @@ use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::outbound::{OutboundReply, gateway_reply, judged_reply, stream_reply};
-use crate::gateway::session_id::session_fp;
-use crate::gateway::session_lifecycle;
 use crate::gateway::streaming::create_sse_response;
+use crate::gateway::{recovery::SurfaceRequest, session_id::session_fp, session_lifecycle};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
@@ -544,10 +543,11 @@ async fn meta_mcp_dispatch(
     // Per-connection Code Mode override (issue #146).
     // Accepted value: ?codemode=search_and_execute
     // When the static config already enables Code Mode, this is a no-op.
-    let code_mode_url_active: bool = query_str.is_some_and(|q| {
+    let code_mode_url_active = query_str.is_some_and(|q| {
         q.split('&')
             .any(|pair| pair == "codemode=search_and_execute")
     });
+    let surface_request = SurfaceRequest::from_url(code_mode_url_active);
     // The refusal arm emits its own audit record. Before this change it
     // returned silently, so a proved-A-claimed-B refusal left no trace on the
     // one path an attacker is most likely to be on.
@@ -686,6 +686,8 @@ async fn meta_mcp_dispatch(
     };
 
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
+    // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).
+    crate::gateway::meta_mcp::grant_audit::note_answer_id(raw_id.as_ref());
     // Hardened signs every `tools/call` here, not only `gateway_invoke`
     // (GH1942.HARDEN.1 row 7).
     let mut signing_context = state.meta_mcp.signing_enabled().then(|| {
@@ -1284,17 +1286,19 @@ async fn meta_mcp_dispatch(
             // What cannot wait is the malformed shape, refused below before
             // anything dispatches.
             let retry = crate::protocol::mrtr::RetryFields::from_params(params);
+            // A refusal below is written to the chain as the meta layer would (#2420).
+            let refused = Refused::of(
+                &arguments,
+                client.as_ref(),
+                grant_subject.as_ref(),
+                &session_id,
+            );
             if retry.is_malformed() {
                 // Neither a usable retry nor a fresh call. Running it as a fresh
                 // call would repeat whatever the first attempt already did, and
                 // for a destructive tool that is the whole risk.
-                return build_error_response(
-                    Some(id),
-                    -32602,
-                    format!("malformed request fields: {}", retry.malformed.join(", ")),
-                    &session_id,
-                    StatusCode::BAD_REQUEST,
-                );
+                let message = format!("malformed request fields: {}", retry.malformed.join(", "));
+                return refused.answer_malformed(&state, id, message).await;
             }
             // Exposure decides before admin does, here as well as in the
             // dispatcher. The dispatcher orders these two correctly for its own
@@ -1323,13 +1327,6 @@ async fn meta_mcp_dispatch(
             response_targets = crate::gateway::meta_mcp::response_security::meta_response_targets(
                 tool_name,
                 &backend_targets,
-            );
-            // A refusal below is written to the chain as the meta layer would (#2420).
-            let refused = Refused::of(
-                &arguments,
-                client.as_ref(),
-                grant_subject.as_ref(),
-                &session_id,
             );
             for target in &backend_targets {
                 // A surfaced name this caller could not invoke is answered by
@@ -1572,6 +1569,7 @@ async fn meta_mcp_dispatch(
                         input_capabilities: declared_capabilities,
                         session_id: Some(session_id.as_str()),
                         protocol_revision: protocol_revision_owned.as_deref(),
+                        surface_request,
                     },
                 ) {
                     Ok(intent) => intent,
@@ -1622,6 +1620,7 @@ async fn meta_mcp_dispatch(
                 caller_key: Some(caller_key.as_str()).filter(|key| !key.is_empty()),
                 verified_identity: verified_identity.as_ref(),
                 is_admin: client.as_ref().is_some_and(|c| c.admin),
+                surface_request,
                 input_capabilities: declared_capabilities,
                 retry: &retry,
                 // Already derived at the top of this handler from the
@@ -1916,7 +1915,8 @@ async fn meta_mcp_dispatch(
             if method == "tasks/get" {
                 tasks::tasks_get(&state, &owner, id.clone(), params, &caller).await
             } else {
-                tasks::tasks_update(&state, &owner, id.clone(), params, &caller).await
+                let update = (params, surface_request);
+                tasks::tasks_update(&state, &owner, id.clone(), update, &caller).await
             }
         }
         "tasks/cancel" => tasks::tasks_cancel(&state, &owner, id.clone(), params).await,

@@ -20,8 +20,9 @@
 //!    - `"true"` / `"false"` → `true` / `false` for `boolean` fields
 //! 4. **Enum values** – if a property declares `enum: [...]`, the value must
 //!    be one of the listed options (checked after coercion).
-//! 5. **String constraints** – `minLength`, `maxLength`, and numeric
-//!    `minimum` / `maximum` are checked where declared.
+//! 5. **Constraints** – string `minLength` / `maxLength`, numeric
+//!    `minimum` / `maximum`, and array `minItems` / `maxItems` are checked
+//!    where declared.
 
 use std::fmt::Write as _;
 
@@ -527,8 +528,9 @@ fn validate_property(
 
 // ── Type coercion ─────────────────────────────────────────────────────────────
 
-/// Whether a property's `type` is `"null"` or a list that names it.
-fn admits_null(prop_schema: Option<&Value>) -> bool {
+/// Whether a property's `type` is `"null"` or a list that names it. The
+/// executor fills a JSON body by the same rule (MIK-7970).
+pub(crate) fn admits_null(prop_schema: Option<&Value>) -> bool {
     match prop_schema.and_then(|p| p.get("type")) {
         Some(Value::String(ty)) => ty == "null",
         Some(Value::Array(types)) => types.iter().any(|t| t == "null"),

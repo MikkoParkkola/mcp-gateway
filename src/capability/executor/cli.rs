@@ -478,34 +478,86 @@ pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[Strin
 pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
     let needles = needles(secrets, &[]);
     if !needles.is_empty() {
-        scrub_value(value, &needles);
+        // A secret that reads as a JSON number or as `true`, `false` or
+        // `null`: a result scalar equal to it by exact JSON equality is
+        // redacted whatever the secret's length (below the 4-byte floor
+        // nothing else is looked for in a number, and a literal is never
+        // compared otherwise). "007" and "TRUE" are not JSON: no match.
+        let literals: Vec<Value> = needles
+            .iter()
+            .filter_map(|n| serde_json::from_str::<Value>(n).ok())
+            .filter(|v| !matches!(v, Value::String(_) | Value::Array(_) | Value::Object(_)))
+            .collect();
+        scrub_value(value, &needles, &literals);
     }
 }
 
-fn scrub_value(value: &mut Value, needles: &[&str]) {
+/// The exact integer a JSON number's text names, as canonical digits, read
+/// from the text so no float rounding enters: "1.2345e4" and "12345.0" both
+/// give "12345". `None` when the text names a non-integer, or an exponent so
+/// large the value is past any integer a JSON result can carry exactly.
+fn exact_integer(text: &str) -> Option<String> {
+    let (mantissa, exponent) = match text.find(['e', 'E']) {
+        Some(at) => (&text[..at], &text[at + 1..]),
+        None => (text, "0"),
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    // Only significant digits count toward the width bound below: zeros
+    // leading the fraction ("0.0001e8") are not, and a zero coefficient is 0
+    // whatever its exponent, even one past i64 ("0e99", "0e9223372036854775808").
+    let mut digits = format!("{whole}{fraction}")
+        .trim_start_matches('0')
+        .to_owned();
+    if digits.is_empty() {
+        return Some("0".to_owned());
+    }
+    let exponent = exponent.parse::<i64>().ok()?;
+    let shift = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?;
+    if shift >= 0 {
+        // u128 holds at most 39 digits; anything wider cannot equal a result.
+        let pad = usize::try_from(shift)
+            .ok()
+            .filter(|pad| digits.len() + pad <= 40)?;
+        digits.extend(std::iter::repeat_n('0', pad));
+    } else {
+        let cut = usize::try_from(shift.unsigned_abs()).ok()?;
+        let keep = digits.len().saturating_sub(cut);
+        if !digits[keep..].bytes().all(|b| b == b'0') {
+            return None;
+        }
+        digits.truncate(keep);
+    }
+    Some(digits)
+}
+
+fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
+    if literals.contains(value) {
+        *value = Value::String(marker_for(needles).to_owned());
+        return;
+    }
     match value {
         Value::String(s) => *s = scrub(s, needles),
-        // A credential that is all digits can come back as a JSON number. A
-        // short needle would hit every number, so only one a caller could not
-        // guess by chance (the same floor as caller values) is looked for.
-        // An all-digit needle is also compared by value: printed as a number,
-        // it loses its leading zeros ("012345" comes back as 12345), and past
-        // u64 it parses as a float and prints in exponent form. The floor is
-        // on the needle as injected, so "0007" redacts the number 7 but never
-        // the 7 inside 1771. The sign is ignored on both paths: a needle has
-        // none, so -12345, -12345.0 and -0.0 are the same value as one.
+        // A credential that is all digits can come back as a JSON number. It
+        // matches a number of the same value only, never one whose digits
+        // merely hold it: 912345 is not the secret 1234 (MIK-7954). Below the
+        // floor (the same as caller values) only the exact-equality check above
+        // applies. An all-digit needle is compared by value: printed as a
+        // number, it loses its leading zeros ("012345" comes back as 12345),
+        // and past u64 it parses as a float and prints in exponent form. The
+        // floor is on the needle as injected, so "0007" redacts the number 7
+        // but never the 7 inside 1771. The sign is ignored on both paths: a
+        // needle has none, so -12345, -12345.0 and -0.0 are the same value as
+        // one.
         Value::Number(n) => {
             let digits = n.to_string();
             let float = n.as_f64().filter(|_| n.is_f64()).map(f64::abs);
             let value_f64 = n.as_f64().map(f64::abs);
-            // An exact integer, when the result is one, so two integers past
-            // f64 precision are never judged equal.
-            let magnitude = |x: &serde_json::Number| {
-                x.as_u64()
-                    .map(u128::from)
-                    .or_else(|| x.as_i64().map(|v| u128::from(v.unsigned_abs())))
-            };
-            let value_int = magnitude(n);
+            // The result's exact magnitude when it is an integer, so two
+            // integers past f64 precision are never judged equal.
+            let value_int = n
+                .as_u64()
+                .map(u128::from)
+                .or_else(|| n.as_i64().map(|v| u128::from(v.unsigned_abs())));
             let same_value = |needle: &str| {
                 // One leading sign is not part of the magnitude, and the
                 // result's sign is ignored too: "+012345" and "-012345" are
@@ -513,13 +565,16 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
                 // below, which also keeps integers past i64 exact. Covered:
                 // JSON number grammar with at most one leading sign, leading
                 // zeros allowed. Other notations ("0x1F", "12_345") are out of
-                // scope here (MIK-7954).
+                // scope here (MIK-7954). Whitespace around it is dropped, as
+                // the JSON parser does ("12345.0\n" is 12345).
+                let needle = needle.trim_ascii();
                 let needle = needle.strip_prefix(['+', '-']).unwrap_or(needle);
                 if needle.is_empty() || !needle.bytes().all(|b| b.is_ascii_digit()) {
                     // A credential injected in another number form ("12.5",
                     // "1.5e10") comes back printed differently, so it is
-                    // compared by value: exactly when both are integers, by
-                    // f64 bits otherwise. Any number equal in value to such a
+                    // compared by value: exactly, from its text, when the
+                    // result is an integer; by f64 bits when the result is a
+                    // float. Any number equal in value to such a
                     // needle is redacted, even one the child printed for
                     // another reason: that over-redaction is accepted.
                     // Leading zeros are not JSON, but a credential may carry
@@ -535,8 +590,8 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
                     let Ok(parsed) = serde_json::from_str::<serde_json::Number>(&normalized) else {
                         return false;
                     };
-                    if let (Some(p), Some(v)) = (magnitude(&parsed), value_int) {
-                        return p == v;
+                    if let Some(v) = value_int {
+                        return exact_integer(&normalized).is_some_and(|e| e == v.to_string());
                     }
                     return parsed
                         .as_f64()
@@ -553,21 +608,23 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
                 }
                 digits.trim_start_matches('-') == value
             };
-            if needles.iter().any(|needle| {
-                needle.len() >= MIN_REDACTED_CALLER_VALUE
-                    && (digits.contains(needle) || same_value(needle))
-            }) {
+            if needles
+                .iter()
+                .any(|needle| needle.len() >= MIN_REDACTED_CALLER_VALUE && same_value(needle))
+            {
                 *value = Value::String(marker_for(needles).to_owned());
             }
         }
-        Value::Array(items) => items.iter_mut().for_each(|v| scrub_value(v, needles)),
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|v| scrub_value(v, needles, literals)),
         Value::Object(map) => {
             let old = std::mem::take(map);
             let mut renamed = Vec::new();
             // Keys that survive keep their names whole: a renamed key never
             // takes one of them.
             for (key, mut item) in old {
-                scrub_value(&mut item, needles);
+                scrub_value(&mut item, needles, literals);
                 let new = scrub(&key, needles);
                 if new == key {
                     map.insert(key, item);
@@ -634,3 +691,7 @@ mod tests;
 #[cfg(all(test, feature = "firewall"))]
 #[path = "cli_firewall_tests.rs"]
 mod firewall_tests;
+
+#[cfg(test)]
+#[path = "cli_literal_tests.rs"]
+mod literal_tests;

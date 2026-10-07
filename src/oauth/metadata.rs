@@ -326,11 +326,8 @@ mod tests {
 
     #[tokio::test]
     async fn discovery_accepts_metadata_naming_the_issuer_it_was_found_at() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-        let base = format!("http://{addr}");
-        let served = serve_metadata_at(&base, &base).await;
+        let (listener, base) = bound_base().await;
+        let served = serve_metadata_at(listener, &base).await;
         let meta =
             AuthorizationServerMetadata::discover(&Client::new(), &served, IssuerSource::Origin)
                 .await
@@ -338,19 +335,23 @@ mod tests {
         assert_eq!(meta.issuer, served);
     }
 
-    /// Pick a free address without holding it, so a helper can bind it next.
-    async fn free_addr() -> String {
+    /// Bind an ephemeral port and keep it, so the base URL is known before
+    /// serving and no parallel test can take the port in between (MIK-7984).
+    async fn bound_base() -> (tokio::net::TcpListener, String) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-        format!("http://{addr}")
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        (listener, base)
     }
 
     /// A failed discovery fetch names its category, never reqwest's Display,
     /// which carries the request URL and any credential a redirect put in it.
     #[tokio::test]
     async fn a_failed_discovery_fetch_does_not_echo_the_url() {
-        let base = free_addr().await;
+        // Bound for the whole test but never listening: a connection is
+        // refused, and no parallel test can bind the port in between (MIK-7984).
+        let closed = tokio::net::TcpSocket::new_v4().unwrap();
+        closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let base = format!("http://{}", closed.local_addr().unwrap());
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let server = AuthorizationServerMetadata::discover(&client, &base, IssuerSource::Origin)
             .await
@@ -396,8 +397,8 @@ mod tests {
         // in it is the authorization server's own. Two spellings of one origin
         // are still two identifiers, and credentials filed under one must not
         // be reachable by discovery aimed at the other.
-        let base = free_addr().await;
-        let served = serve_metadata_at(&base, &format!("{base}/")).await;
+        let (listener, base) = bound_base().await;
+        let served = serve_metadata_at(listener, &format!("{base}/")).await;
         let err = AuthorizationServerMetadata::discover(
             &Client::new(),
             &served,
@@ -416,8 +417,8 @@ mod tests {
         // Same response, different question: here the gateway synthesised the
         // string from the resource URL and it never carries a slash, so a
         // server publishing one -- Auth0's shape -- stays reachable.
-        let base = free_addr().await;
-        let served = serve_metadata_at(&base, &format!("{base}/")).await;
+        let (listener, base) = bound_base().await;
+        let served = serve_metadata_at(listener, &format!("{base}/")).await;
         let meta =
             AuthorizationServerMetadata::discover(&Client::new(), &served, IssuerSource::Origin)
                 .await
@@ -425,13 +426,12 @@ mod tests {
         assert_eq!(meta.issuer, format!("{served}/"));
     }
 
-    /// Serve metadata at a chosen address, claiming `issuer_claimed`. Serving
+    /// Serve metadata on `listener`, claiming `issuer_claimed`. Serving
     /// address and claimed identity are separate parameters so a test can make
     /// them differ by exactly one character.
-    async fn serve_metadata_at(base: &str, issuer_claimed: &str) -> String {
+    async fn serve_metadata_at(listener: tokio::net::TcpListener, issuer_claimed: &str) -> String {
         use axum::{Router, routing::get};
-        let addr: std::net::SocketAddr = base.trim_start_matches("http://").parse().unwrap();
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
         let issuer = issuer_claimed.to_string();
         let body = serde_json::json!({
             "issuer": issuer,
@@ -448,7 +448,7 @@ mod tests {
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
-        base.to_string()
+        base
     }
 
     #[test]

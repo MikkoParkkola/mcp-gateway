@@ -73,6 +73,11 @@ impl ResolvedAuthConfig {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        // MIK-7973: the one place every bearer form, `auto` included, is known.
+        super::refuse_shared_principals(
+            bearer_token.as_deref(),
+            api_keys.iter().map(|k| (k.name.as_str(), &k.digest)),
+        )?;
 
         // Pre-create rate limiters for clients with rate limits
         let rate_limiters = DashMap::new();
@@ -187,24 +192,48 @@ impl ResolvedAuthConfig {
             return None;
         }
         Some((
-            AuthenticatedClient {
-                quota_principal: Some(key.quota_principal.clone()),
-                name: key.name.clone(),
-                // MIK-6704.IDENT.1a: the validated key's digest, = principal_of(key).
-                principal: hex::encode(&key.digest[..6]),
-                rate_limit: key.rate_limit,
-                backends: key.backends.clone(),
-                allowed_tools: key.allowed_tools.clone(),
-                denied_tools: key.denied_tools.clone(),
-                admin: key.admin,
-                authenticated: true,
-                credential_kind: crate::security::audit::CredentialKind::ApiKey,
-            },
+            Self::client_of(key),
             Some(NamedApiKey {
                 name: key.name.clone(),
                 personal: key.personal,
             }),
         ))
+    }
+
+    /// The caller a validated API key authenticates as: the one construction
+    /// the token path and [`Self::client_for_key`] share.
+    fn client_of(key: &ResolvedApiKey) -> AuthenticatedClient {
+        AuthenticatedClient {
+            quota_principal: Some(key.quota_principal.clone()),
+            name: key.name.clone(),
+            // MIK-6704.IDENT.1a: the validated key's digest, = principal_of(key).
+            principal: super::principal_of_digest(&key.digest),
+            rate_limit: key.rate_limit,
+            backends: key.backends.clone(),
+            allowed_tools: key.allowed_tools.clone(),
+            denied_tools: key.denied_tools.clone(),
+            admin: key.admin,
+            authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
+        }
+    }
+
+    /// The caller an API key named `name` with principal `principal` (the
+    /// first 6 bytes of its digest, hex) authenticates as now, for work done
+    /// on its behalf without a request (an event watch's poll). `None` when no
+    /// live key matches both, or the key expired: a key re-issued under the
+    /// same name has another digest and does not match.
+    pub(crate) fn client_for_key(
+        &self,
+        name: &str,
+        principal: &str,
+    ) -> Option<AuthenticatedClient> {
+        let key = self
+            .api_keys
+            .iter()
+            .find(|k| k.name == name && hex::encode(&k.digest[..6]) == principal)?;
+        (!crate::config::api_key_expired(key.expires_at, chrono::Utc::now()))
+            .then(|| Self::client_of(key))
     }
 
     /// Check rate limit for a client. Returns true if allowed, false if rate limited.

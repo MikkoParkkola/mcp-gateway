@@ -273,15 +273,12 @@ async fn run(cli: Cli) -> ExitCode {
             shadow,
             shadow_format,
             start_stdio,
+            show_stderr,
         }) => {
             if shadow {
                 commands::run_doctor_shadow_command(&shadow_format)
             } else {
-                let probe = if start_stdio {
-                    commands::StdioProbe::Start
-                } else {
-                    commands::StdioProbe::Locate
-                };
+                let probe = commands::StdioProbe::from_flags(start_stdio, show_stderr);
                 commands::run_doctor_command(fix, config.as_deref(), format, probe).await
             }
         }

@@ -213,6 +213,13 @@ pub struct Backend {
     /// handshake owns a live process, and shutdown returning before that
     /// resolves leaves the process running for as long as the handshake takes.
     starts_in_flight: std::sync::atomic::AtomicUsize,
+    /// The one admitted start an events subscribe runs to learn the HTTP
+    /// transport, shared by every subscribe waiting on it (MIK-7969).
+    events_resolution: parking_lot::Mutex<Option<listen::Resolution>>,
+    /// Resolution tasks spawned so far: one per in-flight start, not one per
+    /// waiting subscribe (MIK-7969 M2).
+    #[cfg(test)]
+    events_resolutions: std::sync::atomic::AtomicUsize,
     /// Where this backend's transports may connect; stamped by its registry.
     /// Unstamped means `Configured`: a backend no config governs.
     destination: std::sync::OnceLock<crate::security::ssrf::DestinationPolicy>,
@@ -241,6 +248,11 @@ impl Backend {
     /// Set by [`BackendRegistry`]; the first stamp wins.
     pub(crate) fn stamp_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
         let _ = self.destination.set(policy);
+    }
+
+    /// How long this backend's catalogue lists stay fresh (`meta_mcp.cache_ttl`).
+    pub(crate) fn cache_ttl(&self) -> Duration {
+        self.cache_ttl
     }
 
     /// Whether a start began on this HTTP or WebSocket backend before any
@@ -410,6 +422,10 @@ mod start_failure_slot_tests;
 #[cfg(test)]
 #[path = "era_stale_probe_tests.rs"]
 mod era_stale_probe_tests;
+
+#[cfg(all(test, unix))]
+#[path = "frame_limit_start_tests.rs"]
+mod frame_limit_start_tests;
 
 #[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]
