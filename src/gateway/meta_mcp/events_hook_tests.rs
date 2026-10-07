@@ -267,6 +267,8 @@ async fn the_next_complete_reload_withdraws_a_type_still_absent() {
     }
     let (caps, _registry, meta) = wired(&[&d1, &d2], store.path()).await;
     caps.mark_initial_scan_complete();
+    // Past the startup grace period (MIK-8027), as a running gateway is.
+    meta.run_deferred_webhook_withdraw().await;
 
     std::fs::remove_dir_all(&d2).expect("make d2 unreadable");
     caps.reload().await.expect("partial reload");
