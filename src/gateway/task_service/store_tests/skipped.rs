@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::super::record::PreparedTask;
 use super::super::store::{StoreError, StoreLimits, TaskStore};
 use super::support::*;
-use super::{FOREIGN_NAME, OWNER};
+use super::{FOREIGN_NAME, OTHER, OWNER};
 
 /// Two committed tasks; returns the path, the record to damage and the id of
 /// the task that stays intact.
@@ -104,13 +104,17 @@ async fn an_unrestorable_record_keeps_its_binding() {
 /// row whose name or identity is not its own.
 #[tokio::test]
 async fn a_newer_or_rebound_record_still_refuses() {
-    for case in ["newer", "rebound_broken"] {
+    for case in ["newer", "newer_broken_model", "rebound_broken"] {
         let dir = tempfile::tempdir().unwrap();
         let (path, record, _) = two_tasks(dir.path()).await;
-        if case == "newer" {
+        if case.starts_with("newer") {
             rewrite(&record, |v| {
                 v["version"] = json!(999);
                 v["aFieldFromTheFuture"] = json!(true);
+                // A malformed sibling must not hide the version (MIK-8023 r2).
+                if case == "newer_broken_model" {
+                    v["model"] = json!("not a task");
+                }
             });
         } else {
             rewrite(&record, |v| {
@@ -178,4 +182,56 @@ async fn a_kept_row_still_counts_against_its_owners_cap() {
         Err(StoreError::Capacity)
     ));
     store.close().await.unwrap();
+}
+
+/// An unreadable row still takes its place in the record count.
+#[tokio::test]
+async fn an_unreadable_row_still_counts_against_the_record_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, record, _) = two_tasks(dir.path()).await;
+    fs::write(&record, b"{broken").unwrap();
+    let limits = StoreLimits {
+        records: 2,
+        ..StoreLimits::default()
+    };
+    let store = TaskStore::open(&path, limits)
+        .await
+        .expect("one unreadable row no longer stops the store");
+    assert!(matches!(
+        store
+            .create(PreparedTask::for_test(&task(), OTHER, 3))
+            .await,
+        Err(StoreError::Capacity)
+    ));
+    store.close().await.unwrap();
+}
+
+/// The open reports what it skipped on the operator's gauge, by class.
+#[cfg(feature = "metrics")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skipped_rows_are_reported_by_class() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, record, _) = two_tasks(dir.path()).await;
+    unrestorable(&record);
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    telemetry_metrics::with_local_recorder(&recorder, || {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let store = TaskStore::open(&path, StoreLimits::default())
+                    .await
+                    .unwrap();
+                store.close().await.unwrap();
+            });
+        });
+    });
+    let rendered = handle.render();
+    for (class, count) in [("reserved", " 1"), ("unreadable", " 0")] {
+        assert!(
+            rendered.lines().any(|line| line.starts_with(&format!(
+                "mcp_task_store_skipped_records{{class=\"{class}\"}}"
+            )) && line.ends_with(count)),
+            "{class}: {rendered}"
+        );
+    }
 }

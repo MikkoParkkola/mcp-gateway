@@ -4,6 +4,8 @@
 //! the durable write path.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+use serde::Deserialize as _;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -96,23 +98,27 @@ pub(super) struct Loaded {
 }
 
 /// The parts of a record read before, and independently of, the strict
-/// parse: enough to refuse a newer build's row and to keep a damaged row's key.
-#[derive(serde::Deserialize)]
+/// parse, each on its own: one malformed field never hides another. Enough to
+/// refuse a newer build's row and to keep a damaged row's key.
 struct Envelope {
     version: Option<u64>,
     admission: Option<AdmissionRecord>,
-    model: Option<ModelEnvelope>,
-}
-
-#[derive(serde::Deserialize)]
-struct ModelEnvelope {
-    task: Option<TaskEnvelope>,
-}
-
-#[derive(serde::Deserialize)]
-struct TaskEnvelope {
-    #[serde(rename = "taskId")]
     task_id: Option<String>,
+}
+
+impl Envelope {
+    fn read(bytes: &[u8]) -> Self {
+        let value = serde_json::from_slice::<serde_json::Value>(bytes).ok();
+        let field = |pointer: &str| value.as_ref().and_then(|value| value.pointer(pointer));
+        Self {
+            version: field("/version").and_then(serde_json::Value::as_u64),
+            admission: field("/admission")
+                .and_then(|admission| AdmissionRecord::deserialize(admission).ok()),
+            task_id: field("/model/task/taskId")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+        }
+    }
 }
 
 /// Read every record. A row that cannot be read is skipped where it lies,
@@ -164,8 +170,8 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
                 tracing::warn!(path = %shown_path, "task record exceeds the record budget");
             }
         })?;
-        let envelope = serde_json::from_slice::<Envelope>(&bytes).ok();
-        if let Some(version) = envelope.as_ref().and_then(|e| e.version)
+        let envelope = Envelope::read(&bytes);
+        if let Some(version) = envelope.version
             && version > u64::from(MAX_LOADABLE_VERSION)
         {
             tracing::warn!(path = %shown_path, version, "task record was written by a newer gateway");
@@ -176,17 +182,15 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
             (Some((record, task)), _) => (record.admission.clone(), task.id().to_owned()),
             (
                 None,
-                Some(Envelope {
+                Envelope {
                     admission: Some(admission),
-                    model,
+                    task_id,
                     ..
-                }),
+                },
             ) => {
                 // The id the row names for itself; the file name when even
                 // that is gone, which the name check below then accepts.
-                let named = model
-                    .and_then(|model| model.task)
-                    .and_then(|task| task.task_id)
+                let named = task_id
                     .unwrap_or_else(|| name.strip_suffix(".json").unwrap_or(name).to_owned());
                 (admission, named)
             }
@@ -231,10 +235,9 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
 /// The record and its task, when both read and the version is one this build
 /// loads. Why one does not is logged here, the file named, never its content.
 fn restore(bytes: &[u8], shown_path: &std::path::Display<'_>) -> Option<(Record, Task)> {
+    // The file named, never the parser's message: it can quote the record.
     let record: Record = serde_json::from_slice(bytes)
-        .inspect_err(
-            |error| tracing::warn!(%error, path = %shown_path, "task record does not parse"),
-        )
+        .inspect_err(|_| tracing::warn!(path = %shown_path, "task record does not parse"))
         .ok()?;
     if !(1..=MAX_LOADABLE_VERSION).contains(&record.version) {
         let version = record.version;
@@ -242,9 +245,7 @@ fn restore(bytes: &[u8], shown_path: &std::path::Display<'_>) -> Option<(Record,
         return None;
     }
     let task = Task::from_snapshot(record.model.clone())
-        .inspect_err(
-            |error| tracing::warn!(%error, path = %shown_path, "task record does not restore"),
-        )
+        .inspect_err(|_| tracing::warn!(path = %shown_path, "task record does not restore"))
         .ok()?;
     Some((record, task))
 }

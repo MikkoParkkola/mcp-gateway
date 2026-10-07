@@ -547,3 +547,47 @@ async fn an_unrestorable_row_keeps_its_key_after_a_restart() {
     ));
     reopened.close().await.unwrap();
 }
+
+/// MIK-8023: a kept key that admission refuses still refuses the whole open,
+/// the store's lease is given back, and the admission index is unchanged.
+#[tokio::test]
+async fn a_refused_kept_key_refuses_the_open_and_releases_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (id, _) = settled_task(&store, &services(), "k-8023b").await;
+    store.close().await.unwrap();
+    let record = path.join(format!("{id}.json"));
+    let mut value: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    value["model"]["task"]["lastUpdatedAt"] = json!("2026-09-06T00:00:00Z");
+    std::fs::write(&record, serde_json::to_vec(&value).unwrap()).unwrap();
+
+    // The index already holds that key, so importing it again is refused.
+    let admission = services();
+    let first = TaskStore::open(&path, super::super::store::StoreLimits::default())
+        .await
+        .unwrap();
+    admission.import_tasks(&first.restored_bindings()).unwrap();
+    first.close().await.unwrap();
+
+    let before = files(&path);
+    assert!(
+        super::super::service::TaskService::open(
+            &path,
+            super::super::store::StoreLimits::default(),
+            Arc::clone(&admission),
+        )
+        .await
+        .is_err(),
+        "a refused import must refuse the open"
+    );
+    assert_eq!(files(&path), before, "the refusal moves nothing");
+    let again = TaskStore::open(&path, super::super::store::StoreLimits::default())
+        .await
+        .expect("the refused open gave its lease back");
+    again.close().await.unwrap();
+    match admission.admit_task(task_request("oidc:acme:alice", "k-8023b")) {
+        Ok(TaskAdmission::Existing { task_id, .. }) => assert_eq!(task_id, id),
+        other => panic!("the index must be unchanged by the refused import, got {other:?}"),
+    }
+}
