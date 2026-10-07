@@ -46,10 +46,11 @@ def test_complete_doc_passes() -> None:
 
 
 def test_blank_or_missing_reason_fails() -> None:
-    blank = DOC.replace("| `A` | KEEP | needed |", "| `A` | KEEP |  |")
-    assert any("'A' has no reason" in e for e in check(blank)), check(blank)
+    for placeholder in ("", "-", "—", "n/a", "N/A", "none", "?", "  "):
+        doc = DOC.replace("| `A` | KEEP | needed |", f"| `A` | KEEP | {placeholder} |")
+        assert any("'A' has no reason" in e for e in check(doc)), (placeholder, check(doc))
     no_col = DOC.replace("| Item | Class | Reason | Migration |", "| Item | Class | Migration |").replace(" needed |", "").replace(" test hook |", "")
-    assert any("has no reason" in e for e in check(no_col)), check(no_col)
+    assert {"line 5: 'A' has no reason", "line 6: 'B' has no reason"} <= set(check(no_col)), check(no_col)
 
 
 def test_missing_row_fails() -> None:

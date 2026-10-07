@@ -737,6 +737,15 @@ def parse_doc(text: str) -> list[Row]:
     return rows
 
 
+PLACEHOLDER_REASONS = {"na", "none", "null", "nil", "unknown"}
+
+
+def has_reason(text: str) -> bool:
+    """A reason says something: a word of three or more letters, not a stock placeholder."""
+    letters = re.sub(r"[^a-z]", "", text.lower())
+    return re.search(r"[A-Za-z]{3,}", text) is not None and letters not in PLACEHOLDER_REASONS
+
+
 def check(doc_text: str, extracted: dict[str, list[Entry]]) -> list[str]:
     """Every problem with the doc, one line each; empty when the doc is complete."""
     errors = []
@@ -750,7 +759,7 @@ def check(doc_text: str, extracted: dict[str, list[Entry]]) -> list[str]:
         by_surface[r.surface][r.id] = r
         if r.cls not in CLASSES:
             errors.append(f"line {r.lineno}: {r.id!r} has class {r.cls!r}, want one of {sorted(CLASSES)}")
-        elif r.reason in {"", "-"}:
+        elif not has_reason(r.reason):
             errors.append(f"line {r.lineno}: {r.id!r} has no reason")
         elif r.cls != "KEEP" and r.migration in {"", "-"}:
             errors.append(f"line {r.lineno}: {r.cls} item {r.id!r} has no migration story")
