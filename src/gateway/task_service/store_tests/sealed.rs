@@ -282,16 +282,19 @@ async fn a_refused_reread_keeps_the_seal_and_the_store() {
     let record = path.join(format!("{}.json", rows[0].0));
     std::fs::remove_file(&record).unwrap();
     crate::test_fifo::make_fifo(&record);
-    let reread = service.reread_sealed();
-    tokio::pin!(reread);
-    if tokio::time::timeout(std::time::Duration::from_secs(5), &mut reread)
-        .await
-        .is_err()
     {
-        // Release the open blocked on the FIFO so teardown finishes, then fail.
-        let _ = std::fs::OpenOptions::new().write(true).open(&record);
-        reread.await;
-        panic!("the re-read waited on a FIFO");
+        // Scoped so the pinned future's borrow of `service` ends before close.
+        let reread = service.reread_sealed();
+        tokio::pin!(reread);
+        if tokio::time::timeout(std::time::Duration::from_secs(5), &mut reread)
+            .await
+            .is_err()
+        {
+            // Release the open blocked on the FIFO so teardown finishes, then fail.
+            let _ = std::fs::OpenOptions::new().write(true).open(&record);
+            reread.await;
+            panic!("the re-read waited on a FIFO");
+        }
     }
     assert_eq!(service.skipped_records().sealed, 1, "a FIFO stays sealed");
     std::fs::remove_file(&record).unwrap();
