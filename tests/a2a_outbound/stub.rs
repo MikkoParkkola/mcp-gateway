@@ -63,10 +63,10 @@ fn send_message_violation(body: &Value) -> Option<String> {
     if message.get("kind").is_some() {
         return Some("`kind` is A2A 0.3 vocabulary".into());
     }
-    if !message
+    if message
         .get("messageId")
         .and_then(Value::as_str)
-        .is_some_and(|id| !id.is_empty())
+        .is_none_or(str::is_empty)
     {
         return Some("message.messageId missing or empty".into());
     }
