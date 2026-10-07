@@ -157,6 +157,11 @@ pub(super) fn stage_direct_catalogue(
     if !state.firewall.as_ref().is_some_and(|fw| fw.relay_active()) {
         return;
     }
+    // The gateway's stamps are left out before the text is classified, not
+    // only before it is digested (MIK-8022).
+    let mut result = result.clone();
+    crate::gateway::meta_mcp::invoke::relay::strip_gateway_stamps(&mut result, stamps);
+    let result = &result;
     let caller_name = auth.client.map(|c| c.name.as_str());
     let recorded =
         state

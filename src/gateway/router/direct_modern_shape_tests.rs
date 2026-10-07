@@ -1,37 +1,96 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8022: the direct route `POST /mcp/{name}` answers a 2026-07-28 client
-//! with the result fields that revision requires, as `/mcp` and stdio do.
+//! with the result fields that revision requires, as `/mcp` and stdio do, and
+//! a legacy client exactly as before.
 //!
-//! DIRECT.1 is the capture: each failing row prints the body the route sent,
-//! for a legacy backend and for one that already speaks 2026-07-28.
+//! `alpha` takes the sanitized dispatch arm on `tools/call`; `alpha-pt`
+//! (passthrough) takes the plain one. Rows that call run on both.
 
+use axum::body::to_bytes;
 use serde_json::{Value, json};
+use tower::ServiceExt;
 
-use super::direct_guards_fixture::{Answer, Fx, fixture, send_with_headers};
+use super::direct_guards_fixture::Fx;
 
 const KEY: &str = "k-std";
+const BACKENDS: [&str; 2] = ["alpha", "alpha-pt"];
+const CACHEABLE: [&str; 5] = [
+    "tools/list",
+    "prompts/list",
+    "resources/list",
+    "resources/templates/list",
+    "resources/read",
+];
 
-/// A request written against 2026-07-28: the version header and its mirrors,
-/// and the `_meta` declaration a modern client sends on every request.
-async fn modern(fx: &Fx, method: &str, mut params: Value, name: Option<&str>) -> Value {
-    params["_meta"] = json!({
-        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-        "io.modelcontextprotocol/clientCapabilities": {},
-    });
-    let mut headers = vec![
-        ("mcp-protocol-version", "2026-07-28"),
-        ("mcp-method", method),
-    ];
-    if let Some(name) = name {
-        headers.push(("mcp-name", name));
+/// One request to `/mcp/{backend}`, modern or legacy, with request id `id`
+/// and `meta` merged into `params._meta`.
+async fn post(
+    fx: &Fx,
+    (backend, method): (&str, &str),
+    (modern, id): (bool, i64),
+    mut params: Value,
+    meta: Value,
+) -> Value {
+    let mut merged = meta.as_object().cloned().unwrap_or_default();
+    if modern {
+        merged.insert(
+            "io.modelcontextprotocol/protocolVersion".into(),
+            json!("2026-07-28"),
+        );
+        merged.insert(
+            "io.modelcontextprotocol/clientCapabilities".into(),
+            json!({}),
+        );
     }
-    let (_, body) = send_with_headers(fx, "/mcp/alpha", KEY, method, params, None, &headers).await;
-    body
+    if !merged.is_empty() {
+        params["_meta"] = Value::Object(merged);
+    }
+    let name = params["name"].as_str().map(str::to_owned);
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/mcp/{backend}"))
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("content-type", "application/json");
+    if modern {
+        request = request
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", method);
+        if let Some(name) = name {
+            request = request.header("mcp-name", name);
+        }
+    }
+    let body = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+    let request = request
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn modern(fx: &Fx, backend: &str, method: &str, params: Value) -> Value {
+    post(fx, (backend, method), (true, 1), params, json!({})).await
+}
+
+async fn legacy(fx: &Fx, backend: &str, method: &str, params: Value) -> Value {
+    post(fx, (backend, method), (false, 1), params, json!({})).await
+}
+
+fn call_params() -> Value {
+    json!({"name": "read", "arguments": {"cmd": "x"}})
+}
+
+fn params_for(method: &str) -> Value {
+    if method == "resources/read" {
+        json!({"uri": "res://x"})
+    } else {
+        json!({})
+    }
 }
 
 /// The 2026-07-28 fields a result is missing: `resultType` always, the cache
-/// pair on a cacheable list.
+/// pair on a cacheable result.
 fn missing(body: &Value, cacheable: bool) -> Vec<&'static str> {
     let result = &body["result"];
     let mut keys = vec!["resultType"];
@@ -43,48 +102,5 @@ fn missing(body: &Value, cacheable: bool) -> Vec<&'static str> {
         .collect()
 }
 
-#[tokio::test]
-async fn a_modern_tools_list_from_a_legacy_backend_carries_the_fields() {
-    let fx = fixture(Answer::Ok, |_| {}).await;
-    let body = modern(&fx, "tools/list", json!({}), None).await;
-    assert!(body["result"]["tools"].is_array(), "a listing: {body}");
-    let gone = missing(&body, true);
-    assert!(gone.is_empty(), "missing {gone:?}: {body}");
-}
-
-#[tokio::test]
-async fn a_modern_tools_list_from_a_modern_backend_keeps_the_fields() {
-    let fx = fixture(Answer::ModernList, |_| {}).await;
-    let body = modern(&fx, "tools/list", json!({}), None).await;
-    assert!(body["result"]["tools"].is_array(), "a listing: {body}");
-    let gone = missing(&body, true);
-    assert!(gone.is_empty(), "missing {gone:?}: {body}");
-}
-
-#[tokio::test]
-async fn a_modern_tools_call_carries_the_result_type() {
-    let fx = fixture(Answer::Ok, |_| {}).await;
-    let params = json!({"name": "read", "arguments": {"cmd": "x"}});
-    let body = modern(&fx, "tools/call", params, Some("read")).await;
-    assert!(
-        body["result"]["content"].is_array(),
-        "a call result: {body}"
-    );
-    let gone = missing(&body, false);
-    assert!(gone.is_empty(), "missing {gone:?}: {body}");
-}
-
-/// DIRECT.3 guard: a legacy client gains none of the fields.
-#[tokio::test]
-async fn a_legacy_tools_list_gains_no_fields() {
-    let fx = fixture(Answer::Ok, |_| {}).await;
-    let (_, body) =
-        send_with_headers(&fx, "/mcp/alpha", KEY, "tools/list", json!({}), None, &[]).await;
-    assert!(body["result"]["tools"].is_array(), "a listing: {body}");
-    for key in ["resultType", "ttlMs", "cacheScope"] {
-        assert!(
-            body["result"].get(key).is_none(),
-            "legacy gained {key}: {body}"
-        );
-    }
-}
+#[path = "direct_modern_shape_rows.rs"]
+mod rows;

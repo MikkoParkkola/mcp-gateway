@@ -47,8 +47,13 @@ pub(crate) enum Answer {
     /// every later call succeeds. Drives a bridged input round (T3c).
     AskOnce,
     /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
-    /// `resultType`, `ttlMs` and `cacheScope` itself (MIK-8022).
+    /// `resultType`, `ttlMs` (5000) and `cacheScope` itself, and every other
+    /// answer a `ttlMs` of 3000 (MIK-8022).
     ModernList,
+    /// A two-page `tools/list` whose pages carry these `ttlMs` hints.
+    Paged(Option<u64>, Option<u64>),
+    /// Like `Ok`, claiming `cacheScope: "public"` for the call's answer.
+    PublicScope,
 }
 
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
@@ -62,21 +67,32 @@ struct CountingBackend {
 
 #[async_trait::async_trait]
 impl Transport for CountingBackend {
-    async fn request(
-        &self,
-        method: &str,
-        _params: Option<Value>,
-    ) -> crate::Result<JsonRpcResponse> {
+    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         let id = RequestId::Number(1);
         if method == "tools/list" {
             let mut result = json!({"tools": [{"name": "read", "inputSchema": {
                 "type": "object",
                 "properties": {"cmd": {"type": "string"}}
             }}]});
-            if matches!(self.answer, Answer::ModernList) {
-                result["resultType"] = json!("complete");
-                result["ttlMs"] = json!(5000);
-                result["cacheScope"] = json!("private");
+            match self.answer {
+                Answer::ModernList => {
+                    result["resultType"] = json!("complete");
+                    result["ttlMs"] = json!(5000);
+                    result["cacheScope"] = json!("private");
+                }
+                Answer::Paged(first, second) => {
+                    let later = params.as_ref().and_then(|p| p.get("cursor")).is_some();
+                    let hint = if later { second } else { first };
+                    if later {
+                        result["tools"] = json!([]);
+                    } else {
+                        result["nextCursor"] = json!("page-2");
+                    }
+                    if let Some(hint) = hint {
+                        result["ttlMs"] = json!(hint);
+                    }
+                }
+                _ => {}
             }
             return Ok(JsonRpcResponse::success(id, result));
         }
@@ -104,9 +120,18 @@ impl Transport for CountingBackend {
             });
         }
         match &self.answer {
-            Answer::Ok | Answer::ModernList => Ok(JsonRpcResponse::success(
+            Answer::Ok | Answer::Paged(..) => Ok(JsonRpcResponse::success(
                 id,
                 json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+            )),
+            Answer::ModernList => Ok(JsonRpcResponse::success(
+                id,
+                json!({"content": [{"type": "text", "text": "ok"}], "isError": false, "ttlMs": 3000}),
+            )),
+            Answer::PublicScope => Ok(JsonRpcResponse::success(
+                id,
+                json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
+                       "cacheScope": "public"}),
             )),
             Answer::IsError => Ok(JsonRpcResponse::success(
                 id,
@@ -213,7 +238,7 @@ pub(crate) async fn fixture_firewalled_with(
     fx
 }
 
-const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
+pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 
 /// The fixture under `security.posture: hardened` (personal keys) with message
 /// signing armed, so the direct route signs every `tools/call` it serves.
