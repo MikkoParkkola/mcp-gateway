@@ -276,9 +276,15 @@ def is_prerelease_tag(tag):
 def in_range(text, match):
     """True when the version `match` ends a hyphen range (4.0.0-rc.1-4.0.1,
     v4.0.0-rc.1-v4.0.1) rather than sitting in the suffix before it: a
-    hyphen, then a whole x.y.z or a v-prefixed version."""
-    return text[: match.start()].endswith("-") and (
-        match.group(3) is not None or match.group(0)[:1] in "vV"
+    hyphen, then a whole x.y.z or a v-prefixed version. Never inside build
+    metadata: 4.0.0+build-4.0.1 is a build of 4.0.0."""
+    before = text[: match.start()]
+    suffix = IN_SUFFIX.search(before)
+    return (
+        bool(suffix)
+        and "+" not in suffix.group(0)
+        and before.endswith("-")
+        and (match.group(3) is not None or match.group(0)[:1] in "vV")
     )
 
 
