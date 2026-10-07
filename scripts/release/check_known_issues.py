@@ -23,6 +23,7 @@ Exit 0 when the gate holds, 1 otherwise (an unreadable notes file included).
 """
 
 import argparse
+import html
 import os
 import pathlib
 import re
@@ -43,11 +44,12 @@ VERSION_TOKEN = re.compile(r"(?<![\w.])v?([45])\.(\d+)(?:\.(\d+))?(?!\d|\.\d)")
 IN_SUFFIX = re.compile(r"\d\.\d+\.\d+[-+][0-9a-z.-]*$", re.IGNORECASE)
 PRERELEASE_TAG = re.compile(r"^v4\.0\.0-(beta|rc)\.\d+$")
 # ATX level 1-2 headings: up to three spaces of indent; the title is compared as
-# words only (see is_title), so closing hashes and inline Markdown never hide it.
+# letters only (see title_letters), so no inline Markdown can hide it.
 HEADING = re.compile(r"^ {0,3}#{1,2}[ \t]+(.*)$")
-# What a title's inline Markdown adds besides its words: HTML comments and
-# tags, and link targets.
-INLINE_NOISE = re.compile(r"<!--.*?(?:-->|$)|<[^>]*>|\]\([^)]*\)")
+# What a title's inline Markdown adds besides its text: HTML comments and
+# tags, link targets and reference labels.
+INLINE_NOISE = re.compile(r"<!--.*?(?:-->|$)|<[^>]*>|\]\([^)]*\)|\]\[[^\]]*\]")
+TITLE = "knownissues"
 SECTION_END = re.compile(r"^#{1,2}(?:[ \t]|$)")
 # Setext: a paragraph line underlined with = (level 1) or - (level 2). A list
 # item, indented code, an ATX heading, a quote, a fence or a thematic break
@@ -74,18 +76,19 @@ HTML = re.compile(
 REFERENCE = re.compile(r"^ {0,3}\[")
 
 
-def title_words(text):
-    """The words of `text`, its inline Markdown (see INLINE_NOISE) dropped."""
-    return re.sub(r"[^a-z]+", " ", INLINE_NOISE.sub(" ", text).lower()).split()
+def title_letters(text):
+    """The letters `text` renders: entities decoded, inline Markdown dropped,
+    and nothing else kept, so markup inside a word cannot split it."""
+    return re.sub(r"[^a-z]", "", INLINE_NOISE.sub("", html.unescape(text)).lower())
 
 
 def is_title(text):
-    """True when `text`, reduced to its words, opens with "known issues".
+    """True when the letters of `text` hold "knownissues".
 
-    A prefix, not an exact match: whatever follows (a reference label, an
-    annotation) only makes a doubtful start, and a start fails closed.
+    Containment, not an exact match: whatever else the title says only makes
+    a doubtful start, and a start fails closed.
     """
-    return title_words(text)[:2] == ["known", "issues"]
+    return TITLE in title_letters(text)
 
 
 def atx_start(line):
@@ -104,7 +107,7 @@ def starts_section(lines, i):
     if atx_start(lines[i]):
         return True
     underline = UNDERLINE.match(lines[i + 1]) if i + 1 < len(lines) else None
-    if not underline or underline.group(1)[0] != "-" or not lines[i].strip():
+    if not underline or not lines[i].strip():
         return False
     two = lines[i - 1] + " " + lines[i] if i else lines[i]
     return is_title(lines[i]) or is_title(two)
@@ -158,7 +161,7 @@ def known_issues(text):
     for i, line in enumerate(lines):
         if starts_section(lines, i):
             inside, underline = True, not atx_start(line)
-            if len(title_words(line)) > 2:
+            if title_letters(line).replace(TITLE, "", 1):
                 # A start line that says more than the title (a bullet read
                 # as one) is content too, so nothing it says is dropped.
                 body.append(line)
