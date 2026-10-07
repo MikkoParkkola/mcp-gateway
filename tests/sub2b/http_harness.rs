@@ -39,35 +39,25 @@ struct HttpSession {
 impl HttpSession {
     /// Spawn the gateway in HTTP mode and wait until it answers `initialize`.
     async fn spawn(home: &Path, backend_url: &str) -> Self {
-        // Ask the OS for a free port and hand it straight to the child. The
-        // listener is dropped before the child binds, so the port is briefly
-        // unclaimed; the readiness loop below is what makes that safe, and a
-        // timeout there names this race.
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("reserve a port")
-            .local_addr()
-            .expect("reserved port")
-            .port();
-        write_http_config(home, backend_url, port);
+        // The child binds an OS-chosen port and logs it (MIK-7984).
+        write_http_config(home, backend_url, gateway_bin::ANY_PORT);
+        let log = home.join("serve.log");
+        let out = std::fs::File::create(&log).expect("serve log");
+        let err = out.try_clone().expect("serve log handle");
 
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-        command.arg("serve").current_dir(home).env("HOME", home);
-        // The developer's own environment must not decide what this child
-        // connects to.
-        for (name, _) in std::env::vars() {
-            if name.starts_with("MCP_GATEWAY_") {
-                command.env_remove(name);
-            }
-        }
+        let mut command = Command::from(gateway_bin::command(
+            home,
+            gateway_bin::Inherit::Environment,
+        ));
+        command.arg("serve").current_dir(home);
         let child = command
             .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
+            .stdout(Stdio::from(out))
+            .stderr(Stdio::from(err))
             .kill_on_drop(true)
             .spawn()
             .expect("spawn gateway over http");
 
-        let url = format!("http://127.0.0.1:{port}/mcp");
         // Attached once, as a default header, so no POST helper can forget it:
         // an unauthenticated request reaches the gateway as `anonymous`, which
         // holds no principal and cannot be admitted for a keyed call.
@@ -83,6 +73,11 @@ impl HttpSession {
             .expect("build the http client");
         let ready = timeout(READ_TIMEOUT, async {
             loop {
+                let Some(port) = gateway_bin::logged_port(&log) else {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                };
+                let url = format!("http://127.0.0.1:{port}/mcp");
                 let posted = client
                     .post(&url)
                     .header("Accept", "application/json, text/event-stream")
@@ -92,22 +87,22 @@ impl HttpSession {
                 if let Ok(response) = posted
                     && response.status() == reqwest::StatusCode::OK
                 {
-                    return response
+                    let session = response
                         .headers()
                         .get("mcp-session-id")
                         .and_then(|value| value.to_str().ok())
                         .unwrap_or_default()
                         .to_owned();
+                    return (session, url);
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
         .await;
-        let session = ready.unwrap_or_else(|_| {
+        let (session, url) = ready.unwrap_or_else(|_| {
             panic!(
-                "the gateway never answered initialize on 127.0.0.1:{port} — either \
-                 it failed to start, or another process took the reserved port \
-                 between the probe bind and the child's own bind"
+                "the gateway never logged a port and answered initialize:\n{}",
+                std::fs::read_to_string(&log).unwrap_or_default()
             )
         });
         assert!(

@@ -161,6 +161,8 @@ impl MetaMcp {
         let verified_identity = caller.verified_identity;
         let provenance = caller.provenance();
         let caller_proof = CallerProof::new(verified_identity, provenance);
+        // The meta-tools this caller can see, for its recovery hints (MIK-7974).
+        let surface = self.hint_surface(caller);
 
         // Capture once, before any authorization input is read. A bump after
         // this strands the insert under the epoch this call was authorized
@@ -404,6 +406,7 @@ impl MetaMcp {
             session_id,
             api_key_name,
             trace_id,
+            caller_key: None,
         })?;
         #[cfg(feature = "cost-governance")]
         let cost_warnings = std::mem::take(&mut admission.warnings);
@@ -491,20 +494,22 @@ impl MetaMcp {
         {
             let message = super::signing::wire_error_message(&error);
             if let Some(reservation) = idem_reservation.as_mut() {
-                reservation.fail(&json!({"code": error.to_rpc_code(), "message": message}));
+                reservation.fail(&audit::stored_failure(
+                    json!({"code": error.to_rpc_code(), "message": message}),
+                ));
             }
             return Err(error);
         }
         let mut answered = mcp_backend && dispatch_result.is_ok();
         let mut result = match dispatch_result {
-            Ok(value) => attach_tool_error_recovery(value, tool, server, self.hint_surface()),
+            Ok(value) => attach_tool_error_recovery(value, tool, server, surface),
             Err(e) => {
                 self.settle_dispatch_error(
                     e,
                     caller_credential.managed.as_ref(),
-                    &mut idem_reservation,
+                    (&mut idem_reservation, caller.execution),
                     verified_identity,
-                    (server, tool),
+                    (server, tool, surface),
                 )
                 .await?
             }
@@ -624,6 +629,7 @@ impl MetaMcp {
             session_id,
             api_key_name,
             trace_id,
+            caller_key: None,
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
         result = gated;
@@ -739,6 +745,9 @@ mod captured_invoke_tests;
 
 #[cfg(test)]
 mod cancel_settles_tests;
+
+#[cfg(test)]
+mod caller_cost_tests;
 
 #[cfg(test)]
 mod f13_hint_scope_tests;

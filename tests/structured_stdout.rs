@@ -3,8 +3,11 @@
 //! #1909: a command asked for a machine-readable format writes exactly one
 //! document to stdout. Hints, progress and empty-state text go to stderr.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 struct Home {
     _dir: tempfile::TempDir,
@@ -21,14 +24,8 @@ impl Home {
     /// Run the binary in this home. `found` publishes one server through the
     /// `MCP_SERVER_*_URL` scan, so discovery has something to list.
     fn run(&self, args: &[&str], found: bool) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        let mut command = gateway_bin::command(&self.root, gateway_bin::Inherit::Nothing);
         command
-            .env_clear()
-            .env("HOME", &self.root)
-            .env("USERPROFILE", &self.root)
-            // Debug-build seam: Windows `dirs::home_dir()` ignores HOME (#2368).
-            .env("MCP_GATEWAY_TEST_HOME_DIR", &self.root)
-            .env("APPDATA", self.root.join("AppData/Roaming"))
             .env("XDG_CONFIG_HOME", self.root.join("xdg"))
             // Process discovery calls `ps` by name; an empty PATH keeps host
             // processes out of the discovered set.
@@ -254,10 +251,8 @@ fn controller_watch_json_writes_one_document_per_line() {
         "/deploy/kubernetes/enterprise-alpha/base/example-gateway.yaml"
     );
     let home = Home::new();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+    let mut command = gateway_bin::command(&home.root, gateway_bin::Inherit::Nothing);
     command
-        .env_clear()
-        .env("HOME", &home.root)
         .current_dir(&home.root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

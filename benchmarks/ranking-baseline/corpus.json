@@ -1,6 +1,6 @@
 {
   "criterion": "MIK-3274.RANKING.3",
-  "tool_inventory_size": 137,
+  "tool_inventory_size": 119,
   "corpus_size": 114,
   "derivation_note": "Every query below is produced by a mechanical rule over capabilities/*.yaml (name / description / tags), applied with a fixed alphabetical stride so the sample is reproducible. No query was chosen by observing ranker output; see gen_corpus.py for the exact rule that produced each case (derivation/derivation_detail fields).",
   "cases": [

@@ -622,110 +622,84 @@ async fn a_request_fails_only_when_every_copy_is_withheld() {
     );
 }
 
-/// MIK-7939 D6.RELAY.5/.11: a bridged prompt's relay receipt commits when the
-/// SSE stream writes it past the audit gate, never while it is only queued,
-/// and never for a prompt the gate withholds (a tenant read whose record fails
-/// closed). A receipt exempts the caller later, so it must name only text the
-/// caller was shown.
+/// MIK-7918 AC1, the sampling case: backend sampling content can name a
+/// tenant (here in a tool schema it offers), so under a failing `FailClosed`
+/// log the request is withheld at write and its waiter fails at once.
 #[cfg(feature = "firewall")]
 #[tokio::test]
-async fn a_bridged_prompt_commits_only_when_the_stream_writes_it() {
-    use crate::gateway::input_bridge::{ClientChannel, DeliveryCommit, DeliveryError};
+async fn a_withheld_sampling_request_fails_its_waiter_at_once() {
     use crate::gateway::proxy::ProxyManager;
     use futures::StreamExt;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     let (_dir, log, multiplexer, id, mut body) = judged_sse();
     log.set_append_failure_for_test(true);
-    let proxy = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    let ask = |rid: &'static str, params: serde_json::Value| {
-        let (proxy, id) = (Arc::clone(&proxy), id.clone());
-        let commits = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&commits);
-        let commit = DeliveryCommit::new(move || {
-            counted.fetch_add(1, Ordering::SeqCst);
-        });
-        let sent = tokio::spawn(async move {
-            proxy
-                .send_request_committing(&id, rid, "elicitation/create", Some(params), Some(commit))
-                .await
-        });
-        (sent, commits)
-    };
-    let (withheld, withheld_commits) = ask("withheld-prompt", json!({"customer_id": "cust-b"}));
-    let (written, written_commits) = ask("written-prompt", json!({"message": "Proceed?"}));
-
+    let proxy = ProxyManager::new(Arc::clone(&multiplexer));
+    let ask: crate::protocol::SamplingCreateMessageParams = serde_json::from_value(json!({
+        "messages": [{"role": "user", "content": {"type": "text", "text": "Summarize"}}],
+        "maxTokens": 16,
+        "tools": [{"name": "lookup", "inputSchema": {"customer_id": "cust-b"}}]
+    }))
+    .expect("sampling params");
+    let asked = proxy.forward_sampling_with_response(&id, &ask, Duration::from_secs(30));
     let mut seen = String::new();
     let read = async {
         while let Some(chunk) = body.next().await {
             seen.push_str(&String::from_utf8_lossy(&chunk.unwrap()));
         }
     };
-    let ended = tokio::select! {
-        ended = tokio::time::timeout(Duration::from_secs(5), withheld) => ended,
+    let answer = tokio::select! {
+        answer = tokio::time::timeout(Duration::from_secs(5), asked) => answer,
         () = read => panic!("the stream ended"),
     };
     assert!(
-        matches!(ended, Ok(Ok(Err(DeliveryError::TimedOut)))),
-        "the tenant prompt was not withheld: {ended:?}"
+        matches!(
+            answer,
+            Ok(Err(crate::gateway::proxy::SamplingError::SendFailed))
+        ),
+        "the sampling waiter was not failed at once: {answer:?}"
     );
-    while !seen.contains("written-prompt") {
-        let chunk = tokio::time::timeout(Duration::from_secs(5), body.next())
-            .await
-            .expect("the written prompt reaches the stream")
-            .expect("the stream is open");
-        seen.push_str(&String::from_utf8_lossy(&chunk.unwrap()));
-    }
-    assert!(!seen.contains("withheld-prompt"), "{seen}");
+    assert!(
+        !seen.contains("sampling/createMessage"),
+        "the withheld request reached the stream: {seen}"
+    );
     assert!(
         log.append_attempts_for_test() >= 1,
-        "the withheld prompt tried no record"
+        "no record was attempted"
     );
-    assert_eq!(
-        withheld_commits.load(Ordering::SeqCst),
-        0,
-        "a withheld prompt committed its receipt"
-    );
-    assert_eq!(
-        written_commits.load(Ordering::SeqCst),
-        1,
-        "a written prompt commits its receipt once"
-    );
-    written.abort();
 }
 
-/// MIK-7939: a second copy written while the first is still recording the
-/// receipt waits for it, so no stream shows the prompt before it is recorded.
-#[test]
-fn a_second_written_copy_waits_for_the_receipt() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    let (started, done) = (
-        Arc::new(AtomicBool::new(false)),
-        Arc::new(AtomicBool::new(false)),
-    );
-    let (on_start, on_done) = (Arc::clone(&started), Arc::clone(&done));
-    let watch = Arc::new(DeliveryWatch {
-        commit: parking_lot::Mutex::new(Some(crate::gateway::input_bridge::DeliveryCommit::new(
-            move || {
-                on_start.store(true, Ordering::SeqCst);
-                std::thread::sleep(Duration::from_millis(200));
-                on_done.store(true, Ordering::SeqCst);
-            },
-        ))),
-        ..DeliveryWatch::default()
-    });
-    watch.sent(2);
-    let first = std::thread::spawn({
-        let watch = Arc::clone(&watch);
-        move || watch.report(true)
-    });
-    while !started.load(Ordering::SeqCst) {
-        std::thread::yield_now();
-    }
-    watch.report(true);
-    assert!(
-        done.load(Ordering::SeqCst),
-        "the second copy was written before the receipt was recorded"
-    );
-    first.join().unwrap();
+/// MIK-7918 AC2: a confirmation prompt withheld at write reached nobody. The
+/// gate must read that as `Undelivered`, never as `Unsupported` (a prompt that
+/// may have been seen). The stream here reports its copy withheld directly.
+#[tokio::test]
+async fn a_withheld_confirmation_prompt_reads_as_undelivered() {
+    use crate::gateway::destructive_confirmation::{
+        ConfirmationOutcome, require_destructive_confirmation,
+    };
+    use crate::gateway::proxy::ProxyManager;
+
+    let multiplexer = Arc::new(NotificationMultiplexer::new(
+        Arc::new(BackendRegistry::new()),
+        StreamingConfig::default(),
+    ));
+    let (id, mut rx) = multiplexer.get_or_create_session(Some("s"));
+    let proxy = ProxyManager::new(Arc::clone(&multiplexer));
+    let stream = async {
+        let frame = rx.recv().await.expect("the prompt is queued");
+        frame
+            .watch
+            .as_ref()
+            .expect("a request carries a watch")
+            .report(false);
+    };
+    let asked = require_destructive_confirmation(&proxy, &id, "kill server 'payments'");
+    let (outcome, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(asked, stream)
+    })
+    .await
+    .expect("the withheld prompt ends the wait at once");
+    assert_eq!(outcome, ConfirmationOutcome::Undelivered);
 }
+
+#[path = "streaming_tests/relay_commit.rs"]
+mod relay_commit;

@@ -133,15 +133,16 @@ pub struct RecoveryContext<'a> {
 /// the default message and suggestion come from this function.
 #[must_use]
 pub fn recovery_for(category: ErrorCategory, ctx: RecoveryContext<'_>) -> RecoveryHint {
-    recovery_for_surface(category, ctx, MetaSurface::Standard)
+    recovery_for_surface(category, ctx, MetaSurface::Standard(Revive::Offered))
 }
 
 /// The meta-tool surface the caller has, which decides the tools a hint may
 /// name: a hint that points at a tool the caller cannot see is a dead end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MetaSurface {
-    /// The full meta-tool set (`gateway_list_tools`, `gateway_revive_server`, ...).
-    Standard,
+    /// The full meta-tool set (`gateway_list_tools`, ...); whether it includes
+    /// `gateway_revive_server` depends on the caller (MIK-7974).
+    Standard(Revive),
     /// Code Mode: only `gateway_search` and `gateway_execute`.
     CodeMode,
     /// The operator's `exposed_meta_tools` hides this mode's discovery tool,
@@ -149,11 +150,39 @@ pub(crate) enum MetaSurface {
     Undiscoverable,
 }
 
+/// Whether a standard-surface caller can list and call `gateway_revive_server`:
+/// an admin meta-tool the operator's `exposed_meta_tools` can also hide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Revive {
+    Offered,
+    Hidden,
+}
+
+/// The meta-tool surface a request asked for. `CodeMode` is the per-request
+/// `?codemode=search_and_execute` override; `Configured` defers to the
+/// gateway's own Code Mode setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SurfaceRequest {
+    Configured,
+    CodeMode,
+}
+
+impl SurfaceRequest {
+    /// The request's surface from the HTTP handler's `?codemode=` check.
+    pub(crate) const fn from_url(code_mode_requested: bool) -> Self {
+        if code_mode_requested {
+            Self::CodeMode
+        } else {
+            Self::Configured
+        }
+    }
+}
+
 impl MetaSurface {
     /// The tool this surface discovers tools with, if the caller has one.
     pub(crate) const fn discovery_tool(self) -> Option<&'static str> {
         match self {
-            Self::Standard => Some("gateway_list_tools"),
+            Self::Standard(_) => Some("gateway_list_tools"),
             Self::CodeMode => Some("gateway_search"),
             Self::Undiscoverable => None,
         }
@@ -212,13 +241,15 @@ pub(crate) fn recovery_for_surface(
                 str::to_string,
             ),
             suggest: match surface {
-                MetaSurface::Standard => {
+                MetaSurface::Standard(Revive::Offered) => {
                     "Wait for the circuit breaker to recover (automatic) or use \
                       `gateway_revive_server` to reset it manually. \
                       Do not retry in a tight loop."
                         .to_string()
                 }
-                MetaSurface::CodeMode | MetaSurface::Undiscoverable => {
+                MetaSurface::Standard(Revive::Hidden)
+                | MetaSurface::CodeMode
+                | MetaSurface::Undiscoverable => {
                     "Wait for the circuit breaker to recover (automatic). \
                       Do not retry in a tight loop."
                         .to_string()
@@ -322,15 +353,11 @@ pub fn attach_recovery(mut value: Value, hint: RecoveryHint) -> Value {
 /// only status-shaped or unambiguous phrases.
 ///
 /// Deliberately not matched: a digit run inside a larger token (`4291a` in a
-/// `500`), and `throttling`, which appears in its own negation ("throttling
-/// disabled"). `throttled` — the past participle, which reports what happened
-/// rather than naming the feature — is matched, because "request throttled by
-/// upstream" is a shape this gateway has actually seen, unless negated
-/// ("not throttled", "unthrottled"): those report an ordinary failure, and a
-/// wrong exclusion there is the worse of the two mistakes above. The negated
-/// forms are stripped before the match runs, per-occurrence rather than as a
-/// whole-payload veto, so a negated phrase never suppresses a separate,
-/// genuine "throttled" elsewhere in the same text (GH475.RL.5 review fix).
+/// `500`), and any form of `throttle` on its own. A throttle phrase is prose,
+/// not a status: "request throttled: upstream out of capacity" is a capacity
+/// failure, and exempting it kept a failing backend in rotation (MIK-7677).
+/// A real throttle carries a `429` token or a rate-limit phrase
+/// (`too many requests`, `rate limit`, `resource_exhausted`).
 #[must_use]
 pub fn is_rate_limited(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
@@ -340,10 +367,6 @@ pub fn is_rate_limited(text: &str) -> bool {
         || lower.contains("rate-limit")
         || lower.contains("ratelimit")
         || lower.contains("resource_exhausted")
-        || lower
-            .replace("not throttled", "")
-            .replace("unthrottled", "")
-            .contains("throttled")
     {
         return true;
     }
@@ -528,7 +551,9 @@ mod tests {
             "rate-limit exceeded",
             "ratelimit exceeded",
             "RESOURCE_EXHAUSTED",
-            "request throttled by upstream",
+            // MIK-7677: throttle wording with a co-signal stays exempt
+            "request throttled: HTTP 429",
+            "request throttled: rate limit exceeded",
         ] {
             assert!(is_rate_limited(s), "expected rate-limited for {s:?}");
         }
@@ -542,61 +567,18 @@ mod tests {
             "trace 14293 failed",
             // the form that appears in its own negation
             "throttling disabled for this backend",
+            // MIK-7677: a throttle phrase is prose, not a status; without a
+            // `429` or rate-limit co-signal it counts toward the breaker
+            "request throttled: upstream out of capacity",
+            "request throttled by upstream",
+            "not throttled, connection reset",
+            "unthrottled failure",
+            "the backend was never throttled, it timed out",
             // plain failures that must still reach the breaker
             "HTTP 503 Service Unavailable",
             "connection reset by peer",
         ] {
             assert!(!is_rate_limited(s), "expected NOT rate-limited for {s:?}");
-        }
-    }
-
-    // GH475.RL.5: `throttled` (the past participle) is matched deliberately
-    // (see the doc comment above), but that substring match also fires on the
-    // word's own negation -- "not throttled" and "unthrottled" both contain
-    // "throttled" and both report the OPPOSITE of a rate limit. A false
-    // exclusion here hides a sick backend from the circuit breaker, which is
-    // the worse of the two mistakes the doc comment names. This closes the
-    // negation class for `throttled` specifically (past-participle and its
-    // prefixed form), not general natural-language negation.
-    #[test]
-    fn rate_limit_predicate_rejects_negated_throttled() {
-        for s in [
-            "not throttled, connection reset",
-            "backend is not throttled but timing out",
-            "unthrottled failure",
-        ] {
-            assert!(!is_rate_limited(s), "expected NOT rate-limited for {s:?}");
-        }
-    }
-
-    // §12 review (gpt-review + kimi-review, both HIGH, confirmed independently):
-    // the first version of RL.5 vetoed on ANY negated occurrence appearing
-    // anywhere in the text, so a negated phrase silently suppressed a
-    // separate, genuine "throttled" elsewhere in the same payload -- exactly
-    // the false-exclusion mistake RL.5 exists to prevent. Fixed by stripping
-    // the negated forms before matching, so only what remains decides.
-    #[test]
-    fn rate_limit_predicate_still_matches_genuine_throttled_alongside_a_negation() {
-        assert!(is_rate_limited(
-            "not throttled earlier, but request throttled by upstream"
-        ));
-    }
-
-    // The boundary of the two literal negations, asserted rather than left to
-    // the doc comment: a negation with a word in between, or any other wording,
-    // still matches and so is still exempted. GH475.RL.5's clause names those
-    // two forms for this reason -- a clause that said "unless negated" would
-    // claim a natural-language negation this predicate does not implement.
-    #[test]
-    fn rate_limit_predicate_negation_covers_two_literal_forms_only() {
-        for s in [
-            "the backend was never throttled, it timed out",
-            "is not currently throttled, connection reset",
-        ] {
-            assert!(
-                is_rate_limited(s),
-                "the stripped forms are literal; {s:?} must still match"
-            );
         }
     }
 
@@ -616,6 +598,24 @@ mod tests {
             recovery_for_surface(ErrorCategory::NotFound, ctx_for("t"), MetaSurface::CodeMode);
         assert!(
             hint.suggest.contains("`gateway_search`"),
+            "{}",
+            hint.suggest
+        );
+    }
+
+    #[test]
+    fn a_hidden_revive_is_not_named_by_a_breaker_hint() {
+        let hidden = MetaSurface::Standard(Revive::Hidden);
+        let hint = recovery_for_surface(ErrorCategory::CircuitBreakerTrip, ctx_for("t"), hidden);
+        assert!(
+            !hint.suggest.contains("gateway_revive_server"),
+            "{}",
+            hint.suggest
+        );
+        let offered = MetaSurface::Standard(Revive::Offered);
+        let hint = recovery_for_surface(ErrorCategory::CircuitBreakerTrip, ctx_for("t"), offered);
+        assert!(
+            hint.suggest.contains("`gateway_revive_server`"),
             "{}",
             hint.suggest
         );

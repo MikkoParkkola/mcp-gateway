@@ -4,7 +4,7 @@
 //!
 //! Wraps `reqwest` to talk the A2A JSON-RPC 2.0 wire protocol.
 //! All operations are async, cancel-safe, and respect the backend
-//! timeout configured in [`BackendConfig`].
+//! timeout configured in [`BackendConfig`](crate::config::BackendConfig).
 //!
 //! # Usage
 //!

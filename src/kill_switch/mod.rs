@@ -278,8 +278,9 @@ impl KillSwitch {
     /// Returns `true` when `capability` on `backend` is currently disabled.
     ///
     /// Does **not** perform cooldown-based auto-recovery. Use
-    /// [`is_capability_disabled_with_cooldown`] on the invocation hot-path to
-    /// trigger transparent recovery when the cooldown has elapsed.
+    /// [`is_capability_disabled_with_cooldown`](Self::is_capability_disabled_with_cooldown)
+    /// on the invocation hot-path to trigger transparent recovery when the
+    /// cooldown has elapsed.
     #[must_use]
     pub fn is_capability_disabled(&self, backend: &str, capability: &str) -> bool {
         let key = Self::capability_key(backend, capability);
@@ -328,7 +329,7 @@ impl KillSwitch {
     ///
     /// Returns `true` when this failure triggered a new auto-disable.
     /// The backend-level budget is unaffected — callers must still call
-    /// [`record_failure`] separately to update the backend budget.
+    /// [`record_failure`](Self::record_failure) separately to update the backend budget.
     pub fn record_capability_failure(
         &self,
         backend: &str,

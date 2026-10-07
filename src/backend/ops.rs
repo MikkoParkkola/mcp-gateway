@@ -397,7 +397,7 @@ impl Backend {
     /// start here, on every transport: a failed spawn, upgrade or `initialize` is
     /// recorded on the slot's failsafe (F17) so the breaker names it, then returned
     /// as the pre-send refusal it is ([`super::lifecycle::pre_send_start_error`]).
-    async fn start_recorded(
+    pub(super) async fn start_recorded(
         &self,
         key: &super::pool::PoolKey,
         entry: &super::PooledEntry,
@@ -410,8 +410,7 @@ impl Backend {
     }
 
     /// Record a failed dispatch against the slot's failsafe, log it, and count
-    /// it. `exchange` is the noun the log line opens with; the request and the
-    /// notification paths differ in nothing else, so they share this.
+    /// it; `exchange` is the log line's noun. A login in progress is not one.
     fn record_dispatch_error(
         &self,
         entry: &super::PooledEntry,
@@ -419,6 +418,9 @@ impl Backend {
         error: &Error,
         exchange: &'static str,
     ) {
+        if error.is_authorization_wait() {
+            return; // MIK-7982: the backend was never asked.
+        }
         let rate_limited =
             super::fill_check::record_request_failure(entry, &error.to_string(), latency);
         if rate_limited {
@@ -451,10 +453,9 @@ impl Backend {
         .record(latency.as_secs_f64());
     }
 
-    /// Record the outcome of one dispatch attempt against the slot's failsafe
-    /// and the request-duration metrics, split out of [`Self::request_attempted`]
-    /// purely to keep that function under the line budget -- the logic and its
-    /// ordering (gate check, then this, both on the same slot) are unchanged.
+    /// Record the outcome of one dispatch attempt against the slot's failsafe and
+    /// the request-duration metrics; split out of [`Self::request_attempted`] for
+    /// its line budget, logic and ordering unchanged.
     fn record_attempt_outcome(
         &self,
         entry: &super::PooledEntry,
@@ -467,10 +468,9 @@ impl Backend {
                     latency_ms = latency.as_millis(),
                     "Request completed successfully"
                 );
-                // A throttle can arrive as a successful JSON-RPC response
-                // carrying `isError: true`, not only as a transport error.
-                // Reaching `record_success` with one would break a real
-                // failure streak and could close a half-open circuit.
+                // A throttle can also arrive as a JSON-RPC success carrying
+                // `isError: true`; reaching `record_success` with one would break
+                // a real failure streak and could close a half-open circuit.
                 let throttled = response.result.as_ref().is_some_and(|result| {
                     result
                         .get("isError")

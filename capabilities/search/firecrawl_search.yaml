@@ -1,4 +1,4 @@
-sha256: def74c378aab5c1e6fba47d611c868422d636c46e5f549a69e87ac779ceba29a
+sha256: 155d13f6fa49e867771a67c1bc63e028cc3704a7e26eea382cdfecc7542a1ae7
 fulcrum: "1.0"
 name: firecrawl_search
 description: |
@@ -24,6 +24,8 @@ schema:
       - query
   output:
     type: object
+    # v2 also returns `id`, `creditsUsed` and `warning` beside the results.
+    additionalProperties: true
     properties:
       success: { type: boolean }
       data: { type: object }
