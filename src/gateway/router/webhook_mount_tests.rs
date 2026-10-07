@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8002 test 4f: a base_path the config check accepts mounts its webhook
+//! MIK-8002 test 4f: a `base_path` the config check accepts mounts its webhook
 //! routes beside the gateway's own without an axum startup panic, so the
 //! matcher's acceptance and the router's compatibility agree.
 

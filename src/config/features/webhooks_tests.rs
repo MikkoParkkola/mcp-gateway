@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8002: the base_path matcher, on synthetic and on the real owned set.
+//! MIK-8002: the `base_path` matcher, on synthetic and on the real owned set.
 
 use super::*;
 use crate::gateway::routes::OWNED;
