@@ -225,13 +225,13 @@ mod real_watcher {
         let _ = h.shutdown.send(());
     }
 
-    /// `MIK-8024.WATCHDIR.1`: the config's directory deleted and recreated at
-    /// the same path is watched again. Its inotify watch died with the old
-    /// directory, so an edit in the new one is heard only through a new watch.
-    /// The pause outlasts a broken-chain retry, so the edit's reload is the
-    /// only trigger left to arrive.
-    #[tokio::test]
-    async fn watchdir1_a_recreated_config_directory_is_watched_again() {
+    /// The config's directory replaced in place by `replace`, then a new
+    /// config written there, with the rewatch task settled after it. The
+    /// pause outlasts a broken-chain retry, so the next trigger can only come
+    /// from a later event.
+    async fn replaced_config_dir(
+        replace: impl FnOnce(&Path),
+    ) -> (tempfile::TempDir, std::path::PathBuf, Harness) {
         let root = tempfile::tempdir().expect("root");
         let conf = root.path().join("conf");
         std::fs::create_dir(&conf).unwrap();
@@ -241,18 +241,49 @@ mod real_watcher {
         h.wait_wakes_above(0).await;
         h.drain_idle().await;
 
-        std::fs::remove_dir_all(&conf).unwrap();
+        replace(&conf);
         std::fs::create_dir(&conf).unwrap();
         std::fs::write(&cfg, "a: 2\n").unwrap();
         settled_wakes(&h).await;
         tokio::time::sleep(super::super::CHAIN_RETRY + Duration::from_millis(500)).await;
         settled_wakes(&h).await;
         h.drain_idle().await;
+        (root, cfg, h)
+    }
 
+    /// `MIK-8024.WATCHDIR.1`: the config's directory deleted and recreated at
+    /// the same path is watched again. Its inotify watch died with the old
+    /// directory, so an edit in the new one is heard only through a new watch.
+    #[tokio::test]
+    async fn watchdir1_a_recreated_config_directory_is_watched_again() {
+        let (_root, cfg, mut h) =
+            replaced_config_dir(|conf| std::fs::remove_dir_all(conf).unwrap()).await;
         std::fs::write(&cfg, "a: 3\n").unwrap();
         assert!(
             h.triggered_within(10).await,
             "an edit in the recreated directory was not heard"
+        );
+        let _ = h.shutdown.send(());
+    }
+
+    /// `MIK-8024.WATCHDIR.1`, renamed away: the old watch followed the
+    /// directory to its new name. The new directory at the path is watched,
+    /// and a write in the old one is no longer heard as the config.
+    #[tokio::test]
+    async fn watchdir1_a_config_directory_renamed_away_is_rewatched() {
+        let (root, cfg, mut h) = replaced_config_dir(|conf| {
+            std::fs::rename(conf, conf.with_file_name("conf.old")).unwrap();
+        })
+        .await;
+        std::fs::write(root.path().join("conf.old/gateway.yaml"), "a: 9\n").unwrap();
+        assert!(
+            !h.triggered_within(2).await,
+            "a write in the renamed-away directory reloaded"
+        );
+        std::fs::write(&cfg, "a: 3\n").unwrap();
+        assert!(
+            h.triggered_within(10).await,
+            "an edit in the new directory was not heard"
         );
         let _ = h.shutdown.send(());
     }
