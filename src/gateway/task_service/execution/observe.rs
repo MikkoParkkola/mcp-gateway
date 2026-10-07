@@ -129,6 +129,12 @@ impl HandoffRegistry {
         self.accepted.lock().len()
     }
 
+    /// Test-only: tasks subscribed to `released` right now.
+    #[cfg(test)]
+    pub(crate) fn release_waiters(&self) -> usize {
+        self.released.receiver_count()
+    }
+
     /// The one ownership removal. Reached only from [`Handoff::drop`].
     fn release(&self, id: &str) {
         self.accepted.lock().remove(id);

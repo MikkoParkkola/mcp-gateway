@@ -216,6 +216,69 @@ async fn an_update_losing_to_a_running_resume_is_refused_at_once() {
     );
 }
 
+/// MIK-7662 (`GH2417.1`, `GH2417.2`). Mutants: no wake when the resume commits
+/// `working`; the wake sent before the write commits.
+///
+/// The loser parks while the winner owns the handoff and its write is held.
+/// The winner keeps the handoff through the resume, so the commit itself must
+/// wake the loser: it answers at once instead of at the 1 s wait.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_loser_parked_behind_a_resume_answers_when_the_resume_commits() {
+    let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (state, _store) = state_with(&mock).await;
+    let id = parked(&state, "wake-a").await;
+
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let release_rx = std::sync::Mutex::new(release_rx);
+    let armed = AtomicBool::new(true);
+    // One shot: the resumed call's own writes later pass straight through.
+    let barrier: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        if armed.swap(false, Ordering::SeqCst) {
+            let _ = entered_tx.send(());
+            let _ = release_rx
+                .lock()
+                .expect("release lock")
+                .recv_timeout(Duration::from_secs(5));
+        }
+    });
+    state.task_executor.barrier_on_record_write(barrier).await;
+
+    let spawn_update = |n: i64| {
+        let (state, id) = (Arc::clone(&state), id.clone());
+        tokio::spawn(async move { post(&state, "key-a", completing(n, &id)).await })
+    };
+    let winner = spawn_update(2);
+    tokio::task::spawn_blocking(move || entered_rx.recv_timeout(Duration::from_secs(10)))
+        .await
+        .expect("joins")
+        .expect("the winner's write reached the barrier");
+    let held = get_task(&state, "key-a", &id).await;
+    std::assert_eq!(status_of(&held), "input_required", "{held}");
+
+    let loser = spawn_update(3);
+    // The winner's own subscription ended when it took the handoff, so a
+    // subscriber now is the loser parked in its wait.
+    let parked_by = tokio::time::Instant::now() + Duration::from_secs(10);
+    while state.task_executor.release_waiters_for_test() == 0 {
+        std::assert!(tokio::time::Instant::now() < parked_by, "the loser parks");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    let released = std::time::Instant::now();
+    release_tx.send(()).expect("the barrier is waiting");
+    let lost = loser.await.expect("the loser joins");
+    let waited = released.elapsed();
+    std::assert_eq!(error_code(&lost), Some(-32602), "{lost}");
+    std::assert!(
+        waited < Duration::from_millis(500),
+        "the loser answers when the resume commits, not at the 1 s wait: {waited:?}"
+    );
+    let won = winner.await.expect("the winner joins");
+    std::assert!(won.get("error").is_none(), "{won}");
+    assert_carries_the_backend_result(&poll_until_terminal(&state, "key-a", &id).await);
+}
+
 pub(super) async fn state_with_config(
     mock: &Arc<MockBackend>,
     config: crate::config::Config,
