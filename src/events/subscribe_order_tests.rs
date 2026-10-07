@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-7944 D6.EVENTS_MISC.4: subscribe and refresh audits follow the order
+//! MIK-7944 `D6.EVENTS_MISC.4`: subscribe and refresh audits follow the order
 //! of the commits they record.
 
 use std::sync::Arc;
