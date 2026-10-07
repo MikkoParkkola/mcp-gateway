@@ -14,7 +14,7 @@
 //! | [`types`] | A2A wire-format types (`AgentCard`, `A2aTask`, `Part`, …) |
 //! | [`client`] | Async HTTP client for A2A JSON-RPC calls |
 //! | [`translator`] | Pure MCP ↔ A2A translation functions |
-//! | [`provider`] | [`Provider`] implementation for A2A backends |
+//! | [`provider`] | [`Provider`](crate::provider::Provider) implementation for A2A backends |
 //!
 //! # Feature flag
 //!
