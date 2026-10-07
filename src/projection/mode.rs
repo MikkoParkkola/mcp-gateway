@@ -28,9 +28,7 @@ pub enum ProjectionMode {
     On,
     /// A/B experiment: split callers 50/50 into a `treatment` arm (projected)
     /// and a `control` arm (raw) so projection's effect can be measured before
-    /// committing. Assignment is sticky per experiment key
-    /// (`MetaMcpCallerContext::experiment_key`: the caller key, else a real
-    /// session id; a caller with neither is `control`).
+    /// committing. Assignment is sticky per experiment key (the caller key).
     Experimental,
 }
 
