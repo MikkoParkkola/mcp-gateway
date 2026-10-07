@@ -123,14 +123,17 @@ async fn an_env_edit_appends_inside_the_block() {
     );
 }
 
-/// No-op PATCH: the value is already there, so nothing is written or reloaded.
+/// No-op PATCH: the value is already there, so nothing is written. A live
+/// gateway still reloads: retrying a PATCH whose reload failed finds its value
+/// on disk, and skipping the reload would leave the runtime stale.
 #[tokio::test]
 async fn an_edit_that_changes_nothing_writes_nothing() {
     for route in [Route::Live, Route::File] {
         let (router, path, _keep) = served(SVC, route).await;
         let (status, body) = patch(&router, "svc", json!({"description": "old"})).await;
         assert_eq!(status, StatusCode::OK, "{route:?}: {body}");
-        assert!(body["reload"].is_null(), "{route:?}: reloaded: {body}");
+        let reloaded = body["reload"].is_object();
+        assert_eq!(reloaded, matches!(route, Route::Live), "{route:?}: {body}");
         assert_eq!(read(&path), SVC, "{route:?}");
     }
 }

@@ -72,11 +72,9 @@ pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
 ///
 /// Returns `Err` on validation, serialisation, or I/O failure.
 pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
-    write_config_with(path, config, CommentLoss::Rewrite)
-        .map(|_| ())
-        .map_err(|e| match e {
-            Unwritten::Failed(message) | Unwritten::CommentLoss(message) => message,
-        })
+    write_config_with(path, config, CommentLoss::Rewrite).map_err(|e| match e {
+        Unwritten::Failed(message) | Unwritten::CommentLoss(message) => message,
+    })
 }
 
 #[path = "config_persistence_splice.rs"]
@@ -108,8 +106,8 @@ impl From<String> for Unwritten {
 }
 
 /// [`write_config`] with an explicit answer to a write that would drop the
-/// file's comments. `Ok(false)`: under [`CommentLoss::Refuse`], `config` is
-/// what the file already loads as, so nothing was written.
+/// file's comments. Under [`CommentLoss::Refuse`], a `config` that is what
+/// the file already loads as writes nothing.
 ///
 /// The file is loaded through the strict loader from a single read, and that
 /// exact text is the one edited when `config` differs from it by exactly one
@@ -121,7 +119,7 @@ pub(crate) fn write_config_with(
     path: &Path,
     config: &Config,
     mode: CommentLoss,
-) -> Result<bool, Unwritten> {
+) -> Result<(), Unwritten> {
     config
         .validate_with_env(&config.env_overlay())
         .map_err(|e| format!("Failed to validate config: {e}"))?;
@@ -129,13 +127,12 @@ pub(crate) fn write_config_with(
     if let Some((before, text)) = &current {
         let value = |c: &Config| serde_json::to_value(c).ok();
         if mode == CommentLoss::Refuse && value(before) == value(config) {
-            return Ok(false);
+            return Ok(());
         }
         if let Some(edited) = splice::changed_backend(before, config)
             .and_then(|name| splice::with_backend_edited(text, before, config, &name))
         {
-            write_yaml(path, &edited)?;
-            return Ok(true);
+            return Ok(write_yaml(path, &edited)?);
         }
     }
     if mode == CommentLoss::Refuse {
@@ -148,8 +145,7 @@ pub(crate) fn write_config_with(
     }
     let yaml =
         serde_yaml::to_string(config).map_err(|e| format!("Failed to serialize config: {e}"))?;
-    write_yaml(path, &yaml)?;
-    Ok(true)
+    Ok(write_yaml(path, &yaml)?)
 }
 
 /// How many times a rename is retried before the write is reported failed.

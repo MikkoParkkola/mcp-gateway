@@ -493,7 +493,7 @@ impl ReloadContext {
     }
 
     /// [`Self::mutate_and_reload_outcome_within`] in `mode` for a write that
-    /// would drop comments. A write that changes nothing reloads nothing.
+    /// would drop comments.
     pub(crate) async fn mutate_locked<T, E, F>(
         &self,
         path: &std::path::Path,
@@ -511,9 +511,9 @@ impl ReloadContext {
             Ok(value) => value,
             Err(rejection) => return Ok(ConfigMutation::Rejected(rejection)),
         };
-        if !crate::config_persistence::write_config_with(path, &config, mode)? {
-            return Ok(ConfigMutation::Applied(value, None));
-        }
+        // A write that changes nothing still reloads: a retry after a failed
+        // reload finds its value on disk and must not leave the runtime stale.
+        crate::config_persistence::write_config_with(path, &config, mode)?;
         let outcome = self
             .reload_outcome_locked()
             .await

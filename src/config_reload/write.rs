@@ -187,7 +187,7 @@ pub(super) fn reload_failure(e: &dyn std::fmt::Display, mode: CommentLoss) -> St
 
 /// [`mutate_config_and_reload`] in `mode`: the web UI refuses a write that
 /// would drop the file's comments, and a write that changes nothing writes
-/// and reloads nothing.
+/// nothing (a live gateway still reloads).
 pub(crate) async fn mutate_config_and_reload_with<T, E, F>(
     path: &Path,
     reload_context: Option<&ReloadContext>,
