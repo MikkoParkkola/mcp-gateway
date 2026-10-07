@@ -208,16 +208,19 @@ fn a_change_outside_backends_takes_the_full_rewrite() {
     mcp_gateway::config::Config::load_literal(Some(&path)).expect("the rewrite loads");
 }
 
-/// MIK-8017: several backends at once are spliced in turn and written once.
+/// MIK-8017: several backends at once are spliced in turn and written once
+/// on the CLI path (the web UI writes one backend change at a time).
 #[test]
 fn several_backends_at_once_keep_comments() {
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED).expect("write");
-    let written = ui_write(&path, |c| {
-        c.backends.insert("one".into(), echo_backend());
-        c.backends.insert("two".into(), echo_backend());
-    });
+    let mut config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
+    config.backends.insert("one".into(), echo_backend());
+    config.backends.insert("two".into(), echo_backend());
+    let kept = mcp_gateway::config_persistence::write_config_preserving(&path, &config, false);
+    assert_eq!(kept, Ok(None));
+    let written = std::fs::read_to_string(&path).expect("read");
     assert!(written.contains("# kept by hand"), "{written}");
     let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
     let mut names: Vec<_> = config.backends.keys().map(String::as_str).collect();

@@ -84,7 +84,7 @@ mod splice;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommentLoss {
     /// Re-serialise the whole file (a CLI write given `--force`, and the
-    /// `config_reload` write API).
+    /// reload module's public write API).
     Rewrite,
     /// Write nothing and say what would be lost (web UI backend edits and
     /// CLI writes), and skip a write that would change nothing.
@@ -164,7 +164,7 @@ pub fn write_config_preserving(
 /// How many backends one splice may change.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Splice {
-    /// Exactly one: the web UI and the `config_reload` API change one backend
+    /// Exactly one: the web UI and the reload write API change one backend
     /// per write, so two differences mean another writer got in between.
     One,
     /// Several when none is a removal (CLI setup and discovery import, which
