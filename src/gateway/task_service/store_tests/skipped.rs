@@ -85,7 +85,7 @@ async fn an_unparseable_record_is_skipped_and_the_rest_load() {
 /// task inside it does not restore, so its idempotency key stays taken.
 #[tokio::test]
 async fn an_unrestorable_record_keeps_its_binding() {
-    for case in ["snapshot", "model", "version_zero", "truncated"] {
+    for case in ["snapshot", "model", "version_zero", "truncated", "trailing"] {
         let dir = tempfile::tempdir().unwrap();
         let (path, record, kept) = two_tasks(dir.path()).await;
         let identity: String = {
@@ -95,7 +95,13 @@ async fn an_unrestorable_record_keeps_its_binding() {
                 .unwrap()
                 .to_owned()
         };
-        if case == "truncated" {
+        if case == "trailing" {
+            // Whole and valid, then bytes after its closing brace: the strict
+            // parse refuses it, the member walk still reads the key.
+            let mut bytes = fs::read(&record).unwrap();
+            bytes.extend_from_slice(b" trailing");
+            fs::write(&record, bytes).unwrap();
+        } else if case == "truncated" {
             // A write cut off inside `model`, which the record serializes
             // after `admission`: the key read before the damage is kept.
             truncate_inside(&record, "model", 12);
