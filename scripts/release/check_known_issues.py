@@ -161,9 +161,10 @@ def known_issues(text):
     for i, line in enumerate(lines):
         if starts_section(lines, i):
             inside, underline = True, not atx_start(line)
-            if title_letters(line).replace(TITLE, "", 1):
+            if title_letters(line).replace(TITLE, "", 1) or later_releases(line):
                 # A start line that says more than the title (a bullet read
-                # as one) is content too, so nothing it says is dropped.
+                # as one, or a version in an annotation, read from the raw
+                # text) is content too, so nothing it says is dropped.
                 body.append(line)
             continue
         if underline:
