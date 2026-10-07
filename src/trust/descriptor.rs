@@ -127,8 +127,8 @@ fn with_card(mut descriptor: Value, card: Value) -> Value {
 
 /// Projected descriptors by server id, then server name, then tool name. A
 /// projection is a pure function of the server identity and the tool, and an
-/// entry is reused only while the tool equals, field for field through the
-/// derive, the one it was projected from. A tool changed under the same name
+/// entry is reused only while the tool equals, every field named in
+/// [`same_tool`], the one it was projected from. A tool changed under the same name
 /// is re-projected, never served stale (MIK-7916). The identity is the whole
 /// tool, not a hash: a collision would serve another tool's card.
 #[derive(Default)]
@@ -257,10 +257,14 @@ fn same_json(a: &Value, b: &Value) -> bool {
         (Value::Array(x), Value::Array(y)) => {
             x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same_json(x, y))
         }
+        // Both maps iterate in key order (no `preserve_order`), so equal maps
+        // pair up entry by entry; were the order ever insertion order, a zip
+        // would only miss more, never hit stale.
         (Value::Object(x), Value::Object(y)) => {
             x.len() == y.len()
                 && x.iter()
-                    .all(|(key, x)| y.get(key).is_some_and(|y| same_json(x, y)))
+                    .zip(y)
+                    .all(|((kx, vx), (ky, vy))| kx == ky && same_json(vx, vy))
         }
         _ => a == b,
     }
