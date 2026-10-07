@@ -286,8 +286,9 @@ impl EventsHub {
         }
         if scan == CatalogueScan::Partial && webhooks_on {
             tracing::warn!(
-                "events: a capability directory could not be read at startup; stored \
-                 subscriptions are kept and reconciled at the next complete load"
+                "events: the startup catalogue is partial (a capability directory could not \
+                 be read) or its webhook refresh was refused; stored subscriptions are kept \
+                 and reconciled at the next complete load"
             );
             return self.release_worker();
         }
