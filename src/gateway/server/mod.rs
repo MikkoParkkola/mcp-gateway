@@ -1831,15 +1831,19 @@ impl Gateway {
             // A held lease is most often a stdio gateway on the same
             // directory (MIK-7272.OWNER.2, design D6 rev 5 item 7).
             Error::Config(format!(
-                "task store at '{}' could not be opened: {error} (if it is held by \
-                 another gateway process, possibly a stdio gateway using '<store_dir>/stdio', \
-                 give each gateway its own tasks.store_dir)",
+                "task store at '{}' could not be opened: {error} (the task store warning \
+                 above names the file; if it is held by another gateway process, possibly a \
+                 stdio gateway using '<store_dir>/stdio', give each gateway its own \
+                 tasks.store_dir)",
                 task_store_dir.display()
             ))
         })?;
+        let skipped = task_service.skipped_records();
         info!(
             path = %task_store_dir.display(),
             max_workers = self.config.tasks.max_workers,
+            skipped_kept_key = skipped.reserved,
+            skipped_unreadable = skipped.unreadable,
             "Durable task store opened"
         );
         // The trusted upstream adapter, installed after the store recovered and

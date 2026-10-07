@@ -51,12 +51,11 @@ async fn assert_skipped(path: &Path, kept: &str, case: &str) -> TaskStore {
 
 #[tokio::test]
 async fn an_unparseable_record_is_skipped_and_the_rest_load() {
-    for case in ["syntax", "version_zero", "no_admission"] {
+    for case in ["syntax", "no_admission"] {
         let dir = tempfile::tempdir().unwrap();
         let (path, record, kept) = two_tasks(dir.path()).await;
         match case {
             "syntax" => fs::write(&record, b"{broken").unwrap(),
-            "version_zero" => rewrite(&record, |v| v["version"] = json!(0)),
             _ => rewrite(&record, |v| {
                 v.as_object_mut().unwrap().remove("admission");
             }),
@@ -75,7 +74,7 @@ async fn an_unparseable_record_is_skipped_and_the_rest_load() {
 /// task inside it does not restore, so its idempotency key stays taken.
 #[tokio::test]
 async fn an_unrestorable_record_keeps_its_binding() {
-    for case in ["snapshot", "model"] {
+    for case in ["snapshot", "model", "version_zero"] {
         let dir = tempfile::tempdir().unwrap();
         let (path, record, kept) = two_tasks(dir.path()).await;
         let identity: String = {
@@ -85,12 +84,10 @@ async fn an_unrestorable_record_keeps_its_binding() {
                 .unwrap()
                 .to_owned()
         };
-        rewrite(&record, |v| {
-            if case == "snapshot" {
-                v["model"]["task"]["lastUpdatedAt"] = json!("2026-09-06T00:00:00Z");
-            } else {
-                v["model"] = json!("not a task");
-            }
+        rewrite(&record, |v| match case {
+            "snapshot" => v["model"]["task"]["lastUpdatedAt"] = json!("2026-09-06T00:00:00Z"),
+            "model" => v["model"] = json!("not a task"),
+            _ => v["version"] = json!(0),
         });
         let store = assert_skipped(&path, &kept, case).await;
         let bindings = store.restored_bindings();
@@ -131,4 +128,54 @@ async fn a_newer_or_rebound_record_still_refuses() {
         );
         assert_eq!(files(&path), before, "{case} must preserve every file");
     }
+}
+
+fn unrestorable(record: &Path) {
+    rewrite(record, |v| {
+        v["model"]["task"]["lastUpdatedAt"] = json!("2026-09-06T00:00:00Z");
+    });
+}
+
+/// Expiry reads only the loaded tasks: a skipped row is never a candidate,
+/// so its file and its kept key outlive every sweep.
+#[tokio::test]
+async fn expiry_never_reaches_a_skipped_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, record, kept) = two_tasks(dir.path()).await;
+    unrestorable(&record);
+    let skipped_id = record.file_stem().unwrap().to_str().unwrap().to_owned();
+    let store = assert_skipped(&path, &kept, "expiry").await;
+    let later = chrono::Utc::now() + chrono::Duration::days(3650);
+    assert!(
+        store
+            .expired_candidates(later)
+            .iter()
+            .all(|(id, _)| *id != skipped_id),
+        "a skipped row must never be offered to expiry"
+    );
+    store.close().await.unwrap();
+    assert!(record.is_file(), "the skipped row's file stays");
+}
+
+/// A skipped row with a kept key still holds its owner's place: with a cap of
+/// two, the owner of one loaded and one reserved row cannot add a third.
+#[tokio::test]
+async fn a_kept_row_still_counts_against_its_owners_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, record, _) = two_tasks(dir.path()).await;
+    unrestorable(&record);
+    let limits = StoreLimits {
+        per_principal: 2,
+        ..StoreLimits::default()
+    };
+    let store = TaskStore::open(&path, limits)
+        .await
+        .expect("one unrestorable row no longer stops the store");
+    assert!(matches!(
+        store
+            .create(PreparedTask::for_test(&task(), OWNER, 3))
+            .await,
+        Err(StoreError::Capacity)
+    ));
+    store.close().await.unwrap();
 }
