@@ -249,7 +249,7 @@ record "S4.RESTRICTED_CALLER_DOES_NOT_SEE_THE_FORBIDDEN_TOOL" "absent" \
   "$(contains "\"$FORBIDDEN_TOOL\"" "$RESTRICTED")"
 # Without this control the row above would pass on an empty result set, which
 # proves nothing about authorization (RANKING.2 pins its denial tests the same
-# way, src/gateway/meta_mcp/search_ranking_authz_tests.rs:788).
+# way, src/gateway/meta_mcp/search_ranking_authz_tests/mcp_routes.rs:31).
 record "S4.OPEN_CALLER_SEES_THE_SAME_TOOL_AT_RANK_1" "$FORBIDDEN_TOOL" "$TOP_TOOL"
 
 echo
