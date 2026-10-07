@@ -200,3 +200,48 @@ async fn a_prompt_queued_behind_a_dead_credential_fails_its_waiter_at_once() {
     );
     assert_eq!(commits, 0, "an unwritten prompt committed its receipt");
 }
+
+/// Seat finding on the write-time check: a session that presented no
+/// credential (a public `/mcp` caller under gateway authentication) has nothing
+/// to re-validate, so its own prompts are still written to it.
+#[tokio::test]
+async fn a_credentialless_public_session_still_receives_its_prompts() {
+    let (key_server, _, _) = key_server_with_token().await;
+    let multiplexer = multiplexer(&key_server);
+    let (id, mut body) = open(&multiplexer, None).await;
+
+    assert!(multiplexer.send_to_session(&id, note("rows://public")));
+    let (seen, ended) = read(&mut body, Duration::from_millis(500)).await;
+    assert!(
+        seen.contains("rows://public"),
+        "the prompt was not written: {seen}"
+    );
+    assert!(!ended, "the public session's stream stays open");
+}
+
+/// Seat finding: the `lagged` notice is a frame like any other, so a stream
+/// whose token was revoked while it fell behind gets no notice and ends.
+#[tokio::test]
+async fn a_lagging_stream_whose_token_died_gets_no_lagged_notice() {
+    let (key_server, credential, jti) = key_server_with_token().await;
+    let multiplexer = Arc::new(NotificationMultiplexer::new(
+        Arc::new(BackendRegistry::new()),
+        StreamingConfig {
+            buffer_size: 1,
+            ..StreamingConfig::default()
+        },
+    ));
+    multiplexer.set_authorizer(authorizer(Arc::clone(&key_server)));
+    let (id, mut body) = open(&multiplexer, credential).await;
+    for uri in ["rows://lag-1", "rows://lag-2", "rows://lag-3"] {
+        assert!(multiplexer.send_to_session(&id, note(uri)));
+    }
+    assert!(key_server.store.revoke_by_jti(&jti).await);
+
+    let (seen, ended) = read(&mut body, Duration::from_secs(2)).await;
+    assert!(
+        !seen.contains("lagged") && !seen.contains("rows://lag"),
+        "a revoked token was written to: {seen}"
+    );
+    assert!(ended, "the revoked token's stream ends");
+}

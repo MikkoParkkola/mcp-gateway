@@ -58,7 +58,7 @@ pub fn create_sse_response(
                     // G6: judged again as it is written, not only as it was
                     // queued, so a credential that died in between is written
                     // nothing.
-                    match credential_at_write(&multiplexer, &session, &item).await {
+                    match credential_at_write(&multiplexer, &session, item.audience.as_audience()).await {
                         Delivery::Deliver => {}
                         Delivery::OutOfScope => {
                             withhold(&item);
@@ -111,6 +111,13 @@ pub fn create_sse_response(
                     break;
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
+                    // A frame like any other: a dead credential gets none.
+                    let audience = crate::gateway::auth::live::Audience::Any;
+                    if credential_at_write(&multiplexer, &session, audience).await == Delivery::Dead {
+                        settle_stranded(&mut rx);
+                        warn!(target: STREAMING_TARGET, "session stream's credential no longer authenticates; closing");
+                        break;
+                    }
                     // Client fell behind, notify them
                     yield Ok(Event::default()
                         .event("lagged")
@@ -123,25 +130,25 @@ pub fn create_sse_response(
     Some(Sse::new(stream).keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping")))
 }
 
-/// What writing `item` to `session`'s stream should do now. Without an
-/// installed authorizer nothing scoped was queued (fan-out refuses), and the
+/// What writing a copy for `audience` to `session`'s stream should do now.
+/// Without an installed authorizer nothing scoped was queued (fan-out refuses), and the
 /// router installs one before any stream opens, so the copy is written.
 async fn credential_at_write(
     multiplexer: &NotificationMultiplexer,
     session: &super::ClientSession,
-    item: &super::SessionFrame,
+    audience: crate::gateway::auth::live::Audience<'_>,
 ) -> Delivery {
     let authorizer = multiplexer.authorizer.read().clone();
     let Some(authorizer) = authorizer else {
         return Delivery::Deliver;
     };
-    let credential = session.credential.read().clone();
-    delivery(
-        &authorizer,
-        credential.as_ref(),
-        item.audience.as_audience(),
-    )
-    .await
+    // A session that presented no credential was admitted as a public caller
+    // and has nothing that can expire or be revoked: what reached its queue
+    // (its own prompts; fan-out refuses it) is written as queued.
+    let Some(credential) = session.credential.read().clone() else {
+        return Delivery::Deliver;
+    };
+    delivery(&authorizer, Some(&credential), audience).await
 }
 
 /// Report `item` withheld, so a request's waiter does not wait for it.
