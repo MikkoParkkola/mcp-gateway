@@ -746,3 +746,26 @@ async fn a_repeated_field_keeps_its_step_run_when_interleaved() {
         "counting the repeated field split the step's run"
     );
 }
+
+/// MIK-7992: the plan delivers a step's two short fields in the other order.
+/// The run the caller received is the delivered one, and it is receipted.
+#[tokio::test]
+async fn short_fields_delivered_reordered_keep_the_delivered_run() {
+    let (meta, firewall) = relay_meta();
+    let (p, s) = (
+        "the vineyard gate opens at six for the pickers",
+        "dog on premises, ring twice at the side porch!",
+    );
+    let delivered = json!({"x": p, "y": s});
+    deliver_step(&meta, &json!({"a": s, "b": p}), &plan_answer(&delivered)).await;
+    firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "a", &delivered);
+
+    assert!(
+        relays_row(&firewall, "bob", &delivered),
+        "control: bob holds no copy of the row"
+    );
+    assert!(
+        !relays_row(&firewall, "alice", &delivered),
+        "the receipt kept the step's order, not the delivered one"
+    );
+}
