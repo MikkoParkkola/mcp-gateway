@@ -448,7 +448,7 @@ impl Backend {
     fn record_dispatch_latency(&self, latency: std::time::Duration) {
         telemetry_metrics::histogram!(
             "mcp_backend_request_duration_seconds",
-            "backend" => self.name.clone()
+            "backend" => self.metric_label.clone()
         )
         .record(latency.as_secs_f64());
     }

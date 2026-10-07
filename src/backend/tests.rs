@@ -23,6 +23,7 @@ mod breaker_and_status;
 mod era_probe;
 mod login_probe;
 mod login_window;
+mod metric_label;
 mod per_identity_catalogue;
 mod tool_cache;
 
