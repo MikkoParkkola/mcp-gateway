@@ -89,6 +89,19 @@ async fn an_edit_keeps_comments_in_crlf_and_unterminated_files() {
     }
 }
 
+/// A CRLF file keeps its line endings: only the edited line changes.
+#[tokio::test]
+async fn an_edit_keeps_crlf_line_endings() {
+    let yaml = SVC.replace('\n', "\r\n");
+    let (router, path, _keep) = served(&yaml, Route::File).await;
+    let (status, body) = patch(&router, "svc", json!({"description": "new"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        read(&path),
+        yaml.replace("description: old", "description: new")
+    );
+}
+
 /// T2 KEEP.2: an env key is appended inside the block `env:`, its comment kept.
 #[tokio::test]
 async fn an_env_edit_appends_inside_the_block() {
