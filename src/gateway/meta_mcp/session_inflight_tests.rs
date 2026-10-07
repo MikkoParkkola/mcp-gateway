@@ -287,10 +287,10 @@ impl Wired {
         self.lifecycle.reap(now_unix() + END_GRACE.as_secs() + 1);
     }
 
-    /// Writes all five session-keyed stores under `SESSION` through the tail:
-    /// the profile, the workflow state, then one backend call (cost, last
-    /// tool and, under spec-preview, a promoted tool). The backend call is
-    /// let through at once.
+    /// Writes the session-keyed stores under `SESSION` through the tail: the
+    /// profile, the workflow state, then one backend call (cost and, under
+    /// spec-preview, a promoted tool; no last tool, since the caller has no
+    /// key, MIK-7997). The backend call is let through at once.
     async fn write_all_five(&self) {
         for (tool, args) in [
             ("gateway_set_profile", json!({"profile": "focus"})),
@@ -387,7 +387,11 @@ async fn a_live_session_keeps_what_its_calls_wrote() {
         meta.cost_tracker.session_snapshot(SESSION).is_some(),
         "cost"
     );
-    assert_eq!(w.tracker.key_count(), 1, "last tool");
+    assert_eq!(
+        w.tracker.key_count(),
+        0,
+        "a keyless caller records no last tool (MIK-7997)"
+    );
     assert_eq!(meta.session_profiles.len(), 1, "profile");
     assert_eq!(meta.session_state.len(), 1, "workflow state");
     #[cfg(feature = "spec-preview")]
