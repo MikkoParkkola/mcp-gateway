@@ -343,6 +343,22 @@ fn a_ref_to_a_free_map_in_any_of_matches_the_inlined_form() {
     }
 }
 
+/// `MIK-8014.PERF.3a` guard: a `$ref` target is checked for matching nothing
+/// even when the level holding the `$ref` already was. An `anyOf` branch that
+/// `$ref`s a string schema cannot hold an object, so it opens nothing.
+#[test]
+fn a_ref_to_a_match_nothing_target_in_any_of_opens_nothing() {
+    let shut = closed(&json!({"a": {}}));
+    let by_ref = json!({
+        "$defs": {"text": {"type": "string"}},
+        "anyOf": [{"$ref": "#/$defs/text"}, shut]
+    });
+    let inlined = json!({"anyOf": [{"type": "string"}, shut]});
+    for schema in [&by_ref, &inlined] {
+        assert!(refused(schema, &json!({"b": 1})), "{schema}");
+    }
+}
+
 /// F14e with `$id`: a level carrying its own `$id` resolves its `$ref`
 /// against itself, not the outer document. Here the outer `free` is closed
 /// and the inner one open, so only the inner base admits the extra key.
