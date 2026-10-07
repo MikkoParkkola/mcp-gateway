@@ -188,7 +188,9 @@ sequential-thinking, context7, time); every other server is off until you `add` 
   a call names. Set `enabled: true` on one if you accept that. Both browsers start with a
   throwaway profile (`--isolated`); do not point them at your everyday browser profile.
 
-`mcp-gateway list` shows what is configured. `mcp-gateway remove <name>` removes one.
+`mcp-gateway list` shows what is configured. `mcp-gateway remove <name>` removes one. `add` and `remove`
+keep the comments in `gateway.yaml`; when a change cannot keep them, the command refuses and names
+the lines, and `--force` rewrites the file without them.
 
 #### Option C: hand-write `gateway.yaml`
 

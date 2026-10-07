@@ -3,7 +3,7 @@
 //! Reclaiming what a gateway keeps per session when that session ends, and
 //! the key per-caller state is kept under.
 
-use super::{MetaMcp, MetaMcpCallerContext};
+use super::{MetaMcp, MetaMcpCallerContext, session_key};
 
 impl MetaMcpCallerContext<'_> {
     /// Who the A/B arm and the prefetch hints key on (MIK-7215.CONTROL.5, G4):
@@ -28,6 +28,32 @@ impl MetaMcp {
         if let Some(tracker) = self.get_transition_tracker() {
             tracker.remove_session(session_id);
         }
+    }
+
+    /// Take the lifecycle calls hold their session through. Once; the first
+    /// wiring wins.
+    pub(crate) fn attach_session_lifecycle(
+        &self,
+        lifecycle: &std::sync::Arc<crate::gateway::session_lifecycle::SessionLifecycle>,
+    ) {
+        if self
+            .session_lifecycle
+            .set(std::sync::Arc::downgrade(lifecycle))
+            .is_err()
+        {
+            tracing::debug!("session lifecycle already attached");
+        }
+    }
+
+    /// Hold `session_id` for as long as the returned guard lives, so whatever
+    /// the call writes under it is taken if the session ends first or meanwhile
+    /// (MIK-7996). `None` for no session, the empty id or an unwired gateway.
+    pub(crate) fn hold_session(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<crate::gateway::session_lifecycle::SessionHold> {
+        let id = session_key(session_id)?;
+        Some(self.session_lifecycle.get()?.upgrade()?.hold_session(id))
     }
 
     /// Forget the last tool recorded under a caller key whose idle deadline

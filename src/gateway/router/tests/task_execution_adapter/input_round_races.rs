@@ -216,6 +216,88 @@ async fn an_update_losing_to_a_running_resume_is_refused_at_once() {
     );
 }
 
+/// MIK-7662 (`GH2417.1`, `GH2417.2`). Mutants: no wake when the resume commits
+/// `working`; the wake sent before the write commits.
+///
+/// The loser parks while the winner owns the handoff and its write is held.
+/// The winner keeps the handoff through the resume, whose backend call is
+/// held too, so nothing but the commit itself can wake the loser: it answers
+/// at once instead of at the 1 s wait.
+///
+/// Current-thread runtime on purpose: the loser subscribes, fails to take the
+/// handoff and reads the row with no await in between, so once this task sees
+/// the subscriber the loser has already read `input_required` and parked.
+#[tokio::test]
+async fn a_loser_parked_behind_a_resume_answers_when_the_resume_commits() {
+    let (mock, mut gate) =
+        MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (state, _store) = state_with(&mock).await;
+    let id = task_id(&post(&state, "key-a", create(1, "wake-a")).await);
+    gate.wait_for_dispatch().await;
+    gate.release();
+    wait_input_required(&state, &id).await;
+
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let release_rx = std::sync::Mutex::new(release_rx);
+    let armed = AtomicBool::new(true);
+    // One shot: the resumed call's own writes later pass straight through.
+    let barrier: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        if armed.swap(false, Ordering::SeqCst) {
+            let _ = entered_tx.send(());
+            // A barrier never released fails the winner's write, and the
+            // test with it, instead of passing a stall off as a slow write.
+            release_rx
+                .lock()
+                .expect("release lock")
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the test releases the barrier");
+        }
+    });
+    state.task_executor.barrier_on_record_write(barrier).await;
+
+    let spawn_update = |n: i64| {
+        let (state, id) = (Arc::clone(&state), id.clone());
+        tokio::spawn(async move { post(&state, "key-a", completing(n, &id)).await })
+    };
+    let winner = spawn_update(2);
+    tokio::task::spawn_blocking(move || entered_rx.recv_timeout(Duration::from_secs(10)))
+        .await
+        .expect("joins")
+        .expect("the winner's write reached the barrier");
+    let held = get_task(&state, "key-a", &id).await;
+    std::assert_eq!(status_of(&held), "input_required", "{held}");
+    // Nothing else waits on the release signal here, so the next subscriber
+    // can only be the loser.
+    std::assert_eq!(state.task_executor.release_waiters_for_test(), 0);
+
+    let loser = spawn_update(3);
+    // The winner's own subscription ended when it took the handoff, so a
+    // subscriber now is the loser parked in its wait.
+    let parked_by = tokio::time::Instant::now() + Duration::from_secs(10);
+    while state.task_executor.release_waiters_for_test() == 0 {
+        std::assert!(tokio::time::Instant::now() < parked_by, "the loser parks");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    let released = std::time::Instant::now();
+    release_tx.send(()).expect("the barrier is waiting");
+    let lost = loser.await.expect("the loser joins");
+    let waited = released.elapsed();
+    std::assert_eq!(error_code(&lost), Some(-32602), "{lost}");
+    // Half the 1 s produce-seam wait: without the wake the loser sleeps it out.
+    std::assert!(
+        waited < Duration::from_millis(500),
+        "the loser answers when the resume commits, not at the 1 s wait: {waited:?}"
+    );
+    let won = winner.await.expect("the winner joins");
+    std::assert!(won.get("error").is_none(), "{won}");
+    // Only now does the resumed call reach the backend and settle.
+    gate.wait_for_dispatch().await;
+    gate.release_all();
+    assert_carries_the_backend_result(&poll_until_terminal(&state, "key-a", &id).await);
+}
+
 pub(super) async fn state_with_config(
     mock: &Arc<MockBackend>,
     config: crate::config::Config,

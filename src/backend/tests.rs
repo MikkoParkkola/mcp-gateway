@@ -23,6 +23,7 @@ mod breaker_and_status;
 mod era_probe;
 mod login_probe;
 mod login_window;
+mod metric_label;
 mod per_identity_catalogue;
 mod tool_cache;
 
@@ -306,7 +307,7 @@ async fn probe_backend(mock: Arc<ProbeMock>, resolve_era: bool) -> Arc<Backend> 
     let transport = mock as Arc<dyn Transport>;
     backend.set_transport_for_test(Arc::clone(&transport));
     if resolve_era {
-        backend.resolve_era(&transport).await;
+        backend.resolve_era_for_test(&transport).await;
     }
     backend
 }

@@ -336,7 +336,8 @@ impl Services {
         registry.register_from_capability(&tool, cost);
         let verdict = enforcer.check(&tool, key);
         if verdict.allowed {
-            enforcer.record_spend(&tool, key, verdict.cost_usd);
+            // Spent and released in one step (MIK-7903).
+            enforcer.settle(verdict.hold.as_deref(), &tool, key, verdict.cost_usd);
         }
         verdict.allowed
     }

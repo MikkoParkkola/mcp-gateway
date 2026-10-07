@@ -495,3 +495,6 @@ async fn a_test_source_event_reaches_a_receiver() {
         "the POST is signed under the subscriber's secret: {signatures}"
     );
 }
+
+#[path = "subscribe_order_tests.rs"]
+mod subscribe_order;
