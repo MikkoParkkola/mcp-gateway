@@ -494,6 +494,42 @@ async fn taking_up_a_shared_login_takes_up_its_registered_client_id() {
     );
 }
 
+/// MIK-7982: a stored login is taken up only when its token is live and was
+/// stored for this client's own resource; otherwise the caller opens its own.
+#[tokio::test]
+async fn an_expired_or_foreign_stored_login_is_not_taken_up() {
+    let issuer = "https://as.example";
+    for (resource, expiry, case) in [
+        (RESOURCE, Expiry::Expired, "an expired token"),
+        (
+            "https://other.example.com/mcp",
+            Expiry::Live,
+            "another resource's token",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = client(dir.path(), Some(issuer));
+        let opened = Arc::new(tokio::sync::Notify::new());
+        let signal = Arc::clone(&opened);
+        client.open_browser = Box::new(move |_| {
+            signal.notify_one();
+            true
+        });
+        let client =
+            client.with_login_gate(Arc::new(crate::oauth::login_gate::LoginGate::default()));
+        let stored = token("stored-access", None, expiry);
+        client
+            .storage
+            .save(&storage_key(BACKEND, issuer), resource, &stored)
+            .unwrap();
+
+        tokio::select! {
+            taken = client.authorize_shared(true, None) => panic!("{case} was taken up: {taken:?}"),
+            () = opened.notified() => {}
+        }
+    }
+}
+
 /// MIK-7982.BOUND.1: when the window passes, the callback listener is closed
 /// before the wait returns, not on a later poll of an aborted task: the port
 /// binds again with no await in between.
