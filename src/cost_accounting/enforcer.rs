@@ -394,6 +394,9 @@ pub struct BudgetEnforcer {
     /// Spend of unbudgeted tool and key names past the day maps' cap.
     tool_overflow: DailyAccumulator,
     key_overflow: DailyAccumulator,
+    /// The day an overflowing spend last swept each map (MIK-8045).
+    tool_overflow_swept: std::sync::atomic::AtomicU64,
+    key_overflow_swept: std::sync::atomic::AtomicU64,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -412,6 +415,8 @@ impl BudgetEnforcer {
             swept_day: std::sync::atomic::AtomicU64::new(0),
             tool_overflow: DailyAccumulator::new(),
             key_overflow: DailyAccumulator::new(),
+            tool_overflow_swept: std::sync::atomic::AtomicU64::new(0),
+            key_overflow_swept: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -680,14 +685,22 @@ impl BudgetEnforcer {
         self.key_overflow.add(micro(persisted.key_overflow_usd));
     }
 
-    /// The per-tool day map and its overflow accumulator.
-    fn tool_maps(&self) -> (&DashMap<String, DailyAccumulator>, &DailyAccumulator) {
-        (&self.tool_daily, &self.tool_overflow)
+    /// The per-tool day rows.
+    fn tool_maps(&self) -> rows::Rows<'_> {
+        (
+            &self.tool_daily,
+            &self.tool_overflow,
+            &self.tool_overflow_swept,
+        )
     }
 
-    /// The per-key day map and its overflow accumulator.
-    fn key_maps(&self) -> (&DashMap<String, DailyAccumulator>, &DailyAccumulator) {
-        (&self.key_daily, &self.key_overflow)
+    /// The per-key day rows.
+    fn key_maps(&self) -> rows::Rows<'_> {
+        (
+            &self.key_daily,
+            &self.key_overflow,
+            &self.key_overflow_swept,
+        )
     }
 
     /// Snapshot current accumulator state for persistence and the UI endpoint.

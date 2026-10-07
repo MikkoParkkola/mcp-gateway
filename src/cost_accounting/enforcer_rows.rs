@@ -3,6 +3,7 @@
 //! The capped per-name day rows of one budget scope.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
 
@@ -13,6 +14,14 @@ use super::DailyAccumulator;
 /// `default_cost` the caller would otherwise choose how many entries exist.
 pub(super) const MAX_UNBUDGETED_ROWS: usize = 256;
 
+/// One scope's day rows, its overflow total, and the day an overflowing
+/// spend last swept the rows.
+pub(super) type Rows<'a> = (
+    &'a DashMap<String, DailyAccumulator>,
+    &'a DailyAccumulator,
+    &'a AtomicU64,
+);
+
 /// Add `micro` to `name`'s entry and return that entry's running total. A
 /// budgeted name always has its own. Any other name has one only while `map`
 /// holds fewer than [`MAX_UNBUDGETED_ROWS`] unbudgeted entries, and only if it is no longer than the cost tracker's row-name limit; past
@@ -20,7 +29,7 @@ pub(super) const MAX_UNBUDGETED_ROWS: usize = 256;
 /// a budget whose name happens to be `(other)` keeps its own total.
 /// ponytail: a soft cap; racing first inserts can pass it by the caller count.
 pub(super) fn add_capped(
-    (map, overflow): (&DashMap<String, DailyAccumulator>, &DailyAccumulator),
+    (map, overflow, swept): Rows<'_>,
     name: &str,
     limits: &HashMap<String, f64>,
     micro: u64,
@@ -32,10 +41,20 @@ pub(super) fn add_capped(
         // A sweep may remove entries between the two reads.
         map.len().saturating_sub(budgeted)
     };
-    let own = limits.contains_key(name)
+    let short = name.len() <= super::super::tally::MAX_ROW_NAME_BYTES;
+    let mut own = limits.contains_key(name)
         || map.contains_key(name)
-        || (name.len() <= super::super::tally::MAX_ROW_NAME_BYTES
-            && unbudgeted() < MAX_UNBUDGETED_ROWS);
+        || (short && unbudgeted() < MAX_UNBUDGETED_ROWS);
+    // A spend that read the day just before midnight skipped the day's sweep,
+    // so yesterday's rows may still fill the cap (MIK-8045). Sweep here, at
+    // most once a day, so a full cap of today's rows stays O(1) per call.
+    if !own && short {
+        let today = super::current_day();
+        if swept.fetch_max(today, Ordering::Relaxed) < today {
+            map.retain(|row, day| limits.contains_key(row) || day.is_current());
+            own = unbudgeted() < MAX_UNBUDGETED_ROWS;
+        }
+    }
     if own {
         map.entry(name.to_string()).or_default().add(micro)
     } else {
