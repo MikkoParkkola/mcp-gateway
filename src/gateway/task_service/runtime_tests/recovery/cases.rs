@@ -345,7 +345,8 @@ async fn a_task_settled_during_recovery_is_published() {
 
 /// `MIK-8052`: a sealed row (its key unreadable) changes nothing for recovery.
 /// The interrupted row beside it is settled as before and its key still finds
-/// it; only a NEW key is refused while the seal holds.
+/// it; only a NEW key is refused while the seal holds, and the running expiry
+/// sweep lifts the seal once the file is gone.
 #[tokio::test]
 async fn recovery_beside_a_sealed_row_settles_and_keeps_keys() {
     let root = tempfile::tempdir().unwrap();
@@ -413,6 +414,36 @@ async fn recovery_beside_a_sealed_row_settles_and_keeps_keys() {
         ),
         "a new key is refused while the seal holds"
     );
+
+    // The running expiry sweep is what lifts the seal: remove the file and
+    // wait, bounded, for a sweep to notice, with no direct re-read here.
+    let sweep = executor
+        .start_expiry(std::time::Duration::from_millis(50))
+        .expect("the sweep starts");
+    std::fs::remove_file(&record).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while restored.skipped_records().sealed != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the expiry sweep never re-read the sealed row"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        matches!(
+            admission.admit(Request {
+                key: "unclaimed-key",
+                mode: Mode::Sync,
+                ..request(row.key, &operation, &representation)
+            }),
+            Ok(Admission::Owned(_))
+        ),
+        "the seal lifted without a restart"
+    );
+    timeout(BUDGET, sweep.shutdown())
+        .await
+        .expect("the sweep stops")
+        .expect("the sweep ran clean");
     timeout(BUDGET, restored.shutdown())
         .await
         .expect("shutdown does not hang")
