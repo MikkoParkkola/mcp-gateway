@@ -71,33 +71,39 @@ fn chained_meta(dir: &tempfile::TempDir) -> MetaMcp {
 /// a value no gate read.
 #[tokio::test]
 async fn a_replayed_chain_refusal_keeps_its_uninspected_attribution() {
-    let dir = tempfile::tempdir().unwrap();
-    let meta = chained_meta(&dir);
-    let who = api_key_caller();
-    let retry = RetryFields {
-        idempotency_key: Some("key-7636".into()),
-        ..RetryFields::default()
-    };
-    let mut caller = context(&AllowAll, &who);
-    caller.retry = &retry;
-    let args = json!({"server": "alpha", "tool": "read", "arguments": {"customer_id": "cust-1"}});
-    let mut errors = Vec::new();
-    for _ in 0..2 {
-        let error = meta
-            .invoke_tool(&args, None, &caller)
-            .await
-            .expect_err("the chain check refuses the unchained answer");
-        errors.push(error.to_rpc_code());
+    // With a tenant named, and with none (GH2555.2).
+    for arguments in [json!({"customer_id": "cust-1"}), json!({})] {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = chained_meta(&dir);
+        let who = api_key_caller();
+        let retry = RetryFields {
+            idempotency_key: Some(format!(
+                "key-7636-{}",
+                arguments.as_object().map_or(0, serde_json::Map::len)
+            )),
+            ..RetryFields::default()
+        };
+        let mut caller = context(&AllowAll, &who);
+        caller.retry = &retry;
+        let args = json!({"server": "alpha", "tool": "read", "arguments": arguments});
+        let mut errors = Vec::new();
+        for _ in 0..2 {
+            let error = meta
+                .invoke_tool(&args, None, &caller)
+                .await
+                .expect_err("the chain check refuses the unchained answer");
+            errors.push(error.to_rpc_code());
+        }
+        // The replay answers the stored refusal's code.
+        assert_eq!(errors[0], errors[1], "{errors:?}");
+        let all = records(&dir);
+        assert_eq!(all.len(), 2, "{all:?}");
+        assert_eq!(all[0]["attribution"], json!("uninspected"), "{}", all[0]);
+        assert_eq!(
+            all[1]["attribution"],
+            json!("cached_delivery_uninspected"),
+            "{}",
+            all[1]
+        );
     }
-    // The replay answers the stored refusal's code.
-    assert_eq!(errors[0], errors[1], "{errors:?}");
-    let all = records(&dir);
-    assert_eq!(all.len(), 2, "{all:?}");
-    assert_eq!(all[0]["attribution"], json!("uninspected"), "{}", all[0]);
-    assert_eq!(
-        all[1]["attribution"],
-        json!("cached_delivery_uninspected"),
-        "{}",
-        all[1]
-    );
 }
