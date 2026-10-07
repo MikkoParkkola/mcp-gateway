@@ -171,7 +171,17 @@ impl DeliveryDigest {
     /// fingerprint (the original runs' and retained ones) stays when its
     /// k-gram is in a delivered leaf or in a kept run.
     pub(super) fn retaining(self, detector: &CollusionDetector, delivered: &Delivered<'_>) -> Self {
-        let verbatim = |s: &Segment| s.whole && delivered.leaves.contains(s.text.as_str());
+        // Verbatim only as the same kind: a value the answer carries only as
+        // a key is no longer run together with its neighbours, as egress
+        // never runs keys together.
+        let verbatim = |s: &Segment| {
+            let leaves = if s.key {
+                &delivered.keys
+            } else {
+                &delivered.values
+            };
+            s.whole && leaves.contains(s.text.as_str())
+        };
         if self.retained.is_empty() && self.segments.iter().all(verbatim) {
             return self;
         }
@@ -268,17 +278,27 @@ impl DeliveryDigest {
 /// taken leaf by leaf when first needed. With the kept runs' own k-grams they
 /// decide which fingerprints a receipt keeps, whichever window selected them.
 pub(crate) struct Delivered<'v> {
-    leaves: HashSet<&'v str>,
+    values: HashSet<&'v str>,
+    keys: HashSet<&'v str>,
     all: Vec<&'v str>,
     found: OnceCell<HashSet<u64>>,
 }
 
 impl<'v> Delivered<'v> {
-    /// `None` over [`DELIVERED_SET_CAP`].
+    /// [`Self::of_parts`] with every leaf a value (tests only).
+    #[cfg(test)]
     pub(super) fn of_leaves(all: Vec<&'v str>) -> Option<Self> {
+        let values = all.len();
+        Self::of_parts(all, values)
+    }
+
+    /// `all` as [`delivery_parts`] returns it, the first `values` of them
+    /// values and the rest keys. `None` over [`DELIVERED_SET_CAP`].
+    pub(super) fn of_parts(all: Vec<&'v str>, values: usize) -> Option<Self> {
         let total: usize = all.iter().map(|l| l.len()).sum();
         (total <= DELIVERED_SET_CAP).then(|| Self {
-            leaves: all.iter().copied().collect(),
+            values: all[..values].iter().copied().collect(),
+            keys: all[values..].iter().copied().collect(),
             all,
             found: OnceCell::new(),
         })
@@ -294,14 +314,15 @@ impl<'v> Delivered<'v> {
     }
 }
 
-/// The string leaves of `value` a delivery walk reads, in walk order: every
-/// string, leaving out a top-level `_context_integrity`, then each object key
-/// of at least `K` chars.
+/// The leaves of [`delivery_parts`] (tests only).
+#[cfg(test)]
 pub(super) fn delivery_leaves(value: &Value) -> Vec<&str> {
     delivery_parts(value).0
 }
 
-/// [`delivery_leaves`], and how many of them, from the front, are values
+/// The string leaves of `value` a delivery walk reads, in walk order: every
+/// string, leaving out a top-level `_context_integrity`, then each object key
+/// of at least `K` chars; and how many of them, from the front, are values
 /// (the rest are keys).
 pub(super) fn delivery_parts(value: &Value) -> (Vec<&str>, usize) {
     fn visit<'v>(value: &'v Value, leaves: &mut Vec<&'v str>, keys: &mut Vec<&'v str>) {
