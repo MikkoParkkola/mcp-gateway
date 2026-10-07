@@ -162,6 +162,38 @@ async fn t4b_a_held_stderr_pipe_keeps_the_tail() {
     );
 }
 
+/// MIK-8080: a failed start ends a descendant that closed its pipes after its
+/// leader exited; the leader is reaped only after its group is killed.
+#[tokio::test]
+async fn a_failed_start_ends_a_descendant_that_closed_its_pipes() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("descendant.pid");
+    let t = transport(
+        &format!(
+            "sleep 30 >/dev/null 2>&1 </dev/null & echo $! > {}; echo boom >&2; exit 3",
+            pidfile.display()
+        ),
+        &[],
+    );
+    let err = start_err(&t).await;
+    assert!(err.contains("exit status: 3"), "{err}");
+    let pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_owned();
+    let mut running = true;
+    for _ in 0..50 {
+        let state = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid])
+            .output()
+            .unwrap();
+        let state = String::from_utf8_lossy(&state.stdout).trim().to_owned();
+        if state.is_empty() || state.starts_with('Z') {
+            running = false;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(!running, "descendant {pid} outlived the failed start");
+}
+
 /// T4: a child that closes stdout but keeps running is reported at once and
 /// does not outlive the failed start.
 #[tokio::test]
