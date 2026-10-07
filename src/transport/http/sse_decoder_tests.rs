@@ -382,3 +382,14 @@ async fn a_retry_priming_frame_ahead_of_the_result_does_not_fail_the_exchange() 
         "the exchange resolves on the frame holding the response, not the priming frame"
     );
 }
+
+/// MIK-8019.SAME.1: a null-method frame on a response stream is a malformed
+/// event, not the call's answer.
+#[tokio::test]
+async fn a_null_method_frame_is_not_the_streams_response() {
+    let body = futures::stream::iter(vec![Ok(bytes::Bytes::from_static(
+        b"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":null,\"result\":{}}\n\n",
+    ))]);
+    let outcome = decode_sse_exchange(body).await;
+    assert!(outcome.is_err(), "decoded as {:?}", outcome.ok());
+}

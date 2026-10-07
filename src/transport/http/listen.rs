@@ -676,4 +676,16 @@ mod tests {
             .expect("the stream ends");
         assert_eq!(note, None);
     }
+
+    /// MIK-8019.SAME.1: a null-method frame carrying this listen's id is not a
+    /// response of the listen, so it is not projected into a note.
+    #[test]
+    fn a_null_method_frame_is_not_projected() {
+        let id = RequestId::Number(4);
+        let frame_text = json!({"jsonrpc": "2.0", "id": 4, "method": null, "result": {}});
+        assert!(matches!(
+            frame(&frame_text.to_string(), &id, &json!(4), &req(), true),
+            Frame::Ignore
+        ));
+    }
 }
