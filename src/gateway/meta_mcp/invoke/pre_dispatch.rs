@@ -128,18 +128,14 @@ impl MetaMcp {
                 }
                 GuardOutcome::CachedResult(cached) => {
                     debug!(target: INVOKE_TARGET, server, tool, key, trace_id, "Idempotency cache hit");
-                    // A stored side-effect notice is the gateway's own text;
-                    // its first call delivered no read either (MIK-7991).
-                    if !super::side_effect_markers::is_gateway_notice(&cached) {
-                        self.stage_relay_receipt(
-                            caller.relay_caller(session_id),
-                            (server, tool),
-                            &super::gateway_writes::without(
-                                &cached,
-                                &super::gateway_writes::snapshot_since(mark),
-                            ),
-                        );
-                    }
+                    self.stage_relay_receipt(
+                        caller.relay_caller(session_id),
+                        (server, tool),
+                        &super::gateway_writes::without(
+                            &cached,
+                            &super::gateway_writes::snapshot_since(mark),
+                        ),
+                    );
                     if let Some(ref stats) = self.stats {
                         stats.record_cache_hit();
                     }

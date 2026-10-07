@@ -466,3 +466,51 @@ async fn a_replayed_refused_receipt_is_recorded_as_a_cached_delivery() {
     assert_eq!(hit["tenants"], sorted(&["cust-1"]), "{hit}");
     assert!(hit.get("data_classes").is_none(), "{hit}");
 }
+
+/// MIK-7991 r4 (cleanup row): over HTTP and stdio the sync admission answers
+/// every keyed re-issue before this invoke-path guard (`idempotency/admission.rs`
+/// pins that its entry outlives this one), so only an in-process caller of
+/// `invoke_tool` reaches the guard's replay arm. This pins what that arm does
+/// today, so a production caller that starts reaching it shows up here: the
+/// stored answer is served again without the backend running twice.
+#[tokio::test]
+async fn an_in_process_keyed_repeat_is_replayed_by_the_invoke_path_guard() {
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "alpha",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    backend.set_transport_for_test(Arc::new(CountedReply(
+        Arc::clone(&calls),
+        reply_naming("cust-9", ""),
+    )));
+    let _ = registry.register(Arc::clone(&backend));
+    let meta = idempotent(MetaMcp::new(registry));
+    let who = api_key_caller();
+    let retry = keyed("in-process-replay");
+    let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        retry: &retry,
+        ..context(&AllowAll, &who)
+    };
+    let mut answers = Vec::new();
+    for _ in 0..2 {
+        answers.push(
+            meta.invoke_tool(&args_for(Some("cust-1")), None, &ctx)
+                .await
+                .expect("answered"),
+        );
+    }
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the guard's replay reached the backend"
+    );
+    assert!(
+        answers[1].to_string().contains("cust-9"),
+        "the replay serves the stored answer: {}",
+        answers[1]
+    );
+}
