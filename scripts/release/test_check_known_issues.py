@@ -430,6 +430,32 @@ def test_build_metadata_of_this_release_is_not_a_later_release():
     assert run(notes("\n- Seen in 4.0.0+build-5.1.\n"), "--check") == 0
 
 
+def test_a_numeric_build_of_this_release_is_not_a_later_release():
+    assert run(notes("\n- Seen in 4.0.0+4.0.1.\n"), "--check") == 0
+
+
+def test_a_hyphen_range_to_a_later_release_fails_the_check():
+    assert run(notes("\n- Seen in 4.0.0-4.0.1.\n"), "--check") == 1
+
+
+def test_an_uppercase_v_later_release_fails_the_check():
+    assert run(notes("\n- Fixed in V4.0.1.\n"), "--check") == 1
+
+
+def test_a_quoted_angle_bracket_in_a_tag_does_not_hide_a_version():
+    assert run(notes('\n- Fixed in 4.0.<em title="a>b">1</em>.\n'), "--check") == 1
+
+
+def test_a_quoted_angle_bracket_in_a_tag_does_not_hide_the_title():
+    head = '## Known iss<span title="a>b">u</span>es\n'
+    assert run(f"{head}\n- Open.\n", "--release", "--tag", "v4.0.0") == 1
+
+
+def test_an_unbalanced_quote_in_a_title_tag_still_starts_the_section():
+    head = "## Known iss<span title='a>u</span>es\n"
+    assert run(f"{head}\n- Open.\n", "--release", "--tag", "v4.0.0") == 1
+
+
 def test_a_hyphen_joined_later_release_fails_the_check():
     assert run(notes("\n- Fixed in release-v4.0.1.\n"), "--check") == 1
 
