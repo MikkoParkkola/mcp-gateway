@@ -8,7 +8,9 @@
 //! with the reason, never accepted and left silent.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
+use crate::backend::BackendRegistry;
 use crate::config::{BackendConfig, Config, TransportConfig};
 
 /// The upstream-notification event kinds (design §1, §14).
@@ -52,10 +54,10 @@ pub(crate) fn parse_name(name: &str) -> Option<(&str, Kind)> {
 /// Why a backend offers no upstream-notification events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ineligible {
-    /// An `http_url` without `streamable_http: true`: the SSE-handshake
-    /// transport, whose GET stream is read only up to its `endpoint` event
-    /// (design §11 D2). An absent flag is detected only at connect, and this
-    /// is read from config alone, so it counts as SSE here.
+    /// The SSE-handshake transport, whose GET stream is read only up to its
+    /// `endpoint` event (design §11 D2): the transport the backend's live
+    /// connection detected, or, with none live, an explicit
+    /// `streamable_http: false` (MIK-7969).
     SseHandshake,
     /// A2A carries no MCP notifications (D2).
     #[cfg_attr(not(feature = "a2a"), allow(dead_code, reason = "a2a feature off"))]
@@ -90,25 +92,71 @@ pub(crate) fn multi_user(running: &Config) -> bool {
         .implies_multi_user(!running.key_server.oidc.is_empty())
 }
 
-/// The backends the live config makes ineligible, re-read at every call: the
-/// one predicate the events source and its listeners share, so a reload is
-/// seen at the next use (MIK-7894).
+/// How the live config and the live connections judge one backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Judged {
+    /// It cannot offer the events.
+    Refused(Ineligible),
+    /// It is reached over HTTP and no live connection has detected which
+    /// transport answers, so the answer waits for a connect (MIK-7969).
+    Unresolved,
+}
+
+/// The HTTP flavour each backend's live connection detected, by name.
+pub(crate) type Detected<'a> = &'a dyn Fn(&str) -> Option<bool>;
+
+/// The flavour `registry`'s backends detected, read live at each call.
+pub(crate) fn detected_in(registry: &BackendRegistry) -> impl Fn(&str) -> Option<bool> + '_ {
+    |name| registry.get(name).and_then(|b| b.connected_streamable())
+}
+
+/// The backends the live config and the live connections make ineligible,
+/// re-read at every call: the one predicate the events source and its
+/// listeners share, so a reload or a transport switch is seen at the next use
+/// (MIK-7894, MIK-7969). An unresolved backend is not among them.
 pub(crate) fn live_ineligible(
-    live: std::sync::Arc<crate::config_reload::LiveConfig>,
+    live: Arc<crate::config_reload::LiveConfig>,
+    registry: Arc<BackendRegistry>,
 ) -> super::backend_source::Ineligible {
-    std::sync::Arc::new(move || {
-        ineligible_backends(&live.get(), multi_user(live.running()))
-            .into_keys()
-            .collect()
+    Arc::new(move || {
+        ineligible_backends(
+            &live.get(),
+            multi_user(live.running()),
+            &detected_in(&registry),
+        )
+        .into_keys()
+        .collect()
     })
 }
 
 /// Every configured backend that cannot offer the events, with the reason.
-/// Read from config alone, so asking never starts a backend.
+/// Never starts a backend.
 pub(crate) fn ineligible_backends(
     config: &Config,
     multi_user: bool,
+    detected: Detected<'_>,
 ) -> BTreeMap<String, Ineligible> {
+    refused(judged_backends(config, multi_user, detected))
+}
+
+/// The definite refusals of a judged set; an unresolved backend is not one.
+pub(crate) fn refused(judged: BTreeMap<String, Judged>) -> BTreeMap<String, Ineligible> {
+    judged
+        .into_iter()
+        .filter_map(|(name, judged)| match judged {
+            Judged::Refused(reason) => Some((name, reason)),
+            Judged::Unresolved => None,
+        })
+        .collect()
+}
+
+/// Every configured backend that cannot offer the events yet, refused or
+/// unresolved. Never starts a backend.
+pub(crate) fn judged_backends(
+    config: &Config,
+    multi_user: bool,
+    detected: Detected<'_>,
+) -> BTreeMap<String, Judged> {
     // Account references compile into the configuration a backend runs with
     // (a `shared` descriptor drops its reference, an external one becomes
     // identity propagation); judge that, not the raw text. The live config
@@ -123,31 +171,48 @@ pub(crate) fn ineligible_backends(
         .filter(|(_, raw)| raw.enabled)
         .filter_map(|(name, raw)| {
             let effective = bound.get(name).map(|b| b.effective(raw));
-            reason(effective.as_ref().unwrap_or(raw), multi_user).map(|r| (name.clone(), r))
+            judge(
+                effective.as_ref().unwrap_or(raw),
+                multi_user,
+                detected(name),
+            )
+            .map(|j| (name.clone(), j))
         })
         .collect()
 }
 
-/// The first reason `backend` cannot offer the events, if any.
-fn reason(backend: &BackendConfig, multi_user: bool) -> Option<Ineligible> {
-    match &backend.transport {
-        TransportConfig::Http {
-            streamable_http: Some(false) | None,
-            ..
-        } => return Some(Ineligible::SseHandshake),
-        #[cfg(feature = "a2a")]
-        TransportConfig::A2a { .. } => return Some(Ineligible::A2a),
-        _ => {}
+/// Why `backend` cannot offer the events yet, if it cannot. The identity
+/// reasons come first, so a subscribe never connects a backend they refuse.
+fn judge(backend: &BackendConfig, multi_user: bool, detected: Option<bool>) -> Option<Judged> {
+    #[cfg(feature = "a2a")]
+    if matches!(backend.transport, TransportConfig::A2a { .. }) {
+        return Some(Judged::Refused(Ineligible::A2a));
     }
     if backend.identity_propagation.is_some() {
-        return Some(Ineligible::IdentityPropagation);
+        return Some(Judged::Refused(Ineligible::IdentityPropagation));
     }
     let personal = backend
         .oauth
         .as_ref()
         .is_some_and(|o| o.enabled && !o.shared_account)
         || backend.account.is_some();
-    (multi_user && personal).then_some(Ineligible::PerUserCredential)
+    if multi_user && personal {
+        return Some(Judged::Refused(Ineligible::PerUserCredential));
+    }
+    let TransportConfig::Http {
+        streamable_http, ..
+    } = &backend.transport
+    else {
+        return None;
+    };
+    // The live connection decides, whatever the key says: a fallback may have
+    // switched transport (ELIG.3). With none live, only an explicit `false`
+    // is known; an unset key or an explicit `true` may still fall back.
+    match detected.or(streamable_http.filter(|s| !s)) {
+        Some(true) => None,
+        Some(false) => Some(Judged::Refused(Ineligible::SseHandshake)),
+        None => Some(Judged::Unresolved),
+    }
 }
 
 #[cfg(test)]
@@ -186,27 +251,84 @@ mod tests {
         serde_yaml::from_str(yaml).expect("backend config")
     }
 
+    const SSE: Option<Judged> = Some(Judged::Refused(Ineligible::SseHandshake));
+
     #[test]
     fn each_reason_is_found_and_the_eligible_pass() {
-        let sse = backend("http_url: http://h/sse");
-        assert_eq!(reason(&sse, false), Some(Ineligible::SseHandshake));
         let idp = backend(
             "http_url: http://h/mcp\nstreamable_http: true\nidentity_propagation:\n  \
              strategy: passthrough\n  audience: https://a\n  session_mode: per_user\n",
         );
-        assert_eq!(reason(&idp, false), Some(Ineligible::IdentityPropagation));
+        assert_eq!(
+            judge(&idp, false, Some(true)),
+            Some(Judged::Refused(Ineligible::IdentityPropagation))
+        );
         let oauth =
             backend("http_url: http://h/mcp\nstreamable_http: true\noauth:\n  enabled: true\n");
-        assert_eq!(reason(&oauth, true), Some(Ineligible::PerUserCredential));
         assert_eq!(
-            reason(&oauth, false),
+            judge(&oauth, true, Some(true)),
+            Some(Judged::Refused(Ineligible::PerUserCredential))
+        );
+        assert_eq!(
+            judge(&oauth, false, Some(true)),
             None,
             "single user: the login is theirs"
         );
-        let streamable = backend("http_url: http://h/mcp\nstreamable_http: true");
-        assert_eq!(reason(&streamable, true), None);
-        assert_eq!(reason(&backend("command: echo"), true), None);
-        assert_eq!(reason(&backend("ws_url: ws://h/ws"), true), None);
+        assert_eq!(judge(&backend("command: echo"), true, None), None);
+        assert_eq!(judge(&backend("ws_url: ws://h/ws"), true, None), None);
+    }
+
+    /// MIK-7969: the live connection decides; with none, only an explicit
+    /// `false` is known.
+    #[test]
+    fn an_http_backend_is_judged_by_its_live_transport() {
+        let unset = backend("http_url: http://h/mcp");
+        let on = backend("http_url: http://h/mcp\nstreamable_http: true");
+        let off = backend("http_url: http://h/mcp\nstreamable_http: false");
+        for config in [&unset, &on, &off] {
+            assert_eq!(judge(config, true, Some(true)), None, "{config:?}");
+            assert_eq!(judge(config, true, Some(false)), SSE, "{config:?}");
+        }
+        assert_eq!(judge(&unset, false, None), Some(Judged::Unresolved));
+        assert_eq!(judge(&on, false, None), Some(Judged::Unresolved));
+        assert_eq!(judge(&off, false, None), SSE);
+    }
+
+    /// The identity reasons come before the transport, so a subscribe never
+    /// connects a backend they refuse.
+    #[test]
+    fn identity_is_judged_before_the_transport() {
+        let idp = backend(
+            "http_url: http://h/mcp\nidentity_propagation:\n  \
+             strategy: passthrough\n  audience: https://a\n  session_mode: per_user\n",
+        );
+        for detected in [None, Some(false)] {
+            assert_eq!(
+                judge(&idp, false, detected),
+                Some(Judged::Refused(Ineligible::IdentityPropagation))
+            );
+        }
+    }
+
+    /// The refused set leaves the unresolved out; the judged set has both.
+    #[test]
+    fn only_definite_refusals_are_ineligible() {
+        let config: Config = serde_yaml::from_str(
+            "backends:\n  u:\n    http_url: http://h/mcp\n  \
+             s:\n    http_url: http://h/mcp\n    streamable_http: false\n",
+        )
+        .expect("config");
+        let none = |_: &str| None;
+        let refused = ineligible_backends(&config, false, &none);
+        assert_eq!(refused.get("s"), Some(&Ineligible::SseHandshake));
+        assert_eq!(refused.get("u"), None);
+        let judged = judged_backends(&config, false, &none);
+        assert_eq!(judged.get("u"), Some(&Judged::Unresolved));
+        let live = |name: &str| (name == "u").then_some(false);
+        assert_eq!(
+            ineligible_backends(&config, false, &live).get("u"),
+            Some(&Ineligible::SseHandshake)
+        );
     }
 
     /// Accounts compile before the verdict: a personal or external account
@@ -242,7 +364,7 @@ mod tests {
         let config: Config = serde_yaml::from_str(yaml).expect("config");
         crate::config::account_bindings::compile(&config).expect("the fixture compiles");
         for multi_user in [false, true] {
-            let refused = ineligible_backends(&config, multi_user);
+            let refused = ineligible_backends(&config, multi_user, &|_| None);
             assert_eq!(refused.get("a"), Some(&Ineligible::IdentityPropagation));
             assert_eq!(refused.get("b"), Some(&Ineligible::IdentityPropagation));
             assert_eq!(
@@ -258,8 +380,8 @@ mod tests {
     #[test]
     fn a2a_is_refused() {
         assert_eq!(
-            reason(&backend("a2a_url: http://h"), false),
-            Some(Ineligible::A2a)
+            judge(&backend("a2a_url: http://h"), false, None),
+            Some(Judged::Refused(Ineligible::A2a))
         );
     }
 }
