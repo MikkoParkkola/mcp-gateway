@@ -181,7 +181,7 @@ def known_issues(text):
             inside, underline = True, not atx_start(line)
             above = lines[i - 1] if i else ""
             title = line if is_title(line) else f"{above} {line}"
-            extra = any(r.replace(TITLE, "", 1) for r in title_readings(title))
+            extra = any(TITLE in r and r.replace(TITLE, "", 1) for r in title_readings(title))
             if extra or later_releases(title):
                 # A start line that says more than the title (a bullet read
                 # as one, or a version in an annotation, read from the raw
@@ -218,18 +218,21 @@ def later_releases(line):
     """The versions `line` renders that are later than this release.
 
     Markdown decides what renders (a code span keeps its markup), so the line
-    is read three ways and a version any reading shows counts (fail closed).
+    is read four ways and a version any reading shows counts (fail closed).
     Both decode entities and drop backslash escapes, emphasis and code marks,
     so 4\\.0\\.1 and 4.0.&#49; count. The second also drops inline tags, link
     targets and brackets (tags before decoding, so &lt;b&gt; stays text), so
     4.0.<em>1</em> and 4.0.[1](url) count. The third first drops tags read
-    with quoted attribute values, so 4.0.<em title="a>b">1</em> counts.
+    with quoted attribute values, so 4.0.<em title="a>b">1</em> counts. The
+    fourth keeps code-span edges as spaces, so `4.0.0`+`4.0.1` is two versions,
+    not a build of 4.0.0.
     """
     found = []
     readings = (
         re.sub(r"[\\`*_]", "", html.unescape(line)),
         re.sub(r"[\\`*_\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", line))),
         re.sub(r"[\\`*_\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", QUOTED_TAG.sub("", line)))),
+        re.sub(r"[\\*_]", "", html.unescape(line)).replace("`", " "),
     )
     for text in readings:
         found += [
