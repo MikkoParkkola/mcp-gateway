@@ -451,3 +451,22 @@ async fn a_capability_refused_at_a_partial_reload_counts_as_read() {
         "refused before, unread now"
     );
 }
+
+/// MIK-8037 (review of #3406): a refusal is forgotten once the name is
+/// admitted, so a capability refused, then registered, then unloaded is not
+/// counted as read on the strength of the old refusal.
+#[tokio::test]
+async fn an_admitted_capability_forgets_its_refusal() {
+    let root = tempfile::tempdir().expect("root");
+    let (caps, meta) = with_refused(root.path()).await;
+    let d2 = root.path().join("d2");
+    std::fs::write(d2.join("gamma.yaml"), capability("gamma")).expect("write");
+    let d2 = d2.to_str().expect("utf8");
+    caps.load_from_directory(d2).await.expect("register");
+    assert!(caps.has_capability("gamma"), "admitted now");
+    assert!(caps.unload_capability("gamma"), "unloaded");
+    assert!(
+        !meta.watch_catalogue().present.contains("gamma"),
+        "no stale read"
+    );
+}
