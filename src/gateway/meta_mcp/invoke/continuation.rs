@@ -452,9 +452,12 @@ impl crate::gateway::meta_mcp::MetaMcp {
             && let Some(object) = outbound.as_object_mut()
         {
             // The client's envelope never travels upstream: the backend gets
-            // the state it issued, or none if it kept none.
+            // the state it issued, or none if it kept none. Only the state is
+            // replaced: `outbound` already carries the answers, sanitized.
             object.remove("requestState");
-            redeemed.apply(outbound);
+            if let Some(state) = redeemed.request_state {
+                object.insert("requestState".to_owned(), json!(state));
+            }
         }
         Ok(())
     }

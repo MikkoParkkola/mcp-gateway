@@ -70,12 +70,22 @@ impl DirectRouteGuards {
         meta.admit_spend_for(call)
     }
 
-    /// S3 accounting on every dispatch; on an answered call, S4 payload gates,
-    /// the S2 warnings, the response firewall verdict and client accounting.
-    /// A transport failure is returned unchanged for the caller's failure arm.
-    pub(crate) fn after_dispatch(
+    /// S3 accounting on every dispatch; on an answered call, the interim
+    /// seal, S4 payload gates, the S2 warnings, the response firewall verdict
+    /// and client accounting. A transport failure is returned unchanged for
+    /// the caller's failure arm.
+    ///
+    /// `seal` is the caller's verified identity and the params as sent: what
+    /// an interim answer's continuation is bound to (MIK-8078).
+    pub(crate) async fn after_dispatch(
         state: &AppState,
-        (call, challenge): (&BackendCall<'_>, Option<&str>),
+        ((call, challenge), (identity, sent)): (
+            (&BackendCall<'_>, Option<&str>),
+            (
+                Option<&crate::key_server::oidc::VerifiedIdentity>,
+                Option<&serde_json::Value>,
+            ),
+        ),
         client: Option<&AuthenticatedClient>,
         admission: &Admission,
         forward: Result<JsonRpcResponse>,
@@ -91,6 +101,17 @@ impl DirectRouteGuards {
             meta.chain_receive_for(call.server, result, challenge, &slot)?;
         }
         let receipt = std::mem::take(&mut *slot.lock());
+        // MIK-8078 (MRTR.2a): the backend's state is sealed after the raw
+        // receipt is checked and before any gate reads or rewrites the answer,
+        // the meta route's order, so no gate can copy the raw state into what
+        // the client receives.
+        if let Some(result) = response.result.as_mut()
+            && let Err(e) = meta
+                .seal_direct_interim(identity, (call.server, sent), result)
+                .await
+        {
+            return Ok(refusal(response.id.clone(), &e));
+        }
         if let Some(result) = response.result.take() {
             match meta.gate_payload(call, result) {
                 Ok((mut result, effect)) => {

@@ -258,7 +258,7 @@ async fn forward_sanitized(
     scope: Scope<'_>,
     envelope: &Envelope,
     (preflight, propagation): (&Preflight, &Propagation),
-    (mut admitted, sanitized_params): (Admitted<'_>, Value),
+    (mut admitted, mut sanitized_params): (Admitted<'_>, Value),
 ) -> Rejection {
     let Scope {
         state,
@@ -274,6 +274,14 @@ async fn forward_sanitized(
             return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
         }
     };
+    if preflight.retry.is_retry()
+        && let Err(refused) =
+            redeem_retry(scope, envelope, &mut admitted, &mut sanitized_params).await
+    {
+        // Not dispatched: the spend reservation is given back on drop.
+        drop(admission);
+        return refused;
+    }
     // Forward the sanitized params to the backend
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
@@ -288,16 +296,17 @@ async fn forward_sanitized(
     ))
     .await;
     let client = caller.client.as_ref();
+    release_if_interim(&forward, &mut admitted);
     let seen = (&admitted.call, preflight.challenge.as_deref());
-    let forward = DirectRouteGuards::after_dispatch(state, seen, client, &admission, forward);
+    let seal = (caller.verified_identity.as_ref(), envelope.params.as_ref());
+    let forward =
+        DirectRouteGuards::after_dispatch(state, (seen, seal), client, &admission, forward).await;
     // The spend is settled; an unsettled reservation is given back here.
     drop(admission);
     match forward {
         // The same delivery as a plain answer: one tail, so a modern
         // sanitized call is shaped like any other (MIK-8022).
-        Ok(response) => {
-            finish_response(scope, envelope, preflight, (&mut admitted, response)).await
-        }
+        Ok(response) => finish_response(scope, envelope, preflight, (&mut admitted, response)),
         // Settled as terminal unless raised before dispatch
         // (ADR-012 consequence 1; see `settle_direct_failure`).
         Err(e) => answer_failure(admitted, e).await,
@@ -363,8 +372,10 @@ async fn forward_plain(
     ))
     .await;
     let answered = if method == "tools/call" {
+        release_if_interim(&forward, admitted);
         let seen = (&admitted.call, preflight.challenge.as_deref());
-        DirectRouteGuards::after_dispatch(state, seen, client, &admission, forward)
+        let seal = (caller.verified_identity.as_ref(), envelope.params.as_ref());
+        DirectRouteGuards::after_dispatch(state, (seen, seal), client, &admission, forward).await
     } else {
         forward.inspect(|_| super::record_client_success(state, client))
     };
@@ -376,7 +387,7 @@ async fn forward_plain(
 /// What the caller receives from an answered plain dispatch: the id they
 /// supplied, the list or call post-processing, the settled idempotency key,
 /// the chain finish, and (for `tools/call`) the signature.
-async fn finish_response(
+fn finish_response(
     scope: Scope<'_>,
     envelope: &Envelope,
     preflight: &Preflight,
@@ -411,9 +422,6 @@ async fn finish_response(
         );
         super::direct_list::retain_invocable(state, client, oauth, cert, name, &mut response);
     } else if method == "tools/call" {
-        if let Err(refused) = seal_interim(scope, envelope, admitted, &mut response).await {
-            return refused;
-        }
         super::stamp_direct_provenance(
             state,
             name,
@@ -485,69 +493,43 @@ fn deliver_tail(
 }
 
 /// MIK-8078 (MRTR.1, MRTR.3-6): a retry presents the continuation this route
-/// sealed, and the backend gets its own state back in its place, as on the
-/// meta route. Refused before dispatch, so the key is released: the backend
-/// has not acted.
-///
-/// The rewritten params go out through the sanitized arm. For `tools/call`
-/// the two arms run the same guards and the same dispatch; only `tools/list`
-/// differs, and it is never a retry.
+/// sealed, and the backend gets its own state back in `outbound` in its place,
+/// as on the meta route. Refused before dispatch, so the key is released: the
+/// backend has not acted.
 async fn redeem_retry(
     scope: Scope<'_>,
     envelope: &Envelope,
     admitted: &mut Admitted<'_>,
+    outbound: &mut Value,
 ) -> Result<(), Rejection> {
-    let mut outbound = admitted
-        .sanitized
-        .take()
-        .or_else(|| envelope.params.clone())
-        .unwrap_or_default();
     let identity = scope.caller.verified_identity.as_ref();
     let sent = (scope.name, envelope.params.as_ref());
     let redeemed = scope
         .state
         .meta_mcp
-        .redeem_direct_retry(identity, sent, &mut outbound)
+        .redeem_direct_retry(identity, sent, outbound)
         .await;
-    if let Err(e) = redeemed {
+    redeemed.map_err(|e| {
         if let Some(reservation) = admitted.idem_reservation.as_mut() {
             reservation.release();
         }
-        return Err(build_http_response(
-            &refusal(Some(scope.id.clone()), &e),
-            StatusCode::OK,
-        ));
-    }
-    admitted.sanitized = Some(outbound);
-    Ok(())
+        build_http_response(&refusal(Some(scope.id.clone()), &e), StatusCode::OK)
+    })
 }
 
-/// MIK-8078 (MRTR.2a): an interim answer's state is sealed before anything
-/// stores, stamps or signs the answer, so neither the cache nor the client
-/// ever holds the backend's own state. The key is released, not settled: the
-/// backend stopped to ask and did not act (the meta route's rule).
-async fn seal_interim(
-    scope: Scope<'_>,
-    envelope: &Envelope,
-    admitted: &mut Admitted<'_>,
-    response: &mut JsonRpcResponse,
-) -> Result<(), Rejection> {
-    let Some(result) = response.result.as_mut() else {
-        return Ok(());
-    };
-    if crate::protocol::mrtr::InputRequired::claims_input_required(result)
-        && let Some(mut reservation) = admitted.idem_reservation.take()
-    {
+/// MIK-8078: a backend that stopped to ask did not act, so its key is
+/// released rather than settled (the meta route's rule). Released here, before
+/// the guards, because a seal they refuse returns before settlement, and an
+/// armed reservation dropped unsettled records an uncertain outcome.
+fn release_if_interim(forward: &crate::Result<JsonRpcResponse>, admitted: &mut Admitted<'_>) {
+    let asked = forward
+        .as_ref()
+        .ok()
+        .and_then(|response| response.result.as_ref())
+        .is_some_and(crate::protocol::mrtr::InputRequired::claims_input_required);
+    if asked && let Some(mut reservation) = admitted.idem_reservation.take() {
         reservation.release();
     }
-    let identity = scope.caller.verified_identity.as_ref();
-    let sent = (scope.name, envelope.params.as_ref());
-    let sealed = scope
-        .state
-        .meta_mcp
-        .seal_direct_interim(identity, sent, result)
-        .await;
-    sealed.map_err(|e| build_http_response(&refusal(Some(scope.id.clone()), &e), StatusCode::OK))
 }
 
 /// Answer a dispatch that failed, settling the reservation (`answer` consumes
@@ -570,19 +552,20 @@ pub(super) async fn dispatch(
     stages: (&Preflight, &Propagation),
     mut admitted: Admitted<'_>,
 ) -> Rejection {
-    if envelope.method == "tools/call" && stages.0.retry.is_retry() {
-        if let Err(refused) = redeem_retry(scope, envelope, &mut admitted).await {
-            return refused;
-        }
+    // MIK-8078: a retry goes out through the sanitized arm, which redeems it
+    // after the spend is admitted. For `tools/call` the two arms run the same
+    // guards and the same dispatch; only `tools/list` differs, and it is never
+    // a retry.
+    if envelope.method == "tools/call" && stages.0.retry.is_retry() && admitted.sanitized.is_none()
+    {
+        admitted.sanitized = Some(envelope.params.clone().unwrap_or_default());
     }
     if let Some(sanitized_params) = admitted.sanitized.take() {
         return forward_sanitized(scope, envelope, stages, (admitted, sanitized_params)).await;
     }
     match forward_plain(scope, envelope, stages, &mut admitted).await {
         Err(refusal) => refusal,
-        Ok(Ok(response)) => {
-            finish_response(scope, envelope, stages.0, (&mut admitted, response)).await
-        }
+        Ok(Ok(response)) => finish_response(scope, envelope, stages.0, (&mut admitted, response)),
         Ok(Err(e)) => answer_failure(admitted, e).await,
     }
 }

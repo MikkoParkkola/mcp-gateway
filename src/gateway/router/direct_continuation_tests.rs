@@ -33,6 +33,17 @@ fn identity(subject: &str) -> VerifiedIdentity {
 /// `tools/call read` on `/mcp/{backend}` as key `k-std`, carrying `subject`'s
 /// verified identity when one is given, with `extra` merged into the params.
 async fn call(fx: &Fx, backend: &str, subject: Option<&str>, extra: Value) -> (StatusCode, Value) {
+    call_as(fx, "k-std", backend, subject, extra).await
+}
+
+/// [`call`] as API key `key`.
+async fn call_as(
+    fx: &Fx,
+    key: &str,
+    backend: &str,
+    subject: Option<&str>,
+    extra: Value,
+) -> (StatusCode, Value) {
     let mut params = json!({"name": "read", "arguments": {}});
     if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
         params.extend(extra.clone());
@@ -40,7 +51,7 @@ async fn call(fx: &Fx, backend: &str, subject: Option<&str>, extra: Value) -> (S
     let mut request = axum::http::Request::builder()
         .method("POST")
         .uri(format!("/mcp/{backend}"))
-        .header("authorization", "Bearer k-std")
+        .header("authorization", format!("Bearer {key}"))
         .header("content-type", "application/json")
         .body(axum::body::Body::from(
             json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
@@ -295,5 +306,46 @@ async fn r11_an_unusable_round_does_not_carry_the_state() {
             !body.to_string().contains(BACKEND_STATE),
             "meta {backend}: {body}"
         );
+    }
+}
+
+/// R12: a retry the spend budget refuses is refused before its continuation is
+/// spent, as on the meta route, so the caller can still resume it. `k-budget`
+/// (1.5 at 1.0 a call) pays for the question and is refused the retry; the
+/// same caller then resumes it under `k-std`. Mutant: the redeem before the
+/// spend admission.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn r12_a_budget_refusal_does_not_spend_the_continuation() {
+    use crate::cost_accounting::config::CostGovernanceConfig;
+    for backend in BACKENDS {
+        let mut cfg = CostGovernanceConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        cfg.tool_costs.insert("read".to_string(), 1.0);
+        cfg.budgets.per_key.insert("k-budget".to_string(), 1.5);
+        let registry =
+            std::sync::Arc::new(crate::cost_accounting::registry::CostRegistry::new(&cfg));
+        let enforcer = std::sync::Arc::new(crate::cost_accounting::enforcer::BudgetEnforcer::new(
+            cfg,
+            std::sync::Arc::clone(&registry),
+        ));
+        let fx = super::direct_guards_fixture::fixture_built(Answer::AskOnce, move |meta| {
+            meta.with_cost_governance(enforcer, registry)
+        })
+        .await;
+        let (_, asked) = call_as(&fx, "k-budget", backend, Some("alice"), json!({})).await;
+        let retry = json!({"requestState": state_of(&asked), "inputResponses": answers()});
+        let (_, refused) = call_as(&fx, "k-budget", backend, Some("alice"), retry.clone()).await;
+        assert!(refused.get("error").is_some(), "{backend}: {refused}");
+        assert_eq!(
+            dispatched(&fx),
+            1,
+            "{backend}: the refused retry dispatched"
+        );
+        let (_, done) = call_as(&fx, "k-std", backend, Some("alice"), retry).await;
+        assert!(done.get("error").is_none(), "{backend}: {done}");
+        assert_eq!(dispatched(&fx), 2, "{backend}");
     }
 }
