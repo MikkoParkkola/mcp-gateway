@@ -103,7 +103,10 @@ fn an_anonymous_holder_resumes_by_its_minted_id() {
 #[test]
 fn an_id_only_session_opens_its_channel_on_first_subscribe() {
     let m = mux();
-    let id = m.get_or_create_session_id_scoped(None, &cred("alice"), None);
+    let id = m
+        .get_or_create_session_id_scoped(None, &cred("alice"), None)
+        .expose_secret()
+        .to_owned();
     let session = Arc::clone(m.sessions.read().get(id.as_str()).expect("opened"));
     assert!(
         session.tx.get().is_none(),
@@ -118,7 +121,8 @@ fn an_id_only_session_opens_its_channel_on_first_subscribe() {
     m.broadcast(note());
     assert!(session.tx.get().is_none(), "a fan-out built a channel");
     assert_eq!(
-        m.resume_session_id_scoped(Some(&id), &cred("alice"), None),
+        m.resume_session_id_scoped(Some(&id), &cred("alice"), None)
+            .map(|resumed| resumed.expose_secret().to_owned()),
         Some(id.clone()),
         "the owner resumes by id"
     );
@@ -150,7 +154,10 @@ fn note() -> TaggedNotification {
 #[test]
 fn the_reaper_removes_an_unopened_session() {
     let m = mux();
-    let id = m.get_or_create_session_id_scoped(None, &cred("alice"), None);
+    let id = m
+        .get_or_create_session_id_scoped(None, &cred("alice"), None)
+        .expose_secret()
+        .to_owned();
     assert_eq!(
         m.reap_expired_sessions(std::time::Duration::ZERO),
         vec![id.clone()]
@@ -173,7 +180,10 @@ fn streams_subscribing_at_once_to_an_unopened_session_share_one_channel() {
     const STREAMS: usize = 8;
     for _ in 0..200 {
         let m = Arc::new(mux());
-        let id = m.get_or_create_session_id_scoped(None, &cred("alice"), None);
+        let id = m
+            .get_or_create_session_id_scoped(None, &cred("alice"), None)
+            .expose_secret()
+            .to_owned();
         let start = Arc::new(std::sync::Barrier::new(STREAMS));
         let streams: Vec<_> = (0..STREAMS)
             .map(|_| {
@@ -202,4 +212,62 @@ fn streams_subscribing_at_once_to_an_unopened_session_share_one_channel() {
             );
         }
     }
+}
+
+/// `MIK-8014.PERF.2a`: the fingerprint is held with the id it was made from.
+/// A session that ended and was opened again under the same id is logged as
+/// that id, and a second session of the same owner is never logged with the
+/// first one's fingerprint.
+#[test]
+fn a_reused_id_is_fingerprinted_as_the_new_session() {
+    use crate::gateway::session_id::session_fp;
+    let m = mux();
+    drop(m.seed_session("gw-reused"));
+    m.remove_session("gw-reused");
+    drop(m.seed_session("gw-reused"));
+    drop(m.seed_session("gw-other"));
+    for raw in ["gw-reused", "gw-other"] {
+        let resumed = m.get_or_create_session_id_scoped(Some(raw), &SessionOwner::Anonymous, None);
+        assert_eq!(resumed.expose_secret(), raw, "the named session resumed");
+        assert_eq!(
+            resumed.fp(),
+            session_fp(raw),
+            "{raw} carries another id's fingerprint"
+        );
+        assert_eq!(resumed.to_string(), session_fp(raw));
+    }
+    assert_ne!(session_fp("gw-reused"), session_fp("gw-other"));
+}
+
+/// `MIK-8014.PERF.2a`: removing a session logs the fingerprint its key already
+/// holds; nothing is hashed again, with logging on.
+#[test]
+fn removing_a_session_does_not_fingerprint_it_again() {
+    use crate::gateway::session_id::FINGERPRINTS;
+    let m = mux();
+    drop(m.seed_session("gw-gone"));
+    let (_captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
+    FINGERPRINTS.with(|n| n.set(0));
+    m.remove_session("gw-gone");
+    assert!(!m.has_session("gw-gone"), "the session was removed");
+    assert_eq!(FINGERPRINTS.with(std::cell::Cell::get), 0);
+}
+
+/// Only the session's owner can remove it: another owner's DELETE leaves it in
+/// place, and the owner's removes it and gets the removed id back.
+#[test]
+fn only_the_owner_removes_a_session() {
+    let m = mux();
+    let id = m
+        .get_or_create_session_id_scoped(None, &cred("alice"), None)
+        .expose_secret()
+        .to_owned();
+    assert!(m.remove_session_for(&id, &cred("mallory")).is_none());
+    assert!(m.has_session(&id), "another owner removed the session");
+    let removed = m.remove_session_for(&id, &cred("alice"));
+    assert_eq!(
+        removed.as_ref().map(SessionId::expose_secret),
+        Some(id.as_str())
+    );
+    assert!(!m.has_session(&id), "the owner's DELETE left the session");
 }
