@@ -746,10 +746,13 @@ fn a_split_receipt_never_runs_a_value_into_a_key() {
             .any(|fp| !allowed.contains(fp)),
         "premise: running the key in adds fingerprints"
     );
+    let recorded: HashSet<u64> = digest.fingerprints(&d).into_iter().collect();
+    assert!(recorded.iter().all(|fp| allowed.contains(fp)));
+    // The newline form keeps the key, as egress reads keys apart.
     assert!(
-        digest
-            .fingerprints(&d)
+        d.fingerprints(&leaves.join("\n"))
             .iter()
-            .all(|fp| allowed.contains(fp))
+            .all(|fp| recorded.contains(fp)),
+        "the newline form, key included, is recorded"
     );
 }
