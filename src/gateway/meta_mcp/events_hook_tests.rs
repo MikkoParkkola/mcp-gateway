@@ -243,3 +243,35 @@ async fn the_next_complete_reload_withdraws_a_type_still_absent() {
     );
     assert!(subscribed(store.path(), "alpha"));
 }
+
+/// MIK-8028 `PARTIAL.1`: a partial reload still withdraws a type whose
+/// capability it did read, when that capability no longer offers it.
+#[tokio::test]
+async fn a_partial_reload_withdraws_a_route_a_read_capability_dropped() {
+    let root = tempfile::tempdir().expect("root");
+    let store = tempfile::tempdir().expect("store");
+    let (d1, d2) = (root.path().join("d1"), root.path().join("d2"));
+    for (dir, cap) in [(&d1, "alpha"), (&d2, "beta")] {
+        std::fs::create_dir_all(dir).expect("dir");
+        std::fs::write(dir.join(format!("{cap}.yaml")), capability(cap)).expect("write");
+        seed_subscription(store.path(), cap);
+    }
+    let (caps, _registry, meta) = wired(&[&d1, &d2], store.path()).await;
+    caps.mark_initial_scan_complete();
+
+    // Alpha is read again, without its webhook; beta's directory is not.
+    let bare = capability("alpha");
+    let bare = bare.split("webhooks:").next().expect("head");
+    std::fs::write(d1.join("alpha.yaml"), bare).expect("rewrite alpha");
+    std::fs::remove_dir_all(&d2).expect("make d2 unreadable");
+    caps.reload().await.expect("partial reload");
+    meta.events_capabilities_reloaded("hooks");
+    assert!(
+        !subscribed(store.path(), "alpha"),
+        "a read capability's dropped route is withdrawn"
+    );
+    assert!(
+        subscribed(store.path(), "beta"),
+        "the unread directory's subscription is kept"
+    );
+}
