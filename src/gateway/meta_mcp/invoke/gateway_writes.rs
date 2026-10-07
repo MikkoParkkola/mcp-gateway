@@ -259,12 +259,11 @@ pub(crate) fn take_since(mark: Mark) -> WriteRecord {
     WriteRecord(
         GATEWAY_WRITES
             .try_with(|w| {
+                // The list is in `seq` order (notes push with a rising number;
+                // a rebind only retains), so the step's own notes are its tail.
                 let mut writes = w.borrow_mut();
-                let (taken, kept): (Vec<Written>, Vec<Written>) = std::mem::take(&mut writes.list)
-                    .into_iter()
-                    .partition(|written| written.seq >= mark.0);
-                writes.list = kept;
-                taken
+                let at = writes.list.partition_point(|written| written.seq < mark.0);
+                writes.list.split_off(at)
             })
             .unwrap_or_default(),
     )
