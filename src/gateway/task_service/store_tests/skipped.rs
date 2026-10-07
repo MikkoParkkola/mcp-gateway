@@ -104,7 +104,12 @@ async fn an_unrestorable_record_keeps_its_binding() {
 /// row whose name or identity is not its own.
 #[tokio::test]
 async fn a_newer_or_rebound_record_still_refuses() {
-    for case in ["newer", "newer_broken_model", "rebound_broken"] {
+    for case in [
+        "newer",
+        "newer_broken_model",
+        "rebound_broken",
+        "duplicate_broken",
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let (path, record, _) = two_tasks(dir.path()).await;
         if case.starts_with("newer") {
@@ -116,11 +121,21 @@ async fn a_newer_or_rebound_record_still_refuses() {
                     v["model"] = json!("not a task");
                 }
             });
+        } else if case == "rebound_broken" {
+            unrestorable(&record);
+            fs::rename(&record, path.join(format!("{FOREIGN_NAME}.json"))).unwrap();
         } else {
+            // A skipped row that claims the intact row's identity.
+            let other = fs::read_dir(&path)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|file| *file != record && file.extension().is_some_and(|x| x == "json"))
+                .unwrap();
+            let theirs: Value = serde_json::from_slice(&fs::read(other).unwrap()).unwrap();
             rewrite(&record, |v| {
+                v["admission"]["identityDigest"] = theirs["admission"]["identityDigest"].clone();
                 v["model"]["task"]["lastUpdatedAt"] = json!("2026-09-06T00:00:00Z");
             });
-            fs::rename(&record, path.join(format!("{FOREIGN_NAME}.json"))).unwrap();
         }
         let before = files(&path);
         assert!(
