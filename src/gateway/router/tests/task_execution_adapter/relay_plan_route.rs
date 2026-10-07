@@ -56,6 +56,9 @@ async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDi
         FirewallConfig {
             collusion: CollusionConfig {
                 action: CollusionAction::Block,
+                // One shared fingerprint: a 63-char run guarantees one, so a
+                // relay of the URL or the advice is refused if receipted.
+                min_matches: 1,
                 sources: vec![format!("{BACKEND}:*")],
                 ..CollusionConfig::default()
             },
