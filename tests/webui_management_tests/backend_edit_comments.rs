@@ -132,6 +132,18 @@ async fn an_inline_comment_follows_its_edited_value() {
     assert_eq!(read(&path), yaml.replace("enabled: true", "enabled: false"));
 }
 
+/// T3b: an apostrophe in a plain value opens no quote, so the comment after
+/// it is still found and carried onto the edited line.
+#[tokio::test]
+async fn an_apostrophe_does_not_hide_the_inline_comment() {
+    let yaml =
+        "backends:\n  svc:\n    command: x\n    description: it's old  # shown in the panel\n";
+    let (router, path, _keep) = served(yaml, Route::File).await;
+    let (status, body) = patch(&router, "svc", json!({"description": "new"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(read(&path), yaml.replace("it's old", "new"));
+}
+
 /// T4 KEEP.2: clearing `stop_when_idle_for` writes `null`; the comments around
 /// it stay.
 #[tokio::test]
