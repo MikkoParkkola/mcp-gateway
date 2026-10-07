@@ -343,7 +343,6 @@ pub(super) async fn mcp_delete_handler(
     let removed = session_id.and_then(|id| state.multiplexer.remove_session_for(id, &owner));
     let status = match (session_id, removed) {
         (Some(id), Some(removed)) => {
-            // Read before the macro so its count is graded (MIK-7725).
             let session = removed.fp();
             info!(session_id = %session, "Session terminated by client");
             // The id is dead from here; what was keyed by it goes too.
