@@ -397,16 +397,16 @@ fn refused(name: &str) -> String {
     format!("{}auth:\n  account: missing\n", capability(name))
 }
 
-/// A backend whose `d1` holds `alpha` and the refused `gamma`, and whose
-/// `d2` holds `beta`, after a complete startup scan; and its watch view.
+/// A backend whose `d1` holds `alpha`, and whose `d2` holds `beta` and the
+/// refused `gamma`, after a complete startup scan; and its watch view.
 async fn with_refused(root: &std::path::Path) -> (Arc<CapabilityBackend>, MetaMcp) {
     let (d1, d2) = (root.join("d1"), root.join("d2"));
     for dir in [&d1, &d2] {
         std::fs::create_dir_all(dir).expect("dir");
     }
     std::fs::write(d1.join("alpha.yaml"), capability("alpha")).expect("write");
-    std::fs::write(d1.join("gamma.yaml"), refused("gamma")).expect("write");
     std::fs::write(d2.join("beta.yaml"), capability("beta")).expect("write");
+    std::fs::write(d2.join("gamma.yaml"), refused("gamma")).expect("write");
     let accounts = Arc::new(crate::identity_propagation::AccountStrategyRegistry::default());
     let executor = CapabilityExecutor::new().with_account_strategies(accounts);
     let caps = Arc::new(CapabilityBackend::new("hooks", Arc::new(executor)));
@@ -431,17 +431,23 @@ async fn a_capability_refused_at_load_counts_as_read() {
     assert!(meta.watch_catalogue().present.contains("gamma"), "read");
 }
 
-/// MIK-8037 (review of #3406): a partial reload that reads a directory
-/// counts a capability the gate refused there as read: a partial catalogue
-/// leaves only the unread directory's capabilities unread.
+/// MIK-8037 (review of #3406): a partial reload counts as read what the gate
+/// refused in a directory it read, and only that: a capability refused
+/// earlier in the directory it could not read is unread again.
 #[tokio::test]
 async fn a_capability_refused_at_a_partial_reload_counts_as_read() {
     let root = tempfile::tempdir().expect("root");
     let (caps, meta) = with_refused(root.path()).await;
+    let d1 = root.path().join("d1");
+    std::fs::write(d1.join("delta.yaml"), refused("delta")).expect("write");
     std::fs::remove_dir_all(root.path().join("d2")).expect("make d2 unreadable");
     caps.reload().await.expect("partial reload");
     let partial = meta.watch_catalogue();
     assert!(!partial.complete, "a directory was not read");
+    assert!(partial.present.contains("delta"), "read, then refused");
     assert!(!partial.present.contains("beta"), "unread");
-    assert!(partial.present.contains("gamma"), "read, then refused");
+    assert!(
+        !partial.present.contains("gamma"),
+        "refused before, unread now"
+    );
 }
