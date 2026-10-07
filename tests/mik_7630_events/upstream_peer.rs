@@ -389,7 +389,13 @@ fn answer(state: &State, frame: Value) -> Response {
             reply(&id, json!({}))
         }
         "resources/list" => reply(&id, resources()),
-        "tools/list" => reply(&id, json!({"tools": []})),
+        // One tool, not none: warm-start re-asks an empty list (up to three
+        // more times, seconds apart), and those late lists would land in the
+        // rows that count this peer's `tools/list` requests.
+        "tools/list" => {
+            let tool = json!({"name": "noop", "inputSchema": {"type": "object"}});
+            reply(&id, json!({"tools": [tool]}))
+        }
         "prompts/list" => reply(&id, json!({"prompts": []})),
         "ping" if !modern => reply(&id, json!({})),
         _ => refuse(&id, -32601),
