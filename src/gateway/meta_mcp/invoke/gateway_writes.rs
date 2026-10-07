@@ -16,7 +16,8 @@ use std::hash::{Hash, Hasher};
 use serde_json::Value;
 
 /// Where a noted member lives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum Layer {
     /// The tool value: a wrapped answer's decoded value, or the answer
     /// itself when it is not wrapped.
@@ -70,6 +71,77 @@ pub(crate) struct Mark(u64);
 #[derive(Debug, Clone, Default)]
 pub(crate) struct WriteRecord(Vec<Written>);
 
+impl WriteRecord {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Every member the gateway notes. A stored record names its path by these
+/// segments, and decoding maps them back here: a path this build does not
+/// note is dropped, so that member stays receipted (MIK-7991 r4).
+const NOTED_PATHS: &[&[&str]] = &[
+    &["recovery"],
+    &["_signature"],
+    TASK_ID,
+    &["trace_id"],
+    &["predicted_next"],
+    &["_meta", "provenance"],
+    &["_security_findings"],
+    &["_cost_warnings"],
+    &["_cost_suggestion"],
+];
+
+/// A note as the sync admission stores it beside a delivery. `seq` is not
+/// kept: a restored note is numbered in the replay's own record.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredWrite {
+    layer: Layer,
+    path: Vec<String>,
+    digest: u64,
+}
+
+impl serde::Serialize for WriteRecord {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.0.iter().map(|w| {
+            StoredWrite {
+                layer: w.layer,
+                path: w
+                    .path
+                    .iter()
+                    .map(|segment| (*segment).to_string())
+                    .collect(),
+                digest: w.digest,
+            }
+        }))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for WriteRecord {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let stored = Vec::<StoredWrite>::deserialize(deserializer)?;
+        let known = |w: &StoredWrite| {
+            NOTED_PATHS
+                .iter()
+                .copied()
+                .find(|path| path.iter().copied().eq(w.path.iter().map(String::as_str)))
+        };
+        Ok(Self(
+            stored
+                .iter()
+                .filter_map(|w| {
+                    Some(Written {
+                        layer: w.layer,
+                        path: known(w)?,
+                        digest: w.digest,
+                        seq: 0,
+                    })
+                })
+                .collect(),
+        ))
+    }
+}
+
 /// The current end of the delivery's record; `0` outside a scope.
 pub(crate) fn mark() -> Mark {
     Mark(GATEWAY_WRITES.try_with(|w| w.borrow().next).unwrap_or(0))
@@ -90,6 +162,12 @@ pub(crate) fn snapshot_since(mark: Mark) -> WriteRecord {
             })
             .unwrap_or_default(),
     )
+}
+
+/// The whole delivery's record: what a sync admission stores beside the
+/// response it secures (MIK-7991 r4). Empty outside a scope.
+pub(crate) fn recorded() -> WriteRecord {
+    snapshot_since(Mark(0))
 }
 
 /// Add `record` to the delivery's record, as notes of this call. A no-op
@@ -129,6 +207,10 @@ fn member<'v>(value: &'v Value, path: &[&str]) -> Option<&'v Value> {
 /// Note that the gateway wrote `path` of `value` (at `layer`). A no-op
 /// outside a delivery scope or when the member is absent.
 pub(crate) fn note(layer: Layer, path: &'static [&'static str], value: &Value) {
+    debug_assert!(
+        NOTED_PATHS.contains(&path),
+        "{path:?} is not in NOTED_PATHS, so a stored record would drop it"
+    );
     let Some(written) = member(value, path) else {
         return;
     };

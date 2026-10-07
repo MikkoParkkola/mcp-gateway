@@ -654,6 +654,7 @@ fn replay_facts_round_trip_and_older_records_decode() {
             chain: StoredChain::NotEligible,
             audit: Some(ReplayAudit::new(outcome, Some("sha256:x".to_string()))),
             read: None,
+            writes: Default::default(),
         };
         let bytes = serde_json::to_vec(&stored).unwrap();
         let (_, audit) = stored_response(&bytes).expect("decodes");
@@ -707,6 +708,7 @@ async fn a_replay_restores_the_stored_reading() {
         chain: StoredChain::NotEligible,
         audit: None,
         read: Some(b.clone()),
+        writes: Default::default(),
     };
     let bytes = serde_json::to_vec(&stored).unwrap();
     let (_, restored) = with_read_scope(std::sync::Arc::clone(&fw), async {
