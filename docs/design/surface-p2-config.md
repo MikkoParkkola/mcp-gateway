@@ -54,7 +54,7 @@ With `url`, the ESSENTIAL backend keys become `command`, `url`, `env`, `headers`
 | `auth.single_user` | true when there are no API keys and no key server | ADR-008 INV-2 (MIK-6752) makes it fail-closed on purpose (src/config/features/auth.rs:33-45). One bearer token can be handed to a whole team, and the gateway cannot tell from the credential count. Deriving it would switch off the per-user OAuth isolation guard without the operator saying so, which the inventory's rule 1 forbids. Stays KEEP, ADVANCED; `init` keeps writing it for the solo setup. |
 | `auth.public_paths` | fixed default | Already defaults to `["/health"]` (src/config/features/auth.rs:126). What `init` writes on top is the open question; it depends on the auth posture below. |
 | `security.transparency_log.enabled` | on whenever auth is on | Round 1 of the P1 review rejected full AUTO: an auth-off gateway may still want an audit log. Today an authenticated gateway fails to load without it (src/config/features/security.rs:117), so every authenticated config carries the line. 4.0 defaults it on when auth is on; an explicit `enabled: false` with auth on still fails to load, so enforcement does not change. The key stays KEEP (ADVANCED) for turning it on without auth. |
-## Default auth posture: options for review
+## Default auth posture
 
 Today (`mcp-gateway init`, src/commands/mod.rs:176-202) the starter config binds `127.0.0.1`, enables auth
 with a generated bearer token, sets `single_user: true`, writes the file readable only by its owner, and
@@ -75,9 +75,17 @@ is reachable from elsewhere, through a wide bind or a declared non-loopback `pub
 | 3.x upgrade | no change | a config with no `auth` section changes behaviour: `upgrade` must write `auth.enabled: false` to keep it, or the operator adds the token to clients |
 
 Neither option relaxes `network_bind_refusal`. B also closes the "any local process" gap that a
-multi-user machine or a malicious local package exploits. Its cost is one header in each MCP client config. `setup wizard --configure-client` writes the gateway
-entry into each detected client (src/commands/setup.rs:111) but no auth header today, so B also needs that
-writer to add the token. The review seats are asked to weigh B against A; the lead and operator decide.
+multi-user machine or a malicious local package exploits. Its cost is one header in each MCP client
+config. `setup wizard --configure-client` writes the gateway entry into each detected client
+(src/commands/setup.rs:111) but no auth header today, so B also needs that writer to add the token.
+
+**Decision for 4.0: A** (lead, 2026-10-08). B would break every existing MCP client on upgrade, since each
+needs the token, and needs new client-setup work; both are wrong to land at release freeze. Today's
+loopback-open posture is deliberate and documented, and `network_bind_refusal` already refuses
+tools-open with remote reach. A is strengthened cheaply: `init` prints one line saying `/mcp` is open to
+local processes and naming how to require the token. **B is the 4.1 direction**, together with the
+client-setup writer that adds the token.
+
 ## Adaptive values (later, separate item)
 
 `meta_mcp.warm_start` (start the backends recent sessions used) and `backends.<name>.stop_when_idle_for`
@@ -90,11 +98,11 @@ One open PR at a time, each merged and closed before the next.
 
 | # | Increment | Product code |
 |---|---|---|
-| P2a | This design, reviewed; the auth posture decided | none |
+| P2a | This design, reviewed | none |
 | P2b | Hidden keys: one table in code of every INTERNAL and AUTO config key and variable (generated from the inventory and checked against it), `doctor` lists the ones a config sets, and the validators stay as they are | yes |
 | P2c | Deterministic AUTO: backend `url` with `http_url`/`ws_url` as hidden aliases; `transparency_log.enabled` defaults on with auth | yes |
 | P2d | REMOVE keys refused at load naming the replacement; `upgrade` deletes them | yes |
-| P2e | The auth posture chosen in P2a, with its `init` and `upgrade` changes | yes, if B |
+| P2e | Posture A kept: `init` prints one line saying `/mcp` is open to local processes and how to require the token | yes, `init` output only |
 | P2f | Docs: tier column in the inventory; the reference, `gateway.example.yaml`, QUICKSTART and `init` lead with ESSENTIAL only; the minimal setup is the one-screen config | docs and `init` |
 
 SURF.2 is met when P2b to P2f have merged.
@@ -110,7 +118,7 @@ Each test is written first and seen failing on CI at its own assertion before th
 | P2c | a 3.x config with `http_url` or `ws_url` loads unchanged | (guard: passes before and after) |
 | P2c | auth on with no `transparency_log` section loads with the log on; auth on with `enabled: false` still fails to load | the first fails to load today |
 | P2d | each REMOVE key fails the load with a message naming its replacement; `upgrade` output has no REMOVE key | most warn once or have no effect today (inventory rows say which) |
-| P2e (B) | no `auth` section: `/mcp` without the token gets 401; with it, 200; `auth.enabled: false` serves as today | `/mcp` answers without a token |
+| P2e | `init` output contains the local-exposure line naming `/mcp` and the setting that requires the token; the generated config is unchanged | the line is absent |
 | P2f | the minimal config in QUICKSTART loads and serves a tool call (this also feeds SURF.7) | QUICKSTART still shows the longer config |
 ## UPGRADING impact
 
@@ -121,9 +129,7 @@ saying what the user loses, gains and does:
 - `url`: new spelling; `http_url` and `ws_url` keep working. No action.
 - Transparency log: an authenticated config no longer needs the line. No action.
 - REMOVE keys: the load fails naming the replacement; `mcp-gateway upgrade` deletes them.
-- Auth posture B only: a 3.x config without an `auth` section now requires a token on `/mcp`. Action: run
-  `mcp-gateway upgrade` (writes `auth.enabled: false` to keep 3.x behaviour) or add the token to each MCP
-  client.
+- Auth posture: unchanged in 4.0 (decision A). `init` now says that `/mcp` is open to local processes.
 
 ## Falsifiers
 
