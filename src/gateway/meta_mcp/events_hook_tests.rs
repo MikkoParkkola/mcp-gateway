@@ -390,3 +390,58 @@ async fn every_catalogue_write_moves_the_generation() {
         .expect("register");
     assert!(caps.catalogue_generation() > unloaded, "a registration");
 }
+
+/// `capability(name)` with an account the gate cannot resolve: its directory
+/// reads, and the admission gate refuses it.
+fn refused(name: &str) -> String {
+    format!("{}auth:\n  account: missing\n", capability(name))
+}
+
+/// A backend whose `d1` holds `alpha` and the refused `gamma`, and whose
+/// `d2` holds `beta`, after a complete startup scan; and its watch view.
+async fn with_refused(root: &std::path::Path) -> (Arc<CapabilityBackend>, MetaMcp) {
+    let (d1, d2) = (root.join("d1"), root.join("d2"));
+    for dir in [&d1, &d2] {
+        std::fs::create_dir_all(dir).expect("dir");
+    }
+    std::fs::write(d1.join("alpha.yaml"), capability("alpha")).expect("write");
+    std::fs::write(d1.join("gamma.yaml"), refused("gamma")).expect("write");
+    std::fs::write(d2.join("beta.yaml"), capability("beta")).expect("write");
+    let accounts = Arc::new(crate::identity_propagation::AccountStrategyRegistry::default());
+    let executor = CapabilityExecutor::new().with_account_strategies(accounts);
+    let caps = Arc::new(CapabilityBackend::new("hooks", Arc::new(executor)));
+    caps.begin_initial_scan();
+    for dir in [&d1, &d2] {
+        let dir = dir.to_str().expect("utf8");
+        caps.load_from_directory(dir).await.expect("load");
+    }
+    caps.mark_initial_scan_complete();
+    assert!(!caps.has_capability("gamma"), "the gate refused it");
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_capabilities(Arc::clone(&caps));
+    (caps, meta)
+}
+
+/// MIK-8037 (review of #3406): a capability the startup load read but the
+/// account gate refused is read, not unread, so its absence is confirmed.
+#[tokio::test]
+async fn a_capability_refused_at_load_counts_as_read() {
+    let root = tempfile::tempdir().expect("root");
+    let (_caps, meta) = with_refused(root.path()).await;
+    assert!(meta.watch_catalogue().present.contains("gamma"), "read");
+}
+
+/// MIK-8037 (review of #3406): a partial reload that reads a directory
+/// counts a capability the gate refused there as read: a partial catalogue
+/// leaves only the unread directory's capabilities unread.
+#[tokio::test]
+async fn a_capability_refused_at_a_partial_reload_counts_as_read() {
+    let root = tempfile::tempdir().expect("root");
+    let (caps, meta) = with_refused(root.path()).await;
+    std::fs::remove_dir_all(root.path().join("d2")).expect("make d2 unreadable");
+    caps.reload().await.expect("partial reload");
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(!partial.present.contains("beta"), "unread");
+    assert!(partial.present.contains("gamma"), "read, then refused");
+}
