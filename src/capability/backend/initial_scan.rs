@@ -109,7 +109,8 @@ impl CapabilityBackend {
     }
 
     /// Record `name` as read but refused by the account gate (MIK-8037): a
-    /// catalogue write, so the generation moves.
+    /// catalogue write, so the generation moves. Takes the write lock: call
+    /// it holding no capabilities guard. An admission forgets it again.
     pub(super) fn note_refused(&self, name: &str) {
         let mut caps = self.capabilities.write();
         caps.refused.insert(name.to_owned());

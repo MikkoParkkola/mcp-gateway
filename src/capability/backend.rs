@@ -696,6 +696,7 @@ impl CapabilityBackend {
         let mut caps = self.capabilities.write();
         let replaced = caps.contains(&name);
         caps.upsert(capability);
+        caps.refused.remove(&name);
         self.bump_catalogue_generation(&caps);
         if replaced {
             // A replacement is a live-policy change (MIK-7814): children
