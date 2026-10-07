@@ -12,6 +12,7 @@ use crate::backend::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use crate::events::EventSource as _;
 use crate::events::backend_source::{BackendSource, Upstream};
+use crate::transport::upstream_tap::NoteKind;
 
 /// Longer than one revive sweep.
 const PAST_A_SWEEP: std::time::Duration = std::time::Duration::from_secs(31);
@@ -144,4 +145,102 @@ async fn a_listener_ended_as_ineligible_comes_back_once_eligible() {
     tokio::time::advance(PAST_A_SWEEP).await;
     tokio::task::yield_now().await;
     assert_eq!(starts(&source), 2, "the held key got its listener back");
+}
+
+/// F6.4: the last held key leaving removes the ended entry, so a later
+/// sweep starts nothing for it.
+#[tokio::test(start_paused = true)]
+async fn a_held_key_that_leaves_takes_its_entry_along() {
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(silent_backend()));
+    let refused = Arc::new(AtomicBool::new(true));
+    let source = source(registry, Arc::clone(&refused));
+    hold_tools(&source).await;
+    listeners(&source).remove("b", &Interest::ToolsChanged);
+    assert!(!listeners(&source).backends.lock().contains_key("b"));
+    refused.store(false, Ordering::SeqCst);
+    tokio::time::advance(PAST_A_SWEEP).await;
+    tokio::task::yield_now().await;
+    assert_eq!(starts(&source), 0);
+}
+
+/// F6.7: a key held on a backend whose task runs counts there and starts
+/// nothing more.
+#[tokio::test(start_paused = true)]
+async fn holding_on_a_running_listener_only_counts() {
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(silent_backend()));
+    let source = source(registry, Arc::new(AtomicBool::new(false)));
+    hold_tools(&source).await;
+    listeners(&source).hold("b", &Interest::ToolsChanged);
+    assert_eq!(starts(&source), 1);
+    let running = listeners(&source).backends.lock().get("b").cloned();
+    let running = running.expect("listener");
+    assert!(!running.stop.is_cancelled());
+    assert!(running.need.lock().emits(NoteKind::ToolsChanged, None));
+    listeners(&source).remove("b", &Interest::ToolsChanged);
+    assert!(
+        listeners(&source).backends.lock().contains_key("b"),
+        "one key still held"
+    );
+}
+
+/// F6.8: the sweep holds the listeners weakly, so dropping their last owner
+/// still cancels every task.
+#[tokio::test(start_paused = true)]
+async fn dropping_the_listeners_cancels_their_tasks_while_the_sweep_sleeps() {
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(silent_backend()));
+    let none: crate::events::backend_source::Ineligible = Arc::new(std::collections::BTreeSet::new);
+    let listeners = UpstreamListeners::new(registry, Weak::new(), none);
+    listeners.add("b", &Interest::ToolsChanged).expect("room");
+    let task = listeners
+        .backends
+        .lock()
+        .get("b")
+        .cloned()
+        .expect("listener");
+    tokio::time::advance(std::time::Duration::from_secs(5)).await;
+    drop(listeners);
+    assert!(
+        task.stop.is_cancelled(),
+        "a strong sweep kept the owner alive"
+    );
+    tokio::time::advance(PAST_A_SWEEP).await;
+    tokio::task::yield_now().await;
+}
+
+/// F6.9: a backend refused again after the sweep read its eligibility gets
+/// one task at most, which ends at its loop head.
+#[tokio::test(start_paused = true)]
+async fn a_backend_refused_again_before_its_revived_task_runs_ends_that_task() {
+    use std::sync::atomic::AtomicUsize;
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(silent_backend()));
+    // The first read (the sweep's) admits; every later one refuses.
+    let reads = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&reads);
+    let ineligible: crate::events::backend_source::Ineligible = Arc::new(move || {
+        if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+            std::collections::BTreeSet::new()
+        } else {
+            std::iter::once("b".to_owned()).collect()
+        }
+    });
+    let listeners = UpstreamListeners::new(registry, Weak::new(), ineligible);
+    listeners.hold("b", &Interest::ToolsChanged);
+    for _ in 0..3 {
+        tokio::time::advance(PAST_A_SWEEP).await;
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        listeners.starts.load(Ordering::SeqCst),
+        1,
+        "one task at most"
+    );
+    let entry = listeners.backends.lock().get("b").cloned().expect("held");
+    assert!(
+        entry.stop.is_cancelled(),
+        "the revived task ended at its loop head"
+    );
 }
