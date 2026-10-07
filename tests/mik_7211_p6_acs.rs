@@ -139,6 +139,9 @@ mod source_checks {
             // MIK-8022: a backend whose own listing sends the 2026-07-28
             // fields, so the direct route is shown keeping them.
             "src/gateway/router/direct_guards_fixture.rs",
+            // MIK-8022 rows: they read the key from delivered bodies.
+            "src/gateway/router/direct_modern_shape_rows.rs",
+            "src/gateway/router/direct_modern_shape_tests.rs",
             "src/gateway/router/tests/task_execution_adapter/relay_upstream.rs",
             "src/gateway/server/tests/collusion_stdio_delivered.rs",
             "src/gateway/meta_mcp/response_delivery_scope_tests.rs",
