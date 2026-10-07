@@ -69,7 +69,7 @@ impl SkillRegistry {
     /// Falls back to the current directory if no home directory is available.
     #[must_use]
     pub fn default_path() -> PathBuf {
-        if let Some(home) = crate::home_dir::home_dir() {
+        if let Some(home) = dirs::home_dir() {
             home.join(".mcp-gateway").join("skills.json")
         } else {
             PathBuf::from(".mcp-gateway").join("skills.json")

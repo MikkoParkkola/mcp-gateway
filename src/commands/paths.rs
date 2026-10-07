@@ -29,7 +29,7 @@ pub fn claude_desktop_path() -> PathBuf {
 /// `~/.config` on Linux, `%APPDATA%` on Windows).
 #[cfg(not(target_os = "macos"))]
 pub fn config_dir_path(rel: &str) -> PathBuf {
-    crate::home_dir::config_dir()
+    dirs::config_dir()
         .unwrap_or_else(|| home_path(".config"))
         .join(rel)
 }

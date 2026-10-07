@@ -54,7 +54,7 @@ pub(crate) fn configure_child_environment(
     cmd.env("PATH", path);
 
     if let Some(home) = std::env::var_os("HOME")
-        .or_else(|| crate::home_dir::home_dir().map(std::path::PathBuf::into_os_string))
+        .or_else(|| dirs::home_dir().map(std::path::PathBuf::into_os_string))
     {
         cmd.env("HOME", home);
     }

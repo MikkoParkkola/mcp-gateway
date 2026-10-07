@@ -69,7 +69,7 @@ impl HomeResolver for SystemHome {
             .resolve("HOME")
             .filter(|h| !h.is_empty())
             .map(PathBuf::from)
-            .or_else(crate::home_dir::home_dir)
+            .or_else(dirs::home_dir)
     }
 }
 
