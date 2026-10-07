@@ -257,8 +257,10 @@ impl OAuthClient {
             .as_ref()
             .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
         let key = self.credential_key()?;
-        let flight = Flight::of(&self.storage.token_path(&key, &self.resource_url));
+        let token_path = self.storage.token_path(&key, &self.resource_url);
+        let flight = Flight::of(&token_path);
         let guard = std::sync::Arc::clone(&flight.lock).lock_owned().await;
+        let across = super::refresh_flight::hold_across_processes(&token_path).await?;
 
         let stored = self.storage.load(&key, &self.resource_url);
         if let Some(access) = self.adopt_if_fresher(stored.as_ref()) {
@@ -335,6 +337,7 @@ impl OAuthClient {
             state,
             destination: self.destination,
             route: self.refresh_route,
+            across,
         };
         let outcome = exchange
             .spawn()
@@ -364,9 +367,10 @@ impl OAuthClient {
     /// an exchange's save or compare-and-clear of the same record.
     async fn save_issued(&self, token: &TokenInfo) -> Result<()> {
         let key = self.credential_key()?;
-        let flight =
-            super::refresh_flight::Flight::of(&self.storage.token_path(&key, &self.resource_url));
+        let token_path = self.storage.token_path(&key, &self.resource_url);
+        let flight = super::refresh_flight::Flight::of(&token_path);
         let _guard = flight.lock.lock().await;
+        let _across = super::refresh_flight::hold_across_processes(&token_path).await?;
         self.storage.save(&key, &self.resource_url, token)
     }
 

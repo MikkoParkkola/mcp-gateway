@@ -18,6 +18,7 @@ use tracing::warn;
 use super::TokenResponse;
 use super::destination::{Hop, RefreshRoute, hop};
 use crate::Error;
+use crate::fs_lock::ExclusiveFileLock;
 use crate::oauth::storage::{RefreshState, TokenInfo, TokenStorage};
 use crate::security::http_diagnostics::oauth_request_error;
 use crate::security::ssrf::{
@@ -70,6 +71,18 @@ impl Flight {
     }
 }
 
+/// Hold the credential at `token_path` against other gateway processes that
+/// share the storage directory, as [`Flight::lock`] holds it within this one:
+/// an `flock` on a sidecar, released by the OS if the process dies. Taken
+/// after the in-process lock, so one waiter per process blocks here.
+pub(super) async fn hold_across_processes(token_path: &Path) -> crate::Result<ExclusiveFileLock> {
+    let lock_path = token_path.with_extension("refresh.lock");
+    tokio::task::spawn_blocking(move || ExclusiveFileLock::acquire(&lock_path))
+        .await
+        .map_err(|e| Error::OAuth(format!("The refresh lock task failed: {e}")))?
+        .map_err(|e| Error::OAuth(format!("Could not take the refresh lock: {e}")))
+}
+
 /// SHA-256 of a refresh token: what the spent set and the persisted in-flight
 /// marker hold, so neither keeps the secret itself.
 pub(super) fn fingerprint(refresh_token: &str) -> [u8; 32] {
@@ -117,6 +130,9 @@ pub(super) struct Exchange {
     pub(super) state: RefreshState,
     pub(super) destination: DestinationPolicy,
     pub(super) route: RefreshRoute,
+    /// The flight's other half: other gateway processes sharing the storage
+    /// directory wait on it too.
+    pub(super) across: ExclusiveFileLock,
 }
 
 impl Exchange {
@@ -145,6 +161,7 @@ impl Exchange {
         {
             warn!(backend = %self.backend, %error, "Could not settle the refresh state");
         }
+        drop(self.across);
         drop(self.guard);
         outcome
     }

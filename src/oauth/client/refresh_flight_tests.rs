@@ -756,35 +756,5 @@ async fn a_login_save_waits_for_a_running_refresh() {
     assert_eq!(stored(&refresher).unwrap().access_token, issued);
 }
 
-/// A client supplied to `OAuthClient::new` carries the refresh, standing in
-/// for one built with the caller's own roots, proxy or identity. `Private`
-/// keeps this loopback endpoint off the unproxied loopback route `Configured`
-/// would take.
-#[tokio::test]
-async fn a_supplied_client_carries_its_refreshes() {
-    let server = TokenServer::start(&[]).await;
-    let dir = tempfile::tempdir().unwrap();
-    let mut supplied = supplied_client(dir.path(), &server);
-    supplied.destination = DestinationPolicy::Private;
-    hold(&supplied, &token("a1", Some("r1"), true));
-
-    headless(&supplied).await.expect("refreshed");
-    assert_eq!(*server.agents.lock().unwrap(), [SUPPLIED_AGENT]);
-}
-
-/// A token file that exists but cannot be read may still hold the spent
-/// token: spending does not count it retired, so the in-flight marker stays.
-#[tokio::test]
-async fn an_unreadable_token_file_is_not_counted_retired() {
-    let server = TokenServer::start(&[]).await;
-    let dir = tempfile::tempdir().unwrap();
-    let client = client(dir.path(), &server);
-    let key = client.credential_key().unwrap();
-    let path = client.storage.token_path(&key, RESOURCE);
-    std::fs::create_dir_all(&path).unwrap();
-    let flight = super::refresh_flight::Flight::of(&path);
-
-    let retired =
-        super::refresh_flight::spend(&flight, &client.storage, (&key, RESOURCE), BACKEND, "r1");
-    assert!(!retired, "an unreadable record was counted retired");
-}
+#[path = "refresh_flight_sharing_tests.rs"]
+mod sharing;
