@@ -356,6 +356,15 @@ impl ChainWatch {
         }
     }
 
+    /// Keep only the recorded paths the ledger holds. While the chain cannot
+    /// be resolved every event passes and nothing drains the record, so this
+    /// bounds it by the ledger's size; the paths kept are the only ones
+    /// [`ChainWatch::forget`] acts on.
+    fn keep_gone_watched(&self) {
+        let ledger = self.ledger.lock();
+        self.names.gone.lock().retain(|path| ledger.contains(path));
+    }
+
     /// The ledger: the directories actually watched.
     pub(super) fn watched_now(&self) -> BTreeSet<PathBuf> {
         self.ledger.lock().clone()
@@ -448,6 +457,7 @@ pub(super) fn spawn_rewatch_task(
                 Err(e) => {
                     // Without a chain nothing says which events matter.
                     chain.names.set(None);
+                    chain.keep_gone_watched();
                     if !broken {
                         warn!(error = %e, "Config watcher: cannot resolve the config's link chain; keeping the last watches");
                     }
