@@ -215,3 +215,20 @@ fn a_change_beyond_one_backend_takes_the_full_rewrite() {
         mcp_gateway::config::Config::load_literal(Some(&path)).expect("the rewrite loads");
     }
 }
+
+/// MIK-7968 T9 guard: the CLI keeps today's best effort. `add` on a
+/// flow-style file it cannot splice still writes the backend (a full
+/// rewrite); only the web UI refuses a write that would drop comments.
+#[test]
+fn cli_add_on_a_flow_style_file_still_rewrites() {
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &path,
+        "# top\nbackends: {a: {command: x}}\n",
+    )
+    .expect("write");
+    gateway(home.path(), &["add", "--command", "echo hi", "local"]);
+    let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
+    assert!(config.backends.contains_key("a") && config.backends.contains_key("local"));
+}

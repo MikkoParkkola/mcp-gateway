@@ -298,7 +298,10 @@ src/oauth/client/destination.rs	http_client	1	standard	borderline	http_client	In
 src/oauth/client/destination.rs	client_for	1	critical	b,d	OAuthClient::client_for	Refuses a cleartext http:// OAuth endpoint off this machine; uses the unproxied client only for configured loopback.
 src/oauth/client/destination.rs	finish	1	critical	b,d	finish	Installs the OAuth redirect policy: refuses a cleartext loopback hop through the environment proxy and an over-long chain.
 src/oauth/client/destination.rs	loopback_client	1	standard	borderline	loopback_client	Builds the unproxied loopback OAuth client; a wrong builder would skip the redirect policy.
-src/oauth/client/grants.rs	authorize	1	critical	b	OAuthClient::authorize	Issuer check enforced before redeeming the authorization code
+src/oauth/client/grants.rs	authorize_until	1	critical	b	OAuthClient::authorize_until	Issuer check enforced before redeeming the authorization code
+src/oauth/client/grants.rs	authorize	1	standard	borderline	OAuthClient::authorize	Forwards to authorize_until; a mistake would skip its issuer check
+src/oauth/client/grants.rs	authorize_shared	1	standard	borderline	OAuthClient::authorize_shared	Refuses a non-interactive start and a refused login gate before any login opens
+src/oauth/client/grants.rs	adopt_stored_login	1	critical	c	OAuthClient::adopt_stored_login	Accepts a stored credential only when it is unexpired and stored under this client's own key and resource
 src/oauth/client/grants.rs	build_authorize_url	1	standard	borderline	OAuthClient::build_authorize_url	Sets state, S256 challenge and resource
 src/oauth/client/mod.rs	credential_key	1	critical	c	OAuthClient::credential_key	Credentials keyed by issuer; refuses before the issuer is known
 src/oauth/client/mod.rs	drop_credentials_from_other_issuer	1	critical	c	OAuthClient::drop_credentials_from_other_issuer	Drops token and registered client_id when the issuer changes
