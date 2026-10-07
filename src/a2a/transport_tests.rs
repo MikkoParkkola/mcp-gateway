@@ -126,3 +126,32 @@ async fn an_unknown_tool_or_a_missing_message_is_invalid_params() {
         assert_eq!(response.error.map(|e| e.code), Some(-32602), "{params}");
     }
 }
+
+/// MIK-8063 A2A.3: under the hardened policy a literal private `a2a_url` is
+/// refused at start, before anything connects (no server listens there).
+#[tokio::test]
+async fn a_private_literal_a2a_url_is_refused_under_the_hardened_policy() {
+    for url in [
+        "http://169.254.169.254",
+        "http://10.0.0.7:8080",
+        "http://127.0.0.1:9",
+    ] {
+        let refused = A2aTransport::start(
+            url,
+            None,
+            &HashMap::new(),
+            Duration::from_secs(5),
+            DestinationPolicy::Public,
+        )
+        .await;
+        let Err(error) = refused else {
+            panic!("{url} must be refused under the hardened policy");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains(crate::security::ssrf::SSRF_BLOCKED),
+            "{url}: {error}"
+        );
+    }
+}
