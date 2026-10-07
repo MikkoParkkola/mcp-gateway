@@ -161,6 +161,8 @@ impl MetaMcp {
         let verified_identity = caller.verified_identity;
         let provenance = caller.provenance();
         let caller_proof = CallerProof::new(verified_identity, provenance);
+        // The meta-tools this caller can see, for its recovery hints (MIK-7974).
+        let surface = self.hint_surface(caller);
 
         // Capture once, before any authorization input is read. A bump after
         // this strands the insert under the epoch this call was authorized
@@ -500,14 +502,14 @@ impl MetaMcp {
         }
         let mut answered = mcp_backend && dispatch_result.is_ok();
         let mut result = match dispatch_result {
-            Ok(value) => attach_tool_error_recovery(value, tool, server, self.hint_surface()),
+            Ok(value) => attach_tool_error_recovery(value, tool, server, surface),
             Err(e) => {
                 self.settle_dispatch_error(
                     e,
                     caller_credential.managed.as_ref(),
-                    &mut idem_reservation,
+                    (&mut idem_reservation, caller.execution),
                     verified_identity,
-                    (server, tool),
+                    (server, tool, surface),
                 )
                 .await?
             }

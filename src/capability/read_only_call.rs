@@ -23,8 +23,22 @@ pub(crate) async fn read_only_call_as<F: std::future::Future>(
     READ_ONLY_CALL.scope(credential_free, call).await
 }
 
-/// Inside a read-only call, refuse `capability` unless it is read-only and,
-/// when the call expects it, needs no credential.
+/// Whether `capability` has a provider and every one, fallbacks included, is
+/// REST: the only kind a read-only call runs (MIK-7720 U1). A webhook-only
+/// capability has none, so nothing to poll. Reads `service` itself, since
+/// `protocol_config` maps an unknown service to REST.
+pub(crate) fn served_over_rest(capability: &CapabilityDefinition) -> bool {
+    let providers = &capability.providers;
+    !providers.is_empty()
+        && providers
+            .named
+            .values()
+            .chain(&providers.fallback)
+            .all(|p| p.service == "rest")
+}
+
+/// Inside a read-only call, refuse `capability` unless it is read-only,
+/// served over REST and, when the call expects it, needs no credential.
 pub(super) fn refuse_unless_read_only(capability: &CapabilityDefinition) -> crate::Result<()> {
     let Ok(credential_free) = READ_ONLY_CALL.try_with(|free| *free) else {
         return Ok(());
@@ -32,6 +46,8 @@ pub(super) fn refuse_unless_read_only(capability: &CapabilityDefinition) -> crat
     let auth = &capability.auth;
     let refusal = if !capability.metadata.read_only {
         "is not read-only"
+    } else if !served_over_rest(capability) {
+        "is not served over REST"
     } else if credential_free && (auth.account.is_some() || auth.required || !auth.key.is_empty()) {
         "needs a credential"
     } else {

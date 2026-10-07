@@ -108,6 +108,8 @@ mod settlement;
 mod settlement_record;
 mod signing_joint;
 mod stored_result_policy;
+/// MIK-7974: a task keeps its request's meta-tool surface for its hints.
+mod surface_hints;
 #[cfg(feature = "metrics")]
 mod unkeyed_task;
 /// I5's before-the-wire half: the recovery descriptor's capacity, decided
