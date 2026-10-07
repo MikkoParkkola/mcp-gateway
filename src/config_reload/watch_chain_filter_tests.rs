@@ -140,17 +140,17 @@ fn a_broken_chain_keeps_only_watched_paths_on_record() {
     let watcher =
         notify::recommended_watcher(|_: notify::Result<notify::Event>| {}).expect("watcher");
     let chain = super::ChainWatch::with_names(watcher, std::sync::Arc::default());
-    let watched = PathBuf::from("/c/conf");
-    chain.ledger.lock().insert(watched.clone());
+    let on_ledger = PathBuf::from("/c/conf");
+    chain.ledger.lock().insert(on_ledger.clone());
     let removed = Event::new(EventKind::Remove(RemoveKind::Folder))
-        .add_path(watched.clone())
+        .add_path(on_ledger.clone())
         .add_path(PathBuf::from("/c/old.log"));
     let renamed = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
         .add_path(PathBuf::from("/c/app.log"));
     chain.names.note_gone(&removed);
     chain.names.note_gone(&renamed);
     chain.keep_gone_watched();
-    assert_eq!(chain.names.take_gone(), BTreeSet::from([watched]));
+    assert_eq!(chain.names.take_gone(), BTreeSet::from([on_ledger]));
 }
 
 // Linux-only (W-L9): the real-watcher rows run on inotify.
