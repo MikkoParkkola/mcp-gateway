@@ -717,6 +717,47 @@ mod tests {
         assert_eq!(over, None);
     }
 
+    /// A streamed frame over `FRAME_CAP` ends the listen: nothing after it is
+    /// read, not even this listen's own end.
+    #[tokio::test]
+    async fn a_streamed_frame_over_the_cap_ends_the_listen() {
+        let url = peer(|id| {
+            let big = json!({"jsonrpc": "2.0", "method": "notifications/message",
+                "params": {"data": "x".repeat(FRAME_CAP)}});
+            let end = json!({"jsonrpc": "2.0", "id": id, "result": {"resultType": "complete"}});
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n\
+                 data: {big}\n\ndata: {end}\n\n"
+            )
+        })
+        .await;
+        let mut stream = transport(&url).listen(req()).await.expect("opened");
+        let note = tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
+            .await
+            .expect("the stream ends");
+        assert_eq!(note, None);
+    }
+
+    /// A streamed answer to another request is skipped, not the listen's end:
+    /// the listen's own end after it still arrives.
+    #[tokio::test]
+    async fn a_streamed_answer_for_another_id_is_skipped() {
+        let url = peer(|id| {
+            let other = json!({"jsonrpc": "2.0", "id": "another-listen", "result": {}});
+            let end = json!({"jsonrpc": "2.0", "id": id, "result": {"resultType": "complete"}});
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n\
+                 data: {other}\n\ndata: {end}\n\n"
+            )
+        })
+        .await;
+        let mut stream = transport(&url).listen(req()).await.expect("opened");
+        let note = tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
+            .await
+            .expect("the stream ends");
+        assert_eq!(note, Some(UpstreamNote::End));
+    }
+
     /// A single answer carrying another request's id is not this listen's.
     #[tokio::test]
     async fn a_json_answer_for_another_id_is_not_classified() {

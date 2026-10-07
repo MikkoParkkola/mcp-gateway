@@ -306,7 +306,7 @@ src/identity_propagation/token_exchange.rs	exchange_cache_key	1	standard	borderl
 src/identity_propagation/token_exchange.rs	mint_client_assertion	1	standard	borderline	TokenExchangeStrategy::mint_client_assertion	RFC 7523 client authentication assertion
 src/oauth/callback.rs	handle_callback	1	critical	b	handle_callback	OAuth state (CSRF) check; refuses a mismatch or a missing code
 src/oauth/callback.rs	start_callback_server	1	standard	borderline	start_callback_server	Binds loopback only; holds expected_state
-src/oauth/callback.rs	loopback_literal	1	standard	borderline	loopback_literal	Keeps a configured callback host to a loopback literal; anything else listens on 127.0.0.1
+src/oauth/callback.rs	loopback_literal	1	critical	d	loopback_literal	Refuses a configured callback host that is not a loopback literal, so the listener never binds off loopback
 src/oauth/client/destination.rs	check_advertised_endpoints	1	critical	d	OAuthClient::check_advertised_endpoints	Refuses discovered token/registration endpoints the policy denies
 src/oauth/client/destination.rs	check_destination	1	critical	d	OAuthClient::check_destination	Refuses OAuth URLs whose literal host the destination policy denies
 src/oauth/client/destination.rs	hop	1	critical	d	hop	Redirect hop SSRF literal check plus hop budget
@@ -339,12 +339,12 @@ src/oauth/client/refresh_flight.rs	send	1	critical	d	Exchange::send	Classifies t
 src/oauth/client/refresh_flight.rs	refused_target	1	critical	d	refused_target	Refuses a redirect target by literal or by what its name resolves to (SSRF)
 src/oauth/client/refresh_flight.rs	retire_unsettled	1	standard	borderline	retire_unsettled	Spends a token whose exchange never settled before a restart
 src/oauth/client/refresh_flight.rs	redirect_error	1	standard	borderline	Exchange::redirect_error	Keeps a refused redirect target typed as an SSRF refusal
-src/oauth/client/refresh_flight.rs	names_an_oauth_error	1	critical	d	names_an_oauth_error	Decides an OAuth refusal (token not consumed, kept for reuse) from an unsettled outcome (token spent)
+src/oauth/client/refresh_flight.rs	names_an_oauth_error	1	critical	d	names_an_oauth_error	Decides an OAuth refusal from an unsettled outcome; a refusal keeps the token unless it came through a supplied client on a rotating server
 src/oauth/metadata.rs	discover	1	critical	b	AuthorizationServerMetadata::discover	RFC 8414 issuer must match the discovery base
 src/oauth/storage.rs	is_expired	1	critical	d	TokenInfo::is_expired	Expiry decision (60s buffer) gating reuse of a cached token
 src/oauth/storage.rs	create_secret_tmp	1	standard	borderline	TokenStorage::create_secret_tmp	Creates a private (0600/DACL) temp file via create_new_private
 src/oauth/storage.rs	save	1	standard	borderline	TokenStorage::save	Atomic 0600 write of the token file
-src/oauth/storage.rs	load_refresh_state	1	standard	borderline	TokenStorage::load_refresh_state	A refresh state that cannot be read reads as rotating, so an unsettled exchange retires the token
+src/oauth/storage.rs	load_refresh_state	1	critical	d	TokenStorage::load_refresh_state	A refresh state that cannot be read or parsed reads as rotating, so an unsettled exchange retires the token instead of resending it
 src/oauth/storage.rs	save_refresh_state	1	standard	borderline	TokenStorage::save_refresh_state	Atomic 0600 write of the refresh state
 src/oauth/token_file.rs	read	1	critical	d	read	Refuses a token file whose mode lets other users read it
 src/personal_accounts/commit.rs	claim_forced_refresh	1	critical	b	claim_forced_refresh	Checks the live grant version; one forced refresh per claim
@@ -522,7 +522,7 @@ src/transport/http/requests.rs	send_request_with_headers	1	critical	c	HttpTransp
 src/transport/http/mod.rs	with_destination	1	critical	d	HttpTransport::with_destination	Destination literal check and OAuth TLS check at construction.
 src/transport/http/sse_decoder.rs	oversized	1	critical	borderline	SseDecoder::oversized	Caps pending SSE bytes from a backend.
 src/transport/http/listen.rs	read_single	1	critical	d	read_single	Caps a listen's single JSON answer from an untrusted upstream at FRAME_CAP and classifies only a complete body
-src/transport/http/listen.rs	read_stream	1	standard	borderline	read_stream	Reads a listen stream under the frame cap
+src/transport/http/listen.rs	read_stream	1	critical	d	read_stream	Caps each listen frame from the untrusted backend and ends the stream on an oversized or unreadable frame
 src/transport/http/listen.rs	unsolicited_frame	1	standard	borderline	unsolicited_frame	Admits only the three notifications from a legacy stream
 src/transport/stdio.rs	capture_notification	1	critical	c	StdioTransport::capture_notification	Routes only notifications/progress to the call that registered the token; drops the rest
 src/transport/stdio.rs	configure_child_environment	1	critical	d	configure_child_environment	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics) and backend env, so no secret leakage
