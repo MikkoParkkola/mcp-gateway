@@ -289,6 +289,25 @@ def test_a_reference_definition_over_dashes_does_not_end_the_section():
     assert run(over_dashes("- One.\n\n[details]: /url"), "--check") == 1
 
 
+def test_a_known_issues_title_under_other_text_is_the_section():
+    text = "Intro line.\nKnown issues\n---\n\n- Fixed in 4.0.1.\n"
+    assert run(text, "--check") == 1
+
+
+def test_dashes_in_a_div_block_do_not_end_the_section():
+    text = "## Known issues\n\n<div>\n---\n</div>\n\n- Fixed in 4.0.1.\n"
+    assert run(text, "--check") == 1
+
+
+def test_an_escaped_bracket_reference_over_dashes_does_not_end_the_section():
+    assert run(over_dashes("- One.\n\n[error \\[E1\\]]: /e1"), "--check") == 1
+
+
+def test_an_indented_heading_in_a_list_fence_does_not_end_the_section():
+    text = "## Known issues\n\n- ```\n  ## Example\n  ```\n\n- Fixed in 4.0.1.\n"
+    assert run(text, "--check") == 1
+
+
 def test_every_tag_publish_path_runs_the_release_gate():
     # ci.yml's container publish and release.yml both fire on a v* tag; each
     # must refuse a non-empty section before it publishes.
