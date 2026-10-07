@@ -254,42 +254,25 @@ pub(super) async fn read_envelope(
         &method,
         params.as_ref(),
     );
-    // Hardened (GH1942.HARDEN.1 row 10), before the backend lookup: this
-    // route keeps no handshake state, so it serves no legacy request other
-    // than an `initialize` that declares elicitation.
-    if super::super::hardened_elicitation::is_hardened(state)
-        && let Some(refusal) = super::super::hardened_elicitation::direct_refusal(
-            state,
-            &caller.inbound_headers,
-            &json_request,
-            (&method, params.as_ref()),
-            id.as_ref(),
-            (&reading.0, reading.1),
-        )
-    {
+    // Before the backend lookup, under every posture (MIK-8040): what `/mcp`
+    // refuses is refused here with the same code and status, so an unknown
+    // backend gets the request refusal (no existence oracle). Under
+    // `hardened` (GH1942.HARDEN.1 row 10) this route, which keeps no
+    // handshake state, also serves no legacy request other than an
+    // `initialize` that declares elicitation.
+    if let Some(refusal) = super::super::hardened_elicitation::direct_refusal(
+        state,
+        &caller.inbound_headers,
+        &json_request,
+        (&method, params.as_ref()),
+        id.as_ref(),
+        (&reading.0, reading.1),
+    ) {
         return Err(refusal);
     }
-    // Shaped as modern only when `/mcp` would serve the request: outside
-    // `hardened` the checks above did not run, and a request they would
-    // refuse (rollback gate off, unserved revision) is relayed unshaped, as
-    // before MIK-8022, never answered in a revision the gateway turned off.
-    let era = match reading.0.era() {
-        crate::protocol::meta::Era::Modern
-            if super::super::handlers::request_checks::request_check_refusal(
-                state,
-                &caller.inbound_headers,
-                &reading.0,
-                reading.1,
-                &method,
-                params.as_ref(),
-                id.as_ref(),
-            )
-            .is_some() =>
-        {
-            crate::protocol::meta::Era::Legacy
-        }
-        era => era,
-    };
+    // Every modern request reaching here passed the `/mcp` checks above, so
+    // its reading is the era `/mcp` would answer in.
+    let era = reading.0.era();
     Ok(Envelope {
         json_request,
         attestation,
