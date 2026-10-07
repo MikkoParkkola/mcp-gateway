@@ -123,11 +123,22 @@ async fn a_token_revoked_after_its_copy_is_queued_is_written_nothing() {
     assert!(ended, "the revoked token's stream ends at the write");
 }
 
-/// A frame, then a bridged prompt, queued on one session; the token revoked
-/// when `revoke`; the stream then read. Returns the prompt's wait (`None`
-/// while it still waits), its receipt count, and what the stream wrote.
+/// The credential a session holds when its stream writes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Held {
+    /// A token that stays live.
+    Live,
+    /// A token revoked after the copies are queued.
+    Revoked,
+    /// No credential at all: a public caller.
+    Nothing,
+}
+
+/// A frame, then a bridged prompt, queued on one session holding `held`; the
+/// stream then read. Returns the prompt's wait (`None` while it still waits),
+/// its receipt count, and what the stream wrote.
 async fn prompt_behind_a_frame(
-    revoke: bool,
+    held: Held,
 ) -> (
     Option<std::result::Result<serde_json::Value, crate::gateway::input_bridge::DeliveryError>>,
     usize,
@@ -138,6 +149,11 @@ async fn prompt_behind_a_frame(
 
     let (key_server, credential, jti) = key_server_with_token().await;
     let multiplexer = multiplexer(&key_server);
+    let credential = if held == Held::Nothing {
+        None
+    } else {
+        credential
+    };
     let (id, mut body) = open(&multiplexer, credential).await;
     assert!(multiplexer.send_to_session(&id, note("rows://r11")));
     let proxy = crate::gateway::proxy::ProxyManager::new(Arc::clone(&multiplexer));
@@ -158,7 +174,7 @@ async fn prompt_behind_a_frame(
         futures::poll!(&mut asked).is_pending(),
         "the prompt is queued and waits"
     );
-    if revoke {
+    if held == Held::Revoked {
         assert!(key_server.store.revoke_by_jti(&jti).await);
     }
     let (seen, _) = read(&mut body, Duration::from_millis(500)).await;
@@ -174,7 +190,7 @@ async fn prompt_behind_a_frame(
 /// stream writes both and commits the receipt once.
 #[tokio::test]
 async fn a_prompt_queued_behind_a_dead_credential_fails_its_waiter_at_once() {
-    let (answer, commits, seen) = prompt_behind_a_frame(false).await;
+    let (answer, commits, seen) = prompt_behind_a_frame(Held::Live).await;
     assert!(
         seen.contains("rows://r11") && seen.contains("r11-prompt"),
         "{seen}"
@@ -185,7 +201,7 @@ async fn a_prompt_queued_behind_a_dead_credential_fails_its_waiter_at_once() {
         "a written prompt waits for its reply: {answer:?}"
     );
 
-    let (answer, commits, seen) = prompt_behind_a_frame(true).await;
+    let (answer, commits, seen) = prompt_behind_a_frame(Held::Revoked).await;
     assert!(
         !seen.contains("rows://r11") && !seen.contains("r11-prompt"),
         "a revoked token was written to: {seen}"
@@ -202,26 +218,25 @@ async fn a_prompt_queued_behind_a_dead_credential_fails_its_waiter_at_once() {
 
 /// Seat finding on the write-time check: a session that presented no
 /// credential (a public `/mcp` caller under gateway authentication) has nothing
-/// to re-validate, so its own prompts are still written to it.
+/// to re-validate, so a real bridged prompt is still written to it and its
+/// receipt commits once.
 #[tokio::test]
 async fn a_credentialless_public_session_still_receives_its_prompts() {
-    let (key_server, _, _) = key_server_with_token().await;
-    let multiplexer = multiplexer(&key_server);
-    let (id, mut body) = open(&multiplexer, None).await;
-
-    assert!(multiplexer.send_to_session(&id, note("rows://public")));
-    let (seen, ended) = read(&mut body, Duration::from_millis(500)).await;
+    let (answer, commits, seen) = prompt_behind_a_frame(Held::Nothing).await;
     assert!(
-        seen.contains("rows://public"),
-        "the prompt was not written: {seen}"
+        seen.contains("rows://r11") && seen.contains("r11-prompt"),
+        "the public session was not written to: {seen}"
     );
-    assert!(!ended, "the public session's stream stays open");
+    assert_eq!(commits, 1, "a written prompt commits its receipt once");
+    assert!(
+        answer.is_none(),
+        "a written prompt waits for its reply: {answer:?}"
+    );
 }
 
-/// Seat finding: the `lagged` notice is a frame like any other, so a stream
-/// whose token was revoked while it fell behind gets no notice and ends.
-#[tokio::test]
-async fn a_lagging_stream_whose_token_died_gets_no_lagged_notice() {
+/// A session with a one-slot buffer, holding `held`, sent three copies so it
+/// lags; returns what its stream writes and whether it ended.
+async fn lagging_stream(held: Held) -> (String, bool) {
     let (key_server, credential, jti) = key_server_with_token().await;
     let multiplexer = Arc::new(NotificationMultiplexer::new(
         Arc::new(BackendRegistry::new()),
@@ -231,13 +246,37 @@ async fn a_lagging_stream_whose_token_died_gets_no_lagged_notice() {
         },
     ));
     multiplexer.set_authorizer(authorizer(Arc::clone(&key_server)));
+    let credential = if held == Held::Nothing {
+        None
+    } else {
+        credential
+    };
     let (id, mut body) = open(&multiplexer, credential).await;
     for uri in ["rows://lag-1", "rows://lag-2", "rows://lag-3"] {
         assert!(multiplexer.send_to_session(&id, note(uri)));
     }
-    assert!(key_server.store.revoke_by_jti(&jti).await);
+    if held == Held::Revoked {
+        assert!(key_server.store.revoke_by_jti(&jti).await);
+    }
+    read(&mut body, Duration::from_secs(2)).await
+}
 
-    let (seen, ended) = read(&mut body, Duration::from_secs(2)).await;
+/// Seat finding: the `lagged` notice is a frame like any other, so a stream
+/// whose token was revoked while it fell behind gets no notice and ends.
+/// Controls: a live token and a credentialless session both get the notice
+/// and the newest copy, and stay open.
+#[tokio::test]
+async fn a_lagging_stream_whose_token_died_gets_no_lagged_notice() {
+    for held in [Held::Live, Held::Nothing] {
+        let (seen, ended) = lagging_stream(held).await;
+        assert!(
+            seen.contains("lagged") && seen.contains("rows://lag-3"),
+            "a lagging live stream is told and keeps reading: {seen}"
+        );
+        assert!(!ended, "a lagging live stream stays open");
+    }
+
+    let (seen, ended) = lagging_stream(Held::Revoked).await;
     assert!(
         !seen.contains("lagged") && !seen.contains("rows://lag"),
         "a revoked token was written to: {seen}"
