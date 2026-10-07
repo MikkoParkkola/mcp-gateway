@@ -219,8 +219,8 @@ async fn a_capability_refresh_left_in_flight_is_not_resent() {
 }
 
 /// RESTSAVE.1: the token directory turns read-only while the server holds the
-/// rotated answer. The rotated token cannot be saved, and the refresh token it
-/// replaced is not sent again.
+/// rotated answer, so nothing about the answer can be stored. The refresh
+/// token it replaced is not sent again, even once storage is writable.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_capability_refresh_that_cannot_be_saved_is_not_replayed() {
@@ -245,8 +245,10 @@ async fn a_capability_refresh_that_cannot_be_saved_is_not_replayed() {
     mode(0o500).unwrap();
     server.release.notify_one();
     let _ = first.await.unwrap();
-    let _ = fetch(&executor(dir.path()), &server).await;
+    // Writable again: only the spent token, not a failing write, may stop
+    // the retry from sending it.
     mode(0o700).unwrap();
+    let _ = fetch(&executor(dir.path()), &server).await;
     assert_eq!(
         server.uses("r1"),
         1,
