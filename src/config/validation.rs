@@ -249,7 +249,8 @@ impl Config {
             // credential (MIK-6734 review).
             if !backend.transport.carries_identity_headers() {
                 return Err(Error::ConfigValidation(format!(
-                    "backend '{name}' identity_propagation requires an http or a2a transport; \
+                    "backend '{name}' identity_propagation requires an http transport (or an a2a \
+                     backend); \
                      stdio/websocket cannot carry the credential header (IDP.2)"
                 )));
             }
