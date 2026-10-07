@@ -367,6 +367,21 @@ def test_build_metadata_of_this_release_is_not_a_later_release():
     assert run(notes("\n- Seen in 4.0.0+build-5.1.\n"), "--check") == 0
 
 
+def test_a_hyphen_joined_later_release_fails_the_check():
+    assert run(notes("\n- Fixed in release-v4.0.1.\n"), "--check") == 1
+
+
+def test_a_title_line_that_says_more_is_section_content():
+    text = "## Known issues\n\n- Known issues remain; fixed in 4.0.1\n---\n"
+    assert run(text, "--check") == 1
+
+
+def test_an_annotated_setext_title_holds_its_section_at_a_tag():
+    head = "Known issues <!-- note -->\n---\n"
+    assert run(head, "--release", "--tag", "v4.0.0") == 0
+    assert run(head + "\n- Open.\n", "--release", "--tag", "v4.0.0") == 1
+
+
 def test_an_email_autolink_line_does_not_keep_the_section_open():
     text = "## Known issues\n\n<ops@example.com>\n\n## Performance\n\n4.0.1 later.\n"
     assert run(text, "--check") == 0
