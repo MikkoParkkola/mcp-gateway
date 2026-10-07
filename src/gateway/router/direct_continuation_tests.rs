@@ -349,3 +349,18 @@ async fn r12_a_budget_refusal_does_not_spend_the_continuation() {
         assert_eq!(dispatched(&fx), 2, "{backend}");
     }
 }
+
+/// R13: the redeem replaces only the state, so the answers the sanitizing arm
+/// cleaned are the answers the backend gets. Mutant: the client's raw answers
+/// written back over the sanitized ones.
+#[tokio::test]
+async fn r13_the_backend_gets_the_sanitized_answers() {
+    let fx = fixture(Answer::AskOnce, |_| {}).await;
+    let (_, asked) = call(&fx, "alpha", Some("alice"), json!({})).await;
+    let raw = json!({"k1": {"action": "accept", "content": {"account": "wo\u{7}rk"}}});
+    let retry = json!({"requestState": state_of(&asked), "inputResponses": raw});
+    let (_, done) = call(&fx, "alpha", Some("alice"), retry).await;
+    assert!(done.get("error").is_none(), "{done}");
+    let seen = fx.seen.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(seen["inputResponses"], answers(), "{seen}");
+}
