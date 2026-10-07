@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `TrustCard` projection helpers for live MCP tool descriptors.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -224,6 +224,8 @@ pub fn project_tool_descriptors_trust_cards(
 /// apart). Maps are `BTreeMap`s (no `preserve_order`), so equal maps serialise
 /// alike; `equal_maps_serialise_alike` pins that.
 fn same_tool(seen: &Tool, tool: &Tool) -> bool {
+    #[cfg(test)]
+    SAME_TOOL_CALLS.with(|n| n.set(n.get() + 1));
     let Tool {
         name,
         title,
@@ -280,6 +282,81 @@ fn held_or_default<'a, V: Default>(map: &'a mut HashMap<String, V>, key: &str) -
         .expect("present: inserted above when absent")
 }
 
+/// Whole lists already projected, held by their owner (MIK-7916): each entry
+/// is (server id, server name, list, projection), oldest first.
+///
+/// Owned per caller rather than process-wide, so one gateway instance's lists
+/// never evict another's, and a reload's new instance starts empty.
+#[derive(Default)]
+pub(crate) struct SharedProjections(Mutex<VecDeque<HeldList>>);
+
+type HeldList = (String, String, Arc<[Tool]>, Vec<Value>);
+
+impl SharedProjections {
+    /// Lists held. Past it the oldest is dropped, and a list no longer held
+    /// takes the per-tool path, which recomputes nothing for unchanged tools.
+    pub(crate) const CAPACITY: usize = 64;
+
+    fn find(
+        held: &VecDeque<HeldList>,
+        id: &str,
+        name: &str,
+        tools: &Arc<[Tool]>,
+    ) -> Option<Vec<Value>> {
+        held.iter()
+            .find(|(seen_id, seen_name, seen, _)| {
+                Arc::ptr_eq(seen, tools) && seen_id == id && seen_name == name
+            })
+            .map(|(.., projected)| projected.clone())
+    }
+
+    /// [`project_tool_descriptors_trust_cards`] for a list its caller shares:
+    /// the same `Arc` again is recognised by address, and its projection is
+    /// copied with no compare.
+    ///
+    /// The `Arc` is held with its projection, so its address cannot be reused
+    /// by another list while the entry stands. A list matches only under the
+    /// server identity it was projected for.
+    #[must_use]
+    pub(crate) fn project(
+        &self,
+        server_id: &str,
+        server_name: &str,
+        tools: &Arc<[Tool]>,
+    ) -> Vec<Value> {
+        let lock = || self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(projected) = Self::find(&lock(), server_id, server_name, tools) {
+            return projected;
+        }
+        // Projected outside the lock, so a cold list does not stall a held one.
+        let projected = project_tool_descriptors_trust_cards(server_id, server_name, tools);
+        let mut held = lock();
+        // A concurrent miss on the same list may have stored it meanwhile.
+        if Self::find(&held, server_id, server_name, tools).is_none() {
+            if held.len() == Self::CAPACITY {
+                held.pop_front();
+            }
+            held.push_back((
+                server_id.to_owned(),
+                server_name.to_owned(),
+                Arc::clone(tools),
+                projected.clone(),
+            ));
+        }
+        projected
+    }
+}
+
+/// Test-only: (cards computed, exact tool compares) on this thread, for tests
+/// outside this module that prove a repeat list recomputes nothing.
+#[cfg(test)]
+pub(crate) fn memo_counters() -> (usize, usize) {
+    (
+        CARD_COMPUTATIONS.with(std::cell::Cell::get),
+        SAME_TOOL_CALLS.with(std::cell::Cell::get),
+    )
+}
+
 /// Build a JSON-RPC `tools/list` result with projected `TrustCard` references.
 #[must_use]
 pub fn tools_list_result_with_trust_cards(tools: Vec<Value>) -> Value {
@@ -294,6 +371,8 @@ thread_local! {
     static CARD_COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Test-only: tools serialised into a descriptor on this thread.
     static TOOL_SERIALISATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Test-only: exact tool compares made on this thread.
+    static SAME_TOOL_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@ use super::{
 };
 use crate::config::AuthConfig;
 use crate::gateway::auth::{AuthenticatedClient, anonymous_client, principal_of};
+use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
 use crate::identity_grants::GrantSubject;
 use crate::mtls::CertIdentity;
 use crate::protocol::RequestId;
@@ -113,7 +114,13 @@ async fn parity(a: &Who, a_other_key: &Who, b: &Who) {
     };
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     crate::gateway::meta_mcp::invoke::relay::collecting(async {
-        stage_direct_delivery(&state, a.auth(&key), "alpha", "read", Some(&delivered));
+        stage_direct_delivery(
+            &state,
+            a.auth(&key),
+            ("alpha", "read"),
+            Some(&delivered),
+            GatewayStamps::Legacy,
+        );
         commit_direct_receipts(&state, true);
     })
     .await;
@@ -187,7 +194,7 @@ async fn a_signing_refusal_records_nothing() {
         a.auth(&key),
         target,
         &mut response,
-        Some(&Some(String::new())),
+        (Some(&Some(String::new())), GatewayStamps::Legacy),
     );
     assert!(
         response.result.is_none(),
@@ -214,6 +221,7 @@ async fn classes_noted_by_staging(state: &AppState) -> String {
                 who.auth(&key),
                 ("alpha", "resources/read"),
                 Some(&result),
+                GatewayStamps::Legacy,
             );
         })
         .await;
@@ -249,4 +257,112 @@ async fn staging_a_catalogue_result_classifies_only_when_relay_is_on() {
         !noted.contains("personal_data"),
         "classified with relay off: {noted}"
     );
+}
+
+/// `blocking_state` with `source` as a relay source as well.
+async fn blocking_state_for(source: &str) -> (Arc<AppState>, tempfile::TempDir) {
+    let (mut state, store) =
+        crate::gateway::router::tests::test_router_app_state_with_auth(&AuthConfig::default())
+            .await;
+    let config = FirewallConfig {
+        collusion: CollusionConfig {
+            action: CollusionAction::Block,
+            sources: vec!["alpha:read".to_string(), source.to_string()],
+            ..CollusionConfig::default()
+        },
+        ..FirewallConfig::default()
+    };
+    Arc::get_mut(&mut state).expect("state is unique").firewall =
+        Some(Arc::new(Firewall::from_config(config, None)));
+    (state, store)
+}
+
+fn subject(id: &str) -> Who {
+    Who::Subject(GrantSubject::new("oidc:https://idp", id, None))
+}
+
+/// A result whose only copy of `PROSE` is the gateway's `serverInfo` stamp.
+fn stamped_with_prose(body: Value) -> Value {
+    let mut result = body;
+    result["_meta"] = json!({ (crate::protocol::meta::KEY_SERVER_INFO): {"name": PROSE} });
+    result
+}
+
+/// MIK-8022: a modern direct answer carries the gateway's `serverInfo`; its
+/// receipt leaves that out, so text found only there is not the receiver's
+/// to relay. The legacy reading digests it, which shows the stamps decide.
+#[tokio::test]
+async fn a_direct_receipt_leaves_out_the_gateway_server_info() {
+    for (stamps, relays) in [
+        (GatewayStamps::Modern, false),
+        (GatewayStamps::Legacy, true),
+    ] {
+        let (state, _store) = blocking_state().await;
+        let key = shared_key();
+        let (a, b) = (subject("alice"), subject("bob"));
+        let delivered = stamped_with_prose(json!({"content": [{"type": "text", "text": "ok"}]}));
+        crate::gateway::meta_mcp::invoke::relay::collecting(async {
+            stage_direct_delivery(
+                &state,
+                a.auth(&key),
+                ("alpha", "read"),
+                Some(&delivered),
+                stamps,
+            );
+            commit_direct_receipts(&state, true);
+        })
+        .await;
+        assert_eq!(refused(&state, b.auth(&key)), relays, "{stamps:?}");
+    }
+}
+
+/// The strip removes the gateway's stamp only: the same text in the backend's
+/// own content is still the receiver's, so relaying it is still refused.
+#[tokio::test]
+async fn the_strip_keeps_backend_text() {
+    let (state, _store) = blocking_state().await;
+    let key = shared_key();
+    let (a, b) = (subject("alice"), subject("bob"));
+    let delivered = stamped_with_prose(json!({"content": [{"type": "text", "text": PROSE}]}));
+    crate::gateway::meta_mcp::invoke::relay::collecting(async {
+        stage_direct_delivery(
+            &state,
+            a.auth(&key),
+            ("alpha", "read"),
+            Some(&delivered),
+            GatewayStamps::Modern,
+        );
+        commit_direct_receipts(&state, true);
+    })
+    .await;
+    assert!(
+        refused(&state, b.auth(&key)),
+        "backend text was stripped too"
+    );
+}
+
+/// MIK-8022: the catalogue path takes the same stamps.
+#[tokio::test]
+async fn a_direct_catalogue_receipt_leaves_out_the_gateway_server_info() {
+    for (stamps, relays) in [
+        (GatewayStamps::Modern, false),
+        (GatewayStamps::Legacy, true),
+    ] {
+        let (state, _store) = blocking_state_for("alpha:resources/read").await;
+        let key = shared_key();
+        let (a, b) = (subject("alice"), subject("bob"));
+        let result = stamped_with_prose(json!({"contents": [{"uri": "res://x", "text": "ok"}]}));
+        crate::gateway::meta_mcp::invoke::relay::collecting(async {
+            stage_direct_catalogue(
+                &state,
+                a.auth(&key),
+                ("alpha", "resources/read"),
+                Some(&result),
+                stamps,
+            );
+            commit_direct_receipts(&state, true);
+        })
+        .await;
+        assert_eq!(refused(&state, b.auth(&key)), relays, "{stamps:?}");
+    }
 }

@@ -456,7 +456,10 @@ impl MetaMcp {
             tool: tool.to_owned(),
         };
         self.inspect_task_result(&[target], trace_id, &mut gated)?;
-        Ok(gated)
+        // Stamped last, as the live path is (MIK-6909): a peer receipt is
+        // replaced, or dropped with stamping off, never stored as ours, and no
+        // later rewrite touches the gateway's own receipt (MIK-8030).
+        Ok(self.stamp_recovered_result(gated, server, tool, api_key_name))
     }
 
     /// The tests' shorthand: the screened error alone.
@@ -537,6 +540,10 @@ pub(crate) const RECOVERED_ERROR_WITHHELD: &str =
 #[cfg(test)]
 #[path = "upstream/error_policy_tests.rs"]
 mod error_policy_tests;
+
+#[cfg(test)]
+#[path = "upstream/provenance_tests.rs"]
+mod provenance_tests;
 
 #[cfg(test)]
 mod tests {
