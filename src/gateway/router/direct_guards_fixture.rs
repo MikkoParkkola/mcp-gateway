@@ -271,6 +271,15 @@ pub(crate) async fn fixture_relayed(answer: Answer) -> Fx {
     fx
 }
 
+/// [`fixture`] under the default posture with `server.modern_protocol: false`,
+/// the rollback gate that turns the 2026-07-28 revision off.
+pub(crate) async fn fixture_modern_off(answer: Answer) -> Fx {
+    MODERN_OFF.with(|m| m.set(true));
+    let fx = fixture_inner(answer, false, |meta| meta).await;
+    MODERN_OFF.with(|m| m.set(false));
+    fx
+}
+
 /// [`fixture_firewalled`] with sequence-anomaly blocking armed: `read` was only
 /// ever followed by `other`, so a second `read` in one session scores as a
 /// never-seen transition and is blocked.
@@ -286,6 +295,7 @@ pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
 // call, so the plain fixtures keep their signatures.
 thread_local! {
     static HARDENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(feature = "firewall")]
@@ -333,9 +343,16 @@ async fn fixture_inner(
     build: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fx {
     let auth = fixture_auth();
-    let (mut state, store) = if HARDENED.with(std::cell::Cell::get) {
+    let hardened = HARDENED.with(std::cell::Cell::get);
+    let modern_off = MODERN_OFF.with(std::cell::Cell::get);
+    let (mut state, store) = if hardened || modern_off {
         let mut config = crate::config::Config::default();
-        config.security.posture = crate::security::SecurityPosture::Hardened;
+        if hardened {
+            config.security.posture = crate::security::SecurityPosture::Hardened;
+        }
+        if modern_off {
+            config.server.modern_protocol = false;
+        }
         test_router_app_state_with_auth_and_config(&auth, config).await
     } else {
         test_router_app_state_with_auth(&auth).await

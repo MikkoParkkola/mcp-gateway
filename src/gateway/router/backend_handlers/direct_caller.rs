@@ -269,7 +269,27 @@ pub(super) async fn read_envelope(
     {
         return Err(refusal);
     }
-    let era = reading.0.era();
+    // Shaped as modern only when `/mcp` would serve the request: outside
+    // `hardened` the checks above did not run, and a request they would
+    // refuse (rollback gate off, unserved revision) is relayed unshaped, as
+    // before MIK-8022, never answered in a revision the gateway turned off.
+    let era = match reading.0.era() {
+        crate::protocol::meta::Era::Modern
+            if super::super::handlers::request_checks::request_check_refusal(
+                state,
+                &caller.inbound_headers,
+                &reading.0,
+                reading.1,
+                &method,
+                params.as_ref(),
+                id.as_ref(),
+            )
+            .is_some() =>
+        {
+            crate::protocol::meta::Era::Legacy
+        }
+        era => era,
+    };
     Ok(Envelope {
         json_request,
         attestation,

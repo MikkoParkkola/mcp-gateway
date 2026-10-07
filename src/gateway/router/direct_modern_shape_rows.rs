@@ -4,7 +4,7 @@
 
 use serde_json::{Value, json};
 
-use super::super::direct_guards_fixture::{Answer, fixture};
+use super::super::direct_guards_fixture::{Answer, fixture, fixture_modern_off};
 use super::{BACKENDS, CACHEABLE, call_params, legacy, missing, modern, params_for, post};
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 
@@ -63,6 +63,36 @@ async fn every_modern_cacheable_result_carries_the_cache_pair() {
         let gone = missing(&body, true);
         assert!(gone.is_empty(), "{method} missing {gone:?}: {body}");
         assert_eq!(body["result"]["cacheScope"], "private", "{method}: {body}");
+    }
+}
+
+/// The rollback gate: with `server.modern_protocol: false` the default
+/// posture relays a modern request as before, unshaped, since `/mcp` would
+/// refuse it rather than answer in that revision (codex P1 on #3327).
+#[tokio::test]
+async fn the_rollback_gate_leaves_a_modern_request_unshaped() {
+    let fx = fixture_modern_off(Answer::Ok).await;
+    let list = modern(&fx, "alpha", "tools/list", json!({})).await;
+    assert!(list["result"]["tools"].is_array(), "a listing: {list}");
+    for key in ["resultType", "ttlMs", "cacheScope"] {
+        assert!(
+            list["result"].get(key).is_none(),
+            "list gained {key}: {list}"
+        );
+    }
+    for backend in BACKENDS {
+        let call = modern(&fx, backend, "tools/call", call_params()).await;
+        assert!(call["result"]["content"].is_array(), "{backend}: {call}");
+        assert!(
+            call["result"].get("resultType").is_none(),
+            "{backend}: {call}"
+        );
+        assert!(
+            call["result"]["_meta"]
+                .get(crate::protocol::meta::KEY_SERVER_INFO)
+                .is_none(),
+            "{backend}: {call}"
+        );
     }
 }
 
