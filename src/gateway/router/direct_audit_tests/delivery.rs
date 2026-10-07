@@ -87,7 +87,8 @@ async fn a_refused_direct_notification_is_not_recorded_as_ok() {
         ..Setup::default()
     })
     .await;
-    let note = json!({"jsonrpc": "2.0", "method": "notifications/roots/list_changed", "params": {"requestId": 7}});
+    let note =
+        json!({"jsonrpc": "2.0", "method": "notifications/roots/list_changed", "params": {}});
     let (status, body) = post(&fx, "alpha", &note.to_string(), &Caller::Anonymous).await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
     let event = only_attempt(&fx);

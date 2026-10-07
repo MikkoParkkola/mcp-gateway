@@ -208,7 +208,7 @@ async fn notify(gw: &Gateway, subject: Option<&str>) -> (StatusCode, Vec<u8>) {
         .uri("/mcp/ledger")
         .header("content-type", "application/json")
         .body(axum::body::Body::from(
-            json!({ "jsonrpc": "2.0", "method": NOTE, "params": { "requestId": 7 } }).to_string(),
+            json!({ "jsonrpc": "2.0", "method": NOTE, "params": {} }).to_string(),
         ))
         .unwrap();
     if let Some(subject) = subject {
@@ -413,7 +413,7 @@ async fn a_refused_notification_leaves_the_client_breaker_untouched() {
         .header("content-type", "application/json")
         .header("authorization", "Bearer k-probe")
         .body(axum::body::Body::from(
-            json!({ "jsonrpc": "2.0", "method": NOTE, "params": { "requestId": 7 } }).to_string(),
+            json!({ "jsonrpc": "2.0", "method": NOTE, "params": {} }).to_string(),
         ))
         .unwrap();
     let response = gw.router.clone().oneshot(request).await.unwrap();

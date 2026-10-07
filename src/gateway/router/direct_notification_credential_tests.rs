@@ -260,7 +260,7 @@ async fn notify(gw: &Gateway, subject: Option<&str>, passthrough: Option<&str>) 
     }
     let mut request = builder
         .body(axum::body::Body::from(
-            json!({ "jsonrpc": "2.0", "method": NOTE, "params": { "requestId": 7 } }).to_string(),
+            json!({ "jsonrpc": "2.0", "method": NOTE, "params": {} }).to_string(),
         ))
         .unwrap();
     if let Some(subject) = subject {
