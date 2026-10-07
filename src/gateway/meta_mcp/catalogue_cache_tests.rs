@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::{CATALOGUE_BUILDS, MetaCatalogues, MetaListKey, build_catalogue};
+use super::{CATALOGUE_BUILDS, HELD_KEYS, MetaCatalogues, MetaListKey, build_catalogue};
 use crate::backend::BackendRegistry;
 use crate::config::WebhookConfig;
 use crate::gateway::WebhookRegistry;
@@ -92,6 +92,13 @@ fn one_input_changed() -> Vec<(&'static str, MetaListKey)> {
             },
         ),
         (
+            "counts.tools exact at the same number",
+            MetaListKey {
+                counts: (ToolTotal::Exact(40), 3),
+                ..b
+            },
+        ),
+        (
             "counts.servers",
             MetaListKey {
                 counts: (ToolTotal::AtLeast(40), 4),
@@ -147,7 +154,7 @@ fn past_the_bound_the_oldest_key_is_rebuilt_not_served_stale() {
     let exposure = MetaToolExposure::expose_all();
     let cache = MetaCatalogues::default();
     let first = cache.get_or_build(base(), &exposure);
-    for servers in 0..64 {
+    for servers in 0..HELD_KEYS {
         let key = MetaListKey {
             counts: (ToolTotal::AtLeast(1), servers),
             ..base()
@@ -241,28 +248,44 @@ fn a_repeat_list_builds_computes_and_compares_nothing() {
 
 #[test]
 fn a_list_no_longer_held_falls_back_to_the_exact_path() {
+    use crate::trust::SharedProjections;
+    // Its own server identity, so no other test's lists touch the per-tool
+    // cards this row reads.
+    let (id, name) = ("test:mik-7916-fallback", "fallback");
     let meta = with_webhooks();
-    let first = meta.handle_tools_list(RequestId::Number(1));
-    // Fill the held lists with 64 other lists of the same content, so the
-    // first one is dropped.
     let tools = meta.meta_tools_for(CallerStanding::Admin, meta.backend_counts());
-    for _ in 0..64 {
+    let store = SharedProjections::default();
+    let first = store.project(id, name, &tools);
+    // The same content in other lists, enough to drop the first one.
+    for _ in 0..SharedProjections::CAPACITY {
         let other: Arc<[crate::protocol::Tool]> = tools.to_vec().into();
-        let _ = crate::trust::project_tool_descriptors_trust_cards_shared(
-            "gateway:meta",
-            "mcp-gateway",
-            &other,
-        );
+        let _ = store.project(id, name, &other);
     }
     let (cards, compares) = crate::trust::memo_counters();
-    let again = meta.handle_tools_list(RequestId::Number(2));
+    let again = store.project(id, name, &tools);
     let (cards_after, compares_after) = crate::trust::memo_counters();
-    assert_eq!(tools_of(&again), tools_of(&first), "the same descriptors");
+    assert_eq!(again, first, "the same descriptors");
     assert_eq!(cards_after - cards, 0, "unchanged tools recompute no card");
     assert!(
         compares_after > compares,
         "the fallback is the exact per-tool compare"
     );
+}
+
+#[test]
+fn the_nonce_input_changes_what_is_listed() {
+    // The nonce row above proves a miss; this one proves the miss matters:
+    // with nonces required, `gateway_invoke` describes a different schema.
+    let exposure = MetaToolExposure::expose_all();
+    let plain = build_catalogue(base(), &exposure);
+    let with_nonce = build_catalogue(
+        MetaListKey {
+            nonce: true,
+            ..base()
+        },
+        &exposure,
+    );
+    assert_ne!(plain, with_nonce);
 }
 
 #[test]

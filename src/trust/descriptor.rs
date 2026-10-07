@@ -282,52 +282,69 @@ fn held_or_default<'a, V: Default>(map: &'a mut HashMap<String, V>, key: &str) -
         .expect("present: inserted above when absent")
 }
 
-/// Whole lists already projected, by the `Arc` they arrived in, oldest first:
-/// (server id, server name, list, projection).
+/// Whole lists already projected, held by their owner (MIK-7916): each entry
+/// is (server id, server name, list, projection), oldest first.
+///
+/// Owned per caller rather than process-wide, so one gateway instance's lists
+/// never evict another's, and a reload's new instance starts empty.
+#[derive(Default)]
+pub(crate) struct SharedProjections(Mutex<VecDeque<HeldList>>);
+
 type HeldList = (String, String, Arc<[Tool]>, Vec<Value>);
 
-/// Lists held. Past it the oldest is dropped, and a list no longer held takes
-/// the per-tool path, which recomputes nothing for unchanged tools.
-const HELD_LISTS: usize = 64;
+impl SharedProjections {
+    /// Lists held. Past it the oldest is dropped, and a list no longer held
+    /// takes the per-tool path, which recomputes nothing for unchanged tools.
+    pub(crate) const CAPACITY: usize = 64;
 
-fn held_lists() -> &'static Mutex<VecDeque<HeldList>> {
-    static HELD: OnceLock<Mutex<VecDeque<HeldList>>> = OnceLock::new();
-    HELD.get_or_init(Mutex::default)
-}
+    fn find(
+        held: &VecDeque<HeldList>,
+        id: &str,
+        name: &str,
+        tools: &Arc<[Tool]>,
+    ) -> Option<Vec<Value>> {
+        held.iter()
+            .find(|(seen_id, seen_name, seen, _)| {
+                Arc::ptr_eq(seen, tools) && seen_id == id && seen_name == name
+            })
+            .map(|(.., projected)| projected.clone())
+    }
 
-/// [`project_tool_descriptors_trust_cards`] for a list its caller shares: the
-/// same `Arc` again is recognised by address, and its projection is copied
-/// with no compare (MIK-7916).
-///
-/// The `Arc` is held with its projection, so its address cannot be reused by
-/// another list while the entry stands. A list matches only under the server
-/// identity it was projected for.
-#[must_use]
-pub fn project_tool_descriptors_trust_cards_shared(
-    server_id: &str,
-    server_name: &str,
-    tools: &Arc<[Tool]>,
-) -> Vec<Value> {
-    {
-        let held = held_lists().lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((.., projected)) = held.iter().find(|(id, name, seen, _)| {
-            Arc::ptr_eq(seen, tools) && id == server_id && name == server_name
-        }) {
-            return projected.clone();
+    /// [`project_tool_descriptors_trust_cards`] for a list its caller shares:
+    /// the same `Arc` again is recognised by address, and its projection is
+    /// copied with no compare.
+    ///
+    /// The `Arc` is held with its projection, so its address cannot be reused
+    /// by another list while the entry stands. A list matches only under the
+    /// server identity it was projected for.
+    #[must_use]
+    pub(crate) fn project(
+        &self,
+        server_id: &str,
+        server_name: &str,
+        tools: &Arc<[Tool]>,
+    ) -> Vec<Value> {
+        let lock = || self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(projected) = Self::find(&lock(), server_id, server_name, tools) {
+            return projected;
         }
+        // Projected outside the lock, so a cold list does not stall a held one.
+        let projected = project_tool_descriptors_trust_cards(server_id, server_name, tools);
+        let mut held = lock();
+        // A concurrent miss on the same list may have stored it meanwhile.
+        if Self::find(&held, server_id, server_name, tools).is_none() {
+            if held.len() == Self::CAPACITY {
+                held.pop_front();
+            }
+            held.push_back((
+                server_id.to_owned(),
+                server_name.to_owned(),
+                Arc::clone(tools),
+                projected.clone(),
+            ));
+        }
+        projected
     }
-    let projected = project_tool_descriptors_trust_cards(server_id, server_name, tools);
-    let mut held = held_lists().lock().unwrap_or_else(PoisonError::into_inner);
-    if held.len() == HELD_LISTS {
-        held.pop_front();
-    }
-    held.push_back((
-        server_id.to_owned(),
-        server_name.to_owned(),
-        Arc::clone(tools),
-        projected.clone(),
-    ));
-    projected
 }
 
 /// Test-only: (cards computed, exact tool compares) on this thread, for tests

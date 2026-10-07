@@ -87,16 +87,29 @@ impl MetaCatalogues {
         key: MetaListKey,
         exposure: &MetaToolExposure,
     ) -> Arc<[Tool]> {
-        let mut held = self.0.lock();
-        if let Some((_, tools)) = held.iter().find(|(seen, _)| *seen == key) {
+        let held = |key| {
+            self.0
+                .lock()
+                .iter()
+                .find(|(seen, _)| *seen == key)
+                .map(|(_, tools)| Arc::clone(tools))
+        };
+        if let Some(tools) = held(key) {
+            return tools;
+        }
+        // Built outside the lock, so a cold key does not stall a held one.
+        let built: Arc<[Tool]> = build_catalogue(key, exposure).into();
+        let mut held_now = self.0.lock();
+        // A concurrent miss on the same key may have stored it meanwhile;
+        // serve that one, so one key never maps to two lists.
+        if let Some((_, tools)) = held_now.iter().find(|(seen, _)| *seen == key) {
             return Arc::clone(tools);
         }
-        let tools: Arc<[Tool]> = build_catalogue(key, exposure).into();
-        if held.len() == HELD_KEYS {
-            held.pop_front();
+        if held_now.len() == HELD_KEYS {
+            held_now.pop_front();
         }
-        held.push_back((key, Arc::clone(&tools)));
-        tools
+        held_now.push_back((key, Arc::clone(&built)));
+        built
     }
 }
 
