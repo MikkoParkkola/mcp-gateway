@@ -50,6 +50,11 @@ HEADING = re.compile(r"^ {0,3}#{1,2}[ \t]+(.*)$")
 # What a title's inline Markdown adds besides its text: HTML comments and
 # tags, link targets and reference labels.
 INLINE_NOISE = re.compile(r"<!--.*?(?:-->|$)|<[^>]*>|\]\([^)]*\)|\]\[[^\]]*\]")
+# The same, for body text: only real tags go, so an autolink's URL, which
+# renders, is still scanned.
+HIDDEN_MARKUP = re.compile(
+    r"<!--.*?(?:-->|$)|</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?/?>|\]\([^)]*\)|\]\[[^\]]*\]"
+)
 TITLE = "knownissues"
 SECTION_END = re.compile(r"^#{1,2}(?:[ \t]|$)")
 # Setext: a paragraph line underlined with = (level 1) or - (level 2). A list
@@ -199,10 +204,12 @@ def is_prerelease_tag(tag):
 def later_releases(line):
     """The versions `line` renders that are later than this release.
 
-    Read from the rendered text: entities decoded, backslash escapes and
-    inline emphasis or code marks dropped, so 4\\.0\\.1 and 4.0.&#49; count.
+    Read from the rendered text: inline tags and link targets dropped before
+    entities are decoded (so &lt;b&gt; stays text), then backslash escapes,
+    emphasis, code and bracket marks dropped, so 4\\.0\\.1, 4.0.&#49;,
+    4.0.<em>1</em> and 4.0.[1](url) count.
     """
-    line = re.sub(r"[\\`*_]", "", html.unescape(line))
+    line = re.sub(r"[\\`*_\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", line)))
     return [
         match.group(0)
         for match in VERSION_TOKEN.finditer(line)

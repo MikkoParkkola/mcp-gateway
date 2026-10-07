@@ -382,6 +382,7 @@ def test_a_later_release_split_by_inline_html_or_link_markup_fails_the_check():
         "- Fixed in 4.0.<em>1</em>.\n",
         "- Fixed in 4.0.[1](https://example.com/next).\n",
         "- Fixed in [4.0.1][next].\n",
+        "- See <https://example.com/v4.0.1>.\n",
     ):
         assert run(notes("\n" + line), "--check") == 1, line
 
