@@ -377,6 +377,19 @@ def test_an_escaped_or_encoded_later_release_fails_the_check():
         assert run(notes("\n" + line), "--check") == 1, line
 
 
+def test_a_later_release_split_by_inline_html_or_link_markup_fails_the_check():
+    for line in (
+        "- Fixed in 4.0.<em>1</em>.\n",
+        "- Fixed in 4.0.[1](https://example.com/next).\n",
+        "- Fixed in [4.0.1][next].\n",
+    ):
+        assert run(notes("\n" + line), "--check") == 1, line
+
+
+def test_a_later_release_on_a_wordy_wrapped_titles_first_line_fails_the_check():
+    assert run("Known issues fixed in 4.0.1\ncontinued\n---\n", "--check") == 1
+
+
 def test_an_empty_wrapped_setext_title_passes_at_a_tag():
     assert run("Known\nissues\n---\n", "--release", "--tag", "v4.0.0") == 0
 
