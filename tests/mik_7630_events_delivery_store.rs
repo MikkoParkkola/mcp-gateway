@@ -360,12 +360,14 @@ async fn a_subscribe_whose_route_narrows_during_its_challenge_is_refused() {
     let root = tempfile::tempdir().expect("root");
     let rx = Receiver::start(root.path()).await;
     let gw = start(root.path(), &rx, json!({})).await;
-    rx.reply(receiver::Reply::SlowEcho(Duration::from_secs(12)));
+    // Under the 10 s challenge timeout, long enough for two reloads (the
+    // watcher polls every 2 s and debounces 500 ms).
+    rx.reply(receiver::Reply::SlowEcho(Duration::from_secs(9)));
     let file = root.path().join("caps/github.yaml");
     let original = std::fs::read_to_string(&file).expect("fixture capability");
     let params = delivery::params(&rx.url, &whsec(32), json!({"ref": "refs/heads/main"}));
     let narrow = async {
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
         std::fs::remove_file(&file).expect("remove the route");
         assert!(
             descriptor_until(&gw, Value::is_null).await,
@@ -380,9 +382,10 @@ async fn a_subscribe_whose_route_narrows_during_its_challenge_is_refused() {
         );
     };
     let (answer, ()) = tokio::join!(gw.rpc(Some(ALICE), "events/subscribe", params), narrow);
-    assert!(
-        answer["error"].is_object(),
-        "the commit is refused: {answer}"
+    assert_eq!(
+        (&answer["error"]["code"], &answer["error"]["data"]["field"]),
+        (&json!(-32602), &json!("arguments")),
+        "the commit is refused for its arguments: {answer}"
     );
     assert!(
         records(root.path(), "subs").is_empty(),

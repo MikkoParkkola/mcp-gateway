@@ -93,7 +93,12 @@ async fn a_wider_restore_after_a_partial_reload_applies() {
 async fn a_narrower_restore_of_a_type_nobody_subscribes_to_applies() {
     let (_root, store, d2, caps, registry, meta) = two_dirs().await;
     drop_d2(&d2, &caps, &meta).await;
-    std::fs::remove_file(store.path().join("subs").join("sub_beta.json")).expect("unsubscribe");
+    let hub = meta.events().expect("hub");
+    assert!(
+        hub.withdraw(&["webhook.beta.push.received".to_owned()]),
+        "unsubscribe beta"
+    );
+    assert!(!subscribed(store.path(), "beta"));
     restore_d2(&d2, &narrower("beta"), &caps, &meta).await;
     assert_eq!(routes(&registry), ["alpha.push", "beta.push"]);
 }
@@ -110,6 +115,14 @@ async fn a_refused_restore_leaves_the_retired_shape_in_place() {
     restore_d2(&d2, &capability("beta"), &caps, &meta).await;
     assert_eq!(routes(&registry), ["alpha.push", "beta.push"]);
     assert!(subscribed(store.path(), "beta"));
+    // A second cycle retires the shape again.
+    drop_d2(&d2, &caps, &meta).await;
+    restore_d2(&d2, &narrower("beta"), &caps, &meta).await;
+    assert_eq!(
+        routes(&registry),
+        ["alpha.push"],
+        "refused in the second cycle"
+    );
 }
 
 /// MIK-8038 `SHAPE.5` (A2): a reload removes beta but its withdraw fails
