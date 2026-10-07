@@ -131,6 +131,71 @@ async fn a_hinted_failure_is_receipted_without_its_hint() {
     );
 }
 
+/// MIK-7994 at the POST route: the continuation the gateway mints for an
+/// interim answer is the gateway's text. The receipt leaves it out, so it
+/// cannot push the backend's prompt out of the capped digest, and every
+/// backend member stays, a nested one named `requestState` included.
+#[tokio::test]
+async fn an_interim_answer_is_receipted_without_its_continuation() {
+    let prompt = crate::gateway::meta_mcp::invoke::receipt_test_support::distinct_prose(4800);
+    let ask = json!({
+        "resultType": "input_required",
+        "inputRequests": { "confirm": {
+            "method": "elicitation/create",
+            "params": {
+                "message": prompt,
+                "requestState": PROSE,
+                "requestedSchema": { "type": "object", "properties": {} }
+            }
+        }},
+        "requestState": "s".repeat(3000)
+    });
+    let mock = MockBackend::answering(Answer::Sequence(vec![ask, text_ok(), text_ok(), text_ok()]));
+    let (state, _store) = surfaced_state(&mock).await;
+
+    let read = post(
+        &state,
+        "key-a",
+        declaring_elicitation(sync_invoke(1, json!({}))),
+    )
+    .await;
+    assert_eq!(
+        read["result"]["resultType"], "input_required",
+        "base: the interim answer is delivered: {read}"
+    );
+    let envelope = read["result"]["requestState"].as_str().unwrap_or_default();
+    assert_ne!(
+        envelope,
+        "s".repeat(3000),
+        "base: the gateway minted its own: {read}"
+    );
+    // Half of RECORD_CAP (collusion_gate.rs:245): the envelope alone fills
+    // the digest's tail.
+    assert!(
+        envelope.len() > 3 * 1024,
+        "base: the envelope must outgrow the digest's tail: {}",
+        envelope.len()
+    );
+
+    let head: String = prompt.chars().take(400).collect();
+    let relayed = post(&state, "key-b", sync_invoke(2, json!({"text": head}))).await;
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "control: the prompt's head is receipted: {relayed}"
+    );
+    let tail: String = prompt.chars().skip(prompt.chars().count() - 400).collect();
+    let relayed = post(&state, "key-b", sync_invoke(3, json!({"text": tail}))).await;
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "the continuation pushed the prompt's tail out of its receipt: {relayed}"
+    );
+    let nested = post(&state, "key-b", sync_invoke(4, json!({"text": PROSE}))).await;
+    assert_eq!(
+        nested["error"]["code"], -32002,
+        "a backend member named requestState lost its receipt: {nested}"
+    );
+}
+
 /// The delivered hint's own text (not [`PROSE`]).
 fn hint_text(read: &Value) -> String {
     crate::gateway::meta_mcp::invoke::receipt_test_support::own_hint_text(&read["result"], PROSE)
