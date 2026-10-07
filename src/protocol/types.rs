@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Tool definition
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Tool {
     /// Tool name (1-128 chars, [a-zA-Z0-9_.-])
     pub name: String,
@@ -40,7 +40,7 @@ pub struct Tool {
 }
 
 /// Tool annotations (hints about tool behavior)
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ToolAnnotations {
     /// Human-readable title for the tool
     #[serde(skip_serializing_if = "Option::is_none")]
