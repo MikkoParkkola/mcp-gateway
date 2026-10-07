@@ -17,13 +17,13 @@ story, or no longer exists. `--summary` prints the counts. The check runs in CI 
 | Class | Meaning | What the user sees in 4.0 |
 |---|---|---|
 | KEEP | A normal user needs it to set up or run the gateway. | Documented in the user reference. |
-| AUTO | The gateway derives or tunes it. Each row names the derivation. | Gone from the reference. A set value is refused or ignored as the row says; `mcp-gateway upgrade` deletes it. |
-| INTERNAL | Crate-private, hidden, a fixed default, or dev/test-only. | Gone from the reference. A tuning key is refused at load naming its replacement and `upgrade` deletes it. A security bound is a hidden key: still read, so enforcement is unchanged, and `doctor` lists it when set. A command is hidden from `--help`; a lib item leaves docs.rs. |
+| AUTO | The gateway derives or tunes it. Each row names the derivation. | Gone from the reference. Unset, the gateway derives it; a set value stays honoured as a hidden key. |
+| INTERNAL | Crate-private, hidden, a fixed default, or dev/test-only. | Gone from the reference. A config key or variable becomes a hidden key: still read and validated, so nothing an operator set stops applying, and `doctor` lists it when set. A command is hidden from `--help`; a route stays mounted and leaves the reference; a lib item leaves docs.rs. |
 | REMOVE | Dead or redundant. | Refused with a message naming the replacement; `upgrade` deletes it. |
 
-For environment variables the same classes apply: an INTERNAL or AUTO variable read by the binary is
-ignored with one startup warning naming its replacement; a variable only a test script or example
-reads is documented as such and nothing changes in the binary.
+So in 4.0 no config key or variable that a 3.x user set stops applying unless it already had no effect
+(REMOVE). The surface shrinks where users meet it: the reference, `init`, the examples and `--help`.
+A variable only a test script or an example reads is documented as such; nothing changes in the binary.
 
 ## Who is a normal user
 
@@ -45,8 +45,8 @@ where the value differs from the default or is a credential.
 ## Rules the classification follows
 
 1. **Security controls keep their behaviour.** A control that is opt-in stays reachable, so its switch
-   and its policy lists stay KEEP. Its thresholds, windows and per-principal caps become hidden keys:
-   still honoured, out of the docs. Nothing an operator set stops applying, and no default changes.
+   and its policy lists stay KEEP. Its thresholds, windows and per-principal caps become hidden keys.
+   No default changes.
 2. **Security opt-outs stay explicit.** `server.allow_unauthenticated_network_bind`,
    `server.cleartext_http`, `backends.<name>.passthrough`, `allow_flagged_tools`,
    `allow_cleartext_credentials` and `input_schema_enforcement` are KEEP. Hiding an opt-out would turn a
@@ -54,8 +54,9 @@ where the value differs from the default or is a credential.
 3. **Operator intent is KEEP; tuning is not.** Endpoints, credentials, identities, allow and deny lists,
    budgets, feature switches and sandbox resource limits (`runtime.profiles.<name>.resources`,
    `restart`) carry information only the operator has. Retry, breaker, cache, buffer,
-   queue, TTL, poll and capacity numbers that bound no abuse do not: they become INTERNAL with today's
-   default as the value.
+   queue, TTL, poll and capacity numbers do not: they become INTERNAL (hidden keys). Retention and
+   eviction policies (audit rotation, dead-letter retention) are operator intent and stay KEEP.
+   "Budget" in this rule means a guard or cost budget, not store capacity.
 4. **AUTO only with a concrete derivation**, each one becomes P2 work with a red-then-green test. Where
    the gateway already derives the value (transport detection, protocol negotiation) AUTO is cheap;
    elsewhere the row says what to build.
@@ -78,30 +79,30 @@ Generated from the tables at the end; each row there carries the reason and migr
 |---|---|---|---|---|---|
 | `accounts` | 45 | `schema_version` | `adapters[].clock_skew_seconds`; `adapters[].max_lifetime_seconds`; `limits`; `limits.authority_bytes`; `limits.journeys_created_per_minute`; `limits.journeys_per_user`; `limits.journeys_total`; `limits.starts_per_minute_per_user`; `limits.store_entries` |  |  |
 | `agent_auth` | 10 |  |  |  |  |
-| `auth` | 15 |  | `client_circuit_breaker`; `client_circuit_breaker.enabled`; `client_circuit_breaker.failure_threshold`; `client_circuit_breaker.reset_timeout`; `client_circuit_breaker.success_threshold`; `dashboard_session`; `dashboard_session.absolute_timeout_secs`; `dashboard_session.idle_timeout_secs` |  | `api_keys[].key` |
+| `auth` | 17 |  | `client_circuit_breaker.failure_threshold`; `client_circuit_breaker.reset_timeout`; `client_circuit_breaker.success_threshold`; `dashboard_session`; `dashboard_session.absolute_timeout_secs`; `dashboard_session.idle_timeout_secs` |  | `api_keys[].key` |
 | `backends` | 45 | `<name>.oauth.token_refresh_buffer_secs`; `<name>.protocol_version`; `<name>.streamable_http` | `<name>.max_frame_bytes` |  | `<name>.circuit_breaker`; `<name>.idle_timeout` |
-| `cache` | 2 |  |  | `default_ttl`; `max_entries` |  |
-| `capabilities` | 12 |  | `files.downloads_quota_bytes` | `name` |  |
+| `cache` | 2 |  | `default_ttl`; `max_entries` |  |  |
+| `capabilities` | 12 |  | `files.downloads_quota_bytes`; `name` |  |  |
 | `code_mode` | 2 |  |  |  |  |
-| `control_plane` | 12 |  |  | `export.max_batch`; `export.poll_interval_secs` |  |
+| `control_plane` | 12 |  | `export.max_batch`; `export.poll_interval_secs` |  |  |
 | `cost_governance` | 12 |  |  |  | `currency` |
 | `default_routing_profile` | 1 |  |  |  |  |
 | `env_files` | 1 |  |  |  |  |
-| `error_budget` |  |  |  | `error_budget`; `capability`; `capability.cooldown`; `capability.min_samples`; `capability.threshold`; `capability.window_duration`; `capability.window_size`; `min_samples`; `threshold`; `window_duration`; `window_size` |  |
-| `events` | 12 |  | `max_outbox_per_subscription`; `max_subscriptions_per_principal`; `max_verified_tail_per_principal`; `rate_limit_per_subscription`; `rate_limit_per_subscription.burst`; `rate_limit_per_subscription.per_minute`; `schedule.max_timers_per_principal`; `verification_per_host_per_minute`; `watch.max_pollers_per_principal` | 23 |  |
-| `failsafe` |  |  | `rate_limit`; `rate_limit.burst_size`; `rate_limit.enabled`; `rate_limit.requests_per_second` | 16 |  |
+| `error_budget` |  |  | `error_budget`; `capability`; `capability.cooldown`; `capability.min_samples`; `capability.threshold`; `capability.window_duration`; `capability.window_size`; `min_samples`; `threshold`; `window_duration`; `window_size` |  |  |
+| `events` | 13 |  | 31 |  |  |
+| `failsafe` |  |  | 20 |  |  |
 | `idempotency` | 4 |  |  |  |  |
-| `key_server` | 21 | `oidc[].auto_discover` | `max_oidc_token_age_secs`; `max_tokens_per_identity` | `cleanup_interval_secs` |  |
+| `key_server` | 21 | `oidc[].auto_discover` | `cleanup_interval_secs`; `max_oidc_token_age_secs`; `max_tokens_per_identity` |  |  |
 | `marketplace` |  |  |  |  | `marketplace` |
-| `meta_mcp` | 8 | `prompts_resources_fetch_timeout` |  | `cache_ttl`; `projection_mode` | `cache_tools` |
+| `meta_mcp` | 8 | `prompts_resources_fetch_timeout` | `cache_ttl`; `projection_mode` |  | `cache_tools` |
 | `mtls` | 20 |  |  |  |  |
 | `playbooks` | 3 |  |  |  |  |
 | `routing_profiles` | 6 |  |  |  |  |
-| `runtime` | 23 | `availability`; `availability.docker`; `availability.kubernetes`; `availability.launchd`; `availability.local_process`; `availability.podman`; `availability.systemd` |  |  |  |
-| `security` | 117 |  | `firewall.anomaly_min_observations`; `firewall.anomaly_threshold`; `firewall.collusion.common_principals`; `firewall.collusion.min_matches`; `firewall.collusion.window_secs`; `firewall.memory_poisoning.max_entry_size_bytes`; `message_signing.replay_window` | `claim_capture`; `claim_capture.enabled`; `claim_capture.path` |  |
-| `server` | 10 |  | `max_body_size` | `modern_protocol`; `shutdown_timeout` | `request_timeout`; `ws_port` |
-| `streaming` | 3 |  |  | `buffer_size`; `keep_alive_interval`; `session_reaper_interval`; `session_ttl` |  |
-| `tasks` | 3 |  | `max_per_principal` | `default_ttl_ms`; `expiry_interval`; `logical_budget_bytes`; `max_record_bytes`; `max_records`; `max_workers`; `poll_interval_ms` |  |
+| `runtime` | 30 |  |  |  |  |
+| `security` | 117 |  | `claim_capture`; `claim_capture.enabled`; `claim_capture.path`; `firewall.anomaly_min_observations`; `firewall.anomaly_threshold`; `firewall.collusion.common_principals`; `firewall.collusion.min_matches`; `firewall.collusion.window_secs`; `firewall.memory_poisoning.max_entry_size_bytes`; `message_signing.replay_window` |  |  |
+| `server` | 10 |  | `max_body_size`; `modern_protocol`; `shutdown_timeout` |  | `request_timeout`; `ws_port` |
+| `streaming` | 3 |  | `buffer_size`; `keep_alive_interval`; `session_reaper_interval`; `session_ttl` |  |  |
+| `tasks` | 3 |  | `default_ttl_ms`; `expiry_interval`; `logical_budget_bytes`; `max_per_principal`; `max_record_bytes`; `max_records`; `max_workers`; `poll_interval_ms` |  |  |
 | `webhooks` | 4 |  | `rate_limit` |  |  |
 
 ### cli
@@ -133,14 +134,14 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `tls` | 20 |  |  |  |  |
 | `tool` | 13 | `mcp-gateway tool completions --capabilities`; `mcp-gateway tool inspect --capabilities`; `mcp-gateway tool invoke --capabilities`; `mcp-gateway tool list --capabilities` |  |  |  |
 | `trust` |  |  |  | 31 |  |
-| `upgrade` | 3 |  |  | `mcp-gateway upgrade --data-dir` |  |
+| `upgrade` | 4 |  |  |  |  |
 | `validate` | 5 | `mcp-gateway validate --no-color` |  |  |  |
 
 ### env
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
-| `env` | 18 | `MCP_GATEWAY_CAPABILITIES` |  | 13 |  |
+| `env` | 19 | `MCP_GATEWAY_CAPABILITIES` |  | `MCP_GATEWAY_FIREWALL_SKIP_KEYS`; `MCP_GATEWAY_KIND_CLUSTER`; `MCP_GATEWAY_KIND_KEEP`; `MCP_GATEWAY_KIND_NAMESPACE`; `MCP_GATEWAY_ROLLOUT_TIMEOUT`; `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE`; `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`; `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`; `MCP_GATEWAY_TEST_HOME_DIR`; `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED` |  |
 
 ### routes
 
@@ -283,8 +284,8 @@ backends:
 | `auth.api_keys[].name` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:81 |
 | `auth.api_keys[].rate_limit` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:84 |
 | `auth.bearer_token` | KEEP | `None` | who may call the gateway | - | src/config/features/auth.rs:22 |
-| `auth.client_circuit_breaker` | INTERNAL | `None` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/auth.rs:32 |
-| `auth.client_circuit_breaker.enabled` | INTERNAL | `true` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:52 |
+| `auth.client_circuit_breaker` | KEEP | `None` | opt-in per-client circuit breaker | - | src/config/features/auth.rs:32 |
+| `auth.client_circuit_breaker.enabled` | KEEP | `true` | opt-in per-client circuit breaker | - | src/config/features/failsafe.rs:52 |
 | `auth.client_circuit_breaker.failure_threshold` | INTERNAL | `DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:54 |
 | `auth.client_circuit_breaker.reset_timeout` | INTERNAL | `Duration::from_secs(DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_SE` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:59 |
 | `auth.client_circuit_breaker.success_threshold` | INTERNAL | `DEFAULT_CIRCUIT_BREAKER_SUCCESS_THRESHOLD` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:56 |
@@ -329,9 +330,9 @@ backends:
 | `backends.<name>.oauth.enabled` | KEEP | `true` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:141 |
 | `backends.<name>.oauth.scopes` | KEEP | — | how a user declares a backend and its credentials | - | src/config/backend_config.rs:144 |
 | `backends.<name>.oauth.shared_account` | KEEP | — | how a user declares a backend and its credentials | - | src/config/backend_config.rs:183 |
-| `backends.<name>.oauth.token_refresh_buffer_secs` | AUTO | `300` | refresh at a fixed fraction of the token lifetime | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/backend_config.rs:172 |
+| `backends.<name>.oauth.token_refresh_buffer_secs` | AUTO | `300` | refresh at a fixed fraction of the token lifetime | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:172 |
 | `backends.<name>.passthrough` | KEEP | `false` | per-backend security opt-out; stays explicit | - | src/config/backend_config.rs:65 |
-| `backends.<name>.protocol_version` | AUTO | `None` | negotiated in `initialize` | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/backend_config.rs:220 |
+| `backends.<name>.protocol_version` | AUTO | `None` | negotiated in `initialize` | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:220 |
 | `backends.<name>.runtime_profile` | KEEP | `None` | multi-user and provenance deployments (MULTI_USER.md) | - | src/config/backend_config.rs:86 |
 | `backends.<name>.secrets` | KEEP | `Vec::new()` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:54 |
 | `backends.<name>.secrets[].credential_type` | KEEP | `CredentialType::ApiKey` | how a user declares a backend and its credentials | - | src/secret_injection.rs:63 |
@@ -342,13 +343,13 @@ backends:
 | `backends.<name>.secrets[].value` | KEEP | — | how a user declares a backend and its credentials | - | src/secret_injection.rs:68 |
 | `backends.<name>.signature_chain` | KEEP | `ChainMode::Off` | multi-user and provenance deployments (MULTI_USER.md) | - | src/config/backend_config.rs:102 |
 | `backends.<name>.stop_when_idle_for` | KEEP | `None` | operator trades memory for cold starts per backend | - | src/config/backend_config.rs:35 |
-| `backends.<name>.streamable_http` | AUTO | `None` | already detected at connect (POST first, SSE on 4xx) | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/backend_config.rs:231 |
+| `backends.<name>.streamable_http` | AUTO | `None` | already detected at connect (POST first, SSE on 4xx) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:231 |
 | `backends.<name>.timeout` | KEEP | `Duration::from_secs(30)` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:43 |
 | `backends.<name>.ws_url` | KEEP | `see impl Default` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:246 |
 | `cache` | KEEP | `type default` | turn response caching off for side-effecting backends | - | src/config/mod.rs:109 |
-| `cache.default_ttl` | INTERNAL | `Duration::from_secs(DEFAULT_TTL_SECS)` | cache sizing with fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/cache.rs:24 |
+| `cache.default_ttl` | INTERNAL | `Duration::from_secs(DEFAULT_TTL_SECS)` | cache sizing with fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/cache.rs:24 |
 | `cache.enabled` | KEEP | `true` | turn response caching off for side-effecting backends | - | src/config/features/cache.rs:21 |
-| `cache.max_entries` | INTERNAL | `DEFAULT_MAX_ENTRIES` | cache sizing with fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/cache.rs:26 |
+| `cache.max_entries` | INTERNAL | `DEFAULT_MAX_ENTRIES` | cache sizing with fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/cache.rs:26 |
 | `capabilities` | KEEP | `type default` | where REST capabilities come from and what they may touch | - | src/config/mod.rs:107 |
 | `capabilities.directories` | KEEP | `vec!["capabilities".to_string()]` | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:20 |
 | `capabilities.egress_proxy` | KEEP | `None` | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:30 |
@@ -358,7 +359,7 @@ backends:
 | `capabilities.files.downloads_quota_bytes` | INTERNAL | `DEFAULT_DOWNLOADS_QUOTA_BYTES` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/capability.rs:59 |
 | `capabilities.files.projects` | KEEP | `None` | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:55 |
 | `capabilities.files.uploads` | KEEP | `None` | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:53 |
-| `capabilities.name` | INTERNAL | `"gateway".to_string()` | display name of the built-in capability backend; always `gateway` | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/capability.rs:18 |
+| `capabilities.name` | INTERNAL | `"gateway".to_string()` | display name of the built-in capability backend; always `gateway` | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/capability.rs:18 |
 | `capabilities.process_commands` | KEEP | `None` | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:39 |
 | `capabilities.process_commands[].args_prefix` | KEEP | — | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:110 |
 | `capabilities.process_commands[].command` | KEEP | — | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:107 |
@@ -368,8 +369,8 @@ backends:
 | `control_plane` | KEEP | `type default` | governance roles and SIEM export (control_plane.md) | - | src/config/mod.rs:141 |
 | `control_plane.export` | KEEP | `type default` | governance roles and SIEM export (control_plane.md) | - | src/control_plane/role_mapping.rs:32 |
 | `control_plane.export.enabled` | KEEP | `false` | governance roles and SIEM export (control_plane.md) | - | src/control_plane/export.rs:342 |
-| `control_plane.export.max_batch` | INTERNAL | `LogExporter::DEFAULT_MAX_BATCH` | exporter cadence; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/control_plane/export.rs:350 |
-| `control_plane.export.poll_interval_secs` | INTERNAL | `15` | exporter cadence; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/control_plane/export.rs:348 |
+| `control_plane.export.max_batch` | INTERNAL | `LogExporter::DEFAULT_MAX_BATCH` | exporter cadence; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/control_plane/export.rs:350 |
+| `control_plane.export.poll_interval_secs` | INTERNAL | `15` | exporter cadence; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/control_plane/export.rs:348 |
 | `control_plane.export.sink_path` | KEEP | `"~/.mcp-gateway/export/siem.ndjson".to_string()` | governance roles and SIEM export (control_plane.md) | - | src/control_plane/export.rs:346 |
 | `control_plane.role_mapping` | KEEP | `type default` | governance roles and SIEM export (control_plane.md) | - | src/control_plane/role_mapping.rs:30 |
 | `control_plane.role_mapping.rules` | KEEP | `type default` | governance roles and SIEM export (control_plane.md) | - | src/control_plane/role_mapping.rs:74 |
@@ -394,47 +395,47 @@ backends:
 | `cost_governance.tool_costs` | KEEP | `HashMap::new()` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:30 |
 | `default_routing_profile` | KEEP | `"default".to_string()` | per-session tool scoping | - | src/config/mod.rs:123 |
 | `env_files` | KEEP | `type default` | loads secrets from files the user owns | - | src/config/mod.rs:91 |
-| `error_budget` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/mod.rs:103 |
-| `error_budget.capability` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/error_budget.rs:39 |
-| `error_budget.capability.cooldown` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/error_budget.rs:57 |
-| `error_budget.capability.min_samples` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/error_budget.rs:54 |
-| `error_budget.capability.threshold` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/error_budget.rs:47 |
-| `error_budget.capability.window_duration` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/error_budget.rs:52 |
-| `error_budget.capability.window_size` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/error_budget.rs:49 |
-| `error_budget.min_samples` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/error_budget.rs:37 |
-| `error_budget.threshold` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/error_budget.rs:30 |
-| `error_budget.window_duration` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/error_budget.rs:35 |
-| `error_budget.window_size` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/error_budget.rs:32 |
+| `error_budget` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/mod.rs:103 |
+| `error_budget.capability` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:39 |
+| `error_budget.capability.cooldown` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:57 |
+| `error_budget.capability.min_samples` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:54 |
+| `error_budget.capability.threshold` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:47 |
+| `error_budget.capability.window_duration` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:52 |
+| `error_budget.capability.window_size` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:49 |
+| `error_budget.min_samples` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:37 |
+| `error_budget.threshold` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:30 |
+| `error_budget.window_duration` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:35 |
+| `error_budget.window_size` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:32 |
 | `events` | KEEP | `type default` | MCP Events opt-in and which sources publish (EVENTS.md) | - | src/config/mod.rs:150 |
 | `events.allow_no_expiry` | KEEP | `false` | MCP Events opt-in and which sources publish (EVENTS.md) | - | src/config/features/events.rs:121 |
 | `events.callback_allow_private` | KEEP | `Vec::new()` | SSRF exception list: operator intent | - | src/config/features/events.rs:160 |
 | `events.cost_per_delivery_usd` | KEEP | `0.0` | price per delivery is an operator input to cost governance | - | src/config/features/events.rs:146 |
-| `events.dead_letter_max_bytes` | INTERNAL | `256 * 1024 * 1024` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:156 |
-| `events.dead_letter_max_records` | INTERNAL | `10_000` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:154 |
-| `events.dead_letter_retention` | INTERNAL | `Duration::from_secs(7 * 24 * 3600)` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:152 |
-| `events.default_ttl` | INTERNAL | `Duration::from_secs(3600)` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:113 |
+| `events.dead_letter_max_bytes` | INTERNAL | `256 * 1024 * 1024` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:156 |
+| `events.dead_letter_max_records` | INTERNAL | `10_000` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:154 |
+| `events.dead_letter_retention` | KEEP | `Duration::from_secs(7 * 24 * 3600)` | record-retention policy, like audit rotation | - | src/config/features/events.rs:152 |
+| `events.default_ttl` | INTERNAL | `Duration::from_secs(3600)` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:113 |
 | `events.enabled` | KEEP | `false` | MCP Events opt-in and which sources publish (EVENTS.md) | - | src/config/features/events.rs:108 |
-| `events.max_in_flight` | INTERNAL | `32` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:129 |
-| `events.max_outbox` | INTERNAL | `50_000` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:131 |
+| `events.max_in_flight` | INTERNAL | `32` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:129 |
+| `events.max_outbox` | INTERNAL | `50_000` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:131 |
 | `events.max_outbox_per_subscription` | INTERNAL | `1000` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:133 |
-| `events.max_subscriptions` | INTERNAL | `10_000` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:123 |
+| `events.max_subscriptions` | INTERNAL | `10_000` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:123 |
 | `events.max_subscriptions_per_principal` | INTERNAL | `100` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:125 |
-| `events.max_ttl` | INTERNAL | `Duration::from_secs(24 * 3600)` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:119 |
-| `events.max_verified_tail` | INTERNAL | `10_000` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:137 |
+| `events.max_ttl` | INTERNAL | `Duration::from_secs(24 * 3600)` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:119 |
+| `events.max_verified_tail` | INTERNAL | `10_000` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:137 |
 | `events.max_verified_tail_per_principal` | INTERNAL | `100` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:139 |
-| `events.min_ttl` | INTERNAL | `Duration::from_secs(60)` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:116 |
-| `events.queue_depth` | INTERNAL | `1024` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:127 |
+| `events.min_ttl` | INTERNAL | `Duration::from_secs(60)` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:116 |
+| `events.queue_depth` | INTERNAL | `1024` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:127 |
 | `events.rate_limit_per_subscription` | INTERNAL | `EventsRateLimit::default()` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:144 |
 | `events.rate_limit_per_subscription.burst` | INTERNAL | `10` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:22 |
 | `events.rate_limit_per_subscription.per_minute` | INTERNAL | `60` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:20 |
-| `events.retry_base` | INTERNAL | `Duration::from_secs(10)` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:169 |
-| `events.retry_max_attempts` | INTERNAL | `5` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:171 |
-| `events.retry_window` | INTERNAL | `Duration::from_secs(15 * 60)` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:175 |
-| `events.schedule` | INTERNAL | `EventsScheduleConfig::default()` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:166 |
-| `events.schedule.max_timers` | INTERNAL | `1000` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:77 |
+| `events.retry_base` | INTERNAL | `Duration::from_secs(10)` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:169 |
+| `events.retry_max_attempts` | INTERNAL | `5` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:171 |
+| `events.retry_window` | INTERNAL | `Duration::from_secs(15 * 60)` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:175 |
+| `events.schedule` | INTERNAL | `EventsScheduleConfig::default()` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:166 |
+| `events.schedule.max_timers` | INTERNAL | `1000` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:77 |
 | `events.schedule.max_timers_per_principal` | INTERNAL | `20` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:79 |
-| `events.secret_rotation_grace` | INTERNAL | `Duration::from_secs(600)` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:149 |
-| `events.seen_max_per_route` | INTERNAL | `100_000` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:135 |
+| `events.secret_rotation_grace` | INTERNAL | `Duration::from_secs(600)` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:149 |
+| `events.seen_max_per_route` | INTERNAL | `100_000` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:135 |
 | `events.sources` | KEEP | `EventsSourcesConfig::default()` | MCP Events opt-in and which sources publish (EVENTS.md) | - | src/config/features/events.rs:162 |
 | `events.sources.backend_notifications` | KEEP | `true` | MCP Events opt-in and which sources publish (EVENTS.md) | - | src/config/features/events.rs:43 |
 | `events.sources.operational` | KEEP | `false` | MCP Events opt-in and which sources publish (EVENTS.md) | - | src/config/features/events.rs:41 |
@@ -442,40 +443,40 @@ backends:
 | `events.sources.schedule` | KEEP | `false` | MCP Events opt-in and which sources publish (EVENTS.md) | - | src/config/features/events.rs:50 |
 | `events.sources.task_settled` | KEEP | `true` | MCP Events opt-in and which sources publish (EVENTS.md) | - | src/config/features/events.rs:45 |
 | `events.store_dir` | KEEP | `"~/.mcp-gateway/events".to_string()` | state location; deployments put it on a chosen volume (the Helm chart puts the audit log on its own persistent volume) | - | src/config/features/events.rs:110 |
-| `events.suspend_min_attempts` | INTERNAL | `100` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:180 |
-| `events.suspend_window` | INTERNAL | `Duration::from_secs(60 * 60)` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:178 |
+| `events.suspend_min_attempts` | INTERNAL | `100` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:180 |
+| `events.suspend_window` | INTERNAL | `Duration::from_secs(60 * 60)` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:178 |
 | `events.verification_per_host_per_minute` | INTERNAL | `10` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:158 |
-| `events.verified_tail_ttl` | INTERNAL | `Duration::from_secs(24 * 3600)` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:142 |
-| `events.watch` | INTERNAL | `EventsWatchConfig::default()` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:164 |
-| `events.watch.max_pollers` | INTERNAL | `100` | delivery, retry, TTL and capacity limits; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/events.rs:58 |
+| `events.verified_tail_ttl` | INTERNAL | `Duration::from_secs(24 * 3600)` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:142 |
+| `events.watch` | INTERNAL | `EventsWatchConfig::default()` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:164 |
+| `events.watch.max_pollers` | INTERNAL | `100` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:58 |
 | `events.watch.max_pollers_per_principal` | INTERNAL | `10` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:60 |
-| `failsafe` | INTERNAL | `type default` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/mod.rs:101 |
-| `failsafe.circuit_breaker` | INTERNAL | `type default` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:38 |
-| `failsafe.circuit_breaker.enabled` | INTERNAL | `true` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:52 |
-| `failsafe.circuit_breaker.failure_threshold` | INTERNAL | `DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:54 |
-| `failsafe.circuit_breaker.reset_timeout` | INTERNAL | `Duration::from_secs(DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_SE` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:59 |
-| `failsafe.circuit_breaker.success_threshold` | INTERNAL | `DEFAULT_CIRCUIT_BREAKER_SUCCESS_THRESHOLD` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:56 |
-| `failsafe.health_check` | INTERNAL | `type default` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:44 |
-| `failsafe.health_check.enabled` | INTERNAL | `true` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:138 |
-| `failsafe.health_check.interval` | INTERNAL | `Duration::from_secs(DEFAULT_HEALTH_CHECK_INTERVAL_SECS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:141 |
-| `failsafe.health_check.timeout` | INTERNAL | `Duration::from_secs(DEFAULT_HEALTH_CHECK_TIMEOUT_SECS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:144 |
+| `failsafe` | INTERNAL | `type default` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/mod.rs:101 |
+| `failsafe.circuit_breaker` | INTERNAL | `type default` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:38 |
+| `failsafe.circuit_breaker.enabled` | INTERNAL | `true` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:52 |
+| `failsafe.circuit_breaker.failure_threshold` | INTERNAL | `DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:54 |
+| `failsafe.circuit_breaker.reset_timeout` | INTERNAL | `Duration::from_secs(DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_SE` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:59 |
+| `failsafe.circuit_breaker.success_threshold` | INTERNAL | `DEFAULT_CIRCUIT_BREAKER_SUCCESS_THRESHOLD` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:56 |
+| `failsafe.health_check` | INTERNAL | `type default` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:44 |
+| `failsafe.health_check.enabled` | INTERNAL | `true` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:138 |
+| `failsafe.health_check.interval` | INTERNAL | `Duration::from_secs(DEFAULT_HEALTH_CHECK_INTERVAL_SECS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:141 |
+| `failsafe.health_check.timeout` | INTERNAL | `Duration::from_secs(DEFAULT_HEALTH_CHECK_TIMEOUT_SECS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:144 |
 | `failsafe.rate_limit` | INTERNAL | `type default` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:42 |
 | `failsafe.rate_limit.burst_size` | INTERNAL | `DEFAULT_RATE_LIMIT_BURST` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:120 |
 | `failsafe.rate_limit.enabled` | INTERNAL | `true` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:116 |
 | `failsafe.rate_limit.requests_per_second` | INTERNAL | `DEFAULT_RATE_LIMIT_RPS` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:118 |
-| `failsafe.retry` | INTERNAL | `type default` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:40 |
-| `failsafe.retry.enabled` | INTERNAL | `true` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:78 |
-| `failsafe.retry.initial_backoff` | INTERNAL | `Duration::from_millis(DEFAULT_RETRY_INITIAL_BACKOFF_MS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:91 |
-| `failsafe.retry.max_attempts` | INTERNAL | `DEFAULT_RETRY_MAX_ATTEMPTS` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:88 |
-| `failsafe.retry.max_backoff` | INTERNAL | `Duration::from_secs(DEFAULT_RETRY_MAX_BACKOFF_SECS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:94 |
-| `failsafe.retry.multiplier` | INTERNAL | `DEFAULT_RETRY_MULTIPLIER` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/failsafe.rs:96 |
+| `failsafe.retry` | INTERNAL | `type default` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:40 |
+| `failsafe.retry.enabled` | INTERNAL | `true` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:78 |
+| `failsafe.retry.initial_backoff` | INTERNAL | `Duration::from_millis(DEFAULT_RETRY_INITIAL_BACKOFF_MS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:91 |
+| `failsafe.retry.max_attempts` | INTERNAL | `DEFAULT_RETRY_MAX_ATTEMPTS` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:88 |
+| `failsafe.retry.max_backoff` | INTERNAL | `Duration::from_secs(DEFAULT_RETRY_MAX_BACKOFF_SECS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:94 |
+| `failsafe.retry.multiplier` | INTERNAL | `DEFAULT_RETRY_MULTIPLIER` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:96 |
 | `idempotency` | KEEP | `type default` | operator declares read-only tools the admission gate may replay (ADR-012) | - | src/config/mod.rs:111 |
 | `idempotency.read_only_tools` | KEEP | `type default` | operator declares read-only tools the admission gate may replay (ADR-012) | - | src/config/features/idempotency.rs:12 |
 | `idempotency.read_only_tools[].server` | KEEP | — | operator declares read-only tools the admission gate may replay (ADR-012) | - | src/config/features/idempotency.rs:20 |
 | `idempotency.read_only_tools[].tool` | KEEP | — | operator declares read-only tools the admission gate may replay (ADR-012) | - | src/config/features/idempotency.rs:22 |
 | `key_server` | KEEP | `type default` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/mod.rs:132 |
 | `key_server.admin_token` | KEEP | `None` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:65 |
-| `key_server.cleanup_interval_secs` | INTERNAL | `DEFAULT_CLEANUP_INTERVAL_SECS` | token-store hygiene; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/key_server.rs:55 |
+| `key_server.cleanup_interval_secs` | INTERNAL | `DEFAULT_CLEANUP_INTERVAL_SECS` | token-store hygiene; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/key_server.rs:55 |
 | `key_server.delegated_bearer` | KEEP | `false` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:73 |
 | `key_server.enabled` | KEEP | `false` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:43 |
 | `key_server.max_oidc_token_age_secs` | INTERNAL | `DEFAULT_MAX_OIDC_TOKEN_AGE_SECS` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/key_server.rs:52 |
@@ -483,7 +484,7 @@ backends:
 | `key_server.oidc` | KEEP | `Vec::new()` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:58 |
 | `key_server.oidc[].allowed_domains` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:293 |
 | `key_server.oidc[].audiences` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:290 |
-| `key_server.oidc[].auto_discover` | AUTO | `true` | try OIDC discovery, then `{issuer}/.well-known/jwks.json`; `jwks_uri` still overrides both | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/key_server.rs:284 |
+| `key_server.oidc[].auto_discover` | AUTO | `true` | try OIDC discovery, then `{issuer}/.well-known/jwks.json`; `jwks_uri` still overrides both | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/key_server.rs:284 |
 | `key_server.oidc[].discovery_url` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:278 |
 | `key_server.oidc[].issuer` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:270 |
 | `key_server.oidc[].jwks_uri` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:274 |
@@ -501,12 +502,12 @@ backends:
 | `marketplace` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:53 |
 | `meta_mcp` | KEEP | `type default` | section | - | src/config/mod.rs:97 |
 | `meta_mcp.cache_tools` | REMOVE | `true` | read by nothing (MIK-8064); setting it has no effect | refused at load naming MIK-8064's fix; `upgrade` and `init` drop it | src/config/meta_mcp_config.rs:40 |
-| `meta_mcp.cache_ttl` | INTERNAL | `Duration::from_secs(300)` | catalogue freshness; fixed 300 s (the `init` value) | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/meta_mcp_config.rs:43 |
+| `meta_mcp.cache_ttl` | INTERNAL | `Duration::from_secs(300)` | catalogue freshness; fixed 300 s (the `init` value) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:43 |
 | `meta_mcp.enabled` | KEEP | `true` | the durable form of `--no-meta-mcp`; `false` runs as a plain proxy | - | src/config/meta_mcp_config.rs:38 |
 | `meta_mcp.expose_stats_tool` | KEEP | `false` | README documents it as the switch for `gateway_get_stats` | - | src/config/meta_mcp_config.rs:98 |
 | `meta_mcp.exposed_meta_tools` | KEEP | `Vec::new()` | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:90 |
-| `meta_mcp.projection_mode` | INTERNAL | `crate::projection::ProjectionMode::default()` | rollout switch for response projection; off unless a test sets it | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/meta_mcp_config.rs:75 |
-| `meta_mcp.prompts_resources_fetch_timeout` | AUTO | `Duration::from_secs(10)` | derived from the backend's own `timeout` | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/meta_mcp_config.rs:56 |
+| `meta_mcp.projection_mode` | INTERNAL | `crate::projection::ProjectionMode::default()` | rollout switch for response projection; off unless a test sets it | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:75 |
+| `meta_mcp.prompts_resources_fetch_timeout` | AUTO | `Duration::from_secs(10)` | derived from the backend's own `timeout` | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:56 |
 | `meta_mcp.surfaced_tools` | KEEP | `Vec::new()` | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:67 |
 | `meta_mcp.surfaced_tools[].server` | KEEP | — | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:28 |
 | `meta_mcp.surfaced_tools[].tool` | KEEP | — | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:30 |
@@ -541,13 +542,13 @@ backends:
 | `routing_profiles.<name>.deny_tools` | KEEP | `type default` | per-session tool scoping | - | src/routing_profile/mod.rs:73 |
 | `routing_profiles.<name>.description` | KEEP | `type default` | per-session tool scoping | - | src/routing_profile/mod.rs:53 |
 | `runtime` | KEEP | `type default` | sandbox runtime profiles (opt-in) | - | src/config/mod.rs:138 |
-| `runtime.availability` | AUTO | `RuntimeAvailabilityConfig::default()` | probe the host for docker, podman, systemd, launchd, kubernetes at startup | a declared value is ignored with one warning; `upgrade` deletes it | src/config/features/runtime.rs:23 |
-| `runtime.availability.docker` | AUTO | `false` | probe the host for docker, podman, systemd, launchd, kubernetes at startup | a declared value is ignored with one warning; `upgrade` deletes it | src/config/features/runtime.rs:120 |
-| `runtime.availability.kubernetes` | AUTO | `false` | probe the host for docker, podman, systemd, launchd, kubernetes at startup | a declared value is ignored with one warning; `upgrade` deletes it | src/config/features/runtime.rs:128 |
-| `runtime.availability.launchd` | AUTO | `false` | probe the host for docker, podman, systemd, launchd, kubernetes at startup | a declared value is ignored with one warning; `upgrade` deletes it | src/config/features/runtime.rs:126 |
-| `runtime.availability.local_process` | AUTO | `true` | probe the host for docker, podman, systemd, launchd, kubernetes at startup | a declared value is ignored with one warning; `upgrade` deletes it | src/config/features/runtime.rs:118 |
-| `runtime.availability.podman` | AUTO | `false` | probe the host for docker, podman, systemd, launchd, kubernetes at startup | a declared value is ignored with one warning; `upgrade` deletes it | src/config/features/runtime.rs:122 |
-| `runtime.availability.systemd` | AUTO | `false` | probe the host for docker, podman, systemd, launchd, kubernetes at startup | a declared value is ignored with one warning; `upgrade` deletes it | src/config/features/runtime.rs:124 |
+| `runtime.availability` | KEEP | `RuntimeAvailabilityConfig::default()` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:23 |
+| `runtime.availability.docker` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:120 |
+| `runtime.availability.kubernetes` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:128 |
+| `runtime.availability.launchd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:126 |
+| `runtime.availability.local_process` | KEEP | `true` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:118 |
+| `runtime.availability.podman` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:122 |
+| `runtime.availability.systemd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:124 |
 | `runtime.default_provider` | KEEP | `RuntimeProviderKind::LocalProcess` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:21 |
 | `runtime.profiles` | KEEP | `HashMap::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:25 |
 | `runtime.profiles.<name>.data_class` | KEEP | `RuntimeDataClass::Internal` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:170 |
@@ -588,9 +589,9 @@ backends:
 | `security.caller_identity.cloudflare_access.team_domain` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:30 |
 | `security.caller_identity.mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:43 |
 | `security.caller_identity.trusted_proxies` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:45 |
-| `security.claim_capture` | INTERNAL | `ClaimCaptureConfig::default()` | research capture for offline scoring (MIK-6908); no user docs | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/security.rs:659 |
-| `security.claim_capture.enabled` | INTERNAL | `false` | research capture for offline scoring (MIK-6908); no user docs | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/security.rs:571 |
-| `security.claim_capture.path` | INTERNAL | `"~/.mcp-gateway/claim-capture/claims.jsonl".to_string()` | research capture for offline scoring (MIK-6908); no user docs | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/security.rs:573 |
+| `security.claim_capture` | INTERNAL | `ClaimCaptureConfig::default()` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/security.rs:659 |
+| `security.claim_capture.enabled` | INTERNAL | `false` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/security.rs:571 |
+| `security.claim_capture.path` | INTERNAL | `"~/.mcp-gateway/claim-capture/claims.jsonl".to_string()` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/security.rs:573 |
 | `security.context_integrity` | KEEP | `ContextIntegrityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:647 |
 | `security.context_integrity.non_bypassable` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:535 |
 | `security.context_integrity.preset` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:530 |
@@ -705,29 +706,29 @@ backends:
 | `server.idempotency_key` | KEEP | `IdempotencyKeyMode::Optional` | operator policy: whether clients must send an idempotency key (ADR-012) | - | src/config/server_config.rs:68 |
 | `server.max_body_size` | INTERNAL | `10 * 1024 * 1024` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/server_config.rs:42 |
 | `server.metrics_token` | KEEP | `None` | security opt-out or credential; must stay an explicit operator decision | - | src/config/server_config.rs:77 |
-| `server.modern_protocol` | INTERNAL | `true` | protocol revision is negotiated per client; the switch only served the rollout | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/server_config.rs:30 |
+| `server.modern_protocol` | INTERNAL | `true` | protocol revision is negotiated per client; the switch only served the rollout | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/server_config.rs:30 |
 | `server.port` | KEEP | `39400` | where the gateway listens and how clients reach it | - | src/config/server_config.rs:34 |
 | `server.public_url` | KEEP | `None` | where the gateway listens and how clients reach it | - | src/config/server_config.rs:52 |
 | `server.replicas` | KEEP | `1` | declared, not observable from inside a pod | - | src/config/server_config.rs:83 |
 | `server.request_timeout` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:48 |
-| `server.shutdown_timeout` | INTERNAL | `Duration::from_secs(30)` | safety limit with a fixed default; no user story needs it | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/server_config.rs:39 |
+| `server.shutdown_timeout` | INTERNAL | `Duration::from_secs(30)` | safety limit with a fixed default; no user story needs it | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/server_config.rs:39 |
 | `server.ws_port` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:42 |
 | `streaming` | KEEP | `type default` | turn server-push streams off behind proxies that break SSE | - | src/config/mod.rs:99 |
 | `streaming.auto_subscribe` | KEEP | `Vec::new()` | operator picks backends to subscribe for notifications | - | src/config/features/streaming.rs:31 |
-| `streaming.buffer_size` | INTERNAL | `DEFAULT_BUFFER_SIZE` | stream plumbing with fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/streaming.rs:25 |
+| `streaming.buffer_size` | INTERNAL | `DEFAULT_BUFFER_SIZE` | stream plumbing with fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/streaming.rs:25 |
 | `streaming.enabled` | KEEP | `true` | turn server-push streams off behind proxies that break SSE | - | src/config/features/streaming.rs:23 |
-| `streaming.keep_alive_interval` | INTERNAL | `Duration::from_secs(DEFAULT_KEEP_ALIVE_SECS)` | stream plumbing with fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/streaming.rs:28 |
-| `streaming.session_reaper_interval` | INTERNAL | `Duration::from_secs(DEFAULT_SESSION_REAPER_INTERVAL_SECS)` | stream plumbing with fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/streaming.rs:38 |
-| `streaming.session_ttl` | INTERNAL | `Duration::from_secs(DEFAULT_SESSION_TTL_SECS)` | stream plumbing with fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/streaming.rs:35 |
+| `streaming.keep_alive_interval` | INTERNAL | `Duration::from_secs(DEFAULT_KEEP_ALIVE_SECS)` | stream plumbing with fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/streaming.rs:28 |
+| `streaming.session_reaper_interval` | INTERNAL | `Duration::from_secs(DEFAULT_SESSION_REAPER_INTERVAL_SECS)` | stream plumbing with fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/streaming.rs:38 |
+| `streaming.session_ttl` | INTERNAL | `Duration::from_secs(DEFAULT_SESSION_TTL_SECS)` | stream plumbing with fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/streaming.rs:35 |
 | `tasks` | KEEP | `type default` | trusted recovery adapters are an operator trust decision | - | src/config/mod.rs:148 |
-| `tasks.default_ttl_ms` | INTERNAL | `DEFAULT_TTL_MS` | task-store capacity and cadence; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/tasks.rs:37 |
-| `tasks.expiry_interval` | INTERNAL | `Duration::from_secs(60)` | task-store capacity and cadence; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/tasks.rs:53 |
-| `tasks.logical_budget_bytes` | INTERNAL | `DEFAULT_LOGICAL_BUDGET_BYTES` | task-store capacity and cadence; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/tasks.rs:49 |
+| `tasks.default_ttl_ms` | INTERNAL | `DEFAULT_TTL_MS` | task-store capacity and cadence; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:37 |
+| `tasks.expiry_interval` | INTERNAL | `Duration::from_secs(60)` | task-store capacity and cadence; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:53 |
+| `tasks.logical_budget_bytes` | INTERNAL | `DEFAULT_LOGICAL_BUDGET_BYTES` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:49 |
 | `tasks.max_per_principal` | INTERNAL | `DEFAULT_MAX_PER_PRINCIPAL` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:43 |
-| `tasks.max_record_bytes` | INTERNAL | `DEFAULT_MAX_RECORD_BYTES` | task-store capacity and cadence; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/tasks.rs:47 |
-| `tasks.max_records` | INTERNAL | `DEFAULT_MAX_RECORDS` | task-store capacity and cadence; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/tasks.rs:41 |
-| `tasks.max_workers` | INTERNAL | `DEFAULT_MAX_WORKERS` | task-store capacity and cadence; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/tasks.rs:45 |
-| `tasks.poll_interval_ms` | INTERNAL | `DEFAULT_POLL_INTERVAL_MS` | task-store capacity and cadence; fixed defaults | rejected at load; `upgrade` deletes it (value stays the built-in default) | src/config/features/tasks.rs:39 |
+| `tasks.max_record_bytes` | INTERNAL | `DEFAULT_MAX_RECORD_BYTES` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:47 |
+| `tasks.max_records` | INTERNAL | `DEFAULT_MAX_RECORDS` | task-store capacity and cadence; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:41 |
+| `tasks.max_workers` | INTERNAL | `DEFAULT_MAX_WORKERS` | task-store capacity and cadence; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:45 |
+| `tasks.poll_interval_ms` | INTERNAL | `DEFAULT_POLL_INTERVAL_MS` | task-store capacity and cadence; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:39 |
 | `tasks.recovery_adapters` | KEEP | `Vec::new()` | trusted recovery adapters are an operator trust decision | - | src/config/features/tasks.rs:56 |
 | `tasks.store_dir` | KEEP | `"~/.mcp-gateway/tasks".to_string()` | state location; deployments put it on a chosen volume (the Helm chart puts the audit log on its own persistent volume) | - | src/config/features/tasks.rs:35 |
 | `webhooks` | KEEP | `type default` | inbound webhook receiver (WEBHOOKS.md) | - | src/config/mod.rs:117 |
@@ -936,7 +937,7 @@ backends:
 | `mcp-gateway setup wizard --yes` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:611 |
 | `mcp-gateway skills` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:364 |
 | `mcp-gateway skills generate` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:47 |
-| `mcp-gateway skills generate --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag kept as a hidden override for one release; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/skills.rs:47 |
+| `mcp-gateway skills generate --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate --category` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate --dry-run` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate --install` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:47 |
@@ -980,20 +981,20 @@ backends:
 | `mcp-gateway tls issue-server --validity-days` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:639 |
 | `mcp-gateway tool` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:357 |
 | `mcp-gateway tool completions` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:786 |
-| `mcp-gateway tool completions --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag kept as a hidden override for one release; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:786 |
+| `mcp-gateway tool completions --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:786 |
 | `mcp-gateway tool completions <shell>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:786 |
 | `mcp-gateway tool inspect` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:755 |
-| `mcp-gateway tool inspect --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag kept as a hidden override for one release; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:755 |
+| `mcp-gateway tool inspect --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:755 |
 | `mcp-gateway tool inspect --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:755 |
 | `mcp-gateway tool inspect <tool>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:755 |
 | `mcp-gateway tool invoke` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:696 |
 | `mcp-gateway tool invoke --args` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:696 |
-| `mcp-gateway tool invoke --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag kept as a hidden override for one release; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:696 |
+| `mcp-gateway tool invoke --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:696 |
 | `mcp-gateway tool invoke --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:696 |
 | `mcp-gateway tool invoke <kv-args>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:696 |
 | `mcp-gateway tool invoke <tool>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:696 |
 | `mcp-gateway tool list` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:735 |
-| `mcp-gateway tool list --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag kept as a hidden override for one release; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:735 |
+| `mcp-gateway tool list --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:735 |
 | `mcp-gateway tool list --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:735 |
 | `mcp-gateway trust` | INTERNAL | TrustCard and CBOM metadata for catalogue maintainers | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:264 |
 | `mcp-gateway trust generate` | INTERNAL | TrustCard and CBOM metadata for catalogue maintainers | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:446 |
@@ -1027,7 +1028,7 @@ backends:
 | `mcp-gateway trust validate --format` | INTERNAL | TrustCard and CBOM metadata for catalogue maintainers | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:488 |
 | `mcp-gateway trust validate --strict` | INTERNAL | TrustCard and CBOM metadata for catalogue maintainers | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:488 |
 | `mcp-gateway upgrade` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:548 |
-| `mcp-gateway upgrade --data-dir` | INTERNAL | test seam for the data directory; users have one home (env MCP_GATEWAY_CONFIG_DIR) | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:548 |
+| `mcp-gateway upgrade --data-dir` | KEEP | flag form of `MCP_GATEWAY_CONFIG_DIR` for volume-mounted deployments (env MCP_GATEWAY_CONFIG_DIR) | - | src/cli/mod.rs:548 |
 | `mcp-gateway upgrade --dry-run` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:548 |
 | `mcp-gateway upgrade --quiet` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:548 |
 | `mcp-gateway validate` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:328 |
@@ -1043,13 +1044,13 @@ backends:
 |---|---|---|---|---|
 | `MCP_GATEWAY_<SECTION>__<KEY>` | KEEP | env form of any KEEP config key (container deployments); follows the key's class | - | src/config/mod.rs:193 |
 | `MCP_GATEWAY_AUTH__ENABLED` | KEEP | documented overlay spelling of `auth.enabled` (Helm chart) | - | deploy/helm/mcp-gateway/templates/_helpers.tpl:170 |
-| `MCP_GATEWAY_CAPABILITIES` | AUTO | env form of `-C/--capabilities`; derive from the config's `capabilities.directories` | kept as a hidden override for one release; UPGRADING entry | src/cli/mod.rs:706 |
+| `MCP_GATEWAY_CAPABILITIES` | AUTO | env form of `-C/--capabilities`; derive from the config's `capabilities.directories` | hidden override, still honoured; UPGRADING entry | src/cli/mod.rs:706 |
 | `MCP_GATEWAY_CA_CERT` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:31 |
 | `MCP_GATEWAY_CLIENT_CERT` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:23 |
 | `MCP_GATEWAY_CLIENT_KEY` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:26 |
 | `MCP_GATEWAY_CONFIG` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:125 |
-| `MCP_GATEWAY_CONFIG_DIR` | INTERNAL | test seam behind `upgrade --data-dir` | hidden with the flag; UPGRADING entry | src/cli/mod.rs:559 |
-| `MCP_GATEWAY_FIREWALL_SKIP_KEYS` | INTERNAL | undocumented override of the argument keys the injection scan treats as free text; the built-in list stays | ignored with a startup warning naming `security.firewall.rules` (per-tool scan selection); the built-in list applies again | src/security/firewall/input_scanner.rs:85 |
+| `MCP_GATEWAY_CONFIG_DIR` | KEEP | data directory for persisted state (src/gateway/server/persistence.rs:181); volume-mounted deployments set it | - | src/cli/mod.rs:559 |
+| `MCP_GATEWAY_FIREWALL_SKIP_KEYS` | INTERNAL | undocumented override of the argument keys the injection scan treats as free text; the built-in list stays | hidden: still read, so injection enforcement is unchanged; `doctor` lists it when set | src/security/firewall/input_scanner.rs:85 |
 | `MCP_GATEWAY_HOST` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:133 |
 | `MCP_GATEWAY_KIND_CLUSTER` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh:19 |
 | `MCP_GATEWAY_KIND_KEEP` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/README.md:155 |

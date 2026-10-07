@@ -565,7 +565,7 @@ def extract_env() -> list[Entry]:
 # ── Surface: routes ──────────────────────────────────────────────────────────
 
 
-# `.route(` calls that are not HTTP registrations: the continuation in-flight
+# Path-taking calls (`.route`, `.route_service`, `.nest`, `.nest_service`) that are not HTTP registrations: the continuation in-flight
 # table's `route(key, now)`. Any other non-constant `.route(` becomes an item
 # the inventory must classify, so a new listener path cannot slip past.
 NOT_HTTP_ROUTES = {
@@ -586,7 +586,7 @@ def extract_routes() -> list[Entry]:
     # receiver under `webhooks.base_path`, the backend OAuth callback listener.
     for p in src_files():
         code, _ = prod_scan(p)
-        for m in re.finditer(r"\.route\(\s*([^,]+?)\s*,", code):
+        for m in re.finditer(r"\.(?:route|route_service|nest|nest_service)\(\s*([^,]+?)\s*,", code):
             arg = m.group(1)
             if arg.startswith("routes::") or (rel(p), arg) in NOT_HTTP_ROUTES:
                 continue
@@ -688,6 +688,8 @@ def check(doc_text: str, extracted: dict[str, list[Entry]]) -> list[str]:
             errors.append(f"line {r.lineno}: {r.id!r} has class {r.cls!r}, want one of {sorted(CLASSES)}")
         elif r.cls != "KEEP" and r.migration in {"", "-"}:
             errors.append(f"line {r.lineno}: {r.cls} item {r.id!r} has no migration story")
+    for surface in sorted(set(extracted) - set(SURFACES)):
+        errors.append(f"{surface}: extracted surface has no section in the doc's vocabulary")
     for surface in SURFACES:
         entries = extracted.get(surface)
         if not entries:

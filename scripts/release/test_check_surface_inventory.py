@@ -88,9 +88,14 @@ def test_route_with_named_handler_is_extracted() -> None:
 
     with tempfile.TemporaryDirectory(dir=inv.ROOT / "src") as tmp:
         f = Path(tmp) / "planted.rs"
-        f.write_text('fn r(h: H) -> Router { Router::new().route("/planted", h) }\n', encoding="utf-8")
+        f.write_text(
+            'fn r(h: H, s: S, n: Router) -> Router {\n'
+            '    Router::new().route("/planted", h).route_service("/svc", s).nest("/nested", n)\n}\n',
+            encoding="utf-8",
+        )
         ids = {e.id for e in inv.extract_routes()}
-    assert any('"/planted"' in i for i in ids), sorted(ids)
+    for path in ('"/planted"', '"/svc"', '"/nested"'):
+        assert any(path in i for i in ids), (path, sorted(ids))
 
 
 def test_not_http_route_allowlist_is_live() -> None:
