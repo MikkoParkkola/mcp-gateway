@@ -27,7 +27,7 @@ use crate::{Error, Result};
 /// handle that goes out names a slot this process is holding (MRTR.8).
 pub(super) async fn mint_continuation(
     continuation: &crate::protocol::continuation::ContinuationState,
-    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    source: crate::protocol::mrtr::PrincipalSource<'_>,
     server: &str,
     tool: &str,
     arguments: &Value,
@@ -37,7 +37,7 @@ pub(super) async fn mint_continuation(
         .begin_exchange(
             server.to_string(),
             backend_request_state,
-            crate::protocol::mrtr::source_fingerprint(caller.principal_source())?,
+            crate::protocol::mrtr::source_fingerprint(source)?,
             crate::protocol::mrtr::original_request_digest(server, tool, arguments),
             crate::protocol::continuation::now_unix_secs(),
         )
@@ -260,15 +260,18 @@ pub(in crate::gateway::meta_mcp) fn retry_origin_backend(
 /// exists to close.
 pub(super) async fn redeem_retry(
     continuation: &crate::protocol::continuation::ContinuationState,
-    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    (source, retry): (
+        crate::protocol::mrtr::PrincipalSource<'_>,
+        &crate::protocol::mrtr::RetryFields,
+    ),
     server: &str,
     tool: &str,
     arguments: &Value,
 ) -> Result<OutboundRetry> {
     use crate::protocol::continuation::ContinuationError;
 
-    let input_responses = caller.retry.solicited_input_responses()?;
-    let Some(token) = caller.retry.request_state.as_deref() else {
+    let input_responses = retry.solicited_input_responses()?;
+    let Some(token) = retry.request_state.as_deref() else {
         return Ok(OutboundRetry {
             request_state: None,
             input_responses,
@@ -305,12 +308,11 @@ pub(super) async fn redeem_retry(
         })?;
 
     // The same fingerprint the mint bound to, derived the same way — both read
-    // `caller.principal_source()`. A caller the gateway cannot name cannot match
+    // the caller's `principal_source()`. A caller the gateway cannot name cannot match
     // one it could: `source_fingerprint` returns `None` for exactly the
     // credential schemes no continuation is ever minted for, so there is no
     // handle here for such a caller to hold.
-    let Some(fingerprint) = crate::protocol::mrtr::source_fingerprint(caller.principal_source())
-    else {
+    let Some(fingerprint) = crate::protocol::mrtr::source_fingerprint(source) else {
         warn!(
             server,
             tool, "Retry from a caller no continuation can be bound to"
@@ -380,4 +382,111 @@ pub(super) async fn redeem_retry(
         request_state: payload.backend_request_state,
         input_responses,
     })
+}
+
+/// The tool and the argument object a direct-route `tools/call` names: the two
+/// parts of the request a continuation is bound to (MIK-8078). Read from the
+/// params as the client sent them, at the mint and at the redeem alike, so a
+/// sanitized copy can never make the two digests disagree.
+fn direct_call_parts(params: Option<&Value>) -> (&str, Value) {
+    let tool = params
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let arguments = params
+        .and_then(|p| p.get("arguments"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    (tool, arguments)
+}
+
+impl crate::gateway::meta_mcp::MetaMcp {
+    /// MRTR.1 and MRTR.3-6 on the direct route `POST /mcp/{name}` (MIK-8078):
+    /// open the continuation a `tools/call` presents and put the backend's own
+    /// state in `outbound` in its place.
+    ///
+    /// The same checks, in the same order, as the meta route's
+    /// [`redeem_retry`]: authentic, sealed for a backend input round, bound to
+    /// this caller and this call, still held here, and spent once. A call with
+    /// neither retry field is left as it is.
+    ///
+    /// `sent` is the params as the client sent them; `outbound` is what goes
+    /// upstream (the sanitized copy, or a copy of `sent`).
+    ///
+    /// # Errors
+    ///
+    /// `-32602` for a continuation this gateway will not redeem, or for
+    /// answers that present none.
+    pub(crate) async fn redeem_direct_retry(
+        &self,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        (server, sent): (&str, Option<&Value>),
+        outbound: &mut Value,
+    ) -> Result<()> {
+        let retry = crate::protocol::mrtr::RetryFields::from_params(sent);
+        let (tool, arguments) = direct_call_parts(sent);
+        let source = crate::protocol::mrtr::PrincipalSource::Credential(identity);
+        let redeemed = redeem_retry(
+            &self.continuation,
+            (source, &retry),
+            server,
+            tool,
+            &arguments,
+        )
+        .await?;
+        if retry.request_state.is_some()
+            && let Some(object) = outbound.as_object_mut()
+        {
+            // The client's envelope never travels upstream: the backend gets
+            // the state it issued, or none if it kept none.
+            object.remove("requestState");
+            redeemed.apply(outbound);
+        }
+        Ok(())
+    }
+
+    /// MRTR.2 on the direct route `POST /mcp/{name}` (MIK-8078): seal an
+    /// interim answer's state into a continuation bound to this caller and this
+    /// call, as the meta route does. An answer that is not interim is left as
+    /// it is.
+    ///
+    /// # Errors
+    ///
+    /// `-32003` when no continuation can be bound to this caller, or the mint
+    /// is refused: the backend's own state is never sent in its place.
+    pub(crate) async fn seal_direct_interim(
+        &self,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        (server, sent): (&str, Option<&Value>),
+        result: &mut Value,
+    ) -> Result<()> {
+        let Some(interim) = crate::protocol::mrtr::InputRequired::from_result(result) else {
+            return Ok(());
+        };
+        let (tool, arguments) = direct_call_parts(sent);
+        let source = crate::protocol::mrtr::PrincipalSource::Credential(identity);
+        let Some(envelope) = mint_continuation(
+            &self.continuation,
+            source,
+            server,
+            tool,
+            &arguments,
+            interim.request_state,
+        )
+        .await
+        else {
+            warn!(
+                server,
+                tool, "Cannot mint a continuation for this direct-route caller; refusing"
+            );
+            return Err(unbindable_continuation(server, tool));
+        };
+        result["requestState"] = json!(envelope);
+        super::gateway_writes::note(
+            super::gateway_writes::Layer::Value,
+            super::gateway_writes::REQUEST_STATE,
+            result,
+        );
+        Ok(())
+    }
 }

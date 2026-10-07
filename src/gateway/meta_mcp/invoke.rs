@@ -427,21 +427,28 @@ impl MetaMcp {
         // the backend with the credential the first round used, and an `Arc` clone
         // is that same credential rather than a second resolution of it.
         let mut bridge_account_credential = account_credential.clone();
-        let outbound_retry =
-            match redeem_retry(&self.continuation, caller, server, tool, &arguments).await {
-                Ok(retry) => retry,
-                Err(error) => {
-                    // Refused before the backend was reached, so it has not
-                    // acted: the key is released rather than settled. Settling
-                    // one here would answer an honest retry, made after a fresh
-                    // question, with a sentence naming a side effect nothing
-                    // performed.
-                    if let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.release();
-                    }
-                    return Err(error);
+        let outbound_retry = match redeem_retry(
+            &self.continuation,
+            (caller.principal_source(), &caller.retry),
+            server,
+            tool,
+            &arguments,
+        )
+        .await
+        {
+            Ok(retry) => retry,
+            Err(error) => {
+                // Refused before the backend was reached, so it has not
+                // acted: the key is released rather than settled. Settling
+                // one here would answer an honest retry, made after a fresh
+                // question, with a sentence naming a side effect nothing
+                // performed.
+                if let Some(reservation) = idem_reservation.as_mut() {
+                    reservation.release();
                 }
-            };
+                return Err(error);
+            }
+        };
 
         let egress = relay::Egress {
             arguments: &arguments,
@@ -611,7 +618,7 @@ impl MetaMcp {
         if let Some(interim) = interim {
             let Some(envelope) = mint_continuation(
                 &self.continuation,
-                caller,
+                caller.principal_source(),
                 server,
                 tool,
                 &arguments,
