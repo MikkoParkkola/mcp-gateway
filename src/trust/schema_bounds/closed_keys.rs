@@ -223,7 +223,9 @@ impl<'a> Walk<'a> {
                 Verdict::Accept(req) => faults.extend(self.value(item, &req, &at, depth + 1)),
                 Verdict::Undecided
                     if *open.get_or_insert_with(|| {
-                        self.standard || is_free_map(schema) || ref_to_free_map(root, schema, depth)
+                        self.standard
+                            || is_free_map(schema, Level::Open)
+                            || ref_to_free_map(root, schema, depth, Level::Open)
                     }) => {}
                 Verdict::Undecided | Verdict::Refuse | Verdict::MatchesNothing => {
                     faults.push(KeyFault::Undeclared(at));
@@ -298,7 +300,7 @@ impl<'a> Walk<'a> {
             Value::Object(map) => map,
             _ => return Verdict::Undecided,
         };
-        if in_any && (is_free_map(schema) || ref_to_free_map(root, schema, hops)) {
+        if in_any && (is_free_map(schema, level) || ref_to_free_map(root, schema, hops, level)) {
             return Verdict::Accept(Req::Free);
         }
         if level == Level::Unchecked && matches_nothing(map) {
@@ -508,12 +510,15 @@ fn combine(parts: Vec<Verdict<'_>>) -> Verdict<'_> {
 /// A level that accepts any key: `true`, or an object-capable schema whose
 /// every keyword is in [`KEY_NEUTRAL`] (an allowlist, so an unrecognised
 /// keyword closes the level rather than opening it).
-fn is_free_map(schema: &Value) -> bool {
+///
+/// `level` says whether `schema` is already known to match an object.
+fn is_free_map(schema: &Value, level: Level) -> bool {
     match schema {
         Value::Bool(open) => *open,
         Value::Object(map) => {
             // `properties: {}` declares no key (design revision 2, item 4).
-            !matches_nothing(map) && map.iter().all(|(k, v)| key_neutral(k, v))
+            (level == Level::Open || !matches_nothing(map))
+                && map.iter().all(|(k, v)| key_neutral(k, v))
         }
         _ => false,
     }
@@ -528,7 +533,7 @@ fn key_neutral(keyword: &str, value: &Value) -> bool {
 /// such `$ref`: as free as X inlined. A sibling that closes the level (say
 /// `additionalProperties: false`) is not neutral, and its Refuse is decided
 /// before this is asked. Bounded by [`MAX_DEPTH`] like any `$ref` descent.
-fn ref_to_free_map<'a>(root: &'a Value, schema: &'a Value, hops: usize) -> bool {
+fn ref_to_free_map<'a>(root: &'a Value, schema: &'a Value, hops: usize, level: Level) -> bool {
     let Some(map) = schema.as_object() else {
         return false;
     };
@@ -541,10 +546,12 @@ fn ref_to_free_map<'a>(root: &'a Value, schema: &'a Value, hops: usize) -> bool 
         root
     };
     hops < MAX_DEPTH
-        && !matches_nothing(map)
+        && (level == Level::Open || !matches_nothing(map))
         && map.iter().all(|(k, v)| k == "$ref" || key_neutral(k, v))
-        && resolve(root, pointer)
-            .is_some_and(|target| is_free_map(target) || ref_to_free_map(root, target, hops + 1))
+        && resolve(root, pointer).is_some_and(|target| {
+            is_free_map(target, Level::Unchecked)
+                || ref_to_free_map(root, target, hops + 1, Level::Unchecked)
+        })
 }
 
 /// `enum: []`, or a `type` that excludes `object`.

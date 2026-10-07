@@ -393,6 +393,11 @@ fn a_level_is_checked_for_matching_nothing_once() {
     super::NOTHING_CHECKS.with(|n| n.set(0));
     assert!(!refused(&schema, &json!({"a": 1, "b": "x", "c": true})));
     assert_eq!(super::NOTHING_CHECKS.with(std::cell::Cell::get), 1);
+    // An open level whose keys are undecided asks whether it is free, which
+    // must not check it for matching nothing a second time.
+    super::NOTHING_CHECKS.with(|n| n.set(0));
+    assert!(!refused(&json!({}), &json!({"a": 1, "b": 2})));
+    assert_eq!(super::NOTHING_CHECKS.with(std::cell::Cell::get), 1);
 }
 
 /// `MIK-8014.PERF.3a` guard: a scalar still costs its visit. 5 000 scalar
@@ -410,4 +415,26 @@ fn scalar_elements_still_count_toward_the_visit_budget() {
     );
     let under = json!({"a": vec![1; 4_998]});
     assert!(undeclared_keys(&under, &schema, Closed).is_empty());
+}
+
+/// `MIK-8014.PERF.3a` guard: a scalar leaf still costs its depth. With one
+/// object per level and no `$ref`, the leaf is the deepest thing charged, so a
+/// leaf at [`super::MAX_DEPTH`] passes and one level deeper is refused.
+#[test]
+fn a_scalar_leaf_is_held_to_the_depth_limit() {
+    let nested = |levels: usize| {
+        let (mut schema, mut args) = (json!({}), json!(1));
+        for _ in 0..levels {
+            schema = json!({"type": "object", "properties": {"c": schema}});
+            args = json!({"c": args});
+        }
+        (schema, args)
+    };
+    let (schema, args) = nested(super::MAX_DEPTH);
+    assert!(undeclared_keys(&args, &schema, Closed).is_empty());
+    let (schema, args) = nested(super::MAX_DEPTH + 1);
+    assert_eq!(
+        undeclared_keys(&args, &schema, Closed),
+        vec![KeyFault::TooDeep]
+    );
 }
