@@ -48,6 +48,21 @@ const SNAPSHOT_RETRY: Duration = Duration::from_secs(5);
 const STABLE: Duration = Duration::from_secs(60);
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
 const BACKOFF_CAP: Duration = Duration::from_secs(300);
+/// A tools refill that did not fill is retried once after this: the backend's
+/// list-fill cooldown, which fails every fill inside it without reaching the
+/// backend (MIK-8007). Taken from it, so the two cannot drift apart.
+const REFILL_RETRY: Duration = crate::backend::LIST_FILL_COOLDOWN;
+
+/// The backend tools notices a listener task has not yet served (MIK-8007).
+#[derive(Default)]
+pub(super) struct ToolsDebt {
+    /// The earliest the next refill may start (one per tick).
+    due: Option<Instant>,
+    /// That refill retries one that did not fill.
+    retrying: bool,
+    /// A notice the hub has not heard of yet.
+    unannounced: bool,
+}
 
 enum Outcome {
     Stopped,
@@ -82,13 +97,22 @@ fn event_name(backend: &str, kind: NoteKind) -> String {
 /// the listener served. `tools_changed` stays, since the gateway announces it
 /// itself.
 ///
-/// The withdrawal runs under the lifecycle lock a subscribe commits under, and
-/// only if the backend is still ineligible there: a reload that restores it
-/// first keeps its subscriptions, and one admitted after the restore lands
-/// after the withdrawal, so it is never deleted by it.
-fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) {
+/// The check and the withdrawal run under the lifecycle lock a subscribe
+/// commits under, and the listener stops only if the backend is still
+/// ineligible there: a reload or a transport switch that restores it first
+/// keeps the listener and its subscriptions, and one admitted after the
+/// restore lands after the withdrawal, so it is never deleted by it. `true`
+/// when the listener was stopped.
+async fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) -> bool {
+    let Some(hub) = hub.upgrade() else {
+        shared.stop.cancel();
+        return true;
+    };
+    let started = hub.lifecycle.lock().await;
+    if !shared.is_ineligible() {
+        return false;
+    }
     shared.stop.cancel();
-    let Some(hub) = hub.upgrade() else { return };
     let names: Vec<String> = [
         Kind::ResourceUpdated,
         Kind::ResourcesChanged,
@@ -97,15 +121,10 @@ fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) {
     .into_iter()
     .map(|kind| format!("backend.{}.{}", shared.name, kind.suffix()))
     .collect();
-    let (name, ineligible) = (shared.name.clone(), Arc::clone(&shared.ineligible));
-    tokio::spawn(async move {
-        let started = hub.lifecycle.lock().await;
-        if ineligible().contains(&name) {
-            hub.withdraw(&names);
-        }
-        drop(started);
-        hub.reconcile_stops_in_background();
-    });
+    hub.withdraw(&names);
+    drop(started);
+    hub.reconcile_stops_in_background();
+    true
 }
 
 /// The task: reconnect until stopped.
@@ -119,12 +138,13 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         if shared.stop.is_cancelled() {
             return;
         }
-        if shared.is_ineligible() {
-            end_ineligible(&shared, &hub);
+        if shared.is_ineligible() && end_ineligible(&shared, &hub).await {
             return;
         }
         let Some(backend) = registry.get(&shared.name) else {
             // Gone: park until the interest changes or the keys are deleted.
+            // A removed backend owes nothing; a re-added one starts afresh.
+            *shared.tools.lock() = ToolsDebt::default();
             let mut wake = shared.wake.subscribe();
             tokio::select! {
                 () = shared.stop.cancelled() => return,
@@ -212,7 +232,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             }
             note = recv(&mut state.current) => Ev::Current(note),
             note = recv_pending(&mut state.pending) => Ev::Pending(note),
-            () = refilled(&mut refill) => Ev::Refilled,
+            filled = refilled(&mut refill) => Ev::Refilled(filled),
             _ = wake.changed() => Ev::Wake,
             _ = tick.tick() => Ev::Tick,
         };
@@ -229,26 +249,17 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
                 state.note(note, true);
             }
             Ev::Pending(None) => state.pending = None,
-            Ev::Refilled => {
+            Ev::Refilled(filled) => {
                 // The refill ended (filled or timed out): the hub may hear now.
                 refill = None;
-                state.tools_pending = true;
+                state.refill_ended(filled);
             }
             Ev::Wake | Ev::Tick => {}
         }
         // Not while a finished refill's change is still unannounced: invalidating
         // now would have the hub announce it over an emptied cache.
-        if refill.is_none()
-            && !state.tools_pending
-            && state.tools_due.is_some_and(|due| Instant::now() >= due)
-        {
-            // A notice arrived: drop the cached list and refill it before the
-            // hub hears, so the subscriber's re-read is fresh and nothing sees
-            // an emptied cache. At most once per tick however many notices
-            // came; a notice during a refill waits for the next one.
-            state.tools_due = None;
-            backend.invalidate_tools();
-            refill = Some(start_refill(backend, &shared.name));
+        if refill.is_none() && !state.tools_pending {
+            refill = start_due_refill(&mut state, backend);
         }
         if !backend_still_current(backend, &target.handle) {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
@@ -262,8 +273,51 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             state.release(backend).await;
             return Outcome::Stopped;
         }
-        state.flush(hub);
+        let tick = on_tick(backend.connected_streamable(), || shared.is_ineligible());
+        if (state.flush(hub) || tick == OnTick::EndIneligible) && end_ineligible(shared, hub).await
+        {
+            state.release(backend).await;
+            return Outcome::Stopped;
+        }
     }
+}
+
+/// What a tick does about the backend's live transport (MIK-7969 H2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnTick {
+    Keep,
+    EndIneligible,
+}
+
+/// A listener runs only for a backend that was eligible when subscribed.
+/// Once its live connection reads the SSE handshake (`live`, as
+/// `Backend::connected_streamable` reads it), a quiet stream would never
+/// notice, so the tick asks the shared predicate (`refused`, the costlier
+/// read) whether the backend is now refused. An undetected transport is not
+/// a refusal: a stopped slot reconnects through the loop head.
+fn on_tick(live: Option<bool>, refused: impl FnOnce() -> bool) -> OnTick {
+    if live == Some(false) && refused() {
+        OnTick::EndIneligible
+    } else {
+        OnTick::Keep
+    }
+}
+
+/// The refill a due notice starts, unpolled. A notice arrived: drop the cached
+/// list and refill it before the hub hears, so the subscriber's re-read is
+/// fresh and nothing sees an emptied cache. At most once per tick however many
+/// notices came; a notice during a refill waits for the next one. A silent
+/// retry keeps the cache: the failed refill already emptied it, so what is
+/// there now was read after the notice, and invalidating again could void a
+/// reader's fill into a new cooldown (MIK-8007).
+fn start_due_refill(state: &mut State<'_>, backend: &Arc<Backend>) -> Option<Refill> {
+    if !state.take_due_refill() {
+        return None;
+    }
+    if state.refill_announces {
+        backend.invalidate_tools();
+    }
+    Some(start_refill(backend, &state.shared.name))
 }
 
 /// The tools refill a notice starts. The shared fetch, so a reader of the list
@@ -281,6 +335,7 @@ fn start_refill(backend: &Arc<Backend>, name: &str) -> Refill {
         if !filled {
             warn!(backend = %name, "upstream listener: tools refill did not complete; announcing the change anyway");
         }
+        filled
     })
 }
 
@@ -298,13 +353,13 @@ fn backend_still_current(backend: &Backend, handle: &Weak<dyn UpstreamListen>) -
 enum Ev {
     Current(Option<UpstreamNote>),
     Pending(Option<UpstreamNote>),
-    Refilled,
+    Refilled(bool),
     Wake,
     Tick,
 }
 
-/// An in-flight tools refill.
-type Refill = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+/// An in-flight tools refill; `true` when it filled the list.
+type Refill = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
 
 /// End the session, first letting an in-flight refill finish and any tools
 /// change it produced reach the hub, as when the refill ran inline and the
@@ -324,20 +379,21 @@ async fn finish_refill(
                 state.release(backend).await;
                 return Outcome::Stopped;
             }
-            () = refill => {}
+            filled = refill => state.refill_ended(filled),
         }
-        state.tools_pending = true;
     }
     // Also a refill that finished this iteration, its change not yet
     // announced when the transport was found replaced, and every notice
     // still inside its coalescing window: the session's state goes with it
     // (MIK-7898).
-    state.flush_at(hub, Instant::now() + WINDOW);
+    if state.flush_at(hub, Instant::now() + WINDOW) {
+        end_ineligible(shared, hub).await;
+    }
     state.ended(started)
 }
 
 /// Resolves when the in-flight refill ends; never, when there is none.
-async fn refilled(refill: &mut Option<Refill>) {
+async fn refilled(refill: &mut Option<Refill>) -> bool {
     match refill {
         Some(future) => future.await,
         None => std::future::pending().await,
@@ -404,8 +460,8 @@ struct State<'a> {
     reread: bool,
     /// A backend tools notice waits to be handed to the hub (§14).
     tools_pending: bool,
-    /// The earliest the next tools handoff may run (one per tick).
-    tools_due: Option<Instant>,
+    /// The refill in flight serves a notice the hub has not heard of yet.
+    refill_announces: bool,
     snapshot_due: Instant,
     /// A catalogue read is not retried before this.
     snapshot_retry_at: Instant,
@@ -430,7 +486,7 @@ impl<'a> State<'a> {
             resource_interest_unsupported: false,
             reread: false,
             tools_pending: false,
-            tools_due: None,
+            refill_announces: false,
             // Due at once: a session that starts with no URI watched reads
             // the catalogue as soon as one is, even when the shared snapshot
             // is known from an earlier session.
@@ -438,6 +494,34 @@ impl<'a> State<'a> {
             snapshot_retry_at: now,
             retry_open_at: now,
         }
+    }
+
+    /// Take the tools refill when one is due, with the notices it serves.
+    fn take_due_refill(&mut self) -> bool {
+        let mut debt = self.shared.tools.lock();
+        if debt.due.is_none_or(|due| Instant::now() < due) {
+            return false;
+        }
+        debt.due = None;
+        self.refill_announces = std::mem::take(&mut debt.unannounced);
+        // A newer notice earns its own retry.
+        debt.retrying &= !self.refill_announces;
+        true
+    }
+
+    /// A refill ended. One that did not fill (inside the backend's list-fill
+    /// cooldown it never reaches the backend) is retried once, no sooner than
+    /// the cooldown, so the notice is served (MIK-8007). The hub hears once
+    /// per notice: a failed refill still announces (MIK-7951), and its retry
+    /// only refreshes the list unless a newer notice joined it.
+    fn refill_ended(&mut self, filled: bool) {
+        let mut debt = self.shared.tools.lock();
+        debt.retrying = !filled && !debt.retrying;
+        if debt.retrying {
+            let retry = Instant::now() + REFILL_RETRY;
+            debt.due = Some(debt.due.map_or(retry, |due| due.max(retry)));
+        }
+        self.tools_pending |= std::mem::take(&mut self.refill_announces);
     }
 
     fn ended(&self, started: Instant) -> Outcome {
@@ -505,7 +589,9 @@ impl<'a> State<'a> {
                 if kind == NoteKind::ToolsChanged {
                     // Not coalesced here: the hub's own quiet window does it.
                     if self.shared.need.lock().emits(kind, None) {
-                        self.tools_due.get_or_insert(Instant::now() + TICK);
+                        let mut debt = self.shared.tools.lock();
+                        debt.due.get_or_insert(Instant::now() + TICK);
+                        debt.unannounced = true;
                     }
                 } else if self.shared.need.lock().emits(kind, uri.as_deref()) {
                     self.coalescer.offer(kind, uri, Instant::now());
@@ -656,20 +742,20 @@ impl<'a> State<'a> {
     }
 
     /// Emit the coalescing windows that closed (§8), through the hub only.
-    fn flush(&mut self, hub: &Weak<EventsHub>) {
-        self.flush_at(hub, Instant::now());
+    /// `true` when the backend is now ineligible: nothing was sent, and the
+    /// caller ends the listener through [`end_ineligible`].
+    fn flush(&mut self, hub: &Weak<EventsHub>) -> bool {
+        self.flush_at(hub, Instant::now())
     }
 
     /// [`Self::flush`] of the windows closed by `at`.
-    fn flush_at(&mut self, hub: &Weak<EventsHub>, at: Instant) {
+    fn flush_at(&mut self, hub: &Weak<EventsHub>, at: Instant) -> bool {
         // Re-checked at every delivery: a reload can make the backend
-        // ineligible while its listener runs (MIK-7894). Nothing pending is
-        // sent, the task ends, and the upstream subscriptions are withdrawn.
+        // ineligible while its listener runs (MIK-7894).
         let due = self.coalescer.due(at);
         if (self.tools_pending || !due.is_empty()) && self.shared.is_ineligible() {
             self.tools_pending = false;
-            end_ineligible(self.shared, hub);
-            return;
+            return true;
         }
         if std::mem::take(&mut self.tools_pending)
             && let Some(hub) = hub.upgrade()
@@ -677,9 +763,11 @@ impl<'a> State<'a> {
             hub.backend_tools_changed(&self.shared.name);
         }
         if due.is_empty() {
-            return;
+            return false;
         }
-        let Some(hub) = hub.upgrade() else { return };
+        let Some(hub) = hub.upgrade() else {
+            return false;
+        };
         for (kind, uri) in due {
             if !self.shared.need.lock().emits(kind, uri.as_deref()) {
                 continue;
@@ -702,6 +790,7 @@ impl<'a> State<'a> {
                 lifecycle_key: None,
             });
         }
+        false
     }
 }
 

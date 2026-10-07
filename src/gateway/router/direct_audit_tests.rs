@@ -26,6 +26,7 @@ use crate::transport::Transport;
 mod delivery;
 mod delivery_who;
 mod lost_round;
+mod meta_malformed_retry;
 mod meta_refusal;
 mod meta_replay;
 #[cfg(feature = "firewall")]
@@ -144,9 +145,17 @@ struct Setup {
     /// (0 = guard off, attribution only).
     #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     tenant_limit: Option<usize>,
+    /// Response firewall rules (YAML) beside the tenant guard; `None`, none.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    response_rules: Option<&'static str>,
     meta_mode: MetaMode,
     /// The backends refuse every notification (L1254).
     notify_refused: bool,
+    /// The backends' chain policy; under `Require` the gateway also has a
+    /// chain identity, so their unchained answers are refused unread (MIK-7636).
+    chain: crate::config::ChainMode,
+    /// `security.caller_identity` (MIK-7938 ATTR.4).
+    caller_identity: Option<crate::security::caller_identity::CallerIdentityConfig>,
 }
 
 /// One optional meta-layer switch a cell turns on (MIK-7116.MIN.1 cells).
@@ -211,7 +220,10 @@ async fn fixture(setup: Setup) -> Fixture {
     for name in ["alpha", "beta"] {
         let backend = Arc::new(Backend::new(
             name,
-            BackendConfig::default(),
+            BackendConfig {
+                signature_chain: setup.chain,
+                ..BackendConfig::default()
+            },
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         ));
@@ -240,24 +252,19 @@ async fn fixture(setup: Setup) -> Fixture {
     }
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     meta.enable_transparency_log(Arc::clone(&log));
+    if setup.chain == crate::config::ChainMode::Require {
+        meta.set_chain_signer(
+            crate::security::signature_chain::ChainSigner::from_seed(&[7; 32], "gw-test")
+                .expect("signer"),
+            crate::config::ChainEmit::OnRequest,
+        );
+    }
     #[cfg(feature = "firewall")]
     if let Some(limit) = setup.tenant_limit {
-        let config = crate::security::firewall::FirewallConfig {
-            tenant_guard: crate::security::firewall::tenant_guard::TenantGuardConfig {
-                enabled: limit > 0,
-                max_tenants_per_window: limit,
-                arg_keys: vec!["customer_id".to_string()],
-                ..Default::default()
-            },
-            ..crate::security::firewall::FirewallConfig::default()
-        };
-        let firewall = |config| {
-            Arc::new(crate::security::firewall::Firewall::from_config(
-                config, None,
-            ))
-        };
-        state_mut.firewall = Some(firewall(config.clone()));
-        meta.set_firewall(Some(firewall(config)));
+        tenants::guard_tenants(state_mut, &mut meta, (limit, setup.response_rules));
+    }
+    if let Some(config) = setup.caller_identity {
+        meta = meta.with_caller_identity(config);
     }
     state_mut.meta_mcp = Arc::new(setup.meta_mode.arm(meta));
     state_mut.transparency_log = Some(Arc::clone(&log));
@@ -303,6 +310,8 @@ enum Caller {
     Key,
     /// Anonymous, carrying an `mcp-session-id` header.
     Session,
+    /// Anonymous, declaring the modern era by header: no session at all.
+    Modern,
     /// Anonymous, with a verified client certificate (MIK-7938).
     Cert,
     /// Anonymous, with a verified OAuth agent token (MIK-7938).
@@ -350,6 +359,18 @@ async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (Statu
     }
     if matches!(caller, Caller::Session) {
         builder = builder.header("mcp-session-id", "sess-d2");
+    }
+    if matches!(caller, Caller::Modern) {
+        // The modern era also requires the method and name headers to echo
+        // the body, or the call is refused (-32020) before any audit path.
+        let parsed: Value = serde_json::from_str(body).unwrap();
+        builder = builder
+            .header(
+                "mcp-protocol-version",
+                crate::protocol::meta::MODERN_VERSIONS[0],
+            )
+            .header("mcp-method", parsed["method"].as_str().unwrap())
+            .header("mcp-name", parsed["params"]["name"].as_str().unwrap());
     }
     let mut request = builder
         .body(axum::body::Body::from(body.to_string()))

@@ -68,14 +68,33 @@ impl HttpTransport {
             // is gone — so a follow-up call finds a valid token and skips re-authorization.
             let oauth_arc_for_task = Arc::clone(oauth_arc);
             let base_url_for_task = self.base_url.clone();
+            // Read here: the spawned task does not inherit the caller's scope.
+            let interactive = crate::oauth::login_gate::interactive();
+            let set_out = crate::oauth::login_gate::set_out_epoch();
+            let refused_name = sanitize_url_for_diagnostics(&self.base_url);
             let oauth_task = tokio::spawn(async move {
-                let mut oauth = oauth_arc_for_task.lock().await;
+                // A non-interactive caller (the health probe) never waits on
+                // the client mutex a login holds for minutes (MIK-7982 C2).
+                let mut oauth = if interactive {
+                    oauth_arc_for_task.lock().await
+                } else {
+                    oauth_arc_for_task.try_lock().map_err(|_| {
+                        crate::Error::AuthorizationRequired {
+                            backend: refused_name,
+                        }
+                    })?
+                };
+                // A start's epoch was captured when it set out, before this
+                // task existed; any other caller takes it before discovery.
+                // Either way a restart or stop that cancels logins since then
+                // refuses this login.
+                let since = set_out.or_else(|| oauth.login_epoch());
                 oauth.initialize().await?;
 
                 // If we don't have a valid token, trigger authorization flow
                 if !oauth.has_valid_token() {
                     info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&base_url_for_task), "OAuth required - initiating authorization flow");
-                    oauth.authorize().await?;
+                    oauth.authorize_shared(interactive, since).await?;
                 }
 
                 Ok::<String, crate::Error>(oauth.backend_name().to_string())

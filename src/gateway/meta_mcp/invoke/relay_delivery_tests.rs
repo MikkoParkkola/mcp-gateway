@@ -578,7 +578,9 @@ async fn a_gateway_recovery_hint_is_not_receipted() {
             backend.clone(),
             "send",
             "alpha",
-            crate::gateway::recovery::MetaSurface::Standard,
+            crate::gateway::recovery::MetaSurface::Standard(
+                crate::gateway::recovery::Revive::Offered,
+            ),
         )
     })
     .await;
@@ -611,7 +613,9 @@ async fn a_dispatch_failure_hint_is_not_receipted() {
             &crate::Error::BackendUnavailable(PROSE.to_owned()),
             "send",
             "alpha",
-            crate::gateway::recovery::MetaSurface::Standard,
+            crate::gateway::recovery::MetaSurface::Standard(
+                crate::gateway::recovery::Revive::Offered,
+            ),
         )
     })
     .await;

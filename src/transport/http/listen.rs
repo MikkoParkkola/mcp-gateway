@@ -162,6 +162,14 @@ impl HttpTransport {
     }
 }
 
+#[cfg(test)]
+impl HttpTransport {
+    /// Stand in for a connect or a session recovery that detected `flavour`.
+    pub(crate) fn set_detected(&self, flavour: Option<bool>) {
+        *self.streamable_http.write() = flavour;
+    }
+}
+
 #[async_trait::async_trait]
 impl UpstreamListen for HttpTransport {
     async fn listen(
@@ -175,6 +183,10 @@ impl UpstreamListen for HttpTransport {
     async fn unsolicited(self: std::sync::Arc<Self>) -> std::result::Result<FrameStream, Refused> {
         let opened = self.open_session_stream().await?;
         refused_as("session stream", opened.map(FrameStream::new))
+    }
+
+    fn detected_streamable(&self) -> Option<bool> {
+        self.streamable()
     }
 }
 
@@ -345,6 +357,23 @@ mod tests {
                 tools_changed: false,
             },
             uris: vec!["file:///a".into()],
+        }
+    }
+
+    /// T11 (MIK-7969): the detected transport is read live, so a session
+    /// recovery that switched it in place is seen at the next read.
+    #[test]
+    fn the_detected_transport_is_read_live() {
+        let transport = HttpTransport::new(
+            "http://127.0.0.1:9/mcp",
+            std::collections::HashMap::new(),
+            std::time::Duration::from_secs(1),
+            true,
+        )
+        .expect("transport");
+        for flavour in [Some(false), Some(true), None] {
+            transport.set_detected(flavour);
+            assert_eq!(transport.detected_streamable(), flavour);
         }
     }
 
@@ -646,5 +675,69 @@ mod tests {
             .await
             .expect("the stream ends");
         assert_eq!(note, None);
+    }
+
+    /// The note a listen answered with one complete JSON body delivers.
+    async fn note_for_json_answer(
+        body: impl Fn(&Value) -> String + Send + 'static,
+    ) -> Option<UpstreamNote> {
+        let url = peer(move |id| {
+            let body = body(id);
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                 content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        })
+        .await;
+        let mut stream = transport(&url).listen(req()).await.expect("opened");
+        tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
+            .await
+            .expect("the stream ends")
+    }
+
+    /// An untrusted upstream's single answer is capped at `FRAME_CAP`: the
+    /// answer that reaches the session as `Unsupported` at exactly the cap is
+    /// dropped unread one byte over it.
+    #[tokio::test]
+    async fn a_json_answer_over_the_frame_cap_is_not_classified() {
+        fn sized(id: &Value, size: usize) -> String {
+            let answer = |message: &str| {
+                json!({"jsonrpc": "2.0", "id": id,
+                    "error": {"code": -32601, "message": message}})
+                .to_string()
+            };
+            let body = answer(&"x".repeat(size - answer("").len()));
+            assert_eq!(body.len(), size);
+            body
+        }
+        let at_cap = note_for_json_answer(|id| sized(id, FRAME_CAP)).await;
+        assert_eq!(at_cap, Some(UpstreamNote::Unsupported));
+        let over = note_for_json_answer(|id| sized(id, FRAME_CAP + 1)).await;
+        assert_eq!(over, None);
+    }
+
+    /// A single answer carrying another request's id is not this listen's.
+    #[tokio::test]
+    async fn a_json_answer_for_another_id_is_not_classified() {
+        let note = note_for_json_answer(|_| {
+            json!({"jsonrpc": "2.0", "id": "another-listen",
+                "error": {"code": -32601, "message": "Method not found"}})
+            .to_string()
+        })
+        .await;
+        assert_eq!(note, None);
+    }
+
+    /// MIK-8019.SAME.1: a null-method frame carrying this listen's id is not a
+    /// response of the listen, so it is not projected into a note.
+    #[test]
+    fn a_null_method_frame_is_not_projected() {
+        let id = RequestId::Number(4);
+        let frame_text = json!({"jsonrpc": "2.0", "id": 4, "method": null, "result": {}});
+        assert!(matches!(
+            frame(&frame_text.to_string(), &id, &json!(4), &req(), true),
+            Frame::Ignore
+        ));
     }
 }

@@ -76,30 +76,105 @@ pub struct CallbackServer {
     receiver: oneshot::Receiver<Result<CallbackResult>>,
     /// Server task handles (one per bound address)
     server_handles: Vec<tokio::task::JoinHandle<Result<()>>>,
+    /// Dropped only once every listener has let go of its socket (MIK-7982).
+    closed: Option<tokio_util::sync::DropGuard>,
 }
 
 impl CallbackServer {
-    /// Stop listening without waiting for a callback, for an authorization
-    /// abandoned before the browser was sent anywhere.
-    pub(crate) fn stop(self) {
-        for handle in self.server_handles {
-            handle.abort();
-        }
+    /// Hold `guard` until the listeners are closed, however this server ends.
+    pub(crate) fn hold_until_closed(&mut self, guard: tokio_util::sync::DropGuard) {
+        self.closed = Some(guard);
     }
 
-    /// Wait for the callback to be received
-    pub async fn wait_for_callback(self) -> Result<(String, CallbackResult)> {
-        let result = self
-            .receiver
+    /// Stop listening without waiting for a callback, for an authorization
+    /// abandoned before the browser was sent anywhere. Returns once the
+    /// listeners have let go of their sockets.
+    pub(crate) async fn stop(self) {
+        self.shutdown().await;
+    }
+    /// Tests only: every login waits through [`Self::wait_within`] (MIK-7982).
+    #[cfg(test)]
+    pub async fn wait_for_callback(mut self) -> Result<(String, CallbackResult)> {
+        let result = (&mut self.receiver)
             .await
             .map_err(|_| Error::OAuth("Callback channel closed unexpectedly".to_string()))?;
 
-        // Abort all listener tasks — they have all done their job.
-        for handle in self.server_handles {
+        // The listeners have done their job; dropping `self` aborts them.
+        result.map(|r| (std::mem::take(&mut self.callback_url), r))
+    }
+
+    /// Wait for the callback to be received, ended without an answer when `window`
+    /// passes or `cancel` fires (MIK-7982). On those ends the listeners are
+    /// closed before this returns, so the port is free for the next login.
+    pub(crate) async fn wait_within(
+        mut self,
+        window: std::time::Duration,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> std::result::Result<Result<(String, CallbackResult)>, Unanswered> {
+        let unanswered = tokio::select! {
+            answer = &mut self.receiver => {
+                let result = answer
+                    .map_err(|_| Error::OAuth("Callback channel closed unexpectedly".to_string()))
+                    .and_then(|r| r);
+                let callback_url = std::mem::take(&mut self.callback_url);
+                // Closed before the login reports its end, so a restart or a
+                // new login can bind a fixed callback port at once.
+                self.shutdown().await;
+                return Ok(result.map(|r| (callback_url, r)));
+            }
+            () = tokio::time::sleep(window) => Unanswered::Window,
+            () = cancel.cancelled() => Unanswered::Cancelled,
+        };
+        self.shutdown().await;
+        Err(unanswered)
+    }
+
+    /// Abort every listener and wait until each has let go of its socket.
+    /// Dropping alone frees a port only on the listener's next poll.
+    async fn shutdown(mut self) {
+        for handle in &self.server_handles {
             handle.abort();
         }
+        // Each handle leaves `self` only once joined: a shutdown interrupted
+        // mid-way leaves the rest to `Drop`, which keeps the guard until then.
+        while let Some(handle) = self.server_handles.last_mut() {
+            let _ = handle.await;
+            self.server_handles.pop();
+        }
+    }
+}
 
-        result.map(|r| (self.callback_url, r))
+/// How a bounded callback wait ended without an answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unanswered {
+    /// The authorization window passed.
+    Window,
+    /// The login was cancelled (restart or shutdown of its backend).
+    Cancelled,
+}
+
+impl Drop for CallbackServer {
+    /// Every way a server ends closes its listeners, a wait dropped mid-way
+    /// (a cancelled or timed-out caller) included: dropping a `JoinHandle`
+    /// alone would detach the listener and keep its port (MIK-7982 F2).
+    fn drop(&mut self) {
+        for handle in &self.server_handles {
+            handle.abort();
+        }
+        // An aborted listener frees its port only when next polled: the
+        // guard is dropped once each one has actually ended.
+        let handles = std::mem::take(&mut self.server_handles);
+        if let Some(guard) = self.closed.take()
+            && !handles.is_empty()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move {
+                for handle in handles {
+                    let _ = handle.await;
+                }
+                drop(guard);
+            });
+        }
     }
 }
 
@@ -259,6 +334,7 @@ pub async fn start_callback_server(
         callback_url,
         receiver: rx,
         server_handles: handles,
+        closed: None,
     })
 }
 
@@ -464,9 +540,7 @@ pub(in crate::oauth) mod tests {
         assert!(server.callback_url.starts_with("http://localhost:"));
         assert!(server.callback_url.ends_with("/oauth/callback"));
         // Clean up
-        for h in server.server_handles {
-            h.abort();
-        }
+        server.stop().await;
     }
 
     /// #2578: the redirect URI names the configured callback host, as
@@ -543,9 +617,7 @@ pub(in crate::oauth) mod tests {
             .await
             .unwrap();
         assert!(server.callback_url.starts_with("http://localhost:"));
-        for h in server.server_handles {
-            h.abort();
-        }
+        server.stop().await;
     }
 
     #[tokio::test]
@@ -554,9 +626,7 @@ pub(in crate::oauth) mod tests {
             .await
             .unwrap();
         assert!(server.callback_url.ends_with("/auth/cb"));
-        for h in server.server_handles {
-            h.abort();
-        }
+        server.stop().await;
     }
 
     // =========================================================================

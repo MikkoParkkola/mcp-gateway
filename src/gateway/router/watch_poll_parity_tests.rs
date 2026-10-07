@@ -233,3 +233,130 @@ async fn a_poll_runs_only_what_the_executor_finds_read_only() {
         assert_eq!(endpoint.arrivals(), hits, "read_only {read_only}: requests");
     }
 }
+
+/// The source's own authorization of a holder (`GatewayWatchHost::may_invoke`):
+/// only a key that still authenticates under its own digest, and is granted
+/// the capability, may be polled for; a gateway that is gone admits no one.
+#[tokio::test]
+async fn the_watch_host_admits_only_a_live_granted_key() {
+    use super::super::watch_poll::GatewayWatchHost;
+    use crate::events::ApiKeyRef;
+    use crate::events::watch_source::{CredentialUse, Holder, Target, WatchHost};
+    let target = Target {
+        capability: "read".into(),
+        backend: "alpha".into(),
+        read_only: true,
+        credential: CredentialUse::Keyed,
+        input_schema: json!({}),
+    };
+    let holder = |name: &str, principal: String| Holder {
+        principal: "subscriber".into(),
+        api_key: ApiKeyRef {
+            name: name.into(),
+            principal,
+        },
+    };
+    let live = |name: &str| holder(name, crate::gateway::auth::principal_of(name));
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    let host = GatewayWatchHost::new(&fx.state);
+    assert!(
+        host.may_invoke(&live("k-std"), &target),
+        "a live granted key"
+    );
+    assert!(
+        !host.may_invoke(&live("k-deny"), &target),
+        "a key denied `read`"
+    );
+    assert!(
+        !host.may_invoke(&holder("k-std", "000000000000".into()), &target),
+        "the key's name under another digest (re-issued)"
+    );
+    assert!(!host.may_invoke(&live("k-gone"), &target), "an unknown key");
+    let (state, _store) = super::super::tests::test_router_app_state().await;
+    let gone = GatewayWatchHost::new(&state);
+    let owner = Arc::downgrade(&state);
+    drop(state);
+    assert!(owner.upgrade().is_none(), "nothing else owns the state");
+    assert!(
+        !gone.may_invoke(&live("k-std"), &target),
+        "the gateway is gone"
+    );
+}
+
+/// A read-only capability `name` with these `providers`, as a catalogue holds it.
+fn read_only(name: &str, providers: &str) -> crate::capability::CapabilityDefinition {
+    crate::capability::parse_capability(&format!(
+        "name: {name}\n\
+         description: Read one day\n\
+         metadata:\n\
+         \x20 exposure: public\n\
+         \x20 read_only: true\n\
+         providers:\n{providers}"
+    ))
+    .expect(name)
+}
+
+/// MIK-7720 (U1): watch is offered for read-only REST capabilities only. A
+/// read-only capability served over GraphQL, JSON-RPC or a local process is
+/// no target, nor is a REST one with a non-REST fallback, nor a webhook-only
+/// one with no provider to poll; a provider with no `service` is REST.
+#[tokio::test]
+async fn only_read_only_rest_capabilities_are_watch_targets() {
+    const REST: &str = "    config:\n      base_url: http://localhost:9\n      path: /read\n      \
+                        method: GET\n";
+    const CLI: &str = "config:\n      command: gws\n      args: [gmail]\n";
+    let rows = [
+        (
+            "rest_named",
+            format!("  primary:\n    service: rest\n{REST}"),
+        ),
+        ("rest_default", format!("  primary:\n{REST}")),
+        (
+            "over_graphql",
+            "  primary:\n    service: graphql\n    config:\n      endpoint: \
+             http://localhost:9/graphql\n      body: \"{ probe }\"\n"
+                .to_owned(),
+        ),
+        (
+            "over_jsonrpc",
+            "  primary:\n    service: jsonrpc\n    config:\n      endpoint: \
+             http://localhost:9/rpc\n      method: probe\n"
+                .to_owned(),
+        ),
+        (
+            "over_cli",
+            format!("  primary:\n    service: cli\n    {CLI}"),
+        ),
+        (
+            "rest_then_cli",
+            format!(
+                "  primary:\n    service: rest\n{REST}  fallback:\n    - service: cli\n      \
+                 config:\n        command: gws\n        args: [gmail]\n"
+            ),
+        ),
+        (
+            "webhook_only",
+            "  {}\nwebhooks:\n  push:\n    path: /webhook_only/push\n    method: POST\n".to_owned(),
+        ),
+    ];
+    let backend = Arc::new(crate::capability::CapabilityBackend::new(
+        "probe_caps",
+        Arc::new(crate::capability::CapabilityExecutor::new()),
+    ));
+    for (name, providers) in &rows {
+        backend
+            .register_capability(read_only(name, providers))
+            .expect(name);
+    }
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    fx.state.meta_mcp.set_capabilities(backend);
+    let mut watched: Vec<String> = fx
+        .state
+        .meta_mcp
+        .watch_targets()
+        .into_iter()
+        .map(|t| t.capability)
+        .collect();
+    watched.sort();
+    assert_eq!(watched, ["rest_default", "rest_named"]);
+}

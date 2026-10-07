@@ -241,3 +241,63 @@ fn error_data_is_clamped_at_its_top_level_only() {
         "{data}"
     );
 }
+
+/// MIK-7734: a string `taskId` beside a `result` is not enough to make an
+/// envelope. Without a task status it is tool data, and its nested scope is
+/// left as sent; the result's own top-level scope is still clamped.
+#[test]
+fn a_string_task_id_without_a_task_status_is_tool_data() {
+    for status in [None, Some(json!("shipped")), Some(Value::Null)] {
+        let mut plain = json!({
+            "cacheScope": "public", "taskId": "t1", "result": {"cacheScope": "public"}
+        });
+        if let Some(status) = status.clone() {
+            plain["status"] = status;
+        }
+        clamp_delivered_scope(&mut plain);
+        assert_eq!(plain["cacheScope"], "private", "status {status:?}");
+        assert_eq!(
+            plain["result"]["cacheScope"], "public",
+            "a string taskId without a task status is not an envelope: {status:?}"
+        );
+    }
+
+    // Through the response serializer, with no top-level scope to clamp.
+    let wire = delivered(json!({"taskId": "t1", "result": {"cacheScope": "public"}}));
+    assert_eq!(wire["result"]["result"]["cacheScope"], "public", "{wire}");
+}
+
+/// MIK-7734: a server-to-client request carries an `id` too. A `result` member
+/// on it is an extension, not a response result, and the frame passes as sent,
+/// alone or in a batch beside a response that is clamped.
+#[test]
+fn a_request_frame_passes_unchanged() {
+    let request = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "sampling/createMessage",
+        "params": {"cacheScope": "public"}, "result": {"cacheScope": "public"},
+        "error": {"code": 1, "message": "x", "data": {"cacheScope": "public"}}
+    });
+    assert_eq!(message_event_data(&request), request.to_string());
+
+    let batch = json!([
+        request.clone(),
+        {"jsonrpc": "2.0", "id": 2, "result": {"cacheScope": "public"}}
+    ]);
+    let data: Value = serde_json::from_str(&message_event_data(&batch)).expect("json");
+    assert_eq!(data[0], request, "{data}");
+    assert_eq!(data[1]["result"]["cacheScope"], "private", "{data}");
+}
+
+/// MIK-7734: only a string `method` makes a request. A response carrying
+/// `"method": null` or a number is still a response, and still clamped.
+#[test]
+fn a_non_string_method_does_not_exempt_a_response() {
+    for method in [Value::Null, json!(7)] {
+        let frame = json!({
+            "jsonrpc": "2.0", "id": 1, "method": method.clone(),
+            "result": {"cacheScope": "public"}
+        });
+        let data: Value = serde_json::from_str(&message_event_data(&frame)).expect("json");
+        assert_eq!(data["result"]["cacheScope"], "private", "method {method}");
+    }
+}

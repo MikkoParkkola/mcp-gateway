@@ -333,6 +333,7 @@ impl Backend {
                             .ensure_entry_started(&key)
                             .await
                             .map_err(|e| super::lifecycle::pre_send_start_error(&self.name, e))?;
+                        crate::oauth::login_gate::Provenance::mark_started();
                         let (merged, truncated) = drain_list_pages(
                             transport.as_ref(),
                             &self.name,
@@ -350,6 +351,8 @@ impl Backend {
                     .await;
                     let end = match &drained {
                         Ok(_) => FillEnd::Drained,
+                        // A login in progress stamps no cooldown (MIK-7982).
+                        Err(e) if e.is_authorization_wait() => FillEnd::Pending,
                         Err(e) => match super::fill_check::Replay::of(e) {
                             None if super::fill_check::is_transport_failure(e) => {
                                 FillEnd::Unreplayable
@@ -357,7 +360,7 @@ impl Backend {
                             transport => FillEnd::Failed { transport },
                         },
                     };
-                    if family.stale_hit && drained.is_err() {
+                    if family.stale_hit && drained.is_err() && !matches!(end, FillEnd::Pending) {
                         *refresh_failed() = Some(tokio::time::Instant::now());
                     }
                     if let Some(guard) = guard.as_mut() {
@@ -517,9 +520,18 @@ impl Backend {
     ) -> Result<(Arc<Vec<Tool>>, Completeness)> {
         let limit = self.config.timeout;
         let fill = self.tools_fill(binding, headers, FillBound::CallTimeout(limit), stale_hit);
-        let tools = tokio::time::timeout(limit + super::fill_check::LIST_FILL_WAIT_GRACE, fill)
-            .await
-            .unwrap_or_else(|_| Err(super::fill_check::list_timeout(&self.name, limit)))?;
+        // MIK-7982 C3/C4: both deadlines below read this caller's provenance.
+        let bounded = async {
+            tokio::time::timeout(limit + super::fill_check::LIST_FILL_WAIT_GRACE, fill)
+                .await
+                .unwrap_or_else(|_| {
+                    Err(crate::oauth::login_gate::Provenance::expired(
+                        &self.name,
+                        super::fill_check::list_timeout(&self.name, limit),
+                    ))
+                })
+        };
+        let tools = crate::oauth::login_gate::Provenance::scope(&self.login_gate, bounded).await?;
         let slot = self.tools_slot(binding);
         let completeness = slot.tools_cache.with_cached(|current| match current {
             Some(held) if Arc::ptr_eq(held, &tools) => {
