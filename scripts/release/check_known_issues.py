@@ -11,27 +11,25 @@ left at a final tag is shipped, so it blocks the tag instead. A prerelease tag
 (v4.0.0-beta.N, v4.0.0-rc.N) may ship open items as known gaps
 (docs/release/v4.0.0-prerelease-channel.md), so only the later-release rule
 applies to it. The tag is --tag, else $GITHUB_REF_NAME; anything that is not a
-v-prefixed semver prerelease tag, a branch name included, is held to the
+vX.Y.Z-beta.N or vX.Y.Z-rc.N tag, a branch name included, is held to the
 final-tag rule.
 
 Exit 0 when the gate holds, 1 otherwise (an unreadable notes file included).
 """
 
 import argparse
-import importlib.util
 import os
 import pathlib
 import re
 import sys
 
-_spec = importlib.util.spec_from_file_location(
-    "check_tag_manifest", pathlib.Path(__file__).with_name("check_tag_manifest.py")
-)
-tag_manifest = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(tag_manifest)
-
 DEFAULT_NOTES = "docs/release/v4.0.0-release-notes-DRAFT.md"
 LATER_RELEASE = "4.0.1"
+# The version as a whole token: not 14.0.1, not 4.0.10; v4.0.1 and "4.0.1." count.
+LATER_RELEASE_TOKEN = re.compile(r"(?<![\d.])4\.0\.1(?!\.?\d)")
+# Same two forms as check_scope_acceptance.py PRERELEASE_400; any other suffix,
+# build metadata included, is held to the final-tag rule.
+PRERELEASE_TAG = re.compile(r"^v\d+\.\d+\.\d+-(beta|rc)\.\d+$")
 # ATX headings: up to three spaces of indent, optional closing hashes.
 HEADING = re.compile(r"^ {0,3}##[ \t]+known issues(?:[ \t]+#*)?[ \t]*$", re.IGNORECASE)
 SECTION_END = re.compile(r"^ {0,3}#{1,2}(?:[ \t]|$)")
@@ -51,16 +49,15 @@ def known_issues(text):
 
 
 def is_prerelease_tag(tag):
-    """True only for a v-prefixed semver tag with a prerelease identifier."""
-    version = tag[1:] if tag.startswith("v") else ""
-    return bool(tag_manifest.SEMVER.match(version)) and tag_manifest.is_prerelease(version)
+    """True only for a vX.Y.Z-beta.N or vX.Y.Z-rc.N tag."""
+    return bool(PRERELEASE_TAG.match(tag))
 
 
 def problems(section, release):
     found = [
         f"Known issues names {LATER_RELEASE}: {line.strip()}"
         for line in section
-        if LATER_RELEASE in line
+        if LATER_RELEASE_TOKEN.search(line)
     ]
     content = [line for line in section if line.strip()]
     if release and content:
