@@ -574,12 +574,13 @@ fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
                 let needle = needle.strip_prefix(['+', '-']).unwrap_or(needle);
                 // A needle with no digit before its exponent ("e123", "+",
                 // whitespace) names no number: read as one it became 0 and
-                // blanked every zero in the result (MIK-8065).
+                // blanked every zero in the result (MIK-8065). So every needle
+                // past this point is non-empty.
                 let coefficient = needle.split(['e', 'E']).next().unwrap_or_default();
                 if !coefficient.bytes().any(|b| b.is_ascii_digit()) {
                     return false;
                 }
-                if needle.is_empty() || !needle.bytes().all(|b| b.is_ascii_digit()) {
+                if !needle.bytes().all(|b| b.is_ascii_digit()) {
                     // A credential injected in another number form ("12.5",
                     // "1.5e10") comes back printed differently, so it is
                     // compared by value: exactly, from its text, when the
