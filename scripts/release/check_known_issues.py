@@ -37,7 +37,9 @@ LATER_RELEASE_TOKEN = re.compile(r"(?<![\d.])4\.0\.1(?!\.?\d)")
 # final-tag rule.
 PRERELEASE_TAG = re.compile(r"^v4\.0\.0-(beta|rc)\.\d+$")
 # ATX headings: up to three spaces of indent, optional closing hashes.
-HEADING = re.compile(r"^ {0,3}##[ \t]+known issues(?:[ \t]+#*)?[ \t]*$", re.IGNORECASE)
+HEADING = re.compile(
+    r"^ {0,3}##[ \t]+known[ \t]+issues(?:[ \t]+#*)?[ \t]*$", re.IGNORECASE
+)
 SECTION_END = re.compile(r"^#{1,2}(?:[ \t]|$)")
 # Setext: a paragraph line underlined with = (level 1) or - (level 2). A list
 # item, indented code, an ATX heading, a quote, a fence or a thematic break
@@ -65,6 +67,7 @@ HTML_BLOCKS = tuple(
         (r"^ {0,3}</?[a-z]", r"\A\s*\Z"),
     )
 )
+BLANK_ENDS = HTML_BLOCKS[-1][1]
 # A link reference definition is not paragraph text, so it is never a heading;
 # any line that opens with a bracket is read as one.
 REFERENCE = re.compile(r"^ {0,3}\[")
@@ -132,6 +135,10 @@ def known_issues(text):
                 if found:
                     block, start = closer, found.end()
                     break
+        if block is BLANK_ENDS and FENCE.match(line):
+            # A fence line inside a blank-ended block opens a fence anyway,
+            # so its content can never end the section.
+            block = None
         if block:
             if block.search(line, start):
                 block = None
