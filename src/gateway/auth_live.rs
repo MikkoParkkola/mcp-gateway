@@ -73,11 +73,14 @@ pub(crate) async fn current_client(
     state: &AuthState,
     credential: Option<&HeldCredential>,
 ) -> Option<AuthenticatedClient> {
-    let agent_validated = state.agent_auth.enabled && {
+    // Dead here, in either gateway mode, unless the held bearer is a valid
+    // agent token: ingress refused every other request already.
+    let mut agent_validated = false;
+    if state.agent_auth.enabled {
         let token = credential.and_then(|held| held.bearer.as_deref())?;
         crate::gateway::oauth::validate_agent_token(token, &state.agent_auth.registry).ok()?;
-        true
-    };
+        agent_validated = true;
+    }
     if !state.auth_config.enabled {
         return Some(anonymous_client());
     }

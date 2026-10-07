@@ -156,6 +156,16 @@ impl SessionFrame {
     }
 }
 
+/// A copy that was not queued: nobody listens, or its judgement failed closed.
+#[derive(Debug)]
+struct Unsent;
+
+impl std::fmt::Display for Unsent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("no stream took the copy")
+    }
+}
+
 /// Client session state
 #[derive(Debug)]
 struct ClientSession {
@@ -213,14 +223,12 @@ impl ClientSession {
     }
 
     /// Send as `broadcast::Sender::send` does; an unopened sender has no
-    /// receiver, so it refuses exactly as an open one with none would.
-    fn send(
-        &self,
-        notification: SessionFrame,
-    ) -> std::result::Result<usize, broadcast::error::SendError<SessionFrame>> {
+    /// receiver, so it refuses exactly as an open one with none would. The
+    /// refused frame is dropped, not returned: no caller reads it.
+    fn send(&self, notification: SessionFrame) -> std::result::Result<usize, Unsent> {
         match self.tx.get() {
-            Some(tx) => tx.send(notification),
-            None => Err(broadcast::error::SendError(notification)),
+            Some(tx) => tx.send(notification).map_err(|_| Unsent),
+            None => Err(Unsent),
         }
     }
 }
@@ -311,17 +319,12 @@ impl NotificationMultiplexer {
         hidden: Option<&crate::security::tenant_reads::ReadAttribution>,
         watch: Option<Arc<DeliveryWatch>>,
         audience: CopyAudience,
-    ) -> std::result::Result<usize, broadcast::error::SendError<SessionFrame>> {
+    ) -> std::result::Result<usize, Unsent> {
         // No open stream: nothing to deliver, so nothing to judge, and nothing
         // is sent either, so a stream that subscribes meanwhile cannot get an
         // unjudged copy (a send with no receiver delivers nothing anyway).
         if session.tx.get().is_none_or(|tx| tx.receiver_count() == 0) {
-            return Err(broadcast::error::SendError(SessionFrame {
-                note: notification,
-                mark: None,
-                watch: None,
-                audience,
-            }));
+            return Err(Unsent);
         }
         let key = session.read_key.read().clone();
         let key = key.as_deref();
@@ -329,14 +332,7 @@ impl NotificationMultiplexer {
             None => None,
             Some(judge) => match judge.judge(key, &notification, hidden) {
                 Ok(mark) => mark.map(Box::new),
-                Err(()) => {
-                    return Err(broadcast::error::SendError(SessionFrame {
-                        note: notification,
-                        mark: None,
-                        watch: None,
-                        audience,
-                    }));
-                }
+                Err(()) => return Err(Unsent),
             },
         };
         let copies = session.send(SessionFrame {
