@@ -703,6 +703,39 @@ fn bench_continuation(c: &mut Criterion) {
     group.finish();
 }
 
+/// `InFlight` reads on a full table with nothing expired (MIK-8060.RECLAIM.1):
+/// every reader reclaims against `now` under the lock, so this is the case
+/// whose cost should not grow with the number of held exchanges.
+fn bench_in_flight_full(c: &mut Criterion) {
+    use mcp_gateway::protocol::continuation::InFlight;
+
+    // Fixed clock, deadlines far after it: no hold can expire mid-run.
+    const NOW: u64 = 1_800_000_000;
+    const CAPACITY: usize = 4_096;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("bench runtime");
+    let table = InFlight::new("replica-a", CAPACITY);
+    let keys: Vec<String> = (0..CAPACITY)
+        .map(|_| {
+            rt.block_on(table.hold("bench-backend", NOW + 3_600, NOW))
+                .expect("room below capacity")
+        })
+        .collect();
+    let probe = &keys[CAPACITY / 2];
+
+    let mut group = c.benchmark_group("in_flight_full");
+    group.bench_function("route", |b| {
+        b.iter(|| std::hint::black_box(rt.block_on(table.route(std::hint::black_box(probe), NOW))));
+    });
+    // At capacity: refused, so the table stays full across samples.
+    group.bench_function("hold_at_capacity", |b| {
+        b.iter(|| std::hint::black_box(rt.block_on(table.hold("bench-backend", NOW + 3_600, NOW))));
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_tool_registry,
@@ -715,5 +748,6 @@ criterion_group!(
     bench_semantic_search,
     bench_modern_request_path,
     bench_continuation,
+    bench_in_flight_full,
 );
 criterion_main!(benches);
