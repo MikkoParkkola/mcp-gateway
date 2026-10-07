@@ -104,6 +104,17 @@ impl MetaMcp {
                 return;
             }
             #[cfg(feature = "firewall")]
+            if shape == AnswerShape::InvokeWrapped
+                && let (Some(fw), Some(text)) = (
+                    &self.firewall,
+                    result.and_then(super::super::audit::rewritten_text),
+                )
+            {
+                keep_to_rewritten(fw, &mut staged, text);
+                *receipts = staged;
+                return;
+            }
+            #[cfg(feature = "firewall")]
             if let ([one], Some(delivered), Some(fw)) = (staged.as_slice(), result, &self.firewall)
                 && let Some(digest) = fw.delivery_digest(
                     &one.server,
@@ -167,6 +178,15 @@ impl MetaMcp {
             }
             let _ = RELAY_RECEIPTS.try_with(|receipts| {
                 let mut receipts = receipts.borrow_mut();
+                // MIK-7998: a wrapper no longer in the gateway's print keeps
+                // its staged receipt, kept to the text delivered.
+                if shape.as_built(result) == AnswerShape::InvokeWrapped
+                    && !receipts.iter().any(|r| r.in_plan)
+                    && let Some(text) = super::super::audit::rewritten_text(result)
+                {
+                    keep_to_rewritten(fw, &mut receipts, text);
+                    return;
+                }
                 // A task envelope with no delivered slot keeps the staged
                 // receipt: it was staged from the stored slot, never from
                 // the envelope's own fields.
@@ -227,6 +247,90 @@ fn keep_plan_receipts(
         r.digest = fw.retain_delivered(digest, &delivered);
         r.pending_retain = false;
     }
+}
+
+/// MIK-7998: the single staged receipt kept to a wrapper the gateway's own
+/// final pass rewrote, read as the caller reads it. The staged receipt is the
+/// backend's value, decoded, without the gateway's members; keeping it to the
+/// delivered text removes what the rewrite took out. Dropped and counted when
+/// the text is over the bound plans are kept against.
+#[cfg(feature = "firewall")]
+fn keep_to_rewritten(
+    fw: &crate::security::firewall::Firewall,
+    receipts: &mut Vec<super::Receipt>,
+    text: &str,
+) {
+    let [one] = receipts.as_mut_slice() else {
+        return;
+    };
+    let read = Value::String(unescape(text));
+    match fw.delivered_for_plan(&read) {
+        Some(delivered) => {
+            let digest = std::mem::take(&mut one.digest);
+            one.digest = fw.retain_delivered(digest, &delivered);
+        }
+        None => receipts.clear(),
+    }
+}
+
+/// The text of a JSON print as a caller reads it: each string escape
+/// decoded, a malformed escape or an unpaired surrogate kept as written.
+#[cfg(feature = "firewall")]
+fn unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('\\') {
+        out.push_str(&rest[..at]);
+        let escape = &rest[at..];
+        let (decoded, used) = escape_at(escape);
+        match decoded {
+            Some(c) => out.push(c),
+            None => out.push_str(&escape[..used]),
+        }
+        rest = &escape[used..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The char the escape at the start of `escape` stands for, and its length
+/// in bytes; `None` keeps those bytes as written.
+#[cfg(feature = "firewall")]
+fn escape_at(escape: &str) -> (Option<char>, usize) {
+    let simple = |c| (Some(c), 2);
+    match escape.as_bytes().get(1) {
+        Some(b'n') => simple('\n'),
+        Some(b't') => simple('\t'),
+        Some(b'r') => simple('\r'),
+        Some(b'"') => simple('"'),
+        Some(b'\\') => simple('\\'),
+        Some(b'/') => simple('/'),
+        Some(b'b') => simple('\u{8}'),
+        Some(b'f') => simple('\u{c}'),
+        Some(b'u') => match hex4(escape, 2) {
+            Some(high @ 0xD800..=0xDBFF) => match (escape.get(6..8), hex4(escape, 8)) {
+                (Some("\\u"), Some(low @ 0xDC00..=0xDFFF)) => (
+                    char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00)),
+                    12,
+                ),
+                _ => (None, 6),
+            },
+            Some(code) => (char::from_u32(code), 6),
+            None => (None, 1),
+        },
+        _ => (None, 1),
+    }
+}
+
+/// The four hex digits at `at` of `text`, as a number.
+#[cfg(feature = "firewall")]
+fn hex4(text: &str, at: usize) -> Option<u32> {
+    let digits = text.get(at..at + 4)?;
+    digits
+        .bytes()
+        .all(|b| b.is_ascii_hexdigit())
+        .then(|| u32::from_str_radix(digits, 16).ok())
+        .flatten()
 }
 
 /// Which members of a delivered result the gateway wrote on its route.
