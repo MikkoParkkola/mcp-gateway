@@ -462,4 +462,14 @@ async fn a_refused_startup_import_leaves_the_seal_as_it_found_it() {
         is_new_owner(&admission, "k-fresh"),
         "a refused startup left new keyed calls sealed"
     );
+    assert!(
+        !is_new_owner(&admission, "k-held"),
+        "the caller's own lease survives the refused startup"
+    );
+    // A seal the caller already had is put back as it was, not cleared.
+    admission.set_sealed(7);
+    let reopened = TaskService::open(&path, StoreLimits::default(), Arc::clone(&admission)).await;
+    assert!(reopened.is_err(), "the import is still refused");
+    assert_eq!(admission.set_sealed(0), 7, "the earlier seal is restored");
+    drop(held);
 }
