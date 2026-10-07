@@ -45,6 +45,21 @@ NOT_A_PARAGRAPH = re.compile(
 # A fenced block's lines are text, never headings; it closes on a run of the
 # same character at least as long as the one that opened it.
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+# An HTML comment's lines are text too, up to the line that holds "-->".
+COMMENT = re.compile(r"^ {0,3}<!--")
+
+
+def ends_section(lines, i):
+    """True when the setext heading on line i may end a section.
+
+    Stop rule: this is a line reader, not a Markdown parser, so it does not try
+    to decide every form. A section ends only on the plain form: one line of
+    paragraph text at column 0 after a blank line. Every other form (a heading
+    that spans lines, an indented line, a lazy continuation) stays section
+    text, so the gate can only read too much, never too little. Starts stay
+    liberal: setext_level alone decides them.
+    """
+    return not lines[i][:1].isspace() and i > 0 and not lines[i - 1].strip()
 
 
 def setext_level(line, underline):
@@ -58,8 +73,14 @@ def setext_level(line, underline):
 def known_issues(text):
     """Every Known issues section's lines, each up to the next level 1-2 heading."""
     lines = text.splitlines()
-    body, inside, underline, fence = [], False, False, ""
+    body, inside, underline, fence, comment = [], False, False, "", False
     for i, line in enumerate(lines):
+        if comment or (not fence and COMMENT.match(line)):
+            start = 0 if comment else line.index("<!--") + 4
+            comment = "-->" not in line[start:]
+            if inside:
+                body.append(line)
+            continue
         opener = FENCE.match(line)
         if fence or opener:
             run = opener.group(1) if opener else ""
@@ -76,7 +97,7 @@ def known_issues(text):
         level = setext_level(line, lines[i + 1] if i + 1 < len(lines) else "")
         if HEADING.match(line) or (level == 2 and line.strip().lower() == "known issues"):
             inside, underline = True, bool(level)
-        elif SECTION_END.match(line) or level:
+        elif SECTION_END.match(line) or (level and ends_section(lines, i)):
             inside, underline = False, bool(level)
         elif inside:
             body.append(line)
