@@ -252,6 +252,11 @@ async fn direct_replayed_chain_refusal_keeps_its_uninspected_attribution() {
             error.pointer("/data/_gatewayUninspected").is_none(),
             "{error}"
         );
+        assert_eq!(
+            fx.calls.load(Ordering::SeqCst),
+            1,
+            "the replay must not reach the backend again"
+        );
         let all = invocations(&fx);
         assert_eq!(all.len(), 2, "{all:?}");
         let (first, replay) = (&all[0], &all[1]);
@@ -315,6 +320,11 @@ async fn direct_replayed_firewall_refusal_of_an_unread_answer_stays_uninspected(
     assert!(
         answers[0]["error"]["code"].is_i64() && answers[1]["error"] == answers[0]["error"],
         "base: the firewall refuses, and the replay answers that refusal: {answers:?}"
+    );
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "the replay must not reach the backend again"
     );
     let all = invocations(&fx);
     assert_eq!(all.len(), 2, "{all:?}");
