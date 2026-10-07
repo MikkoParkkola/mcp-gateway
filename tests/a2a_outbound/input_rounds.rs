@@ -404,3 +404,42 @@ async fn a2a_8_a_leaked_token_is_refused_to_another_caller_on_the_backend_route(
     );
     assert_eq!(stub::sends(&log).len(), 2);
 }
+
+/// A2A.9: once a question is redeemed its task is owned by the retry; a
+/// retry abandoned while the agent holds it still cancels the task.
+#[tokio::test]
+async fn a2a_9_an_abandoned_retry_still_cancels_the_task() {
+    let mut agent = Agent::answering(Value::Null);
+    agent.answer = stub::script(vec![
+        Step::Reply(stub::task_in("TASK_STATE_INPUT_REQUIRED", "which city?")),
+        Step::Hang,
+    ]);
+    let (base, log) = stub::serve(agent).await;
+    let backend = std::sync::Arc::new(backend(&base, None, &[]));
+    let asked = send(&backend, first_call(), None).await;
+    let state = asked.result.expect("interim")["requestState"].clone();
+
+    let accept = json!({"action": "accept", "content": {"reply": "Helsinki"}});
+    let retry_call = tokio::spawn({
+        let backend = std::sync::Arc::clone(&backend);
+        async move { send(&backend, retry(&state, accept), None).await }
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while stub::sends(&log).len() < 2 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the retry never reached the agent"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    retry_call.abort();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while stub::calls(&log, "CancelTask").is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "an abandoned retry must still cancel the agent's task"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(stub::calls(&log, "CancelTask")[0]["params"]["id"], "task-2");
+}

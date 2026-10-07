@@ -19,7 +19,7 @@ fn park(parked: &Parked, identity: Option<&str>, now: Instant) -> String {
             Vec::new(),
             now,
         )
-        .expect("room to park")
+        .unwrap_or_else(|refused| panic!("room to park: {refused:?}"))
 }
 
 #[test]
@@ -87,7 +87,7 @@ fn the_sweep_takes_only_expired_entries() {
             .take(&fresh, None, now + Duration::from_secs(61))
             .is_ok()
     );
-    assert!(parked.drain_all().is_empty());
+    assert!(parked.close().is_empty());
 }
 
 #[test]
@@ -96,10 +96,21 @@ fn parking_stops_at_the_cap() {
     for _ in 0..PARKED_CAP {
         park(&parked, None, now);
     }
-    assert!(
-        parked
-            .park("one-more".into(), None, None, Vec::new(), now)
-            .is_none()
+    assert_eq!(
+        parked.park("one-more".into(), None, None, Vec::new(), now),
+        Err(ParkRefused::Full)
     );
-    assert_eq!(parked.drain_all().len(), PARKED_CAP);
+    assert_eq!(parked.close().len(), PARKED_CAP);
+}
+
+#[test]
+fn nothing_parks_after_close() {
+    let (parked, now) = (parked(), Instant::now());
+    park(&parked, None, now);
+    assert_eq!(parked.close().len(), 1, "close hands back what was waiting");
+    assert_eq!(
+        parked.park("late".into(), None, None, Vec::new(), now),
+        Err(ParkRefused::Closed),
+        "a park racing close is refused, so its caller cancels the task"
+    );
 }

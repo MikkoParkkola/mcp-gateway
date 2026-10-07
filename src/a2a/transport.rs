@@ -22,7 +22,9 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use super::client::{A2aClient, Endpoint, Reply};
-use super::delegation::{CancelGuard, PARKED_TTL, Parked, Pending, SWEEP_EVERY, spawn_cancel};
+use super::delegation::{
+    CancelGuard, PARKED_TTL, ParkRefused, Parked, Pending, SWEEP_EVERY, spawn_cancel,
+};
 use super::translator::{
     TOOL_NAME, card_to_tool, error_result, reply_to_result, status_text, task_to_result,
 };
@@ -223,7 +225,12 @@ impl A2aTransport {
                 "`{TOOL_NAME}` requires a `message` string argument"
             ));
         };
-        self.delegate(id, Message::user_text(text), extra_headers, identity)
+        let guard = CancelGuard::new(
+            self.client.clone(),
+            self.endpoint.clone(),
+            extra_headers.to_vec(),
+        );
+        self.delegate(id, Message::user_text(text), extra_headers, identity, guard)
             .await
     }
 
@@ -252,6 +259,14 @@ impl A2aTransport {
                 ));
             }
         };
+        // The map no longer owns the task; this guard does, from here on, so
+        // a retry abandoned midway still cancels it.
+        let mut guard = CancelGuard::new(
+            self.client.clone(),
+            self.endpoint.clone(),
+            extra_headers.to_vec(),
+        );
+        guard.arm(&pending.task_id);
         let answer = params.and_then(|p| p.pointer(&format!("/inputResponses/{ASK_KEY}")));
         let accepted = answer
             .filter(|answer| answer.get("action").and_then(Value::as_str) == Some("accept"))
@@ -259,13 +274,18 @@ impl A2aTransport {
             .and_then(Value::as_str);
         let Some(reply) = accepted else {
             // Declined, canceled, or no usable answer: the agent's task ends.
-            let _ = self
+            let canceled = self
                 .unless_closed(self.client.cancel_task(
                     &self.endpoint,
                     &pending.task_id,
                     extra_headers,
                 ))
                 .await;
+            // Only an answer the agent gave releases the guard; otherwise it
+            // asks once more as it drops.
+            if matches!(canceled, Ok(Reply::Answer(_))) {
+                guard.disarm();
+            }
             return Ok(JsonRpcResponse::success(
                 id,
                 error_result(
@@ -277,28 +297,27 @@ impl A2aTransport {
         let mut message = Message::user_text(reply);
         message.task_id = Some(pending.task_id);
         message.context_id = pending.context_id;
-        self.delegate(id, message, extra_headers, identity).await
+        self.delegate(id, message, extra_headers, identity, guard)
+            .await
     }
 
     /// Send `message` and follow the agent's task to an answer, a question or
-    /// the deadline. Abandoned midway, the guard cancels the task.
+    /// the deadline. `guard` owns the task: armed already when the message
+    /// continues a known task, armed as soon as a new task is named.
     async fn delegate(
         &self,
         id: RequestId,
         message: Message,
         extra_headers: &[(String, String)],
         identity: Option<&str>,
+        mut guard: CancelGuard,
     ) -> Result<JsonRpcResponse> {
         let deadline = tokio::time::Instant::now() + self.timeout;
-        let mut guard = CancelGuard::new(
-            self.client.clone(),
-            self.endpoint.clone(),
-            extra_headers.to_vec(),
-        );
-        // Before the agent names its task nothing can cancel it, so a failure
-        // here says the remote outcome is not known rather than guessing.
+        // Before the agent names a new task nothing can cancel it, so a
+        // failure here says the remote outcome is not known.
         let sent = self
-            .unless_closed(
+            .within(
+                deadline,
                 self.client
                     .send_message(&self.endpoint, message, extra_headers),
             )
@@ -309,12 +328,29 @@ impl A2aTransport {
                 ))
             })?;
         let mut task = match sent {
-            Reply::AgentError { code, message } => return Ok(agent_error(id, code, &message)),
-            Reply::Answer(reply) => match *reply {
+            // A known task is canceled by the guard; a new one was never named.
+            None if guard.is_armed() => return Ok(self.timed_out(id)),
+            None => {
+                return Ok(JsonRpcResponse::success(
+                    id,
+                    error_result(&format!(
+                        "the A2A agent did not answer within the backend timeout ({}s); whether \
+                         it started the task is not known",
+                        self.timeout.as_secs()
+                    )),
+                ));
+            }
+            Some(Reply::AgentError { code, message }) => {
+                return Ok(agent_error(id, code, &message));
+            }
+            Some(Reply::Answer(reply)) => match *reply {
                 SendMessageResponse {
                     task: Some(task), ..
                 } => task,
-                answer => return Ok(JsonRpcResponse::success(id, reply_to_result(&answer))),
+                answer => {
+                    guard.disarm();
+                    return Ok(JsonRpcResponse::success(id, reply_to_result(&answer)));
+                }
             },
         };
         let mut wait = FIRST_POLL;
@@ -329,36 +365,58 @@ impl A2aTransport {
                 return Ok(self.ask(id, task, extra_headers, identity));
             }
             guard.arm(&task.id);
-            if tokio::time::Instant::now() + wait >= deadline {
-                // The guard, still armed, cancels the task as it drops.
-                return Ok(JsonRpcResponse::success(
-                    id,
-                    error_result(&format!(
-                        "the A2A agent did not finish within the backend timeout ({}s); its \
-                         task was canceled",
-                        self.timeout.as_secs()
-                    )),
-                ));
+            // Sleep no further than the deadline, and bound the poll by it.
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(self.timed_out(id));
             }
             self.unless_closed(async {
-                tokio::time::sleep(wait).await;
+                tokio::time::sleep(wait.min(remaining)).await;
                 Ok(())
             })
             .await?;
             wait = (wait * 2).min(LONGEST_POLL);
-            task = match self
-                .unless_closed(
+            let polled = self
+                .within(
+                    deadline,
                     self.client
                         .get_task(&self.endpoint, &task.id, extra_headers),
                 )
-                .await?
-            {
-                Reply::Answer(task) => task,
-                Reply::AgentError { code, message } => {
+                .await?;
+            task = match polled {
+                None => return Ok(self.timed_out(id)),
+                Some(Reply::Answer(task)) => task,
+                Some(Reply::AgentError { code, message }) => {
                     return Ok(agent_error(id, code, &message));
                 }
             };
         }
+    }
+
+    /// `call`, unless the transport closes (`Err`) or `deadline` passes first
+    /// (`Ok(None)`).
+    async fn within<T>(
+        &self,
+        deadline: tokio::time::Instant,
+        call: impl Future<Output = Result<T>>,
+    ) -> Result<Option<T>> {
+        match tokio::time::timeout_at(deadline, self.unless_closed(call)).await {
+            Ok(outcome) => outcome.map(Some),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// The answer when the deadline passes. The caller's guard, still armed,
+    /// requests the task's cancellation as it drops.
+    fn timed_out(&self, id: RequestId) -> JsonRpcResponse {
+        JsonRpcResponse::success(
+            id,
+            error_result(&format!(
+                "the A2A agent did not finish within the backend timeout ({}s); cancellation of \
+                 its task was requested",
+                self.timeout.as_secs()
+            )),
+        )
     }
 
     /// The agent's question as an MCP input round. Its task is parked under an
@@ -374,23 +432,32 @@ impl A2aTransport {
         if task.status.state == TaskState::AuthRequired {
             question = format!("The agent needs authorization: {question}");
         }
-        let Some(token) = self.parked.park(
+        let token = match self.parked.park(
             task.id.clone(),
             task.context_id.clone(),
             identity,
             extra_headers.to_vec(),
             std::time::Instant::now(),
-        ) else {
-            spawn_cancel(
-                self.client.clone(),
-                self.endpoint.clone(),
-                task.id,
-                extra_headers.to_vec(),
-            );
-            return JsonRpcResponse::success(
-                id,
-                error_result("too many unanswered agent questions; the agent's task was canceled"),
-            );
+        ) {
+            Ok(token) => token,
+            Err(refused) => {
+                spawn_cancel(
+                    self.client.clone(),
+                    self.endpoint.clone(),
+                    task.id,
+                    extra_headers.to_vec(),
+                );
+                let why = match refused {
+                    ParkRefused::Full => "too many unanswered agent questions",
+                    ParkRefused::Closed => "the A2A backend is closing",
+                };
+                return JsonRpcResponse::success(
+                    id,
+                    error_result(&format!(
+                        "{why}; cancellation of the agent's task was requested"
+                    )),
+                );
+            }
         };
         JsonRpcResponse::success(
             id,
@@ -455,7 +522,9 @@ impl Transport for A2aTransport {
 
     async fn close(&self) -> Result<()> {
         self.closed.send_replace(true);
-        for pending in self.parked.drain_all() {
+        // Closed under the map's lock: a call parking concurrently either
+        // lands before this drain or is refused and cancels its own task.
+        for pending in self.parked.close() {
             self.cancel(pending);
         }
         Ok(())

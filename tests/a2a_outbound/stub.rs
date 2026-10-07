@@ -218,6 +218,13 @@ async fn rpc(agent: &Agent, headers: &HeaderMap, body: &Value) -> Response {
     match &agent.answer {
         Answer::Result(result) => reply(result),
         Answer::Script(steps) => match next_step(steps) {
+            // Scripts are written as `SendMessage` results (`{task}` or
+            // `{message}`); `GetTask` answers with the bare task.
+            Step::Reply(result)
+                if body.get("method").and_then(Value::as_str) == Some("GetTask") =>
+            {
+                reply(result.get("task").unwrap_or(&result))
+            }
             Step::Reply(result) => reply(&result),
             Step::Hang => std::future::pending().await,
         },

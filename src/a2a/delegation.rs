@@ -54,21 +54,38 @@ pub(crate) enum Refused {
     NotYours,
 }
 
+/// Why a question could not be parked; its task is then canceled instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParkRefused {
+    /// [`PARKED_CAP`] questions are already waiting.
+    Full,
+    /// The backend is closing: nothing would ever sweep the entry.
+    Closed,
+}
+
+/// The parked entries, and whether the backend has closed. One lock for
+/// both, so a park and a close cannot interleave.
+#[derive(Default)]
+struct Entries {
+    map: HashMap<String, Pending>,
+    closed: bool,
+}
+
 /// The questions an agent backend is waiting on, keyed by opaque token.
 pub(crate) struct Parked {
-    entries: parking_lot::Mutex<HashMap<String, Pending>>,
+    entries: parking_lot::Mutex<Entries>,
     ttl: Duration,
 }
 
 impl Parked {
     pub(crate) fn new(ttl: Duration) -> Self {
         Self {
-            entries: parking_lot::Mutex::new(HashMap::new()),
+            entries: parking_lot::Mutex::new(Entries::default()),
             ttl,
         }
     }
 
-    /// Park a task; its token, or `None` at [`PARKED_CAP`] (the caller then
+    /// Park a task and return its token, or say why not (the caller then
     /// cancels the task instead of holding it).
     pub(crate) fn park(
         &self,
@@ -77,13 +94,17 @@ impl Parked {
         identity: Option<&str>,
         headers: Vec<(String, String)>,
         now: Instant,
-    ) -> Option<String> {
+    ) -> Result<String, ParkRefused> {
         let mut entries = self.entries.lock();
-        if entries.len() >= PARKED_CAP {
-            return None;
+        if entries.closed {
+            return Err(ParkRefused::Closed);
         }
-        let token = fresh_token()?;
-        entries.insert(
+        if entries.map.len() >= PARKED_CAP {
+            return Err(ParkRefused::Full);
+        }
+        // A system RNG that cannot answer leaves nothing safe to issue.
+        let token = fresh_token().ok_or(ParkRefused::Full)?;
+        entries.map.insert(
             token.clone(),
             Pending {
                 task_id,
@@ -93,7 +114,7 @@ impl Parked {
                 expires: now + self.ttl,
             },
         );
-        Some(token)
+        Ok(token)
     }
 
     /// Redeem `token` for `identity`, once. An expired entry is removed and
@@ -106,39 +127,39 @@ impl Parked {
         now: Instant,
     ) -> Result<Pending, (Refused, Option<Pending>)> {
         let mut entries = self.entries.lock();
-        let Some(entry) = entries.get(token) else {
+        let Some(entry) = entries.map.get(token) else {
             return Err((Refused::NotYours, None));
         };
         if entry.expires <= now {
-            return Err((Refused::NotYours, entries.remove(token)));
+            return Err((Refused::NotYours, entries.map.remove(token)));
         }
         if entry.identity.as_deref() != identity {
             return Err((Refused::NotYours, None));
         }
-        entries.remove(token).ok_or((Refused::NotYours, None))
+        entries.map.remove(token).ok_or((Refused::NotYours, None))
     }
 
     /// Remove and return every expired entry.
     pub(crate) fn drain_expired(&self, now: Instant) -> Vec<Pending> {
         let mut entries = self.entries.lock();
         let expired: Vec<String> = entries
+            .map
             .iter()
             .filter(|(_, entry)| entry.expires <= now)
             .map(|(token, _)| token.clone())
             .collect();
         expired
             .into_iter()
-            .filter_map(|token| entries.remove(&token))
+            .filter_map(|token| entries.map.remove(&token))
             .collect()
     }
 
-    /// Remove and return every entry (the backend is closing).
-    pub(crate) fn drain_all(&self) -> Vec<Pending> {
-        self.entries
-            .lock()
-            .drain()
-            .map(|(_, entry)| entry)
-            .collect()
+    /// Refuse every later park and return every waiting entry (the backend
+    /// is closing).
+    pub(crate) fn close(&self) -> Vec<Pending> {
+        let mut entries = self.entries.lock();
+        entries.closed = true;
+        entries.map.drain().map(|(_, entry)| entry).collect()
     }
 }
 
@@ -164,8 +185,19 @@ pub(crate) fn spawn_cancel(
         return;
     };
     runtime.spawn(async move {
-        if let Err(error) = client.cancel_task(&endpoint, &task_id, &headers).await {
-            tracing::warn!(task_id, %error, "canceling an abandoned A2A task failed");
+        match client.cancel_task(&endpoint, &task_id, &headers).await {
+            Ok(super::client::Reply::Answer(_)) => {}
+            Ok(super::client::Reply::AgentError { code, message }) => {
+                tracing::warn!(
+                    task_id,
+                    code,
+                    message,
+                    "the A2A agent refused to cancel a task"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(task_id, %error, "canceling an abandoned A2A task failed");
+            }
         }
     });
 }
@@ -200,6 +232,11 @@ impl CancelGuard {
 
     pub(crate) fn disarm(&mut self) {
         self.task_id = None;
+    }
+
+    /// Whether the guard owns a task it would cancel.
+    pub(crate) fn is_armed(&self) -> bool {
+        self.task_id.is_some()
     }
 }
 
