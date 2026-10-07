@@ -620,4 +620,24 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
         "the replayed notice is in a receipt: {}",
         answers[1]
     );
+    // Control: receipted, the same notice is refused to the other caller, so
+    // the allowed verdict above is not relay detection being idle.
+    firewall.record_delivery(
+        RelayCaller::Keyed("lost-round-caller"),
+        "alpha",
+        "read",
+        &answers[1],
+    );
+    let verdict = firewall.check_relay(
+        RelayCaller::Keyed("other-caller"),
+        "alpha",
+        "read",
+        &params,
+        ("s", "other"),
+    );
+    assert!(
+        !verdict.allowed,
+        "a receipted notice was allowed: {}",
+        answers[1]
+    );
 }
