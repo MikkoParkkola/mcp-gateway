@@ -18,6 +18,7 @@ use super::{
 };
 use crate::config::AuthConfig;
 use crate::gateway::auth::{AuthenticatedClient, anonymous_client, principal_of};
+use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
 use crate::identity_grants::GrantSubject;
 use crate::mtls::CertIdentity;
 use crate::protocol::RequestId;
@@ -113,7 +114,13 @@ async fn parity(a: &Who, a_other_key: &Who, b: &Who) {
     };
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     crate::gateway::meta_mcp::invoke::relay::collecting(async {
-        stage_direct_delivery(&state, a.auth(&key), "alpha", "read", Some(&delivered));
+        stage_direct_delivery(
+            &state,
+            a.auth(&key),
+            ("alpha", "read"),
+            Some(&delivered),
+            GatewayStamps::Legacy,
+        );
         commit_direct_receipts(&state, true);
     })
     .await;
@@ -187,7 +194,7 @@ async fn a_signing_refusal_records_nothing() {
         a.auth(&key),
         target,
         &mut response,
-        Some(&Some(String::new())),
+        (Some(&Some(String::new())), GatewayStamps::Legacy),
     );
     assert!(
         response.result.is_none(),
@@ -214,6 +221,7 @@ async fn classes_noted_by_staging(state: &AppState) -> String {
                 who.auth(&key),
                 ("alpha", "resources/read"),
                 Some(&result),
+                GatewayStamps::Legacy,
             );
         })
         .await;

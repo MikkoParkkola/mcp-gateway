@@ -180,6 +180,10 @@ pub(super) struct Envelope {
     pub(super) id: Option<crate::protocol::RequestId>,
     pub(super) method: String,
     pub(super) params: Option<Value>,
+    /// What the request declared, read once by
+    /// `hardened_elicitation::classify_direct`: a modern request gets the
+    /// 2026-07-28 result shape on the way out (MIK-8022).
+    pub(super) era: crate::protocol::meta::Era,
 }
 
 /// Stage 2: read and parse the body, fill the D2-a audit slot, then refuse
@@ -245,6 +249,11 @@ pub(super) async fn read_envelope(
         ));
     }
 
+    let reading = super::super::hardened_elicitation::classify_direct(
+        &caller.inbound_headers,
+        &method,
+        params.as_ref(),
+    );
     // Hardened (GH1942.HARDEN.1 row 10), before the backend lookup: this
     // route keeps no handshake state, so it serves no legacy request other
     // than an `initialize` that declares elicitation.
@@ -253,19 +262,21 @@ pub(super) async fn read_envelope(
             state,
             &caller.inbound_headers,
             &json_request,
-            &method,
-            params.as_ref(),
+            (&method, params.as_ref()),
             id.as_ref(),
+            (&reading.0, reading.1),
         )
     {
         return Err(refusal);
     }
+    let era = reading.0.era();
     Ok(Envelope {
         json_request,
         attestation,
         id,
         method,
         params,
+        era,
     })
 }
 

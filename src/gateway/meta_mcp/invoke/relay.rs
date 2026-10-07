@@ -761,6 +761,8 @@ impl crate::gateway::input_bridge::ClientChannel for RecordingChannel<'_> {
 
 #[path = "relay_delivered.rs"]
 mod delivered;
+#[cfg(feature = "firewall")]
+pub(crate) use delivered::strip_gateway_stamps;
 pub(crate) use delivered::{AnswerShape, GatewayStamps};
 
 #[cfg(all(test, feature = "firewall"))]

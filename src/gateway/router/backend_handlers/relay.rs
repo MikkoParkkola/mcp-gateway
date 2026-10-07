@@ -8,6 +8,7 @@ use axum::http::StatusCode;
 use serde_json::Value;
 
 use super::{AppState, BackendAuthContext, BackendRejection, backend_security_error_with_status};
+use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
 use crate::protocol::RequestId;
 use crate::security::firewall::{Firewall, RelayCaller};
 
@@ -117,16 +118,24 @@ pub(super) fn catalogue_refusal(
 pub(super) fn stage_direct_delivery(
     state: &AppState,
     auth: BackendAuthContext<'_>,
-    server: &str,
-    tool: &str,
+    (server, tool): (&str, &str),
     result: Option<&Value>,
+    stamps: GatewayStamps,
 ) {
     let (Some(fw), Some(result)) = (state.firewall.as_ref(), result) else {
         return;
     };
     let (key, keyed) = direct_caller(auth, &format!("direct:{server}"));
     let who = crate::gateway::meta_mcp::invoke::relay::RelayKey::new(&key, keyed);
-    crate::gateway::meta_mcp::invoke::relay::stage_with(fw, who, (server, tool), result);
+    // The gateway's own stamps are not backend text (MIK-8022, MIK-7939).
+    let staged = if stamps == GatewayStamps::Modern {
+        let mut copy = result.clone();
+        crate::gateway::meta_mcp::invoke::relay::strip_gateway_stamps(&mut copy, stamps);
+        std::borrow::Cow::Owned(copy)
+    } else {
+        std::borrow::Cow::Borrowed(result)
+    };
+    crate::gateway::meta_mcp::invoke::relay::stage_with(fw, who, (server, tool), &staged);
 }
 
 /// [`stage_direct_delivery`] for a catalogue result, which no response gate
@@ -138,6 +147,7 @@ pub(super) fn stage_direct_catalogue(
     auth: BackendAuthContext<'_>,
     (server, method): (&str, &str),
     result: Option<&Value>,
+    stamps: GatewayStamps,
 ) {
     let Some(result) = result else {
         return;
@@ -152,7 +162,7 @@ pub(super) fn stage_direct_catalogue(
         state
             .meta_mcp
             .recorded_prompt((server, method), caller_name, "catalogue", result);
-    stage_direct_delivery(state, auth, server, method, Some(&recorded));
+    stage_direct_delivery(state, auth, (server, method), Some(&recorded), stamps);
 }
 
 /// Record the staged receipts when the answer that was written delivers a

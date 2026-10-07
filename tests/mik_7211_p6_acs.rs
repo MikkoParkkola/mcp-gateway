@@ -136,6 +136,9 @@ mod source_checks {
             // MIK-7887.RECEIPT.4 rows: they write the key only into backend
             // fixtures.
             "src/gateway/meta_mcp/invoke/relay_delivery_tests.rs",
+            // MIK-8022: a backend whose own listing sends the 2026-07-28
+            // fields, so the direct route is shown keeping them.
+            "src/gateway/router/direct_guards_fixture.rs",
             "src/gateway/router/tests/task_execution_adapter/relay_upstream.rs",
             "src/gateway/server/tests/collusion_stdio_delivered.rs",
             "src/gateway/meta_mcp/response_delivery_scope_tests.rs",
