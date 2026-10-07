@@ -19,13 +19,14 @@ pub(crate) const TOOL: &str = "echo";
 
 /// What the mock answers a `tools/call` with.
 ///
-/// One variant, deliberately. A mock that could also answer a JSON-RPC error
-/// would be the obvious way to drive a `failed` task, and it would be the wrong
-/// way: the `failed` rows in `settlement.rs` need the error the GATEWAY
-/// produces — `Error::Forbidden`, the one variant
-/// `error_response_preserving_status` stamps its internal HTTP-status key onto —
-/// and a backend-authored error carries no such key, so the row that exists to
-/// see the key stripped would never have had one to strip.
+/// A result, a sequence of results, or a JSON-RPC error from the backend
+/// itself (`Failure`, `FirstCallFails`). A backend error is not how the
+/// `failed` rows in `settlement.rs` fail a task: they need the error the
+/// GATEWAY produces — `Error::Forbidden`, the one variant
+/// `error_response_preserving_status` stamps its internal HTTP-status key onto
+/// — and a backend-authored error carries no such key, so the row that exists
+/// to see the key stripped would never have had one to strip. A backend error
+/// also reaches the caller as a tool-error result, not as an `Err`.
 pub(crate) enum Answer {
     /// A successful tool result, carried verbatim.
     Result(Value),

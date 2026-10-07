@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
+use crate::commands::config_write::CommentLoss;
 use mcp_gateway::cli::{Cli, InitProfile};
 use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
+use mcp_gateway::config_persistence::write_config;
 use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
 #[path = "main_dangling_tests.rs"]
 mod dangling;
@@ -206,8 +208,8 @@ fn write_discovered_to_config_creates_file_when_missing() {
     let output = dir.path().join("discovered.yaml");
     let server = make_discovered_server("tavily");
 
-    let written =
-        write_discovered_to_config(&[server], Some(&output)).expect("write should succeed");
+    let written = write_discovered_to_config(&[server], Some(&output), CommentLoss::Refuse)
+        .expect("write should succeed");
 
     assert_eq!(written, output);
     let loaded = Config::load(Some(&output)).expect("must reload");
@@ -233,7 +235,8 @@ fn write_discovered_to_config_preserves_existing_backends() {
     write_config(&output, &existing).expect("initial write should succeed");
 
     let server = make_discovered_server("tavily");
-    write_discovered_to_config(&[server], Some(&output)).expect("write should succeed");
+    write_discovered_to_config(&[server], Some(&output), CommentLoss::Refuse)
+        .expect("write should succeed");
 
     let loaded = Config::load(Some(&output)).expect("must reload");
     assert!(loaded.backends.contains_key("existing"));
@@ -261,7 +264,14 @@ fn gh462_discovery_persistence_preserves_existing_invalid_files() {
             let metadata = std::fs::metadata(&output).unwrap();
             (metadata.dev(), metadata.ino())
         };
-        assert!(write_discovered_to_config(std::slice::from_ref(&server), Some(&output)).is_err());
+        assert!(
+            write_discovered_to_config(
+                std::slice::from_ref(&server),
+                Some(&output),
+                CommentLoss::Refuse
+            )
+            .is_err()
+        );
         assert_eq!(std::fs::read(&output).unwrap(), original.as_bytes());
         #[cfg(unix)] // Unix-only: (dev, ino) file identity via MetadataExt.
         {

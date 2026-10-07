@@ -610,7 +610,11 @@ impl MetaMcp {
         };
         if let Some(target) = target {
             let value = unwrapped.as_ref().unwrap_or(result);
-            self.stage_relay_receipt(caller.relay_caller(session_id), target, value);
+            // MIK-7991: the stored record was restored on decode; the replay
+            // wrote nothing else, so the delivery's record is exactly it.
+            let record = super::gateway_writes::recorded();
+            let value = super::gateway_writes::without(value, &record);
+            self.stage_relay_receipt(caller.relay_caller(session_id), target, &value);
         }
     }
 }
@@ -685,8 +689,26 @@ pub(crate) fn stage_with(
     value: &Value,
 ) {
     if let Some(receipt) = receipt_with(fw, who, target, value) {
+        // Only a value a receipt was built from, so a row that sees nothing
+        // staged also catches receipt construction switched off.
+        #[cfg(test)]
+        STAGED_FOR_TEST.with(|staged| staged.borrow_mut().push(value.clone()));
         let _ = RELAY_RECEIPTS.try_with(|receipts| receipts.borrow_mut().push(receipt));
     }
+}
+
+#[cfg(all(test, feature = "firewall"))]
+thread_local! {
+    /// Every value the direct route staged on this thread, so a route-level
+    /// row can read what a receipt was built from (MIK-8022.FOLLOW.1).
+    static STAGED_FOR_TEST: std::cell::RefCell<Vec<Value>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Take what [`stage_with`] staged on this thread since the last take.
+#[cfg(all(test, feature = "firewall"))]
+pub(crate) fn take_staged_for_test() -> Vec<Value> {
+    STAGED_FOR_TEST.with(|staged| std::mem::take(&mut *staged.borrow_mut()))
 }
 
 /// Record every staged receipt into `fw` when `delivered`; drop them either way.
