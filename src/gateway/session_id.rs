@@ -37,6 +37,12 @@ pub(crate) enum SessionOwner {
     Anonymous,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Digests [`session_fp`] has computed on this thread (`MIK-8014.PERF.2a`).
+    pub(crate) static FINGERPRINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A log-safe stand-in for a session id: the first 8 hex characters of its
 /// SHA-256.
 ///
@@ -48,6 +54,8 @@ pub(crate) fn session_fp(id: &str) -> String {
     if id.is_empty() {
         return String::new();
     }
+    #[cfg(test)]
+    FINGERPRINTS.with(|n| n.set(n.get() + 1));
     let digest = Sha256::digest(id.as_bytes());
     hex::encode(&digest[..4])
 }

@@ -133,6 +133,8 @@ mod r2_input_keys_tests;
 mod replay_policy_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
+#[cfg(test)]
+mod session_fp_once_tests;
 /// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.
 #[cfg(all(test, feature = "metrics"))]
 mod signing_nonce_order_tests;
