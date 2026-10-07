@@ -134,7 +134,7 @@ fn note() -> String {
         .join("\n")
 }
 
-/// MIK-7998.DECODE.1: the redactor's database-URL match runs to the next
+/// `MIK-7998.DECODE.1`: the redactor's database-URL match runs to the next
 /// whitespace, so in the wrapper's pretty print it takes the note's closing
 /// quote with it and the block is no longer JSON. The receipt still holds
 /// the note as the caller reads it.

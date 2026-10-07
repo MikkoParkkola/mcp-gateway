@@ -462,7 +462,7 @@ mod tests {
         assert_eq!(copy["_meta"][KEY_SERVER_INFO]["name"], "named", "{copy}");
     }
 
-    /// MIK-7998.DECODE.1: escapes read as the caller reads them, a literal
+    /// `MIK-7998.DECODE.1`: escapes read as the caller reads them, a literal
     /// backslash and a surrogate pair included.
     #[test]
     fn unescape_reads_a_print_as_the_caller_reads_it() {
@@ -471,7 +471,7 @@ mod tests {
         assert_eq!(unescape(r"é 𝄞"), "\u{e9} \u{1D11E}");
     }
 
-    /// MIK-7998.DECODE.1: a malformed escape or an unpaired surrogate is kept
+    /// `MIK-7998.DECODE.1`: a malformed escape or an unpaired surrogate is kept
     /// as written, never dropped.
     #[test]
     fn unescape_keeps_a_malformed_escape_as_written() {
