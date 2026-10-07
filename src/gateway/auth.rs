@@ -471,6 +471,24 @@ pub fn anonymous_client() -> AuthenticatedClient {
     }
 }
 
+/// The identity a public path gives a caller no gateway credential
+/// authenticates. One constructor, because delivery gives a validated agent
+/// token the same one and compares principals against what ingress stored.
+fn public_client() -> AuthenticatedClient {
+    AuthenticatedClient {
+        quota_principal: None,
+        name: "public".to_string(),
+        principal: String::new(),
+        rate_limit: 0,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+        authenticated: false,
+        credential_kind: crate::security::audit::CredentialKind::None,
+    }
+}
+
 /// Combined auth state: static config + optional key server.
 #[derive(Clone)]
 pub struct AuthState {
@@ -628,18 +646,7 @@ async fn authenticate_request(
     // Check if path is public
     if auth_config.is_public_path(path) {
         debug!(path = %path, "Public path, skipping auth");
-        request.extensions_mut().insert(AuthenticatedClient {
-            quota_principal: None,
-            name: "public".to_string(),
-            principal: String::new(),
-            rate_limit: 0,
-            backends: vec!["*".to_string()],
-            allowed_tools: None,
-            denied_tools: None,
-            admin: false,
-            authenticated: false,
-            credential_kind: crate::security::audit::CredentialKind::None,
-        });
+        request.extensions_mut().insert(public_client());
         return next.run(request).await;
     }
 

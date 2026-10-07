@@ -16,7 +16,7 @@ use tokio::sync::broadcast;
 use tracing::warn;
 
 use super::{NotificationMultiplexer, STREAMING_TARGET};
-use crate::gateway::auth::live::Delivery;
+use crate::gateway::auth::live::{Delivery, delivery};
 use crate::gateway::outbound::{OutboundFrame, StreamJudge, sse_data, sse_message};
 
 /// Create SSE response for GET /mcp
@@ -39,6 +39,9 @@ pub fn create_sse_response(
     }
 
     let mut rx = session.subscribe();
+    // Held for its credential slot, which a resume may replace: each copy is
+    // judged against the credential the session holds when it is written.
+    let session = Arc::clone(session);
     let session_id_owned = session_id;
     drop(sessions);
 
@@ -52,6 +55,22 @@ pub fn create_sse_response(
         loop {
             match rx.recv().await {
                 Ok(item) => {
+                    // G6: judged again as it is written, not only as it was
+                    // queued, so a credential that died in between is written
+                    // nothing.
+                    match credential_at_write(&multiplexer, &session, &item).await {
+                        Delivery::Deliver => {}
+                        Delivery::OutOfScope => {
+                            withhold(&item);
+                            continue;
+                        }
+                        Delivery::Dead => {
+                            withhold(&item);
+                            settle_stranded(&mut rx);
+                            warn!(target: STREAMING_TARGET, "session stream's credential no longer authenticates; closing");
+                            break;
+                        }
+                    }
                     // MIN.2: recorded and committed as it is written; an item
                     // whose record fails closed is withheld.
                     if let Some(mark) = &item.mark
@@ -102,6 +121,47 @@ pub fn create_sse_response(
     };
 
     Some(Sse::new(stream).keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping")))
+}
+
+/// What writing `item` to `session`'s stream should do now. Without an
+/// installed authorizer nothing scoped was queued (fan-out refuses), and the
+/// router installs one before any stream opens, so the copy is written.
+async fn credential_at_write(
+    multiplexer: &NotificationMultiplexer,
+    session: &super::ClientSession,
+    item: &super::SessionFrame,
+) -> Delivery {
+    let authorizer = multiplexer.authorizer.read().clone();
+    let Some(authorizer) = authorizer else {
+        return Delivery::Deliver;
+    };
+    let credential = session.credential.read().clone();
+    delivery(
+        &authorizer,
+        credential.as_ref(),
+        item.audience.as_audience(),
+    )
+    .await
+}
+
+/// Report `item` withheld, so a request's waiter does not wait for it.
+fn withhold(item: &super::SessionFrame) {
+    if let Some(watch) = &item.watch {
+        watch.report(false);
+    }
+}
+
+/// H2: a stream ending on a dead credential reports every copy still queued
+/// withheld, so no waiter runs to its timeout for a copy that will never be
+/// written. Nothing is marked read and no receipt commits.
+fn settle_stranded(rx: &mut broadcast::Receiver<super::SessionFrame>) {
+    loop {
+        match rx.try_recv() {
+            Ok(stranded) => withhold(&stranded),
+            Err(broadcast::error::TryRecvError::Lagged(_)) => {}
+            Err(_) => break,
+        }
+    }
 }
 
 /// Builds the frame a listener receives for a `notifications/tasks`
@@ -198,8 +258,12 @@ pub(crate) fn subscription_stream(
                         Delivery::OutOfScope => continue,
                         Delivery::Dead => {
                             // Skipping would hold one of the listener slots for
-                            // a stream that can never receive again.
+                            // a stream that can never receive again. Not
+                            // graceful: a dead credential receives no further
+                            // frame of any kind, and learns of the refusal when
+                            // it re-subscribes.
                             warn!(target: STREAMING_TARGET, "subscription listener's credential no longer authenticates; closing");
+                            graceful = false;
                             break;
                         }
                     }
@@ -213,6 +277,7 @@ pub(crate) fn subscription_stream(
                             // ends the stream, as `Delivery::Dead` does.
                             let Some(reader) = listener.current_client().await else {
                                 warn!(target: STREAMING_TARGET, "subscription listener's credential no longer authenticates; closing");
+                                graceful = false;
                                 break;
                             };
                             let Some(built) = frames
@@ -281,8 +346,11 @@ pub(crate) fn subscription_stream(
         }
         // The server ended the subscription (a client that hangs up drops the
         // stream and never gets here). A lagged stream just closes: the
-        // abrupt end is the specification's non-graceful signal.
+        // abrupt end is the specification's non-graceful signal. The graceful
+        // end is a frame like any other, so it goes only to a credential that
+        // still authenticates.
         if graceful
+            && listener.current_client().await.is_some()
             && let Some(frame) = judge.judge_document(subscription.graceful_end())
             && let Some(end) = sse_data(&judge.record(frame).await)
         {

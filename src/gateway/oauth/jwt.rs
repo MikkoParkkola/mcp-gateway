@@ -40,7 +40,6 @@
 
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 
 use super::agents::{AgentDefinition, AgentRegistry};
 use super::scopes::Scope;
@@ -137,16 +136,10 @@ pub(crate) fn validate_agent_token_at(
     // Reject unsupported algorithms up-front.
     let alg = match header.alg {
         Algorithm::HS256 => Algorithm::HS256,
-        Algorithm::RS256 => {
-            // PQC deprecation warning (issue #116): RS256 (RSA-2048) is broken by
-            // Shor's algorithm on a CRQC.  Operators should migrate to HS256.
-            // See module-level documentation for the migration path.
-            warn!(
-                "RS256 agent token accepted — RSA-2048 is not post-quantum safe. \
-                 Migrate this agent to HS256 (see issue #116)."
-            );
-            Algorithm::RS256
-        }
+        // No warning here: delivery re-runs this per notification, so the
+        // RS256 deprecation warning (issue #116) is the middleware's, once
+        // per accepted request.
+        Algorithm::RS256 => Algorithm::RS256,
         other => return Err(JwtError::UnsupportedAlgorithm(other)),
     };
 

@@ -54,6 +54,24 @@ pub struct SessionFrame {
     mark: Option<Box<crate::gateway::outbound::StreamMark>>,
     /// Set on a server-to-client request: how its copies fared on the streams.
     watch: Option<Arc<DeliveryWatch>>,
+    /// Who the copy is for, judged again when the stream writes it (G6).
+    audience: CopyAudience,
+}
+
+/// The owned twin of [`Audience`] a queued copy carries.
+#[derive(Debug, Clone)]
+enum CopyAudience {
+    Backend(Arc<str>),
+    Any,
+}
+
+impl CopyAudience {
+    fn as_audience(&self) -> Audience<'_> {
+        match self {
+            Self::Backend(backend) => Audience::Backend(backend),
+            Self::Any => Audience::Any,
+        }
+    }
 }
 
 /// How a server-to-client request's queued copies fared on their streams
@@ -292,6 +310,7 @@ impl NotificationMultiplexer {
         notification: TaggedNotification,
         hidden: Option<&crate::security::tenant_reads::ReadAttribution>,
         watch: Option<Arc<DeliveryWatch>>,
+        audience: CopyAudience,
     ) -> std::result::Result<usize, broadcast::error::SendError<SessionFrame>> {
         // No open stream: nothing to deliver, so nothing to judge, and nothing
         // is sent either, so a stream that subscribes meanwhile cannot get an
@@ -301,6 +320,7 @@ impl NotificationMultiplexer {
                 note: notification,
                 mark: None,
                 watch: None,
+                audience,
             }));
         }
         let key = session.read_key.read().clone();
@@ -314,6 +334,7 @@ impl NotificationMultiplexer {
                         note: notification,
                         mark: None,
                         watch: None,
+                        audience,
                     }));
                 }
             },
@@ -322,6 +343,7 @@ impl NotificationMultiplexer {
             note: notification,
             mark,
             watch: watch.clone(),
+            audience,
         })?;
         if let Some(watch) = watch {
             watch.sent(copies);
@@ -562,13 +584,20 @@ impl NotificationMultiplexer {
             .values()
             .map(|s| (Arc::clone(s), s.credential.read().clone()))
             .collect();
+        let audience = CopyAudience::Backend(Arc::from(backend));
         let mut reached = 0;
         for (session, credential) in targets {
             let verdict =
                 delivery(&authorizer, credential.as_ref(), Audience::Backend(backend)).await;
             if verdict == Delivery::Deliver
                 && self
-                    .enqueue(&session, notification.clone(), hidden.as_ref(), None)
+                    .enqueue(
+                        &session,
+                        notification.clone(),
+                        hidden.as_ref(),
+                        None,
+                        audience.clone(),
+                    )
                     .is_ok()
             {
                 reached += 1;
@@ -634,7 +663,7 @@ impl NotificationMultiplexer {
         }
         let sessions = self.sessions.read();
         if let Some(session) = sessions.get(session_id) {
-            match self.enqueue(session, notification, None, None) {
+            match self.enqueue(session, notification, None, None, CopyAudience::Any) {
                 Ok(_) => true,
                 Err(e) => {
                     debug!(session_id = %session_fp(session_id), error = %e, "Failed to send notification");
@@ -664,9 +693,15 @@ impl NotificationMultiplexer {
             commit: parking_lot::Mutex::new(commit),
             ..DeliveryWatch::default()
         });
-        self.enqueue(session, notification, None, Some(Arc::clone(&watch)))
-            .ok()
-            .map(|_| watch)
+        self.enqueue(
+            session,
+            notification,
+            None,
+            Some(Arc::clone(&watch)),
+            CopyAudience::Any,
+        )
+        .ok()
+        .map(|_| watch)
     }
 
     /// Broadcast a notification to all sessions
@@ -674,7 +709,7 @@ impl NotificationMultiplexer {
     pub fn broadcast(&self, notification: TaggedNotification) {
         let sessions = self.sessions.read();
         for session in sessions.values() {
-            let _ = self.enqueue(session, notification.clone(), None, None);
+            let _ = self.enqueue(session, notification.clone(), None, None, CopyAudience::Any);
         }
     }
 

@@ -71,6 +71,13 @@ impl AgentDefinition {
 }
 
 /// Thread-safe agent registry backed by a `DashMap`.
+///
+/// The gateway fills it once at startup from `agent_auth.agents`; a change to
+/// that section waits for a restart, which ends every stream. A held agent
+/// token is re-validated against it at every delivery, with no cached verdict,
+/// so an embedder that mutates it mid-stream is seen at the next delivery,
+/// subject only to check-then-act: a removal landing just after a check, as
+/// for an API key revoked just after its check.
 #[derive(Default, Clone)]
 pub struct AgentRegistry {
     inner: Arc<DashMap<String, AgentDefinition>>,
