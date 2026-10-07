@@ -329,14 +329,14 @@ impl CapabilityBackend {
     /// [`DirectoryLoad::rejected`] so the caller decides.
     pub async fn load_from_directory_reporting(&self, path: &str) -> Result<DirectoryLoad> {
         let _order = self.load_order.lock().await;
-        let (loaded, file_failed) = match CapabilityLoader::load_directory_reporting(path).await {
+        let (loaded, failures) = match CapabilityLoader::load_directory_reporting(path).await {
             Ok(read) => read,
             Err(error) => {
                 self.record_read(path, None);
                 return Err(error);
             }
         };
-        let mut names = std::collections::BTreeSet::new();
+        let names = loaded.iter().map(|c| c.name.clone()).collect();
         let mut report = DirectoryLoad {
             admitted: loaded.len(),
             rejected: Vec::new(),
@@ -356,7 +356,6 @@ impl CapabilityBackend {
         // tool whose account reference cannot resolve.
         for cap in loaded {
             let capability = cap.name.clone();
-            names.insert(capability.clone());
             if let Err(error) = self.register_capability(cap) {
                 warn!(
                     backend = %self.name,
@@ -370,10 +369,9 @@ impl CapabilityBackend {
             tokio::task::yield_now().await;
         }
 
-        // A refused capability is not proven deleted: its directory reads as
-        // failed for the keep rule (MIK-8050).
-        let failed = file_failed || !report.rejected.is_empty();
-        self.record_read(path, Some((names, failed)));
+        // A refused capability is not proven deleted (MIK-8050).
+        let outcome = load_state::ReadOutcome::of(names, failures, !report.rejected.is_empty());
+        self.record_read(path, Some(outcome));
         info!(backend = %self.name, count = report.admitted, path = path, "Loaded capabilities");
         Ok(report)
     }

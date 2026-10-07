@@ -60,18 +60,51 @@ impl LoadState {
     }
 }
 
-/// One directory's read: its admitted capabilities and whether a file failed,
-/// or `None` when the directory could not be read.
-type Read = Option<(Vec<CapabilityDefinition>, BTreeSet<String>, bool)>;
+/// What one successful directory read proved.
+pub(super) struct ReadOutcome {
+    /// Every capability the read named: admitted, refused or failed after
+    /// parsing.
+    pub(super) names: BTreeSet<String>,
+    /// A file failed or a capability was refused: not a clean read.
+    pub(super) failed: bool,
+    /// A file failed before it yielded a name.
+    pub(super) opaque: bool,
+}
+
+impl ReadOutcome {
+    /// The outcome of a read that parsed `names`, with `failures`, where
+    /// `refused` says whether the admission gate refused any of them.
+    pub(super) fn of(
+        mut names: BTreeSet<String>,
+        failures: crate::capability::FileFailures,
+        refused: bool,
+    ) -> Self {
+        let failed = failures.any() || refused;
+        names.extend(failures.named);
+        Self {
+            names,
+            failed,
+            opaque: failures.unnamed,
+        }
+    }
+}
+
+/// One directory's read: its admitted capabilities and what it proved, or
+/// `None` when the directory could not be read.
+type Read = Option<(Vec<CapabilityDefinition>, ReadOutcome)>;
 
 impl CapabilityBackend {
     /// Record a read of `dir`. Called with the catalogue the read produced
     /// already published.
-    pub(super) fn record_read(&self, dir: &str, read: Option<(BTreeSet<String>, bool)>) {
+    pub(super) fn record_read(&self, dir: &str, read: Option<ReadOutcome>) {
         let mut dirs = self.dirs_loaded.lock();
         let state = dirs.entry(dir.to_owned()).or_default();
         match read {
-            Some((names, false)) => {
+            Some(ReadOutcome {
+                names,
+                failed: false,
+                ..
+            }) => {
                 state.last_read = names;
                 state.failed = false;
                 state.ever_loaded = true;
@@ -79,10 +112,10 @@ impl CapabilityBackend {
             }
             // Not a clean read: what the failed file holds is not known, so
             // a directory never read cleanly keeps every absent capability.
-            Some((names, true)) => {
+            Some(ReadOutcome { names, opaque, .. }) => {
                 state.last_read.extend(names);
                 state.failed = true;
-                state.opaque = true;
+                state.opaque = opaque;
             }
             None => state.failed = true,
         }
@@ -154,12 +187,13 @@ impl CapabilityBackend {
         let mut reads: Vec<(String, Read)> = Vec::with_capacity(dirs.len());
         for dir in &dirs {
             match CapabilityLoader::load_directory_reporting(dir).await {
-                Ok((loaded, file_failed)) => {
-                    // Every parsed name, refused or not: a refused capability
+                Ok((loaded, failures)) => {
+                    // Every named capability, refused or not: a refused one
                     // is not proven deleted (MIK-8050).
+                    let (admitted, refused) = self.admit(&loaded);
                     let names = loaded.iter().map(|c| c.name.clone()).collect();
-                    let (admitted, failed) = self.admit(loaded, file_failed);
-                    reads.push((dir.clone(), Some((admitted, names, failed))));
+                    let outcome = ReadOutcome::of(names, failures, refused);
+                    reads.push((dir.clone(), Some((admitted, outcome))));
                 }
                 Err(e) => {
                     warn!(backend = %self.name, directory = %dir, error = %e, "Failed to reload directory");
@@ -170,13 +204,14 @@ impl CapabilityBackend {
         let admitted: Vec<CapabilityDefinition> = reads
             .iter()
             .filter_map(|(_, read)| read.as_ref())
-            .flat_map(|(caps, _, _)| caps.iter().cloned())
+            .flat_map(|(caps, _)| caps.iter().cloned())
             .collect();
         let total = admitted.len();
 
         // Atomic swap: rebuild index and tool cache in one write lock, then
         // bump the shared policy epoch while that lock is still held.
-        {
+        let proved = self.load_state();
+        let changed = {
             let mut caps = self.capabilities.write();
             let incoming: std::collections::HashMap<&str, &CapabilityDefinition> =
                 admitted.iter().map(|c| (c.name.as_str(), c)).collect();
@@ -193,21 +228,26 @@ impl CapabilityBackend {
                     revoked.insert(name.clone());
                 }
             }
+            let added = admitted.iter().any(|c| !caps.index.contains_key(&c.name));
             caps.replace_all(admitted);
             // With the swap, under the same lock: `catalogue_snapshot` never
             // sees one without the other.
             for (dir, read) in reads {
-                self.record_read(&dir, read.map(|(_, names, failed)| (names, failed)));
+                self.record_read(&dir, read.map(|(_, outcome)| outcome));
             }
             self.note_reload_during_scan();
             self.executor.bump_policy_epoch();
             self.executor.stop_unloaded_mcp(&|name| {
                 !revoked.contains(name) && caps.index.contains_key(name)
             });
-        }
+            added || !revoked.is_empty()
+        } || self.load_state() != proved;
 
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
-        if let Some(notice) = self.reload_notice.get() {
+        // Only a reload that changed the tool set, or what the directories
+        // prove, announces it: a rerun over unchanged files must not send
+        // `tools/list_changed` (MIK-8050).
+        if changed && let Some(notice) = self.reload_notice.get() {
             let _ = notice.send(self.name.clone());
         }
         Ok(total)
@@ -219,21 +259,17 @@ impl CapabilityBackend {
         let _ = self.reload_notice.set(notice);
     }
 
-    /// The same admission gate the initial load applies, per directory: a
-    /// refused capability is not proven deleted, so its directory reads as
-    /// failed for the keep rule (MIK-8050).
-    fn admit(
-        &self,
-        loaded: Vec<CapabilityDefinition>,
-        file_failed: bool,
-    ) -> (Vec<CapabilityDefinition>, bool) {
-        let mut failed = file_failed;
+    /// The same admission gate the initial load applies, per directory.
+    /// Returns the admitted capabilities and whether any was refused: a
+    /// refused capability is not proven deleted (MIK-8050).
+    fn admit(&self, loaded: &[CapabilityDefinition]) -> (Vec<CapabilityDefinition>, bool) {
+        let mut refused = false;
         let mut admitted = Vec::with_capacity(loaded.len());
         for cap in loaded {
-            match validate_capability_account_binding(&cap, self.executor.account_strategies()) {
-                Ok(()) => admitted.push(cap),
+            match validate_capability_account_binding(cap, self.executor.account_strategies()) {
+                Ok(()) => admitted.push(cap.clone()),
                 Err(error) => {
-                    failed = true;
+                    refused = true;
                     warn!(
                         backend = %self.name,
                         capability = %cap.name,
@@ -243,7 +279,7 @@ impl CapabilityBackend {
                 }
             }
         }
-        (admitted, failed)
+        (admitted, refused)
     }
 }
 

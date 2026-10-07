@@ -13,6 +13,23 @@ use tracing::{debug, info, warn};
 /// Loader for capability definitions from directories
 pub struct CapabilityLoader;
 
+/// The capability files of one directory read that failed to load.
+#[derive(Debug, Default)]
+pub(crate) struct FileFailures {
+    /// Capabilities whose file parsed but was refused (validation).
+    pub(crate) named: std::collections::BTreeSet<String>,
+    /// A file failed before it yielded a name (unreadable, unparseable, or
+    /// its pin did not match): it may hold any capability.
+    pub(crate) unnamed: bool,
+}
+
+impl FileFailures {
+    /// Whether any file failed.
+    pub(crate) fn any(&self) -> bool {
+        self.unnamed || !self.named.is_empty()
+    }
+}
+
 impl CapabilityLoader {
     /// Load all capabilities from a directory (recursive)
     ///
@@ -30,8 +47,8 @@ impl CapabilityLoader {
         Ok(Self::load_directory_reporting(path).await?.0)
     }
 
-    /// [`Self::load_directory`], also reporting whether any capability file in
-    /// it failed to load. Such a file is skipped, but its capability is not
+    /// [`Self::load_directory`], also reporting the capability files in it
+    /// that failed to load. Such a file is skipped, but its capability is not
     /// proven deleted (MIK-8050).
     ///
     /// # Errors
@@ -39,7 +56,7 @@ impl CapabilityLoader {
     /// As [`Self::load_directory`].
     pub(crate) async fn load_directory_reporting(
         path: &str,
-    ) -> Result<(Vec<CapabilityDefinition>, bool)> {
+    ) -> Result<(Vec<CapabilityDefinition>, FileFailures)> {
         let path = Path::new(path);
 
         if !path.exists() {
@@ -57,8 +74,8 @@ impl CapabilityLoader {
         }
 
         let mut capabilities = Vec::new();
-        let mut file_failed = false;
-        Self::load_directory_recursive(path, &mut capabilities, &mut file_failed).await?;
+        let mut failures = FileFailures::default();
+        Self::load_directory_recursive(path, &mut capabilities, &mut failures).await?;
 
         let unpinned = count_unpinned(&capabilities);
         info!(
@@ -69,15 +86,15 @@ impl CapabilityLoader {
             capabilities.len(),
         );
 
-        Ok((capabilities, file_failed))
+        Ok((capabilities, failures))
     }
 
-    /// Recursively load capabilities from a directory; `file_failed` is set
-    /// when a capability file in it cannot be loaded.
+    /// Recursively load capabilities from a directory, noting in `failures`
+    /// every capability file in it that cannot be loaded.
     async fn load_directory_recursive(
         dir: &Path,
         capabilities: &mut Vec<CapabilityDefinition>,
-        file_failed: &mut bool,
+        failures: &mut FileFailures,
     ) -> Result<()> {
         let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| {
             Error::Config(format!("Failed to read directory {}: {e}", dir.display()))
@@ -107,7 +124,7 @@ impl CapabilityLoader {
                 Box::pin(Self::load_directory_recursive(
                     &path,
                     capabilities,
-                    file_failed,
+                    failures,
                 ))
                 .await?;
             } else if path
@@ -120,8 +137,13 @@ impl CapabilityLoader {
                         debug!(name = %cap.name, path = %path.display(), "Loaded capability");
                         capabilities.push(cap);
                     }
-                    Err(e) => {
-                        *file_failed = true;
+                    Err((name, e)) => {
+                        match name {
+                            Some(name) => {
+                                failures.named.insert(name);
+                            }
+                            None => failures.unnamed = true,
+                        }
                         warn!(error = %e, path = %path.display(), "Failed to load capability");
                     }
                 }
@@ -137,9 +159,14 @@ impl CapabilityLoader {
     /// validator.  Structural errors cause the capability to be skipped (this
     /// function returns `Err`); structural warnings are logged but the capability
     /// is still loaded.
-    async fn load_capability_file(path: &Path) -> Result<CapabilityDefinition> {
-        let capability = parse_capability_file(path).await?;
-        validate_capability(&capability)?;
+    /// The error carries the capability's name when the file parsed far
+    /// enough to have one.
+    async fn load_capability_file(
+        path: &Path,
+    ) -> std::result::Result<CapabilityDefinition, (Option<String>, Error)> {
+        let capability = parse_capability_file(path).await.map_err(|e| (None, e))?;
+        let name = Some(capability.name.clone());
+        validate_capability(&capability).map_err(|e| (name.clone(), e))?;
 
         let path_str = path.to_string_lossy();
         let issues = validate_capability_definition(&capability, Some(&path_str));
@@ -167,14 +194,17 @@ impl CapabilityLoader {
         }
 
         if has_errors {
-            return Err(Error::Config(format!(
-                "Capability '{}' has {} structural error(s); skipping",
-                path_str,
-                issues
-                    .iter()
-                    .filter(|i| i.severity == IssueSeverity::Error)
-                    .count(),
-            )));
+            return Err((
+                name,
+                Error::Config(format!(
+                    "Capability '{}' has {} structural error(s); skipping",
+                    path_str,
+                    issues
+                        .iter()
+                        .filter(|i| i.severity == IssueSeverity::Error)
+                        .count(),
+                )),
+            ));
         }
 
         Ok(capability)
