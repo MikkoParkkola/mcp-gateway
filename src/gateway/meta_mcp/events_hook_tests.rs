@@ -472,3 +472,20 @@ async fn an_unloaded_capability_counts_as_read_in_a_partial_catalogue() {
     assert!(partial.present.contains("alpha"), "removed, not unread");
     assert!(!partial.present.contains("beta"), "still unread");
 }
+
+/// MIK-8037 (review of #3406): a rug-pull quarantine unloads a capability and
+/// the reload that follows cannot load its file back; when that reload is
+/// partial, the unload still counts as read.
+#[tokio::test]
+async fn an_unload_survives_a_partial_reload_that_cannot_restore_it() {
+    let root = tempfile::tempdir().expect("root");
+    let (caps, meta) = with_refused(root.path()).await;
+    let d1 = root.path().join("d1");
+    assert!(caps.unload_capability("alpha"), "unloaded");
+    std::fs::remove_file(d1.join("alpha.yaml")).expect("its file no longer loads");
+    std::fs::remove_dir_all(root.path().join("d2")).expect("make d2 unreadable");
+    caps.reload().await.expect("partial reload");
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(partial.present.contains("alpha"), "unloaded, not unread");
+}
