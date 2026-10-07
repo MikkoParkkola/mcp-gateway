@@ -444,12 +444,39 @@ enum Client {
     Silent,
 }
 
+/// Host overhead each wave may add to its ask timeout. One flat slack for the
+/// whole burst was spent by about 2 s per wave: the 16-wave full burst ran 485 s
+/// of its 510 s on Linux and ran out on Windows (MIK-7534, MIK-7644). The ask
+/// timeout is `BridgeBounds::DEFAULT` in product code, so it cannot be shortened
+/// here; a run ends as soon as every call is accounted for, so a longer deadline
+/// costs a passing run nothing.
+const WAVE_SLACK: Duration = Duration::from_secs(5);
+
 /// Enough to drain `accepted` calls behind a silent client: `ceil(n/64)` waves
-/// of one ask timeout each, plus slack. Derived, so it moves with the constants.
+/// of one ask timeout and its slack each, plus a margin. Derived, so it moves
+/// with the constants.
 fn drain_deadline(accepted: i64) -> Duration {
     let waves =
         u32::try_from((accepted + ADMISSION_CAP - 1) / ADMISSION_CAP).expect("a small wave count");
-    PER_PROMPT * waves + Duration::from_secs(30)
+    (PER_PROMPT + WAVE_SLACK) * waves + Duration::from_secs(30)
+}
+
+/// MIK-7534.FLAKE.2: the slack grows with the wave count, so per-wave overhead
+/// cannot add up past it as the burst grows.
+#[test]
+fn the_drain_deadline_budgets_slack_per_wave() {
+    let one = drain_deadline(ADMISSION_CAP);
+    assert_eq!(drain_deadline(1), one, "a partial wave is a wave");
+    assert_eq!(
+        drain_deadline(2 * ADMISSION_CAP) - one,
+        PER_PROMPT + WAVE_SLACK,
+        "each further wave brings its own slack"
+    );
+    assert_eq!(
+        drain_deadline(INFLIGHT_CAP),
+        (PER_PROMPT + WAVE_SLACK) * 16 + Duration::from_secs(30),
+        "the full burst: 16 waves"
+    );
 }
 
 /// The whole post-collection settle, however chatty the child.
