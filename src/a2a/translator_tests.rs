@@ -103,3 +103,10 @@ fn every_other_state_is_a_tool_error_with_the_agents_words() {
         }
     }
 }
+
+#[test]
+fn a_null_data_part_is_an_answer_not_empty_content() {
+    let result = reply_to_result(&completed(json!([{"data": null}])));
+    assert_eq!(result["content"], json!([{"type": "text", "text": "null"}]));
+    assert!(result.get("structuredContent").is_none());
+}

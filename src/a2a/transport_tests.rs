@@ -12,11 +12,14 @@ use serde_json::json;
 use super::*;
 
 /// An agent whose card is served and counted, and whose RPC never answers.
-async fn hanging_agent() -> (String, Arc<AtomicUsize>) {
+/// `reached` is notified when a `SendMessage` arrives.
+async fn hanging_agent() -> (String, Arc<AtomicUsize>, Arc<tokio::sync::Notify>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let fetches = Arc::new(AtomicUsize::new(0));
+    let reached = Arc::new(tokio::sync::Notify::new());
     let (counted, endpoint) = (Arc::clone(&fetches), format!("{base}/a2a"));
+    let arrived = Arc::clone(&reached);
     let app = Router::new()
         .route(
             "/.well-known/agent-card.json",
@@ -29,9 +32,15 @@ async fn hanging_agent() -> (String, Arc<AtomicUsize>) {
                 }
             }),
         )
-        .route("/a2a", post(std::future::pending::<String>));
+        .route(
+            "/a2a",
+            post(move || {
+                arrived.notify_one();
+                std::future::pending::<String>()
+            }),
+        );
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    (base, fetches)
+    (base, fetches, reached)
 }
 
 async fn started(base: &str) -> Arc<A2aTransport> {
@@ -48,7 +57,7 @@ async fn started(base: &str) -> Arc<A2aTransport> {
 
 #[tokio::test]
 async fn close_aborts_an_in_flight_call() {
-    let (base, _) = hanging_agent().await;
+    let (base, _, reached) = hanging_agent().await;
     let transport = started(&base).await;
     let pending = tokio::spawn({
         let transport = Arc::clone(&transport);
@@ -57,7 +66,11 @@ async fn close_aborts_an_in_flight_call() {
             transport.request("tools/call", Some(params)).await
         }
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Closed only once the agent holds the request: the row proves an
+    // in-flight call is aborted, not one that had not left yet.
+    tokio::time::timeout(Duration::from_secs(5), reached.notified())
+        .await
+        .expect("the call reaches the agent");
     transport.close().await.unwrap();
     let outcome = tokio::time::timeout(Duration::from_secs(5), pending)
         .await
@@ -72,7 +85,7 @@ async fn close_aborts_an_in_flight_call() {
 
 #[tokio::test]
 async fn ping_is_a_live_card_fetch() {
-    let (base, fetches) = hanging_agent().await;
+    let (base, fetches, _) = hanging_agent().await;
     let transport = started(&base).await;
     let before = fetches.load(Ordering::SeqCst);
     let response = transport.request("ping", None).await.unwrap();
@@ -86,7 +99,7 @@ async fn ping_is_a_live_card_fetch() {
 
 #[tokio::test]
 async fn initialize_is_synthetic_and_other_methods_are_not_found() {
-    let (base, _) = hanging_agent().await;
+    let (base, _, _) = hanging_agent().await;
     let transport = started(&base).await;
     let init = transport.request("initialize", None).await.unwrap();
     let init = init.result.unwrap();
@@ -100,7 +113,7 @@ async fn initialize_is_synthetic_and_other_methods_are_not_found() {
 
 #[tokio::test]
 async fn an_unknown_tool_or_a_missing_message_is_invalid_params() {
-    let (base, _) = hanging_agent().await;
+    let (base, _, _) = hanging_agent().await;
     let transport = started(&base).await;
     for params in [
         json!({"name": "other", "arguments": {"message": "hi"}}),

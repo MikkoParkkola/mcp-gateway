@@ -386,3 +386,84 @@ async fn a2a_7_a_delegation_passes_the_gateway_funnel() {
         "exactly one delegation reached the agent"
     );
 }
+
+/// A2A.4: a card interface that names a `tenant` gets it on every send.
+#[tokio::test]
+async fn a2a_4_the_cards_tenant_rides_every_send() {
+    let mut agent = Agent::answering(stub::completed_task(json!([{"text": "tenant ok"}])));
+    agent.tenant = Some("tenant-7".into());
+    let (base, log) = stub::serve(agent).await;
+    let result = call(&backend(&base, None, &[]), "hi")
+        .await
+        .expect("the call succeeds");
+    assert_eq!(texts(&result), ["tenant ok"], "result: {result}");
+    assert_eq!(
+        stub::sends(&log)[0].body.pointer("/params/tenant"),
+        Some(&json!("tenant-7"))
+    );
+}
+
+/// A2A.7: identity propagation on an A2A backend is accepted at load, and a
+/// per-request credential reaches the agent on that request alone.
+#[tokio::test]
+async fn a2a_7_a_propagated_credential_reaches_the_agent_per_request() {
+    use mcp_gateway::identity_propagation::{
+        IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+    };
+    let (base, log) = stub::serve(Agent::answering(stub::completed_task(
+        json!([{"text": "ok"}]),
+    )))
+    .await;
+
+    let mut config = mcp_gateway::config::Config::default();
+    let mut backend_config = mcp_gateway::config::BackendConfig {
+        transport: TransportConfig::A2a {
+            a2a_url: base.clone(),
+            a2a_agent_card_path: None,
+        },
+        allow_cleartext_credentials: true,
+        ..mcp_gateway::config::BackendConfig::default()
+    };
+    backend_config.identity_propagation = Some(IdentityPropagationConfig {
+        strategy: PropagationStrategyKind::Passthrough,
+        audience: "agent".into(),
+        required: true,
+        session_mode: SessionMode::Stateless,
+        token_exchange_endpoint: None,
+        token_exchange_scope: None,
+    });
+    config.backends.insert("agent".into(), backend_config);
+    config
+        .validate()
+        .expect("an A2A backend can carry a propagated credential");
+
+    let backend = backend(&base, None, &[("authorization", "Bearer static")]);
+    let params = json!({"name": TOOL, "arguments": {"message": "hi"}});
+    let user = [("authorization".to_owned(), "Bearer user-1".to_owned())];
+    backend
+        .request_with_headers("tools/call", Some(params.clone()), &user, Some("user-1"))
+        .await
+        .expect("the propagated call succeeds");
+    backend
+        .request("tools/call", Some(params))
+        .await
+        .expect("the static call succeeds");
+
+    let seen: Vec<Option<String>> = stub::sends(&log)
+        .iter()
+        .map(|sent| {
+            sent.headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            Some("Bearer user-1".to_owned()),
+            Some("Bearer static".to_owned())
+        ],
+        "the user's credential replaces the static one on its request only"
+    );
+}

@@ -93,3 +93,30 @@ fn an_agent_error_is_the_agents_and_a_result_is_one_of_task_or_message() {
         Reply::Answer(_)
     ));
 }
+
+#[test]
+fn the_card_sits_at_the_origin_whatever_a2a_url_carries() {
+    let client = A2aClient::new(
+        "https://agent.invalid/rpc/v1?token=x#frag",
+        None,
+        Vec::new(),
+        reqwest::Client::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        client.card_url,
+        "https://agent.invalid/.well-known/agent-card.json"
+    );
+}
+
+#[test]
+fn credentials_in_a2a_url_are_refused_without_echoing_them() {
+    let userinfo = ["operator", "hunter2-secret"].join(":");
+    let url = format!("https://{userinfo}@agent.invalid");
+    let error = A2aClient::new(&url, None, Vec::new(), reqwest::Client::new())
+        .err()
+        .expect("userinfo is refused")
+        .to_string();
+    assert!(error.contains("headers"), "{error}");
+    assert!(!error.contains("hunter2-secret"), "{error}");
+}

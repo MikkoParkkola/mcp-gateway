@@ -55,13 +55,29 @@ impl A2aClient {
                 diagnostic_url(a2a_url)
             ))
         })?;
+        // Credentials in the URL would authenticate the card fetch but not
+        // the advertised endpoint, and would ride every diagnostic that
+        // forgot to redact: they belong in `headers`.
+        if !origin.username().is_empty() || origin.password().is_some() {
+            return Err(Error::Config(format!(
+                "a2a_url {} carries credentials; put them in the backend's `headers` \
+                 (for example an Authorization header) instead",
+                diagnostic_url(a2a_url)
+            )));
+        }
         let path = card_path.unwrap_or(DEFAULT_CARD_PATH);
         if !path.starts_with('/') || path.contains("://") {
             return Err(Error::Config(format!(
                 "a2a_agent_card_path must be a path starting with '/', got {path:?}"
             )));
         }
-        let card_url = format!("{}{path}", a2a_url.trim_end_matches('/'));
+        // The card lives at a path on the agent's origin, whatever path,
+        // query or fragment `a2a_url` itself carries.
+        let mut card_url = origin.clone();
+        card_url.set_path(path);
+        card_url.set_query(None);
+        card_url.set_fragment(None);
+        let card_url = card_url.to_string();
         Ok(Self {
             http,
             origin,
@@ -91,10 +107,9 @@ impl A2aClient {
                 response.status()
             )));
         }
-        response
-            .json::<AgentCard>()
-            .await
-            .map_err(|e| Error::Protocol(safe_reqwest_message("A2A Agent Card is malformed", &e)))
+        let card = read_capped_json(response, "A2A Agent Card").await?;
+        serde_json::from_value(card)
+            .map_err(|e| Error::Protocol(format!("A2A Agent Card is malformed: {e}")))
     }
 
     /// The first JSON-RPC 1.x interface of `card`, held to the configured
@@ -166,13 +181,7 @@ impl A2aClient {
                 response.status()
             )));
         }
-        let envelope: Value = response.json().await.map_err(|e| {
-            Error::Protocol(safe_reqwest_message(
-                "A2A SendMessage reply is not JSON",
-                &e,
-            ))
-        })?;
-        decode_reply(envelope)
+        decode_reply(read_capped_json(response, "A2A SendMessage reply").await?)
     }
 
     /// Configured headers, then this request's own, then the protocol version.
@@ -196,6 +205,29 @@ impl A2aClient {
         }
         request.header(VERSION_HEADER, PROTOCOL_VERSION)
     }
+}
+
+/// The largest card or reply this bridge reads, the default stdio frame
+/// limit: an agent cannot make the gateway buffer an unbounded body.
+const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+
+/// Read `response` as JSON, refusing a body over [`MAX_BODY_BYTES`] as soon
+/// as it is exceeded, before it is buffered whole.
+async fn read_capped_json(mut response: reqwest::Response, what: &str) -> Result<Value> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| Error::Protocol(safe_reqwest_message(&format!("{what} read failed"), &e)))?
+    {
+        if body.len().saturating_add(chunk.len()) > MAX_BODY_BYTES {
+            return Err(Error::Protocol(format!(
+                "{what} exceeds {MAX_BODY_BYTES} bytes; refused"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|e| Error::Protocol(format!("{what} is not JSON: {e}")))
 }
 
 /// A JSON-RPC envelope as the agent's error or its `SendMessage` result.

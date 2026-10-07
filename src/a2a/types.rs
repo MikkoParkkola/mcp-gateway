@@ -71,12 +71,24 @@ pub(crate) struct Part {
     pub raw: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// `Some(Value::Null)` for a present `"data": null`, which is a valid
+    /// answer; `None` only when the field is absent.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub data: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
+}
+
+/// A present field, `null` included, as `Some`. With `default`, an absent
+/// field stays `None`.
+fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
 }
 
 impl Part {

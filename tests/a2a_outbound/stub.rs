@@ -91,6 +91,8 @@ pub struct Agent {
     pub card_path: String,
     /// The JSON-RPC interface URL the card advertises; `None` = own `RPC_PATH`.
     pub endpoint: Option<String>,
+    /// The `tenant` the card's interface names; a send without it is refused.
+    pub tenant: Option<String>,
     pub answer: Answer,
 }
 
@@ -99,6 +101,7 @@ impl Agent {
         Self {
             card_path: CARD_PATH.into(),
             endpoint: None,
+            tenant: None,
             answer: Answer::Result(result),
         }
     }
@@ -129,13 +132,16 @@ fn card(agent: &Agent, base: &str) -> Value {
         .endpoint
         .clone()
         .unwrap_or_else(|| format!("{base}{RPC_PATH}"));
+    let mut interface =
+        json!({"url": endpoint, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"});
+    if let Some(tenant) = &agent.tenant {
+        interface["tenant"] = json!(tenant);
+    }
     json!({
         "name": "Stub Agent",
         "description": "Answers questions for the outbound bridge rows.",
         "version": "1.0.0",
-        "supportedInterfaces": [
-            {"url": endpoint, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
-        ],
+        "supportedInterfaces": [interface],
         "capabilities": {},
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],
@@ -148,7 +154,12 @@ fn card(agent: &Agent, base: &str) -> Value {
 
 fn rpc(agent: &Agent, headers: &HeaderMap, body: &Value) -> Response {
     let id = body.get("id").cloned().unwrap_or(Value::Null);
-    if let Some(why) = send_message_violation(headers, body) {
+    let tenant_missing = agent.tenant.as_ref().is_some_and(|tenant| {
+        body.pointer("/params/tenant").and_then(Value::as_str) != Some(tenant.as_str())
+    });
+    let violation = send_message_violation(headers, body)
+        .or_else(|| tenant_missing.then(|| "params.tenant does not match the card".to_owned()));
+    if let Some(why) = violation {
         return axum::Json(json!({"jsonrpc": "2.0", "id": id,
             "error": {"code": -32602, "message": why}}))
         .into_response();
