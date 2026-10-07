@@ -16,6 +16,8 @@ mod session_hold;
 pub(crate) use session_hold::SessionHold;
 
 type CleanupFn = Box<dyn Fn(&str) + Send + Sync>;
+/// Whether the multiplexer still has a session; see `SessionLifecycle::liveness`.
+type LivenessFn = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// Registry of session disconnect callbacks.
 ///
@@ -68,7 +70,7 @@ pub struct SessionLifecycle {
     session_holds: parking_lot::Mutex<std::collections::HashMap<String, session_hold::Held>>,
     /// Whether the multiplexer still has a session, installed by the reaper
     /// that pairs the two. None: every id counts as live.
-    liveness: std::sync::OnceLock<Box<dyn Fn(&str) -> bool + Send + Sync>>,
+    liveness: std::sync::OnceLock<LivenessFn>,
 }
 
 /// A running call's claim on its caller key; see [`SessionLifecycle::hold`].
@@ -152,7 +154,9 @@ impl SessionLifecycle {
     /// It runs more than once per id: at the end, when the last call still
     /// holding the session finishes ([`SessionHold`]), and at the grace pass,
     /// and a re-run can race the grace pass on another thread. A handler must
-    /// therefore be idempotent and safe to run concurrently with itself.
+    /// therefore be idempotent and safe to run concurrently with itself. It
+    /// must not block either: a re-run happens where the last call's hold
+    /// drops, on whatever runtime thread that is.
     pub fn register_session_end(
         &self,
         name: impl Into<String>,

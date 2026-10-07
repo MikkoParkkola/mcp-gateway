@@ -82,6 +82,10 @@ impl Drop for SessionHold {
     /// no lifecycle lock held, so everything the call wrote is taken.
     fn drop(&mut self) {
         let mut holds = self.lifecycle.session_holds.lock();
+        debug_assert!(
+            holds.get(&self.id).is_some_and(|held| held.holds >= 1),
+            "a live hold always has its counted entry"
+        );
         let Some(held) = holds.get_mut(&self.id) else {
             return;
         };
