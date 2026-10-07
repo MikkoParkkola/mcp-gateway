@@ -1895,6 +1895,8 @@ impl MetaMcp {
     /// When the `spec-preview` feature is active and the params contain a `query`
     /// key, delegates to the filtered handler (SEP-1821).  Otherwise falls back to
     /// the standard session-aware handler so baseline behaviour is unchanged.
+    /// The filtered handler may spawn a cache fill, so call it inside a Tokio
+    /// runtime.
     pub fn handle_tools_list_with_params(
         &self,
         id: RequestId,
