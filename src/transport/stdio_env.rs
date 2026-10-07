@@ -114,11 +114,12 @@ where
         .collect()
 }
 
-/// The setting npm reads from an environment key, folded exactly as npm folds
-/// it: the `npm_config_` prefix in any case, then every non-leading `_` read
-/// as `-`, lowercased (`@npmcli/config` `loadEnv`). `npm_config_strict_ssl`
-/// and `NPM_CONFIG_STRICT-SSL` are one setting; a key outside the prefix is
-/// none.
+/// The setting npm reads from an environment key, folded as npm folds it: the
+/// `npm_config_` prefix in any case, then every non-leading `_` read as `-`,
+/// lowercased (`@npmcli/config` `loadEnv`). `npm_config_strict_ssl` and
+/// `NPM_CONFIG_STRICT-SSL` are one setting; a key outside the prefix is none.
+/// Lowercasing is ASCII only, where npm's is Unicode: enough for the allowlist,
+/// whose names are ASCII, since a key that folds differently cannot name one.
 fn npm_setting(key: &str) -> Option<String> {
     const PREFIX: &str = "npm_config_";
     let rest = key
