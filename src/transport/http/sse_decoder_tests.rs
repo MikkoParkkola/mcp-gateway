@@ -390,6 +390,11 @@ async fn a_null_method_frame_is_not_the_streams_response() {
     let body = futures::stream::iter(vec![Ok(bytes::Bytes::from_static(
         b"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":null,\"result\":{}}\n\n",
     ))]);
-    let outcome = decode_sse_exchange(body).await;
-    assert!(outcome.is_err(), "decoded as {:?}", outcome.ok());
+    let error = decode_sse_exchange(body)
+        .await
+        .expect_err("a null-method frame is a malformed event");
+    assert!(
+        error.to_string().contains("Failed to parse SSE data"),
+        "the malformed-event error, not another failure: {error}"
+    );
 }

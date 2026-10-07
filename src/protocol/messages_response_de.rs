@@ -27,8 +27,8 @@ impl<'de> Deserialize<'de> for JsonRpcResponse {
             error: Option<JsonRpcError>,
             /// Present, `null` included: a plain `Option` maps null to `None`,
             /// which let `"method": null` through as a response (MIK-8019).
-            #[serde(default, deserialize_with = "present")]
-            method: Option<Value>,
+            #[serde(default, deserialize_with = "present_unread")]
+            method: Option<serde::de::IgnoredAny>,
         }
 
         let shadow = Shadow::deserialize(deserializer)?;
@@ -57,4 +57,15 @@ where
     D: serde::Deserializer<'de>,
 {
     Value::deserialize(deserializer).map(Some)
+}
+
+/// Presence alone, `null` included, without building the value: refusing a
+/// frame costs no allocation however large its `method` member is.
+fn present_unread<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<serde::de::IgnoredAny>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde::de::IgnoredAny::deserialize(deserializer).map(Some)
 }

@@ -465,8 +465,12 @@ fn response_deser_rejects_frame_with_null_method() {
         r#"{"jsonrpc":"2.0","id":7,"method":null,"result":{"content":[]}}"#,
         r#"{"jsonrpc":"2.0","id":7,"method":null,"error":{"code":-32000,"message":"x"}}"#,
     ] {
-        let outcome = serde_json::from_str::<JsonRpcResponse>(frame);
-        assert!(outcome.is_err(), "{frame} parsed as {:?}", outcome.ok());
+        let error = serde_json::from_str::<JsonRpcResponse>(frame)
+            .expect_err("a frame carrying `method` is not a response");
+        assert!(
+            error.to_string().contains("frame carries `method`"),
+            "{frame} must fail on the method refusal, not elsewhere: {error}"
+        );
     }
 }
 
