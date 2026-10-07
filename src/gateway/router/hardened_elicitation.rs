@@ -46,31 +46,43 @@ pub(super) fn refusal() -> (StatusCode, Json<Value>) {
     build_http_error_response(None, -32600, REFUSAL, StatusCode::FORBIDDEN)
 }
 
-/// The direct route's refusal under `hardened`, or `None`.
-///
-/// The request is classified exactly as `/mcp` classifies it (the same
-/// duplicate-safe header read, the same parser, the same checks), so a modern
-/// header over a legacy body, a doubled or contradicted header, or an
-/// unsupported revision is refused here as there. What remains legacy is
-/// refused unless it is a declaring `initialize`.
-pub(super) fn direct_refusal(
-    state: &AppState,
-    headers: &HeaderMap,
-    request: &Value,
+/// The direct route's one reading of what a request declared: the header
+/// read once, duplicate-safe, then the observing classifier, as `/mcp` reads
+/// it (handlers.rs `classify_and_observe`). The hardened refusal and the era a
+/// response is shaped for both come from this one reading (MIK-8022).
+pub(super) fn classify_direct<'h>(
+    headers: &'h HeaderMap,
     method: &str,
     params: Option<&Value>,
-    id: Option<&RequestId>,
-) -> Option<(StatusCode, Json<Value>)> {
-    // Read once, duplicate-safe, as `/mcp` does: a doubled header takes the
-    // modern reading and is refused by the single-occurrence check.
+) -> (RequestShape, Option<&'h str>) {
+    // A doubled header takes the modern reading and is refused by the
+    // single-occurrence check.
     let mut versions = headers.get_all("mcp-protocol-version").iter();
     let declared_version = match (versions.next(), versions.next()) {
         (Some(only), None) => only.to_str().ok(),
         (None, _) => None,
         (Some(_), Some(_)) => Some(crate::protocol::meta::MODERN_VERSIONS[0]),
     };
-    let shape = crate::protocol::meta::classify_request(params, declared_version);
-    if let RequestShape::Malformed { missing } = &shape {
+    // No session on this route, so no session revision to consult.
+    let shape = crate::protocol::meta::classify_and_observe(method, params, declared_version, None);
+    (shape, declared_version)
+}
+
+/// The direct route's refusal under `hardened`, or `None`.
+///
+/// `reading` is [`classify_direct`]'s, so a modern header over a legacy body,
+/// a doubled or contradicted header, or an unsupported revision is refused
+/// here as on `/mcp`. What remains legacy is refused unless it is a declaring
+/// `initialize`.
+pub(super) fn direct_refusal(
+    state: &AppState,
+    headers: &HeaderMap,
+    request: &Value,
+    (method, params): (&str, Option<&Value>),
+    id: Option<&RequestId>,
+    (shape, declared_version): (&RequestShape, Option<&str>),
+) -> Option<(StatusCode, Json<Value>)> {
+    if let RequestShape::Malformed { missing } = shape {
         return Some(build_http_error_response(
             id.cloned(),
             -32602,
@@ -81,7 +93,7 @@ pub(super) fn direct_refusal(
     if let Some((rpc, status)) = super::handlers::request_checks::request_check_refusal(
         state,
         headers,
-        &shape,
+        shape,
         declared_version,
         method,
         params,
