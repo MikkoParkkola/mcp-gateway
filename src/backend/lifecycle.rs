@@ -25,6 +25,12 @@ use crate::transport::{HttpTransport, Transport};
 
 use crate::{Error, Result};
 
+/// A transport start, erased to `dyn Future`: the start future is deep enough
+/// that proving the dispatch future `Send` through it overflows the trait
+/// solver (E0275). The erasure restarts that proof.
+type StartFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Arc<dyn Transport>>> + Send + 'a>>;
+
 /// Consecutive unserved probe answers the gateway tolerates before it treats
 /// the peer as faulty (MIK-7217, OUTBOUND.2).
 ///
@@ -197,13 +203,8 @@ impl Backend {
                 return Err(outcome.to_error(&self.name));
             }
 
-            // Start transport for this slot.
-            // Erased to `dyn Future`: the start future is deep enough that
-            // proving the dispatch future `Send` through it overflows the
-            // trait solver (E0275). The erasure restarts that proof here.
-            let start: std::pin::Pin<
-                Box<dyn std::future::Future<Output = Result<Arc<dyn Transport>>> + Send + '_>,
-            > = Box::pin(self.start_entry(key, &entry));
+            // Start transport for this slot, erased (see `StartFuture`).
+            let start: StartFuture<'_> = Box::pin(self.start_entry(key, &entry));
             let transport = crate::oauth::login_gate::set_out(set_out, start).await?;
 
             // Reconcile: did the evictor remove this exact entry while we

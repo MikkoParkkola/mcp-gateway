@@ -84,8 +84,15 @@ pub(crate) struct Attempt {
     /// Fired once this login's callback listeners have let go of their
     /// sockets (or it never bound any).
     closed: CancellationToken,
-    /// `None` while running; then `Some(None)` on a token, or the outcome.
-    finished: watch::Sender<Option<Option<LoginOutcome>>>,
+    /// Where this login stands, as its joiners see it.
+    finished: watch::Sender<Progress>,
+}
+
+/// A login's progress: running, or ended (`None` on a token, else its outcome).
+#[derive(Debug, Clone)]
+enum Progress {
+    Running,
+    Ended(Option<LoginOutcome>),
 }
 
 impl Attempt {
@@ -93,8 +100,13 @@ impl Attempt {
     pub(crate) async fn finished(&self) -> Option<LoginOutcome> {
         let mut rx = self.finished.subscribe();
         // The sender lives in `self`, so the channel cannot close here.
-        let ended = rx.wait_for(Option::is_some).await;
-        ended.ok().and_then(|value| value.clone()).flatten()
+        let Ok(ended) = rx.wait_for(|p| matches!(p, Progress::Ended(_))).await else {
+            return None;
+        };
+        match &*ended {
+            Progress::Ended(outcome) => outcome.clone(),
+            Progress::Running => None,
+        }
     }
 }
 
@@ -221,7 +233,7 @@ impl LoginGate {
             cohort: Arc::clone(&state.cohort),
             cancel: CancellationToken::new(),
             closed: CancellationToken::new(),
-            finished: watch::Sender::new(None),
+            finished: watch::Sender::new(Progress::Running),
         });
         state.attempt = Some(Arc::clone(&attempt));
         Begin::Lead(Lead {
@@ -264,7 +276,7 @@ impl LoginGate {
                 state.attempt = None;
             }
         }
-        attempt.finished.send_replace(Some(to_joiners));
+        attempt.finished.send_replace(Progress::Ended(to_joiners));
     }
 
     /// End the login in flight, if any, and wait until it has closed its

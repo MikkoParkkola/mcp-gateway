@@ -360,9 +360,7 @@ impl Backend {
                             transport => FillEnd::Failed { transport },
                         },
                     };
-                    if family.stale_hit
-                        && drained.as_ref().is_err_and(|e| !e.is_authorization_wait())
-                    {
+                    if family.stale_hit && drained.is_err() && !matches!(end, FillEnd::Pending) {
                         *refresh_failed() = Some(tokio::time::Instant::now());
                     }
                     if let Some(guard) = guard.as_mut() {
