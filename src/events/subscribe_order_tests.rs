@@ -58,7 +58,8 @@ async fn a_racing_refresh_is_audited_after_the_insert_it_follows() {
         let hub = Arc::clone(&hub);
         async move { subscribe(&hub, "p").await }
     });
-    // Today the refresh finishes here; once ordered it waits for the insert.
+    // The refresh waits on the lifecycle lock the insert holds until its
+    // audit is written; without that order it would finish here first.
     let _ = tokio::time::timeout(Duration::from_secs(2), async {
         while !second.is_finished() {
             tokio::time::sleep(Duration::from_millis(20)).await;

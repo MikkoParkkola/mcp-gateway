@@ -98,6 +98,19 @@ async fn an_audit_outage_does_not_use_up_the_attempts() {
         accepted.load(Ordering::SeqCst) >= 1,
         "sent once the log recovered"
     );
+    // R2c: numbers stay unique. The refused claims left nothing on record,
+    // so the one `sending` record is attempt 4, not a reused 1.
+    let sending: Vec<u64> = std::fs::read_to_string(dir.path().join("audit.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.contains("evt_outage") && l.contains("\"status\":\"sending\""))
+        .filter_map(|l| {
+            let at = l.find("\"attempt\":")? + "\"attempt\":".len();
+            let digits: String = l[at..].chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok()
+        })
+        .collect();
+    assert_eq!(sending, [4], "one sending record, numbered on: {sending:?}");
 }
 
 /// .3: a burial over the byte cap is evicted at once; its own receipt is

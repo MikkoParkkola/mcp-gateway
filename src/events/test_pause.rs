@@ -16,7 +16,8 @@ impl Slot {
     /// signals `reached` on arrival and waits for `release`.
     pub(crate) fn arm(&self) -> (Arc<Notify>, Arc<Notify>) {
         let pair = (Arc::new(Notify::new()), Arc::new(Notify::new()));
-        *self.0.lock() = Some(pair.clone());
+        let earlier = self.0.lock().replace(pair.clone());
+        assert!(earlier.is_none(), "pause point armed twice");
         pair
     }
 
