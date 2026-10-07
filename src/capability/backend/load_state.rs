@@ -28,6 +28,10 @@ pub(crate) struct DirState {
     /// Whether any read of it has been clean (every file loaded) in this
     /// process.
     ever_loaded: bool,
+    /// Its latest successful read had a file that failed to load. Such a
+    /// file may hold any capability (it may not even parse to a name), so
+    /// the directory's contents are not fully known (MIK-8057 round 1).
+    opaque: bool,
 }
 
 /// What the current catalogue proves, read with it under one lock.
@@ -37,8 +41,10 @@ pub(crate) struct LoadState {
     pub(crate) complete: bool,
     /// The capabilities of failed directories, as their last reads saw them.
     pub(crate) unread: BTreeSet<String>,
-    /// A failed directory has never loaded: what it holds is unknown.
-    pub(crate) never_loaded: bool,
+    /// A failed directory has never been read cleanly, or its latest read
+    /// had a file that failed: what it holds is not fully known, so every
+    /// absent capability is kept.
+    pub(crate) opaque: bool,
 }
 
 impl LoadState {
@@ -46,7 +52,7 @@ impl LoadState {
     /// kept: its capability may still exist in a directory this load could
     /// not read.
     pub(crate) fn keeps(&self, name: &str) -> bool {
-        self.never_loaded
+        self.opaque
             || self
                 .unread
                 .iter()
@@ -69,12 +75,14 @@ impl CapabilityBackend {
                 state.last_read = names;
                 state.failed = false;
                 state.ever_loaded = true;
+                state.opaque = false;
             }
             // Not a clean read: what the failed file holds is not known, so
             // a directory never read cleanly keeps every absent capability.
             Some((names, true)) => {
                 state.last_read.extend(names);
                 state.failed = true;
+                state.opaque = true;
             }
             None => state.failed = true,
         }
@@ -95,11 +103,11 @@ impl CapabilityBackend {
                 Some(read) => {
                     state.complete = false;
                     state.unread.extend(read.last_read.iter().cloned());
-                    state.never_loaded |= !read.ever_loaded;
+                    state.opaque |= !read.ever_loaded || read.opaque;
                 }
                 None => {
                     state.complete = false;
-                    state.never_loaded = true;
+                    state.opaque = true;
                 }
             }
         }
