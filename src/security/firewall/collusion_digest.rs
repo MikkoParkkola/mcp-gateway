@@ -77,38 +77,34 @@ pub(crate) struct DeliveryDigest {
     deferred: bool,
 }
 
-/// Each leaf as a whole segment, no seam between them; the first `values`
-/// are values and the rest object keys, as [`delivery_parts`] returns them.
-fn part_views<'a>(leaves: &[&'a str], values: usize) -> Vec<View<'a>> {
-    leaves
-        .iter()
-        .enumerate()
-        .map(|(i, &leaf)| View {
-            text: leaf,
-            whole: true,
-            gap_before: false,
-            key: i >= values,
-        })
-        .collect()
+/// Leaf `i` as a whole segment, no seam before it; the first `values` are
+/// values and the rest object keys, as [`delivery_parts`] returns them.
+fn part_view<'a>(leaves: &[&'a str], values: usize, i: usize) -> View<'a> {
+    View {
+        text: leaves[i],
+        whole: true,
+        gap_before: false,
+        key: i >= values,
+    }
 }
 
-/// `segments` in walk order, capped: segments from the head and from the
-/// tail up to half of [`RECORD_CAP`] each, one at a boundary cut on a char
-/// boundary, and the middle dropped behind a seam. A kept segment keeps its
-/// own seam. Only kept text is copied. Also whether anything was cut.
-fn cap(segments: &[View<'_>]) -> (Vec<Segment>, bool) {
-    let total = segments
-        .iter()
-        .map(|s| s.text.len() + 1)
+/// The `n` segments `at` reads, in walk order, capped: segments from the head
+/// and from the tail up to half of [`RECORD_CAP`] each, one at a boundary cut
+/// on a char boundary, and the middle dropped behind a seam. A kept segment
+/// keeps its own seam. Only kept text is copied, and no segment is held that
+/// is not kept. Also whether anything was cut.
+fn cap<'a>(n: usize, at: &dyn Fn(usize) -> View<'a>) -> (Vec<Segment>, bool) {
+    let total = (0..n)
+        .map(|i| at(i).text.len() + 1)
         .sum::<usize>()
         .saturating_sub(1);
     if total <= RECORD_CAP {
-        return (segments.iter().map(|s| s.owned()).collect(), false);
+        return ((0..n).map(|i| at(i).owned()).collect(), false);
     }
     let half = RECORD_CAP / 2;
     let mut head = Vec::new();
     let mut room = half;
-    for s in segments {
+    for s in (0..n).map(at) {
         if room == 0 {
             break;
         }
@@ -130,7 +126,7 @@ fn cap(segments: &[View<'_>]) -> (Vec<Segment>, bool) {
     }
     let mut tail = Vec::new();
     let mut room = half;
-    for s in segments.iter().rev() {
+    for s in (0..n).rev().map(at) {
         if room == 0 {
             break;
         }
@@ -169,7 +165,7 @@ impl DeliveryDigest {
     /// object keys, as [`delivery_parts`] returns them; capped by leaf (see
     /// [`cap`]). Also whether anything was cut.
     pub(super) fn of_parts(leaves: &[&str], values: usize, sensitive: bool) -> (Self, bool) {
-        let (segments, cut) = cap(&part_views(leaves, values));
+        let (segments, cut) = cap(leaves.len(), &|i| part_view(leaves, values, i));
         let digest = Self {
             segments,
             retained: Vec::new(),
@@ -202,9 +198,8 @@ impl DeliveryDigest {
             return Self::of_parts(leaves, values, sensitive);
         }
         let digest = Self {
-            segments: part_views(leaves, values)
-                .into_iter()
-                .map(View::owned)
+            segments: (0..leaves.len())
+                .map(|i| part_view(leaves, values, i).owned())
                 .collect(),
             retained: Vec::new(),
             sensitive,
@@ -221,8 +216,7 @@ impl DeliveryDigest {
         if !self.deferred {
             return None;
         }
-        let views: Vec<View<'_>> = self.segments.iter().map(Segment::view).collect();
-        let (segments, cut) = cap(&views);
+        let (segments, cut) = cap(self.segments.len(), &|i| self.segments[i].view());
         let kept = self.retained.len().min(RECORD_CAP);
         let digest = Self {
             segments,
@@ -252,6 +246,13 @@ impl DeliveryDigest {
             .iter()
             .map(|s| (s.text.as_str(), s.gap_before))
             .collect()
+    }
+
+    /// The bytes its segments hold, as plan-step staging counts them: text
+    /// plus one segment per leaf (MIK-7992).
+    pub(crate) fn staged_len(&self) -> usize {
+        let per_leaf = std::mem::size_of::<Segment>();
+        self.segments.iter().map(|s| s.text.len() + per_leaf).sum()
     }
 
     /// This digest, as sensitive as `earlier` was: a rebuild from a redacted

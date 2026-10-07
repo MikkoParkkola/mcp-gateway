@@ -11,6 +11,9 @@ use super::{OTHER_PROSE, PROSE, relay_meta, text_result};
 use crate::gateway::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps, RelayKey, plan_step};
 use crate::security::firewall::{Firewall, RelayCaller};
 
+#[path = "relay_plan_budget_tests.rs"]
+mod budget;
+
 /// Text a redaction removes from step A, long enough to be matched alone.
 const SECRET: &str = "Account recovery phrase for the vineyard terminal: amber kettle \
     seventeen lantern quiet harbour violet anchor, rotated after the September audit.";

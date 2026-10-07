@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::collusion::{CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams};
+use super::collusion_digest::DELIVERED_SET_CAP;
 #[cfg(test)]
 pub(super) use super::collusion_digest::delivery_leaves;
 pub(super) use super::collusion_digest::delivery_parts;
@@ -413,15 +414,24 @@ impl Firewall {
         self.digest_with(server, tool, result, DeliveryDigest::of_parts)
     }
 
-    /// [`Self::delivery_digest`] for a plan step: staged whole, capped once
-    /// it is kept to what the plan delivers, or when recorded (MIK-7992).
-    pub(crate) fn plan_step_digest(
+    /// [`Self::delivery_digest`], or for a plan step (`plan`: what its
+    /// delivery has staged so far, as [`DeliveryDigest::staged_len`] counts)
+    /// staged whole, capped once it is kept to what the plan delivers or when
+    /// recorded (MIK-7992). From [`DELIVERED_SET_CAP`] staged on, a step is
+    /// capped now, so a plan of many steps stages a bounded total.
+    pub(crate) fn receipt_digest(
         &self,
         server: &str,
         tool: &str,
         result: &Value,
+        plan: Option<usize>,
     ) -> Option<DeliveryDigest> {
-        self.digest_with(server, tool, result, DeliveryDigest::of_plan_step_parts)
+        match plan {
+            Some(staged) if staged < DELIVERED_SET_CAP => {
+                self.digest_with(server, tool, result, DeliveryDigest::of_plan_step_parts)
+            }
+            _ => self.delivery_digest(server, tool, result),
+        }
     }
 
     fn digest_with(
