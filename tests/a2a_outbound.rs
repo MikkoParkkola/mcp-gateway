@@ -321,3 +321,23 @@ async fn a2a_6_url_credentials_are_redacted_from_errors() {
         "the error still names the target: {error}"
     );
 }
+
+/// A2A.5: `structuredContent` is an object or absent; a sole non-object data
+/// part stays text only.
+#[tokio::test]
+async fn a2a_5_a_non_object_data_part_is_not_structured_content() {
+    let parts = json!([{"data": [1, 2, 3]}]);
+    let (base, _log) = stub::serve(Agent::answering(stub::completed_task(parts))).await;
+    let result = call(&backend(&base, None, &[]), "hi")
+        .await
+        .expect("the call succeeds");
+    assert!(
+        result.get("structuredContent").is_none(),
+        "an array is not structured content: {result}"
+    );
+    assert_eq!(
+        texts(&result),
+        ["[1,2,3]"],
+        "the data stays as its JSON text: {result}"
+    );
+}
