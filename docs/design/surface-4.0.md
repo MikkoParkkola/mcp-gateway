@@ -91,10 +91,10 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `default_routing_profile` | 1 |  |  |  |  |
 | `env_files` | 1 |  |  |  |  |
 | `error_budget` |  |  | `error_budget`; `capability`; `capability.cooldown`; `capability.min_samples`; `capability.threshold`; `capability.window_duration`; `capability.window_size`; `min_samples`; `threshold`; `window_duration`; `window_size` |  |  |
-| `events` | 13 |  | 31 |  |  |
+| `events` | 13 |  | `dead_letter_max_bytes`; `dead_letter_max_records`; `default_ttl`; `max_in_flight`; `max_outbox`; `max_outbox_per_subscription`; `max_subscriptions`; `max_subscriptions_per_principal`; `max_ttl`; `max_verified_tail`; `max_verified_tail_per_principal`; `min_ttl`; `queue_depth`; `rate_limit_per_subscription`; `rate_limit_per_subscription.burst`; `rate_limit_per_subscription.per_minute`; `retry_base`; `retry_max_attempts`; `retry_window`; `schedule`; `schedule.max_timers`; `schedule.max_timers_per_principal`; `secret_rotation_grace`; `seen_max_per_route`; `suspend_min_attempts`; `suspend_window`; `verification_per_host_per_minute`; `verified_tail_ttl`; `watch`; `watch.max_pollers`; `watch.max_pollers_per_principal` |  |  |
 | `failsafe` | 9 |  | `circuit_breaker.failure_threshold`; `circuit_breaker.reset_timeout`; `circuit_breaker.success_threshold`; `health_check.interval`; `health_check.timeout`; `rate_limit.burst_size`; `rate_limit.requests_per_second`; `retry.initial_backoff`; `retry.max_attempts`; `retry.max_backoff`; `retry.multiplier` |  |  |
 | `idempotency` | 4 |  |  |  |  |
-| `key_server` | 21 | `oidc[].auto_discover` | `cleanup_interval_secs`; `max_oidc_token_age_secs`; `max_tokens_per_identity` |  |  |
+| `key_server` | 20 | `oidc[].auto_discover` | `cleanup_interval_secs`; `max_oidc_token_age_secs`; `max_tokens_per_identity`; `token_ttl_secs` |  |  |
 | `marketplace` |  |  |  |  | `marketplace` |
 | `meta_mcp` | 8 | `prompts_resources_fetch_timeout` | `cache_ttl`; `projection_mode` |  | `cache_tools` |
 | `mtls` | 20 |  |  |  |  |
@@ -102,7 +102,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `routing_profiles` | 6 |  |  |  |  |
 | `runtime` | 30 |  |  |  |  |
 | `security` | 120 |  | `firewall.anomaly_min_observations`; `firewall.anomaly_threshold`; `firewall.collusion.common_principals`; `firewall.collusion.min_matches`; `firewall.collusion.window_secs`; `firewall.memory_poisoning.max_entry_size_bytes`; `message_signing.replay_window` |  |  |
-| `server` | 10 |  | `max_body_size`; `modern_protocol`; `shutdown_timeout` |  | `request_timeout`; `ws_port` |
+| `server` | 11 |  | `max_body_size`; `shutdown_timeout` |  | `request_timeout`; `ws_port` |
 | `streaming` | 3 |  | `buffer_size`; `keep_alive_interval`; `session_reaper_interval`; `session_ttl` |  |  |
 | `tasks` | 3 |  | `default_ttl_ms`; `expiry_interval`; `logical_budget_bytes`; `max_per_principal`; `max_record_bytes`; `max_records`; `max_workers`; `poll_interval_ms` |  |  |
 | `webhooks` | 4 |  | `rate_limit` |  |  |
@@ -124,7 +124,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `identity` | 29 |  |  |  |  |
 | `import` | 15 |  |  |  |  |
 | `init` | 4 |  |  |  |  |
-| `kubernetes` |  |  |  | 18 |  |
+| `kubernetes` |  |  |  | `mcp-gateway kubernetes`; `mcp-gateway kubernetes apply-plan`; `mcp-gateway kubernetes apply-plan --approve-apply`; `mcp-gateway kubernetes apply-plan --execute`; `mcp-gateway kubernetes apply-plan --format`; `mcp-gateway kubernetes apply-plan --namespace`; `mcp-gateway kubernetes apply-plan <resources>`; `mcp-gateway kubernetes controller`; `mcp-gateway kubernetes controller --cycles`; `mcp-gateway kubernetes controller --format`; `mcp-gateway kubernetes controller --interval-seconds`; `mcp-gateway kubernetes controller --namespace`; `mcp-gateway kubernetes controller --watch`; `mcp-gateway kubernetes controller <resources>`; `mcp-gateway kubernetes plan`; `mcp-gateway kubernetes plan --format`; `mcp-gateway kubernetes plan --namespace`; `mcp-gateway kubernetes plan <resources>` |  |
 | `list` | 3 |  |  |  | `mcp-gateway list --config` |
 | `ranking` |  |  |  | `mcp-gateway ranking`; `mcp-gateway ranking eval`; `mcp-gateway ranking eval --format`; `mcp-gateway ranking eval <file>` |  |
 | `remove` | 2 |  |  |  | `mcp-gateway remove --config` |
@@ -135,7 +135,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `stats` | 2 |  |  |  |  |
 | `tls` | 20 |  |  |  |  |
 | `tool` | 13 | `mcp-gateway tool completions --capabilities`; `mcp-gateway tool inspect --capabilities`; `mcp-gateway tool invoke --capabilities`; `mcp-gateway tool list --capabilities` |  |  |  |
-| `trust` |  |  |  | 31 |  |
+| `trust` |  |  |  | `mcp-gateway trust`; `mcp-gateway trust generate`; `mcp-gateway trust generate --capabilities`; `mcp-gateway trust generate --format`; `mcp-gateway trust generate --output`; `mcp-gateway trust inspect`; `mcp-gateway trust inspect --capabilities`; `mcp-gateway trust inspect --format`; `mcp-gateway trust inspect <name>`; `mcp-gateway trust lab`; `mcp-gateway trust lab evaluate`; `mcp-gateway trust lab evaluate --active-fixtures`; `mcp-gateway trust lab evaluate --baseline`; `mcp-gateway trust lab evaluate --baseline-id`; `mcp-gateway trust lab evaluate --baseline-registry`; `mcp-gateway trust lab evaluate --capabilities`; `mcp-gateway trust lab evaluate --certification-score`; `mcp-gateway trust lab evaluate --enforce`; `mcp-gateway trust lab evaluate --execute-active-fixtures`; `mcp-gateway trust lab evaluate --format`; `mcp-gateway trust lab evaluate --minimum-score`; `mcp-gateway trust lab evaluate --runtime-image`; `mcp-gateway trust lab evaluate --runtime-provider-plan`; `mcp-gateway trust lab evaluate --update-baseline-registry`; `mcp-gateway trust lab evaluate --write-baseline`; `mcp-gateway trust lab evaluate <name>`; `mcp-gateway trust validate`; `mcp-gateway trust validate --capabilities`; `mcp-gateway trust validate --file`; `mcp-gateway trust validate --format`; `mcp-gateway trust validate --strict` |  |
 | `upgrade` | 4 |  |  |  |  |
 | `validate` | 5 | `mcp-gateway validate --no-color` |  |  |  |
 
@@ -160,7 +160,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `/metrics` | 1 |  |  |  |  |
 | `/readyz` | 1 |  |  |  |  |
 | `/sse` |  |  |  | `/sse` |  |
-| `/ui` | 1 |  |  | 23 |  |
+| `/ui` | 1 |  |  | `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools` |  |
 | `config-driven` | 3 |  |  |  |  |
 
 ### lib
@@ -187,6 +187,9 @@ auth:
   bearer_token: "<generated by init>"
   single_user: true
   public_paths: ["/health", "/mcp"]
+security:
+  transparency_log:
+    enabled: true   # required while auth is on
 backends:
   my-server:
     command: "npx -y @my/mcp-server"
@@ -198,11 +201,10 @@ backends:
 - `crates/gateway-core`: a separate crate that does not depend on this one.
 - Security control semantics and the web UI's look: excluded by the scope file.
 
-## Open decisions for the operator
+## Library consumers
 
-1. Hide `kubernetes` while DEPLOYMENT.md still documents it, or keep it as an advanced command.
-2. Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mcp-gateway`
-   (checked 2026-10-07), so no published crate builds on the library.
+Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mcp-gateway`
+(checked 2026-10-07), so no published crate builds on the library.
 
 ## Surface: config
 
@@ -500,7 +502,7 @@ backends:
 | `key_server.policies[].scopes.backends` | KEEP | `type default` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:332 |
 | `key_server.policies[].scopes.rate_limit` | KEEP | `type default` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:338 |
 | `key_server.policies[].scopes.tools` | KEEP | `type default` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:335 |
-| `key_server.token_ttl_secs` | KEEP | `DEFAULT_TOKEN_TTL_SECS` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:46 |
+| `key_server.token_ttl_secs` | INTERNAL | `DEFAULT_TOKEN_TTL_SECS` | lifetime of issued keys; a security window (rule 1) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/key_server.rs:46 |
 | `marketplace` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:53 |
 | `meta_mcp` | KEEP | `type default` | section | - | src/config/mod.rs:97 |
 | `meta_mcp.cache_tools` | REMOVE | `true` | read by nothing (MIK-8064); setting it has no effect | refused at load naming MIK-8064's fix; `upgrade` and `init` drop it | src/config/meta_mcp_config.rs:40 |
@@ -509,7 +511,7 @@ backends:
 | `meta_mcp.expose_stats_tool` | KEEP | `false` | README documents it as the switch for `gateway_get_stats` | - | src/config/meta_mcp_config.rs:98 |
 | `meta_mcp.exposed_meta_tools` | KEEP | `Vec::new()` | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:90 |
 | `meta_mcp.projection_mode` | INTERNAL | `crate::projection::ProjectionMode::default()` | rollout switch for response projection; off unless a test sets it | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:75 |
-| `meta_mcp.prompts_resources_fetch_timeout` | AUTO | `Duration::from_secs(10)` | derived from the backend's own `timeout` | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:56 |
+| `meta_mcp.prompts_resources_fetch_timeout` | AUTO | `Duration::from_secs(10)` | unset: min(the backend's `timeout`, 10 s), today's 10 s as the ceiling | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:56 |
 | `meta_mcp.surfaced_tools` | KEEP | `Vec::new()` | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:67 |
 | `meta_mcp.surfaced_tools[].server` | KEEP | — | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:28 |
 | `meta_mcp.surfaced_tools[].tool` | KEEP | — | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:30 |
@@ -598,7 +600,7 @@ backends:
 | `security.context_integrity.non_bypassable` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:535 |
 | `security.context_integrity.preset` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:530 |
 | `security.firewall` | KEEP | `crate::security::firewall::FirewallConfig::default()` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/config/features/security.rs:623 |
-| `security.firewall.anomaly_block_threshold` | KEEP | `see impl Default` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:78 |
+| `security.firewall.anomaly_block_threshold` | KEEP | `see impl Default` | a switch under rule 3: setting it turns anomaly blocking on (unset warns only) | - | src/security/firewall/config.rs:78 |
 | `security.firewall.anomaly_detection` | KEEP | `see impl Default` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:30 |
 | `security.firewall.anomaly_min_observations` | INTERNAL | `fn default_anomaly_min_observations` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/security/firewall/config.rs:81 |
 | `security.firewall.anomaly_threshold` | INTERNAL | `fn default_anomaly_threshold` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/security/firewall/config.rs:57 |
@@ -708,7 +710,7 @@ backends:
 | `server.idempotency_key` | KEEP | `IdempotencyKeyMode::Optional` | operator policy: whether clients must send an idempotency key (ADR-012) | - | src/config/server_config.rs:68 |
 | `server.max_body_size` | INTERNAL | `10 * 1024 * 1024` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/server_config.rs:42 |
 | `server.metrics_token` | KEEP | `None` | security opt-out or credential; must stay an explicit operator decision | - | src/config/server_config.rs:77 |
-| `server.modern_protocol` | INTERNAL | `true` | protocol revision is negotiated per client; the switch only served the rollout | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/server_config.rs:30 |
+| `server.modern_protocol` | KEEP | `true` | multi-replica deployments turn it off (DEPLOYMENT.md:181); it is also the protocol rollback switch | - | src/config/server_config.rs:30 |
 | `server.port` | KEEP | `39400` | where the gateway listens and how clients reach it | - | src/config/server_config.rs:34 |
 | `server.public_url` | KEEP | `None` | where the gateway listens and how clients reach it | - | src/config/server_config.rs:52 |
 | `server.replicas` | KEEP | `1` | declared, not observable from inside a pod | - | src/config/server_config.rs:83 |
@@ -889,24 +891,24 @@ backends:
 | `mcp-gateway init --output` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:289 |
 | `mcp-gateway init --profile` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:289 |
 | `mcp-gateway init --with-examples` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:289 |
-| `mcp-gateway kubernetes` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:249 |
-| `mcp-gateway kubernetes apply-plan` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:342 |
-| `mcp-gateway kubernetes apply-plan --approve-apply` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:342 |
-| `mcp-gateway kubernetes apply-plan --execute` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:342 |
-| `mcp-gateway kubernetes apply-plan --format` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:342 |
-| `mcp-gateway kubernetes apply-plan --namespace` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:342 |
-| `mcp-gateway kubernetes apply-plan <resources>` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:342 |
-| `mcp-gateway kubernetes controller` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:311 |
-| `mcp-gateway kubernetes controller --cycles` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:311 |
-| `mcp-gateway kubernetes controller --format` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:311 |
-| `mcp-gateway kubernetes controller --interval-seconds` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:311 |
-| `mcp-gateway kubernetes controller --namespace` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:311 |
-| `mcp-gateway kubernetes controller --watch` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:311 |
-| `mcp-gateway kubernetes controller <resources>` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:311 |
-| `mcp-gateway kubernetes plan` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:295 |
-| `mcp-gateway kubernetes plan --format` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:295 |
-| `mcp-gateway kubernetes plan --namespace` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:295 |
-| `mcp-gateway kubernetes plan <resources>` | INTERNAL | enterprise-alpha controller; documented only under deploy/kubernetes/enterprise-alpha | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:295 |
+| `mcp-gateway kubernetes` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/mod.rs:249 |
+| `mcp-gateway kubernetes apply-plan` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:342 |
+| `mcp-gateway kubernetes apply-plan --approve-apply` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:342 |
+| `mcp-gateway kubernetes apply-plan --execute` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:342 |
+| `mcp-gateway kubernetes apply-plan --format` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:342 |
+| `mcp-gateway kubernetes apply-plan --namespace` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:342 |
+| `mcp-gateway kubernetes apply-plan <resources>` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:342 |
+| `mcp-gateway kubernetes controller` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:311 |
+| `mcp-gateway kubernetes controller --cycles` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:311 |
+| `mcp-gateway kubernetes controller --format` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:311 |
+| `mcp-gateway kubernetes controller --interval-seconds` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:311 |
+| `mcp-gateway kubernetes controller --namespace` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:311 |
+| `mcp-gateway kubernetes controller --watch` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:311 |
+| `mcp-gateway kubernetes controller <resources>` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:311 |
+| `mcp-gateway kubernetes plan` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:295 |
+| `mcp-gateway kubernetes plan --format` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:295 |
+| `mcp-gateway kubernetes plan --namespace` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:295 |
+| `mcp-gateway kubernetes plan <resources>` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:295 |
 | `mcp-gateway list` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:441 |
 | `mcp-gateway list --available` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:441 |
 | `mcp-gateway list --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | the global `--config` (and `MCP_GATEWAY_CONFIG`) takes over; a clap error names it | src/cli/mod.rs:441 |
@@ -1105,7 +1107,7 @@ backends:
 | `/mcp/{name}` | KEEP | direct endpoint for one backend | - | src/gateway/routes.rs:27 |
 | `/metrics` | KEEP | Prometheus scrape, behind `server.metrics_token` | - | src/gateway/routes.rs:24 |
 | `/readyz` | KEEP | liveness and readiness probes for supervisors and Kubernetes | - | src/gateway/routes.rs:23 |
-| `/sse` | INTERNAL | not a transport: answers a pointer to `/mcp` for clients configured for the removed SSE endpoint | unchanged; listed as a deprecation helper | src/gateway/routes.rs:28 |
+| `/sse` | INTERNAL | not a transport: answers a pointer to `/mcp` for clients configured for the removed SSE endpoint; SSE-transport clients use `/mcp` (Streamable HTTP; `GET /mcp` opens the stream) | unchanged; listed as a deprecation helper | src/gateway/routes.rs:28 |
 | `/ui` | KEEP | the web dashboard and its sign-in hand-off | - | src/gateway/routes.rs:34 |
 | `/ui/api/backends` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:51 |
 | `/ui/api/backends/{name}` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:52 |

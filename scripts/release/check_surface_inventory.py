@@ -601,9 +601,10 @@ def extract_routes() -> list[Entry]:
             if m.group(1) not in owned and m.group(1) != "OWNED":
                 rid = f"unresolved routes::{m.group(1)} ({rel(p)})"
                 out.setdefault(rid, Entry(rid, rel(p), line_of(code, m.start()), "not in routes.rs"))
-        for m in re.finditer(r"\.(?:route|route_service|nest|nest_service)\(\s*([^,]+?)\s*,", code):
+        for m in re.finditer(r"\.\s*(?:route|route_service|nest|nest_service)\s*\(\s*([^,]+?)\s*,", code):
             arg = m.group(1)
-            if arg.startswith("routes::") or (rel(p), arg) in NOT_HTTP_ROUTES:
+            # Only a bare declared constant is already a row; any expression over one is not.
+            if (re.fullmatch(r"routes::([A-Z][A-Z0-9_]*)", arg) and arg[8:] in owned) or (rel(p), arg) in NOT_HTTP_ROUTES:
                 continue
             rid = f"dynamic {arg} ({rel(p)})"
             out.setdefault(rid, Entry(rid, rel(p), line_of(code, m.start()), "path from config"))
@@ -613,12 +614,21 @@ def extract_routes() -> list[Entry]:
 # ── Surface: lib ─────────────────────────────────────────────────────────────
 
 
-def extract_lib() -> list[Entry]:
-    path = SRC / "lib.rs"
+LIB_ITEM_RE = re.compile(
+    r"^((?:#\[[^\n]*\]\s*)*)pub\s+(?:(?:async|unsafe|extern\s+\"\w+\")\s+)*"
+    r"(mod|use|fn|const\s+fn|const|static|struct|enum|trait|type|union)\s+([^;{(=<]+)",
+    re.M,
+)
+
+
+def extract_lib(path: Path | None = None) -> list[Entry]:
+    path = path or SRC / "lib.rs"
     code, mask = prod_scan(path)
     out = []
-    for m in re.finditer(r"^((?:#\[[^\n]*\]\s*)*)pub\s+(mod|use|fn|const|static|struct|enum|trait|type)\s+([^;{(=<]+)", code, re.M):
-        kind, rest = m.group(2), " ".join(m.group(3).split())
+    for m in re.finditer(r"^#\[macro_export\][^\n]*\n(?:#\[[^\n]*\]\s*)*macro_rules!\s*(\w+)", code, re.M):
+        out.append(Entry(f"mcp_gateway::{m.group(1)}!", rel(path), line_of(code, m.start()), "exported macro"))
+    for m in LIB_ITEM_RE.finditer(code):
+        kind, rest = m.group(2).split()[-1], " ".join(m.group(3).split())
         note = feature_of(m.group(1))
         if kind == "use":
             end = code.index(";", m.start())

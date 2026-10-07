@@ -98,6 +98,33 @@ def test_route_with_named_handler_is_extracted() -> None:
         assert any(path in i for i in ids), (path, sorted(ids))
 
 
+def test_route_expression_over_a_constant_is_an_item() -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory(dir=inv.ROOT / "src") as tmp:
+        (Path(tmp) / "planted.rs").write_text(
+            'fn r() { x.route(routes::HEALTH.trim_end_matches("h"), h) . route ("/spaced", h); }\n',
+            encoding="utf-8",
+        )
+        ids = {e.id for e in inv.extract_routes()}
+    assert any("trim_end_matches" in i for i in ids), sorted(ids)
+    assert any('"/spaced"' in i for i in ids), sorted(ids)
+
+
+def test_lib_extractor_sees_async_const_fn_and_macros() -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory(dir=inv.ROOT / "src") as tmp:
+        f = Path(tmp) / "planted_lib.rs"
+        f.write_text(
+            "pub async fn planted_async() {}\npub const fn planted_const() {}\n"
+            "#[macro_export]\nmacro_rules! planted_macro { () => {} }\n",
+            encoding="utf-8",
+        )
+        ids = {e.id for e in inv.extract_lib(f)}
+    assert {"mcp_gateway::planted_async", "mcp_gateway::planted_const", "mcp_gateway::planted_macro!"} <= ids, ids
+
+
 def test_versioned_route_constant_is_read() -> None:
     names = [n for n, _, _ in inv.route_constants('owned_routes! {\n    HEALTH_V2 = "/v2/health",\n}')]
     assert names == ["HEALTH_V2"], names
