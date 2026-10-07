@@ -48,6 +48,9 @@ pub(super) fn add_capped(
     // A spend that read the day just before midnight skipped the day's sweep,
     // so yesterday's rows may still fill the cap (MIK-8045). Sweep here, at
     // most once a day, so a full cap of today's rows stays O(1) per call.
+    // The day is marked before the sweep finishes; no second spend can act on
+    // that early mark because settles run one at a time under the ledger lock
+    // and a restore runs before the enforcer is shared.
     if !own && short {
         let today = super::current_day();
         if swept.fetch_max(today, Ordering::Relaxed) < today {

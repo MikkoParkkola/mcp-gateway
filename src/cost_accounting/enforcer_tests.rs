@@ -423,7 +423,9 @@ fn a_new_tool_after_a_straddled_sweep_gets_its_own_row() {
         e.tool_daily.contains_key("new-today"),
         "the new tool's spend went to the overflow row"
     );
-    assert!(e.snapshot().tool_overflow_usd.abs() < 1e-12);
+    let snap = e.snapshot();
+    assert!((snap.tool_daily["new-today"] - 0.01).abs() < 1e-9);
+    assert!(snap.tool_overflow_usd.abs() < 1e-12);
 }
 
 /// `MIK-STRADDLE.2`: the same for a new key.
@@ -438,7 +440,9 @@ fn a_new_key_after_a_straddled_sweep_gets_its_own_row() {
         e.key_daily.contains_key("new-key"),
         "the new key's spend went to the overflow row"
     );
-    assert!(e.snapshot().key_overflow_usd.abs() < 1e-12);
+    let snap = e.snapshot();
+    assert!((snap.key_daily["new-key"] - 0.01).abs() < 1e-9);
+    assert!(snap.key_overflow_usd.abs() < 1e-12);
 }
 
 /// `MIK-STRADDLE.3`: with the cap full of today's rows, overflowing spends do
