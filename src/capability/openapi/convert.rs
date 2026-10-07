@@ -117,7 +117,7 @@ impl OpenApiConverter {
     /// capabilities.
     ///
     /// The host portion of `url` is automatically set as the converter's
-    /// [`with_host_override`] so that relative `servers` entries (such as
+    /// [`with_host_override`](Self::with_host_override) so that relative `servers` entries (such as
     /// Petstore's `/api/v3`) resolve to absolute URLs in the generated
     /// capability YAML.
     ///

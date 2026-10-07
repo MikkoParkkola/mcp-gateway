@@ -12,16 +12,21 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use tracing::warn;
 
+use super::anchor::{Walked, check_anchor, succ};
 use super::rotation::{
     EV_EXPIRED, EV_HWM_MISSING, EV_OPENED, EV_SEALED, EV_TORN, HWM_MISSING_AT, TORN_COMMITTED,
 };
 use super::segments::{self, HighWater};
+
+// The session reader, which shares this file's listing and test hooks.
+#[path = "transparency_log_session.rs"]
+mod session;
 use super::{
     MAX_AUDIT_READ_BYTES, TransparencyLogConfig, bounded_read_to_string, recompute_entry_hash,
     verify_entry_sig,
 };
+pub use session::show_session_entries;
 
 /// Result of a chain-integrity verification pass.
 #[derive(Debug, Default)]
@@ -105,70 +110,6 @@ pub fn log_contains_signed_entry(path: &Path) -> io::Result<bool> {
     Ok(false)
 }
 
-/// Every entry whose `session_id` is `session` or, since F9, its
-/// fingerprint, oldest first, across the sealed segments and the active file.
-///
-/// # Errors
-///
-/// `NotFound` when neither the log nor any sealed segment exists, or a
-/// segment cannot be read.
-pub fn show_session_entries(path: &Path, session: &str) -> io::Result<Vec<Value>> {
-    let fp = crate::gateway::session_id::session_fp(session);
-    let mut attempt = 0;
-    loop {
-        #[cfg(test)]
-        {
-            PASSES.with(|c| c.set(c.get() + 1));
-            fire(&BEFORE_STREAM);
-        }
-        let files = existing_log_files(path)?;
-        #[cfg(test)]
-        fire(&LISTED);
-        let read = matching_entries(&files, session, &fp);
-        #[cfg(test)]
-        fire(&AFTER_STREAM);
-        // Growth leaves the file list as it was; only a rotation changes it.
-        let stable = seqs(&files) == seqs(&log_files(path)?);
-        match read {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
-            Ok(found) if stable => return Ok(found),
-            Ok(_) => {}
-        }
-        if attempt == 1 {
-            return Err(changed_under_reader("reading"));
-        }
-        attempt += 1;
-    }
-}
-
-/// One pass of [`show_session_entries`] over `files`.
-fn matching_entries(
-    files: &[(Option<u64>, PathBuf)],
-    session: &str,
-    fp: &str,
-) -> io::Result<Vec<Value>> {
-    let mut results = Vec::new();
-    for (_, file) in files {
-        let content = bounded_read_to_string(file, MAX_AUDIT_READ_BYTES)?;
-        for raw in content.lines().filter(|l| !l.trim().is_empty()) {
-            match serde_json::from_str::<Value>(raw.trim()) {
-                Ok(entry)
-                    if entry
-                        .get("session_id")
-                        .and_then(Value::as_str)
-                        .is_some_and(|s| s == session || s == fp) =>
-                {
-                    results.push(entry);
-                }
-                Ok(_) => {}
-                Err(e) => warn!("transparency log: skipping malformed line: {e}"),
-            }
-        }
-    }
-    Ok(results)
-}
-
 /// The segment numbers a listing names, oldest first.
 fn seqs(files: &[(Option<u64>, PathBuf)]) -> Vec<Option<u64>> {
     files.iter().map(|(s, _)| *s).collect()
@@ -194,23 +135,6 @@ fn existing_log_files(path: &Path) -> io::Result<Vec<(Option<u64>, PathBuf)>> {
     Ok(files)
 }
 
-/// The one library entry point for `audit verify`: the whole log at `path`,
-/// across its sealed segments, in `mode`, with the per-entry HMAC checked
-/// when `config` carries a secret (D6 2.5).
-///
-/// # Errors
-///
-/// `NotFound` when neither the log nor any sealed segment exists;
-/// `Interrupted` when the log rotated under the reader twice in a row
-/// (retry); any read error.
-pub fn verify_audit_log(
-    path: &Path,
-    config: &TransparencyLogConfig,
-    mode: VerifyMode,
-) -> io::Result<VerifyResult> {
-    verify_segments(path, config, mode)
-}
-
 /// Verify the whole log at `path`: every segment as one stream, seams,
 /// expiry anchors and (live mode) tail completeness against `.hwm`. Runs
 /// even when the active file is absent. Restarts once if a live rotation
@@ -223,6 +147,16 @@ pub(crate) fn verify_segments(
     path: &Path,
     config: &TransparencyLogConfig,
     mode: VerifyMode,
+) -> io::Result<VerifyResult> {
+    verify_pinned(path, config, mode, None)
+}
+
+/// As [`verify_segments`], also against `pin`, an anchor (MIK-7713).
+pub(super) fn verify_pinned(
+    path: &Path,
+    config: &TransparencyLogConfig,
+    mode: VerifyMode,
+    pin: Option<&HighWater>,
 ) -> io::Result<VerifyResult> {
     let secret = config.shared_secret.as_bytes();
     let changed = || changed_under_reader("verification");
@@ -255,7 +189,7 @@ pub(crate) fn verify_segments(
         } else {
             Some(secret)
         })
-        .run(&files, hw.as_ref(), mode);
+        .run(&files, hw.as_ref(), mode, pin);
         let files_after = log_files(path)?;
         // A `.hwm` written during the pass (a new log's first append) is a
         // moved log too: the records read may be newer than the missing mark.
@@ -331,6 +265,11 @@ struct Stream<'a> {
     /// (MIK-7712): the mark names a record, not only a count.
     mark_counter: Option<u64>,
     at_mark: Option<String>,
+    /// The anchor's counter, the hash walked there, and the expired
+    /// boundary the oldest survivor verifiably links to (MIK-7713).
+    pin_counter: Option<u64>,
+    at_pin: Option<String>,
+    boundary: Option<(u64, String)>,
 }
 
 type Verdict = Result<(), (Option<u64>, String)>;
@@ -363,6 +302,9 @@ impl<'a> Stream<'a> {
             hwm_missing: None,
             mark_counter: None,
             at_mark: None,
+            pin_counter: None,
+            at_pin: None,
+            boundary: None,
         }
     }
 
@@ -371,10 +313,12 @@ impl<'a> Stream<'a> {
         files: &[(Option<u64>, PathBuf)],
         hw: Option<&HighWater>,
         mode: VerifyMode,
+        pin: Option<&HighWater>,
     ) -> io::Result<VerifyResult> {
         self.mark_counter = hw.map(|h| h.counter);
+        self.pin_counter = pin.map(|p| p.counter);
         let verdict = match self.stream(files)? {
-            Ok(()) => self.finish(files, hw, mode),
+            Ok(()) => self.finish(files, hw, mode, pin),
             failed => failed,
         };
         match verdict {
@@ -395,10 +339,14 @@ impl<'a> Stream<'a> {
             // With sealed siblings the active file must be the next segment;
             // with none left (retention or the disk-full path took them) its
             // open record names it, and the expiry anchor pins the link.
-            let expected = seq.unwrap_or_else(|| match newest_sealed {
-                Some(n) => n + 1,
-                None => segments::active_segment_seq(file, 0),
-            });
+            let expected = match (seq, newest_sealed) {
+                (Some(s), _) => *s,
+                (None, Some(n)) => match succ(n, None) {
+                    Ok(next) => next,
+                    Err(e) => return Ok(Err(e)),
+                },
+                (None, None) => segments::active_segment_seq(file, 0),
+            };
             let content = bounded_read_to_string(file, MAX_AUDIT_READ_BYTES)?;
             let mut sealed_here: Option<u64> = None;
             for (ln, raw) in content.lines().filter(|l| !l.trim().is_empty()).enumerate() {
@@ -430,8 +378,12 @@ impl<'a> Stream<'a> {
                 }
                 match field_str(&entry, "event") {
                     Some(EV_SEALED) => {
-                        sealed_here =
-                            Some(field_u64(&entry, "next_segment_seq").unwrap_or(expected + 1));
+                        let next = field_u64(&entry, "next_segment_seq")
+                            .map_or_else(|| succ(expected, Some(counter)), Ok);
+                        match next {
+                            Ok(next) => sealed_here = Some(next),
+                            Err(e) => return Ok(Err(e)),
+                        }
                     }
                     Some(EV_HWM_MISSING) => self.note_hwm_missing(counter),
                     Some(EV_TORN)
@@ -500,43 +452,7 @@ impl Stream<'_> {
     ) -> Verdict {
         let opened = field_str(entry, "event") == Some(EV_OPENED);
         let Some((prev_seq, prev_file, prev_seal)) = before else {
-            // The oldest surviving file.
-            if !opened {
-                if expected != 0 {
-                    return Err((
-                        Some(counter),
-                        format!(
-                            "{} (segment {expected}) does not start with an open record",
-                            file.display()
-                        ),
-                    ));
-                }
-                return Ok(()); // a pre-D6 segment 0 starts at genesis
-            }
-            self.opened_oldest = true;
-            Self::check_open_seq(entry, counter, expected, file)?;
-            let prev_hash = field_str(entry, "prev_entry_hash")
-                .unwrap_or_default()
-                .to_string();
-            match field_u64(entry, "prev_segment_seq") {
-                Some(gone) => {
-                    let link = field_str(entry, "prev_segment_final_hash").unwrap_or_default();
-                    self.anchor = Some((gone, link.to_string(), counter));
-                }
-                None if prev_hash != "genesis" => {
-                    return Err((
-                        Some(counter),
-                        format!(
-                            "counters 1..{} missing before {}: the active segment was deleted",
-                            counter.saturating_sub(1),
-                            file.display()
-                        ),
-                    ));
-                }
-                None => self.genesis_open = counter == 1,
-            }
-            self.prev = Some((counter.saturating_sub(1), prev_hash));
-            return Ok(());
+            return self.first_record_oldest(entry, counter, expected, file);
         };
         debug_assert!(index > 0);
         let Some(next) = prev_seal else {
@@ -582,17 +498,75 @@ impl Stream<'_> {
         }
         self.check_seam_link(entry, counter, prev_seq, prev_file, file)?;
         let seal_counter = self.prev.as_ref().map_or(0, |p| p.0);
-        if counter > seal_counter + 1 {
+        let after_seal = succ(seal_counter, Some(seal_counter))?;
+        if counter > after_seal {
             return Err((
                 Some(counter),
                 format!(
                     "counters {}..{} missing after segment {prev_seq}: the active segment was \
                  deleted or truncated, or the host lost unflushed writes",
-                    seal_counter + 1,
+                    after_seal,
                     counter - 1
                 ),
             ));
         }
+        Ok(())
+    }
+
+    /// Seam checks on the oldest surviving file's first record.
+    fn first_record_oldest(
+        &mut self,
+        entry: &Value,
+        counter: u64,
+        expected: u64,
+        file: &Path,
+    ) -> Verdict {
+        if field_str(entry, "event") != Some(EV_OPENED) {
+            if expected != 0 {
+                return Err((
+                    Some(counter),
+                    format!(
+                        "{} (segment {expected}) does not start with an open record",
+                        file.display()
+                    ),
+                ));
+            }
+            return Ok(()); // a pre-D6 segment 0 starts at genesis
+        }
+        self.opened_oldest = true;
+        Self::check_open_seq(entry, counter, expected, file)?;
+        let prev_hash = field_str(entry, "prev_entry_hash")
+            .unwrap_or_default()
+            .to_string();
+        match field_u64(entry, "prev_segment_seq") {
+            Some(gone) => {
+                let link = field_str(entry, "prev_segment_final_hash").unwrap_or_default();
+                // The chain must continue from the boundary it links to,
+                // as at every internal seam.
+                if link != prev_hash {
+                    return Err((
+                        Some(counter),
+                        format!(
+                            "segment {expected} opens with prev_entry_hash {prev_hash} but \
+                             links to final hash {link}"
+                        ),
+                    ));
+                }
+                self.anchor = Some((gone, link.to_string(), counter));
+            }
+            None if prev_hash != "genesis" => {
+                return Err((
+                    Some(counter),
+                    format!(
+                        "counters 1..{} missing before {}: the active segment was deleted",
+                        counter.saturating_sub(1),
+                        file.display()
+                    ),
+                ));
+            }
+            None => self.genesis_open = counter == 1,
+        }
+        self.prev = Some((counter.saturating_sub(1), prev_hash));
         Ok(())
     }
 
@@ -643,7 +617,10 @@ impl Stream<'_> {
         let stored_prev = field_str(entry, "prev_entry_hash")
             .ok_or_else(|| missing(ln + 1, "prev_entry_hash"))?;
         let (want_counter, want_prev) = match &self.prev {
-            Some((c, h)) => (c + 1, h.as_str()),
+            Some((c, h)) => match succ(*c, Some(*c)) {
+                Ok(next) => (next, h.as_str()),
+                Err(e) => return Ok(Err(e)),
+            },
             None => (counter, "genesis"),
         };
         if counter != want_counter {
@@ -677,6 +654,9 @@ impl Stream<'_> {
         if self.mark_counter == Some(counter) {
             self.at_mark = Some(stored.to_string());
         }
+        if self.pin_counter == Some(counter) {
+            self.at_pin = Some(stored.to_string());
+        }
         self.prev = Some((counter, stored.to_string()));
         self.result.entries_checked += 1;
         Ok(Ok(()))
@@ -692,12 +672,14 @@ impl Stream<'_> {
         files: &[(Option<u64>, PathBuf)],
         hw: Option<&HighWater>,
         mode: VerifyMode,
+        pin: Option<&HighWater>,
     ) -> Verdict {
         if let Some((gone, link, counter)) = self.anchor.take() {
             match self.expiries.get(&gone) {
-                Some((last, hash)) if *hash == link && last + 1 == counter => {
+                Some((last, hash)) if *hash == link && succ(*last, Some(*last))? == counter => {
                     self.result.segments_expired =
                         self.expiries.keys().filter(|k| **k <= gone).count();
+                    self.boundary = Some((*last, link));
                 }
                 Some(_) => {
                     return Err((
@@ -727,6 +709,15 @@ impl Stream<'_> {
                 VerifyMode::Archive => self.result.warnings.push(format!("archive mode: {msg}")),
             }
         }
+        if let Some(pin) = pin {
+            let walked = Walked {
+                last: self.prev.as_ref().map(|p| p.0),
+                at_pin: self.at_pin.as_deref(),
+                boundary: self.boundary.as_ref().map(|(c, h)| (*c, h.as_str())),
+                signed: self.secret.is_some(),
+            };
+            check_anchor(pin, &walked)?;
+        }
         let sealed_present = files.iter().any(|(s, _)| s.is_some());
         let last = self.prev.as_ref().map_or(0, |p| p.0);
         // Disk-full expiry can take the last sealed segment, so the open
@@ -739,7 +730,7 @@ impl Stream<'_> {
         let gap = match hw {
             None if sealed_present || (self.opened_oldest && !(self.genesis_open && last == 1)) => {
                 Some((
-                    last + 1,
+                    succ(last, Some(last))?,
                     "high-water mark missing: tail loss cannot be ruled out".to_string(),
                 ))
             }
