@@ -14,6 +14,9 @@
 // marked `expect(dead_code)` so the annotation self-deletes the moment a case
 // starts using the item.
 
+#[path = "../common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -104,6 +107,10 @@ impl Peer {
         *self.payload.lock() = payload;
     }
 
+    #[allow(
+        dead_code,
+        reason = "task_crash_boundaries waits on the worker; task_upstream_recovery reads instead"
+    )]
     pub async fn wait_for_queries(&self, at_least: usize) {
         let observe = async {
             loop {
@@ -440,22 +447,11 @@ impl Gateway {
         let out = std::fs::File::create(&log).expect("the child log opens under the temp root");
         let err = out.try_clone().expect("the child log handle clones");
 
-        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-        // Operator config overrides must not replace this child's isolated fixture.
-        for (key, _) in std::env::vars_os() {
-            if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-                command.env_remove(key);
-            }
-        }
+        let mut command = tokio::process::Command::from(gateway_bin::command(
+            root,
+            gateway_bin::Inherit::Environment,
+        ));
         command.env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"));
-        // The bound port is read from an info-level banner, so an inherited
-        // filter keeps its own directives but may not hide that one line.
-        if let Ok(filter) = std::env::var("RUST_LOG") {
-            command.env(
-                "RUST_LOG",
-                format!("{filter},mcp_gateway::gateway::server::support=info"),
-            );
-        }
         for (key, value) in env {
             command.env(key, value);
         }
@@ -514,7 +510,7 @@ impl Gateway {
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "the gateway was not ready within {READY_BOUND:?} (no `Listening` line \
-                 means it never logged one; a RUST_LOG above info hides it)\n{}",
+                 means it never bound)\n{}",
                 self.logs()
             );
             tokio::time::sleep(POLL_GAP).await;

@@ -19,6 +19,9 @@
 
 #![cfg(unix)]
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -98,25 +101,17 @@ impl Gateway {
         std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600))
             .expect("chmod 600");
 
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("a loopback port")
-            .local_addr()
-            .expect("its address")
-            .port();
         let log = root.join("serve.log");
         let out = std::fs::File::create(&log).expect("serve log");
         let err = out.try_clone().expect("log handle");
-        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
-        for (key, _) in std::env::vars_os() {
-            if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
-                command.env_remove(key);
-            }
-        }
+        let mut command = tokio::process::Command::from(gateway_bin::command(
+            &root,
+            gateway_bin::Inherit::Environment,
+        ));
         let child = command
             .current_dir(&root)
-            .env("HOME", &root)
             .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
-            .args(["-c", "gateway.yaml", "-p", &port.to_string(), "serve"])
+            .args(["-c", "gateway.yaml", "-p", "0", "serve"])
             .stdin(Stdio::null())
             .stdout(Stdio::from(out))
             .stderr(Stdio::from(err))
@@ -132,7 +127,7 @@ impl Gateway {
             _tmp: tmp,
             child,
             log,
-            url: format!("http://127.0.0.1:{port}"),
+            url: String::new(),
             http,
         };
         gateway.wait_ready().await;
@@ -143,19 +138,26 @@ impl Gateway {
         std::fs::read_to_string(&self.log).unwrap_or_default()
     }
 
+    /// Read the port the child bound (`-p 0`) from its log, then wait for
+    /// `/health` on it (MIK-7984).
     async fn wait_ready(&mut self) {
-        let health = format!("{}/health", self.url);
         let deadline = tokio::time::Instant::now() + READY_BOUND;
         loop {
             if let Some(status) = self.child.try_wait().expect("child status") {
                 panic!("serve exited before ready ({status})\n{}", self.logs());
             }
-            if self
-                .http
-                .get(&health)
-                .send()
-                .await
-                .is_ok_and(|r| r.status().is_success())
+            if self.url.is_empty()
+                && let Some(port) = gateway_bin::logged_port(&self.log)
+            {
+                self.url = format!("http://127.0.0.1:{port}");
+            }
+            if !self.url.is_empty()
+                && self
+                    .http
+                    .get(format!("{}/health", self.url))
+                    .send()
+                    .await
+                    .is_ok_and(|r| r.status().is_success())
             {
                 return;
             }

@@ -161,11 +161,16 @@ pub(crate) struct Reservation {
 }
 
 /// One process's read history, shared by every `Firewall` and stream writer.
-/// The only lock is the principal's map shard, taken only for a frame that
-/// names a tenant or is unread.
+/// The lock a frame takes is the principal's map shard, and only for a frame
+/// that names a tenant or is unread; a principal's first frame also takes
+/// `admitting`.
 #[derive(Debug, Default)]
 pub(crate) struct ReadHistory {
     principals: DashMap<String, Principal>,
+    /// Held to admit a new principal: every insert into `principals` and every
+    /// eviction runs under it, so the cap check and the insert cannot
+    /// interleave with another new key's (MIK-7975 CAP.1).
+    admitting: parking_lot::Mutex<()>,
     /// Source of fresh unread tenants: each unread frame is its own.
     unread: AtomicU64,
     /// Test clock: milliseconds added to `Instant::now()` (MIN.4 corpus).
@@ -195,6 +200,32 @@ impl ReadHistory {
         Arc::new(Self::default())
     }
 
+    /// `key`'s first frame: admitted under `admitting`, so the map never
+    /// holds more than `MAX_PRINCIPALS`. A concurrent first frame for the same
+    /// key may have admitted it meanwhile; then no cap applies. `None` when the
+    /// map is full of live principals.
+    fn admit(
+        &self,
+        key: &str,
+        now: Instant,
+        window: Duration,
+    ) -> Option<dashmap::mapref::one::RefMut<'_, String, Principal>> {
+        let _admitting = self.admitting.lock();
+        if let Some(principal) = self.principals.get_mut(key) {
+            return Some(principal);
+        }
+        if self.principals.len() >= MAX_PRINCIPALS {
+            self.principals.retain(|_, p| {
+                p.expire(now, window);
+                !p.idle()
+            });
+            if self.principals.len() >= MAX_PRINCIPALS {
+                return None;
+            }
+        }
+        Some(self.principals.entry(key.to_owned()).or_default())
+    }
+
     /// Count the frame against `key`'s live tenants and, unless it is over
     /// and `refuse_over` is set, reserve its tenants under a ticket; both
     /// under one shard guard, so two concurrent frames serialize. `None`
@@ -212,16 +243,10 @@ impl ReadHistory {
             let n = self.unread.fetch_add(1, Ordering::Relaxed);
             hashes.push(format!("?unread-{n}"));
         }
-        if !self.principals.contains_key(key) && self.principals.len() >= MAX_PRINCIPALS {
-            self.principals.retain(|_, p| {
-                p.expire(now, window);
-                !p.idle()
-            });
-            if self.principals.len() >= MAX_PRINCIPALS {
-                return None;
-            }
-        }
-        let mut principal = self.principals.entry(key.to_owned()).or_default();
+        let mut principal = match self.principals.get_mut(key) {
+            Some(principal) => principal,
+            None => self.admit(key, now, window)?,
+        };
         principal.expire(now, window);
         let fresh = hashes.iter().filter(|h| !principal.holds(h)).count();
         let over = principal.live() + fresh > 1;

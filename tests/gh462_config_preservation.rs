@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! GH462 regression-first checks for real config loaders, mutations and CLI writes.
 
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::{sync::Arc, time::Duration};
@@ -389,15 +392,9 @@ mod cli {
         setup: bool,
         configure_client: bool,
     ) -> std::process::Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        let mut command = Command::from(gateway_bin::command(home, gateway_bin::Inherit::Nothing));
         command
-            .env_clear()
-            .env("HOME", home)
-            .env("MCP_GATEWAY_TEST_HOME_DIR", home)
-            .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root))) // a cleared Windows environment cannot start
-            .env("USERPROFILE", home)
             .env("XDG_CONFIG_HOME", home.join(".config"))
-            .env("APPDATA", home.join("AppData/Roaming"))
             // Process discovery invokes ps/wmic by name. An isolated child PATH
             // removes host-process input while retaining real client discovery.
             .env("PATH", home.join("no-system-programs"))

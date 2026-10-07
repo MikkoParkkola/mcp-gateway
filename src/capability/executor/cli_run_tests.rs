@@ -728,13 +728,14 @@ fn every_covered_number_form_redacts_only_its_own_value() {
     );
 }
 
-/// The 4-character floor applies to the needle as injected, number form
-/// included: "1e5" is 3 characters, so the number it names is left alone.
+/// Below the 4-character floor a needle is matched by exact JSON equality
+/// only: "1e5" redacts the float 1e5 (MIK-7954), never 100000 or 1e50.
 #[test]
-fn a_number_form_credential_below_the_floor_is_not_looked_for() {
-    let mut value: Value = serde_json::from_str(r#"{"n": 1e5}"#).unwrap();
+fn a_number_form_credential_below_the_floor_matches_its_exact_value() {
+    let mut value: Value = serde_json::from_str(r#"{"n": 1e5, "m": 1e50}"#).unwrap();
     super::super::cli::redact_value(&mut value, &["1e5".to_owned()]);
-    assert_ne!(value["n"], "[redacted]", "{value}");
+    assert_eq!(value["n"], "[redacted]", "{value}");
+    assert_ne!(value["m"], "[redacted]", "{value}");
 }
 
 /// A digit credential past u64 is compared after the same float parse that

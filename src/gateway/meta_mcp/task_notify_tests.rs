@@ -26,6 +26,7 @@ fn reader() -> Reader<'static> {
     Reader {
         caller: "key-a",
         session_id: "s-1",
+        subject: None,
     }
 }
 

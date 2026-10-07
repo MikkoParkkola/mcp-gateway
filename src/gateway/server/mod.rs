@@ -46,6 +46,8 @@ mod stdio_shutdown;
 mod stdio_tasks;
 mod stdio_writer;
 mod task_runtime;
+#[cfg(test)]
+mod test_seams;
 pub(crate) use stdio_nonce::StdioNonce;
 mod support;
 mod tools_changed;
@@ -58,9 +60,8 @@ pub(crate) use cleartext::reload_posture_refusal;
 pub(crate) use support::start_refusal as next_start_refusal;
 mod warmstart;
 
-use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
+use std::{net::SocketAddr, path::PathBuf};
 
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
@@ -70,11 +71,10 @@ use super::auth::ResolvedAuthConfig;
 use super::authz::ToolPolicyAuthorizer;
 use super::meta_mcp::{InvokeScope, MetaMcp, MetaMcpCallerContext};
 use super::oauth::{AgentAuthState, AgentDefinition, AgentRegistry, GatewayKeyPair};
-use super::outbound::OutboundFrame;
-use super::proxy::ProxyManager;
 use super::router::{AppState, CallerStanding, account_handles_of, create_router_with_accounts};
 use super::streaming::NotificationMultiplexer;
 use super::webhooks::WebhookRegistry;
+use super::{outbound::OutboundFrame, proxy::ProxyManager};
 use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
 use crate::cache::ResponseCache;
 use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
@@ -314,9 +314,9 @@ pub struct Gateway {
     /// account shutdown releases the store and its two file locks while this
     /// handle stays here to refuse everything that arrives afterwards.
     custody: Option<Arc<crate::personal_accounts::GatewayCustody>>,
-    /// In-process tests point this at their tempdir (`with_data_dir`).
+    /// In-process test settings: data directory and bound-port channel.
     #[cfg(test)]
-    data_dir: Option<std::path::PathBuf>,
+    test_seams: test_seams::TestSeams,
 }
 
 /// Who the stdio dispatcher is serving: the session's id, the channel that
@@ -573,7 +573,7 @@ impl Gateway {
 
         Ok(Self {
             #[cfg(test)]
-            data_dir: None,
+            test_seams: test_seams::TestSeams::default(),
             config,
             config_path,
             watched_config: None,
@@ -878,7 +878,7 @@ impl Gateway {
         let usage_stats = Some(Arc::new(UsageStats::new()));
 
         #[cfg(test)]
-        let data_dir = (self.data_dir.clone()).unwrap_or_else(persistence::standard_data_dir);
+        let data_dir = self.test_seams.data_dir();
         #[cfg(not(test))]
         let data_dir = persistence::standard_data_dir();
         persistence::ensure_data_dir(&data_dir);
@@ -1929,6 +1929,16 @@ impl Gateway {
             dashboard_bootstrap,
         });
 
+        // REST capability watch polls through the router's controls, so it
+        // joins the running events hub once the router state exists.
+        if self.config.events.sources.rest_watch
+            && let Some(hub) = state.meta_mcp.events()
+        {
+            hub.install_watch_source(Arc::new(crate::gateway::router::GatewayWatchHost::new(
+                &state,
+            )));
+        }
+
         // Webhook routes are built BEFORE the router and handed to it, so the
         // origin gate covers them. Merging them onto the finished router would
         // put them outside the layer that refuses cross-site requests.
@@ -2028,11 +2038,12 @@ impl Gateway {
         //
         // One bind, before the banner, shared by both paths, has neither.
         let listener = TcpListener::bind(addr).await?;
-        // `server.port: 0` asks the OS for a port; a minted dashboard link
-        // must name the one actually bound, not the configured 0.
+        // A minted dashboard link names the bound port, not a configured 0.
         if let Ok(bound) = listener.local_addr() {
             dashboard_bootstrap.set_bound_port(bound.port());
         }
+        #[cfg(test)]
+        self.test_seams.report_bound_port(&listener);
 
         log_startup_banner(
             &self.config,
@@ -2970,7 +2981,7 @@ impl Gateway {
         };
         let policy = ToolPolicyAuthorizer { tool_policy };
         let scope = InvokeScope::stdio(&policy);
-        let (response, execution) = if method == "tools/call" {
+        let (mut response, execution) = if method == "tools/call" {
             // D3-a: one grant-decision slot spans signing, admission and dispatch.
             super::meta_mcp::grant_audit::slot_rpc(
                 meta_mcp.transparency_logger.as_ref(),
@@ -3043,6 +3054,12 @@ impl Gateway {
             )
         };
 
+        // As `POST /mcp` does: shaped before signing, receipts stamped to match.
+        let stamps = if request_shape.era() == crate::protocol::meta::Era::Modern {
+            super::router::shape_modern_response(&mut response, &method)
+        } else {
+            super::meta_mcp::invoke::relay::GatewayStamps::Legacy
+        };
         let chain_source = response.chain_source;
         let response = meta_mcp.finalize_content(
             response,
@@ -3054,6 +3071,7 @@ impl Gateway {
                     caller: "stdio",
                     external_server: "gateway",
                     external_tool: &external_tool,
+                    subject: None,
                 },
                 mutation:
                     crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
@@ -3063,22 +3081,11 @@ impl Gateway {
             },
             super::meta_mcp::response_security::DeliveryInspection::Required,
         );
-        // MIK-7887.RECEIPT.4: the receipt describes the delivered answer. The
-        // stdio route stamps no `serverInfo` over a backend's. Rebuilt here,
-        // inside the relay-receipt scope; the judge can only replace the
-        // answer, and a replaced answer commits no receipt.
+        // MIK-7887.RECEIPT.4: the receipt describes the delivered answer, with
+        // the stamps its era got; the judge can only replace the answer.
         {
-            use super::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
-            let shape = if external_tool == "gateway_invoke" {
-                AnswerShape::InvokeWrapped
-            } else {
-                AnswerShape::Literal
-            };
-            meta_mcp.rebuild_receipt_from_final(
-                response.result.as_ref(),
-                GatewayStamps::Legacy,
-                shape,
-            );
+            let shape = super::meta_mcp::invoke::relay::AnswerShape::of(&external_tool);
+            meta_mcp.rebuild_receipt_from_final(response.result.as_ref(), stamps, shape);
         }
         // MIK-7920: recorded after the judge, then settled, by the caller
         // (`judge_and_commit`), as `POST /mcp` does.
@@ -3239,6 +3246,7 @@ impl Gateway {
             // alone, so stdio was never checked and the default
             // non-admin context went unnoticed.
             is_admin: true,
+            surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
             // MRTR.9 declares capabilities per request, in the same `_meta`
             // this shape was classified from, so a modern call is read there.
             //
@@ -3739,6 +3747,7 @@ fn stdio_caller_context<'a>(
         // alone, so stdio was never checked and the default
         // non-admin context went unnoticed.
         is_admin: true,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         // stdio carries no per-request capability
         // declaration to read, and absent means absent.
         input_capabilities: crate::protocol::meta::Declared::NONE,

@@ -566,6 +566,9 @@ fn metadata_host_refusal_names_the_metadata_service() {
         "169.254.169.254",
         "[fd00:ec2::254]",
         "::ffff:169.254.169.254",
+        // IPv4-compatible spelling (MIK-7831).
+        "::169.254.169.254",
+        "[::169.254.169.254]",
     ] {
         let msg = check_host_not_ssrf(host).unwrap_err().to_string();
         assert!(msg.contains("cloud metadata address"), "{host}: {msg}");

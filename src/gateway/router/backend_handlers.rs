@@ -574,9 +574,11 @@ fn settle_direct_idempotency(
 /// itself — an open circuit, an unknown backend or tool — carries no such
 /// ambiguity: nothing ran, so caching it for the entry's whole lifetime would
 /// deny the caller a retry of work that provably never happened. See
-/// [`crate::Error::is_pre_dispatch`] for why that allowlist stays tight.
+/// [`crate::Error::is_pre_dispatch`] for why that allowlist stays tight. A
+/// lost round stores the uncertainty notice under the first caller's code
+/// (MIK-7979), the same sentence the meta route stores.
 fn settle_direct_failure(
-    reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
+    mut reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
     error: &crate::Error,
     response: &JsonRpcResponse,
 ) {
@@ -585,6 +587,16 @@ fn settle_direct_failure(
             reservation.release();
         }
         return;
+    }
+    if let Some(sent) = response.error.as_ref() {
+        let route = crate::gateway::meta_mcp::invoke::LostRoundRoute::Direct { code: sent.code };
+        if crate::gateway::meta_mcp::invoke::settle_lost_round(
+            error,
+            reservation.as_deref_mut(),
+            route,
+        ) {
+            return;
+        }
     }
     settle_direct_idempotency(reservation, response);
 }
@@ -682,6 +694,7 @@ fn scan_direct_tools_list_response(
         caller,
         external_server: backend_name,
         external_tool: "tools/list",
+        subject: None,
     };
     let _ = super::response_pass::inspect_tools_call_response(
         state.firewall.as_deref(),

@@ -273,15 +273,12 @@ async fn run(cli: Cli) -> ExitCode {
             shadow,
             shadow_format,
             start_stdio,
+            show_stderr,
         }) => {
             if shadow {
                 commands::run_doctor_shadow_command(&shadow_format)
             } else {
-                let probe = if start_stdio {
-                    commands::StdioProbe::Start
-                } else {
-                    commands::StdioProbe::Locate
-                };
+                let probe = commands::StdioProbe::from_flags(start_stdio, show_stderr);
                 commands::run_doctor_command(fix, config.as_deref(), format, probe).await
             }
         }
@@ -383,6 +380,7 @@ fn resolve_audit_log_path(path: Option<std::path::PathBuf>) -> std::path::PathBu
 fn run_audit_verify(
     log_path: &std::path::Path,
     archive: bool,
+    anchor: Option<&std::path::Path>,
     config_path: Option<&std::path::Path>,
 ) -> ExitCode {
     use mcp_gateway::security::transparency_log::{VerifyMode, verify_audit_log};
@@ -425,7 +423,7 @@ fn run_audit_verify(
             }
         }
     }
-    match verify_audit_log(log_path, &log_config, verify_mode) {
+    match verify_audit_log(log_path, &log_config, verify_mode, anchor) {
         // Neither the log nor any sealed segment exists (D6: sealed segments
         // alone are still a log to verify).
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -479,9 +477,11 @@ fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path>) -
     let resolve_path = resolve_audit_log_path;
 
     match cmd {
-        AuditCommand::Verify { path, archive } => {
-            run_audit_verify(&resolve_path(path), archive, config_path)
-        }
+        AuditCommand::Verify {
+            path,
+            archive,
+            anchor,
+        } => run_audit_verify(&resolve_path(path), archive, anchor.as_deref(), config_path),
 
         AuditCommand::Show { session, path } => {
             let log_path = resolve_path(path);

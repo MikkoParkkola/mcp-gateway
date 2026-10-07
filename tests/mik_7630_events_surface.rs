@@ -97,25 +97,52 @@ async fn events_speaking_backend() -> (String, Arc<Mutex<Vec<String>>>) {
     (url, seen)
 }
 
+/// `cfg` with the events-speaking backend at `url` attached as `mock`.
+fn with_mock(mut cfg: Value, url: &str) -> Value {
+    cfg["backends"] = json!({"mock": {"http_url": url, "streamable_http": true}});
+    cfg["security"]["trust_configured_backends"] = json!(true);
+    cfg["auth"]["api_keys"][0]["backends"] = json!(["hooks", "mock"]);
+    cfg
+}
+
 /// T2 (EVENTS.1): off means -32601; on means gateway-derived names only, and
 /// no `events/*` request ever reaches a backend.
 #[tokio::test]
 async fn events_methods_are_not_found_when_disabled_and_never_proxied() {
+    // Events off, with an events-speaking backend attached: the methods are
+    // not found, and the backend, which the gateway does reach, sees none.
     let root = tempfile::tempdir().expect("root");
-    let off = Gateway::start(root.path(), config(root.path(), &json!({"enabled": false}))).await;
+    let (backend, seen_off) = events_speaking_backend().await;
+    let off = Gateway::start(
+        root.path(),
+        with_mock(config(root.path(), &json!({"enabled": false})), &backend),
+    )
+    .await;
     for method in ["events/list", "events/subscribe", "events/unsubscribe"] {
         let answer = off.rpc(Some(ALICE), method, json!({})).await;
         assert_eq!(error(&answer)["code"], -32601, "{method} with events off");
     }
+    let _ = off
+        .tool_call(ALICE, "gateway_list_tools", json!({"server": "mock"}))
+        .await;
+    let methods = seen_off.lock().expect("log").clone();
+    assert!(
+        methods.iter().any(|m| m == "tools/list"),
+        "premise: the gateway reached the backend: {methods:?}"
+    );
+    assert!(
+        !methods.iter().any(|m| m.starts_with("events/")),
+        "events/* reached the backend with events off: {methods:?}"
+    );
     drop(off);
 
     let root = tempfile::tempdir().expect("root");
     let (backend, seen) = events_speaking_backend().await;
-    let mut cfg = config(root.path(), &json!({}));
-    cfg["backends"] = json!({"mock": {"http_url": backend, "streamable_http": true}});
-    cfg["security"]["trust_configured_backends"] = json!(true);
-    cfg["auth"]["api_keys"][0]["backends"] = json!(["hooks", "mock"]);
-    let on = Gateway::start(root.path(), cfg).await;
+    let on = Gateway::start(
+        root.path(),
+        with_mock(config(root.path(), &json!({})), &backend),
+    )
+    .await;
     let answer = on.rpc(Some(ALICE), "events/list", json!({})).await;
     let events = answer["result"]["events"]
         .as_array()

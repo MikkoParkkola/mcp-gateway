@@ -180,6 +180,7 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
             caller: self.api_key_name.unwrap_or("anonymous"),
             external_server: "gateway",
             external_tool: "gateway_invoke",
+            subject: None,
         };
         self.meta
             .enforce_firewall_challenge(&delivered_challenge(challenge), &targets, &correlation)
@@ -221,6 +222,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 session_id: None,
                 api_key_name: self.api_key_name,
                 trace_id: "",
+                caller_key: None,
             })
             .map_err(|e| crate::gateway::input_bridge::BridgeError::NotAdmitted {
                 message: e.to_string(),

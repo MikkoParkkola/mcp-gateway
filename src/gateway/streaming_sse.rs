@@ -57,7 +57,13 @@ pub fn create_sse_response(
                     if let Some(mark) = &item.mark
                         && !mark.written(multiplexer.reads.get()).await
                     {
+                        if let Some(watch) = &item.watch {
+                            watch.report(false);
+                        }
                         continue;
+                    }
+                    if let Some(watch) = &item.watch {
+                        watch.report(true);
                     }
                     let notification = &item.note;
                     // MCP-standard events (event_type == "message") send raw
@@ -465,4 +471,39 @@ where
         axum::http::HeaderValue::from_static("no-cache"),
     );
     response
+}
+
+#[cfg(test)]
+mod terminal_frame_tests {
+    use axum::http::{StatusCode, header::CONTENT_TYPE};
+    use axum::response::IntoResponse;
+
+    /// MIK-7663.GH2409.2. A -32005 audit refusal decided after dispatch is a
+    /// 503 JSON body; on a committed event stream it is framed as the stream's
+    /// last message, keeping its code and request id, never replaced by the
+    /// unframeable error.
+    #[tokio::test]
+    async fn post_dispatch_audit_refusal_keeps_code_and_id() {
+        let body =
+            r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32005,"message":"audit unavailable"}}"#;
+        let response = (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(CONTENT_TYPE, "application/json")],
+            body,
+        )
+            .into_response();
+        let frame = super::terminal_frame(response).await;
+        assert_eq!(frame, super::message_frame(body));
+        assert_ne!(frame, super::UNFRAMEABLE_FRAME);
+    }
+
+    /// Control: a 503 that is not JSON cannot be framed and gets the error frame.
+    #[tokio::test]
+    async fn non_json_503_is_unframeable() {
+        let response = (StatusCode::SERVICE_UNAVAILABLE, "busy").into_response();
+        assert_eq!(
+            super::terminal_frame(response).await,
+            super::UNFRAMEABLE_FRAME
+        );
+    }
 }

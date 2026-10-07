@@ -202,7 +202,12 @@ impl MetaMcp {
             Err(e) => {
                 let managed = caller_credential.managed.as_ref();
                 match self
-                    .answer_refused_fill((server, tool), e, managed, checked_at)
+                    .answer_refused_fill(
+                        (server, tool),
+                        e,
+                        managed,
+                        (checked_at, self.hint_surface(caller)),
+                    )
                     .await
                 {
                     Ok((value, _)) => Some(value),
@@ -357,3 +362,7 @@ pub(super) fn derive_prompt_cache_key(args: &Value, session_id: Option<&str>) ->
             })
         })
 }
+
+#[cfg(test)]
+#[path = "prompt_cache_key_tests.rs"]
+mod prompt_cache_key_tests;

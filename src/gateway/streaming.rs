@@ -52,6 +52,56 @@ pub struct SessionFrame {
     /// front, so the verdict-off default pays one pointer per slot, not a
     /// whole judged frame.
     mark: Option<Box<crate::gateway::outbound::StreamMark>>,
+    /// Set on a server-to-client request: how its copies fared on the streams.
+    watch: Option<Arc<DeliveryWatch>>,
+}
+
+/// How a server-to-client request's queued copies fared on their streams
+/// (MIK-7975 WAIT.1). A copy written anywhere delivers it; when every copy the
+/// send reached was withheld at write, its waiter can stop at once instead of
+/// at its timeout. A copy a lagging stream skips never reports, so that
+/// request keeps its timeout.
+#[derive(Debug, Default)]
+pub(crate) struct DeliveryWatch {
+    /// Copies sent minus copies reported. The sender adds after its send and
+    /// each stream subtracts, in either order, so only the step that brings
+    /// it to exactly zero has seen every copy.
+    outstanding: std::sync::atomic::AtomicIsize,
+    written: std::sync::atomic::AtomicBool,
+    failed: tokio::sync::Notify,
+}
+
+impl DeliveryWatch {
+    fn sent(&self, copies: usize) {
+        use std::sync::atomic::Ordering::AcqRel;
+        let copies = isize::try_from(copies).unwrap_or(isize::MAX);
+        self.settle(
+            self.outstanding
+                .fetch_add(copies, AcqRel)
+                .saturating_add(copies),
+        );
+    }
+
+    /// A stream wrote its copy (`true`) or withheld it (`false`).
+    pub(crate) fn report(&self, written: bool) {
+        use std::sync::atomic::Ordering::{AcqRel, Release};
+        if written {
+            self.written.store(true, Release);
+        }
+        self.settle(self.outstanding.fetch_sub(1, AcqRel).saturating_sub(1));
+    }
+
+    fn settle(&self, outstanding: isize) {
+        if outstanding == 0 && !self.written.load(std::sync::atomic::Ordering::Acquire) {
+            // A stored permit: a waiter that starts waiting later still sees it.
+            self.failed.notify_one();
+        }
+    }
+
+    /// Resolves once every copy the send reached was withheld.
+    pub(crate) async fn failed(&self) {
+        self.failed.notified().await;
+    }
 }
 
 impl std::ops::Deref for SessionFrame {
@@ -223,6 +273,7 @@ impl NotificationMultiplexer {
         session: &ClientSession,
         notification: TaggedNotification,
         hidden: Option<&crate::security::tenant_reads::ReadAttribution>,
+        watch: Option<Arc<DeliveryWatch>>,
     ) -> std::result::Result<usize, broadcast::error::SendError<SessionFrame>> {
         // No open stream: nothing to deliver, so nothing to judge, and nothing
         // is sent either, so a stream that subscribes meanwhile cannot get an
@@ -231,6 +282,7 @@ impl NotificationMultiplexer {
             return Err(broadcast::error::SendError(SessionFrame {
                 note: notification,
                 mark: None,
+                watch: None,
             }));
         }
         let key = session.read_key.read().clone();
@@ -243,14 +295,20 @@ impl NotificationMultiplexer {
                     return Err(broadcast::error::SendError(SessionFrame {
                         note: notification,
                         mark: None,
+                        watch: None,
                     }));
                 }
             },
         };
-        session.send(SessionFrame {
+        let copies = session.send(SessionFrame {
             note: notification,
             mark,
-        })
+            watch: watch.clone(),
+        })?;
+        if let Some(watch) = watch {
+            watch.sent(copies);
+        }
+        Ok(copies)
     }
 
     /// Install the authorizer that scoped delivery re-validates sessions against.
@@ -492,7 +550,7 @@ impl NotificationMultiplexer {
                 delivery(&authorizer, credential.as_ref(), Audience::Backend(backend)).await;
             if verdict == Delivery::Deliver
                 && self
-                    .enqueue(&session, notification.clone(), hidden.as_ref())
+                    .enqueue(&session, notification.clone(), hidden.as_ref(), None)
                     .is_ok()
             {
                 reached += 1;
@@ -558,7 +616,7 @@ impl NotificationMultiplexer {
         }
         let sessions = self.sessions.read();
         if let Some(session) = sessions.get(session_id) {
-            match self.enqueue(session, notification, None) {
+            match self.enqueue(session, notification, None, None) {
                 Ok(_) => true,
                 Err(e) => {
                     debug!(session_id = %session_fp(session_id), error = %e, "Failed to send notification");
@@ -570,12 +628,31 @@ impl NotificationMultiplexer {
         }
     }
 
+    /// [`Self::send_to_session`] for a server-to-client request: the watch
+    /// reports whether any queued copy is written (MIK-7975 WAIT.1). `None`
+    /// when nothing was queued.
+    pub(crate) fn send_request_to_session(
+        &self,
+        session_id: &str,
+        notification: TaggedNotification,
+    ) -> Option<Arc<DeliveryWatch>> {
+        if session_id.is_empty() {
+            return None;
+        }
+        let sessions = self.sessions.read();
+        let session = sessions.get(session_id)?;
+        let watch = Arc::new(DeliveryWatch::default());
+        self.enqueue(session, notification, None, Some(Arc::clone(&watch)))
+            .ok()
+            .map(|_| watch)
+    }
+
     /// Broadcast a notification to all sessions
     #[allow(clippy::needless_pass_by_value)] // public API: caller may have owned value
     pub fn broadcast(&self, notification: TaggedNotification) {
         let sessions = self.sessions.read();
         for session in sessions.values() {
-            let _ = self.enqueue(session, notification.clone(), None);
+            let _ = self.enqueue(session, notification.clone(), None, None);
         }
     }
 

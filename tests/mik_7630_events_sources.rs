@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use delivery::{DEADLINE, delivery_config, wait_until};
-use gateway::{ALICE, BOB, Gateway, error};
+use gateway::{ADMIN, ALICE, BOB, Gateway, config, error};
 use receiver::{Received, Receiver, whsec};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
@@ -368,4 +368,42 @@ async fn settled_tasks_become_events_for_their_owner_only() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(for_sub(&rx, &alice_one).len(), 1, "the taskId filter holds");
     assert_eq!(for_sub(&rx, &bob_all).len(), 1);
+}
+
+/// MIK-7720 U5 over `/mcp`: health and kill-switch types are listed to an
+/// admin key only (standing set by the transport from the authenticated
+/// key), while every API-key holder sees the budget types.
+#[tokio::test]
+async fn operational_types_are_listed_to_admins_only() {
+    let root = tempfile::tempdir().expect("root");
+    let cfg = config(
+        root.path(),
+        &json!({"enabled": true, "sources": {
+            "operational": true, "backend_notifications": false, "task_settled": false}}),
+    );
+    let gw = Gateway::start(root.path(), cfg).await;
+    let operator = [
+        "gateway.backend.health_changed",
+        "gateway.kill_switch.changed",
+    ];
+    let admin = gw.event_names(Some(ADMIN), Some(operator[1])).await;
+    for name in operator {
+        assert!(
+            admin.iter().any(|n| n == name),
+            "admin lists {name}: {admin:?}"
+        );
+    }
+    let alice = gw
+        .event_names(Some(ALICE), Some("gateway.budget.threshold"))
+        .await;
+    assert!(
+        alice.iter().any(|n| n == "gateway.budget.threshold"),
+        "{alice:?}"
+    );
+    for name in operator {
+        assert!(
+            !alice.iter().any(|n| n == name),
+            "non-admin lists {name}: {alice:?}"
+        );
+    }
 }

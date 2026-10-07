@@ -7,6 +7,7 @@ mod health;
 mod rate_limiter;
 mod retry;
 
+pub(crate) use circuit_breaker::HealthChange;
 pub use circuit_breaker::{
     CircuitBreaker, CircuitBreakerStats, CircuitState, build_circuit_breaker_error,
 };
@@ -184,6 +185,43 @@ mod tests {
             matches!(failsafe.admit("b"), Err(crate::Error::CircuitOpen { .. })),
             "the circuit must be open: a throttle is not evidence the backend recovered"
         );
+    }
+
+    /// MIK-7677.GH1613.1 — a capacity failure worded as a throttle, with no
+    /// `429` or rate-limit co-signal, counts toward the breaker. The `429`
+    /// control on a second backend stays exempt and leaves its circuit closed.
+    #[test]
+    fn a_throttle_phrase_without_a_co_signal_trips_the_breaker() {
+        let config = FailsafeConfig {
+            circuit_breaker: CircuitBreakerConfig {
+                enabled: true,
+                failure_threshold: 2,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let latency = Duration::from_millis(1);
+
+        let capacity = Failsafe::new("capacity-backend", &config);
+        for _ in 0..2 {
+            assert!(
+                !capacity.record_dispatch_failure(
+                    "request throttled: upstream out of capacity",
+                    latency
+                ),
+                "a throttle phrase alone is a failure, not an exclusion"
+            );
+        }
+        assert!(
+            matches!(capacity.admit("b"), Err(crate::Error::CircuitOpen { .. })),
+            "two capacity failures must open the circuit"
+        );
+
+        let limited = Failsafe::new("limited-backend", &config);
+        for _ in 0..2 {
+            assert!(limited.record_dispatch_failure("HTTP 429 Too Many Requests", latency));
+        }
+        assert!(limited.admit("b").is_ok(), "a 429 never opens the circuit");
     }
 
     /// F23 T4 — an exhausted limiter with a closed breaker refuses as

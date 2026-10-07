@@ -41,6 +41,9 @@ pub(crate) struct Bound {
     /// Appends refused at once because the log was stalled (D3-a).
     #[cfg(test)]
     pub(crate) refused_under_stall: std::sync::atomic::AtomicUsize,
+    /// Appends that reached the permit wait (MIK-7912).
+    #[cfg(test)]
+    pub(crate) permit_waits: std::sync::atomic::AtomicUsize,
     /// D3-a R4: one-shot fault for the next append of this `kind`.
     #[cfg(test)]
     pub(crate) fail_next_kind: std::sync::Mutex<Option<String>>,
@@ -60,6 +63,8 @@ impl Default for Bound {
             closures_entered: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             refused_under_stall: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            permit_waits: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             fail_next_kind: std::sync::Mutex::new(None),
             limit: std::sync::Mutex::new(AUDIT_APPEND_TIMEOUT),
@@ -133,6 +138,8 @@ impl TransparencyLogger {
         // times out marks the log stalled only if that same write is still in
         // the kernel, not a fresh one that took the permit at the boundary.
         let queued_behind = self.bound.state.lock().ok().and_then(|s| s.in_flight);
+        #[cfg(test)]
+        self.bound.permit_waits.fetch_add(1, Ordering::SeqCst);
         let permit = tokio::time::timeout(limit, Arc::clone(&self.bound.permit).acquire_owned())
             .await
             .map_err(|_| self.mark_stalled(queued_behind))?
@@ -223,6 +230,12 @@ impl TransparencyLogger {
     pub(crate) fn lift_append_bound_for_test(&self) {
         assert!(self.is_stalled(), "lift the bound only while stalled");
         *self.bound.limit.lock().expect("limit lock") = super::rotation::StallGate::DEADLINE * 2;
+    }
+
+    /// Appends that reached the permit wait: a test holding the permit with a
+    /// stalled write sees a later append queue behind it (MIK-7912).
+    pub(crate) fn permit_waits_for_test(&self) -> usize {
+        self.bound.permit_waits.load(Ordering::SeqCst)
     }
 
     /// Whether a write's generation is still in the kernel.

@@ -62,6 +62,9 @@ mod relay_delivered_route;
 /// MIK-7887.RECEIPT.2: a redacted plan answer keeps each step's delivered text.
 #[cfg(feature = "firewall")]
 mod relay_plan_route;
+/// MIK-7934.PLANRCPT.1: a task plan redacted at settlement keeps step receipts.
+#[cfg(feature = "firewall")]
+mod relay_plan_task;
 /// COLLUDE.1 M9: a task's relay receipt is committed at settlement.
 #[cfg(feature = "firewall")]
 mod relay_settlement;
@@ -75,6 +78,8 @@ mod grant_decisions;
 
 /// MIK-7570.ATTEST.1 part 3: surfaced-tool tasks carry their attestation token.
 mod attestation_tasks;
+/// MIK-7828.FIX.2: a running task's caller key outlives the idle TTL.
+mod caller_key_ttl;
 /// G4: a task keys its arm and hints on its caller.
 mod caller_keyed_hints;
 mod capacity;
@@ -103,6 +108,8 @@ mod settlement;
 mod settlement_record;
 mod signing_joint;
 mod stored_result_policy;
+/// MIK-7974: a task keeps its request's meta-tool surface for its hints.
+mod surface_hints;
 #[cfg(feature = "metrics")]
 mod unkeyed_task;
 /// I5's before-the-wire half: the recovery descriptor's capacity, decided

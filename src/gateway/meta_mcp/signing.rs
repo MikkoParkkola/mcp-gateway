@@ -559,7 +559,13 @@ impl super::MetaMcp {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|_| crate::Error::json_rpc(-32603, "Signing clock is invalid"))?
                 .as_secs();
-            signer.sign_json_rpc_response_at(response, nonce, timestamp)
+            signer.sign_json_rpc_response_at(response, nonce, timestamp)?;
+            // MIK-7939: the signature block is the gateway's, never a receipt's.
+            if let Some(result) = response.result.as_ref() {
+                use super::invoke::gateway_writes::{Layer, note};
+                note(Layer::Answer, &["_signature"], result);
+            }
+            Ok(())
         })();
         result.inspect_err(|_| {
             #[cfg(feature = "metrics")]

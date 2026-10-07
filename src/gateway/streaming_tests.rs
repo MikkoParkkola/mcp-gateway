@@ -397,23 +397,25 @@ async fn a_non_message_event_is_judged_with_its_wrapper_fields() {
     );
 }
 
-/// MIK-7848.READS.2, the destructive-confirmation case: with every audit
-/// append failing under `FailClosed`, an item that names a tenant is withheld
-/// at write (the control), but the `elicitation/create` confirmation prompt
-/// names none, attempts no record, and reaches the stream. So a failing log
-/// cannot hide the prompt and time the gate out into a legacy proceed.
+/// A session whose stream is judged by an observing tenant guard and logged to
+/// a `FailClosed` audit log, with its SSE body open. The temp dir keeps the log
+/// alive; the caller decides when appends start failing.
 #[cfg(feature = "firewall")]
-#[tokio::test]
-async fn a_failing_audit_log_cannot_withhold_the_confirmation_prompt() {
+#[allow(clippy::type_complexity)]
+fn judged_sse() -> (
+    tempfile::TempDir,
+    Arc<crate::security::TransparencyLogger>,
+    Arc<NotificationMultiplexer>,
+    String,
+    axum::body::BodyDataStream,
+) {
     use crate::gateway::outbound::{RejectionAudit, SessionJudge};
-    use crate::gateway::proxy::ProxyManager;
     use crate::security::TransparencyLogger;
     use crate::security::audit::AuditFailurePolicy;
     use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
     use crate::security::firewall::{Firewall, FirewallConfig};
     use crate::security::transparency_log::TransparencyLogConfig;
     use axum::response::IntoResponse;
-    use futures::StreamExt;
 
     let dir = tempfile::tempdir().unwrap();
     let log = Arc::new(
@@ -460,7 +462,22 @@ async fn a_failing_audit_log_cannot_withhold_the_confirmation_prompt() {
         Duration::from_secs(3600),
     )
     .expect("the session exists");
-    let mut body = sse.into_response().into_body().into_data_stream();
+    let body = sse.into_response().into_body().into_data_stream();
+    (dir, log, multiplexer, id, body)
+}
+
+/// MIK-7848.READS.2, the destructive-confirmation case: with every audit
+/// append failing under `FailClosed`, an item that names a tenant is withheld
+/// at write (the control), but the `elicitation/create` confirmation prompt
+/// names none, attempts no record, and reaches the stream. So a failing log
+/// cannot hide the prompt and time the gate out into a legacy proceed.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_failing_audit_log_cannot_withhold_the_confirmation_prompt() {
+    use crate::gateway::proxy::ProxyManager;
+    use futures::StreamExt;
+
+    let (_dir, log, multiplexer, id, mut body) = judged_sse();
     log.set_append_failure_for_test(true);
 
     let control = TaggedNotification {
@@ -507,4 +524,179 @@ async fn a_failing_audit_log_cannot_withhold_the_confirmation_prompt() {
         1,
         "only the control tried a record"
     );
+}
+
+/// MIK-7975 WAIT.1: a server-to-client request whose stream item is withheld
+/// for a failed audit write fails its waiter at once, not at its timeout. The
+/// prompt's schema names a tenant, so it attempts a record, which fails closed.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_withheld_request_fails_its_waiter_at_once() {
+    use crate::gateway::proxy::ProxyManager;
+    use futures::StreamExt;
+
+    let (_dir, log, multiplexer, id, mut body) = judged_sse();
+    log.set_append_failure_for_test(true);
+    let proxy = ProxyManager::new(Arc::clone(&multiplexer));
+    let ask = crate::protocol::ElicitationCreateParams {
+        mode: None,
+        message: "Pick an account".to_string(),
+        requested_schema: Some(json!({"customer_id": "cust-b"})),
+        url: None,
+    };
+    let asked = proxy.forward_elicitation_with_response(&id, &ask, Duration::from_secs(30));
+    // The stream must be read for its loop to judge, record and withhold.
+    let read = async { while body.next().await.is_some() {} };
+    let answer = tokio::select! {
+        answer = tokio::time::timeout(Duration::from_secs(5), asked) => answer,
+        () = read => panic!("the stream ended"),
+    };
+    assert!(
+        matches!(
+            answer,
+            Ok(Err(crate::gateway::proxy::SamplingError::SendFailed))
+        ),
+        "the waiter was not failed at once: {answer:?}"
+    );
+    assert!(
+        log.append_attempts_for_test() >= 1,
+        "no record was attempted"
+    );
+}
+
+/// MIK-7975 WAIT.1, the bridge's sender: a bridged request withheld at write
+/// ends its wait at once, as a wait nothing came back to. Not `NoSession`:
+/// the legacy bridge reads that as "no session at all" and re-asks round one.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_withheld_bridged_request_ends_its_wait_at_once() {
+    use crate::gateway::input_bridge::{ClientChannel, DeliveryError};
+    use crate::gateway::proxy::ProxyManager;
+    use futures::StreamExt;
+
+    let (_dir, log, multiplexer, id, mut body) = judged_sse();
+    log.set_append_failure_for_test(true);
+    let proxy = ProxyManager::new(Arc::clone(&multiplexer));
+    let params = json!({"customer_id": "cust-b"});
+    let asked = proxy.send_request(&id, "bridge-1", "elicitation/create", Some(params));
+    let read = async { while body.next().await.is_some() {} };
+    let answer = tokio::select! {
+        answer = tokio::time::timeout(Duration::from_secs(5), asked) => answer,
+        () = read => panic!("the stream ended"),
+    };
+    assert!(
+        matches!(answer, Ok(Err(DeliveryError::TimedOut))),
+        "the bridged wait was not ended at once: {answer:?}"
+    );
+}
+
+/// MIK-7975 WAIT.1: the watch fails a request only when every copy the send
+/// reached was withheld, whatever order the send and the reports arrive in.
+#[tokio::test]
+async fn a_request_fails_only_when_every_copy_is_withheld() {
+    let failed = |watch: &DeliveryWatch| futures::FutureExt::now_or_never(watch.failed()).is_some();
+    let one_written = DeliveryWatch::default();
+    one_written.sent(2);
+    one_written.report(false);
+    one_written.report(true);
+    assert!(!failed(&one_written), "a copy was written");
+
+    let all_withheld = DeliveryWatch::default();
+    all_withheld.sent(2);
+    all_withheld.report(false);
+    assert!(!failed(&all_withheld), "one copy is still outstanding");
+    all_withheld.report(false);
+    assert!(failed(&all_withheld), "every copy was withheld");
+
+    let reported_first = DeliveryWatch::default();
+    reported_first.report(false);
+    reported_first.report(false);
+    assert!(
+        !failed(&reported_first),
+        "the send has not counted its copies"
+    );
+    reported_first.sent(2);
+    assert!(
+        failed(&reported_first),
+        "both copies were withheld before the count"
+    );
+}
+
+/// MIK-7918 AC1, the sampling case: backend sampling content can name a
+/// tenant (here in a tool schema it offers), so under a failing `FailClosed`
+/// log the request is withheld at write and its waiter fails at once.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_withheld_sampling_request_fails_its_waiter_at_once() {
+    use crate::gateway::proxy::ProxyManager;
+    use futures::StreamExt;
+
+    let (_dir, log, multiplexer, id, mut body) = judged_sse();
+    log.set_append_failure_for_test(true);
+    let proxy = ProxyManager::new(Arc::clone(&multiplexer));
+    let ask: crate::protocol::SamplingCreateMessageParams = serde_json::from_value(json!({
+        "messages": [{"role": "user", "content": {"type": "text", "text": "Summarize"}}],
+        "maxTokens": 16,
+        "tools": [{"name": "lookup", "inputSchema": {"customer_id": "cust-b"}}]
+    }))
+    .expect("sampling params");
+    let asked = proxy.forward_sampling_with_response(&id, &ask, Duration::from_secs(30));
+    let mut seen = String::new();
+    let read = async {
+        while let Some(chunk) = body.next().await {
+            seen.push_str(&String::from_utf8_lossy(&chunk.unwrap()));
+        }
+    };
+    let answer = tokio::select! {
+        answer = tokio::time::timeout(Duration::from_secs(5), asked) => answer,
+        () = read => panic!("the stream ended"),
+    };
+    assert!(
+        matches!(
+            answer,
+            Ok(Err(crate::gateway::proxy::SamplingError::SendFailed))
+        ),
+        "the sampling waiter was not failed at once: {answer:?}"
+    );
+    assert!(
+        !seen.contains("sampling/createMessage"),
+        "the withheld request reached the stream: {seen}"
+    );
+    assert!(
+        log.append_attempts_for_test() >= 1,
+        "no record was attempted"
+    );
+}
+
+/// MIK-7918 AC2: a confirmation prompt withheld at write reached nobody. The
+/// gate must read that as `Undelivered`, never as `Unsupported` (a prompt that
+/// may have been seen). The stream here reports its copy withheld directly.
+#[tokio::test]
+async fn a_withheld_confirmation_prompt_reads_as_undelivered() {
+    use crate::gateway::destructive_confirmation::{
+        ConfirmationOutcome, require_destructive_confirmation,
+    };
+    use crate::gateway::proxy::ProxyManager;
+
+    let multiplexer = Arc::new(NotificationMultiplexer::new(
+        Arc::new(BackendRegistry::new()),
+        StreamingConfig::default(),
+    ));
+    let (id, mut rx) = multiplexer.get_or_create_session(Some("s"));
+    let proxy = ProxyManager::new(Arc::clone(&multiplexer));
+    let stream = async {
+        let frame = rx.recv().await.expect("the prompt is queued");
+        frame
+            .watch
+            .as_ref()
+            .expect("a request carries a watch")
+            .report(false);
+    };
+    let asked = require_destructive_confirmation(&proxy, &id, "kill server 'payments'");
+    let (outcome, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(asked, stream)
+    })
+    .await
+    .expect("the withheld prompt ends the wait at once");
+    assert_eq!(outcome, ConfirmationOutcome::Undelivered);
 }

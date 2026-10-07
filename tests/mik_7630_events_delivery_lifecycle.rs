@@ -190,3 +190,36 @@ async fn unsubscribe_during_an_in_flight_post_sends_nothing_after_the_answer() {
     tokio::time::sleep(Duration::from_secs(5)).await;
     assert_eq!(rx.events().len(), at_answer, "nothing after the answer");
 }
+
+/// MIK-7854.EVENTS.1: the expiry is counted from the commit, after the
+/// callback challenge. A challenge held 8 s against a 7 s TTL still commits
+/// a row that outlives the answer, granted for exactly the asked TTL, and
+/// `refreshBefore` names the stored expiry.
+#[tokio::test]
+async fn a_slow_challenge_does_not_eat_a_short_ttl() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let gw = start(root.path(), &rx, json!({"min_ttl": "1s"})).await;
+    rx.reply(receiver::Reply::SlowEcho(Duration::from_secs(8)));
+    let mut params = delivery::params(&rx.url, &whsec(32), json!({}));
+    params["ttlMs"] = json!(7000);
+    let answer = gw.rpc(Some(ALICE), "events/subscribe", params).await;
+    let answered = chrono::Utc::now();
+    assert!(answer["result"]["id"].is_string(), "{answer}");
+    let time = |v: &serde_json::Value| -> chrono::DateTime<chrono::Utc> {
+        v.as_str()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| panic!("a time: {v}"))
+    };
+    let row = records(root.path(), "subs")[0].clone();
+    let (granted, expires) = (time(&row["granted_at"]), time(&row["expires_at"]));
+    assert_eq!(expires - granted, chrono::Duration::seconds(7), "{row}");
+    assert!(expires > answered, "the row outlives the answer: {row}");
+    assert_eq!(
+        time(&answer["result"]["refreshBefore"]).timestamp(),
+        expires.timestamp(),
+        "{answer}"
+    );
+    fire(&gw, "d-ttl", "o/r").await;
+    events_at_least(&rx, 1).await;
+}

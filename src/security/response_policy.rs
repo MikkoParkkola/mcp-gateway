@@ -25,6 +25,9 @@ pub(crate) struct ResponseCorrelation<'a> {
     pub caller: &'a str,
     pub external_server: &'a str,
     pub external_tool: &'a str,
+    /// The caller's verified grant subject, when one resolved (MIK-7938): the
+    /// delivery record names it as the invocation record does.
+    pub(crate) subject: Option<&'a crate::identity_grants::GrantSubject>,
 }
 
 /// Distinguishes a served result from an internally consumed legacy question.
