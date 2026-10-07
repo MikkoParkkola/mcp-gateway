@@ -163,3 +163,37 @@ fn evaluate_alerts_returns_none_below_50_percent() {
     let action = e.evaluate_alerts(0.40, 1.0);
     assert_eq!(action, None);
 }
+
+// ── Day maps stay bounded (MIK-8015) ──────────────────────────────
+
+#[test]
+fn many_unbudgeted_tools_in_one_day_hold_a_bounded_number_of_entries() {
+    // GIVEN: no per-tool budgets, and spend on 1000 distinct tool names today
+    let e = enforcer_with(true, None, &[], &[], &[]);
+    for i in 0..1_000 {
+        e.record_spend(&format!("invented-{i}"), None, 0.01);
+    }
+    // THEN: the per-tool day map holds the cap plus one overflow entry, not 1000
+    let held = e.tool_daily.len();
+    assert!(held <= 257, "the per-tool day map holds {held} entries");
+}
+
+#[test]
+fn a_spend_sweeps_unbudgeted_entries_from_an_earlier_day() {
+    // GIVEN: entries left from two days ago for an unbudgeted tool and key, and
+    // one for a key with a budget
+    let e = enforcer_with(true, None, &[], &[("budgeted", 5.0)], &[]);
+    let old = current_day() - 2;
+    e.tool_daily
+        .insert("old-tool".to_string(), DailyAccumulator::stale(old, 5));
+    e.key_daily
+        .insert("old-key".to_string(), DailyAccumulator::stale(old, 5));
+    e.key_daily
+        .insert("budgeted".to_string(), DailyAccumulator::stale(old, 5));
+    // WHEN: a call spends today
+    e.record_spend("t", Some("k"), 0.01);
+    // THEN: the stale unbudgeted entries are gone; the budgeted key keeps its own
+    assert!(!e.tool_daily.contains_key("old-tool"), "stale tool kept");
+    assert!(!e.key_daily.contains_key("old-key"), "stale key kept");
+    assert!(e.key_daily.contains_key("budgeted"));
+}
