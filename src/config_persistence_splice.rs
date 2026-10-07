@@ -190,14 +190,23 @@ fn remove_entry(original: &str, name: &str) -> Option<String> {
 
 /// The trailing comment of `line` with the blanks before it (`  # why`):
 /// a `#` after a blank and outside a quoted scalar. A quote opens a scalar
-/// only where a scalar can start, so the apostrophe in `it's` does not.
+/// only where a token starts, so the one in `it's` or `say "hi` does not, and
+/// `\"` or `''` inside a quoted scalar does not end it. A misread here only
+/// matters with a `#` left in the value, which [`edit_block`] refuses.
 fn inline_comment(line: &str) -> Option<&str> {
     let mut quote = None;
     let mut prev = ' ';
-    for (at, c) in line.char_indices() {
+    // Only blanks since the start, a `:`, or a flow indicator.
+    let mut token_start = true;
+    let mut chars = line.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
         match (quote, c) {
-            (None, '\'' | '"') if matches!(prev, ' ' | '\t' | ':' | '[' | '{' | ',') => {
-                quote = Some(c);
+            (None, '\'' | '"') if token_start => quote = Some(c),
+            (Some('"'), '\\') => {
+                chars.next();
+            }
+            (Some('\''), '\'') if chars.peek().is_some_and(|&(_, next)| next == '\'') => {
+                chars.next();
             }
             (Some(q), _) if c == q => quote = None,
             (None, '#') if prev == ' ' || prev == '\t' => {
@@ -206,6 +215,11 @@ fn inline_comment(line: &str) -> Option<&str> {
             }
             _ => {}
         }
+        token_start = match c {
+            ' ' | '\t' => token_start,
+            ':' | '[' | '{' | ',' => true,
+            _ => false,
+        };
         prev = c;
     }
     None
@@ -297,9 +311,8 @@ fn edit_block(
         let colon = at + lines[line][at..].find(':')?;
         let value_text = &lines[line][colon + 1..];
         let comment = inline_comment(value_text);
-        let block = value_text[..value_text.len() - comment.map_or(0, str::len)]
-            .trim()
-            .is_empty();
+        let value = &value_text[..value_text.len() - comment.map_or(0, str::len)];
+        let block = value.trim().is_empty();
         match (was, now) {
             // A removed key takes its own line's comment; one inside its
             // value cannot be kept.
@@ -307,7 +320,9 @@ fn edit_block(
             (Some(Value::Mapping(was)), Some(Value::Mapping(now))) if block && stop > line + 1 => {
                 edit_block(lines, line + 1, stop, was, now, edits)?;
             }
-            (_, Some(now)) if !commented(line + 1, stop) => {
+            // A `#` left in the replaced value may be a comment the scanner
+            // misread; replacing it could drop that silently, so refuse.
+            (_, Some(now)) if !commented(line + 1, stop) && !value.contains('#') => {
                 let mut replaced = render(key, now, pad)?;
                 if let (Some(first), Some(comment)) = (replaced.first_mut(), comment) {
                     first.push_str(comment);
@@ -523,6 +538,20 @@ mod tests {
         assert_eq!(inline_comment("a: x\t# t"), Some("\t# t"));
         // An apostrophe inside a word opens no quote.
         assert_eq!(inline_comment("a: it's old  # kept"), Some("  # kept"));
+        // Nor does a quote after a word, and escapes do not end a quote.
+        assert_eq!(inline_comment("a: say \"hi  # kept"), Some("  # kept"));
+        assert_eq!(
+            inline_comment("a: \"x \\\" # y\"  # kept"),
+            Some("  # kept")
+        );
+        assert_eq!(inline_comment("a: 'it''s # y'  # kept"), Some("  # kept"));
+    }
+
+    #[test]
+    fn a_hash_left_in_a_replaced_value_refuses() {
+        let original = "backends:\n  svc:\n    description: \"a # b\"\n";
+        let old = "description: \"a # b\"\n";
+        assert_eq!(edited(original, old, "description: c\n"), None);
     }
 
     #[test]
