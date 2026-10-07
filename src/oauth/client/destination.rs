@@ -158,17 +158,50 @@ impl OAuthClient {
         if !url::Url::parse(url).is_ok_and(|u| crate::gateway::is_tls_or_loopback(&u)) {
             return Err(Error::Protocol(cleartext_refusal("endpoint")));
         }
-        let loopback_cleartext = self.destination == DestinationPolicy::Configured
-            && url::Url::parse(url).is_ok_and(|u| {
-                u.scheme() == "http"
-                    && crate::gateway::is_loopback_host(u.host_str().unwrap_or_default())
-            });
-        if !loopback_cleartext {
+        if !self.loopback_cleartext(url) {
             return Ok(&self.http_client);
         }
         self.loopback_client.as_ref().ok_or_else(|| {
             Error::OAuth("the unproxied loopback OAuth client is unavailable".into())
         })
+    }
+
+    /// As [`Self::client_for`], for a refresh-token request: the same route,
+    /// with redirects off (MIK-8018). A followed redirect would re-send the
+    /// refresh token and client secret to the target, and a connect error
+    /// after a followed hop cannot be told from one before anything was sent.
+    pub(super) fn refresh_client_for(&self, url: &str) -> Result<Client> {
+        if !url::Url::parse(url).is_ok_and(|u| crate::gateway::is_tls_or_loopback(&u)) {
+            return Err(Error::Protocol(cleartext_refusal("endpoint")));
+        }
+        let loopback = self.loopback_cleartext(url);
+        let slot = &self.refresh_clients[usize::from(loopback)];
+        if let Some(client) = slot.get() {
+            return Ok(client.clone());
+        }
+        let builder = if loopback {
+            Client::builder().no_proxy()
+        } else {
+            match self.destination {
+                DestinationPolicy::Configured => Client::builder(),
+                policy => crate::security::ssrf::pinned_client_builder_for(policy),
+            }
+        };
+        let built = builder
+            .timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| Error::OAuth(format!("Failed to create OAuth HTTP client: {e}")))?;
+        Ok(slot.get_or_init(|| built).clone())
+    }
+
+    /// `http://` on a loopback host under `Configured`: the unproxied route.
+    fn loopback_cleartext(&self, url: &str) -> bool {
+        self.destination == DestinationPolicy::Configured
+            && url::Url::parse(url).is_ok_and(|u| {
+                u.scheme() == "http"
+                    && crate::gateway::is_loopback_host(u.host_str().unwrap_or_default())
+            })
     }
 
     /// Refuse `url`, the authorization server's `what`, when it is cleartext

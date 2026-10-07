@@ -120,6 +120,10 @@ pub struct OAuthClient {
     /// machine. `None` if it could not be built; such a fetch then fails.
     loopback_client: Option<Client>,
 
+    /// Refresh-token clients with redirects off, built on first use: index 0
+    /// the policy route, 1 the unproxied loopback route (MIK-8018).
+    refresh_clients: [std::sync::OnceLock<Client>; 2],
+
     /// Backend name (for storage key)
     backend_name: String,
 
@@ -285,6 +289,7 @@ impl OAuthClient {
         Self {
             http_client,
             loopback_client: destination::loopback_client().ok(),
+            refresh_clients: [std::sync::OnceLock::new(), std::sync::OnceLock::new()],
             backend_name,
             login_gate: None,
             resource_url,
@@ -605,6 +610,7 @@ impl OAuthClient {
 use url::Url;
 
 mod grants;
+mod refresh_flight;
 mod registration;
 mod renewal;
 #[cfg(test)]
