@@ -168,6 +168,7 @@ fn resuming_ctx<'a>(
         caller_key: None,
         verified_identity: Some(who),
         is_admin: false,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: *caps,
         retry,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
