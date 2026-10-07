@@ -50,21 +50,26 @@ fn stdio_client() -> AuthenticatedClient {
     }
 }
 
+/// The local operator as a catalogue relay caller: one relay principal, the
+/// one `tools/call` keys.
+fn operator() -> relay::CatalogueCaller {
+    relay::CatalogueCaller {
+        key: crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL.to_owned(),
+        keyed: true,
+        name: "stdio".to_owned(),
+        // The id the stdio dispatcher keys this connection by (MIK-7942).
+        session: super::STDIO_SESSION_ID.to_owned(),
+    }
+}
+
 pub(super) async fn dispatch(
     meta: &MetaMcp,
     method: &str,
     id: RequestId,
     params: Option<&Value>,
 ) -> JsonRpcResponse {
-    // The local operator is one relay principal, the one `tools/call` keys.
-    let operator = relay::CatalogueCaller {
-        key: crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL.to_owned(),
-        keyed: true,
-        name: "stdio".to_owned(),
-        session: "stdio".to_owned(),
-    };
     relay::as_caller(
-        operator,
+        operator(),
         Box::pin(dispatch_catalogue(meta, method, id, params)),
     )
     .await
@@ -97,3 +102,7 @@ async fn dispatch_catalogue(
         ),
     }
 }
+
+#[cfg(test)]
+#[path = "stdio_catalogue_tests.rs"]
+mod tests;

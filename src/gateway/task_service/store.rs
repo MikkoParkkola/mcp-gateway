@@ -17,8 +17,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::record::{
-    CommittedTask, MAX_UPSTREAM_HANDLE_BYTES, PreparedTask, Record, UPSTREAM_VERSION,
-    UpstreamRecord, widest_handle_reservation,
+    AdmissionRecord, CommittedTask, MAX_UPSTREAM_HANDLE_BYTES, PreparedTask, Record,
+    UPSTREAM_VERSION, UpstreamRecord, widest_handle_reservation,
 };
 use crate::fs_lock::ExclusiveFileLock;
 #[cfg(test)]
@@ -137,6 +137,18 @@ struct Entry {
 struct State {
     ready: bool,
     entries: BTreeMap<String, Entry>,
+    /// Rows skipped at load whose keys stay taken, and rows nothing could be
+    /// read from (MIK-8023). Their files stay; both still count against the
+    /// store's caps.
+    reserved: Vec<(AdmissionRecord, String)>,
+    unreadable: usize,
+}
+
+/// How many rows the last load skipped, by whether each kept its key.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SkippedRecords {
+    pub(crate) reserved: usize,
+    pub(crate) unreadable: usize,
 }
 
 struct Shared {
@@ -159,16 +171,26 @@ impl TaskStore {
     pub(super) async fn open(path: &Path, limits: StoreLimits) -> Result<Self, StoreError> {
         let dir = path.to_owned();
         let opened = dir.clone();
-        let (lease, entries) = tokio::task::spawn_blocking(move || open_blocking(&opened, limits))
+        let (lease, loaded) = tokio::task::spawn_blocking(move || open_blocking(&opened, limits))
             .await
             .map_err(|_| StoreError::Storage)??;
+        for (class, count) in [
+            ("reserved", loaded.reserved.len()),
+            ("unreadable", loaded.unreadable),
+        ] {
+            #[allow(clippy::cast_precision_loss)]
+            telemetry_metrics::gauge!("mcp_task_store_skipped_records", "class" => class)
+                .set(count as f64);
+        }
         Ok(Self(Arc::new(Shared {
             dir,
             limits,
             order: Mutex::new(()),
             state: Mutex::new(State {
                 ready: true,
-                entries,
+                entries: loaded.entries,
+                reserved: loaded.reserved,
+                unreadable: loaded.unreadable,
             }),
             lease: Mutex::new(Some(lease)),
             #[cfg(test)]
@@ -642,12 +664,18 @@ fn admit(
     let mine = state
         .entries
         .values()
-        .filter(|entry| entry.record.admission.principal_digest == *principal)
+        .map(|entry| &entry.record.admission)
+        .chain(state.reserved.iter().map(|(admission, _)| admission))
+        .filter(|admission| admission.principal_digest == *principal)
         .count();
     if size > limits.record_bytes || mine >= limits.per_principal {
         return Err(StoreError::Capacity);
     }
-    fits(limits, state.entries.len())
+    // A skipped row's file is still on disk and still reserves its allowance.
+    fits(
+        limits,
+        state.entries.len() + state.reserved.len() + state.unreadable,
+    )
 }
 
 /// One more record has to fit both the count cap and the logical budget, where
