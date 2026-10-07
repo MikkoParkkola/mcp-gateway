@@ -150,6 +150,21 @@ pub(crate) enum TaskState {
     Unspecified,
 }
 
+impl TaskState {
+    /// The task will not change again.
+    pub(crate) fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Canceled | Self::Rejected
+        )
+    }
+
+    /// The agent is waiting on the caller: a question or an authorization.
+    pub(crate) fn is_interrupted(self) -> bool {
+        matches!(self, Self::InputRequired | Self::AuthRequired)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct TaskStatus {
     pub state: TaskState,
@@ -168,6 +183,8 @@ pub(crate) struct Artifact {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Task {
     pub id: String,
+    #[serde(default)]
+    pub context_id: Option<String>,
     pub status: TaskStatus,
     #[serde(default)]
     pub artifacts: Vec<Artifact>,
