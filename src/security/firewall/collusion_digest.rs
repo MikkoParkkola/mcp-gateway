@@ -45,16 +45,17 @@ pub(crate) struct DeliveryDigest {
 }
 
 impl DeliveryDigest {
-    /// `leaves` in walk order, capped by leaf: leaves from the head and from
-    /// the tail up to half of [`RECORD_CAP`] each, a leaf at a boundary cut on
-    /// a char boundary, and the middle dropped behind a seam. Also whether
-    /// anything was cut.
+    /// [`Self::of_parts`] with every leaf a value (tests only).
+    #[cfg(test)]
     pub(super) fn of_leaves(leaves: &[&str], sensitive: bool) -> (Self, bool) {
         Self::of_parts(leaves, leaves.len(), sensitive)
     }
 
-    /// [`Self::of_leaves`] where only the first `values` leaves are values
-    /// and the rest object keys, as [`delivery_parts`] returns them.
+    /// `leaves` in walk order, the first `values` of them values and the rest
+    /// object keys, as [`delivery_parts`] returns them; capped by leaf: leaves
+    /// from the head and from the tail up to half of [`RECORD_CAP`] each, a
+    /// leaf at a boundary cut on a char boundary, and the middle dropped behind
+    /// a seam. Also whether anything was cut.
     pub(super) fn of_parts(leaves: &[&str], values: usize, sensitive: bool) -> (Self, bool) {
         let total = leaves
             .iter()
