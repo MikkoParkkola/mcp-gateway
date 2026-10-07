@@ -32,8 +32,10 @@ DEFAULT_NOTES = "docs/release/v4.0.0-release-notes-DRAFT.md"
 THIS_RELEASE = (4, 0, 0)
 # A version of this product as a whole token, major 4 or 5 (14.0.1 or a Node
 # 20.1 is another product's): any later than 4.0.0 is a deferral, 4.0.1,
-# 4.0.10, 4.1 and 5.0 alike. A pre-release or build suffix of 4.0.0 is not.
-VERSION_TOKEN = re.compile(r"(?<![\d.])v?([45])\.(\d+)(?:\.(\d+))?(?!\d|\.\d)")
+# 4.0.10, 4.1 and 5.0 alike. A pre-release or build suffix of 4.0.0 is not,
+# nor a number inside one (4.0.0+build-5.1). Other 4.x/5.x numbers (a model
+# version, a size) read as deferrals too: a false red, reworded away.
+VERSION_TOKEN = re.compile(r"(?<![\w.+-])v?([45])\.(\d+)(?:\.(\d+))?(?!\d|\.\d)")
 # Same two forms as check_scope_acceptance.py PRERELEASE_400, these notes being
 # 4.0.0's; any other version or suffix, build metadata included, is held to the
 # final-tag rule.
@@ -41,9 +43,9 @@ PRERELEASE_TAG = re.compile(r"^v4\.0\.0-(beta|rc)\.\d+$")
 # ATX level 1-2 headings: up to three spaces of indent; the title is compared as
 # words only (see is_title), so closing hashes and inline Markdown never hide it.
 HEADING = re.compile(r"^ {0,3}#{1,2}[ \t]+(.*)$")
-# What a title's inline Markdown adds besides its words: HTML tags and
-# comments, and link targets.
-INLINE_NOISE = re.compile(r"<[^>]*>|\]\([^)]*\)")
+# What a title's inline Markdown adds besides its words: HTML comments and
+# tags, and link targets.
+INLINE_NOISE = re.compile(r"<!--.*?(?:-->|$)|<[^>]*>|\]\([^)]*\)")
 SECTION_END = re.compile(r"^#{1,2}(?:[ \t]|$)")
 # Setext: a paragraph line underlined with = (level 1) or - (level 2). A list
 # item, indented code, an ATX heading, a quote, a fence or a thematic break
@@ -71,9 +73,13 @@ REFERENCE = re.compile(r"^ {0,3}\[")
 
 
 def is_title(text):
-    """True when `text`, reduced to its words, reads "known issues"."""
+    """True when `text`, reduced to its words, opens with "known issues".
+
+    A prefix, not an exact match: whatever follows (a reference label, an
+    annotation) only makes a doubtful start, and a start fails closed.
+    """
     words = re.sub(r"[^a-z]+", " ", INLINE_NOISE.sub(" ", text).lower()).split()
-    return words == ["known", "issues"]
+    return words[:2] == ["known", "issues"]
 
 
 def atx_start(line):
