@@ -253,3 +253,29 @@ fn an_add_on_an_earlier_day_never_resets_backward() {
     assert_eq!(acc.add(5), 705, "the newer day's spend was erased");
     assert_eq!(acc.current(), 705, "the newer day's spend is still counted");
 }
+
+/// A positive cost below one micro-USD reserves nothing, so neither a settle
+/// nor a dropped hold leaves a zero-valued tool or key row behind.
+#[test]
+fn a_cost_below_one_micro_leaves_no_ledger_rows() {
+    // GIVEN: a tool priced below one micro-USD, under a per-key budget
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..CostGovernanceConfig::default()
+    };
+    cfg.budgets.per_key.insert(KEY.to_string(), 1.0);
+    cfg.tool_costs.insert(TOOL.to_string(), 1e-7);
+    let registry = Arc::new(CostRegistry::new(&cfg));
+    let enforcer = BudgetEnforcer::new(cfg, registry);
+    // WHEN: one admitted call settles and another is dropped unsettled
+    let settled = enforcer.check(TOOL, Some(KEY));
+    enforcer.settle(settled.hold.as_deref(), TOOL, Some(KEY), settled.cost_usd);
+    drop(settled);
+    drop(enforcer.check(TOOL, Some("other_key")));
+    // THEN: the ledger holds no rows
+    let pending = locked(&enforcer.ledger);
+    assert!(
+        pending.tools.is_empty() && pending.keys.is_empty(),
+        "zero-valued reservations stayed in the ledger"
+    );
+}
