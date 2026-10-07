@@ -497,10 +497,19 @@ async fn a_health_probe_never_begins_a_login() {
     assert_eq!(browser.opens(), 0, "a probe never opens the browser");
 }
 
+/// How [`issuing_server`]'s MCP endpoint answers `tools/list`.
+#[derive(Clone, Copy)]
+enum List {
+    /// At once, with no tools.
+    Empty,
+    /// A first page after the delay, then a second page that never comes.
+    Stalls(Duration),
+}
+
 /// An authorization server that issues a token good for `expires_in` seconds
 /// (no refresh token), and an MCP endpoint at `/mcp` that answers the
-/// handshake and lists no tools. Returns its origin.
-async fn issuing_server(expires_in: u64) -> String {
+/// handshake and lists tools as `list` says. Returns its origin.
+async fn issuing_server(expires_in: u64, list: List) -> String {
     use axum::{Json, Router, http::StatusCode, routing::get, routing::post};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -509,7 +518,7 @@ async fn issuing_server(expires_in: u64) -> String {
         "authorization_endpoint": format!("{origin}/authorize"),
         "token_endpoint": format!("{origin}/token"),
     });
-    let mcp = |Json(request): Json<Value>| async move {
+    let mcp = move |Json(request): Json<Value>| async move {
         let Some(id) = request.get("id").cloned() else {
             return (StatusCode::ACCEPTED, Json(Value::Null));
         };
@@ -519,7 +528,15 @@ async fn issuing_server(expires_in: u64) -> String {
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "login-window", "version": "1"},
             }}),
-            Some("tools/list") => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}}),
+            Some("tools/list") => match (list, request["params"].get("cursor")) {
+                (List::Empty, _) => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}}),
+                (List::Stalls(first), None) => {
+                    sleep(first).await;
+                    json!({"jsonrpc": "2.0", "id": id,
+                        "result": {"tools": [], "nextCursor": "page-2"}})
+                }
+                (List::Stalls(_), Some(_)) => std::future::pending().await,
+            },
             _ => json!({"jsonrpc": "2.0", "id": id,
                 "error": {"code": -32601, "message": "method not found"}}),
         };
@@ -554,19 +571,8 @@ async fn issuing_server(expires_in: u64) -> String {
 /// `AuthorizationPending`, and the breaker counts nothing.
 #[tokio::test]
 async fn a_request_waiting_on_a_request_time_login_times_out_as_authorization_pending() {
-    // 65 s, less the 60 s early-expiry margin: good for the start, gone after.
-    let origin = issuing_server(65).await;
-    let dir = tempfile::tempdir().unwrap();
-    let browser = Browser::new();
-    let backend = login_backend(&origin, dir.path(), &browser, Duration::from_secs(1), None);
-    let start = spawn_start(&backend);
-    let url = browser.opened(1, "the start opening the browser").await;
-    approve(&url).await;
-    within("the start completing with a token", start)
-        .await
-        .expect("start task")
-        .expect("the approved login starts the backend");
-    sleep(Duration::from_secs(6)).await;
+    let (backend, browser, _dir) = approved_start(List::Empty, Duration::from_secs(1)).await;
+    sleep(LAPSE).await;
     let before = backend.health_metrics().failure_count;
 
     let error = within("the fill's own deadline", fill(&backend))
@@ -587,4 +593,149 @@ async fn a_request_waiting_on_a_request_time_login_times_out_as_authorization_pe
         before,
         "a pending login is not a backend failure"
     );
+}
+
+/// After [`approved_start`], the token has lapsed (65 s less the 60 s
+/// early-expiry margin): the next request's token step opens a login.
+const LAPSE: Duration = Duration::from_secs(6);
+
+/// A backend at an `issuing_server(65, list)` with `timeout` as its request
+/// bound, started through an approved login. Its token is good for 5 s more.
+async fn approved_start(
+    list: List,
+    timeout: Duration,
+) -> (Arc<Backend>, Arc<Browser>, tempfile::TempDir) {
+    let origin = issuing_server(65, list).await;
+    let dir = tempfile::tempdir().unwrap();
+    let browser = Browser::new();
+    let backend = login_backend(&origin, dir.path(), &browser, timeout, None);
+    let start = spawn_start(&backend);
+    let url = browser.opened(1, "the start opening the browser").await;
+    approve(&url).await;
+    within("the start completing with a token", start)
+        .await
+        .expect("start task")
+        .expect("the approved login starts the backend");
+    (backend, browser, dir)
+}
+
+/// Send a `tools/call` on `backend` in the background, as a client would.
+fn spawn_call(backend: &Arc<Backend>) -> tokio::task::JoinHandle<Result<JsonRpcResponse>> {
+    let backend = Arc::clone(backend);
+    tokio::spawn(async move {
+        let params = json!({"name": "noop", "arguments": {}});
+        backend.request("tools/call", Some(params)).await
+    })
+}
+
+/// MIK-7982 r5 HIGH 2 (R5H2a, C3): a fill whose own request was handed to the
+/// transport and then timed out is a backend timeout, even while a login of
+/// its cohort is in flight: it waited on the backend, not on the login.
+#[tokio::test]
+async fn an_unrelated_timeout_during_a_login_stays_a_backend_timeout() {
+    // The token is good for 5 s after the start: the fill sends both pages
+    // inside that. The second never comes, and its own 10 s transport timeout
+    // starts 2 s after the fill's 10 s deadline, so the fill's fires first.
+    let (backend, browser, _dir) = approved_start(
+        List::Stalls(Duration::from_secs(2)),
+        Duration::from_secs(10),
+    )
+    .await;
+    let fill = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move { backend.tools_for_check(None, &[], false).await })
+    };
+
+    // Once the token lapses, another caller's request-time login opens in
+    // the cohort the fill captured.
+    sleep(LAPSE).await;
+    let call = spawn_call(&backend);
+    browser
+        .opened(2, "another caller's request-time login")
+        .await;
+
+    let error = within("the fill's own deadline", fill)
+        .await
+        .expect("fill task")
+        .expect_err("the upstream never answered the list in time");
+    assert!(
+        variant(&error).starts_with("BackendUnavailable"),
+        "a dispatched request that timed out is the backend's timeout, not a login's: {error:?}"
+    );
+    call.abort();
+}
+
+/// MIK-7982 (dispatch path): a `tools/call` whose start waits on a login that
+/// nobody finishes ends at the window as `AuthorizationIncomplete`, and the
+/// dispatch path's breaker counts nothing, as the fill path's does not.
+#[tokio::test]
+async fn a_call_whose_login_ends_at_the_window_counts_no_failure() {
+    let origin = authorization_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let browser = Browser::new();
+    let backend = login_backend(&origin, dir.path(), &browser, Duration::from_secs(30), None);
+    let call = spawn_call(&backend);
+    browser
+        .opened(1, "the call's start opening the browser")
+        .await;
+
+    tokio::time::pause();
+    let ended = tokio::time::timeout(Duration::from_secs(301), call)
+        .await
+        .expect("the call waiting on the login must end when the 300 s window passes");
+    tokio::time::resume();
+
+    let error = ended
+        .expect("call task")
+        .expect_err("nobody approved, so the call cannot be sent");
+    assert!(
+        variant(&error).starts_with("AuthorizationIncomplete"),
+        "the call ends as the unfinished login: {error:?}"
+    );
+    assert_eq!(
+        backend.health_metrics().failure_count,
+        0,
+        "an unfinished login is not a backend failure on the dispatch path"
+    );
+}
+
+/// MIK-7982 C2: while a request-time login holds the OAuth client and no start
+/// is in flight, the health probe answers `AuthorizationRequired` at once
+/// rather than queueing on the client, and the probe's non-interactive
+/// rebuild leaves the working transport in the pool.
+#[tokio::test]
+async fn a_probe_during_a_request_time_login_neither_waits_nor_rebuilds() {
+    let (backend, browser, _dir) = approved_start(List::Empty, Duration::from_secs(30)).await;
+    sleep(LAPSE).await;
+    let call = spawn_call(&backend);
+    browser.opened(2, "the call's request-time login").await;
+
+    let probed = tokio::time::timeout(
+        Duration::from_secs(2),
+        backend.health_probe(Duration::from_secs(5)),
+    )
+    .await
+    .expect("a probe does not queue behind the login holding the OAuth client");
+    let error = probed.expect_err("the probe cannot get a token");
+    assert!(
+        variant(&error).starts_with("AuthorizationRequired"),
+        "a probe that would wait on a login answers AuthorizationRequired: {error:?}"
+    );
+
+    let rebuilt = within(
+        "the probe's rebuild",
+        crate::oauth::login_gate::non_interactive(backend.force_restart()),
+    )
+    .await;
+    assert!(rebuilt.is_err(), "a rebuild during a login does nothing");
+    let entry = backend.shared_entry();
+    assert!(
+        entry
+            .transport
+            .read()
+            .as_ref()
+            .is_some_and(|transport| transport.is_connected()),
+        "a non-interactive rebuild during a login took the working transport"
+    );
+    call.abort();
 }
