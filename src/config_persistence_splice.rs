@@ -327,10 +327,11 @@ fn edit_block(
         let comment = inline_comment(value_text);
         let value = &value_text[..value_text.len() - comment.map_or(0, str::len)];
         let block = value.trim().is_empty();
-        // A tag or anchor before a value (`!!str "a # b"`) hides its quote
-        // from the scanner, so a "comment" found after it may be the rest of
-        // the old value; carrying that would leave it on disk.
-        if comment.is_some() && value.trim_start().starts_with(['!', '&']) {
+        // A tag or anchor before a quoted scalar (`!!str "a # b"`, also inside
+        // a flow collection) hides the quote from the scanner, so a "comment"
+        // found after it may be the rest of the old value; carrying that
+        // would leave it on disk.
+        if comment.is_some() && value.contains(['!', '&']) && value.contains(['"', '\'']) {
             return None;
         }
         match (was, now) {
@@ -584,6 +585,8 @@ mod tests {
         let original = "backends:\n  svc:\n    env:\n      TOKEN: !!str \"old # secret\"\n";
         let old = "env:\n  TOKEN: \"old # secret\"\n";
         assert_eq!(edited(original, old, "env:\n  TOKEN: new\n"), None);
+        let flow = "backends:\n  svc:\n    env: {TOKEN: !!str \"old # secret\"}\n";
+        assert_eq!(edited(flow, old, "env:\n  TOKEN: new\n"), None);
     }
 
     #[test]
