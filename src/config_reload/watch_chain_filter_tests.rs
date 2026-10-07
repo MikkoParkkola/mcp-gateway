@@ -35,7 +35,9 @@ fn plain_config() -> (tempfile::TempDir, std::path::PathBuf) {
 /// MIK-8013.WATCH.2: 1000 files written beside the config run no chain
 /// re-resolution. The config edit after them is the barrier: notify delivers
 /// events in order, so once its reload arrives every earlier event was seen.
-#[tokio::test]
+/// Multi-threaded, so the rewatch task resolves while the files are written:
+/// on one thread every wake would coalesce into one after the writes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn watch2_unrelated_files_beside_the_config_resolve_nothing() {
     let (root, cfg) = plain_config();
     let mut h = start(&cfg);
