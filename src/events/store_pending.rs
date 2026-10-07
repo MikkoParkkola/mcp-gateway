@@ -475,8 +475,13 @@ impl Store {
             } else if let Some(left) = state.outbox.get_mut(event_id) {
                 left.state = OutboxState::Pending;
                 left.next_attempt_at = now + SETTLE_RETRY;
-                if let Settle::Dead { reason, .. } = outcome {
-                    left.dead_as = Some(reason);
+                match outcome {
+                    Settle::Dead { reason, .. } => left.dead_as = Some(reason),
+                    // Still not a send: the refusal counts even if its write failed.
+                    Settle::Unsent { .. } => left.unsent = left.unsent.saturating_add(1),
+                    Settle::Delivered | Settle::Retry { .. } => {}
+                }
+                if matches!(outcome, Settle::Dead { .. } | Settle::Unsent { .. }) {
                     // Best effort now; the next claim writes it in any case.
                     let _ = write_record(&self.outbox_dir, &OutboxRecord::file(event_id), &*left);
                 }
