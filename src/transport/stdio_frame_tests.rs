@@ -339,7 +339,7 @@ mod tree_kill {
         let (command, pidfile) = tree_backend(workspace.path(), true);
         let transport = start_tree_transport(workspace.path(), &command);
         transport.start().await.expect("start");
-        let (leader, descendant) = read_pids(&pidfile);
+        let (_leader, descendant) = read_pids(&pidfile);
 
         assert!(
             await_leader_exit(&transport).await,
