@@ -148,6 +148,9 @@ struct Setup {
     meta_mode: MetaMode,
     /// The backends refuse every notification (L1254).
     notify_refused: bool,
+    /// The backends' chain policy; under `Require` the gateway also has a
+    /// chain identity, so their unchained answers are refused unread (MIK-7636).
+    chain: crate::config::ChainMode,
     /// `security.caller_identity` (MIK-7938 ATTR.4).
     caller_identity: Option<crate::security::caller_identity::CallerIdentityConfig>,
 }
@@ -214,7 +217,10 @@ async fn fixture(setup: Setup) -> Fixture {
     for name in ["alpha", "beta"] {
         let backend = Arc::new(Backend::new(
             name,
-            BackendConfig::default(),
+            BackendConfig {
+                signature_chain: setup.chain,
+                ..BackendConfig::default()
+            },
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         ));
@@ -243,24 +249,16 @@ async fn fixture(setup: Setup) -> Fixture {
     }
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     meta.enable_transparency_log(Arc::clone(&log));
+    if setup.chain == crate::config::ChainMode::Require {
+        meta.set_chain_signer(
+            crate::security::signature_chain::ChainSigner::from_seed(&[7; 32], "gw-test")
+                .expect("signer"),
+            crate::config::ChainEmit::OnRequest,
+        );
+    }
     #[cfg(feature = "firewall")]
     if let Some(limit) = setup.tenant_limit {
-        let config = crate::security::firewall::FirewallConfig {
-            tenant_guard: crate::security::firewall::tenant_guard::TenantGuardConfig {
-                enabled: limit > 0,
-                max_tenants_per_window: limit,
-                arg_keys: vec!["customer_id".to_string()],
-                ..Default::default()
-            },
-            ..crate::security::firewall::FirewallConfig::default()
-        };
-        let firewall = |config| {
-            Arc::new(crate::security::firewall::Firewall::from_config(
-                config, None,
-            ))
-        };
-        state_mut.firewall = Some(firewall(config.clone()));
-        meta.set_firewall(Some(firewall(config)));
+        guard_tenants(state_mut, &mut meta, limit);
     }
     if let Some(config) = setup.caller_identity {
         meta = meta.with_caller_identity(config);
@@ -276,6 +274,28 @@ async fn fixture(setup: Setup) -> Fixture {
         calls,
         _dirs: (audit, store),
     }
+}
+
+/// MIK-7116.MIN.1: both routes' firewalls read `customer_id` as a tenant,
+/// the guard refusing past `limit` tenants (0 = attribution only).
+#[cfg(feature = "firewall")]
+fn guard_tenants(state: &mut super::AppState, meta: &mut MetaMcp, limit: usize) {
+    let config = crate::security::firewall::FirewallConfig {
+        tenant_guard: crate::security::firewall::tenant_guard::TenantGuardConfig {
+            enabled: limit > 0,
+            max_tenants_per_window: limit,
+            arg_keys: vec!["customer_id".to_string()],
+            ..Default::default()
+        },
+        ..crate::security::firewall::FirewallConfig::default()
+    };
+    let firewall = |config| {
+        Arc::new(crate::security::firewall::Firewall::from_config(
+            config, None,
+        ))
+    };
+    state.firewall = Some(firewall(config.clone()));
+    meta.set_firewall(Some(firewall(config)));
 }
 
 /// An auth config with one key, `k`, scoped to `alpha`.

@@ -191,6 +191,50 @@ async fn direct_cached_error_replay_is_marked_cached() {
     assert!(replay.get("data_classes").is_none(), "{replay}");
 }
 
+/// MIK-7636 GH2555 (direct route). A chain-refused call is recorded
+/// uninspected; its keyed replay is a cached delivery of a value no gate read.
+#[tokio::test]
+async fn direct_replayed_chain_refusal_keeps_its_uninspected_attribution() {
+    // With no tenant named first (GH2555.2), so that case fails on its own,
+    // then with one.
+    let untenanted = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "t", "arguments": {},
+                   "_meta": {(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): "k-chain"}}});
+    for call in [
+        untenanted.to_string(),
+        direct_call("cust-1", Some("k-chain")),
+    ] {
+        let fx = fixture(Setup {
+            tenant_limit: Some(0),
+            meta_mode: MetaMode::Idempotent,
+            chain: crate::config::ChainMode::Require,
+            ..Setup::default()
+        })
+        .await;
+        let mut answers = Vec::new();
+        for _ in 0..2 {
+            answers.push(post_modern(&fx, "/mcp/alpha", &call).await.1);
+        }
+        // The replay answers the stored error; the stored marker stays internal.
+        let error = &answers[1]["error"];
+        assert!(answers[0]["error"]["code"].is_i64(), "{answers:?}");
+        assert_eq!(error["code"], answers[0]["error"]["code"], "{answers:?}");
+        assert!(error.get("_gatewayUninspected").is_none(), "{error}");
+        assert!(
+            error.pointer("/data/_gatewayUninspected").is_none(),
+            "{error}"
+        );
+        let all = invocations(&fx);
+        assert_eq!(all.len(), 2, "{all:?}");
+        let (first, replay) = (&all[0], &all[1]);
+        assert_eq!(first["attribution"], "uninspected", "{first}");
+        assert_eq!(
+            replay["attribution"], "cached_delivery_uninspected",
+            "call {call}: {replay}"
+        );
+    }
+}
+
 /// #2523. A direct `tools/call` with no `arguments` member is scanned by the
 /// firewall over `params` itself; the refusal record must name the tenants
 /// that refusal read, not none.
