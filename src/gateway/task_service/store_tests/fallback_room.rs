@@ -14,20 +14,6 @@ fn limits(record_bytes: usize) -> StoreLimits {
     }
 }
 
-fn record_file(path: &std::path::Path, id: &str) -> Value {
-    serde_json::from_slice(&fs::read(path.join(format!("{id}.json"))).unwrap()).unwrap()
-}
-
-fn encoded_len(value: &Value) -> usize {
-    serde_json::to_vec(value).unwrap().len()
-}
-
-/// An outcome no record under `limit` can hold, so settling it takes the
-/// bounded fallback.
-fn oversize(limit: usize) -> TaskTransition {
-    TaskTransition::Complete(json!({ "content": [{ "type": "text", "text": "q".repeat(limit) }] }))
-}
-
 /// The smallest round the store accepts: one one-byte key, no request state,
 /// no arguments. It is the round whose own bytes least exceed its fallback's.
 fn smallest_round() -> (InputRequired, InputRound) {
@@ -43,52 +29,6 @@ fn smallest_round() -> (InputRequired, InputRound) {
         continuation_deadline: None,
     };
     (requested, round)
-}
-
-/// The bytes of `task`'s freshly created record, and of the bounded failure it
-/// settles as straight after, at its natural revision and settle instant. Both
-/// measured in a store with room for them.
-async fn created_and_fallback(task: &Task) -> (usize, Value) {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("tasks");
-    let store = TaskStore::open(&path, limits(4 * 1024)).await.unwrap();
-    store
-        .create(PreparedTask::for_test(task, OWNER, 1))
-        .await
-        .unwrap();
-    let created = fs::read(path.join(format!("{}.json", task.id())))
-        .unwrap()
-        .len();
-    let settled = store
-        .settle_bounded(
-            OWNER,
-            task.id(),
-            1,
-            (oversize(4 * 1024), Some(Vec::new())),
-            at(1),
-        )
-        .await
-        .unwrap();
-    assert!(
-        settled.output_free,
-        "the fixture outcome takes the fallback"
-    );
-    let fallback = record_file(&path, task.id());
-    store.close().await.unwrap();
-    (created, fallback)
-}
-
-/// `fallback` re-encoded at its widest: the largest revision and a settle
-/// instant printed with all nine fractional digits.
-fn widest(mut fallback: Value) -> usize {
-    fallback["revision"] = json!(u64::MAX);
-    let updated = &mut fallback["model"]["task"]["lastUpdatedAt"];
-    assert!(
-        updated.is_string(),
-        "the record keeps its update instant: {fallback}"
-    );
-    *updated = json!("2026-09-07T00:00:01.999999999Z");
-    encoded_len(&fallback)
 }
 
 /// The exact boundary: the working record fits, its fallback does not.
