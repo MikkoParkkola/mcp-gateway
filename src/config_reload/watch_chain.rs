@@ -177,8 +177,13 @@ pub(super) fn startup_dirs(named: &Path) -> BTreeSet<PathBuf> {
 ///
 /// Each wake re-resolves the whole chain, so a writer beside the config would
 /// otherwise cost a resolve per write. The notify callback reads this; the
-/// rewatch task replaces it after each resolve. `None` (no chain resolved yet,
-/// or the last resolve failed) wakes on every event, as before.
+/// rewatch task replaces it after each resolve with the chain's
+/// [`Chain::names`] and its watched directories. `None` (no chain resolved
+/// yet, or the last resolve failed) wakes on every event, as before.
+///
+/// A link changed between a resolve reading it and the set landing is heard
+/// only at the next event on the chain: the window is the time between two
+/// statements of the task.
 #[derive(Default)]
 pub(super) struct ChainNames {
     names: Mutex<Option<BTreeSet<PathBuf>>>,
@@ -202,29 +207,22 @@ impl ChainNames {
     /// Whether an event on `paths` can have moved the chain: one of them is a
     /// hop, a followed directory link or a watched directory, or there is no
     /// path or no resolved chain to judge by.
+    ///
+    /// Linux only. Elsewhere an entry can be reported under another spelling
+    /// than the one recorded (case, Unicode normalization, an 8.3 short
+    /// name), so every event still wakes the task, as before.
     pub(super) fn may_move_chain(&self, paths: &[PathBuf]) -> bool {
-        paths.is_empty()
-            || self.names.lock().as_ref().is_none_or(|names| {
-                paths
-                    .iter()
-                    .any(|path| names.iter().any(|name| same_entry(path, name)))
-            })
+        !cfg!(target_os = "linux")
+            || paths.is_empty()
+            || self
+                .names
+                .lock()
+                .as_ref()
+                .is_none_or(|names| paths.iter().any(|path| names.contains(path)))
     }
 
     fn set(&self, names: Option<BTreeSet<PathBuf>>) {
         *self.names.lock() = names;
-    }
-}
-
-/// Whether two paths name the same directory entry. Names are spelled as the
-/// operator wrote them, which a case-insensitive file system (the macOS and
-/// Windows defaults) may report in another case; ignoring case there costs at
-/// most a spare resolve on a case-sensitive volume.
-fn same_entry(a: &Path, b: &Path) -> bool {
-    if cfg!(any(windows, target_os = "macos")) {
-        a.as_os_str().eq_ignore_ascii_case(b.as_os_str())
-    } else {
-        a == b
     }
 }
 

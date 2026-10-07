@@ -20,15 +20,18 @@ fn no_chain_wakes_on_any_path() {
     assert!(names.may_move_chain(&[PathBuf::from("/x/unrelated")]));
 }
 
-/// A resolved chain wakes only on its own paths, and a pathless event (a
-/// rescan) always wakes.
+/// A resolved chain wakes only on its own paths (Linux; elsewhere on every
+/// path), and a pathless event always wakes.
 #[test]
 fn a_chain_wakes_on_its_paths_only() {
     let names = ChainNames::default();
     names.set(Some(BTreeSet::from([PathBuf::from("/c/gateway.yaml")])));
     assert!(names.may_move_chain(&[PathBuf::from("/c/gateway.yaml")]));
     assert!(names.may_move_chain(&[PathBuf::from("/c/.tmp"), PathBuf::from("/c/gateway.yaml")]));
-    assert!(!names.may_move_chain(&[PathBuf::from("/c/perf.data")]));
+    assert_eq!(
+        names.may_move_chain(&[PathBuf::from("/c/perf.data")]),
+        !cfg!(target_os = "linux")
+    );
     assert!(names.may_move_chain(&[]));
 }
 
@@ -39,21 +42,8 @@ fn a_rescan_wakes_on_an_unrelated_path() {
     let names = ChainNames::default();
     names.set(Some(BTreeSet::from([PathBuf::from("/c/gateway.yaml")])));
     let unrelated = Event::new(EventKind::Any).add_path(PathBuf::from("/c/perf.data"));
-    assert!(!names.concerns(&unrelated));
+    assert_eq!(names.concerns(&unrelated), !cfg!(target_os = "linux"));
     assert!(names.concerns(&unrelated.set_flag(Flag::Rescan)));
-}
-
-/// Where the file system ignores case by default, an entry reported in
-/// another case than the operator spelled it still wakes.
-#[test]
-fn case_matches_where_the_file_system_ignores_it() {
-    let names = ChainNames::default();
-    names.set(Some(BTreeSet::from([PathBuf::from("/c/Current")])));
-    let reported = [PathBuf::from("/c/current")];
-    assert_eq!(
-        names.may_move_chain(&reported),
-        cfg!(any(windows, target_os = "macos"))
-    );
 }
 
 /// A plain file's chain names the file, canonical, and nothing beside it.
@@ -134,8 +124,9 @@ mod real_watcher {
     /// re-resolution. The config edit after them is the barrier: notify
     /// delivers events in order and the callback wakes the task before it
     /// sends the reload, so once the reload arrives every earlier event was
-    /// judged.
-    #[tokio::test]
+    /// judged. Multi-threaded, so the rewatch task resolves while the files
+    /// are written: on one thread every wake would coalesce after the writes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn watch2_unrelated_files_beside_the_config_resolve_nothing() {
         let (root, cfg) = plain_config();
         let mut h = start(&cfg);
