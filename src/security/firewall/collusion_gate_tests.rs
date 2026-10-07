@@ -765,3 +765,31 @@ fn a_capped_plan_step_retains_at_most_the_cap_of_fingerprints() {
     assert!(cut, "the truncation counts as a cut");
     assert_eq!(capped.retained_len(), RECORD_CAP);
 }
+
+/// MIK-7992: repeats of a changed leaf retain the same fingerprints; once
+/// each, so the count cap keeps a later leaf's.
+#[test]
+fn repeated_changed_leaves_do_not_crowd_out_a_later_leafs_fingerprints() {
+    use super::super::collusion::{CollusionDetector, RelayParams};
+    use super::super::collusion_digest::Delivered;
+    let detector = CollusionDetector::new(RelayParams::default());
+    let words = |tag: &str, n: usize| (0..n).map(|i| format!("{tag}{i:05}")).collect::<Vec<_>>();
+    let (copy, last) = (words("rep", 25).join(" "), PROSE.to_owned());
+    let mut leaves = vec![copy.as_str(); 400];
+    leaves.push(last.as_str());
+    let (copy_sent, last_sent) = (format!("{copy} sent"), format!("{last} sent"));
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&leaves, false);
+    let delivered = Delivered::of_leaves(vec![copy_sent.as_str(), last_sent.as_str()])
+        .expect("under the bound");
+    let (capped, _) = staged
+        .retaining(&detector, &delivered)
+        .capped()
+        .expect("deferred");
+    let kept: std::collections::HashSet<u64> = capped.fingerprints(&detector).into_iter().collect();
+    assert!(
+        detector
+            .fingerprints(&last)
+            .iter()
+            .all(|fp| kept.contains(fp))
+    );
+}
