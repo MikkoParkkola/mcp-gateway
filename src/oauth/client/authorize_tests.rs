@@ -358,14 +358,23 @@ async fn a_refresh_without_a_new_refresh_token_keeps_the_old_one() {
 #[tokio::test]
 async fn a_refresh_with_a_new_refresh_token_stores_the_new_one() {
     let dir = tempfile::tempdir().unwrap();
-    let (issuer, _forms) = token_endpoint(Some("access-b")).await;
+    let (issuer, forms) = token_endpoint(Some("access-b")).await;
     let client = client(dir.path(), Some(&issuer));
     *client.current_token.write() = Some(token("access-old", Some("r1"), Expiry::Expired));
 
     assert_eq!(client.get_token().await.unwrap(), "access-b");
+    let cached = client.current_token.read().clone().expect("a cached token");
+    assert_eq!(cached.refresh_token.as_deref(), Some("r-next"), "cached");
     let key = client.credential_key().unwrap();
     let stored = client.storage.load(&key, RESOURCE).expect("a stored token");
-    assert_eq!(stored.refresh_token.as_deref(), Some("r-next"));
+    assert_eq!(stored.refresh_token.as_deref(), Some("r-next"), "stored");
+
+    // The next refresh sends the rotated token, never the replaced one.
+    client.current_token.write().as_mut().unwrap().expires_at = Some(1);
+    assert_eq!(client.get_token().await.unwrap(), "access-b");
+    let forms = forms.lock().unwrap().clone();
+    assert_eq!(forms.len(), 2, "{forms:?}");
+    assert_eq!(forms[1]["refresh_token"], "r-next");
 }
 
 /// No authorization server known: the refresh cannot run, the fall-back to
