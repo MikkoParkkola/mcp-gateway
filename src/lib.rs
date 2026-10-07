@@ -83,9 +83,9 @@ pub mod semantic_search;
 pub mod simhash;
 pub mod skills;
 pub mod stats;
-#[cfg(feature = "tool-profiles")]
 #[cfg(test)]
 mod test_pause;
+#[cfg(feature = "tool-profiles")]
 pub mod tool_profiles;
 pub mod tool_registry;
 pub mod tracing_context;
