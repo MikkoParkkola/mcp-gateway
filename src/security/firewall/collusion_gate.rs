@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::collusion::{CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams};
-pub(super) use super::collusion_digest::delivery_leaves;
 pub(crate) use super::collusion_digest::{Delivered, DeliveryDigest};
+pub(super) use super::collusion_digest::{delivery_leaves, delivery_parts};
 use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
 };
@@ -412,7 +412,8 @@ impl Firewall {
         let source = format!("{server}:{tool}");
         let sensitive = self.relay.sources.iter().any(|p| p.matches(&source))
             || context_integrity_sensitive(result);
-        let (digest, cut) = DeliveryDigest::of_leaves(&delivery_leaves(result), sensitive);
+        let (leaves, values) = delivery_parts(result);
+        let (digest, cut) = DeliveryDigest::of_parts(&leaves, values, sensitive);
         if cut {
             self.relay.text_cut.fetch_add(1, Ordering::Relaxed);
         }

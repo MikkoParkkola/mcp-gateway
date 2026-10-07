@@ -30,6 +30,8 @@ struct Segment {
     whole: bool,
     /// A seam lies before it: never fingerprinted together with the previous one.
     gap_before: bool,
+    /// From an object key, not a value: egress runs only values together.
+    key: bool,
 }
 
 /// A delivery reduced to what recording it needs, so a staged receipt holds
@@ -48,27 +50,34 @@ impl DeliveryDigest {
     /// a char boundary, and the middle dropped behind a seam. Also whether
     /// anything was cut.
     pub(super) fn of_leaves(leaves: &[&str], sensitive: bool) -> (Self, bool) {
+        Self::of_parts(leaves, leaves.len(), sensitive)
+    }
+
+    /// [`Self::of_leaves`] where only the first `values` leaves are values
+    /// and the rest object keys, as [`delivery_parts`] returns them.
+    pub(super) fn of_parts(leaves: &[&str], values: usize, sensitive: bool) -> (Self, bool) {
         let total = leaves
             .iter()
             .map(|l| l.len() + 1)
             .sum::<usize>()
             .saturating_sub(1);
-        let whole = |text: &str, gap_before| Segment {
+        let whole = |text: &str, i: usize| Segment {
             text: text.to_owned(),
             whole: true,
-            gap_before,
+            gap_before: false,
+            key: i >= values,
         };
         let cut = total > RECORD_CAP;
         let segments = if cut {
             let half = RECORD_CAP / 2;
             let mut head = Vec::new();
             let mut room = half;
-            for leaf in leaves {
+            for (i, leaf) in leaves.iter().enumerate() {
                 if room == 0 {
                     break;
                 }
                 if leaf.len() <= room {
-                    head.push(whole(leaf, false));
+                    head.push(whole(leaf, i));
                     room -= (leaf.len() + 1).min(room);
                 } else {
                     let end = leaf.floor_char_boundary(room);
@@ -77,6 +86,7 @@ impl DeliveryDigest {
                             text: leaf[..end].to_owned(),
                             whole: false,
                             gap_before: false,
+                            key: i >= values,
                         });
                     }
                     break;
@@ -84,12 +94,12 @@ impl DeliveryDigest {
             }
             let mut tail = Vec::new();
             let mut room = half;
-            for leaf in leaves.iter().rev() {
+            for (i, leaf) in leaves.iter().enumerate().rev() {
                 if room == 0 {
                     break;
                 }
                 if leaf.len() <= room {
-                    tail.push(whole(leaf, false));
+                    tail.push(whole(leaf, i));
                     room -= (leaf.len() + 1).min(room);
                 } else {
                     let start = leaf.ceil_char_boundary(leaf.len() - room);
@@ -98,6 +108,7 @@ impl DeliveryDigest {
                             text: leaf[start..].to_owned(),
                             whole: false,
                             gap_before: false,
+                            key: i >= values,
                         });
                     }
                     break;
@@ -110,7 +121,11 @@ impl DeliveryDigest {
             head.extend(tail);
             head
         } else {
-            leaves.iter().map(|leaf| whole(leaf, false)).collect()
+            leaves
+                .iter()
+                .enumerate()
+                .map(|(i, leaf)| whole(leaf, i))
+                .collect()
         };
         let digest = Self {
             segments,
@@ -209,28 +224,39 @@ impl DeliveryDigest {
     }
 
     /// Each run's text newline-joined, as a delivery walk joins leaves, and,
-    /// for a run of several segments, its leaves run together too, as egress
-    /// reads forwarded leaves: a copy delivered split mid-word over short
-    /// fields then matches its holder's own forwarding of the pieces. A run
-    /// never crosses a seam, so neither form joins text across a cut.
+    /// for a run of several value segments, those values run together too, as
+    /// egress reads forwarded values (keys stay out, as egress keeps them): a
+    /// copy delivered split mid-word over short fields then matches its
+    /// holder's own forwarding of the pieces. A run never crosses a seam, so
+    /// neither form joins text across a cut.
     fn run_texts(&self) -> Vec<String> {
         let mut texts = Vec::new();
         for run in self.runs() {
-            texts.push(run.join("\n"));
-            if run.len() > 1 {
-                texts.push(run.concat());
+            texts.push(
+                run.iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+            let values: Vec<&str> = run
+                .iter()
+                .filter(|s| !s.key)
+                .map(|s| s.text.as_str())
+                .collect();
+            if values.len() > 1 {
+                texts.push(values.concat());
             }
         }
         texts
     }
 
-    /// The segments' texts grouped into runs: a seam starts a new one.
-    fn runs(&self) -> Vec<Vec<&str>> {
-        let mut runs: Vec<Vec<&str>> = Vec::new();
+    /// The segments grouped into runs: a seam starts a new one.
+    fn runs(&self) -> Vec<Vec<&Segment>> {
+        let mut runs: Vec<Vec<&Segment>> = Vec::new();
         for segment in &self.segments {
             match runs.last_mut() {
-                Some(run) if !segment.gap_before => run.push(&segment.text),
-                _ => runs.push(vec![&segment.text]),
+                Some(run) if !segment.gap_before => run.push(segment),
+                _ => runs.push(vec![segment]),
             }
         }
         runs
@@ -271,6 +297,12 @@ impl<'v> Delivered<'v> {
 /// string, leaving out a top-level `_context_integrity`, then each object key
 /// of at least `K` chars.
 pub(super) fn delivery_leaves(value: &Value) -> Vec<&str> {
+    delivery_parts(value).0
+}
+
+/// [`delivery_leaves`], and how many of them, from the front, are values
+/// (the rest are keys).
+pub(super) fn delivery_parts(value: &Value) -> (Vec<&str>, usize) {
     fn visit<'v>(value: &'v Value, leaves: &mut Vec<&'v str>, keys: &mut Vec<&'v str>) {
         match value {
             Value::String(s) => leaves.push(s),
@@ -293,6 +325,7 @@ pub(super) fn delivery_leaves(value: &Value) -> Vec<&str> {
             }),
         _ => visit(value, &mut leaves, &mut keys),
     }
+    let values = leaves.len();
     leaves.extend(keys.into_iter().filter(|k| k.chars().count() >= K));
-    leaves
+    (leaves, values)
 }

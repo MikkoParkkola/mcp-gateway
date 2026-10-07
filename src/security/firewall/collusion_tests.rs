@@ -712,3 +712,44 @@ fn a_sensitive_copy_after_a_plain_one_is_a_witness() {
     let now = start + Duration::from_secs(2);
     assert!(d.check_egress_at(B, U, &s, now).is_some());
 }
+
+/// `RELAY-SPLIT-FP.2` (MIK-7773): a receipt runs only values together, as
+/// egress does, never a value into a long object key: an excuse may cover
+/// only what an egress of the same pieces would read.
+#[test]
+fn a_split_receipt_never_runs_a_value_into_a_key() {
+    use super::super::collusion_digest::{DeliveryDigest, delivery_parts};
+    let d = detector();
+    let flat = text(9, 40);
+    let key = text(11, 20);
+    assert!(
+        key.chars().count() >= super::K,
+        "premise: a key long enough to read"
+    );
+    let mut map = serde_json::Map::new();
+    for (i, piece) in flat.as_bytes().chunks(20).enumerate() {
+        let piece = String::from_utf8(piece.to_vec()).expect("ascii");
+        map.insert(format!("p{i:03}"), serde_json::Value::String(piece));
+    }
+    map.insert(key, serde_json::Value::String("v".into()));
+    let value = serde_json::Value::Object(map);
+    let (leaves, values) = delivery_parts(&value);
+    assert_eq!(values, leaves.len() - 1, "the key comes last");
+    let (digest, _) = DeliveryDigest::of_parts(&leaves, values, false);
+    let allowed: HashSet<u64> = [leaves.join("\n"), leaves[..values].concat()]
+        .iter()
+        .flat_map(|t| d.kgram_hashes(t))
+        .collect();
+    assert!(
+        d.fingerprints(&leaves.concat())
+            .iter()
+            .any(|fp| !allowed.contains(fp)),
+        "premise: running the key in adds fingerprints"
+    );
+    assert!(
+        digest
+            .fingerprints(&d)
+            .iter()
+            .all(|fp| allowed.contains(fp))
+    );
+}
