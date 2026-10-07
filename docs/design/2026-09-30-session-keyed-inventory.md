@@ -166,8 +166,8 @@ These are recorded here, not fixed here. Each is routed through the 4.0 lane rul
     running at the end holds its session until its last write, and the last hold on an ended
     session runs the end handlers again (MIK-7996, `gateway/session_lifecycle/session_hold.rs`), so
     a late write never outlives its call. The pass 120 s after the end stays as a backstop.
-  - Residual, outside G2: the cost bucket's per-call `records` vector still grows within one live
-    session until that session ends.
+  - Fixed, outside G2 (MIK-8000, 7a7ab58b4): a live session's cost is kept as one row per tool
+    with running totals, so it no longer grows per call.
 - **G3.** A security finding, routed privately to the release coordinator on 2026-09-30 and tracked
   in #2448, which has since merged (dc9d2e012).
 - **G4** (fixed by #2591). Rows 16, 18 and 19 keyed on the shared `""` on the modern path. Rows 13 and 17 no longer do
