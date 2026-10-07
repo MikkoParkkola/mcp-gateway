@@ -60,8 +60,9 @@ struct IndexedCapabilities {
     index: HashMap<String, usize>,
     /// Pre-built MCP `Tool` representations — rebuilt whenever `entries` changes.
     tools: Vec<Tool>,
-    /// Names read yet absent: the account gate refused them, or an unload removed them.
-    absent: std::collections::HashSet<String>,
+    /// Read yet absent: gate refusals (rebuilt by each reload) and unloads (until admitted).
+    refused: std::collections::HashSet<String>,
+    unloaded: std::collections::HashSet<String>,
 }
 
 /// True when `new` differs from `old` in any serialised field. A definition
@@ -237,7 +238,7 @@ impl CapabilityBackend {
             caps.entries.remove(pos);
             caps.tools.remove(pos);
             caps.index.remove(name);
-            caps.absent.insert(name.to_owned());
+            caps.unloaded.insert(name.to_owned());
             // Shift remaining indices down.
             for idx in caps.index.values_mut() {
                 if *idx > pos {
@@ -434,7 +435,7 @@ impl CapabilityBackend {
                 }
             }
             caps.replace_all(admitted);
-            caps.absent = refused;
+            caps.settle_absent(refused);
             // With the swap, under the same lock: `catalogue_snapshot` never
             // sees one without the other.
             self.set_catalogue_partial(partial);
@@ -697,6 +698,7 @@ impl CapabilityBackend {
         let mut caps = self.capabilities.write();
         let replaced = caps.contains(&name);
         caps.upsert(capability);
+        caps.unloaded.remove(&name);
         self.bump_catalogue_generation(&caps);
         if replaced {
             // A replacement is a live-policy change (MIK-7814): children

@@ -110,11 +110,11 @@ impl CapabilityBackend {
 
     /// Record `name` as read but refused by the account gate (MIK-8037): a
     /// catalogue write, so the generation moves. Takes the write lock: call
-    /// it holding no capabilities guard. A reload rebuilds the absent names
+    /// it holding no capabilities guard. A reload rebuilds the refused names
     /// from the directories it read.
     pub(super) fn note_refused(&self, name: &str) {
         let mut caps = self.capabilities.write();
-        caps.absent.insert(name.to_owned());
+        caps.refused.insert(name.to_owned());
         self.bump_catalogue_generation(&caps);
     }
 
@@ -136,7 +136,7 @@ impl CapabilityBackend {
             caps.entries.clone(),
             self.initial_scan_loaded_every_directory(),
             self.catalogue_generation(),
-            caps.absent.iter().cloned().collect(),
+            caps.refused.iter().chain(&caps.unloaded).cloned().collect(),
         )
     }
 }
@@ -236,5 +236,17 @@ mod held_reload_tests {
             "complete: the caller applies it now"
         );
         assert!(!backend.take_held_reload(), "and nothing was left held");
+    }
+}
+
+impl super::IndexedCapabilities {
+    /// After a reload's swap: its refusals replace the old ones, and an unload
+    /// stays read-yet-absent until the name is admitted again (MIK-8037). A
+    /// quarantined capability is unloaded, then a reload that cannot load its
+    /// file back must not turn the removal into an unread absence.
+    pub(super) fn settle_absent(&mut self, refused: std::collections::HashSet<String>) {
+        self.refused = refused;
+        let index = &self.index;
+        self.unloaded.retain(|name| !index.contains_key(name));
     }
 }
