@@ -327,7 +327,10 @@ impl DeliveryDigest {
     /// as it stands; a delivered leaf the step did not produce whole is a seam.
     /// A step leaf delivered verbatim is covered by those; any other keeps its
     /// fingerprints whose k-gram a delivered leaf holds. Kept text is at most
-    /// the delivered text, and copies the caller never got spend nothing.
+    /// the delivered text, and copies the caller never got spend nothing. It
+    /// is also at most what the step staged: an answer repeating a step leaf
+    /// keeps its copies only up to that, the rest behind a seam, so retention
+    /// never grows a receipt past what its plan's staging bound counted.
     fn retaining_deferred(self, detector: &CollusionDetector, delivered: &Delivered<'_>) -> Self {
         // Matched as the same kind (MIK-7773): a step value the answer
         // carries only as a key is not kept as a value.
@@ -339,9 +342,12 @@ impl DeliveryDigest {
             .collect();
         let mut segments = Vec::new();
         let mut gap = false;
+        let mut room = self.staged_len() - std::mem::size_of::<Self>();
         for (i, leaf) in delivered.all.iter().enumerate() {
             let key = i >= delivered.values_len;
-            if whole.contains(&(*leaf, key)) {
+            let cost = leaf.len() + std::mem::size_of::<Segment>();
+            if whole.contains(&(*leaf, key)) && cost <= room {
+                room -= cost;
                 segments.push(Segment {
                     text: (*leaf).to_owned(),
                     whole: true,

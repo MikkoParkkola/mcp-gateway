@@ -245,3 +245,19 @@ fn a_kept_and_capped_step_never_runs_a_value_into_its_key() {
     let kept = capped.fingerprints(&detector);
     assert!(kept.iter().all(|fp| allowed.contains(fp)), "key kept apart");
 }
+
+/// MIK-7992: a deferred receipt kept to an answer that repeats one of its
+/// leaves holds no more than it staged, so retention cannot grow a plan's
+/// receipts past what its staging bound counted.
+#[test]
+fn a_kept_receipt_holds_no_more_than_its_step_staged() {
+    let detector = CollusionDetector::new(RelayParams::default());
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["", "the step's other leaf"], false);
+    let before = staged.staged_len();
+    let delivered = Delivered::of_leaves(vec![""; 20_000]).expect("bounded");
+    let kept = staged.retaining(&detector, &delivered);
+    assert!(
+        kept.staged_len() <= before,
+        "copies past the step's size kept"
+    );
+}
