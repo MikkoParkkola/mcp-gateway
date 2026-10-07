@@ -639,6 +639,32 @@ mod tests {
         assert_eq!(lifecycle.tracked_count(), 1, "b keeps its renewed deadline");
     }
 
+    /// Likewise a hold taken after the snapshot: the held key is skipped.
+    #[test]
+    fn a_key_held_after_the_sweep_chose_it_keeps_its_state() {
+        let lifecycle = Arc::new(SessionLifecycle::new());
+        let fired = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = Arc::clone(&fired);
+        lifecycle.register("records", move |key| {
+            seen.lock().expect("seen").push(key.to_owned());
+        });
+        let holds = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let (taker, kept) = (Arc::downgrade(&lifecycle), Arc::clone(&holds));
+        *lifecycle.between_keys.lock() = Some(Box::new(move || {
+            let first = kept.lock().is_empty();
+            if first && let Some(lifecycle) = taker.upgrade() {
+                let hold = lifecycle.hold("b");
+                kept.lock().push(hold);
+            }
+        }));
+        lifecycle.track("a", 0);
+        lifecycle.track("b", 0);
+        assert_eq!(lifecycle.reap(1), 1, "only a reclaimed: {fired:?}");
+        assert_eq!(*fired.lock().expect("seen"), ["a"]);
+        *lifecycle.between_keys.lock() = None;
+        holds.lock().clear();
+    }
+
     /// A caller that renews while its old deadline's handler is running and
     /// then writes fresh state keeps that state (MIK-7746). The handler waits
     /// up to 500 ms for the renewer to have written before it wipes. If a
