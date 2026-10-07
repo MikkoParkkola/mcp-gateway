@@ -159,18 +159,11 @@ impl Exchange {
         tokio::spawn(self.run())
     }
 
-    fn limit(&self) -> std::time::Duration {
-        #[cfg(test)]
-        {
-            if let Some(limit) = *self.flight.exchange_limit.lock() {
-                return limit;
-            }
-        }
-        EXCHANGE_LIMIT
-    }
-
     async fn run(mut self) -> Outcome {
-        let limit = self.limit();
+        #[cfg(not(test))]
+        let limit = EXCHANGE_LIMIT;
+        #[cfg(test)]
+        let limit = self.flight.exchange_limit.lock().unwrap_or(EXCHANGE_LIMIT);
         // A supplied client may have no timeout: an endpoint that takes the
         // request and never answers would hold the credential, and every later
         // refresh and login save, for good. Unanswered means possibly consumed.
