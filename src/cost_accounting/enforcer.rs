@@ -91,6 +91,11 @@ impl DailyAccumulator {
         let state = self.lock();
         if state.0 >= current_day() { state.1 } else { 0 }
     }
+
+    /// False once the stored day is before today: [`Self::current`] reads 0.
+    fn is_current(&self) -> bool {
+        self.lock().0 >= current_day()
+    }
 }
 
 #[cfg(test)]
@@ -125,6 +130,30 @@ fn current_day() -> u64 {
         .unwrap_or(Duration::ZERO)
         .as_secs()
         / 86_400
+}
+
+/// Unbudgeted names one day map keeps entries for; later names add into
+/// `(other)`. A check reads only budgeted names, so with R2 off and a non-zero
+/// `default_cost` the caller would otherwise choose how many entries exist.
+#[cfg(feature = "cost-governance")]
+const MAX_UNBUDGETED_ROWS: usize = 256;
+
+/// Add `micro` to `name`'s entry, or to `(other)` once `map` holds an entry
+/// for every budgeted name plus [`MAX_UNBUDGETED_ROWS`] others, and return the
+/// running total of the entry added to. A budgeted name always has its own.
+/// ponytail: a soft cap; racing first inserts can pass it by the caller count.
+#[cfg(feature = "cost-governance")]
+fn add_capped(
+    map: &DashMap<String, DailyAccumulator>,
+    name: &str,
+    limits: &HashMap<String, f64>,
+    micro: u64,
+) -> u64 {
+    let own = limits.contains_key(name)
+        || map.contains_key(name)
+        || map.len() < limits.len() + MAX_UNBUDGETED_ROWS;
+    let name = if own { name } else { super::tally::OTHER };
+    map.entry(name.to_string()).or_default().add(micro)
 }
 
 // ── EnforcementResult ────────────────────────────────────────────────────────
@@ -327,6 +356,8 @@ pub struct BudgetEnforcer {
     ledger: Arc<Ledger>,
     /// Told when committed spend crosses 50, 80 or 100 % of a daily budget.
     observer: crate::observer::Observer<crossings::BudgetCrossing>,
+    /// When the next sweep of earlier days' entries may run (MIK-8015).
+    next_sweep: std::sync::atomic::AtomicU64,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -341,6 +372,7 @@ impl BudgetEnforcer {
             key_daily: DashMap::new(),
             ledger: Arc::default(),
             observer: crate::observer::Observer::default(),
+            next_sweep: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -512,19 +544,9 @@ impl BudgetEnforcer {
         let micro = (cost_usd * 1_000_000.0) as u64;
 
         let global = self.global_daily.add(micro);
-
-        let tool = self
-            .tool_daily
-            .entry(tool_name.to_string())
-            .or_default()
-            .add(micro);
-
-        let key = api_key_name.map(|key| {
-            self.key_daily
-                .entry(key.to_string())
-                .or_default()
-                .add(micro)
-        });
+        let budgets = &self.config.budgets;
+        let tool = add_capped(&self.tool_daily, tool_name, &budgets.per_tool, micro);
+        let key = api_key_name.map(|key| add_capped(&self.key_daily, key, &budgets.per_key, micro));
         if self.observer.is_set() {
             self.report_crossings(
                 tool_name,
@@ -532,6 +554,15 @@ impl BudgetEnforcer {
                 micro,
                 [global, tool, key.unwrap_or(0)],
             );
+        }
+        // Every entry guard is dropped above: `retain` takes every shard lock.
+        if super::tally::sweep_due(&self.next_sweep, super::persistence::now_secs()) {
+            for (map, limits) in [
+                (&self.tool_daily, &budgets.per_tool),
+                (&self.key_daily, &budgets.per_key),
+            ] {
+                map.retain(|name, day| limits.contains_key(name) || day.is_current());
+            }
         }
     }
 

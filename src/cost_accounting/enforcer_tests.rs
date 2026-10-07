@@ -197,3 +197,38 @@ fn a_spend_sweeps_unbudgeted_entries_from_an_earlier_day() {
     assert!(!e.key_daily.contains_key("old-key"), "stale key kept");
     assert!(e.key_daily.contains_key("budgeted"));
 }
+
+#[test]
+fn spend_past_the_cap_counts_in_other_and_a_budgeted_tool_still_blocks() {
+    // GIVEN: a budgeted tool, and the unbudgeted cap already filled
+    let e = enforcer_with(true, None, &[("paid", 0.005)], &[], &[("paid", 0.01)]);
+    for i in 0..300 {
+        e.record_spend(&format!("invented-{i}"), None, 0.01);
+    }
+    e.record_spend("paid", None, 0.004);
+    // THEN: the overflow is all in (other), and the budgeted tool kept its own
+    // entry, so its check still blocks
+    let snap = e.snapshot();
+    // The cap counts entries: one per budgeted name plus the unbudgeted rows.
+    // "paid" had none yet, so the invented names filled its place as well.
+    let own = 1 + MAX_UNBUDGETED_ROWS;
+    #[allow(clippy::cast_precision_loss)]
+    let overflow = (300 - own) as f64 * 0.01;
+    let other = snap.tool_daily[super::super::tally::OTHER];
+    assert!((other - overflow).abs() < 1e-9, "(other) holds {other}");
+    assert!((snap.tool_daily["paid"] - 0.004).abs() < 1e-9);
+    assert!(!e.check("paid", None).allowed);
+}
+
+#[test]
+fn the_sweep_keeps_entries_from_today() {
+    // GIVEN: spend today on an unbudgeted tool and key
+    let e = enforcer_with(true, None, &[], &[], &[]);
+    e.record_spend("today-tool", Some("today-key"), 0.01);
+    // WHEN: a later spend runs a due sweep
+    e.next_sweep.store(0, std::sync::atomic::Ordering::Relaxed);
+    e.record_spend("t", None, 0.01);
+    // THEN: today's entries are still there
+    assert!(e.tool_daily.contains_key("today-tool"));
+    assert!(e.key_daily.contains_key("today-key"));
+}
