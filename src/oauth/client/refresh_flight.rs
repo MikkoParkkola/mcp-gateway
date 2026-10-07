@@ -32,6 +32,19 @@ pub(super) struct Flight {
     /// with an unknown outcome; never sent again by this process, even when
     /// clearing them from storage failed.
     spent: parking_lot::Mutex<HashSet<[u8; 32]>>,
+    /// A test's pause point in an exchange, after the answer is parsed and
+    /// before the token is saved, with the flight still held.
+    #[cfg(test)]
+    pub(super) save_gate: parking_lot::Mutex<Option<Arc<SaveGate>>>,
+}
+
+/// Holds an exchange before its save: it signals `reached` and waits for
+/// `release`.
+#[cfg(test)]
+#[derive(Default)]
+pub(super) struct SaveGate {
+    pub(super) reached: tokio::sync::Notify,
+    pub(super) release: tokio::sync::Notify,
 }
 
 /// Every credential's flight. Entries are kept for the life of the process:
@@ -188,6 +201,14 @@ impl Exchange {
             answer.expires_in,
             answer.scope,
         );
+        #[cfg(test)]
+        {
+            let gate = self.flight.save_gate.lock().clone();
+            if let Some(gate) = gate {
+                gate.reached.notify_one();
+                gate.release.notified().await;
+            }
+        }
         match self.storage.save(&self.key, &self.resource_url, &token) {
             Ok(()) => Outcome::Refreshed(token),
             Err(error) => {

@@ -438,3 +438,93 @@ async fn a_revoked_grant_surfaces_as_a_clean_relogin() {
         "a login prompt, not {error:?}"
     );
 }
+
+/// k8: the rotated token is saved before the flight is released, so the next
+/// waiter re-reads it rather than the token it replaces.
+#[tokio::test]
+async fn the_flight_is_held_until_the_rotated_token_is_saved() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let first = Arc::new(client(dir.path(), &server));
+    hold(&first, &token("a1", Some("r1"), true));
+    let key = first.credential_key().unwrap();
+    let flight = super::refresh_flight::Flight::of(&first.storage.token_path(&key, RESOURCE));
+    let gate = Arc::new(super::refresh_flight::SaveGate::default());
+    *flight.save_gate.lock() = Some(Arc::clone(&gate));
+
+    let task = tokio::spawn({
+        let first = Arc::clone(&first);
+        async move { headless(&first).await }
+    });
+    gate.reached.notified().await;
+    assert!(
+        flight.lock.try_lock().is_err(),
+        "the flight was released before the save"
+    );
+    gate.release.notify_one();
+    assert_eq!(task.await.unwrap().expect("refreshed"), "a2");
+    *flight.save_gate.lock() = None;
+}
+
+/// The refresh-state sidecar sits in the secrets directory and is written as
+/// the token file is: owner-only from creation.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_refresh_state_is_owner_only_like_the_token() {
+    use std::os::unix::fs::PermissionsExt;
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let late = client(dir.path(), &server);
+    hold(&late, &token("a1", Some("r1"), true));
+    headless(&late).await.expect("refreshed");
+
+    let key = late.credential_key().unwrap();
+    let mode =
+        |path: std::path::PathBuf| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    let sidecar = mode(late.storage.refresh_state_path(&key, RESOURCE));
+    assert_eq!(sidecar, 0o600);
+    assert_eq!(sidecar, mode(late.storage.token_path(&key, RESOURCE)));
+}
+
+/// FU-A.5: the no-redirect refresh client keeps the destination checks: a
+/// cleartext token endpoint off this machine is refused before anything is
+/// sent.
+#[tokio::test]
+async fn a_cleartext_off_host_refresh_is_refused_before_sending() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut late = client(dir.path(), &server);
+    if let Some(meta) = late.auth_metadata.as_mut() {
+        meta.token_endpoint = "http://192.0.2.10/token".to_string();
+    }
+    hold(&late, &token("a1", Some("r1"), true));
+
+    let error = late.refresh_token().await.expect_err("refused");
+    assert!(error.to_string().contains("SSRF blocked"), "{error}");
+    assert_eq!(server.requests(), 0);
+}
+
+/// FU-A.6: a stored record that differs only in its refresh token (another
+/// client's rotation kept the access token) is taken up, not refreshed again.
+#[tokio::test]
+async fn a_stored_rotation_that_kept_the_access_token_is_adopted() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let late = client(dir.path(), &server);
+    let live = token("a1", Some("r1"), false);
+    let mut rotated = live.clone();
+    rotated.refresh_token = Some("r9".to_string());
+    let key = late.credential_key().unwrap();
+    late.storage.save(&key, RESOURCE, &rotated).unwrap();
+    *late.current_token.write() = Some(live);
+
+    assert_eq!(late.refresh_token().await.unwrap(), "a1");
+    assert_eq!(
+        server.requests(),
+        0,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+    let cached = late.current_token.read().clone().unwrap();
+    assert_eq!(cached.refresh_token.as_deref(), Some("r9"));
+}

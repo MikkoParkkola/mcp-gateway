@@ -378,6 +378,7 @@ impl OAuthClient {
             cached.is_expired()
                 || cached.access_token != stored.access_token
                 || cached.expires_at != stored.expires_at
+                || cached.refresh_token != stored.refresh_token
         });
         if fresher {
             self.adopt_stored_login()
