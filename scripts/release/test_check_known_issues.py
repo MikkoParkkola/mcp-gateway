@@ -453,6 +453,29 @@ def test_a_tag_inside_mixed_length_code_spans_is_title_text():
     assert run(head, "--release", "--tag", "v4.0.0") == 1
 
 
+def test_a_comment_spanning_lines_does_not_hide_a_version():
+    assert run(notes("\n- Fixed in 4.0.<!--\neditor note\n-->1.\n"), "--check") == 1
+
+
+def test_a_setext_title_over_three_lines_is_the_section():
+    text = "Known\nissues\nfor 4.0\n---\n\n- Open.\n"
+    assert run(text, "--release", "--tag", "v4.0.0") == 1
+
+
+def test_a_comment_opened_after_text_keeps_the_section_open():
+    text = notes("\nEditorial note <!--\n## reminder\n-->\n\n- Fixed in 4.0.1.\n")
+    assert run(text.replace("The 4.0.1 numbers come later.", "Later."), "--check") == 1
+
+
+def test_a_number_after_the_title_is_section_content():
+    assert run("## Known issues \u2014 #3230\n", "--release", "--tag", "v4.0.0") == 1
+
+
+def test_strikethrough_does_not_hide_a_version():
+    for line in ("- Fixed in 4.0.~~1~~.", "- Fixed in 4.0.~1~."):
+        assert run(notes(f"\n{line}\n"), "--check") == 1, line
+
+
 def test_a_hyphen_range_to_a_later_release_fails_the_check():
     assert run(notes("\n- Seen in 4.0.0-4.0.1.\n"), "--check") == 1
 
