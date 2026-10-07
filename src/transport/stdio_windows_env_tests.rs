@@ -46,6 +46,18 @@ const WINDOWS_ALLOWLIST: [&str; 8] = [
 ];
 /// Set on every platform, from the parent or a fallback.
 const ALWAYS_SET: [&str; 3] = ["PATH", "HOME", "TMPDIR"];
+/// The operator's npm settings `configure_child_environment` forwards when the
+/// gateway holds them (#1759). Listed here, not imported, for the same reason
+/// as the Windows allowlist: a setting added to production must be added here.
+/// npm reads its environment case-insensitively, so they match folded.
+const FORWARDED_NPM_SETTINGS: [&str; 6] = [
+    "npm_config_allow_git",
+    "npm_config_cafile",
+    "npm_config_prefer_offline",
+    "npm_config_offline",
+    "npm_config_strict_ssl",
+    "npm_config_loglevel",
+];
 /// An allowlisted key the backend's own `env:` overrides.
 // Not APPDATA: that is the key #522 lost, so it must be checked as a pass-through.
 const OVERRIDDEN_KEY: &str = "TEMP";
@@ -144,7 +156,10 @@ async fn windows_child_environment_scenario() {
         .collect();
     let unexpected: Vec<&String> = child
         .keys()
-        .filter(|key| !permitted.contains(key.as_str()))
+        .filter(|key| {
+            !permitted.contains(key.as_str())
+                && !FORWARDED_NPM_SETTINGS.contains(&key.to_ascii_lowercase().as_str())
+        })
         .collect();
     assert!(
         unexpected.is_empty(),
