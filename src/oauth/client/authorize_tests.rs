@@ -494,6 +494,32 @@ async fn taking_up_a_shared_login_takes_up_its_registered_client_id() {
     );
 }
 
+/// MIK-7982: a client with a configured id that takes up a stored login keeps
+/// its configured id, whatever registered id that login stored.
+#[tokio::test]
+async fn taking_up_a_shared_login_keeps_a_configured_client_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let issuer = "https://as.example";
+    let client = client(dir.path(), Some(issuer))
+        .with_login_gate(Arc::new(crate::oauth::login_gate::LoginGate::default()));
+    let key = storage_key(BACKEND, issuer);
+    let shared = token("shared-access", None, Expiry::Live);
+    client.storage.save(&key, RESOURCE, &shared).unwrap();
+    client
+        .storage
+        .save_client_id(&key, RESOURCE, "another-registered-id")
+        .unwrap();
+
+    let access = client.authorize_shared(true, None).await.unwrap();
+
+    assert_eq!(access, "shared-access", "the stored login is taken up");
+    assert_eq!(
+        client.client_id.read().as_deref(),
+        Some(CLIENT_ID),
+        "a configured id is never replaced by a stored one"
+    );
+}
+
 /// MIK-7982: a stored login is taken up only when its token is live and was
 /// stored under this client's own key (backend and issuer) and resource;
 /// otherwise the caller opens its own.
