@@ -496,6 +496,31 @@ def test_a_long_title_paragraph_over_a_fence_opener_does_not_hide_the_fence():
     assert run(text.replace("The 4.0.1 numbers come later.", "Later."), "--check") == 1
 
 
+def test_a_title_paragraph_keeps_the_text_above_the_title():
+    text = "# Notes\n\nFixed in 4.0.1:\nKnown\nissues\n---\n"
+    assert run(text, "--check") == 1
+
+
+def test_a_title_paragraph_with_a_closed_comment_is_the_section():
+    text = "Known <!-- note -->\nissues\nfor 4.0\n---\n\n- Open.\n"
+    assert run(text, "--release", "--tag", "v4.0.0") == 1
+
+
+def test_a_title_paragraph_with_an_indented_continuation_is_the_section():
+    text = "Known\n    issues\nfor 4.0\n---\n\n- Open.\n"
+    assert run(text, "--release", "--tag", "v4.0.0") == 1
+
+
+def test_a_fence_opener_read_as_a_title_line_still_opens_the_fence():
+    text = notes("\nKnown issues\n```\n---\n## x\n```\n- Fixed in 4.0.1.\n")
+    assert run(text.replace("The 4.0.1 numbers come later.", "Later."), "--check") == 1
+
+
+def test_a_comment_opener_read_as_a_title_line_still_opens_the_comment():
+    text = notes("\nKnown issues\n<!--\n---\n## x\n-->\n- Fixed in 4.0.1.\n")
+    assert run(text.replace("The 4.0.1 numbers come later.", "Later."), "--check") == 1
+
+
 def test_a_hyphen_range_to_a_later_release_fails_the_check():
     assert run(notes("\n- Seen in 4.0.0-4.0.1.\n"), "--check") == 1
 
