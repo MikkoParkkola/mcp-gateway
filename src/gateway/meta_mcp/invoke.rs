@@ -625,7 +625,11 @@ impl MetaMcp {
             // must not take the receipt's capped budget from the backend's
             // prompt. Noted at the value layer: `tool_value` still reads
             // `requestState` to know the answer is interim, not wrapped.
-            gateway_writes::note(gateway_writes::Layer::Value, &["requestState"], &result);
+            gateway_writes::note(
+                gateway_writes::Layer::Value,
+                gateway_writes::REQUEST_STATE,
+                &result,
+            );
         }
 
         let call = dispatch_guards::BackendCall {
