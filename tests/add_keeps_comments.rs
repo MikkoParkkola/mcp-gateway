@@ -216,19 +216,187 @@ fn a_change_beyond_one_backend_takes_the_full_rewrite() {
     }
 }
 
-/// MIK-7968 T9 guard: the CLI keeps today's best effort. `add` on a
-/// flow-style file it cannot splice still writes the backend (a full
-/// rewrite); only the web UI refuses a write that would drop comments.
-#[test]
-fn cli_add_on_a_flow_style_file_still_rewrites() {
+/// The binary in `home`, isolated as the setup and discovery tests run it:
+/// no inherited environment, and a PATH with no host programs to scan.
+fn run(home: &Path, args: &[&str]) -> std::process::Output {
+    let mut command = gateway_bin::command(home, gateway_bin::Inherit::Nothing);
+    command
+        .env("XDG_CONFIG_HOME", home.join(".config"))
+        .env("PATH", home.join("no-system-programs"))
+        .current_dir(home)
+        .stdin(std::process::Stdio::null())
+        .args(args);
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        command.env("SystemRoot", root);
+    }
+    if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
+    command.output().expect("run mcp-gateway")
+}
+
+/// `MIK-CLI-COMMENTS.WARN.1`: a CLI write that would drop comments writes
+/// nothing, exits non-zero, and names the commented lines and `--force`.
+/// `line 1` is what rules out a clap usage error passing for a refusal.
+fn refused(home: &Path, path: &Path, before: &str, args: &[&str]) {
+    let output = run(home, args);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{args:?} succeeded:\n{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(path).expect("read"),
+        before,
+        "{args:?} wrote the file"
+    );
+    assert!(
+        stderr.contains("line 1") && stderr.contains("--force"),
+        "{args:?} must name the commented line and --force:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("# top") && !stderr.contains("# keep me"),
+        "{args:?} echoed comment text:\n{stderr}"
+    );
+}
+
+/// `--force` takes the full rewrite. The flag does not exist on the base,
+/// so these rows go red there on clap's usage error, not on an assertion.
+fn forced(home: &Path, path: &Path, args: &[&str]) -> mcp_gateway::config::Config {
+    let output = run(home, args);
+    assert!(
+        output.status.success(),
+        "{args:?} failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    mcp_gateway::config::Config::load_literal(Some(path)).expect("the rewrite loads")
+}
+
+/// A flow-style file the splice cannot edit, with a comment on line 1.
+const FLOW: &str = "# top\nbackends: {a: {command: x}, b: {command: y}}\n";
+
+fn flow_home() -> (tempfile::TempDir, std::path::PathBuf) {
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
-    mcp_gateway::gateway::test_helpers::write_owner_only(
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, FLOW).expect("write");
+    (home, path)
+}
+
+#[test]
+fn cli_add_that_would_drop_comments_is_refused() {
+    let (home, path) = flow_home();
+    let p = path.to_str().unwrap();
+    refused(
+        home.path(),
         &path,
-        "# top\nbackends: {a: {command: x}}\n",
-    )
-    .expect("write");
-    gateway(home.path(), &["add", "--command", "echo hi", "local"]);
-    let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
+        FLOW,
+        &["add", "--command", "echo hi", "--config", p, "local"],
+    );
+}
+
+#[test]
+fn cli_add_with_force_rewrites() {
+    let (home, path) = flow_home();
+    let p = path.to_str().unwrap();
+    let args = [
+        "add",
+        "--force",
+        "--command",
+        "echo hi",
+        "--config",
+        p,
+        "local",
+    ];
+    let config = forced(home.path(), &path, &args);
     assert!(config.backends.contains_key("a") && config.backends.contains_key("local"));
+}
+
+#[test]
+fn cli_remove_that_would_drop_comments_is_refused() {
+    let (home, path) = flow_home();
+    let p = path.to_str().unwrap();
+    refused(home.path(), &path, FLOW, &["remove", "--config", p, "a"]);
+}
+
+#[test]
+fn cli_remove_with_force_rewrites() {
+    let (home, path) = flow_home();
+    let p = path.to_str().unwrap();
+    let config = forced(
+        home.path(),
+        &path,
+        &["remove", "--force", "--config", p, "a"],
+    );
+    assert!(!config.backends.contains_key("a") && config.backends.contains_key("b"));
+}
+
+/// A block-style file with a comment on line 1. Importing two servers is
+/// more than the one-backend splice can express.
+const NOTED_BLOCK: &str = "# keep me\nbackends:\n  old:\n    command: x\n";
+
+/// Two Claude Code servers for setup and discovery to import.
+fn two_client_servers() -> (tempfile::TempDir, std::path::PathBuf) {
+    let home = tempfile::tempdir().expect("home");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        home.path().join(".claude.json"),
+        serde_json::to_vec(&serde_json::json!({"mcpServers": {
+            "one": {"command": "echo", "args": ["one"]},
+            "two": {"command": "echo", "args": ["two"]},
+        }}))
+        .unwrap(),
+    )
+    .expect("seed client");
+    let path = home.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED_BLOCK).expect("write");
+    (home, path)
+}
+
+#[test]
+fn setup_import_that_would_drop_comments_is_refused() {
+    let (home, path) = two_client_servers();
+    let p = path.to_str().unwrap();
+    refused(
+        home.path(),
+        &path,
+        NOTED_BLOCK,
+        &["setup", "wizard", "--yes", "--output", p],
+    );
+}
+
+#[test]
+fn setup_import_with_force_rewrites() {
+    let (home, path) = two_client_servers();
+    let p = path.to_str().unwrap();
+    let args = ["setup", "wizard", "--yes", "--force", "--output", p];
+    let config = forced(home.path(), &path, &args);
+    for name in ["old", "one", "two"] {
+        assert!(config.backends.contains_key(name), "{name} missing");
+    }
+}
+
+#[test]
+fn discover_write_that_would_drop_comments_is_refused() {
+    let (home, path) = two_client_servers();
+    let p = path.to_str().unwrap();
+    refused(
+        home.path(),
+        &path,
+        NOTED_BLOCK,
+        &["cap", "discover", "--write-config", "--config-path", p],
+    );
+}
+
+#[test]
+fn discover_write_with_force_rewrites() {
+    let (home, path) = two_client_servers();
+    let p = path.to_str().unwrap();
+    let args = [
+        "cap",
+        "discover",
+        "--write-config",
+        "--force",
+        "--config-path",
+        p,
+    ];
+    let config = forced(home.path(), &path, &args);
+    for name in ["old", "one", "two"] {
+        assert!(config.backends.contains_key(name), "{name} missing");
+    }
 }
