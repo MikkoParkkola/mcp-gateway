@@ -291,10 +291,11 @@ fn a_dropped_middle_leaf_leaves_no_fingerprint_across_it() {
 }
 
 /// MIK-7887.RECEIPT.2: retention keeps exactly the source fingerprints whose
-/// k-gram a delivered leaf holds, including one the delivered leaf's own
-/// winnowing did not select, and drops every other.
+/// k-gram a delivered leaf holds, and drops every other. Selection is
+/// context-free (MIK-8083), so each kept one is also a fingerprint of the
+/// delivered leaf itself.
 #[test]
-fn retaining_keeps_a_delivered_kgram_whichever_window_selected_it() {
+fn retaining_keeps_exactly_the_delivered_kgrams() {
     use std::collections::HashSet;
 
     use super::super::collusion::{CollusionDetector, RelayParams};
@@ -306,7 +307,7 @@ fn retaining_keeps_a_delivered_kgram_whichever_window_selected_it() {
             .collect::<Vec<_>>()
             .join(" ")
     };
-    let mut premise = false;
+    let mut kept_any = false;
     for round in 0..20 {
         let (kept_part, gone) = (words(&format!("k{round}x")), words(&format!("g{round}x")));
         let source = format!("{kept_part} {gone}");
@@ -318,16 +319,14 @@ fn retaining_keeps_a_delivered_kgram_whichever_window_selected_it() {
             .into_iter()
             .collect();
         let kgrams: HashSet<u64> = detector.kgram_hashes(&kept_part).into_iter().collect();
-        let minima: HashSet<u64> = detector.fingerprints(&kept_part).into_iter().collect();
+        let own: HashSet<u64> = detector.fingerprints(&kept_part).into_iter().collect();
         for fp in detector.fingerprints(&source) {
             assert_eq!(kept.contains(&fp), kgrams.contains(&fp), "round {round}");
-            premise |= kgrams.contains(&fp) && !minima.contains(&fp);
+            assert_eq!(kgrams.contains(&fp), own.contains(&fp), "round {round}");
+            kept_any |= kept.contains(&fp);
         }
     }
-    assert!(
-        premise,
-        "premise: some kept fingerprint was not a delivered window minimum"
-    );
+    assert!(kept_any, "premise: something delivered was kept");
 }
 
 /// Empty leaves past the cap add no segments: each walk stops once its half
@@ -347,11 +346,9 @@ fn empty_leaves_past_the_cap_add_no_segments() {
     assert_eq!(digest.segment_texts().len(), 2, "the two edge leaves only");
 }
 
-/// MIK-7887.RECEIPT.2: removing a middle leaf splits its run, and the
-/// neighbours re-winnowed can select other minima. Every fingerprint of the
-/// original run whose k-gram is still delivered, inside one leaf or across
-/// adjacent kept short fields, is kept, and no other: none of the removed
-/// text, none across a seam.
+/// `MIK-7887.RECEIPT.2`: removing a middle leaf splits its run. Every original
+/// fingerprint whose k-gram is still delivered, inside one leaf or across
+/// adjacent kept short fields, is kept; none of the removed text or a seam.
 #[test]
 fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
     use std::collections::HashSet;
@@ -360,7 +357,7 @@ fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
     use super::Delivered;
     let detector = CollusionDetector::new(RelayParams::default());
     let fields = |tag: &str| (0..12).map(|i| format!("{tag} f{i}")).collect::<Vec<_>>();
-    let (mut moved, mut moved_together) = (false, false);
+    let (mut kept_any, mut kept_together) = (false, false);
     for round in 0..20 {
         let (left, right) = (fields(&format!("l{round}")), fields(&format!("r{round}")));
         let gone = format!("removed paragraph {round} ").repeat(8);
@@ -407,18 +404,21 @@ fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
             .collect();
         for fp in &original {
             assert_eq!(kept.contains(fp), allowed.contains(fp), "round {round}");
-            moved |= allowed.contains(fp) && !alone.contains(fp);
-            moved_together |= together.contains(fp) && !alone.contains(fp);
+            // Context-free selection (MIK-8083): a delivered k-gram is a
+            // fingerprint of its kept run as well.
+            assert_eq!(allowed.contains(fp), alone.contains(fp), "round {round}");
+            kept_any |= kept.contains(fp);
+            kept_together |= together.contains(fp) && kept.contains(fp);
         }
         assert!(
             kept.iter().all(|fp| allowed.contains(fp)),
             "round {round}: kept text never delivered"
         );
     }
-    assert!(moved, "premise: a split moved some minimum");
+    assert!(kept_any, "premise: something delivered was kept");
     assert!(
-        moved_together,
-        "premise: a split moved a run-together minimum"
+        kept_together,
+        "premise: a fingerprint only the run-together form carries was kept"
     );
 }
 

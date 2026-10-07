@@ -114,3 +114,22 @@ fn a_copy_the_caller_never_received_is_still_a_relay() {
         .collect();
     assert!(missed.is_empty(), "relays not reported: {missed:?}");
 }
+
+/// MIK-8083: holding the start of a source's text excuses only that start: a
+/// short unreceived suffix forwarded after it is still a relay (the hole a
+/// proximity-based excuse would open).
+#[test]
+fn a_held_prefix_never_excuses_an_unreceived_suffix() {
+    let fw = observing();
+    let missed: Vec<usize> = (0..TEXTS / 10)
+        .filter(|&i| {
+            let (prefix, tool) = (text(i)[..200].to_string(), format!("read{i}"));
+            let whole =
+                format!("{prefix} s{i}k 7f3a9c1e5b2d8f4a6c0e9b7d3f1a5c8e2b4d6f0a9e1c3b5d7f");
+            deliver(&fw, &format!("a{i}"), &tool, &whole, false);
+            deliver(&fw, &format!("h{i}"), &tool, &prefix, false);
+            !reported(&fw, &format!("h{i}"), &whole)
+        })
+        .collect();
+    assert!(missed.is_empty(), "suffixes not reported: {missed:?}");
+}

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
 
-use super::{CollusionDetector, MAX_SOURCE_FINGERPRINTS, RelayAction, RelayParams, W, winnow};
+use super::{CollusionDetector, MAX_SOURCE_FINGERPRINTS, RelayAction, RelayParams, SAMPLE, sample};
 
 const A: &str = "principal-a";
 const B: &str = "principal-b";
@@ -55,15 +55,6 @@ fn text(seed: u64, words: usize) -> String {
 
 fn secret() -> String {
     text(7, 250)
-}
-
-/// First offset from 200 where a 63- and a 79-char slice neither start nor
-/// end on a space, so normalization cannot shorten them.
-fn solid_start(s: &str) -> usize {
-    let b = s.as_bytes();
-    (200..s.len() - 79)
-        .find(|&i| b[i] != b' ' && b[i + 62] != b' ' && b[i + 78] != b' ')
-        .unwrap()
 }
 
 fn shared(d: &CollusionDetector, a: &str, b: &str) -> usize {
@@ -120,44 +111,33 @@ fn copy_interleaved_with_stripped_characters_detected() {
     }
 }
 
-/// The winnowing guarantee itself: every 63-char span of a document shares a
-/// fingerprint with it. A fixed stride or a global bottom-N sample leaves
-/// spans with none.
+/// Context-free selection (MIK-8083): a k-gram is kept by its own hash, so
+/// every fingerprint of a span is one of the whole document's, whatever the
+/// span's edges cut. Winnowing kept a span's edge minima that the document
+/// did not, and a same-source excuse then missed.
 #[test]
-fn every_63_char_span_shares_a_fingerprint() {
+fn every_span_keeps_only_the_documents_fingerprints() {
     let d = detector();
-    // Several times more k-grams than the 1,024-fingerprint source cap, so a
-    // global bottom-1024 sample cannot reach every span.
     let s = text(7, 2_000);
     let all: HashSet<u64> = d.fingerprints(&s).into_iter().collect();
     assert!(!all.is_empty());
-    for start in 0..=s.len() - 63 {
-        let span = &s[start..start + 63];
-        // Normalization trims edge spaces, which would shorten the span.
-        if span.starts_with(' ') || span.ends_with(' ') {
-            continue;
+    for start in (0..=s.len() - 120).step_by(7) {
+        let span = &s[start..start + 120];
+        for fp in d.fingerprints(span) {
+            assert!(
+                all.contains(&fp),
+                "span at {start} kept {fp} the document did not"
+            );
         }
-        let span = d.fingerprints(span);
-        assert!(
-            span.iter().any(|f| all.contains(f)),
-            "span at {start} shares no fingerprint"
-        );
     }
 }
 
-/// The same guarantee on controlled hash values, independent of the key:
-/// every window's minimum is kept. 1,100 low hashes then a high run: a global
-/// bottom-N for any N up to 1,100 (so the 1,024 source cap included) drops
-/// every high minimum, and a fixed stride skips positions.
+/// The selection on controlled hashes, independent of the key: exactly the
+/// hashes `0 mod SAMPLE`, each once, in position order.
 #[test]
-fn winnow_keeps_every_window_minimum() {
-    let hashes: Vec<u64> = (0..1_100).chain((10_000..10_064).rev()).collect();
-    let kept: HashSet<u64> = winnow(&hashes).into_iter().collect();
-    for window in hashes.windows(W) {
-        let min = window.iter().min().unwrap();
-        assert!(kept.contains(min), "window minimum {min} dropped");
-    }
-    assert!(kept.iter().any(|&h| h >= 10_000));
+fn sample_keeps_each_multiple_once_in_order() {
+    let hashes = [SAMPLE, 1, 2 * SAMPLE, SAMPLE, 3, 0, SAMPLE + 1, 2 * SAMPLE];
+    assert_eq!(sample(&hashes), vec![SAMPLE, 2 * SAMPLE, 0]);
 }
 
 // Row 4 ────────────────────────────────────────────────────────────────────
@@ -219,20 +199,17 @@ fn common_content_skipped() {
 fn one_match_not_flagged() {
     let d = detector();
     let now = Instant::now();
-    let s = secret();
-    // k + w - 1 = 63 chars: 16 k-grams, one winnowing window, one fingerprint.
-    let at = solid_start(&s);
-    let excerpt = &s[at..at + 63];
-    assert_eq!(d.fingerprints(excerpt).len(), 1, "premise: one fingerprint");
-    assert_eq!(
-        shared(&d, &s, excerpt),
-        1,
-        "premise: shared with the source"
-    );
+    // Space-free, so each added char adds one k-gram and the shared count
+    // steps by at most one: the excerpt passes through exactly one, then two.
+    let s = secret().replace(' ', "");
+    let at = 200;
+    let first = |n| (at + 48..s.len()).find(|&end| shared(&d, &s, &s[at..end]) == n);
+    let one = first(1).expect("premise: one shared fingerprint");
+    let two = first(2).expect("premise: two shared fingerprints");
     d.record_delivery_at(T, A, true, &s, now);
-    assert!(d.check_egress_at(B, U, excerpt, now).is_none());
-    // Control: 79 chars hold two disjoint 16-hash windows, so two matches.
-    assert!(d.check_egress_at(B, U, &s[at..at + 79], now).is_some());
+    assert!(d.check_egress_at(B, U, &s[at..one], now).is_none());
+    // Control: the first excerpt sharing two is a finding.
+    assert!(d.check_egress_at(B, U, &s[at..two], now).is_some());
 }
 
 #[test]
@@ -243,9 +220,9 @@ fn two_matches_flagged() {
     // normalization and the count can be walked one char at a time.
     let s = secret().replace(' ', "");
     let at = 200;
-    let end = (at + 64..=at + 79)
+    let end = (at + 48..s.len())
         .find(|&end| shared(&d, &s, &s[at..end]) == 2)
-        .expect("premise: two shared fingerprints by 79 chars");
+        .expect("premise: two shared fingerprints");
     d.record_delivery_at(T, A, true, &s, now);
     let finding = d
         .check_egress_at(B, U, &s[at..end], now)
