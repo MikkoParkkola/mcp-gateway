@@ -443,3 +443,28 @@ async fn a_recovery_whose_commit_fails_is_unavailable() {
     );
     assert_eq!(outcome, Err(RecoveryRefusal::Unavailable));
 }
+
+/// `MIK-7993` (r2 CRITICAL): a result an owner's read recovers is stored
+/// with the record of what the gateway wrote while processing it (here the
+/// observe-mode anomaly findings), so a later read's receipt leaves exactly
+/// those out.
+#[tokio::test]
+async fn a_recovered_result_keeps_the_gateways_write_record() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let (committed, _directory) = crate::gateway::meta_mcp::invoke::relay::collecting(
+        recover_committed(Reply::CompletedSecret, meta),
+    )
+    .await;
+    let wire = serde_json::to_value(committed.task.wire()).expect("serializes");
+    assert!(
+        wire.to_string().contains("_security_findings"),
+        "premise: the gateway annotated the recovered result: {wire}"
+    );
+    let stored = serde_json::to_value(&committed.gateway_writes).expect("serializes");
+    assert!(
+        stored.as_array().is_some_and(|entries| entries
+            .iter()
+            .any(|entry| entry["dest"] == json!(["_security_findings"]))),
+        "the recovered row did not record the gateway's findings: {stored}"
+    );
+}
