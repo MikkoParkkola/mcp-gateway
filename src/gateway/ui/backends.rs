@@ -32,8 +32,10 @@ use super::{
     is_admin,
 };
 use crate::config::TransportConfig;
-use crate::config_persistence::{CommentLoss, Unwritten};
-use crate::config_reload::{ConfigMutation, ConfigWriteError, mutate_config_and_reload_with};
+use crate::config_persistence::CommentLoss;
+use crate::config_reload::{
+    ConfigMutation, ConfigWriteError, MutateError, mutate_config_and_reload_with,
+};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::registry::server_registry;
@@ -460,18 +462,18 @@ async fn update_backend(
 }
 
 /// The answer to a backend write that did not happen.
-fn unwritten(e: Unwritten) -> axum::response::Response {
+fn unwritten(e: MutateError) -> axum::response::Response {
     let code = match &e {
         // Nothing was written, and saving it would drop the operator's comments.
-        Unwritten::CommentLoss(_) => StatusCode::CONFLICT,
+        MutateError::CommentLoss(_) => StatusCode::CONFLICT,
         // A busy gateway has written nothing, so this is a retry-me, not a
         // failure. 500 would tell the operator their edit broke something.
-        Unwritten::Write(ConfigWriteError::Busy) => StatusCode::SERVICE_UNAVAILABLE,
-        Unwritten::Write(ConfigWriteError::Failed(_)) => StatusCode::INTERNAL_SERVER_ERROR,
+        MutateError::Write(ConfigWriteError::Busy) => StatusCode::SERVICE_UNAVAILABLE,
+        MutateError::Write(ConfigWriteError::Failed(_)) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     let message = match e {
-        Unwritten::CommentLoss(message) => message,
-        Unwritten::Write(e) => e.to_string(),
+        MutateError::CommentLoss(message) => message,
+        MutateError::Write(e) => e.to_string(),
     };
     flat_error(code, message).into_response()
 }

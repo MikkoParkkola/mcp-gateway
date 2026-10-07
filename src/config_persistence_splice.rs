@@ -415,7 +415,7 @@ pub(super) fn changed_backend(before: &Config, config: &Config) -> Option<String
             config
                 .backends
                 .get(*name)
-                .is_none_or(|c| value(*b) != value(c))
+                .is_none_or(|c| value(b) != value(c))
         })
         .map(|(name, _)| name)
         .chain(

@@ -40,6 +40,47 @@ impl From<String> for ConfigWriteError {
     }
 }
 
+/// Why a guarded read-modify-write did not happen: a [`ConfigWriteError`],
+/// or, under [`CommentLoss::Refuse`], a write that would drop the file's
+/// comments.
+#[derive(Debug)]
+pub(crate) enum MutateError {
+    Write(ConfigWriteError),
+    /// The message names the comments a full rewrite would drop.
+    CommentLoss(String),
+}
+
+impl From<ConfigWriteError> for MutateError {
+    fn from(e: ConfigWriteError) -> Self {
+        Self::Write(e)
+    }
+}
+
+impl From<String> for MutateError {
+    fn from(message: String) -> Self {
+        Self::Write(ConfigWriteError::Failed(message))
+    }
+}
+
+impl From<Unwritten> for MutateError {
+    fn from(e: Unwritten) -> Self {
+        match e {
+            Unwritten::Failed(message) => message.into(),
+            Unwritten::CommentLoss(message) => Self::CommentLoss(message),
+        }
+    }
+}
+
+impl From<MutateError> for ConfigWriteError {
+    /// Only [`CommentLoss::Refuse`] refuses, and no public caller asks for it.
+    fn from(e: MutateError) -> Self {
+        match e {
+            MutateError::Write(e) => e,
+            MutateError::CommentLoss(message) => Self::Failed(message),
+        }
+    }
+}
+
 /// Serialize `config`, write it atomically, then trigger hot-reload when a
 /// reload context is available.
 ///
@@ -128,7 +169,7 @@ pub(crate) async fn mutate_config_and_reload_with<T, E, F>(
     reload_context: Option<&ReloadContext>,
     mode: CommentLoss,
     mutate: F,
-) -> std::result::Result<ConfigMutation<T, E>, Unwritten>
+) -> std::result::Result<ConfigMutation<T, E>, MutateError>
 where
     F: FnOnce(&mut Config) -> std::result::Result<T, E>,
 {

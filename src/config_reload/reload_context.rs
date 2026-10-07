@@ -12,7 +12,7 @@ use std::fmt::Write as _;
 use crate::Result;
 use crate::backend::BackendRegistry;
 use crate::config::{Config, EnvOverlay, LiveEnv, ResolvedEnvFiles};
-use crate::config_persistence::{CommentLoss, Unwritten};
+use crate::config_persistence::CommentLoss;
 use crate::security::{posture, ssrf::DestinationPolicy};
 
 use super::{
@@ -500,7 +500,7 @@ impl ReloadContext {
         wait: Duration,
         mode: CommentLoss,
         mutate: F,
-    ) -> std::result::Result<ConfigMutation<T, E>, Unwritten>
+    ) -> std::result::Result<ConfigMutation<T, E>, super::write::MutateError>
     where
         F: FnOnce(&mut Config) -> std::result::Result<T, E>,
     {

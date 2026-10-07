@@ -74,7 +74,9 @@ pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
 pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
     write_config_with(path, config, CommentLoss::Rewrite)
         .map(|_| ())
-        .map_err(|e| crate::config_reload::ConfigWriteError::from(e).to_string())
+        .map_err(|e| match e {
+            Unwritten::Failed(message) | Unwritten::CommentLoss(message) => message,
+        })
 }
 
 #[path = "config_persistence_splice.rs"]
@@ -93,30 +95,15 @@ pub(crate) enum CommentLoss {
 /// A config write that did not happen.
 #[derive(Debug)]
 pub(crate) enum Unwritten {
-    Write(crate::config_reload::ConfigWriteError),
+    /// Validation, serialisation or I/O failed; the message says which.
+    Failed(String),
     /// Refused under [`CommentLoss::Refuse`]; the message names the comments.
     CommentLoss(String),
 }
 
-impl From<crate::config_reload::ConfigWriteError> for Unwritten {
-    fn from(e: crate::config_reload::ConfigWriteError) -> Self {
-        Self::Write(e)
-    }
-}
-
 impl From<String> for Unwritten {
     fn from(message: String) -> Self {
-        Self::Write(message.into())
-    }
-}
-
-impl From<Unwritten> for crate::config_reload::ConfigWriteError {
-    /// Only [`CommentLoss::Refuse`] refuses, and no public caller asks for it.
-    fn from(e: Unwritten) -> Self {
-        match e {
-            Unwritten::Write(e) => e,
-            Unwritten::CommentLoss(message) => Self::Failed(message),
-        }
+        Self::Failed(message)
     }
 }
 
