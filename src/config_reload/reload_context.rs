@@ -517,7 +517,7 @@ impl ReloadContext {
         let outcome = self
             .reload_outcome_locked()
             .await
-            .map_err(|e| format!("Config written but reload failed: {e}"))?;
+            .map_err(|e| super::write::reload_failure(&e, mode))?;
         Ok(ConfigMutation::Applied(value, Some(outcome)))
     }
 

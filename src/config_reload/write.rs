@@ -161,18 +161,28 @@ where
         .map_err(Into::into)
 }
 
-/// A failed load as the caller may show it. The loader's error can quote
-/// the offending value, which may be a secret, so under
+/// An error's detail as the caller may show it. A load or reload error can
+/// quote the offending value, which may be a secret, so under
 /// [`CommentLoss::Refuse`] (the web UI) the detail is withheld.
-pub(super) fn load_failure(path: &Path, e: &crate::Error, mode: CommentLoss) -> String {
+fn detail(e: &dyn std::fmt::Display, mode: CommentLoss) -> String {
     match mode {
-        CommentLoss::Rewrite => format!("Failed to load {}: {e}", path.display()),
-        CommentLoss::Refuse => format!(
-            "Failed to load {}: the file does not parse or validate (detail withheld: \
-             it can quote a configured value)",
-            path.display()
-        ),
+        CommentLoss::Rewrite => e.to_string(),
+        CommentLoss::Refuse => {
+            "the file does not parse or validate (detail withheld: it can quote a \
+             configured value)"
+                .to_owned()
+        }
     }
+}
+
+/// A failed load, with [`detail`] by `mode`.
+pub(super) fn load_failure(path: &Path, e: &dyn std::fmt::Display, mode: CommentLoss) -> String {
+    format!("Failed to load {}: {}", path.display(), detail(e, mode))
+}
+
+/// A write whose reload failed, with [`detail`] by `mode`.
+pub(super) fn reload_failure(e: &dyn std::fmt::Display, mode: CommentLoss) -> String {
+    format!("Config written but reload failed: {}", detail(e, mode))
 }
 
 /// [`mutate_config_and_reload`] in `mode`: the web UI refuses a write that
@@ -203,5 +213,24 @@ where
             Ok(ConfigMutation::Applied(value, None))
         }
         Err(rejection) => Ok(ConfigMutation::Rejected(rejection)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CommentLoss, load_failure, reload_failure};
+
+    #[test]
+    fn the_web_ui_never_sees_a_loader_detail() {
+        let quoting = "invalid type: found string \"#secret\"";
+        let path = std::path::Path::new("gateway.yaml");
+        for message in [
+            load_failure(path, &quoting, CommentLoss::Refuse),
+            reload_failure(&quoting, CommentLoss::Refuse),
+        ] {
+            assert!(!message.contains("#secret"), "{message}");
+        }
+        // The CLI keeps the detail: its user can read the file anyway.
+        assert!(reload_failure(&quoting, CommentLoss::Rewrite).contains("#secret"));
     }
 }
