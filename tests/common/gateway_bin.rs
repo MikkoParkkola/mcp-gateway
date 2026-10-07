@@ -46,6 +46,16 @@ pub fn command(home: &Path, inherit: Inherit) -> Command {
     isolated(Command::new(path()), home, inherit)
 }
 
+/// As [`command`], but `HOME` and `USERPROFILE` name a second temporary
+/// directory, `env_home`, while the debug override still names `home`. A test
+/// that the gateway resolves its home through the override, never through
+/// `HOME`, needs the two to differ; neither is the real home (MIK-8001).
+pub fn command_with_env_home(home: &Path, env_home: &Path, inherit: Inherit) -> Command {
+    let mut command = command(home, inherit);
+    command.env("HOME", env_home).env("USERPROFILE", env_home);
+    command
+}
+
 /// The binary run through `wrapper` (for example `sh -c '...; exec "$0" "$@"'`),
 /// isolated the same way: the wrapper's child inherits it.
 pub fn wrapped(wrapper: &[&str], home: &Path, inherit: Inherit) -> Command {

@@ -11,7 +11,10 @@
 //! Debug builds only: release builds compile the override out on purpose.
 #![cfg(debug_assertions)]
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
 
 // Port 1 refuses at once, so the call fails offline after the executor
 // (and its token storage) is built.
@@ -31,15 +34,16 @@ fn the_oauth_token_directory_follows_the_test_home() {
     let file = fixture_home.path().join("home_probe.yaml");
     std::fs::write(&file, CAPABILITY).expect("write capability");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
-        .env("HOME", env_home.path())
-        .env("USERPROFILE", env_home.path())
-        .env("MCP_GATEWAY_TEST_HOME_DIR", fixture_home.path())
-        .stdin(Stdio::null())
-        .args(["cap", "test"])
-        .arg(&file)
-        .output()
-        .expect("run mcp-gateway");
+    let out = gateway_bin::command_with_env_home(
+        fixture_home.path(),
+        env_home.path(),
+        gateway_bin::Inherit::Environment,
+    )
+    .stdin(Stdio::null())
+    .args(["cap", "test"])
+    .arg(&file)
+    .output()
+    .expect("run mcp-gateway");
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
