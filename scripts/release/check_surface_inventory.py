@@ -698,6 +698,7 @@ class Row:
     surface: str
     id: str
     cls: str
+    reason: str
     migration: str
     defined: str
     lineno: int
@@ -732,7 +733,7 @@ def parse_doc(text: str) -> list[Row]:
             return c[i] if i < len(c) else ""
 
         item = re.sub(r"^`(.*)`$", r"\1", get("item"))
-        rows.append(Row(surface, item, get("class"), get("migration"), get("defined at").strip("`"), n))
+        rows.append(Row(surface, item, get("class"), get("reason"), get("migration"), get("defined at").strip("`"), n))
     return rows
 
 
@@ -749,6 +750,8 @@ def check(doc_text: str, extracted: dict[str, list[Entry]]) -> list[str]:
         by_surface[r.surface][r.id] = r
         if r.cls not in CLASSES:
             errors.append(f"line {r.lineno}: {r.id!r} has class {r.cls!r}, want one of {sorted(CLASSES)}")
+        elif r.reason in {"", "-"}:
+            errors.append(f"line {r.lineno}: {r.id!r} has no reason")
         elif r.cls != "KEEP" and r.migration in {"", "-"}:
             errors.append(f"line {r.lineno}: {r.cls} item {r.id!r} has no migration story")
     for surface in sorted(set(extracted) - set(SURFACES)):

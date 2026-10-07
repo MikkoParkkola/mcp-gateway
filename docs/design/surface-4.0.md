@@ -188,6 +188,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | Item | Decision |
 |---|---|
 | A2A | Operator decision 2026-10-07: the outbound A2A bridge is finished for 4.0 (MIK-8063). `backends.<name>.a2a_url` is KEEP; `a2a_agent_card_path` is a hidden key defaulting to the spec's well-known path; the `a2a` module and default feature stay. Inbound A2A is out of scope. |
+| A2A card path default | Known follow-up: A2A 1.0, pinned in a2a-1's MIK-8063 design (round 2), puts the card at `/.well-known/agent-card.json`; the 0.3 path `/.well-known/agent.json` is the current default. a2a-1's PR updates the `a2a_agent_card_path` row and the default. |
 | `meta_mcp.cache_tools` | REMOVE (MIK-8064). |
 | Capability `trawl_extract` and the `cisco_scanner` operation `scan_mcp_server` | Held until 4.1 (MIK-7788): the gateway cannot confine where these tools connect. Capability files are outside the five surfaces, so they have no table row. Class INTERNAL: the definitions stay in the tree, refuse to run and are not offered to clients; they leave the user docs until 4.1. |
 

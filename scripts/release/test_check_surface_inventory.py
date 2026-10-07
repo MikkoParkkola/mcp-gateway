@@ -30,7 +30,7 @@ EXTRACTED = {"env": [inv.Entry("A", "src/a.rs", 1), inv.Entry("B", "src/b.rs", 9
 
 FILLER = {s: [inv.Entry(f"x-{s}", "src/x.rs", 1)] for s in inv.SURFACES if s != "env"}
 FILLER_ROWS = "".join(
-    f"## Surface: {s}\n| Item | Class | Migration | Defined at |\n|---|---|---|---|\n| `x-{s}` | KEEP | - | src/x.rs:1 |\n"
+    f"## Surface: {s}\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n| `x-{s}` | KEEP | filler | - | src/x.rs:1 |\n"
     for s in FILLER
 )
 
@@ -43,6 +43,13 @@ def check(doc: str, extracted=None) -> list[str]:
 
 def test_complete_doc_passes() -> None:
     assert check(DOC) == [], check(DOC)
+
+
+def test_blank_or_missing_reason_fails() -> None:
+    blank = DOC.replace("| `A` | KEEP | needed |", "| `A` | KEEP |  |")
+    assert any("'A' has no reason" in e for e in check(blank)), check(blank)
+    no_col = DOC.replace("| Item | Class | Reason | Migration |", "| Item | Class | Migration |").replace(" needed |", "").replace(" test hook |", "")
+    assert any("has no reason" in e for e in check(no_col)), check(no_col)
 
 
 def test_missing_row_fails() -> None:
