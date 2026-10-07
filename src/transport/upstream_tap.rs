@@ -430,6 +430,13 @@ pub(crate) trait UpstreamListen: Send + Sync {
 
     /// The legacy peer's out-of-request notifications.
     async fn unsolicited(self: std::sync::Arc<Self>) -> Result<FrameStream, Refused>;
+
+    /// The HTTP transport this connection detected, read live: `Some(true)`
+    /// for Streamable HTTP, `Some(false)` for the SSE handshake, `None`
+    /// before it is known and for every other transport (MIK-7969).
+    fn detected_streamable(&self) -> Option<bool> {
+        None
+    }
 }
 
 #[cfg(test)]

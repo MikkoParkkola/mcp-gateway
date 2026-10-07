@@ -43,6 +43,7 @@ impl MetaMcp {
             session_id,
             api_key_name: None,
             trace_id: "",
+            caller_key: None,
         })?;
         // #2445: a withheld tool is refused here, ahead of every replay layer.
         let backend = self.backends.get(server);

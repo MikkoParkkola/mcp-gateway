@@ -273,3 +273,143 @@ async fn an_early_exit_logs_its_class_and_needle() {
     assert!(!line.contains("stderr="), "{line}");
     assert!(!text.contains("secret-path-7978"), "{text}");
 }
+
+/// MIK-7978 STDERR.3: the sanitized tail is kept for the doctor's accessor,
+/// with its credential masked, while the error and the log stay free of it.
+#[tokio::test]
+async fn an_early_exit_keeps_a_sanitized_tail_for_the_doctor_only() {
+    let (captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
+    let t = transport(
+        "echo \"Error: Cannot find module tail-7978\" >&2; echo \"Authorization: Bearer tok-7978\" >&2; exit 3",
+        &[],
+    );
+    let err = tokio::time::timeout(ROW_LIMIT, t.start())
+        .await
+        .expect("start must fail fast")
+        .expect_err("an early exit");
+    let shown = t.last_failure_stderr();
+    assert_eq!(
+        shown.first().map(String::as_str),
+        Some("Error: Cannot find module tail-7978"),
+        "{shown:?}"
+    );
+    assert!(shown.iter().all(|l| !l.contains("tok-7978")), "{shown:?}");
+    // The capture saw the exit's record, so its silence below means something.
+    assert!(
+        captured.text().contains("missing_module"),
+        "{}",
+        captured.text()
+    );
+    for text in [err.to_string(), format!("{err:?}"), captured.text()] {
+        assert!(!text.contains("tail-7978"), "stderr escaped: {text}");
+        assert!(!text.contains("tok-7978"), "stderr escaped: {text}");
+    }
+}
+
+/// STDERR.3: a later start clears the previous exit's tail.
+#[tokio::test]
+async fn a_new_start_clears_the_previous_tail() {
+    let dir = tempfile::tempdir().expect("dir");
+    let flag = dir.path().join("second");
+    let t = transport(
+        &format!(
+            "[ -e {f} ] && exit 4; touch {f}; echo \"first-run-7978\" >&2; exit 3",
+            f = flag.display()
+        ),
+        &[],
+    );
+    let _ = start_err(&t).await;
+    assert_eq!(t.last_failure_stderr(), vec!["first-run-7978".to_string()]);
+    let _ = start_err(&t).await;
+    assert!(
+        t.last_failure_stderr().is_empty(),
+        "{:?}",
+        t.last_failure_stderr()
+    );
+}
+
+/// STDERR.3: a key block longer than the tail loses its BEGIN line to
+/// eviction, and its body lines stay masked anyway.
+#[tokio::test]
+async fn a_block_longer_than_the_tail_stays_masked() {
+    let t = transport(
+        "echo \"-----BEGIN EXAMPLE BLOCK-----\" >&2; \
+         for i in $(seq 25); do echo \"MIIEvQIBADANBg/kqhkiG9w0BAQEFAASCBKcwggSjAgEA/AoIB$i\" >&2; done; \
+         echo \"AQIDBAUGBwgJCgsMDQ4PEBE=\" >&2; echo \"-----END EXAMPLE BLOCK-----\" >&2; exit 3",
+        &[],
+    );
+    let _ = start_err(&t).await;
+    let shown = t.last_failure_stderr();
+    assert_eq!(shown.len(), 20, "{shown:?}");
+    assert_eq!(
+        shown.last().map(String::as_str),
+        Some("-----END EXAMPLE BLOCK-----")
+    );
+    assert!(shown[..19].iter().all(|l| l == "[masked]"), "{shown:?}");
+}
+
+/// The tail after `pad` (zeros with no newline) and then a key block whose
+/// `-----BEGIN` lands on the same line, past what the capture stores.
+async fn tail_after_a_begin_behind(pad: &str) -> Vec<String> {
+    let t = transport(
+        &format!(
+            "{pad}; echo \"-----BEGIN EXAMPLE BLOCK-----\" >&2; \
+             echo \"MIIEvQIBADANBg/kqhkiG9w0BAQEFAASCBKcwggSjAgEA/AoIB\" >&2; \
+             echo \"-----END EXAMPLE BLOCK-----\" >&2; exit 3"
+        ),
+        &[],
+    );
+    let _ = start_err(&t).await;
+    t.last_failure_stderr()
+}
+
+/// STDERR.3: a `-----BEGIN` past the line limit is skipped unstored, and
+/// still opens the block, so the body line after it is masked.
+#[tokio::test]
+async fn a_begin_past_the_line_limit_still_masks_the_body() {
+    // 4,200 zeros, then the marker.
+    let shown = tail_after_a_begin_behind(
+        "i=0; while [ $i -lt 84 ]; do printf %050d 0 >&2; i=$((i+1)); done",
+    )
+    .await;
+    assert_eq!(shown.len(), 3, "{shown:?}");
+    assert_eq!(shown[1], "[masked]", "{shown:?}");
+}
+
+/// STDERR.3: a `-----BEGIN` cut in two by the line limit still opens the
+/// block.
+#[tokio::test]
+async fn a_begin_split_by_the_line_limit_still_masks_the_body() {
+    // 4,091 zeros: the limit (4,096) falls inside the marker.
+    let shown = tail_after_a_begin_behind(
+        "i=0; while [ $i -lt 81 ]; do printf %050d 0 >&2; i=$((i+1)); done; printf %041d 0 >&2",
+    )
+    .await;
+    assert_eq!(shown.len(), 3, "{shown:?}");
+    assert_eq!(shown[1], "[masked]", "{shown:?}");
+}
+
+/// STDERR.3: a start that cannot spawn shows no older exit's tail.
+#[tokio::test]
+async fn a_spawn_failure_clears_the_previous_tail() {
+    let dir = tempfile::tempdir().expect("dir");
+    let cwd = dir.path().join("cwd");
+    std::fs::create_dir(&cwd).expect("cwd");
+    let t = StdioTransport::new(
+        "sh -c 'echo \"first-run-7980\" >&2; exit 3'",
+        HashMap::new(),
+        Some(cwd.display().to_string()),
+        REQUEST_TIMEOUT,
+        None,
+    );
+    let _ = start_err(&t).await;
+    assert_eq!(t.last_failure_stderr(), vec!["first-run-7980".to_string()]);
+    std::fs::remove_dir(&cwd).expect("remove cwd");
+    let spawn = tokio::time::timeout(ROW_LIMIT, t.start()).await;
+    assert!(matches!(spawn, Ok(Err(_))), "the spawn must fail");
+    assert!(
+        t.last_failure_stderr().is_empty(),
+        "{:?}",
+        t.last_failure_stderr()
+    );
+}

@@ -74,6 +74,49 @@ pub(super) async fn status_error(response: Response, endpoint: &str) -> Error {
 }
 
 impl CapabilityExecutor {
+    /// Attach the request body for POST/PUT/PATCH methods.
+    ///
+    /// When `config.body_content_type` is `"text/plain"` and a `body` template
+    /// is present the template is substituted and the resulting string is sent
+    /// verbatim (no JSON encoding).  This is required for databases such as
+    /// `SurrealDB` whose `/sql` endpoint only accepts raw SQL as `text/plain`.
+    pub(super) fn attach_request_body(
+        &self,
+        mut request: reqwest::RequestBuilder,
+        config: &RestConfig,
+        params: &Value,
+        body_nulls: &[String],
+    ) -> Result<reqwest::RequestBuilder> {
+        let use_plain_text = config.body_content_type.eq_ignore_ascii_case("text/plain");
+
+        if let Some(ref body_template) = config.body {
+            if use_plain_text {
+                // Substitute into the template and send as a raw string body.
+                // The template must be a JSON string value; after substitution
+                // we send the string contents (not JSON-encoded).
+                let raw = match body_template {
+                    Value::String(s) => self.substitute_string(s, params)?,
+                    other => self
+                        .substitute_value(other, params, KeptNulls::None)?
+                        .to_string(),
+                };
+                request = request
+                    .header(reqwest::header::CONTENT_TYPE, "text/plain")
+                    .body(raw);
+            } else {
+                let params = with_nulls(params, body_nulls);
+                let kept = KeptNulls::Named(body_nulls);
+                let body = self.substitute_value(body_template, &params, kept)?;
+                request = request.json(&body);
+            }
+        } else if !params.is_null() && params.as_object().is_some_and(|o| !o.is_empty()) {
+            // No body template — use input params directly as body.
+            // Enables LLM APIs where the input IS the request body.
+            request = request.json(params);
+        }
+        Ok(request)
+    }
+
     /// Handle an API response.
     ///
     /// Supports JSON (default) and XML response formats.  The format is
@@ -276,15 +319,20 @@ impl CapabilityExecutor {
     /// A pure placeholder string like `"{priority}"` is replaced by the
     /// original typed value (integer, boolean, etc.) rather than its string
     /// representation. Null and unresolved placeholders are dropped from
-    /// object fields.
-    pub(super) fn substitute_value(&self, template: &Value, params: &Value) -> Result<Value> {
+    /// object fields, except a null `kept` names.
+    pub(super) fn substitute_value(
+        &self,
+        template: &Value,
+        params: &Value,
+        kept: KeptNulls<'_>,
+    ) -> Result<Value> {
         match template {
             Value::String(s) => self.substitute_string_value(s, params),
-            Value::Object(map) => self.substitute_object_value(map, params),
+            Value::Object(map) => self.substitute_object_value(map, params, kept),
             Value::Array(arr) => {
                 let result: Result<Vec<Value>> = arr
                     .iter()
-                    .map(|v| self.substitute_value(v, params))
+                    .map(|v| self.substitute_value(v, params, kept))
                     .collect();
                 Ok(Value::Array(result?))
             }
@@ -436,6 +484,7 @@ impl CapabilityExecutor {
         &self,
         map: &serde_json::Map<String, Value>,
         params: &Value,
+        kept: KeptNulls<'_>,
     ) -> Result<Value> {
         let mut result = serde_json::Map::new();
         for (k, v) in map {
@@ -443,10 +492,11 @@ impl CapabilityExecutor {
             // scan: a filled value is never dropped for looking like one.
             let (substituted, unfilled) = match v {
                 Value::String(s) => self.substitute_string_value_tracked(s, params)?,
-                _ => (self.substitute_value(v, params)?, false),
+                _ => (self.substitute_value(v, params, kept)?, false),
             };
-            // Skip null values and unresolved placeholders
-            if substituted.is_null() {
+            // Skip null values, except a null `kept` names (MIK-7970), and
+            // unresolved placeholders.
+            if substituted.is_null() && !v.as_str().is_some_and(|s| kept.keeps(s)) {
                 continue;
             }
             if unfilled
@@ -550,6 +600,62 @@ pub(super) fn with_path_defaults<'a>(
     merged.map_or(std::borrow::Cow::Borrowed(params), |map| {
         std::borrow::Cow::Owned(Value::Object(map))
     })
+}
+
+/// Which nulls filling a pure placeholder an object keeps (MIK-7970).
+#[derive(Clone, Copy)]
+pub(super) enum KeptNulls<'a> {
+    /// None: a plain-text body, where a null is not given.
+    None,
+    /// A JSON body can carry null: the caller's explicit nulls for these
+    /// names, each one its property's schema admits.
+    Named(&'a [String]),
+}
+
+impl KeptNulls<'_> {
+    /// Whether `template` is a pure placeholder for a kept name.
+    fn keeps(self, template: &str) -> bool {
+        let template = template.trim();
+        match self {
+            Self::None => false,
+            Self::Named(names) => {
+                is_pure_placeholder(template)
+                    && names.iter().any(|n| *n == template[1..template.len() - 1])
+            }
+        }
+    }
+}
+
+/// MIK-7970: the names the caller sent as an explicit null that the
+/// property's schema admits. Any other null is not given, as the validator
+/// treats it; static params and schema defaults never name a null here.
+pub(super) fn admitted_nulls(input_schema: &Value, caller: &Value) -> Vec<String> {
+    let properties = input_schema.get("properties");
+    caller.as_object().map_or_else(Vec::new, |caller| {
+        caller
+            .iter()
+            .filter(|(name, value)| {
+                value.is_null()
+                    && super::super::schema_validator::admits_null(
+                        properties.and_then(|p| p.get(*name)),
+                    )
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    })
+}
+
+/// `params` with each admitted null restored, over a URL default that
+/// [`with_path_defaults`] put in its place.
+pub(super) fn with_nulls<'a>(params: &'a Value, names: &[String]) -> std::borrow::Cow<'a, Value> {
+    if names.is_empty() {
+        return std::borrow::Cow::Borrowed(params);
+    }
+    let mut map = params.as_object().cloned().unwrap_or_default();
+    for name in names {
+        map.insert(name.clone(), Value::Null);
+    }
+    std::borrow::Cow::Owned(Value::Object(map))
 }
 
 /// Every template `build_url` fills for this call: the endpoint, or the base
