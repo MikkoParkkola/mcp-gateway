@@ -143,6 +143,8 @@ mod source_checks {
             "src/gateway/outbound/tests.rs",
             "src/gateway/router/handlers/tasks/scope_tests.rs",
             "src/gateway/server/tests/stdio_cache_scope.rs",
+            // MIK-7942: an allocation row; the key is only in its backend fixture.
+            "src/gateway/server/tests/judge_allocations.rs",
             "src/gateway/task_service/execution/scope_tests.rs",
             "src/gateway/webhooks/message_clamp_tests.rs",
             "src/protocol/cacheable/clamp_tests.rs",
