@@ -201,6 +201,106 @@ fn a_duplicated_section_is_refused() {
     sections("## 4. One\n\n## 4. Again\n");
 }
 
+/// Columns every summary row must fill. A breaking change is weighed by what
+/// it takes away; the row has to say what the reader gets back and what to do,
+/// not only what changed.
+const REQUIRED_COLUMNS: [&str; 2] = ["What you gain", "Action needed"];
+
+/// The summary header names every required column, and every numbered row has
+/// the header's cell count with each required cell non-empty.
+fn check_columns(doc: &str) -> Result<(), String> {
+    let mut in_summary = false;
+    let mut header: Option<Vec<&str>> = None;
+    let mut problems = Vec::new();
+    for line in doc.lines() {
+        if line.starts_with("## ") {
+            in_summary = line.trim() == "## What changed";
+            continue;
+        }
+        if !in_summary || !line.starts_with('|') {
+            continue;
+        }
+        let cells: Vec<&str> = line
+            .trim()
+            .trim_matches('|')
+            .split('|')
+            .map(str::trim)
+            .collect();
+        let Some(head) = &header else {
+            header = Some(cells);
+            continue;
+        };
+        let Ok(n) = cells[0].parse::<u32>() else {
+            continue; // the |---| separator
+        };
+        if cells.len() != head.len() {
+            problems.push(format!(
+                "item {n} has {} cells, the header {}",
+                cells.len(),
+                head.len()
+            ));
+            continue;
+        }
+        for column in REQUIRED_COLUMNS {
+            if let Some(i) = head.iter().position(|h| *h == column)
+                && cells[i].is_empty()
+            {
+                problems.push(format!("item {n} has an empty `{column}` cell"));
+            }
+        }
+    }
+    let Some(head) = header else {
+        return Err("no summary table under `## What changed`".into());
+    };
+    for column in REQUIRED_COLUMNS {
+        if !head.contains(&column) {
+            problems.insert(0, format!("the summary header has no `{column}` column"));
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("; "))
+    }
+}
+
+#[test]
+fn every_summary_row_says_what_you_gain_and_what_to_do() {
+    if let Err(problems) = check_columns(&GUIDE) {
+        panic!("docs/UPGRADING-4.0.md: {problems}");
+    }
+}
+
+#[test]
+fn column_rules_on_fixtures() {
+    let ok = "## What changed\n\n| # | Change | What you gain | Action needed |\n|---|---|---|---|\n\
+              | 1 | a | g | b |\n| 2 | Never assigned | None — number never assigned | None |\n\n## 1. A\n";
+    assert_eq!(check_columns(ok), Ok(()));
+    let old_header =
+        "## What changed\n\n| # | Change | Action needed |\n|---|---|---|\n| 1 | a | b |\n";
+    assert!(
+        check_columns(old_header)
+            .unwrap_err()
+            .contains("no `What you gain` column")
+    );
+    assert!(
+        check_columns(&ok.replace("| 1 | a | g | b |", "| 1 | a |  | b |"))
+            .unwrap_err()
+            .contains("item 1 has an empty `What you gain` cell")
+    );
+    assert!(
+        check_columns(&ok.replace("| 1 | a | g | b |", "| 1 | a | g |  |"))
+            .unwrap_err()
+            .contains("item 1 has an empty `Action needed` cell")
+    );
+    assert!(
+        check_columns(&ok.replace("| 1 | a | g | b |", "| 1 | a | b |"))
+            .unwrap_err()
+            .contains("item 1 has 3 cells, the header 4")
+    );
+    assert!(check_columns("## What changed\n\nno table\n").is_err());
+}
+
 /// Item numbers written as `1-4, 6, 11 and 58` in `text`.
 fn numbers_in(text: &str) -> BTreeSet<u32> {
     let mut out = BTreeSet::new();
