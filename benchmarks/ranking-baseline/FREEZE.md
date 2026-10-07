@@ -59,6 +59,22 @@ substring-`contains` + a synonym table. The `RANKING.3` ordering window
 (119 production capabilities, `capabilities/examples/` excluded per
 `capabilities/README.md`'s own stated count).
 
+The generator reads the tree it is pointed at, so it reproduces the file
+byte for byte only from the freeze tree, not from a later checkout with more
+capabilities. `f241b464` (the harness commit, on the release line) has the
+same `capabilities/` tree as the freeze commit, which is not; CI runs this
+in the release tooling job:
+
+```
+git archive f241b464acf6007a88ebc2b576c0825350b018a1 capabilities | tar -x -C <dir>
+python3 benchmarks/ranking-baseline/gen_corpus.py <dir> | cmp - benchmarks/ranking-baseline/corpus.json
+```
+
+`tool_inventory_size` in corpus.json is that derivation's 119. The size of
+the live candidate pool the floors were last measured against is
+`POOL_SIZE_AT_LAST_MEASUREMENT` in `tests/mik_3274_ranking_3_baseline.rs`
+(MIK-7850).
+
 114 queries via six mechanical rules, each keyed to a `derivation` field on
 every case (full detail is per-case in `corpus.json`, not restated here):
 
