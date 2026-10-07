@@ -231,6 +231,10 @@ pub(crate) fn note(layer: Layer, path: &'static [&'static str], value: &Value) {
 /// the gateway minted.
 const TASK_ID: &[&str] = &["taskId"];
 
+/// The continuation the gateway mints in place of a backend's state
+/// (MIK-7994).
+pub(super) const REQUEST_STATE: &[&str] = &["requestState"];
+
 /// Note that `answer` is a task envelope the gateway built
 /// (`BeginOutcome::into_response`).
 pub(crate) fn note_task_envelope(answer: &Value) {
@@ -252,6 +256,24 @@ pub(super) fn built_task_envelope(answer: &Value) -> bool {
                 .list
                 .iter()
                 .any(|w| w.layer == Layer::Answer && w.path == TASK_ID && w.digest == digest)
+        })
+        .unwrap_or(false)
+}
+
+/// Whether the gateway wrote `path` of `value` (at `layer`) on this call and
+/// the member still holds what it wrote: a backend member of that name does
+/// not count.
+pub(super) fn owns(layer: Layer, path: &[&str], value: &Value) -> bool {
+    let Some(written) = member(value, path) else {
+        return false;
+    };
+    let digest = digest(written);
+    GATEWAY_WRITES
+        .try_with(|writes| {
+            writes
+                .borrow()
+                .iter()
+                .any(|w| w.layer == layer && w.path == path && w.digest == digest)
         })
         .unwrap_or(false)
 }
