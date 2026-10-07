@@ -134,14 +134,23 @@ fn note() -> String {
         .join("\n")
 }
 
+/// A database URL longer than a k-gram, so a receipt that kept it would
+/// match a relay of it.
+const DSN: &str = "postgres://ledger:pw@db.local/orchard-archive-of-the-north-slope-pear-rows";
+
+/// The gateway's recovery advice for a tool error it reads as a parameter
+/// problem: the gateway's text, longer than a k-gram.
+const SUGGEST: &str =
+    "Check the tool's input schema, correct the offending parameter(s), and retry.";
+
 /// `MIK-7998.DECODE.1`: the redactor's database-URL match runs to the next
 /// whitespace, so in the wrapper's pretty print it takes the note's closing
 /// quote with it and the block is no longer JSON. The receipt still holds
-/// the note as the caller reads it.
+/// the note as the caller reads it, and not the redacted URL (I3).
 #[tokio::test]
 async fn a_rewritten_invoke_wrapper_keeps_its_decoded_receipt() {
     let note = note();
-    let answer = text(&format!("{note} postgres://ledger:pw@db.local/orchard"));
+    let answer = text(&format!("{note} {DSN}"));
     let mock = MockBackend::answering(Answer::Sequence(vec![answer, text("ok"), text("ok")]));
     let (state, _store) = plan_state(&mock).await;
 
@@ -163,5 +172,46 @@ async fn a_rewritten_invoke_wrapper_keeps_its_decoded_receipt() {
     assert_eq!(
         relayed["error"]["code"], -32002,
         "the receipt read the escaped wrapper, not the note: {relayed}"
+    );
+    let secret = post(&state, "key-b", sync_invoke(4, json!({"text": DSN}))).await;
+    assert!(
+        secret.get("error").is_none(),
+        "the redacted URL was never delivered, so no receipt holds it: {secret}"
+    );
+}
+
+/// `MIK-7998.DECODE.2`: a tool error the gateway answers with recovery
+/// advice, redacted the same way. The receipt holds the note but not the
+/// gateway's advice (I2), though both are in the delivered text.
+#[tokio::test]
+async fn a_rewritten_tool_error_keeps_the_gateways_advice_out_of_its_receipt() {
+    let note = note();
+    let answer = json!({
+        "content": [{"type": "text", "text": format!("{note} {DSN}")}],
+        "isError": true
+    });
+    let mock = MockBackend::answering(Answer::Sequence(vec![answer, text("ok"), text("ok")]));
+    let (state, _store) = plan_state(&mock).await;
+
+    let read = post(&state, "key-a", sync_invoke(1, json!({}))).await;
+    let block = read["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        block.contains("REDACTED")
+            && block.contains(SUGGEST)
+            && serde_json::from_str::<Value>(block).is_err(),
+        "base: the advice was delivered in a wrapper the redaction broke: {read}"
+    );
+
+    let relayed = post(&state, "key-b", sync_invoke(2, json!({"text": note}))).await;
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "control: the note kept its receipt: {relayed}"
+    );
+    let advice = post(&state, "key-b", sync_invoke(3, json!({"text": SUGGEST}))).await;
+    assert!(
+        advice.get("error").is_none(),
+        "the gateway's advice is not backend text, so no receipt holds it: {advice}"
     );
 }
