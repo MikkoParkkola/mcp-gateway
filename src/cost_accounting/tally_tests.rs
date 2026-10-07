@@ -117,14 +117,22 @@ fn a_real_tool_named_other_stays_apart_from_the_overflow_row() {
 }
 
 #[test]
-fn an_over_long_name_counts_in_other() {
+fn a_name_pair_past_the_byte_limit_counts_in_other() {
     let mut tally = ToolTally::default();
-    let long = "x".repeat(MAX_ROW_NAME_BYTES);
-    // GIVEN: one call whose names together pass the byte limit
-    tally.add("srv", &long, 1, 0);
-    // THEN: no row stores the name; the call is in (other)
+    // GIVEN: one pair exactly at the byte limit, one a byte past it
+    let at_limit = "x".repeat(MAX_ROW_NAME_BYTES - "srv".len());
+    let past_limit = "y".repeat(MAX_ROW_NAME_BYTES - "srv".len() + 1);
+    tally.add("srv", &at_limit, 3, 5);
+    tally.add("srv", &past_limit, 7, 11);
+    // THEN: the first keeps a row; the second is in (other) with its totals
     let (_, by_tool, totals) = tally.breakdown();
-    assert_eq!(by_tool.len(), 1);
-    assert_eq!(by_tool[0].tool_key, OTHER);
-    assert_eq!(totals[0], 1);
+    let row = |key: &str| {
+        by_tool
+            .iter()
+            .find(|t| t.tool_key == key)
+            .map(|t| t.token_count)
+    };
+    assert_eq!(row(&format!("srv:{at_limit}")), Some(3));
+    assert_eq!(row(OTHER), Some(7));
+    assert_eq!(totals, [2, 10, 16]);
 }

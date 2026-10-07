@@ -40,12 +40,16 @@ pub(crate) struct ToolTally {
 impl ToolTally {
     /// Add one call on `backend`/`tool`.
     pub(crate) fn add(&mut self, backend: &str, tool: &str, tokens: u64, micro: u64) {
-        let key = (backend.to_string(), tool.to_string());
-        let fits = backend.len() + tool.len() <= MAX_ROW_NAME_BYTES;
-        let row = if self.rows.contains_key(&key) || (fits && self.rows.len() < MAX_TOOL_ROWS) {
-            self.rows.entry(key).or_default()
-        } else {
+        // An over-long pair never has a row, so it needs no lookup or copy.
+        let row = if backend.len() + tool.len() > MAX_ROW_NAME_BYTES {
             &mut self.overflow
+        } else {
+            let key = (backend.to_string(), tool.to_string());
+            if self.rows.contains_key(&key) || self.rows.len() < MAX_TOOL_ROWS {
+                self.rows.entry(key).or_default()
+            } else {
+                &mut self.overflow
+            }
         };
         for (total, add) in row.iter_mut().zip([1, tokens, micro]) {
             *total += add;
