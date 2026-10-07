@@ -206,7 +206,7 @@ fn spend_past_the_cap_counts_in_other_and_a_budgeted_tool_still_blocks() {
         e.record_spend(&format!("invented-{i}"), None, 0.01);
     }
     e.record_spend("paid", None, 0.004);
-    // THEN: the overflow is all in (other), and the budgeted tool kept its own
+    // THEN: the overflow is all in its own total, and the budgeted tool kept its own
     // entry, so its check still blocks
     let snap = e.snapshot();
     // The cap counts entries: one per budgeted name plus the unbudgeted rows.
@@ -214,8 +214,11 @@ fn spend_past_the_cap_counts_in_other_and_a_budgeted_tool_still_blocks() {
     let own = 1 + MAX_UNBUDGETED_ROWS;
     #[allow(clippy::cast_precision_loss)]
     let overflow = (300 - own) as f64 * 0.01;
-    let other = snap.tool_daily[super::super::tally::OTHER];
-    assert!((other - overflow).abs() < 1e-9, "(other) holds {other}");
+    let other = snap.tool_overflow_usd;
+    assert!(
+        (other - overflow).abs() < 1e-9,
+        "the overflow holds {other}"
+    );
     assert!((snap.tool_daily["paid"] - 0.004).abs() < 1e-9);
     assert!(!e.check("paid", None).allowed);
 }
@@ -231,4 +234,45 @@ fn the_sweep_keeps_entries_from_today() {
     // THEN: today's entries are still there
     assert!(e.tool_daily.contains_key("today-tool"));
     assert!(e.key_daily.contains_key("today-key"));
+}
+
+#[test]
+fn a_budget_named_other_never_sees_overflow_spend() {
+    // GIVEN: a per-tool budget whose name is "(other)", and the cap filled
+    let e = enforcer_with(true, None, &[("(other)", 1.0)], &[], &[("(other)", 0.01)]);
+    for i in 0..400 {
+        e.record_spend(&format!("invented-{i}"), None, 0.01);
+    }
+    // THEN: that budget's own total is untouched, so its check passes
+    assert!(e.snapshot().tool_daily.get("(other)").is_none());
+    assert!(e.check("(other)", None).allowed);
+}
+
+#[test]
+fn a_restore_applies_the_cap_and_keeps_the_saved_overflow() {
+    use super::super::persistence::{PersistedCosts, ToolTotal, now_secs};
+    // GIVEN: a same-day snapshot saved before the cap, with 400 tool names
+    let mut saved = PersistedCosts {
+        saved_at: now_secs(),
+        tool_overflow_usd: 0.5,
+        ..PersistedCosts::default()
+    };
+    for i in 0..400 {
+        let total = ToolTotal {
+            call_count: 1,
+            total_cost_usd: 0.01,
+            avg_cost_usd: 0.01,
+        };
+        saved.tool_totals.insert(format!("t{i}"), total);
+    }
+    // WHEN: it is restored
+    let e = enforcer_with(true, None, &[], &[], &[]);
+    e.restore(&saved);
+    // THEN: the map holds the cap; nothing is lost from the day's spend
+    assert_eq!(e.tool_daily.len(), MAX_UNBUDGETED_ROWS);
+    let snap = e.snapshot();
+    #[allow(clippy::cast_precision_loss)]
+    let past_cap = (400 - MAX_UNBUDGETED_ROWS) as f64 * 0.01;
+    assert!((snap.tool_overflow_usd - (0.5 + past_cap)).abs() < 1e-9);
+    assert!((snap.global_daily_usd - (4.0 + 0.5)).abs() < 1e-9);
 }

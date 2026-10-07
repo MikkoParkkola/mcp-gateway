@@ -124,6 +124,13 @@ impl DailyAccumulator {
     }
 }
 
+/// Micro-USD as USD.
+#[cfg(feature = "cost-governance")]
+#[allow(clippy::cast_precision_loss)]
+fn usd(micro: u64) -> f64 {
+    micro as f64 / 1_000_000.0
+}
+
 fn current_day() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -138,22 +145,29 @@ fn current_day() -> u64 {
 #[cfg(feature = "cost-governance")]
 const MAX_UNBUDGETED_ROWS: usize = 256;
 
-/// Add `micro` to `name`'s entry, or to `(other)` once `map` holds an entry
-/// for every budgeted name plus [`MAX_UNBUDGETED_ROWS`] others, and return the
-/// running total of the entry added to. A budgeted name always has its own.
+/// Add `micro` to `name`'s entry and return that entry's running total. A
+/// budgeted name always has its own. Any other name has one only while `map`
+/// holds fewer than one entry per budgeted name plus [`MAX_UNBUDGETED_ROWS`],
+/// and only if it is no longer than the cost tracker's row-name limit; past
+/// either, its spend goes to `overflow`, which no budget check ever reads, so
+/// a budget whose name happens to be `(other)` keeps its own total.
 /// ponytail: a soft cap; racing first inserts can pass it by the caller count.
 #[cfg(feature = "cost-governance")]
 fn add_capped(
-    map: &DashMap<String, DailyAccumulator>,
+    (map, overflow): (&DashMap<String, DailyAccumulator>, &DailyAccumulator),
     name: &str,
     limits: &HashMap<String, f64>,
     micro: u64,
 ) -> u64 {
     let own = limits.contains_key(name)
         || map.contains_key(name)
-        || map.len() < limits.len() + MAX_UNBUDGETED_ROWS;
-    let name = if own { name } else { super::tally::OTHER };
-    map.entry(name.to_string()).or_default().add(micro)
+        || (name.len() <= super::tally::MAX_ROW_NAME_BYTES
+            && map.len() < limits.len() + MAX_UNBUDGETED_ROWS);
+    if own {
+        map.entry(name.to_string()).or_default().add(micro)
+    } else {
+        overflow.add(micro)
+    }
 }
 
 // ── EnforcementResult ────────────────────────────────────────────────────────
@@ -332,6 +346,12 @@ pub struct EnforcerSnapshot {
     /// Unix seconds read before the accumulators. A snapshot that straddles
     /// UTC midnight then dates its spend to the earlier day, never the later.
     pub taken_at: u64,
+    /// Today's spend of unbudgeted tools past the per-tool map's cap (USD).
+    #[serde(default)]
+    pub tool_overflow_usd: f64,
+    /// Today's spend of unbudgeted keys past the per-key map's cap (USD).
+    #[serde(default)]
+    pub key_overflow_usd: f64,
 }
 
 // ── BudgetEnforcer ───────────────────────────────────────────────────────────
@@ -358,6 +378,9 @@ pub struct BudgetEnforcer {
     observer: crate::observer::Observer<crossings::BudgetCrossing>,
     /// When the next sweep of earlier days' entries may run (MIK-8015).
     next_sweep: std::sync::atomic::AtomicU64,
+    /// Spend of unbudgeted tool and key names past the day maps' cap.
+    tool_overflow: DailyAccumulator,
+    key_overflow: DailyAccumulator,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -373,6 +396,8 @@ impl BudgetEnforcer {
             ledger: Arc::default(),
             observer: crate::observer::Observer::default(),
             next_sweep: std::sync::atomic::AtomicU64::new(0),
+            tool_overflow: DailyAccumulator::new(),
+            key_overflow: DailyAccumulator::new(),
         }
     }
 
@@ -545,8 +570,8 @@ impl BudgetEnforcer {
 
         let global = self.global_daily.add(micro);
         let budgets = &self.config.budgets;
-        let tool = add_capped(&self.tool_daily, tool_name, &budgets.per_tool, micro);
-        let key = api_key_name.map(|key| add_capped(&self.key_daily, key, &budgets.per_key, micro));
+        let tool = add_capped(self.tool_maps(), tool_name, &budgets.per_tool, micro);
+        let key = api_key_name.map(|key| add_capped(self.key_maps(), key, &budgets.per_key, micro));
         if self.observer.is_set() {
             self.report_crossings(
                 tool_name,
@@ -582,17 +607,31 @@ impl BudgetEnforcer {
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let micro = |usd: f64| (usd.max(0.0) * 1_000_000.0).round() as u64;
+        // Through the cap: a snapshot saved before the cap existed may hold
+        // more names than it allows.
+        let budgets = &self.config.budgets;
         for (tool, total) in &persisted.tool_totals {
             let spent = micro(total.total_cost_usd);
             self.global_daily.add(spent);
-            self.tool_daily.entry(tool.clone()).or_default().add(spent);
+            add_capped(self.tool_maps(), tool, &budgets.per_tool, spent);
         }
         for (key, &usd) in &persisted.key_totals {
-            self.key_daily
-                .entry(key.clone())
-                .or_default()
-                .add(micro(usd));
+            add_capped(self.key_maps(), key, &budgets.per_key, micro(usd));
         }
+        let tool_overflow = micro(persisted.tool_overflow_usd);
+        self.global_daily.add(tool_overflow);
+        self.tool_overflow.add(tool_overflow);
+        self.key_overflow.add(micro(persisted.key_overflow_usd));
+    }
+
+    /// The per-tool day map and its overflow accumulator.
+    fn tool_maps(&self) -> (&DashMap<String, DailyAccumulator>, &DailyAccumulator) {
+        (&self.tool_daily, &self.tool_overflow)
+    }
+
+    /// The per-key day map and its overflow accumulator.
+    fn key_maps(&self) -> (&DashMap<String, DailyAccumulator>, &DailyAccumulator) {
+        (&self.key_daily, &self.key_overflow)
     }
 
     /// Snapshot current accumulator state for persistence and the UI endpoint.
@@ -628,6 +667,8 @@ impl BudgetEnforcer {
             taken_at,
             key_daily,
             key_limits: self.config.budgets.per_key.clone(),
+            tool_overflow_usd: usd(self.tool_overflow.current()),
+            key_overflow_usd: usd(self.key_overflow.current()),
         }
     }
 

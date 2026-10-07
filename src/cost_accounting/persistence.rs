@@ -25,6 +25,12 @@ pub struct PersistedCosts {
     pub tool_totals: HashMap<String, ToolTotal>,
     /// Per-API-key spend for the day of `saved_at`.
     pub key_totals: HashMap<String, f64>,
+    /// Spend of unbudgeted tools past the per-tool day map's cap (MIK-8015).
+    #[serde(default)]
+    pub tool_overflow_usd: f64,
+    /// Spend of unbudgeted keys past the per-key day map's cap (MIK-8015).
+    #[serde(default)]
+    pub key_overflow_usd: f64,
 }
 
 /// Spend for a single tool on the day of `saved_at`.
@@ -162,8 +168,7 @@ mod tests {
 
         let mut costs = PersistedCosts {
             saved_at: 1_700_000_000,
-            tool_totals: HashMap::new(),
-            key_totals: HashMap::new(),
+            ..PersistedCosts::default()
         };
         costs.tool_totals.insert(
             "tavily_search".to_string(),
