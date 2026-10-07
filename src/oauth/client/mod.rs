@@ -476,13 +476,16 @@ impl OAuthClient {
         }
 
         // Try to refresh if we have a refresh token
-        let refresh_token_opt = {
-            let token = self.current_token.read();
-            token.as_ref().and_then(|t| t.refresh_token.clone())
-        };
+        // A refresh sends the stored refresh token (MIK-8018); a cached one
+        // only says this client has a grant to refresh.
+        let has_refresh_token = self
+            .current_token
+            .read()
+            .as_ref()
+            .is_some_and(|t| t.refresh_token.is_some());
 
-        if let Some(refresh_token) = refresh_token_opt {
-            match self.refresh_token(&refresh_token).await {
+        if has_refresh_token {
+            match self.refresh_token().await {
                 Ok(new_token) => return Ok(new_token),
                 // A policy refusal is not an expired grant: re-authorizing
                 // would only walk past it (MIK-7701).

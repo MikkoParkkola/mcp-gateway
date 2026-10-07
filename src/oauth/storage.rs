@@ -69,6 +69,16 @@ pub struct RefreshState {
     pub in_flight: Option<String>,
 }
 
+impl RefreshState {
+    /// What an unreadable sidecar reads as: rotating, nothing in flight.
+    fn unreadable() -> Self {
+        Self {
+            rotates: true,
+            in_flight: None,
+        }
+    }
+}
+
 // Manual `Debug` that redacts the bearer/refresh secrets and the client
 // secret. A derived `Debug` would print `access_token`, `refresh_token`, and
 // `client_secret` verbatim into any trace or error context — a full compromise
@@ -291,13 +301,26 @@ impl TokenStorage {
     }
 
     /// The credential's refresh state; default when none was ever written.
+    ///
+    /// A sidecar that exists but cannot be read or parsed reads as "the server
+    /// rotates" (MIK-8018): an unknown outcome then retires the refresh token
+    /// rather than retrying one that may be consumed. The next settled refresh
+    /// rewrites the file.
     #[must_use]
     pub fn load_refresh_state(&self, backend_name: &str, resource_url: &str) -> RefreshState {
         let path = self.refresh_state_path(backend_name, resource_url);
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|content| serde_json::from_str(&content).ok())
-            .unwrap_or_default()
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return RefreshState::default(),
+            Err(e) => {
+                warn!(backend = %backend_name, error = %e, "Unreadable refresh state; assuming the server rotates");
+                return RefreshState::unreadable();
+            }
+        };
+        serde_json::from_str(&content).unwrap_or_else(|e| {
+            warn!(backend = %backend_name, error = %e, "Corrupt refresh state; assuming the server rotates");
+            RefreshState::unreadable()
+        })
     }
 
     /// Replace the credential's refresh state, through a 0600 scratch file.

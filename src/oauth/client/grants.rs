@@ -247,10 +247,10 @@ impl OAuthClient {
     /// the process, with the stored refresh token, never with one an earlier
     /// exchange may have consumed (MIK-8018).
     ///
-    /// `refresh_token` is used only when nothing is stored for the credential;
-    /// a stored record without one was spent or never issued, and an in-memory
-    /// copy is never a fallback for it.
-    pub(super) async fn refresh_token(&self, refresh_token: &str) -> Result<String> {
+    /// The stored record is the only source of the refresh token: a missing
+    /// record, or one without a refresh token (spent, or never issued), needs a
+    /// login, and an in-memory copy is never a fallback.
+    pub(super) async fn refresh_token(&self) -> Result<String> {
         use super::refresh_flight::{Exchange, Flight, Outcome, fingerprint_hex, spend};
         let auth_meta = self
             .auth_metadata
@@ -267,11 +267,10 @@ impl OAuthClient {
         let required = || Error::AuthorizationRequired {
             backend: self.backend_name.clone(),
         };
-        let sent = match &stored {
-            Some(record) => record.refresh_token.clone(),
-            None => Some(refresh_token.to_string()),
-        };
-        let Some(sent) = sent else {
+        let Some(sent) = stored
+            .as_ref()
+            .and_then(|record| record.refresh_token.clone())
+        else {
             warn!(backend = %self.backend_name, "No stored refresh token; a login is needed");
             return Err(required());
         };
@@ -283,26 +282,28 @@ impl OAuthClient {
         let marker = fingerprint_hex(&sent);
         if state.rotates && state.in_flight.as_deref() == Some(marker.as_str()) {
             // An exchange with this token never settled (the process stopped
-            // mid-exchange) on a server that rotates: it may be consumed.
-            spend(
+            // mid-exchange) on a server that rotates: it may be consumed. The
+            // marker stays unless the token was retired from storage, so a
+            // later start retires it again rather than sending it.
+            let retired = spend(
                 &flight,
                 &self.storage,
                 (&key, &self.resource_url),
                 &self.backend_name,
                 &sent,
             );
-            state.in_flight = None;
-            if let Err(error) = self
-                .storage
-                .save_refresh_state(&key, &self.resource_url, &state)
-            {
-                warn!(backend = %self.backend_name, %error, "Could not settle the refresh state");
+            if retired {
+                state.in_flight = None;
+                if let Err(error) =
+                    self.storage
+                        .save_refresh_state(&key, &self.resource_url, &state)
+                {
+                    warn!(backend = %self.backend_name, %error, "Could not settle the refresh state");
+                }
             }
             return Err(required());
         }
-        if stored.is_some() {
-            self.reload_registered_client_id(&key);
-        }
+        self.reload_registered_client_id(&key);
         let client_id = self
             .client_id
             .read()
@@ -311,13 +312,14 @@ impl OAuthClient {
         let params = self.refresh_params(&sent, &client_id);
         let http = self.refresh_client_for(&auth_meta.token_endpoint)?;
         // Written before sending, so a process that stops mid-exchange leaves
-        // a mark the next refresh reads (FU-A.4).
+        // a mark the next refresh reads (FU-A.4). Without it, nothing is sent.
         state.in_flight = Some(marker);
         if let Err(error) = self
             .storage
             .save_refresh_state(&key, &self.resource_url, &state)
         {
-            warn!(backend = %self.backend_name, %error, "Could not mark the refresh in flight");
+            warn!(backend = %self.backend_name, %error, "Could not mark the refresh in flight; not refreshing");
+            return Err(error);
         }
         let exchange = Exchange {
             guard,

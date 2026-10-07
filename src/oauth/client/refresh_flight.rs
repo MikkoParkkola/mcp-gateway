@@ -109,10 +109,13 @@ impl Exchange {
 
     async fn run(mut self) -> Outcome {
         let outcome = self.send().await;
-        if matches!(outcome, Outcome::Uncertain(_)) && self.state.rotates {
-            self.spend();
+        // The marker stays when a possibly consumed token could not be retired
+        // from storage: a later refresh, even after a restart, retires it then.
+        let retired =
+            !(matches!(outcome, Outcome::Uncertain(_)) && self.state.rotates) || self.spend();
+        if retired {
+            self.state.in_flight = None;
         }
-        self.state.in_flight = None;
         if let Err(error) =
             self.storage
                 .save_refresh_state(&self.key, &self.resource_url, &self.state)
@@ -165,7 +168,17 @@ impl Exchange {
             .as_deref()
             .is_some_and(|issued| issued != self.sent)
         {
+            // Persisted before the rotated token is saved: a stop in between
+            // must not forget that this server rotates. Unrecorded, the sent
+            // token is treated as possibly consumed rather than kept.
             self.state.rotates = true;
+            if let Err(error) =
+                self.storage
+                    .save_refresh_state(&self.key, &self.resource_url, &self.state)
+            {
+                warn!(backend = %self.backend, %error, "Could not record that the server rotates");
+                return Outcome::Uncertain(error);
+            }
         }
         let token = TokenInfo::from_response(
             answer.access_token,
@@ -204,40 +217,43 @@ impl Exchange {
     }
 
     /// The sent refresh token may be consumed: see [`spend`].
-    fn spend(&self) {
+    fn spend(&self) -> bool {
         spend(
             &self.flight,
             &self.storage,
             (&self.key, &self.resource_url),
             &self.backend,
             &self.sent,
-        );
+        )
     }
 }
 
 /// `sent` may be consumed: no client of this process sends it again, and it is
 /// cleared from the stored record at `at` (credential key, resource URL) unless
-/// a login stored a fresh one meanwhile (compare-and-clear).
+/// a login stored a fresh one meanwhile (compare-and-clear). Whether storage no
+/// longer holds `sent` afterwards: `false` only when clearing it failed.
 pub(super) fn spend(
     flight: &Flight,
     storage: &TokenStorage,
     at: (&str, &str),
     backend: &str,
     sent: &str,
-) {
+) -> bool {
     let (key, resource_url) = at;
     flight.spend(sent);
     warn!(backend = %backend, "A refresh with an unknown outcome spent its refresh token");
     let Some(mut stored) = storage.load(key, resource_url) else {
-        return;
+        return true;
     };
     if stored.refresh_token.as_deref() != Some(sent) {
-        return;
+        return true;
     }
     stored.refresh_token = None;
     if let Err(error) = storage.save(key, resource_url, &stored) {
         tracing::error!(backend = %backend, %error, "Could not clear a spent refresh token");
+        return false;
     }
+    true
 }
 
 /// Whether `body` is an RFC 6749 error response (an `error` string field).

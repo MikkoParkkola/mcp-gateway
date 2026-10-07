@@ -319,13 +319,21 @@ async fn get_token_refreshes_an_expired_token() {
     let dir = tempfile::tempdir().unwrap();
     let (issuer, forms) = token_endpoint(Some("access-b")).await;
     let client = client(dir.path(), Some(&issuer));
-    *client.current_token.write() = Some(token("access-old", Some("r1"), Expiry::Expired));
+    cache_and_store(&client, token("access-old", Some("r1"), Expiry::Expired));
 
     assert_eq!(client.get_token().await.unwrap(), "access-b");
     let forms = forms.lock().unwrap().clone();
     assert_eq!(forms.len(), 1, "{forms:?}");
     assert_eq!(forms[0]["grant_type"], "refresh_token");
     assert_eq!(forms[0]["refresh_token"], "r1");
+}
+
+/// Cache `token` in `client` and store it as the credential, as a login does:
+/// a refresh sends the stored refresh token, never an in-memory one (MIK-8018).
+fn cache_and_store(client: &OAuthClient, token: TokenInfo) {
+    let key = client.credential_key().unwrap();
+    client.storage.save(&key, RESOURCE, &token).unwrap();
+    *client.current_token.write() = Some(token);
 }
 
 /// Expire the stored record and the cached copy alike, so the next
@@ -348,7 +356,7 @@ async fn a_refresh_without_a_new_refresh_token_keeps_the_old_one() {
     let dir = tempfile::tempdir().unwrap();
     let (issuer, forms) = token_endpoint_issuing(Some("access-b"), None).await;
     let client = client(dir.path(), Some(&issuer));
-    *client.current_token.write() = Some(token("access-old", Some("r1"), Expiry::Expired));
+    cache_and_store(&client, token("access-old", Some("r1"), Expiry::Expired));
 
     assert_eq!(client.get_token().await.unwrap(), "access-b");
     let cached = client.current_token.read().clone().expect("a cached token");
@@ -371,7 +379,7 @@ async fn a_refresh_with_a_new_refresh_token_stores_the_new_one() {
     let dir = tempfile::tempdir().unwrap();
     let (issuer, forms) = token_endpoint(Some("access-b")).await;
     let client = client(dir.path(), Some(&issuer));
-    *client.current_token.write() = Some(token("access-old", Some("r1"), Expiry::Expired));
+    cache_and_store(&client, token("access-old", Some("r1"), Expiry::Expired));
 
     assert_eq!(client.get_token().await.unwrap(), "access-b");
     let cached = client.current_token.read().clone().expect("a cached token");

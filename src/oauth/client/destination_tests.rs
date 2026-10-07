@@ -545,8 +545,22 @@ async fn a_refused_token_refresh_redirect_is_typed_ssrf_blocked() {
     );
     client.initialize().await.expect("discovery is reachable");
     *client.client_id.write() = Some("listed-client".to_string());
+    // A refresh sends the stored refresh token (MIK-8018): store one.
+    let key = client.credential_key().unwrap();
+    let mut stored = crate::oauth::TokenInfo::from_response(
+        "expired".to_string(),
+        None,
+        Some("refresh".to_string()),
+        None,
+        None,
+    );
+    stored.expires_at = Some(1);
+    client
+        .storage
+        .save(&key, &client.resource_url, &stored)
+        .unwrap();
     let error = client
-        .refresh_token("refresh")
+        .refresh_token()
         .await
         .expect_err("a refused refresh hop must surface");
     assert!(error.to_string().contains("SSRF blocked"), "{error}");
@@ -583,6 +597,12 @@ async fn client_with_refused_refresh(dir: &std::path::Path) -> OAuthClient {
         None,
     );
     token.expires_at = Some(1);
+    // Stored as a login would: a refresh sends the stored token (MIK-8018).
+    let key = client.credential_key().unwrap();
+    client
+        .storage
+        .save(&key, &client.resource_url, &token)
+        .unwrap();
     *client.current_token.write() = Some(token);
     client
 }
