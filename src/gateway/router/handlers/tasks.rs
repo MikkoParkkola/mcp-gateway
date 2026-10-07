@@ -40,7 +40,8 @@ pub(super) const AUTH_DISABLED_TASK_OWNER: &str = "local:auth-disabled:tasks:v1"
 /// The owner key of a stateless task: the validated API-key credential. Only
 /// `route_task_owner` reads it (the firewall keys on `identity::caller_key`);
 /// tasks keep this encoding so an upgrade does not orphan stored ones. Empty
-/// when the caller is unauthenticated: that is not an identity.
+/// when the caller is unauthenticated: that is not an identity by itself, but
+/// `route_task_owner` may still give a validated agent token its own owner.
 pub(super) fn session_owner_key(
     client: Option<&crate::gateway::auth::AuthenticatedClient>,
 ) -> String {
