@@ -499,10 +499,15 @@ mod tests {
         let mut second = serde_json::Map::new();
         second.insert("alpha".to_string(), json!(2));
         second.insert("zeta".to_string(), json!(1));
+        let (first, second) = (Value::Object(first), Value::Object(second));
         assert_eq!(
-            serde_json::to_string(&Value::Object(first)).unwrap(),
-            serde_json::to_string(&Value::Object(second)).unwrap(),
+            serde_json::to_string(&first).unwrap(),
+            serde_json::to_string(&second).unwrap(),
             "equal maps inserted in another order must serialise identically"
+        );
+        assert!(
+            same_json(&first, &second),
+            "same_json pairs entries in key order, so insertion order must not matter"
         );
     }
 
