@@ -112,3 +112,75 @@ async fn a_failed_refusal_write_keeps_the_refusal_when_the_log_is_best_effort() 
     let (status, body) = refused_invoke(&fx, None).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }
+
+/// MIK-7640. A modern (2026-07-28) call carries no session, which the route
+/// passes as an empty id: with no caller trace id the refusal is keyed on the
+/// trace id the gateway minted, never on the empty session.
+#[tokio::test]
+async fn a_modern_refusal_without_a_trace_is_keyed_on_the_minted_trace_id() {
+    let fx = fixture(AuditFailurePolicy::FailClosed).await;
+    let arguments = json!({"server": "elsewhere", "tool": "t", "arguments": {}});
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+            "name": "gateway_invoke",
+            "arguments": arguments,
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        }
+    });
+    // Two stateless refusals: each is keyed on its own minted trace id.
+    for _ in 0..2 {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("authorization", "Bearer scoped-key")
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", "tools/call")
+            .header("mcp-name", "gateway_invoke")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = fx.router.clone().oneshot(request).await.unwrap();
+        let _ = axum::body::to_bytes(response.into_body(), usize::MAX).await;
+    }
+    let written = std::fs::read_to_string(&fx.audit_path).unwrap_or_default();
+    let records: Vec<Value> = written
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter(|entry: &Value| entry.get("correlation_source").is_some())
+        .collect();
+    let [first, second] = records.as_slice() else {
+        panic!("two refusal records: {written}");
+    };
+    for record in [first, second] {
+        assert_eq!(record["correlation_source"], json!("trace_id"), "{record}");
+        assert_ne!(record["session_id"], json!(""), "{record}");
+    }
+    assert_ne!(first["session_id"], second["session_id"], "{written}");
+}
+
+/// MIK-7640 control: a legacy call has a session id, so a refusal with no
+/// caller trace id is keyed on the session, as before.
+#[tokio::test]
+async fn a_legacy_refusal_without_a_trace_is_keyed_on_the_session() {
+    let fx = fixture(AuditFailurePolicy::FailClosed).await;
+    let (status, body) = refused_invoke(&fx, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let written = std::fs::read_to_string(&fx.audit_path).unwrap_or_default();
+    let record: Value = written
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .find(|entry: &Value| entry.get("correlation_source").is_some())
+        .unwrap_or_else(|| panic!("a refusal record: {written}"));
+    assert_eq!(
+        record["correlation_source"],
+        json!("session_id"),
+        "{record}"
+    );
+}
