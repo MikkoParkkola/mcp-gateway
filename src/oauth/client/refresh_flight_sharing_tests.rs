@@ -70,6 +70,13 @@ async fn a_refresh_waits_for_another_process_holding_the_credential() {
     // Its first try failed (the test's own lease is the first attempt): it
     // is waiting on the lock, and cannot have sent.
     let lock_path = path.with_extension("refresh.lock");
+    // Owner-only, so another local user cannot open it to hold every refresh.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&lock_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "refresh lock mode {mode:o}");
+    }
     tokio::time::timeout(Duration::from_secs(5), async {
         while crate::fs_lock::lock_attempts(&lock_path) < 2 {
             tokio::time::sleep(Duration::from_millis(10)).await;
