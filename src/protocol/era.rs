@@ -333,11 +333,32 @@ impl EraCache {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = ProbeOutcome>,
     {
+        self.restart_while_serving(probe, install_always).await
+    }
+
+    /// [`Self::restart_with`] for a start whose slot the pool may retire while it
+    /// runs (MIK-7643). `serving` runs the discard and, later, the install under the
+    /// slot's own guard, and refuses both once the slot is retired: a removed slot's
+    /// start neither erases the backend's verdict nor installs its peer's answer.
+    pub(crate) async fn restart_while_serving<F, Fut, S>(&self, probe: F, serving: S) -> Era
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ProbeOutcome>,
+        S: Fn(&mut dyn FnMut()) -> bool,
+    {
         let mut guard = self.observation.lock().await;
         // Guarded on a determination existing so a cold start does not emit a discard
         // record for a belief it never held.
-        if guard.source == EraSource::Probed {
-            *guard = EraObservation::never_probed();
+        let mut discarded = false;
+        if !serving(&mut || {
+            if guard.source == EraSource::Probed {
+                *guard = EraObservation::never_probed();
+                discarded = true;
+            }
+        }) {
+            return guard.era;
+        }
+        if discarded {
             tracing::info!(
                 target: "mcp_gateway::observed",
                 backend = %self.name,
@@ -348,7 +369,7 @@ impl EraCache {
         // discarded. The miss is recorded for the same reason the start path records
         // one -- an era resolved by probing must never read as a cache hit.
         tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = false);
-        self.probe_and_store(&mut guard, ProbeTrigger::Start, probe, install_always)
+        self.probe_and_store(&mut guard, ProbeTrigger::Start, probe, &serving)
             .await
     }
 
@@ -412,8 +433,10 @@ impl EraCache {
     }
 }
 
-/// The `install` of a probe nothing can supersede: the start path holds the slot's start
-/// lock, so its transport cannot be replaced underneath it.
+/// The `install` of a probe nothing can supersede: a start holds the slot's start lock, so
+/// its transport cannot be replaced underneath it. A per-user slot can still be removed by
+/// a revocation, which takes no start lock; that start path uses
+/// [`EraCache::restart_while_serving`].
 fn install_always(store: &mut dyn FnMut()) -> bool {
     store();
     true

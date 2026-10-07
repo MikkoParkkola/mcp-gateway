@@ -220,7 +220,7 @@ impl Backend {
                 // first request already knows which dialect to speak. Runs
                 // under this slot's `start_lock`; see `Backend::resolve_era`
                 // for the lock order that imposes.
-                self.resolve_era_after_start(&transport).await;
+                self.resolve_era_after_start(&transport, &entry).await;
                 return Ok(transport);
             }
             // Lost the race: `reconcile_after_start` already closed the
@@ -286,11 +286,15 @@ impl Backend {
     /// second call would throw away a verdict the peer has already given and
     /// re-derive it — and the transport shapes requests from that cache while
     /// it is empty. Every other transport still resolves here, unchanged.
-    pub(super) async fn resolve_era_after_start(&self, transport: &Arc<dyn Transport>) {
+    pub(super) async fn resolve_era_after_start(
+        &self,
+        transport: &Arc<dyn Transport>,
+        entry: &PooledEntry,
+    ) {
         if matches!(self.config.transport, TransportConfig::Http { .. }) {
             return;
         }
-        self.resolve_era(transport).await;
+        self.resolve_era(transport, entry).await;
     }
 
     /// Start the backend's canonical (shared) transport.
@@ -452,7 +456,7 @@ impl Backend {
                 // `Backend::resolve_era` and `EraCache`. This path chooses when
                 // to ask, never what the answer means.
                 let peer: Arc<dyn Transport> = transport.clone();
-                self.resolve_era(&peer).await;
+                self.resolve_era(&peer, entry).await;
                 // Only a determined `Modern` skips the handshake. A legacy
                 // answer, an unrecognised error and silence all read as `None`
                 // or `Legacy` here, which is the fallback the RFC requires —

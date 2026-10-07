@@ -78,6 +78,18 @@ pub(super) fn with_serving(
     held
 }
 
+/// Run `step` unless the pool has retired `entry`, holding the slot's read guard through
+/// it, as [`with_serving`] does. For the start path, whose transport the entry may not
+/// hold yet (an HTTP start probes before it publishes), so membership is the whole test.
+pub(super) fn unless_retired(entry: &PooledEntry, step: &mut dyn FnMut()) -> bool {
+    let _slot = entry.transport.read();
+    let live = !entry.retired.load(std::sync::atomic::Ordering::SeqCst);
+    if live {
+        step();
+    }
+    live
+}
+
 /// The JSON-RPC error code in an answer, whichever way the peer carried it.
 ///
 /// A refusal is a refusal whether it arrives in-band, as an error object in a
@@ -168,7 +180,8 @@ impl Backend {
     /// `resolve_era` itself, so the production visibility stays `pub(super)`.
     #[cfg(test)]
     pub(crate) async fn resolve_era_for_test(&self, transport: &Arc<dyn Transport>) {
-        self.resolve_era(transport).await;
+        let unpooled = PooledEntry::new(&self.name, &self.failsafe_config);
+        self.resolve_era(transport, &unpooled).await;
     }
 
     /// Test-only: the start path's era step for the slot `entry` (MIK-7643),
@@ -177,9 +190,9 @@ impl Backend {
     pub(crate) async fn resolve_era_for_entry_test(
         &self,
         transport: &Arc<dyn Transport>,
-        _entry: &PooledEntry,
+        entry: &PooledEntry,
     ) {
-        self.resolve_era(transport).await;
+        self.resolve_era(transport, entry).await;
     }
 
     /// Resolve the era of a freshly started peer, probing at most once.
@@ -191,7 +204,7 @@ impl Backend {
     /// `start_lock` -> era mutex. Anything holding the era mutex must therefore
     /// use a transport handle it already owns and must never call back into
     /// `ensure_entry_started`, which would invert the order.
-    pub(super) async fn resolve_era(&self, transport: &Arc<dyn Transport>) {
+    pub(super) async fn resolve_era(&self, transport: &Arc<dyn Transport>, entry: &PooledEntry) {
         let timeout = self.probe_timeout();
         // A start hands over a transport to a process that has only just come
         // up. Any era already determined describes the peer that came before
@@ -199,7 +212,14 @@ impl Backend {
         // the verdict across the swap asserts something never observed about
         // the peer now on the wire. Discard and probe are one locked step: a
         // detached re-probe of the old peer must not be able to land between them.
-        self.era.restart_with(|| probe(transport, timeout)).await;
+        // A revocation removes a per-user slot without its start lock, so the slot this
+        // start serves may be retired before the discard or before the install (MIK-7643).
+        self.era
+            .restart_while_serving(
+                || probe(transport, timeout),
+                |step| unless_retired(entry, step),
+            )
+            .await;
     }
 
     /// Re-probe when an ordinary response contradicts the cached verdict.
