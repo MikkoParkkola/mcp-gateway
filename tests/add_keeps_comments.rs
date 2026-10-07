@@ -217,13 +217,32 @@ fn several_backends_at_once_keep_comments() {
     let written = ui_write(&path, |c| {
         c.backends.insert("one".into(), echo_backend());
         c.backends.insert("two".into(), echo_backend());
-        c.backends.remove("old");
     });
     assert!(written.contains("# kept by hand"), "{written}");
     let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
     let mut names: Vec<_> = config.backends.keys().map(String::as_str).collect();
     names.sort_unstable();
-    assert_eq!(names, ["one", "two"], "{written}");
+    assert_eq!(names, ["old", "one", "two"], "{written}");
+}
+
+/// A stale config (another writer added `c` after it was loaded) differs by
+/// a removal plus an addition: it is refused, never spliced over `c`.
+#[test]
+fn a_stale_multi_change_is_refused_not_spliced() {
+    use mcp_gateway::config_persistence::{CommentLoss, Unwritten, write_config_with};
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED).expect("write");
+    let mut stale = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
+    stale.backends.insert("b".into(), echo_backend());
+    let current = format!("{NOTED}  c:\n    command: c\n");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, &current).expect("write");
+    let result = write_config_with(&path, &stale, CommentLoss::Refuse);
+    assert!(
+        matches!(result, Err(Unwritten::CommentLoss(_))),
+        "{result:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), current);
 }
 
 /// The binary in `home`, isolated as the setup and discovery tests run it:
