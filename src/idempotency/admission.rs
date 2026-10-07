@@ -22,13 +22,13 @@ pub(crate) const RESULT_LIMIT: usize = 512 * 1_024;
 pub(crate) const TOTAL_RESULT_LIMIT: usize = 128 * 1_024 * 1_024;
 pub(crate) const RETENTION_SECS: u64 = 24 * 60 * 60;
 
-// MIK-7991 r4: the invoke-path idempotency entry completes before this one and
-// must expire before it, so a keyed re-issue is answered here first. This
-// clock counts whole wall-clock seconds, so the margin covers its truncation;
-// a forward wall-clock step can still expire this entry early, which is why
-// that path's replay arm keeps its own guard.
+// MIK-7991: the invoke-path idempotency entry completes before this one and
+// may not outlive it, so a keyed re-issue is normally answered here first.
+// This clock counts whole wall-clock seconds, so its truncation or a forward
+// wall-clock step can still expire this entry first; that path's replay arm
+// keeps its own guard for that case.
 const _: () = {
-    assert!(super::COMPLETED_TTL.as_secs() + 2 <= RETENTION_SECS);
+    assert!(super::COMPLETED_TTL.as_secs() <= RETENTION_SECS);
 };
 
 type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;

@@ -131,7 +131,8 @@ impl MetaMcp {
                     // A stored side-effect notice is the gateway's own text;
                     // its first call delivered no read either (MIK-7991).
                     // Reached when the sync admission's wall-clock entry has
-                    // expired before this one (a forward clock step).
+                    // expired before this one (whole-second truncation at
+                    // equal retention, or a forward clock step).
                     if !super::side_effect_markers::is_gateway_notice(&cached) {
                         self.stage_relay_receipt(
                             caller.relay_caller(session_id),

@@ -549,8 +549,9 @@ impl crate::transport::Transport for CountedLost {
 }
 
 /// MIK-7991 (F1): a keyed call whose round is lost settles its key with the
-/// gateway's uncertainty notice. The sync admission's clock is wall time, so a
-/// forward step can expire its entry before this guard's, and the re-issue
+/// gateway's uncertainty notice. The sync admission's clock is whole wall
+/// seconds, so truncation or a forward step can expire its entry before this
+/// guard's, and the re-issue
 /// then reaches this guard, which replays the notice. That is the gateway's own
 /// text, so the replay stages no receipt and another caller may send it.
 #[tokio::test]
