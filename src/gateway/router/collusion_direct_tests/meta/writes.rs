@@ -39,6 +39,22 @@ async fn meta_replay_leaves_the_gateway_hint_out_of_the_receipt() {
 const CATEGORY: &str =
     "cellar inventory of pressed cider barrels sorted by vintage, cask size and orchard row";
 
+/// A receipt window short enough that a row can let the first call's receipt
+/// lapse, so a later control proves the hit or replay staged its own.
+#[cfg(feature = "cost-governance")]
+fn short_window() -> Setup {
+    Setup {
+        window_secs: 1,
+        ..Setup::default()
+    }
+}
+
+/// Let every receipt staged so far lapse ([`short_window`]).
+#[cfg(feature = "cost-governance")]
+async fn lapse() {
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+}
+
 /// `dear` costs 1.0 and `cheap`, in the same [`CATEGORY`], 0.1: every answer
 /// to `dear` gets the gateway's `_cost_suggestion` naming the category.
 #[cfg(feature = "cost-governance")]
@@ -55,7 +71,7 @@ fn suggest(fx: &mut Fixture, dear: &str, cheap: &str) {
 #[tokio::test]
 async fn meta_cache_hit_leaves_the_cost_suggestion_out_of_the_receipt() {
     let cache = Some(Arc::new(crate::cache::ResponseCache::new()));
-    let mut fx = meta_fixture(Setup::default(), cache).await;
+    let mut fx = meta_fixture(short_window(), cache).await;
     suggest(&mut fx, "read", "send");
     let read = invoke("read", &json!({}));
     let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &json!({})).await;
@@ -63,6 +79,7 @@ async fn meta_cache_hit_leaves_the_cost_suggestion_out_of_the_receipt() {
         first.contains(CATEGORY),
         "base: the gateway suggested a cheaper tool: {first}"
     );
+    lapse().await;
     let reads = fx.reads();
     let (_, hit) = post(&fx, Some("a"), "gateway_invoke", &read, &json!({})).await;
     assert_eq!(fx.reads(), reads, "base: the re-read must be a cache hit");
@@ -81,7 +98,7 @@ async fn meta_cache_hit_leaves_the_cost_suggestion_out_of_the_receipt() {
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn meta_replay_leaves_the_cost_suggestion_out_of_the_receipt() {
-    let mut fx = meta_fixture(Setup::default(), None).await;
+    let mut fx = meta_fixture(short_window(), None).await;
     suggest(&mut fx, "read", "send");
     let read = invoke("read", &json!({}));
     let (_, first) = post(
@@ -96,6 +113,7 @@ async fn meta_replay_leaves_the_cost_suggestion_out_of_the_receipt() {
         first.contains(CATEGORY),
         "base: the gateway suggested a cheaper tool: {first}"
     );
+    lapse().await;
     let reads = fx.reads();
     let (_, replay) = post(
         &fx,
