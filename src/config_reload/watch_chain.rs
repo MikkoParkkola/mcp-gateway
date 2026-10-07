@@ -196,7 +196,8 @@ pub(super) struct ChainNames {
     /// Paths a passed event removed or renamed. A watched directory among
     /// them lost its kernel watch, or the watch left with the renamed inode,
     /// so the rewatch task drops it from the ledger to watch it anew
-    /// (MIK-8024).
+    /// (MIK-8024). Locked alone, or after [`ChainWatch::ledger`], never
+    /// before it.
     gone: Mutex<BTreeSet<PathBuf>>,
     /// The paths of every event that passed (tests read it).
     #[cfg(test)]
