@@ -104,14 +104,27 @@ thread_local! {
     /// before the counter is cleared: a test lands an add there (MIK-7880).
     static AFTER_DAY_PUBLISH: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
+    /// Runs once on this thread inside a settle, right after the spend is
+    /// added: a test starts a competing check there (MIK-7903).
+    static AFTER_SPEND_ADDED: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+type TestHook = std::thread::LocalKey<std::cell::RefCell<Option<Box<dyn FnOnce()>>>>;
+
+/// Run and clear the hook a test set on this thread, if any.
+#[cfg(test)]
+fn fire(hook: &'static TestHook) {
+    let taken = hook.with(|hook| hook.borrow_mut().take());
+    if let Some(f) = taken {
+        f();
+    }
 }
 
 #[cfg(test)]
 fn fire_after_day_publish() {
-    let taken = AFTER_DAY_PUBLISH.with(|hook| hook.borrow_mut().take());
-    if let Some(f) = taken {
-        f();
-    }
+    fire(&AFTER_DAY_PUBLISH);
 }
 
 #[cfg(all(test, feature = "cost-governance"))]
@@ -606,6 +619,22 @@ impl BudgetEnforcer {
                 [global, tool, key.unwrap_or(0)],
             );
         }
+    }
+
+    /// Record an admitted call's spend and settle the reservation its check
+    /// made (MIK-7903).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn settle(
+        &self,
+        hold: Option<&SpendHold>,
+        tool_name: &str,
+        api_key_name: Option<&str>,
+        cost_usd: f64,
+    ) {
+        let _ = hold;
+        self.record_spend(tool_name, api_key_name, cost_usd);
+        #[cfg(test)]
+        fire(&AFTER_SPEND_ADDED);
     }
 
     /// Re-apply today's spend from a persisted snapshot, so a restart keeps

@@ -165,6 +165,65 @@ fn an_add_inside_the_day_reset_window_is_kept() {
     assert_eq!(acc.current(), 8, "an add inside the reset window was lost");
 }
 
+/// MIK-7903 (MIK-7763C.1): a check that runs after a call's spend is added,
+/// before its reservation would be released, sees the call once.
+///
+/// The hook fires inside `settle` right after the adds and starts call B's
+/// check on another thread. With the release in the same step under the
+/// ledger lock, B waits and then sees only the spend; otherwise it sees the
+/// spend and the reservation together and is refused.
+#[test]
+fn a_check_during_a_settle_counts_the_call_once() {
+    use std::sync::Mutex;
+    use std::thread::JoinHandle;
+
+    for scope in [Scope::Global, Scope::Tool, Scope::Key] {
+        // GIVEN: room for exactly two calls, and call A admitted
+        let enforcer = enforcer(scope, 2);
+        let a = enforcer.check(TOOL, Some(KEY));
+        assert!(a.allowed, "{scope:?}: call A is admitted");
+        let slot: Arc<Mutex<Option<JoinHandle<bool>>>> = Arc::default();
+        let (inner, hook_slot) = (Arc::clone(&enforcer), Arc::clone(&slot));
+        AFTER_SPEND_ADDED.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                let b = std::thread::spawn(move || inner.check(TOOL, Some(KEY)).allowed);
+                *hook_slot.lock().unwrap() = Some(b);
+            }));
+        });
+        // WHEN: A settles while B checks
+        enforcer.settle(a.hold.as_deref(), TOOL, Some(KEY), a.cost_usd);
+        let b = slot.lock().unwrap().take().expect("the hook ran");
+        // THEN: B fits, because A counts once (spent), not twice (spent + held)
+        assert!(b.join().unwrap(), "{scope:?}: call B was refused");
+        drop(a);
+    }
+}
+
+/// MIK-7903: a settled hold gives nothing back on drop, so another call's
+/// reservation is never released with it.
+#[test]
+fn dropping_a_settled_hold_keeps_other_reservations() {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let micro = (COST * 1_000_000.0) as u64;
+    // GIVEN: two admitted calls, A and B
+    let enforcer = enforcer(Scope::Global, 4);
+    let a = enforcer.check(TOOL, Some(KEY));
+    let b = enforcer.check(TOOL, Some(KEY));
+    // WHEN: A settles and its hold is dropped
+    enforcer.settle(a.hold.as_deref(), TOOL, Some(KEY), a.cost_usd);
+    drop(a);
+    // THEN: B's reservation is still held whole, and A's spend is recorded
+    let pending = locked(&enforcer.ledger);
+    assert_eq!(
+        (pending.global, pending.tool(TOOL), pending.key(KEY)),
+        (micro, micro, micro),
+        "B's reservation was released with A's"
+    );
+    drop(pending);
+    assert!((enforcer.snapshot().global_daily_usd - COST).abs() < 1e-9);
+    drop(b);
+}
+
 /// A total at the top of the range saturates rather than wrapping to a small
 /// number that would read as budget left.
 #[test]
