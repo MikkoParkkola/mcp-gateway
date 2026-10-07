@@ -163,16 +163,27 @@ async fn post(state: &Arc<AppState>, body: Value, bearer: &str) -> Value {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body must read");
-    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+        panic!(
+            "the answer must be JSON ({error}): {}",
+            String::from_utf8_lossy(&bytes)
+        )
+    })
 }
 
 /// Ask, and return the envelope the gateway answered with.
 async fn ask(state: &Arc<AppState>, id: i64, server: &str, bearer: &str) -> String {
     let body = post(state, kill(id, server, None), bearer).await;
-    assert!(
-        body.pointer(&format!("/result/inputRequests/{CONFIRM_KEY}"))
-            .is_some(),
+    assert_eq!(
+        body.pointer("/result/resultType").and_then(Value::as_str),
+        Some("input_required"),
         "the first call must be asked, not run or refused: {body}"
+    );
+    assert_eq!(
+        body.pointer(&format!("/result/inputRequests/{CONFIRM_KEY}/type"))
+            .and_then(Value::as_str),
+        Some("boolean"),
+        "the ask is a yes/no confirmation: {body}"
     );
     body.pointer("/result/requestState")
         .and_then(Value::as_str)
@@ -194,6 +205,22 @@ fn assert_refused(body: &Value) {
         body.get("result").is_none(),
         "a refusal returns no result: {body}"
     );
+    // The gate could not obtain a confirmation; an operator's "no" is another
+    // arm with its own message and must not satisfy these tests.
+    assert!(
+        body.pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|m| m.contains("requires confirmation and none could be obtained")),
+        "the refusal is the cannot-obtain one: {body}"
+    );
+}
+
+/// The rightful call ran and answered with a JSON-RPC result.
+fn assert_ran(body: &Value) {
+    assert!(
+        body.get("error").is_none() && body.get("result").is_some(),
+        "the rightful call must succeed: {body}"
+    );
 }
 
 /// TEST.2, unredeemable answer: another admin presents an envelope minted
@@ -214,6 +241,7 @@ async fn an_envelope_from_another_principal_is_refused_and_not_run() {
         vec!["mik7927-p".to_owned()],
         "the rightful retry must run the kill: {body}"
     );
+    assert_ran(&body);
 }
 
 /// TEST.2, unredeemable answer: the envelope's own caller presents it for
@@ -233,6 +261,7 @@ async fn an_envelope_for_other_arguments_is_refused_and_not_run() {
         vec!["mik7927-asked".to_owned()],
         "the rightful retry must run the kill: {body}"
     );
+    assert_ran(&body);
 }
 
 /// TEST.3, no free slot: with every in-flight slot held, the gate cannot
@@ -269,4 +298,5 @@ async fn a_full_exchange_table_is_refused_and_not_run() {
         vec!["mik7927-full".to_owned()],
         "the earlier envelope must still run the kill: {body}"
     );
+    assert_ran(&body);
 }
