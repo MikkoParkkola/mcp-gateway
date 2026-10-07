@@ -33,6 +33,9 @@ pub(crate) enum Answer {
     Sequence(Vec<Value>),
     /// A JSON-RPC error from the backend itself, after the call was received.
     Failure,
+    /// [`Self::Failure`] carrying this message on the first call; every later
+    /// call answers a plain `ok` text, so only that first call delivers it.
+    FirstCallFails(String),
 }
 
 impl Answer {
@@ -192,6 +195,13 @@ impl MockBackend {
                     -32000,
                     "mock-backend-failed",
                 );
+            }
+            Answer::FirstCallFails(message) if call == 0 => {
+                return JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, message.clone());
+            }
+            Answer::FirstCallFails(_) => {
+                let ok = json!({ "content": [{ "type": "text", "text": "ok" }] });
+                return JsonRpcResponse::success(RequestId::Number(1), ok);
             }
         };
         JsonRpcResponse::success(RequestId::Number(1), value.clone())
