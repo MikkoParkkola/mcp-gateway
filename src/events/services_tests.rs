@@ -392,8 +392,8 @@ fn an_event_charge_settles_its_reservation_with_its_spend() {
     let enforcer = Arc::new(BudgetEnforcer::new(cfg, Arc::clone(&registry)));
     let mut services = services(Vec::new());
     services.budget = Some((Arc::clone(&enforcer), registry));
-    let competing = enforcer.check_during_next_settle("events:ev", Some("dev"));
-    // WHEN: one charge settles while another check runs
+    let competing = enforcer.check_inside_next_settle("events:ev", Some("dev"));
+    // WHEN: one charge settles, with a check made inside its settle
     assert!(services.charge("ev", Some("dev"), 1.0));
     // THEN: the charge counts once, so the second still fits
     assert!(

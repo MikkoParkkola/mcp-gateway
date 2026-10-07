@@ -572,8 +572,8 @@ async fn an_invoked_call_settles_its_reservation_with_its_spend() {
     // GIVEN: room for two calls of 0.01 on `book`
     let answer = json!({"content": [{"type": "text", "text": "booked"}]});
     let (meta, enforcer, _) = budgeted(vec![answer], 0.025);
-    let competing = enforcer.check_during_next_settle("book", None);
-    // WHEN: one call settles while another check runs
+    let competing = enforcer.check_inside_next_settle("book", None);
+    // WHEN: one call settles, with a check made inside its settle
     let call = json!({"server": "asking_backend", "tool": "book", "arguments": {}});
     meta.invoke_tool(&call, Some("session-settle-1"), &allow_all_ctx())
         .await
@@ -590,7 +590,7 @@ async fn a_bridged_round_settles_its_reservation_with_its_spend() {
     // GIVEN: room for three calls of 0.01 on `book`; the first round asks
     let answer = json!({"content": [{"type": "text", "text": "booked on work"}]});
     let (meta, enforcer, script) = budgeted(vec![question(), answer], 0.035);
-    let competing = enforcer.check_during_settle_after(1, "book", None);
+    let competing = enforcer.check_inside_settle_after(1, "book", None);
     let channel = AcceptingChannel {
         asked: std::sync::Mutex::new(Vec::new()),
     };
@@ -605,7 +605,7 @@ async fn a_bridged_round_settles_its_reservation_with_its_spend() {
     )
     .declared_capabilities();
     ctx.channel = &channel;
-    // WHEN: the bridged round settles while another check runs
+    // WHEN: the bridged round settles, with a check made inside it
     let call = json!({"server": "asking_backend", "tool": "book", "arguments": {}});
     meta.invoke_tool(&call, Some("session-settle-2"), &ctx)
         .await

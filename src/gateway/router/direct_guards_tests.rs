@@ -227,8 +227,8 @@ async fn t3e_a_direct_call_settles_its_reservation_with_its_spend() {
         // GIVEN: room for two calls of 1.0 on `k-budget`
         let fx = budget_fixture(Answer::Ok, 2.5).await;
         let enforcer = fx.state.meta_mcp.budget_enforcer.clone().expect("armed");
-        let competing = enforcer.check_during_next_settle("read", Some("k-budget"));
-        // WHEN: one call settles while another check runs
+        let competing = enforcer.check_inside_next_settle("read", Some("k-budget"));
+        // WHEN: one call settles, with a check made inside its settle
         let (_, body) = post_direct(&fx, backend, "k-budget", "read", json!({}), None, None).await;
         assert!(body.get("result").is_some(), "{backend}: {body}");
         // THEN: the call counts once, so the second still fits

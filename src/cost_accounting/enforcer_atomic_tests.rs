@@ -174,22 +174,33 @@ fn an_add_inside_the_day_reset_window_is_kept() {
 /// spend and the reservation together and is refused.
 #[test]
 fn a_check_during_a_settle_counts_the_call_once() {
+    use std::sync::Mutex;
+    use std::thread::JoinHandle;
+
     for scope in [Scope::Global, Scope::Tool, Scope::Key] {
         // GIVEN: room for exactly two calls, and call A admitted
         let enforcer = enforcer(scope, 2);
         let a = enforcer.check(TOOL, Some(KEY));
         assert!(a.allowed, "{scope:?}: call A is admitted");
-        let b = enforcer.check_during_next_settle(TOOL, Some(KEY));
-        // WHEN: A settles while B checks
+        let slot: Arc<Mutex<Option<JoinHandle<bool>>>> = Arc::default();
+        let (inner, hook_slot) = (Arc::clone(&enforcer), Arc::clone(&slot));
+        AFTER_SPEND_ADDED.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                let b = std::thread::spawn(move || inner.check(TOOL, Some(KEY)).allowed);
+                *hook_slot.lock().unwrap() = Some(b);
+            }));
+        });
+        // WHEN: A settles while B checks; A's hold outlives B's answer
         enforcer.settle(a.hold.as_deref(), TOOL, Some(KEY), a.cost_usd);
+        let b = slot.lock().unwrap().take().expect("the hook ran");
         // THEN: B fits, because A counts once (spent), not twice (spent + held)
-        assert!(b.admitted(), "{scope:?}: call B was refused");
+        assert!(b.join().unwrap(), "{scope:?}: call B was refused");
         drop(a);
     }
 }
 
-/// MIK-7903: a settled hold gives nothing back on drop, so another call's
-/// reservation is never released with it.
+/// MIK-7903: a settled hold gives nothing back on drop, through any clone, so
+/// another call's reservation is never released with it.
 #[test]
 fn dropping_a_settled_hold_keeps_other_reservations() {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -197,10 +208,12 @@ fn dropping_a_settled_hold_keeps_other_reservations() {
     // GIVEN: two admitted calls, A and B
     let enforcer = enforcer(Scope::Global, 4);
     let a = enforcer.check(TOOL, Some(KEY));
+    let copy = a.clone();
     let b = enforcer.check(TOOL, Some(KEY));
-    // WHEN: A settles and its hold is dropped
+    // WHEN: A settles through one clone, then both clones drop
     enforcer.settle(a.hold.as_deref(), TOOL, Some(KEY), a.cost_usd);
     drop(a);
+    drop(copy);
     // THEN: B's reservation is still held whole, and A's spend is recorded
     let pending = locked(&enforcer.ledger);
     assert_eq!(

@@ -108,6 +108,10 @@ thread_local! {
     /// added: a test starts a competing check there (MIK-7903).
     static AFTER_SPEND_ADDED: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
+    /// Runs once on this thread when a settle has let the ledger go, before it
+    /// returns: the caller still holds its admission (MIK-7903).
+    static AFTER_SETTLE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
 }
 
 #[cfg(test)]
@@ -650,6 +654,8 @@ impl BudgetEnforcer {
             hold.release_into(&mut pending);
         }
         drop(pending);
+        #[cfg(test)]
+        fire(&AFTER_SETTLE);
         if self.observer.is_set() {
             self.report_crossings(
                 tool_name,
