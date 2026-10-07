@@ -76,6 +76,7 @@ fn record(event: &str, sub: &str, now: DateTime<Utc>) -> OutboxRecord {
         state: OutboxState::Pending,
         last_status: None,
         dead_as: None,
+        replayed: false,
     }
 }
 

@@ -189,6 +189,7 @@ impl EventsHub {
             state: OutboxState::Pending,
             last_status: None,
             dead_as: None,
+            replayed: false,
         };
         let refusal = if scan == Scan::Block {
             Some(DeadReason::FirewallBlocked)

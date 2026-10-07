@@ -76,6 +76,10 @@ pub(crate) struct OutboxRecord {
     /// buried again, never sent again. Written with the next claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dead_as: Option<DeadReason>,
+    /// Placed by an operator replay (MIK-8061): its dead letter is gone, so
+    /// if its subscription expires it is buried again, never dropped.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replayed: bool,
 }
 
 impl OutboxRecord {
@@ -118,6 +122,9 @@ pub(crate) enum DeadReason {
     Budget,
     /// The cross-tenant read verdict withheld it (MIN.2 E1).
     Tenant,
+    /// Its subscription expired with it replayed or tried (MIK-8061).
+    #[serde(rename = "subscription_expired")]
+    Expired,
 }
 
 impl DeadReason {
@@ -129,6 +136,7 @@ impl DeadReason {
             Self::FirewallBlocked => "firewall_blocked",
             Self::Budget => "budget",
             Self::Tenant => "tenant",
+            Self::Expired => "subscription_expired",
         }
     }
 }
