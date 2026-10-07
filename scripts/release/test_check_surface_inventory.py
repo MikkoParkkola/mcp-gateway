@@ -28,10 +28,17 @@ DOC = """# x
 EXTRACTED = {"env": [inv.Entry("A", "src/a.rs", 1), inv.Entry("B", "src/b.rs", 9)]}
 
 
+FILLER = {s: [inv.Entry(f"x-{s}", "src/x.rs", 1)] for s in inv.SURFACES if s != "env"}
+FILLER_ROWS = "".join(
+    f"## Surface: {s}\n| Item | Class | Migration | Defined at |\n|---|---|---|---|\n| `x-{s}` | KEEP | - | src/x.rs:1 |\n"
+    for s in FILLER
+)
+
+
 def check(doc: str, extracted=None) -> list[str]:
-    full = {s: [] for s in inv.SURFACES}
+    full = dict(FILLER)
     full.update(extracted if extracted is not None else EXTRACTED)
-    return inv.check(doc, full)
+    return inv.check(doc + FILLER_ROWS, full)
 
 
 def test_complete_doc_passes() -> None:
@@ -66,6 +73,31 @@ def test_wrong_file_fails() -> None:
 def test_duplicate_row_fails() -> None:
     dup = DOC.replace("| `B` |", "| `A` | KEEP | x | - | src/a.rs:1 |\n| `B` |")
     assert any("listed twice" in e for e in check(dup)), check(dup)
+
+
+def test_empty_surface_fails() -> None:
+    errors = inv.check(DOC + FILLER_ROWS, {**FILLER, "env": []})
+    assert any("env: extractor returned no items" in e for e in errors), errors
+    errors = inv.check(DOC + FILLER_ROWS, {k: v for k, v in FILLER.items()} | {"env": EXTRACTED["env"]} | {"lib": []})
+    assert any("lib: extractor returned no items" in e for e in errors), errors
+
+
+def test_route_with_named_handler_is_extracted() -> None:
+    """A literal path is an item whatever its handler expression looks like."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory(dir=inv.ROOT / "src") as tmp:
+        f = Path(tmp) / "planted.rs"
+        f.write_text('fn r(h: H) -> Router { Router::new().route("/planted", h) }\n', encoding="utf-8")
+        ids = {e.id for e in inv.extract_routes()}
+    assert any('"/planted"' in i for i in ids), sorted(ids)
+
+
+def test_not_http_route_allowlist_is_live() -> None:
+    """Every allowlisted non-HTTP `.route(` call still exists, so the list cannot rot."""
+    for file, arg in inv.NOT_HTTP_ROUTES:
+        code, _ = inv.prod_scan(inv.ROOT / file)
+        assert re.search(rf"\.route\(\s*{re.escape(arg)}\s*,", code), (file, arg)
 
 
 def test_backend_keys_match_strict_keys_oracle() -> None:

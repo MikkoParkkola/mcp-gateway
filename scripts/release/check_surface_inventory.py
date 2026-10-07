@@ -565,6 +565,17 @@ def extract_env() -> list[Entry]:
 # ── Surface: routes ──────────────────────────────────────────────────────────
 
 
+# `.route(` calls that are not HTTP registrations: the continuation in-flight
+# table's `route(key, now)`. Any other non-constant `.route(` becomes an item
+# the inventory must classify, so a new listener path cannot slip past.
+NOT_HTTP_ROUTES = {
+    ("src/gateway/meta_mcp/chain_interim.rs", "&payload.hold_key"),
+    ("src/gateway/meta_mcp/invoke/continuation.rs", "&payload.hold_key"),
+    ("src/gateway/meta_mcp/task_confirmation.rs", "&payload.hold_key"),
+    ("src/protocol/continuation/ledger/in_flight_lifetime.rs", "&key"),
+}
+
+
 def extract_routes() -> list[Entry]:
     path = SRC / "gateway/routes.rs"
     code, _ = scan(path.read_text(encoding="utf-8"))
@@ -575,9 +586,9 @@ def extract_routes() -> list[Entry]:
     # receiver under `webhooks.base_path`, the backend OAuth callback listener.
     for p in src_files():
         code, _ = prod_scan(p)
-        for m in re.finditer(r"\.route\(\s*([^,]+?)\s*,\s*(?:axum::routing::)?(?:get|post|put|patch|delete|any|on)\(", code):
+        for m in re.finditer(r"\.route\(\s*([^,]+?)\s*,", code):
             arg = m.group(1)
-            if arg.startswith("routes::"):
+            if arg.startswith("routes::") or (rel(p), arg) in NOT_HTTP_ROUTES:
                 continue
             rid = f"dynamic {arg} ({rel(p)})"
             out.setdefault(rid, Entry(rid, rel(p), line_of(code, m.start()), "path from config"))
@@ -677,7 +688,12 @@ def check(doc_text: str, extracted: dict[str, list[Entry]]) -> list[str]:
             errors.append(f"line {r.lineno}: {r.id!r} has class {r.cls!r}, want one of {sorted(CLASSES)}")
         elif r.cls != "KEEP" and r.migration in {"", "-"}:
             errors.append(f"line {r.lineno}: {r.cls} item {r.id!r} has no migration story")
-    for surface, entries in extracted.items():
+    for surface in SURFACES:
+        entries = extracted.get(surface)
+        if not entries:
+            # An extractor that finds nothing is broken, never "all classified".
+            errors.append(f"{surface}: extractor returned no items")
+            continue
         listed = by_surface[surface]
         for e in entries:
             r = listed.pop(e.id, None)
