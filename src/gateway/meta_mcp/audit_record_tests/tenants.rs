@@ -515,6 +515,35 @@ async fn an_in_process_keyed_repeat_is_replayed_by_the_invoke_path_guard() {
     );
 }
 
+/// A backend whose every `tools/call` round is lost after the send, counting
+/// the calls that reach it.
+struct CountedLost(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for CountedLost {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/call" {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        super::Scripted(Err("stream lost".into()))
+            .request(method, params)
+            .await
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
 /// MIK-7991 (F1): a keyed call whose round is lost settles its key with the
 /// gateway's uncertainty notice. The sync admission's clock is wall time, so a
 /// forward step can expire its entry before this guard's, and the re-issue
@@ -530,7 +559,8 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
         &crate::config::FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
-    backend.set_transport_for_test(Arc::new(super::Scripted(Err("stream lost".into()))));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    backend.set_transport_for_test(Arc::new(CountedLost(Arc::clone(&calls))));
     let _ = registry.register(Arc::clone(&backend));
     let firewall = Arc::new(Firewall::from_config(
         FirewallConfig {
@@ -563,6 +593,11 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
         staged.commit(true);
         answers.push(answer.expect("answered"));
     }
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the replay reached the backend again"
+    );
     let notice = answers[1]["content"][0]["text"]
         .as_str()
         .unwrap_or_default()
