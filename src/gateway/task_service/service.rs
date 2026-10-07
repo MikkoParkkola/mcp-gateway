@@ -97,6 +97,19 @@ impl TaskService {
         Ok(Self { store, admission })
     }
 
+    /// Read the sealed rows again and lower the seal only after any repaired
+    /// row's key is imported, so that key is never admitted as new in between
+    /// (MIK-8052). Runs on every expiry sweep; a store with nothing sealed
+    /// returns at once.
+    pub(crate) async fn reread_sealed(&self) {
+        let admission = Arc::clone(&self.admission);
+        let sealed = self
+            .store
+            .reread_sealed(|binding, id| admission.import_tasks(&[(binding, id)]).is_ok())
+            .await;
+        self.admission.set_sealed(sealed);
+    }
+
     /// The rows the store skipped when it opened (MIK-8023).
     pub(crate) fn skipped_records(&self) -> super::store::SkippedRecords {
         self.store.skipped_records()

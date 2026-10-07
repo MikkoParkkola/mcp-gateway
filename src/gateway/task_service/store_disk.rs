@@ -363,6 +363,72 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
     Ok(loaded)
 }
 
+/// What reading a sealed row again found (MIK-8052).
+pub(super) enum Reread {
+    /// The file is gone: nothing to protect any more.
+    Gone,
+    /// The row now names its key and its own task id: keep that key instead.
+    Repaired(AdmissionRecord, String),
+    /// Still unreadable, or refused at the trust boundary: stays sealed. A
+    /// re-read never makes the store unavailable; it only declines to unseal.
+    Sealed,
+}
+
+/// Read one sealed row again by the same rules `load` applies, without ever
+/// blocking on what the name now points at (the open is non-blocking).
+pub(super) fn reread_record(dir: &Path, name: &str, limits: StoreLimits) -> Reread {
+    let path = dir.join(name);
+    let shown_path = path.display();
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Reread::Gone,
+        Err(_) => return Reread::Sealed,
+        Ok(_) => {}
+    }
+    let Ok(mut file) = open_record(&path) else {
+        return Reread::Sealed;
+    };
+    let private_file = file
+        .metadata()
+        .is_ok_and(|meta| meta.is_file() && has_mode(&meta, RECORD_MODE));
+    if !private_file {
+        tracing::error!(path = %shown_path, "sealed task record is not a private regular file; it stays sealed");
+        return Reread::Sealed;
+    }
+    let Ok(bytes) = read_bounded(&mut file, limits.record_bytes) else {
+        return Reread::Sealed;
+    };
+    let envelope = Envelope::read(&bytes);
+    if envelope
+        .version
+        .is_some_and(|version| version > u64::from(MAX_LOADABLE_VERSION))
+    {
+        tracing::error!(path = %shown_path, "sealed task record was written by a newer gateway; it stays sealed");
+        return Reread::Sealed;
+    }
+    let (admission, task_id) = match (restore(&bytes, &shown_path), envelope) {
+        (Some((record, task)), _) => (record.admission, task.id().to_owned()),
+        (
+            None,
+            Envelope {
+                admission: AdmissionRead::Read(admission),
+                task_id,
+                ..
+            },
+        ) => {
+            // As at load: the id the row names, else the file name.
+            let named =
+                task_id.unwrap_or_else(|| name.strip_suffix(".json").unwrap_or(name).to_owned());
+            (admission, named)
+        }
+        _ => return Reread::Sealed,
+    };
+    if record_name(&task_id) != name {
+        tracing::error!(path = %shown_path, "sealed task record names another task; it stays sealed");
+        return Reread::Sealed;
+    }
+    Reread::Repaired(admission, task_id)
+}
+
 /// The record and its task, when both read and the version is one this build
 /// loads. Why one does not is logged here, the file named, never its content.
 fn restore(bytes: &[u8], shown_path: &std::path::Display<'_>) -> Option<(Record, Task)> {

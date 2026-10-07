@@ -13,6 +13,19 @@ use super::platform::sync_dir;
 use super::{CommitStage, Shared, StoreError, TaskStore, fire, record_name};
 use crate::protocol::tasks::TaskStatus;
 
+/// The admission binding a stored admission block describes.
+fn binding_of(
+    admission: &super::super::record::AdmissionRecord,
+) -> crate::idempotency::admission::RestoredBinding {
+    crate::idempotency::admission::RestoredBinding {
+        identity: admission.identity_digest.clone(),
+        principal_digest: admission.principal_digest.clone(),
+        operation: admission.operation_digest.clone(),
+        representation: admission.representation_digest.clone(),
+        metadata_bytes: admission.metadata_bytes,
+    }
+}
+
 /// The S1 store surface: restart enumeration and the conditional durable expiry
 /// that couples a record's deletion to its dedupe entry.
 impl TaskStore {
@@ -30,19 +43,57 @@ impl TaskStore {
             .iter()
             .map(|(id, entry)| (&entry.record.admission, id))
             .chain(state.reserved.iter().map(|(admission, id)| (admission, id)))
-            .map(|(admission, id)| {
-                (
-                    crate::idempotency::admission::RestoredBinding {
-                        identity: admission.identity_digest.clone(),
-                        principal_digest: admission.principal_digest.clone(),
-                        operation: admission.operation_digest.clone(),
-                        representation: admission.representation_digest.clone(),
-                        metadata_bytes: admission.metadata_bytes,
-                    },
-                    id.clone(),
-                )
-            })
+            .map(|(admission, id)| (binding_of(admission), id.clone()))
             .collect()
+    }
+
+    /// Read every sealed row again (MIK-8052), off the runtime, and apply what
+    /// it found: a removed file leaves the seal; a repaired row whose binding
+    /// `import` accepts joins the reserved rows. `import` runs outside the
+    /// store's lock. Returns how many rows stay sealed, for the caller to hand to
+    /// admission AFTER any import, so a repaired key is never left unguarded.
+    pub(in crate::gateway::task_service) async fn reread_sealed(
+        &self,
+        import: impl Fn(crate::idempotency::admission::RestoredBinding, String) -> bool,
+    ) -> usize {
+        let names: Vec<String> = self.0.state().sealed.iter().cloned().collect();
+        if names.is_empty() {
+            return 0;
+        }
+        let shared = Arc::clone(&self.0);
+        let found = tokio::task::spawn_blocking(move || {
+            names
+                .into_iter()
+                .map(|name| {
+                    let outcome = super::disk::reread_record(&shared.dir, &name, shared.limits);
+                    (name, outcome)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        for (name, outcome) in found {
+            let kept = match outcome {
+                super::disk::Reread::Sealed => continue,
+                super::disk::Reread::Gone => None,
+                super::disk::Reread::Repaired(admission, id) => {
+                    if !import(binding_of(&admission), id.clone()) {
+                        tracing::error!(record = %name, "repaired task record's key is refused by admission; it stays sealed");
+                        continue;
+                    }
+                    Some((admission, id))
+                }
+            };
+            tracing::warn!(record = %name, repaired = kept.is_some(), "sealed task record cleared");
+            let mut state = self.0.state();
+            state.sealed.remove(&name);
+            state.reserved.extend(kept);
+        }
+        let sealed = self.0.state().sealed.len();
+        #[allow(clippy::cast_precision_loss)]
+        telemetry_metrics::gauge!("mcp_task_store_skipped_records", "class" => "sealed")
+            .set(sealed as f64);
+        sealed
     }
 
     /// The rows the load skipped, for the startup report (MIK-8023).
