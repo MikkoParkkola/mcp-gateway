@@ -96,6 +96,13 @@ impl TaskStore {
         sealed
     }
 
+    /// Mark `name` sealed as though the load had found its key unreadable, for
+    /// tests above the store that cannot plant a row before their store opens.
+    #[cfg(test)]
+    pub(in crate::gateway::task_service) fn seal_for_test(&self, name: &str) {
+        self.0.state().sealed.insert(name.to_owned());
+    }
+
     /// The rows the load skipped, for the startup report (MIK-8023).
     pub(crate) fn skipped_records(&self) -> super::SkippedRecords {
         let state = self.0.state();

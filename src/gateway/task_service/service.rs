@@ -110,6 +110,14 @@ impl TaskService {
         self.admission.set_sealed(sealed);
     }
 
+    /// Seal `name` as the load would, and seal admission with it (MIK-8052).
+    #[cfg(test)]
+    pub(crate) fn seal_for_test(&self, name: &str) {
+        self.store.seal_for_test(name);
+        self.admission
+            .set_sealed(self.store.skipped_records().sealed);
+    }
+
     /// The rows the store skipped when it opened (MIK-8023).
     pub(crate) fn skipped_records(&self) -> super::store::SkippedRecords {
         self.store.skipped_records()
