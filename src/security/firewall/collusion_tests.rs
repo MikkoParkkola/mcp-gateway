@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
 
-use super::{CollusionDetector, RelayAction, RelayParams, W, winnow};
+use super::{CollusionDetector, MAX_SOURCE_FINGERPRINTS, RelayAction, RelayParams, W, winnow};
 
 const A: &str = "principal-a";
 const B: &str = "principal-b";
@@ -530,19 +530,20 @@ fn whitespace_and_nfc_normalized() {
 #[test]
 fn source_fingerprints_capped() {
     let d = detector();
-    let big = text(5, 12_000);
+    let big = text(5, 24_000);
+    let cap = MAX_SOURCE_FINGERPRINTS;
     assert!(
-        d.fingerprints(&big).len() > 1_024,
+        d.fingerprints(&big).len() > cap,
         "premise: oversized result"
     );
     d.record_delivery_at(T, A, true, &big, Instant::now());
-    assert_eq!(d.tracked_fingerprints(), 1_024);
+    assert_eq!(d.tracked_fingerprints(), cap);
     let first = d.fingerprints(&big);
     assert!(
-        first[..1_024].iter().all(|&fp| d.is_tracked(fp)),
-        "keeps the first 1,024"
+        first[..cap].iter().all(|&fp| d.is_tracked(fp)),
+        "keeps the first {cap}"
     );
-    let dropped = d.fingerprints(&big).len() - 1_024;
+    let dropped = d.fingerprints(&big).len() - cap;
     assert_eq!(d.source_truncated(), u64::try_from(dropped).unwrap());
 }
 

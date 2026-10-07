@@ -79,7 +79,10 @@ const MAX_TUPLES: usize = 8;
 /// tuple saturates it, so a larger `common_principals` is never met.
 pub(super) const MAX_COMMON_PRINCIPALS: usize = MAX_TUPLES + 1;
 /// Fingerprints kept per delivered result; the rest are counted, not stored.
-const MAX_SOURCE_FINGERPRINTS: usize = 1_024;
+/// Twice one form's share: a split delivery records its newline-joined and
+/// its run-together forms, which share almost no k-grams, and both must fit
+/// for a copy up to the record cap.
+const MAX_SOURCE_FINGERPRINTS: usize = 2 * 1_024;
 
 /// Delivery instants kept per pair; see [`Copies`].
 const MAX_COPIES: usize = 3;

@@ -136,13 +136,13 @@ impl DeliveryDigest {
         self
     }
 
-    /// The fingerprints to record: each run's, newline-joined as a delivery
-    /// walk joins leaves, in walk order, then the retained ones; distinct.
+    /// The fingerprints to record: each run's forms (see `run_texts`), in
+    /// walk order, then the retained ones; distinct.
     pub(super) fn fingerprints(&self, detector: &CollusionDetector) -> Vec<u64> {
         let mut seen = HashSet::new();
-        self.runs()
+        self.run_texts()
             .iter()
-            .flat_map(|run| detector.fingerprints(&run.join("\n")))
+            .flat_map(|text| detector.fingerprints(text))
             .chain(self.retained.iter().copied())
             .filter(|fp| seen.insert(*fp))
             .collect()
@@ -200,12 +200,28 @@ impl DeliveryDigest {
         kept
     }
 
-    /// Every k-gram hash of each run of this digest's segments.
+    /// Every k-gram hash of each run's forms (see `run_texts`).
     fn run_kgrams(&self, detector: &CollusionDetector) -> HashSet<u64> {
-        self.runs()
+        self.run_texts()
             .iter()
-            .flat_map(|run| detector.kgram_hashes(&run.join("\n")))
+            .flat_map(|text| detector.kgram_hashes(text))
             .collect()
+    }
+
+    /// Each run's text newline-joined, as a delivery walk joins leaves, and,
+    /// for a run of several segments, its leaves run together too, as egress
+    /// reads forwarded leaves: a copy delivered split mid-word over short
+    /// fields then matches its holder's own forwarding of the pieces. A run
+    /// never crosses a seam, so neither form joins text across a cut.
+    fn run_texts(&self) -> Vec<String> {
+        let mut texts = Vec::new();
+        for run in self.runs() {
+            texts.push(run.join("\n"));
+            if run.len() > 1 {
+                texts.push(run.concat());
+            }
+        }
+        texts
     }
 
     /// The segments' texts grouped into runs: a seam starts a new one.
