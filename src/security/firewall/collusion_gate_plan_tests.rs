@@ -110,3 +110,27 @@ fn repeated_changed_leaves_do_not_crowd_out_a_later_leafs_fingerprints() {
             .all(|fp| kept.contains(fp))
     );
 }
+
+/// MIK-7992 with MIK-7773: a step's split copy keeps its run-together
+/// fingerprints when the answer puts another leaf after the first piece,
+/// as only the step's own run still joins the pieces there.
+#[test]
+fn a_split_step_keeps_its_run_together_form_across_an_interleaved_leaf() {
+    let detector = CollusionDetector::new(RelayParams::default());
+    let (flat, pieces) = super::split_copy(60);
+    let leaves: Vec<&str> = pieces.iter().map(String::as_str).collect();
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&leaves, false);
+    let mut shown = vec![leaves[0], "a note another step put between them"];
+    shown.extend(&leaves[1..]);
+    let delivered = Delivered::of_leaves(shown).expect("bounded");
+    let kept: std::collections::HashSet<u64> = staged
+        .retaining(&detector, &delivered)
+        .fingerprints(&detector)
+        .into_iter()
+        .collect();
+    let flat_fps = detector.fingerprints(&flat);
+    assert!(
+        flat_fps.iter().all(|fp| kept.contains(fp)),
+        "flat form kept"
+    );
+}
