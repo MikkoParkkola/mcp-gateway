@@ -107,6 +107,8 @@ impl MetaMcp {
         // The backend the call was judged on; `None` for the capability route.
         captured: Option<Arc<crate::backend::Backend>>,
         chain: &super::super::response_security::chain_receipt::ChainSlot,
+        // The call's admission: its reservation is settled with the spend.
+        admission: &dispatch_guards::Admission,
     ) -> Result<Value> {
         let dispatch_start = Instant::now();
         let dispatch_result = self
@@ -172,6 +174,7 @@ impl MetaMcp {
                 caller_key: arm_key,
             },
             dispatch_guards::DirectOutcome::of(&dispatch_result),
+            admission,
         );
 
         dispatch_result

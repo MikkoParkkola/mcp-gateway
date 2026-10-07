@@ -126,7 +126,7 @@ impl Backend {
                 // process on the other end, and this one has just been
                 // replaced. Runs under the `start_lock` taken above, which is
                 // the order `Backend::resolve_era` documents.
-                self.resolve_era_after_start(&transport).await;
+                self.resolve_era_after_start(&transport, &entry).await;
                 Ok(RestartOutcome::Rebuilt)
             }
             Err(error) => {
