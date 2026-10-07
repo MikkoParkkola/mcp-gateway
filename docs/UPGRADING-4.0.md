@@ -185,6 +185,7 @@ backend" and "fails a capability file" first.**
 | 158 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 | 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
+| 161 | With gateway authentication off and agent authentication on, each agent token owns its tasks apart; every agent had shared one task owner | None. Tasks an agent created before the upgrade stay under the old shared owner, so the agent no longer finds them under its own |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4228,6 +4229,21 @@ build loads with both at 0.
 
 Library users: code that builds `EnforcerSnapshot` or `PersistedCosts` with a
 struct literal adds the two fields.
+
+## 161. Agent tokens own their tasks apart when gateway authentication is off
+
+**Startup:** no notice
+
+With gateway authentication off and agent authentication on, every caller
+holding a valid agent token shared one task owner, so one agent could read,
+update, cancel or replay another agent's task and listen to its
+notifications. Each agent now owns its own tasks, keyed on the `client_id`
+its token validated as. Callers without an agent token still share the one
+auth-off pool.
+
+Tasks an agent created before the upgrade were stored under the shared owner,
+so they stay in that pool: the agent that created them no longer finds them
+under its own owner.
 
 ## Upgrading from 3.5.x: a walkthrough
 
