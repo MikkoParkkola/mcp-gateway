@@ -47,21 +47,28 @@ fn a_rescan_wakes_on_an_unrelated_path() {
 }
 
 /// What the notify callback does with one event, for a config whose chain
-/// is resolved: (woke the task, queued a reload).
+/// is resolved: (woke the task, queued a reload). The filter holds what the
+/// rewatch task sets for a plain file: the file and its directory.
 fn callback_on(event: &notify::Event, cfg: &std::path::Path) -> (bool, bool) {
     let names = ChainNames::default();
-    names.set(Some(BTreeSet::from([canonical(cfg)])));
+    let dir = cfg.parent().expect("a directory");
+    names.set(Some(BTreeSet::from([canonical(cfg), canonical(dir)])));
     let (wake, woken) = tokio::sync::watch::channel(());
     let (reload, mut reloads) = tokio::sync::mpsc::channel(4);
     super::super::watcher::handle_watch_event(event, &names, cfg, &wake, &reload);
     (woken.has_changed().unwrap(), reloads.try_recv().is_ok())
 }
 
-/// An edit to the config wakes the task and reloads; on Linux a file beside
+/// An edit to the config wakes the task and reloads; reading it does neither
+/// (the reload's own read must not wake the task again); an event on the
+/// watched directory itself wakes without a reload; on Linux a file beside
 /// it does neither; a rescan does both whatever path it carries.
 #[test]
 fn the_callback_wakes_and_reloads_for_the_config_and_rescans_only() {
-    use notify::event::{CreateKind, DataChange, Event, EventKind, Flag, ModifyKind};
+    use notify::event::{
+        AccessKind, AccessMode, CreateKind, DataChange, Event, EventKind, Flag, ModifyKind,
+        RemoveKind,
+    };
     let root = tempfile::tempdir().expect("root");
     let cfg = root.path().join("gateway.yaml");
     std::fs::write(&cfg, "a: 1\n").unwrap();
@@ -70,6 +77,14 @@ fn the_callback_wakes_and_reloads_for_the_config_and_rescans_only() {
     let edit = Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
         .add_path(canonical(&cfg));
     assert_eq!(callback_on(&edit, &cfg), (true, true));
+
+    let read = Event::new(EventKind::Access(AccessKind::Close(AccessMode::Read)))
+        .add_path(canonical(&cfg));
+    assert_eq!(callback_on(&read, &cfg), (false, false));
+
+    let dir_gone =
+        Event::new(EventKind::Remove(RemoveKind::Folder)).add_path(canonical(root.path()));
+    assert_eq!(callback_on(&dir_gone, &cfg), (true, false));
 
     let unrelated = Event::new(EventKind::Create(CreateKind::File)).add_path(beside.clone());
     let off_linux = !cfg!(target_os = "linux");
