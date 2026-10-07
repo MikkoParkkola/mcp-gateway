@@ -452,9 +452,17 @@ pub(super) fn changed_backends(before: &Config, config: &Config) -> Vec<String> 
 /// its proof. `None` when a step cannot be spliced, or when `config` differs
 /// from `before` outside `backends`.
 pub(super) fn with_backends_edited(text: &str, before: &Config, config: &Config) -> Option<String> {
+    let names = changed_backends(before, config);
+    // Several changes are spliced only when all are additions (setup and
+    // discovery import). A removal among several is what a stale `config`
+    // looks like after another writer added a backend: refuse or rewrite
+    // instead of deleting that backend.
+    if names.len() > 1 && names.iter().any(|n| before.backends.contains_key(n)) {
+        return None;
+    }
     let mut text = text.to_owned();
     let mut done = before.clone();
-    for name in changed_backends(before, config) {
+    for name in names {
         let mut next = done.clone();
         match config.backends.get(&name) {
             Some(backend) => next.backends.insert(name.clone(), backend.clone()),
