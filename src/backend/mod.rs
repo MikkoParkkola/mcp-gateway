@@ -300,18 +300,26 @@ impl Backend {
     /// becomes one tool behind the same funnel as every backend. Like the HTTP
     /// arm, the configured address is checked before anything connects and
     /// every request goes through the guarded client. An agent has no
-    /// server-initiated stream, so the caller sets no listener.
+    /// server-initiated stream, so the caller sets no listener. The caller has
+    /// marked the backend connecting and passed `begin_connecting` first.
     #[cfg(feature = "a2a")]
     async fn start_a2a(
         &self,
-        a2a_url: &str,
-        card_path: Option<&str>,
         destination: crate::security::ssrf::DestinationPolicy,
     ) -> crate::Result<Arc<crate::a2a::transport::A2aTransport>> {
-        self.begin_connecting(destination)?;
+        let crate::config::TransportConfig::A2a {
+            a2a_url,
+            a2a_agent_card_path,
+        } = &self.config.transport
+        else {
+            return Err(crate::Error::Config(format!(
+                "backend '{}' is not an A2A backend",
+                self.name
+            )));
+        };
         crate::a2a::transport::A2aTransport::start(
             a2a_url,
-            card_path,
+            a2a_agent_card_path.as_deref(),
             &self.config.headers,
             self.config.timeout,
             destination,

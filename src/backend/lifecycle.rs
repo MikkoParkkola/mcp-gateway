@@ -484,14 +484,11 @@ impl Backend {
                 transport
             }
             #[cfg(feature = "a2a")]
-            TransportConfig::A2a {
-                a2a_url,
-                a2a_agent_card_path,
-            } => {
+            TransportConfig::A2a { .. } => {
                 built_under = self.mark_connecting();
+                self.begin_connecting(built_under)?;
                 listen = None;
-                self.start_a2a(a2a_url, a2a_agent_card_path.as_deref(), built_under)
-                    .await?
+                self.start_a2a(built_under).await?
             }
         };
 
