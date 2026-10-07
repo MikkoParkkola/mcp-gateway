@@ -46,6 +46,11 @@ pub(crate) enum Answer {
     /// The first `tools/call` asks the client a question (`input_required`);
     /// every later call succeeds. Drives a bridged input round (T3c).
     AskOnce,
+    /// Like `AskOnce`, the question carrying no `requestState` (MIK-8078).
+    AskNoState,
+    /// Like `AskOnce`, a question `InputRequired::from_result` declines (an
+    /// `inputRequests` that is not an object) beside a string state (MIK-8078).
+    AskMalformed,
     /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
     /// `resultType`, `ttlMs` (5000) and `cacheScope` itself, and every other
     /// answer a `ttlMs` of 3000 (MIK-8022).
@@ -116,21 +121,28 @@ impl Transport for CountingBackend {
             .unwrap()
             .push(params.clone().unwrap_or(Value::Null));
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
-        if matches!(self.answer, Answer::AskOnce) {
+        if matches!(
+            self.answer,
+            Answer::AskOnce | Answer::AskNoState | Answer::AskMalformed
+        ) {
             return Ok(if n == 0 {
-                JsonRpcResponse::success(
-                    id,
-                    json!({
-                        "resultType": "input_required",
-                        "inputRequests": {
-                            "k1": {
-                                "method": "elicitation/create",
-                                "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
-                            }
-                        },
-                        "requestState": "backend-state-1"
-                    }),
-                )
+                let mut asked = json!({
+                    "resultType": "input_required",
+                    "inputRequests": {
+                        "k1": {
+                            "method": "elicitation/create",
+                            "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
+                        }
+                    },
+                    "requestState": "backend-state-1"
+                });
+                if matches!(self.answer, Answer::AskNoState) {
+                    asked.as_object_mut().unwrap().remove("requestState");
+                }
+                if matches!(self.answer, Answer::AskMalformed) {
+                    asked["inputRequests"] = json!("surprise");
+                }
+                JsonRpcResponse::success(id, asked)
             } else {
                 JsonRpcResponse::success(
                     id,
@@ -165,7 +177,9 @@ impl Transport for CountingBackend {
                 "rate limit exceeded",
             )),
             Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
-            Answer::AskOnce => unreachable!("answered above"),
+            Answer::AskOnce | Answer::AskNoState | Answer::AskMalformed => {
+                unreachable!("answered above")
+            }
             Answer::Text(text) => Ok(JsonRpcResponse::success(
                 id,
                 json!({"content": [{"type": "text", "text": text}], "isError": false}),

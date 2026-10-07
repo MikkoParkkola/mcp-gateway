@@ -12,7 +12,7 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::direct_guards_fixture::{Answer, Fx, fixture};
+use super::direct_guards_fixture::{Answer, Fx, fixture, post_meta_invoke};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 
@@ -176,10 +176,10 @@ async fn r6_an_unbindable_caller_is_refused_not_handed_the_state() {
     }
 }
 
-/// R7: an interim answer is not settled under the idempotency key, as on the
-/// meta route: the backend did not act, it stopped to ask. Re-sending the
-/// opening call under the same key reaches the backend again rather than
-/// replaying the stored question. Mutant: the interim answer settled.
+/// R7 (preservation, green on the base too: the cache already refuses a
+/// non-final result): an interim answer is not settled under the
+/// idempotency key, so re-sending the opening call under the same key reaches
+/// the backend again rather than replaying the stored question.
 #[tokio::test]
 async fn r7_an_interim_answer_does_not_settle_the_key() {
     for backend in BACKENDS {
@@ -222,6 +222,63 @@ async fn r8_answers_without_a_continuation_are_refused() {
             dispatched(&fx),
             1,
             "{backend}: answers without a state dispatched"
+        );
+    }
+}
+
+/// R9: the continuation is bound to the call it was issued for: presented
+/// with other arguments, or on another backend, it is refused.
+#[tokio::test]
+async fn r9_a_continuation_is_bound_to_its_call() {
+    let fx = fixture(Answer::AskOnce, |_| {}).await;
+    let (_, asked) = call(&fx, "alpha", Some("alice"), json!({})).await;
+    let token = state_of(&asked);
+    let other_args = json!({
+        "arguments": {"cmd": "other"},
+        "requestState": token,
+        "inputResponses": answers(),
+    });
+    let (_, body) = call(&fx, "alpha", Some("alice"), other_args).await;
+    assert_eq!(code(&body), Some(-32602), "other arguments: {body}");
+    let retry = json!({"requestState": token, "inputResponses": answers()});
+    let (_, body) = call(&fx, "alpha-pt", Some("alice"), retry).await;
+    assert_eq!(code(&body), Some(-32602), "another backend: {body}");
+    assert_eq!(dispatched(&fx), 1, "a misbound continuation dispatched");
+}
+
+/// R10: a backend that keeps no state still gets none back: the client's
+/// continuation is not forwarded in its place.
+#[tokio::test]
+async fn r10_a_backend_without_state_gets_none_back() {
+    for backend in BACKENDS {
+        let fx = fixture(Answer::AskNoState, |_| {}).await;
+        let (_, asked) = call(&fx, backend, Some("alice"), json!({})).await;
+        let retry = json!({"requestState": state_of(&asked), "inputResponses": answers()});
+        let (_, done) = call(&fx, backend, Some("alice"), retry).await;
+        assert!(done.get("error").is_none(), "{backend}: {done}");
+        let seen = fx.seen.lock().unwrap().last().cloned().unwrap();
+        assert!(seen.get("requestState").is_none(), "{backend}: {seen}");
+        assert_eq!(seen["inputResponses"], answers(), "{backend}: {seen}");
+    }
+}
+
+/// R11 (`MRTR.2a`, both routes): a result claiming `input_required` that is not
+/// a usable round still never carries the backend's state to the client.
+#[tokio::test]
+async fn r11_an_unusable_round_does_not_carry_the_state() {
+    for backend in BACKENDS {
+        let fx = fixture(Answer::AskMalformed, |_| {}).await;
+        let (_, body) = call(&fx, backend, Some("alice"), json!({})).await;
+        assert!(
+            !body.to_string().contains(BACKEND_STATE),
+            "direct {backend}: {body}"
+        );
+        let fx = fixture(Answer::AskMalformed, |_| {}).await;
+        let (_, body) =
+            post_meta_invoke(&fx, "k-std", backend, "read", json!({}), None, None).await;
+        assert!(
+            !body.to_string().contains(BACKEND_STATE),
+            "meta {backend}: {body}"
         );
     }
 }
