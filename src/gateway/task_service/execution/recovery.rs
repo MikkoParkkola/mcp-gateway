@@ -62,6 +62,8 @@ impl TaskExecutor {
                     revision: row.revision,
                     event,
                     author: ErrorAuthor::Gateway,
+                    // The gateway's own restart answer: nothing in it is a noted member.
+                    writes: crate::gateway::gateway_writes::WriteRecord::default(),
                 })
                 .await
             {
@@ -94,20 +96,17 @@ impl TaskExecutor {
         owner_digest: &str,
         id: &str,
         revision: u64,
-        (event, targets): (TaskTransition, Option<Vec<Target>>),
+        settlement: (
+            TaskTransition,
+            Option<Vec<Target>>,
+            crate::gateway::gateway_writes::WriteRecord,
+        ),
         author: ErrorAuthor,
     ) -> Result<(CommittedTask, bool, String), CommitFailure> {
         match self
             .service
             .store
-            .settle_bounded_by(
-                owner_digest,
-                id,
-                revision,
-                (event, targets),
-                author,
-                Utc::now(),
-            )
+            .settle_bounded_by(owner_digest, id, revision, settlement, author, Utc::now())
             .await
         {
             Ok(committed) => {

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Timelike as _, Utc};
 
 use super::{Shared, StoreError, TaskStore, owned, record_name, serialize};
+use crate::gateway::gateway_writes::WriteRecord;
 use crate::gateway::task_service::record::{
     CommittedTask, ERROR_AUTHOR_VERSION, ErrorAuthor, Record, TARGET_VERSION, Target,
 };
@@ -57,7 +58,7 @@ impl TaskStore {
             owner,
             id,
             revision,
-            (event, targets),
+            (event, targets, WriteRecord::default()),
             ErrorAuthor::Gateway,
             at,
         )
@@ -77,20 +78,28 @@ impl TaskStore {
     /// cannot be stored.
     ///
     /// `author` records who wrote a `Fail` event's error (MIK-7887.RECEIPT.1);
-    /// the bounded fallback is always the gateway's.
+    /// the bounded fallback is always the gateway's. `writes` names the
+    /// members of a `Complete` result the gateway wrote (MIK-7993); it is
+    /// stored only with that result, and never costs the result its room.
     pub(crate) async fn settle_bounded_by(
         &self,
         owner: &str,
         id: &str,
         revision: u64,
-        (event, targets): (TaskTransition, Option<Vec<Target>>),
+        (event, targets, writes): (TaskTransition, Option<Vec<Target>>, WriteRecord),
         author: ErrorAuthor,
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || {
-            shared.settle_bounded_blocking(&owner, &id, revision, (event, targets, author), at)
+            shared.settle_bounded_blocking(
+                &owner,
+                &id,
+                revision,
+                (event, targets, author, writes),
+                at,
+            )
         })
         .await
         .map_err(|_| StoreError::Storage)?
@@ -180,7 +189,12 @@ impl Shared {
         owner: &str,
         id: &str,
         revision: u64,
-        (event, targets, author): (TaskTransition, Option<Vec<Target>>, ErrorAuthor),
+        (event, targets, author, writes): (
+            TaskTransition,
+            Option<Vec<Target>>,
+            ErrorAuthor,
+            WriteRecord,
+        ),
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let _order = self.order();
@@ -199,14 +213,32 @@ impl Shared {
         // recovery descriptor, and it is marked so delivery knows its only
         // content is the gateway's own error. Every live row was admitted
         // with room for it ([`fallback_bytes`]).
-        match self.settle_attempt(&task, &record, (event, targets, false, author), at) {
+        let recorded = !writes.is_empty();
+        let attempt = (event.clone(), targets.clone(), false, author, writes);
+        match self.settle_attempt(&task, &record, attempt, at) {
             Err(StoreError::Capacity) => {}
             settled => return settled,
+        }
+        // MIK-7993 r5b: the record of what the gateway wrote never costs the
+        // result its place. Without it the result is stored as before, its
+        // gateway members receipted like backend text.
+        if recorded {
+            let attempt = (event, targets, false, author, WriteRecord::default());
+            match self.settle_attempt(&task, &record, attempt, at) {
+                Err(StoreError::Capacity) => {}
+                settled => return settled,
+            }
         }
         self.settle_attempt(
             &task,
             &record,
-            (bounded(), None, true, ErrorAuthor::Gateway),
+            (
+                bounded(),
+                None,
+                true,
+                ErrorAuthor::Gateway,
+                WriteRecord::default(),
+            ),
             at,
         )
     }
@@ -215,7 +247,13 @@ impl Shared {
         &self,
         task: &Task,
         record: &Record,
-        settlement: (TaskTransition, Option<Vec<Target>>, bool, ErrorAuthor),
+        settlement: (
+            TaskTransition,
+            Option<Vec<Target>>,
+            bool,
+            ErrorAuthor,
+            WriteRecord,
+        ),
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let Some((task, record)) = settled(task, record, settlement, at)? else {
@@ -245,12 +283,19 @@ fn bounded() -> TaskTransition {
 fn settled(
     task: &Task,
     record: &Record,
-    (event, targets, discard, author): (TaskTransition, Option<Vec<Target>>, bool, ErrorAuthor),
+    (event, targets, discard, author, writes): (
+        TaskTransition,
+        Option<Vec<Target>>,
+        bool,
+        ErrorAuthor,
+        WriteRecord,
+    ),
     at: DateTime<Utc>,
 ) -> Result<Option<(Task, Record)>, StoreError> {
     let (mut task, mut record) = (task.clone(), record.clone());
     // Only a Fail has an error to attribute; any other outcome clears it.
     let fails = matches!(event, TaskTransition::Fail(_));
+    let completes = matches!(event, TaskTransition::Complete(_));
     let change = task
         .transition(event, at)
         .map_err(|_| StoreError::InvalidTransition)?;
@@ -259,6 +304,13 @@ fn settled(
     }
     record.revision = record.revision.checked_add(1).ok_or(StoreError::Capacity)?;
     record.set_model(&task);
+    // Only a completed result holds what the gateway wrote into it
+    // (MIK-7993); any other outcome, and an output-free row, clears it.
+    record.gateway_writes = if completes && !discard {
+        writes
+    } else {
+        WriteRecord::default()
+    };
     // Only the peer's authorship is recorded: absent reads as "not
     // established", which is what every gateway error is.
     record.error_author = None;
@@ -304,7 +356,13 @@ pub(super) fn fallback_bytes(
     let Some((_, mut fallback)) = settled(
         task,
         record,
-        (bounded(), None, true, ErrorAuthor::Gateway),
+        (
+            bounded(),
+            None,
+            true,
+            ErrorAuthor::Gateway,
+            WriteRecord::default(),
+        ),
         at,
     )?
     else {

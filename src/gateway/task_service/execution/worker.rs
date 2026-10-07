@@ -365,7 +365,9 @@ async fn follow_upstream_job(
     };
     // The identical post-dispatch processing a live dispatch applies, from the
     // same implementation, in the dispatch scope so the gates' attribution
-    // notes travel with the transition (MIN.1 gap 1).
+    // notes travel with the transition (MIN.1 gap 1). The write record from
+    // here on is what that processing wrote into the result (MIK-7993).
+    let writes_mark = crate::gateway::gateway_writes::mark();
     let processed = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
         match answer {
             UpstreamAnswer::Completed(result) => Some((
@@ -406,7 +408,8 @@ async fn follow_upstream_job(
             principal,
             revision,
         };
-        settle_followed(executor, state, &followed, outcome, &notes).await;
+        let writes = crate::gateway::gateway_writes::snapshot_since(writes_mark);
+        settle_followed(executor, state, &followed, (outcome, writes), &notes).await;
     }
     lease.release(executor, id).await;
 }
@@ -627,22 +630,41 @@ impl TaskExecutor {
         revision: u64,
         event: TaskTransition,
     ) -> bool {
-        self.settle_cas_with(principal, id, revision, (event, None))
-            .await
+        // The gateway's own outcome: nothing in it is a member it noted.
+        self.settle_cas_by(
+            principal,
+            id,
+            revision,
+            (event, None),
+            ErrorAuthor::Gateway,
+            crate::gateway::gateway_writes::WriteRecord::default(),
+        )
+        .await
     }
 
     /// [`Self::settle_cas`] committing a plan's dispatched `targets` in the same
     /// write as the outcome. A settlement that does not fit the record budget
     /// becomes a bounded `Failed` with no output (see `settle_bounded`).
+    ///
+    /// `writes` names the members of a `Complete` result the gateway wrote,
+    /// stored with it so a later read's receipt leaves them out (MIK-7993).
     pub(super) async fn settle_cas_with(
         &self,
         principal: &str,
         id: &str,
         revision: u64,
         outcome: (TaskTransition, Option<Vec<Target>>),
+        writes: crate::gateway::gateway_writes::WriteRecord,
     ) -> bool {
-        self.settle_cas_by(principal, id, revision, outcome, ErrorAuthor::Gateway)
-            .await
+        self.settle_cas_by(
+            principal,
+            id,
+            revision,
+            outcome,
+            ErrorAuthor::Gateway,
+            writes,
+        )
+        .await
     }
 
     /// [`Self::settle_cas_with`], recording who wrote a `Fail` event's error
@@ -655,6 +677,7 @@ impl TaskExecutor {
         revision: u64,
         (event, targets): (TaskTransition, Option<Vec<Target>>),
         author: ErrorAuthor,
+        writes: crate::gateway::gateway_writes::WriteRecord,
     ) -> bool {
         match self
             .commit_transition(TransitionWrite::Settle {
@@ -664,6 +687,7 @@ impl TaskExecutor {
                 event: event.clone(),
                 targets: targets.clone(),
                 author,
+                writes: writes.clone(),
             })
             .await
         {
@@ -692,6 +716,7 @@ impl TaskExecutor {
                 event,
                 targets,
                 author,
+                writes,
             })
             .await;
         let Ok(stored) = settled else {

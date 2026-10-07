@@ -657,6 +657,7 @@ async fn a_built_task_envelope_is_read_as_one() {
         output_free: false,
         error_author: None,
         owner_digest: String::new(),
+        gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
     };
     let ((), receipts) = meta
         .collecting_staged(async {
