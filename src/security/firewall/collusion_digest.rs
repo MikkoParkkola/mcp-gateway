@@ -11,7 +11,7 @@
 //! delivered leaf or across adjacent kept leaves.
 
 use std::cell::OnceCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use serde_json::Value;
 
@@ -333,29 +333,20 @@ impl DeliveryDigest {
     }
 
     /// Every k-gram hash of each step-order run of this digest's whole
-    /// leaves the plan delivered verbatim, each leaf counted no more times
-    /// than it was delivered; any other leaf is a seam. The step's own
-    /// adjacency, which another step's leaf between them in the answer does
-    /// not undo, without the copies the caller never got.
+    /// leaves the plan delivered verbatim; any other leaf is a seam. The
+    /// step's own adjacency, as a receipt kept it before its cap was
+    /// deferred, which another step's leaf between them in the answer does
+    /// not undo. Only fingerprints come from it, deduplicated and capped by
+    /// count, never kept text.
     fn step_runs_kgrams(
         &self,
         detector: &CollusionDetector,
         delivered: &Delivered<'_>,
     ) -> HashSet<u64> {
-        let mut left: HashMap<&str, usize> = HashMap::new();
-        for leaf in &delivered.all {
-            *left.entry(*leaf).or_insert(0) += 1;
-        }
         let mut runs: Vec<Vec<&str>> = Vec::new();
         let mut gap = false;
         for segment in &self.segments {
-            let unused = segment.whole
-                && left.get_mut(segment.text.as_str()).is_some_and(|n| {
-                    let unused = *n > 0;
-                    *n = n.saturating_sub(1);
-                    unused
-                });
-            if !unused {
+            if !(segment.whole && delivered.leaves.contains(segment.text.as_str())) {
                 gap = true;
                 continue;
             }
