@@ -159,7 +159,9 @@ async fn meta_cache_hit_then_replay_leave_the_suggestion_out() {
         own,
         "the replay serves it unchanged"
     );
-    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 2);
+    // Not the first send's text, or the response cache would answer it.
+    let again = format!("{CATEGORY} ");
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), &again).await, 2);
     let relay = format!("{PROSE} ");
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 2);
 }
@@ -215,10 +217,12 @@ async fn meta_chain_step_entry_holds_only_its_own_writes() {
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 2);
 }
 
-/// The notice the gateway settles a key with when a post-dispatch gate
-/// withheld the answer (`side_effect_markers::withheld_side_effect`).
-const WITHHELD: &str = "Side effect executed; the response was withheld by a post-dispatch \
-    gate. Retrying with the same idempotency key will not re-execute it.";
+/// The notice the gateway settles a key with when a round was lost after
+/// the send (`side_effect_markers::UNCERTAIN_TEXT`).
+const UNCERTAIN: &str = "The call may have reached the backend; its outcome is unknown: it \
+    may have executed. Retrying with the same idempotency key will not re-execute it and will \
+    return this same notice. Reconcile at the backend before assuming the effect either ran \
+    or did not.";
 
 /// Response signing on: an external `gateway_invoke` then waits for signing
 /// admission, so the sync admission leaves its key to the invoke path's own
@@ -231,26 +235,20 @@ fn signing(mut meta: MetaMcp) -> MetaMcp {
     meta
 }
 
-/// MIK-7991 (notice): a keyed read that anomaly screening refuses after
-/// dispatch settles its key with the gateway's withheld notice (the
-/// reservation's drop value; a firewall refusal stores its own marked error
-/// instead). Replaying it serves that notice, the gateway's own text, so it
-/// puts nothing in the replay's receipt.
+/// MIK-7991 (notice): a keyed read whose round is lost after the send
+/// settles its key with the gateway's uncertainty notice (MIK-7979). With
+/// signing on, the invoke path's guard replays it as a result: the gateway's
+/// own text, so it puts nothing in the replay's receipt.
 #[tokio::test]
 async fn meta_replayed_gateway_notice_is_not_receipted() {
-    let fx = meta_fixture_with(Setup::default(), None, |meta| {
-        let mut meta = signing(meta);
-        meta.enable_response_inspection_action_mode();
-        meta
-    })
-    .await;
-    fx.answer_read(Read::Injected);
+    let fx = meta_fixture_with(Setup::default(), None, signing).await;
+    fx.answer_read(Read::Lost);
     let read = invoke("read", &json!({}));
     let key = keyed("key-7991-notice");
     let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
     assert!(
         envelope(&first).get("error").is_some(),
-        "base: the read is refused: {first}"
+        "base: the lost round answers an error: {first}"
     );
     let reads = fx.reads();
     let (_, replay) = post(&fx, Some("a"), "gateway_invoke", &read, &key).await;
@@ -260,10 +258,10 @@ async fn meta_replayed_gateway_notice_is_not_receipted() {
         "base: the re-issue is a replay: {replay}"
     );
     assert!(
-        replay.contains(WITHHELD),
+        replay.contains("may have reached the backend"),
         "base: the replay serves the notice: {replay}"
     );
-    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), WITHHELD).await, 1);
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), UNCERTAIN).await, 1);
 }
 
 /// MIK-7991 (replay, invoke-path guard): with signing on, an idempotent
