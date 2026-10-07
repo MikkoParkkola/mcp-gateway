@@ -39,8 +39,21 @@ fn seed_subscription(store: &std::path::Path, cap: &str) {
 }
 /// A subscription to event type `name`, found by [`subscribed`] under `key`.
 fn seed_named(store: &std::path::Path, key: &str, name: &str) {
+    use std::io::Write as _;
+    // Private from creation, as the store writes them: the load refuses a
+    // loosened record (on Windows, an inherited DACL), so the hub would not
+    // know a subscription seeded with plain `std::fs` calls.
     let subs = store.join("subs");
-    std::fs::create_dir_all(&subs).expect("subs dir");
+    if !subs.exists() {
+        #[cfg(windows)]
+        {
+            crate::private_fs::create_dir_private(&subs).expect("subs dir");
+        }
+        #[cfg(not(windows))]
+        {
+            std::fs::create_dir_all(&subs).expect("subs dir");
+        }
+    }
     let row = serde_json::json!({
         "v": 1, "id": format!("sub_{key}"), "principal": "p",
         "url": "https://p.example/cb", "name": name,
@@ -49,12 +62,13 @@ fn seed_named(store: &std::path::Path, key: &str, name: &str) {
         "active": true, "failed_since": null, "last_delivery_at": null, "last_error": null
     });
     let file = subs.join(format!("sub_{key}.json"));
-    std::fs::write(&file, serde_json::to_vec(&row).expect("json")).expect("write");
+    crate::config_persistence::create_new_private(&file)
+        .and_then(|mut f| f.write_all(&serde_json::to_vec(&row).expect("json")))
+        .expect("write");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(0o700)).expect("mode");
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).expect("mode");
     }
 }
 
