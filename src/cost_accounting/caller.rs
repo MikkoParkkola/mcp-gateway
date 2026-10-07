@@ -5,30 +5,27 @@
 //!
 //! A 2026-07-28 request has no session, so its spend had no per-caller home
 //! and its caller's report was always empty. Keyed on the router's caller key,
-//! never on a label keyless callers share. Running counters only: an entry is
-//! bounded by its distinct `(backend, tool)` pairs, and is dropped by the
+//! never on a label keyless callers share. Running counters only: an entry holds
+//! at most `tally::MAX_TOOL_ROWS` rows plus `(other)`, and is dropped by the
 //! opportunistic sweep [`CALLER_COST_IDLE`] after its last spend.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use dashmap::DashMap;
 
-use super::{BackendCost, CostRecord, SessionCostSnapshot, ToolCost};
+use super::tally::{self, ToolTally};
+use super::{CostRecord, SessionCostSnapshot};
 
 /// How long a caller's breakdown outlives its last spend: the per-key
 /// budget's default day window, so a report covers at least a working day.
 pub const CALLER_COST_IDLE: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Minimum seconds between two sweeps.
-const SWEEP_EVERY: u64 = 60;
-
 /// One caller's counters: `(backend, tool)` -> `[calls, tokens, micro-USD]`.
 struct CallerCost {
     first_spend: u64,
     last_spend: u64,
-    by_tool: HashMap<(String, String), [u64; 3]>,
+    by_tool: ToolTally,
 }
 
 impl CallerCost {
@@ -36,7 +33,7 @@ impl CallerCost {
         Self {
             first_spend: now,
             last_spend: now,
-            by_tool: HashMap::new(),
+            by_tool: ToolTally::default(),
         }
     }
 
@@ -58,8 +55,7 @@ impl CallerCosts {
         if key.is_empty() {
             return;
         }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let micro = (rec.estimated_cost_usd * 1_000_000.0) as u64;
+        let micro = tally::micro(rec.estimated_cost_usd);
         {
             let mut entry = self
                 .by_caller
@@ -69,24 +65,14 @@ impl CallerCosts {
             if entry.expired(now) {
                 *entry = CallerCost::new(now);
             }
-            let row = entry
+            entry
                 .by_tool
-                .entry((rec.backend.clone(), rec.tool.clone()))
-                .or_default();
-            for (total, add) in row.iter_mut().zip([1, rec.token_count, micro]) {
-                *total += add;
-            }
+                .add(&rec.backend, &rec.tool, rec.token_count, micro);
             entry.last_spend = now;
         }
         // The shard guard is dropped above: `retain` takes every shard lock,
         // and a held guard would deadlock it.
-        let due = self.next_sweep.load(Ordering::Relaxed);
-        if now >= due
-            && self
-                .next_sweep
-                .compare_exchange(due, now + SWEEP_EVERY, Ordering::Relaxed, Ordering::Relaxed)
-                .is_ok()
-        {
+        if tally::sweep_due(&self.next_sweep, now) {
             self.by_caller.retain(|_, cost| !cost.expired(now));
         }
     }
@@ -102,34 +88,7 @@ impl CallerCosts {
         if cost.expired(now) {
             return None;
         }
-        let mut by_backend: HashMap<&str, BackendCost> = HashMap::new();
-        let mut by_tool = Vec::with_capacity(cost.by_tool.len());
-        let mut totals = [0u64; 3];
-        for ((backend, tool), counters) in &cost.by_tool {
-            let [calls, tokens, micro] = *counters;
-            #[allow(clippy::cast_precision_loss)]
-            let usd = micro as f64 / 1_000_000.0;
-            by_tool.push(ToolCost {
-                tool_key: format!("{backend}:{tool}"),
-                call_count: calls,
-                token_count: tokens,
-                cost_usd: usd,
-            });
-            let row = by_backend
-                .entry(backend.as_str())
-                .or_insert_with(|| BackendCost {
-                    backend: backend.clone(),
-                    call_count: 0,
-                    token_count: 0,
-                    cost_usd: 0.0,
-                });
-            row.call_count += calls;
-            row.token_count += tokens;
-            row.cost_usd += usd;
-            for (total, add) in totals.iter_mut().zip(counters) {
-                *total += add;
-            }
-        }
+        let (by_backend, by_tool, totals) = cost.by_tool.breakdown();
         #[allow(clippy::cast_precision_loss)]
         let total_cost_usd = totals[2] as f64 / 1_000_000.0;
         Some(SessionCostSnapshot {
@@ -139,7 +98,7 @@ impl CallerCosts {
             call_count: totals[0],
             total_tokens: totals[1],
             total_cost_usd,
-            by_backend: by_backend.into_values().collect(),
+            by_backend,
             by_tool,
         })
     }

@@ -140,7 +140,9 @@ src/gateway/router/identity.rs	grant_subject_from_oauth_agent	1	standard	borderl
 src/gateway/router/identity.rs	subject_key	1	standard	borderline	subject_key	Session-ownership and CallerKey encoding; a collision would merge principals.
 src/gateway/router/identity.rs	control_identity	1	critical	d	control_identity	Picks the key per-principal rate and budget limits score on; a fresh session falls to one shared anonymous bucket
 src/gateway/router/judged_answer.rs	record_delivery	1	critical	d	record_delivery	Replaces a judged answer with the audit-unavailable refusal when its delivery cannot be recorded (fail closed).
-src/gateway/router/meta_refusal_audit.rs	answer	1	critical	borderline	Refused::answer	Answers 503 when the refusal's audit write fails under FailClosed.
+src/gateway/router/meta_refusal_audit.rs	record	1	critical	borderline	Refused::record	Answers 503 when the refusal's audit write fails under FailClosed.
+src/gateway/router/meta_refusal_audit.rs	answer	1	standard	borderline	Refused::answer	Builds the Denied record and its tenants; a mistake would record a refusal as another outcome
+src/gateway/router/meta_refusal_audit.rs	answer_malformed	1	standard	borderline	Refused::answer_malformed	Records a malformed-retry refusal as invalid before answering -32602; a mistake would skip the record
 src/gateway/router/mod.rs	authenticate	1	standard	borderline	authenticate	Layer order (agent auth, adapter, auth); swapping it lets unauthenticated callers assert identity.
 src/gateway/router/mod.rs	build_auth_state	1	standard	borderline	build_auth_state	Builds the AuthState used by the auth middleware and webhook re-validation.
 src/gateway/router/mod.rs	create_router_with_accounts	1	standard	borderline	create_router_with_accounts	Installs the body limit and origin guard over the fully merged router.
@@ -158,6 +160,10 @@ src/gateway/router/origin_guard_hosted.rs	exempts_fetch_site	1	critical	b	Hosted
 src/gateway/router/origin_guard_hosted.rs	scope	1	critical	b	scope	Limits the hosted-origin opening to /accounts/v1/ and the exact callback navigation.
 src/gateway/router/origin_guard_hosted.rs	from_config	1	standard	borderline	HostedOrigin::from_config	Builds the hosted-origin opening.
 src/gateway/router/response_pass.rs	inspect_tools_call_response	1	critical	d	inspect_tools_call_response	Meta tools/call response firewall; fails closed with no policy target.
+src/gateway/router/watch_poll.rs	may_invoke	1	critical	a	GatewayWatchHost::may_invoke	Authorizes each watch poll: the holder's key must still be allowed to invoke the capability
+src/gateway/router/watch_poll.rs	client	1	critical	a	GatewayWatchHost::client	Decides for may_invoke whether the holder's key still authenticates; a gone, expired or re-issued key is none
+src/gateway/router/watch_poll.rs	poll_capability	1	critical	d	poll_capability	Refuses a poll past the key's own /mcp rate bucket before it calls the capability as that key
+src/gateway/router/watch_poll.rs	poll	1	standard	borderline	GatewayWatchHost::poll	Forwards to poll_capability; a mistake would bypass its rate refusal
 src/gateway/router/well_known.rs	is_loopback_host	1	critical	borderline	is_loopback_host	Loopback classifier shared by the origin gate and the cleartext-OAuth guard.
 src/gateway/router/well_known.rs	sanitize_public_url	1	critical	b,d	sanitize_public_url	Refuses non-TLS, rewritten, userinfo-bearing or otherwise unsafe origins before publishing OAuth metadata
 src/gateway/router/well_known.rs	authorization_servers	1	critical	b,d	authorization_servers	Advertises no issuer unless delegated bearer auth would accept its tokens (not under agent auth), and only publishable ones (MIK-7941).
@@ -186,6 +192,7 @@ src/gateway/task_service/execution.rs	cancel_lost_the_revision	1	critical	c	Task
 src/gateway/task_service/execution.rs	transition_write	1	critical	c	TaskExecutor::transition_write	Hashes the request principal to an owner
 src/gateway/task_service/execution.rs	install_recovery	1	standard	borderline	TaskExecutor::install_recovery	Installs the trusted upstream adapter that gates recovery queries
 src/gateway/task_service/execution/context.rs	dispatch_context_retrying	1	standard	borderline	OwnedCallerContext::dispatch_context_retrying	signing: None keeps check_invocation_policy running; wrong value silently skips re-auth
+src/gateway/task_service/execution/context.rs	hold_caller_key	1	standard	borderline	OwnedCallerContext::hold_caller_key	Holds the caller key through a backend call; a miss lets an idle sweep reclaim the key the task writes under
 src/gateway/task_service/execution/input_round.rs	provide_input	1	critical	c	TaskExecutor::provide_input	Scopes task/update answers to the owner; foreign or absent task returns NotFound
 src/gateway/task_service/execution/input_round.rs	resume	1	critical	d	resume	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
 src/gateway/task_service/execution/input_round.rs	resume_flow	1	critical	d	resume_flow	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
@@ -481,6 +488,7 @@ src/transport/http/mod.rs	same_origin	1	critical	borderline	same_origin	Comparat
 src/transport/http/requests.rs	send_request_with_headers	1	critical	c	HttpTransport::send_request_with_headers	Binds the upstream session id to the caller's identity bucket.
 src/transport/http/mod.rs	with_destination	1	critical	d	HttpTransport::with_destination	Destination literal check and OAuth TLS check at construction.
 src/transport/http/sse_decoder.rs	oversized	1	critical	borderline	SseDecoder::oversized	Caps pending SSE bytes from a backend.
+src/transport/http/listen.rs	read_single	1	critical	d	read_single	Caps a listen's single JSON answer from an untrusted upstream at FRAME_CAP and classifies only a complete body
 src/transport/stdio.rs	capture_notification	1	critical	c	StdioTransport::capture_notification	Routes only notifications/progress to the call that registered the token; drops the rest
 src/transport/stdio_env.rs	configure_child_environment	1	critical	d	configure_child_environment	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics) and backend env, so no secret leakage
 src/transport/stdio.rs	drop	1	critical	c	ProgressRegistrationGuard::drop	Deregisters a progress token only for the registration's owner

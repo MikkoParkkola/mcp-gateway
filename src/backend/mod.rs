@@ -70,7 +70,7 @@ pub(crate) use annotations::prepare_tool_metadata;
 #[cfg(test)]
 pub(crate) use descriptor_gate::descriptor_digest;
 pub(crate) use descriptor_gate::{Judging, Listing};
-pub(crate) use fill_check::text_absent;
+pub(crate) use fill_check::{LIST_FILL_COOLDOWN, text_absent};
 pub(crate) use identity_slots::passthrough_binding;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,
@@ -228,12 +228,28 @@ pub struct Backend {
     /// that start built may still be alive somewhere (pooled, closing, held
     /// by a request), so a hardened pairing refuses this backend (MIK-7700).
     connected_unpinned: std::sync::atomic::AtomicBool,
+    /// The one interactive login at a time every start of this backend
+    /// shares (MIK-7982).
+    pub(crate) login_gate: Arc<crate::oauth::login_gate::LoginGate>,
     /// A test's pause point in an HTTP start, after it read the policy it
     /// builds under and before it builds anything from it or
     /// [`Backend::begin_connecting`] checks and marks.
     #[cfg(test)]
     mark_window_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
+    /// A test's stand-ins for the user's token store and browser, used by the
+    /// OAuth client [`Backend::create_oauth_client`] builds.
+    #[cfg(test)]
+    oauth_test_seam: parking_lot::Mutex<Option<OAuthTestSeam>>,
     pub(crate) budgets: ShutdownBudgets,
+}
+
+/// Where a test backend's OAuth client keeps tokens, and who plays the
+/// browser it hands the authorization URL to.
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct OAuthTestSeam {
+    pub(crate) storage_dir: std::path::PathBuf,
+    pub(crate) open_browser: Arc<dyn Fn(&str) -> bool + Send + Sync>,
 }
 
 /// Holds a start in the window before it marks: the start signals `reached`

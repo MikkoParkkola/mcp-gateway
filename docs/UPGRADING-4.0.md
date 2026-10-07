@@ -181,6 +181,9 @@ backend" and "fails a capability file" first.**
 | 154 | A same-key retry after a lost round (a broken stream, a timeout, a reload stopping the backend mid-call, an HTTP 5xx, or a 400, 404, 407, 408, 429 or session-expiry answer) is served the uncertain-outcome notice instead of the original error; `BackendUnavailable` frees the key | A client that read a served error as "the work failed" treats the notice as "may have run" and checks before re-issuing under a new key |
 | 155 | A caller signed in through the key server (an `/auth/token` token or a delegated OIDC bearer) has a principal of the form `kst:<sha256 hex>` or `oidc:<sha256 hex>`, no longer 12 hex characters | Update any log or audit query that matched these callers' 12-hex principal |
 | 156 | A REST capability body field that is a pure placeholder (`"{cursor}"`) now sends an explicit `null` the property's schema admits (`type: [string, "null"]`); 3.x left the field out. A null the schema does not admit is still left out, and query and path parameters are unchanged | To keep the field out, leave the argument out instead of sending `null`; a static param or URL default for the same name still fills it, as before |
+| 157 | Reserved: a change in review | None |
+| 158 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
+| 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1621,8 +1624,9 @@ gateway restarts and starts a fresh log, verify passes on it, and nothing in the
 shows an earlier log existed. A log stored only in that directory cannot prove it existed.
 Forward audit records off-host: `control_plane.export` writes a local NDJSON file, and the
 protection holds only once an agent running as another account ships that file to a store (a
-SIEM, for example) where the gateway account cannot delete or alter records already landed. An
-off-host anchor is not built in 4.0.
+SIEM, for example) where the gateway account cannot delete or alter records already landed. To
+detect a wipe or rollback, keep a copy of `<log>.hwm` off the host and verify with
+`audit verify --anchor` (item 158).
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
@@ -4135,6 +4139,56 @@ path parameters are unchanged, because they cannot carry a JSON null.
 
 To keep the field out, leave the argument out instead of sending `null`. A static param or a URL
 default for the same name still fills it, as before.
+
+## 158. `audit verify --anchor` checks the log against an off-host anchor
+
+**Startup:** no notice
+
+Nothing on the host proves an audit log once existed after its sealed segments
+and `.hwm` are deleted and the active file is cut to empty, or after the log is
+rolled back and `.hwm` rewritten to match. Keep a copy of `<log>.hwm` off the
+host and pass it to `mcp-gateway audit verify --anchor <file>`: the log must
+still hold the record the copy names, or verification fails, in live and
+archive mode.
+
+- An anchor that is missing, torn, unparseable or fails its MAC is refused
+  (exit 1), never ignored. An anchor written with a shared secret is refused
+  when no secret is configured.
+- An anchor inside a range that retention expired fails with "predates the
+  retained range": verify with a newer anchor. An anchor at the last record
+  of the newest expired segment passes only for a signed log (a
+  `shared_secret` set): without one, the expiry record that vouches for it
+  can be forged. Take anchors more often than retention expires segments.
+- `verify_audit_log` gains a fourth parameter, `anchor: Option<&Path>`. With an
+  anchor, a log with no file left is a failed verdict (`ok == false` at the
+  anchor's counter) rather than a `NotFound` error.
+
+Independently, a log whose oldest surviving segment opens with a
+`prev_entry_hash` other than the `prev_segment_final_hash` it links to now
+fails verification. The gateway never writes such a log.
+
+## 159. Cost accounting keeps running sums
+
+**Startup:** no notice
+
+Per-key and per-session cost accounting kept one record per answered call and
+never trimmed it, so a caller without a credential (authentication off, or
+`/mcp` public as in the shipped presets) grew gateway memory once per request.
+It now keeps running sums, and what it holds no longer depends on the call
+count:
+
+- A key's 24h, 7d and 30d windows sum hourly buckets (at most 721). A window
+  counts its whole cutoff hour, so it can include up to one hour of older
+  spend at its edge. Budget enforcement is the cost-governance enforcer and is
+  unchanged.
+- Per-tool breakdowns (per key, per session and per session-less caller) keep
+  at most 256 rows; later tools share one `(other)` row, and every total stays
+  exact.
+- A key with no spend for 30 days and no budget set through `set_key_budget`
+  is dropped on a later call, and reads as a key that never spent.
+
+Library users: `CostTracker::evict_old_records` is removed. Nothing called it
+in the gateway, and there is nothing left to evict.
 
 ## Upgrading from 3.5.x: a walkthrough
 
