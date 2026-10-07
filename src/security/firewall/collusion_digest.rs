@@ -424,9 +424,12 @@ pub(crate) struct Delivered<'v> {
 }
 
 impl<'v> Delivered<'v> {
-    /// `None` over [`DELIVERED_SET_CAP`].
+    /// `None` over [`DELIVERED_SET_CAP`] of text plus one segment per leaf:
+    /// a deferred receipt kept to it owns a segment per delivered leaf it
+    /// matches, so many empty leaves must not pass as free.
     pub(super) fn of_leaves(all: Vec<&'v str>) -> Option<Self> {
-        let total: usize = all.iter().map(|l| l.len()).sum();
+        let per_leaf = std::mem::size_of::<Segment>();
+        let total: usize = all.iter().map(|l| l.len() + per_leaf).sum();
         (total <= DELIVERED_SET_CAP).then(|| Self {
             leaves: all.iter().copied().collect(),
             all,

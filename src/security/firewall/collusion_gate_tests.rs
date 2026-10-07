@@ -717,6 +717,8 @@ fn a_plan_step_digest_is_capped_later_as_a_delivery_is_now() {
     let empty = vec![""; 1 << 16];
     let (many, _) = DeliveryDigest::of_plan_step_leaves(&empty, false);
     assert!(!many.is_deferred(), "each leaf costs a segment: capped now");
+    let over = super::super::collusion_digest::Delivered::of_leaves(empty);
+    assert!(over.is_none(), "each delivered leaf costs a segment too");
 }
 
 /// MIK-7992: a plan step's digest recorded without being kept to its plan's
