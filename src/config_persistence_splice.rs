@@ -740,7 +740,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
         let current = "backends:\n  a:  # kept by hand\n    command: a\n";
-        std::fs::write(&path, current).expect("write");
+        crate::gateway::test_helpers::write_owner_only(&path, current).expect("write");
         let stale: Config = serde_yaml::from_str(
             "backends:\n  a: {command: a}\n  b: {command: b}\n  c: {command: c}\n",
         )
@@ -761,8 +761,11 @@ mod tests {
         use crate::config_persistence::write_config_preserving;
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
+        // Owner-only, as the loader requires (CONFIG.2): a file it refuses to
+        // load would be refused for that reason, not the one under test.
+        let write = crate::gateway::test_helpers::write_owner_only;
         let flow = "backends: {a: {command: a}}  # kept by hand\n";
-        std::fs::write(&path, flow).expect("write");
+        write(&path, flow).expect("write");
         let two: Config = serde_yaml::from_str("backends:\n  a: {command: a}\n  b: {command: b}\n")
             .expect("config");
         let refusal = write_config_preserving(&path, &two).expect_err("refused");
@@ -772,7 +775,7 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&path).expect("read"), flow);
         let block = "backends:\n  a:  # kept by hand\n    command: a\n";
-        std::fs::write(&path, block).expect("write");
+        write(&path, block).expect("write");
         assert_eq!(write_config_preserving(&path, &two), Ok(()));
         assert!(
             std::fs::read_to_string(&path)
