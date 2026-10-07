@@ -340,6 +340,7 @@ src/oauth/client/refresh_flight.rs	refused_target	1	critical	d	refused_target	Re
 src/oauth/client/refresh_flight.rs	retire_unsettled	1	critical	d	retire_unsettled	Retires a token whose exchange never settled before a restart; clears its marker only when storage no longer holds the token
 src/oauth/client/refresh_flight.rs	redirect_error	1	critical	d	Exchange::redirect_error	Keeps a refused redirect target typed as an SSRF refusal, so callers stop instead of falling through to a login or another grant
 src/oauth/client/refresh_flight.rs	names_an_oauth_error	1	critical	d	names_an_oauth_error	Decides an OAuth refusal from an unsettled outcome; a refusal keeps the token unless it came through a supplied client on a rotating server
+src/oauth/client/refresh_flight.rs	hold_across_processes	1	critical	d	hold_across_processes	Serializes refreshes and token saves across gateway processes; a lock it cannot take refuses the refresh before anything is sent
 src/oauth/metadata.rs	discover	1	critical	b	AuthorizationServerMetadata::discover	RFC 8414 issuer must match the discovery base
 src/oauth/storage.rs	is_expired	1	critical	d	TokenInfo::is_expired	Expiry decision (60s buffer) gating reuse of a cached token
 src/oauth/storage.rs	create_secret_tmp	1	standard	borderline	TokenStorage::create_secret_tmp	Creates a private (0600/DACL) temp file via create_new_private
@@ -524,6 +525,7 @@ src/transport/http/sse_decoder.rs	oversized	1	critical	borderline	SseDecoder::ov
 src/transport/http/listen.rs	read_single	1	critical	d	read_single	Caps a listen's single JSON answer from an untrusted upstream at FRAME_CAP and classifies only a complete body
 src/transport/http/listen.rs	read_stream	1	critical	d	read_stream	Caps each listen frame from the untrusted backend and ends the stream on an oversized or unreadable frame
 src/transport/http/listen.rs	unsolicited_frame	1	standard	borderline	unsolicited_frame	Admits only the three notifications from a legacy stream
+src/transport/http/listen.rs	next_events	1	critical	d	next_events	Turns an oversized frame or a read error from the untrusted backend into the end of the stream
 src/transport/stdio.rs	capture_notification	1	critical	c	StdioTransport::capture_notification	Routes only notifications/progress to the call that registered the token; drops the rest
 src/transport/stdio.rs	configure_child_environment	1	critical	d	configure_child_environment	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics) and backend env, so no secret leakage
 src/transport/stdio.rs	drop	1	critical	c	ProgressRegistrationGuard::drop	Deregisters a progress token only for the registration's owner

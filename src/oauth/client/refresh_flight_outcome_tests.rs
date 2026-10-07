@@ -299,3 +299,33 @@ async fn a_marked_token_that_cannot_be_cleared_is_not_sent() {
         "the sidecar is as it was"
     );
 }
+
+/// A refresh that cannot take the cross-process lock sends nothing: without
+/// the lock another gateway process could send the same token at once.
+#[tokio::test]
+async fn a_refresh_that_cannot_take_the_cross_process_lock_sends_nothing() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let owned = client(dir.path(), &server);
+    hold(&owned, &token("a1", Some("r1"), true));
+    let key = owned.credential_key().unwrap();
+    let lock = owned
+        .storage
+        .token_path(&key, RESOURCE)
+        .with_extension("refresh.lock");
+    std::fs::create_dir(&lock).unwrap();
+
+    // The refresh fails and falls back to a login the headless caller
+    // refuses; what matters is that nothing was sent.
+    assert!(headless(&owned).await.is_err(), "the lock cannot be taken");
+    assert_eq!(
+        server.requests(),
+        0,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+    assert_eq!(
+        stored(&owned).and_then(|t| t.refresh_token).as_deref(),
+        Some("r1")
+    );
+}
