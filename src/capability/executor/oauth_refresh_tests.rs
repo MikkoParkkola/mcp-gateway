@@ -63,6 +63,17 @@ fn with_expired_token(
     (executor, dir)
 }
 
+/// A token store holding an expired token for `provider` with `refresh_token`.
+fn expired_store(provider: &str, refresh_token: &str) -> (Arc<TokenStorage>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let mut token = TokenInfo::from_response("OLD_AT".to_string(), None, None, None, None);
+    token.expires_at = Some(0);
+    token.refresh_token = Some(refresh_token.to_string());
+    storage.save(provider, provider, &token).unwrap();
+    (storage, dir)
+}
+
 fn through_proxy(proxy: &str) -> CapabilityExecutor {
     CapabilityExecutor::for_config(&CapabilityConfig {
         egress_proxy: Some(proxy.to_string()),
@@ -89,15 +100,12 @@ async fn a_private_literal_token_endpoint_never_receives_the_refresh_token() {
 #[tokio::test]
 async fn the_refresh_refusal_names_the_destination_rule() {
     let (server, seen) = recording_token_server().await;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+    let (storage, _dir) = expired_store("t1b", "REFRESH_SECRET");
     let err = CapabilityExecutor::new()
-        .perform_token_refresh(
+        .refresh_provider_token(
             "t1b",
-            "REFRESH_SECRET",
             &format!("{server}/token"),
             &storage,
-            None,
             &CapabilityExecutionContext::default(),
         )
         .await
@@ -200,7 +208,7 @@ async fn a_private_literal_token_endpoint_is_refused_even_through_the_proxy() {
 /// GH78.RL.1 — an OAuth token-refresh transport failure must not carry the
 /// token endpoint's credential into the error text.
 ///
-/// `perform_token_refresh` POSTs `refresh_token` and, when the keychain holds
+/// The refresh POSTs `refresh_token` and, when the keychain holds
 /// one, `client_secret`. The failure message embedded the endpoint twice: once
 /// verbatim, and once more inside a `reqwest::Error`, whose `Display` appends
 /// `" for url (...)"`. A token endpoint is operator-configured and a
@@ -212,17 +220,13 @@ async fn a_private_literal_token_endpoint_is_refused_even_through_the_proxy() {
 #[tokio::test]
 async fn an_oauth_refresh_transport_error_drops_the_endpoint_credential() {
     let executor = CapabilityExecutor::new();
-    let storage =
-        crate::oauth::TokenStorage::new(std::env::temp_dir().join("gh78_oauth_refresh_redaction"))
-            .unwrap();
+    let (storage, _dir) = expired_store("gh78", "refresh-token-value");
 
     let err = executor
-        .perform_token_refresh(
+        .refresh_provider_token(
             "gh78",
-            "refresh-token-value",
             "http://127.0.0.1:1/token?api_key=CANARY",
             &storage,
-            None,
             &CapabilityExecutionContext::default().with_isolated_loopback_egress(),
         )
         .await
@@ -258,22 +262,22 @@ async fn an_oauth_refresh_parse_error_drops_the_endpoint_credential() {
         .await
         .unwrap();
     });
-    let directory = tempfile::tempdir().unwrap();
-    let storage = crate::oauth::TokenStorage::new(directory.path().to_owned()).unwrap();
+    let (storage, _directory) = expired_store("parse-fixture", "fixture-refresh");
     let error = CapabilityExecutor::new()
-        .perform_token_refresh(
+        .refresh_provider_token(
             "parse-fixture",
-            "fixture-refresh",
             &endpoint,
             &storage,
-            None,
             &CapabilityExecutionContext::default().with_isolated_loopback_egress(),
         )
         .await
         .expect_err("invalid JSON must refuse refresh");
     server.abort();
     let rendered = error.to_string();
-    assert!(rendered.contains("Failed to parse OAuth refresh response"));
+    assert!(
+        rendered.contains("Failed to parse refresh response"),
+        "{rendered}"
+    );
     assert!(rendered.contains("parse-fixture"));
     assert!(!rendered.contains("PARSE_CANARY_78491"));
     assert!(!rendered.contains("fixture-refresh"));
