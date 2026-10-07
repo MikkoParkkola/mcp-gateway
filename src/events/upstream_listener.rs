@@ -55,6 +55,10 @@ pub(crate) struct UpstreamListeners {
     ineligible: super::backend_source::Ineligible,
     gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     stop: CancellationToken,
+    /// Tasks `start` has spawned: a task started wrongly for a refused
+    /// backend cancels itself at once, so its entry alone cannot show it.
+    #[cfg(test)]
+    starts: std::sync::atomic::AtomicUsize,
 }
 
 impl Drop for UpstreamListeners {
@@ -105,6 +109,8 @@ impl UpstreamListeners {
             backends: Mutex::new(HashMap::new()),
             gates: Mutex::new(HashMap::new()),
             stop: CancellationToken::new(),
+            #[cfg(test)]
+            starts: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -208,6 +214,9 @@ impl UpstreamListeners {
     }
 
     fn start(&self, backend: &str, need: Need) -> Arc<Shared> {
+        #[cfg(test)]
+        self.starts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let (wake, _) = watch::channel(0);
         let shared = Arc::new(Shared {
             name: backend.to_owned(),
