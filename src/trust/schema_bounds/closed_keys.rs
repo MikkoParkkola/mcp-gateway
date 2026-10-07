@@ -180,6 +180,8 @@ impl<'a> Walk<'a> {
             }
             _ => Vec::new(),
         };
+        #[cfg(test)]
+        MEMO_INSERTS.with(|n| n.set(n.get() + 1));
         self.memo.insert(key, faults.clone());
         faults
     }
@@ -515,6 +517,8 @@ fn ref_to_free_map<'a>(root: &'a Value, schema: &'a Value, hops: usize) -> bool 
 
 /// `enum: []`, or a `type` that excludes `object`.
 fn matches_nothing(map: &Map<String, Value>) -> bool {
+    #[cfg(test)]
+    NOTHING_CHECKS.with(|n| n.set(n.get() + 1));
     if map
         .get("enum")
         .and_then(Value::as_array)
@@ -563,6 +567,14 @@ pub(crate) fn count_reason(kind: &'static str, reason: &'static str) {
         "reason" => reason
     )
     .increment(1);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Walk results stored in the memo on this thread (`MIK-8014.PERF.3a`).
+    static MEMO_INSERTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// [`matches_nothing`] evaluations on this thread (`MIK-8014.PERF.3a`).
+    static NOTHING_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]

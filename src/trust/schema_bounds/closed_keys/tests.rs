@@ -374,3 +374,40 @@ fn an_unresolvable_ref_under_an_id_stays_refused() {
     });
     assert!(refused(&outer_only, &json!({"opts": {"b": 1}})));
 }
+
+/// `MIK-8014.PERF.3a`: a scalar argument's result is always empty, so the walk
+/// stores nothing for it; only the object level is memoised.
+#[test]
+fn a_scalar_argument_is_not_memoised() {
+    let schema = closed(&json!({"a": {}, "b": {}, "c": {}}));
+    super::MEMO_INSERTS.with(|n| n.set(0));
+    assert!(!refused(&schema, &json!({"a": 1, "b": "x", "c": true})));
+    assert_eq!(super::MEMO_INSERTS.with(std::cell::Cell::get), 1);
+}
+
+/// `MIK-8014.PERF.3a`: whether a level matches no object is decided once for
+/// that level, not again for every key judged at it.
+#[test]
+fn a_level_is_checked_for_matching_nothing_once() {
+    let schema = closed(&json!({"a": {}, "b": {}, "c": {}}));
+    super::NOTHING_CHECKS.with(|n| n.set(0));
+    assert!(!refused(&schema, &json!({"a": 1, "b": "x", "c": true})));
+    assert_eq!(super::NOTHING_CHECKS.with(std::cell::Cell::get), 1);
+}
+
+/// `MIK-8014.PERF.3a` guard: a scalar still costs its visit. 5 000 scalar
+/// elements cost 3 + 2 x 5 000 = 10 003 visits, over [`super::MAX_VISITS`];
+/// with scalars uncharged they would cost 5 003 and pass.
+#[test]
+fn scalar_elements_still_count_toward_the_visit_budget() {
+    let schema = json!({"type": "object", "properties": {
+        "a": {"type": "array", "items": {}}
+    }});
+    let args = json!({"a": vec![1; 5_000]});
+    assert_eq!(
+        undeclared_keys(&args, &schema, Closed),
+        vec![KeyFault::TooComplex]
+    );
+    let under = json!({"a": vec![1; 4_998]});
+    assert!(undeclared_keys(&under, &schema, Closed).is_empty());
+}
