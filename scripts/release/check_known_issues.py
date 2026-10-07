@@ -3,8 +3,8 @@
 """Known issues gate for the release notes.
 
 --check (every PR): the "## Known issues" section must not name a later
-release. Nothing in 4.0 is deferred to 4.0.1, so a "fixed in 4.0.1" line is
-a promise the release plan no longer makes.
+release. Nothing in 4.0 is deferred, so a "fixed in 4.0.1" (or 4.1, or 5.0)
+line is a promise the release plan no longer makes.
 
 --release (at a tag): the section must also be empty or absent. A known issue
 left at a final tag is shipped, so it blocks the tag instead. A prerelease tag
@@ -29,17 +29,21 @@ import re
 import sys
 
 DEFAULT_NOTES = "docs/release/v4.0.0-release-notes-DRAFT.md"
-LATER_RELEASE = "4.0.1"
-# The version as a whole token: not 14.0.1, not 4.0.10; v4.0.1 and "4.0.1." count.
-LATER_RELEASE_TOKEN = re.compile(r"(?<![\d.])4\.0\.1(?!\.?\d)")
+THIS_RELEASE = (4, 0, 0)
+# A version of this product as a whole token, major 4 or 5 (14.0.1 or a Node
+# 20.1 is another product's): any later than 4.0.0 is a deferral, 4.0.1,
+# 4.0.10, 4.1 and 5.0 alike. A pre-release or build suffix of 4.0.0 is not.
+VERSION_TOKEN = re.compile(r"(?<![\d.])v?([45])\.(\d+)(?:\.(\d+))?(?!\d|\.\d)")
 # Same two forms as check_scope_acceptance.py PRERELEASE_400, these notes being
 # 4.0.0's; any other version or suffix, build metadata included, is held to the
 # final-tag rule.
 PRERELEASE_TAG = re.compile(r"^v4\.0\.0-(beta|rc)\.\d+$")
-# ATX headings: up to three spaces of indent, optional closing hashes.
-HEADING = re.compile(
-    r"^ {0,3}##[ \t]+known[ \t]+issues(?:[ \t]+#*)?[ \t]*$", re.IGNORECASE
-)
+# ATX level 1-2 headings: up to three spaces of indent; the title is compared as
+# words only (see is_title), so closing hashes and inline Markdown never hide it.
+HEADING = re.compile(r"^ {0,3}#{1,2}[ \t]+(.*)$")
+# What a title's inline Markdown adds besides its words: HTML tags and
+# comments, and link targets.
+INLINE_NOISE = re.compile(r"<[^>]*>|\]\([^)]*\)")
 SECTION_END = re.compile(r"^#{1,2}(?:[ \t]|$)")
 # Setext: a paragraph line underlined with = (level 1) or - (level 2). A list
 # item, indented code, an ATX heading, a quote, a fence or a thematic break
@@ -55,11 +59,27 @@ NOT_A_PARAGRAPH = re.compile(
 FENCE = re.compile(r"^ {0,3}(`{3,}(?=[^`]*$)|~{3,})")
 # Raw HTML (a tag, comment or declaration at the start of a line). Its block
 # rules nest without end, so a section that holds any never ends: the gate
-# reads it to the end of the notes.
-HTML = re.compile(r"^ {0,3}<[a-z/!?]", re.IGNORECASE)
+# reads it to the end of the notes. An autolink (<https://...>, <a@b.c>) is
+# not HTML.
+HTML = re.compile(
+    r"^ {0,3}<(?![a-z][a-z0-9+.-]{1,31}:[^\s<>]*>|[^\s<>@]+@[^\s<>]+>)[a-z/!?]",
+    re.IGNORECASE,
+)
 # A link reference definition is not paragraph text, so it is never a heading;
 # any line that opens with a bracket is read as one.
 REFERENCE = re.compile(r"^ {0,3}\[")
+
+
+def is_title(text):
+    """True when `text`, reduced to its words, reads "known issues"."""
+    words = re.sub(r"[^a-z]+", " ", INLINE_NOISE.sub(" ", text).lower()).split()
+    return words == ["known", "issues"]
+
+
+def atx_start(line):
+    """True when `line` is an ATX level 1-2 Known issues heading."""
+    match = HEADING.match(line)
+    return bool(match) and is_title(match.group(1))
 
 
 def starts_section(lines, i):
@@ -69,13 +89,13 @@ def starts_section(lines, i):
     start only makes the gate read more. A setext start is a title of one or
     two lines over a dash underline, so a wrapped title still counts.
     """
-    if HEADING.match(lines[i]):
+    if atx_start(lines[i]):
         return True
     underline = UNDERLINE.match(lines[i + 1]) if i + 1 < len(lines) else None
     if not underline or underline.group(1)[0] != "-" or not lines[i].strip():
         return False
     two = lines[i - 1] + " " + lines[i] if i else lines[i]
-    return "known issues" in (" ".join(text.split()).lower() for text in (lines[i], two))
+    return is_title(lines[i]) or is_title(two)
 
 
 def ends_section(lines, i):
@@ -118,12 +138,14 @@ def step_fence(fence, line):
 
 
 def known_issues(text):
-    """Every Known issues section's lines, each up to the next level 1-2 heading."""
+    """Every Known issues section's lines, each up to the next plain level 1-2
+    heading (see ends_section), or to the end of the notes once it holds raw
+    HTML."""
     lines = text.splitlines()
     body, inside, underline, fence, sticky = [], False, False, "", False
     for i, line in enumerate(lines):
         if starts_section(lines, i):
-            inside, underline = True, not HEADING.match(line)
+            inside, underline = True, not atx_start(line)
             continue
         if underline:
             underline = False
@@ -150,11 +172,20 @@ def is_prerelease_tag(tag):
     return bool(PRERELEASE_TAG.match(tag))
 
 
+def later_releases(line):
+    """The versions in `line` later than this release."""
+    return [
+        match.group(0)
+        for match in VERSION_TOKEN.finditer(line)
+        if tuple(int(part or 0) for part in match.groups()) > THIS_RELEASE
+    ]
+
+
 def problems(section, release):
     found = [
-        f"Known issues names {LATER_RELEASE}: {line.strip()}"
+        f"Known issues names a later release ({', '.join(later)}): {line.strip()}"
         for line in section
-        if LATER_RELEASE_TOKEN.search(line)
+        if (later := later_releases(line))
     ]
     content = [line for line in section if line.strip()]
     if release and content:
