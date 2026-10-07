@@ -265,6 +265,9 @@ fn only_the_owner_removes_a_session() {
     assert!(m.remove_session_for(&id, &cred("mallory")).is_none());
     assert!(m.has_session(&id), "another owner removed the session");
     let removed = m.remove_session_for(&id, &cred("alice"));
-    assert_eq!(removed.as_ref().map(SessionId::expose_secret), Some(id.as_str()));
+    assert_eq!(
+        removed.as_ref().map(SessionId::expose_secret),
+        Some(id.as_str())
+    );
     assert!(!m.has_session(&id), "the owner's DELETE left the session");
 }
