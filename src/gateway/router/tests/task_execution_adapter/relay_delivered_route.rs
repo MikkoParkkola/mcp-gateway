@@ -238,6 +238,7 @@ async fn a_stripped_interim_answer_renders_no_continuation() {
         declaring_elicitation(sync_invoke(1, json!({}))),
     )
     .await;
+    assert_stripped(&read);
     let rendered = read["result"]["content"][0]["text"]
         .as_str()
         .unwrap_or_default();
@@ -284,12 +285,25 @@ async fn a_backends_own_request_state_is_still_judged() {
     let (state, _store) = surfaced_state_with(&mock, Some(strip_kernel())).await;
 
     let read = post(&state, "key-a", sync_invoke(1, json!({}))).await;
+    assert_stripped(&read);
     let rendered = read["result"]["content"][0]["text"]
         .as_str()
         .unwrap_or_default();
     assert!(
         rendered.contains(PROSE),
         "a backend's own requestState left the kernel's judgment: {read}"
+    );
+}
+
+/// The answer was judged and `Strip` was enforced on it: the rendered text
+/// is the kernel's output, not ordinary wrapping, which also renders every
+/// member.
+fn assert_stripped(read: &Value) {
+    let policy = &read["result"]["_context_integrity"]["policy"];
+    assert_eq!(policy["decision"], "strip", "base: Strip decided: {read}");
+    assert_eq!(
+        policy["enforcement_applied"], true,
+        "base: Strip enforced: {read}"
     );
 }
 
