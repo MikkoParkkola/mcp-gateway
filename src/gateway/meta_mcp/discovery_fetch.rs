@@ -183,7 +183,9 @@ impl MetaMcp {
         // up) is otherwise skipped by every search forever (#3036), and one
         // whose every tool is withheld must still refresh on TTL (#1441).
         // Single-flight and the fill cooldown keep a dead backend to one
-        // `tools/list` per cooldown, however many searches arrive.
+        // `tools/list` per cooldown, however many searches arrive. An `Io`,
+        // `Http` or `Tls` failure stamps no cooldown (`fill_check::Replay`);
+        // the circuit breaker bounds those instead.
         if tools.is_empty() && binding.is_none() {
             Self::refresh_stale_backend_tools_in_background(backend);
         }
@@ -248,6 +250,19 @@ impl MetaMcp {
         if !backend.has_cached_tools() {
             let backend = Arc::clone(backend);
             tokio::spawn(Self::refresh_stale_backend_tools(backend));
+        }
+    }
+
+    /// Fill `backend`'s shared slot behind a read that carries no caller
+    /// credential (MIK-7962). The fill runs over the identity-free shared
+    /// transport, so a backend that propagates caller identity, or one the
+    /// multi-user guard isolates (INV-2), is never asked here: credentialed
+    /// discovery fills those, on the caller's own slot.
+    pub(super) fn refresh_shared_behind_read(&self, backend: &Arc<Backend>) {
+        if backend.identity_propagation_config().is_none()
+            && !self.meta_route_isolation_refused(backend)
+        {
+            Self::refresh_stale_backend_tools_in_background(backend);
         }
     }
 }
