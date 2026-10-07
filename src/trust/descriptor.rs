@@ -515,7 +515,7 @@ mod tests {
         use crate::protocol::ToolAnnotations;
 
         type Change = fn(&mut Tool);
-        let edits: [(&str, Change); 7] = [
+        let edits: [(&str, Change); 8] = [
             ("title", |t| {
                 t.title = Some("Other title".to_string());
             }),
@@ -524,6 +524,12 @@ mod tests {
             }),
             ("input schema", |t| {
                 t.input_schema["properties"]["limit"] = json!({"type": "integer"});
+            }),
+            // Same length, same value, another key: only the key tells them apart.
+            ("property renamed", |t| {
+                let props = t.input_schema["properties"].as_object_mut().unwrap();
+                let query = props.remove("query").unwrap();
+                props.insert("q".to_string(), query);
             }),
             ("output schema", |t| {
                 t.output_schema = Some(json!({"type": "object"}));
