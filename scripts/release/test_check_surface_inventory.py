@@ -125,6 +125,33 @@ def test_lib_extractor_sees_async_const_fn_and_macros() -> None:
     assert {"mcp_gateway::planted_async", "mcp_gateway::planted_const", "mcp_gateway::planted_macro!"} <= ids, ids
 
 
+def test_serde_tag_key_is_a_config_item() -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory(dir=inv.ROOT / "src") as tmp:
+        f = Path(tmp) / "planted_cfg.rs"
+        f.write_text(
+            "#[derive(Deserialize)]\n#[serde(tag = \"kind\")]\nenum PlantedMode { A { x: u8 } }\n",
+            encoding="utf-8",
+        )
+        w = inv.ConfigWalker()
+        w.walk_item(inv.parse_items(f)[0], "planted", "", ())
+    assert {"planted.kind", "planted.x"} <= set(w.out), sorted(w.out)
+
+
+def test_ufcs_route_and_extern_crate_are_items() -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory(dir=inv.ROOT / "src") as tmp:
+        (Path(tmp) / "planted.rs").write_text('fn r() { Router::route(app, "/ufcs", h); }\n', encoding="utf-8")
+        lib = Path(tmp) / "planted_lib.rs"
+        lib.write_text("pub extern crate planted_dep;\n", encoding="utf-8")
+        ids = {e.id for e in inv.extract_routes()}
+        libs = {e.id for e in inv.extract_lib(lib)}
+    assert any('"/ufcs"' in i for i in ids), sorted(ids)
+    assert "mcp_gateway::planted_dep" in libs, libs
+
+
 def test_versioned_route_constant_is_read() -> None:
     names = [n for n, _, _ in inv.route_constants('owned_routes! {\n    HEALTH_V2 = "/v2/health",\n}')]
     assert names == ["HEALTH_V2"], names

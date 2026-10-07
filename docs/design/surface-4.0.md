@@ -143,7 +143,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
-| `env` | 19 | `MCP_GATEWAY_CAPABILITIES` |  | `MCP_GATEWAY_FIREWALL_SKIP_KEYS`; `MCP_GATEWAY_KIND_CLUSTER`; `MCP_GATEWAY_KIND_KEEP`; `MCP_GATEWAY_KIND_NAMESPACE`; `MCP_GATEWAY_ROLLOUT_TIMEOUT`; `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE`; `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`; `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`; `MCP_GATEWAY_TEST_HOME_DIR`; `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED` |  |
+| `env` | 20 | `MCP_GATEWAY_CAPABILITIES` |  | `MCP_GATEWAY_KIND_CLUSTER`; `MCP_GATEWAY_KIND_KEEP`; `MCP_GATEWAY_KIND_NAMESPACE`; `MCP_GATEWAY_ROLLOUT_TIMEOUT`; `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE`; `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`; `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`; `MCP_GATEWAY_TEST_HOME_DIR`; `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED` |  |
 
 ### routes
 
@@ -176,6 +176,14 @@ Generated from the tables at the end; each row there carries the reason and migr
 |---|---|
 | MIK-8063 | An `a2a_url` backend loads but can never start: nothing outside `src/a2a` builds an `A2aProvider`, and `Backend::start` returns an error (src/backend/lifecycle.rs:487). `a2a_agent_card_path` is read by nothing. |
 | MIK-8064 | `meta_mcp.cache_tools` is read by nothing; `init` writes it. |
+
+## Pending and held items
+
+| Item | Decision |
+|---|---|
+| A2A: `backends.<name>.a2a_url`, `backends.<name>.a2a_agent_card_path`, the `a2a` module | Pending the operator's decision on whether A2A ships in 4.0 (MIK-8063). The rows read KEEP and INTERNAL provisionally and say "pending operator". |
+| `meta_mcp.cache_tools` | REMOVE (MIK-8064). |
+| Capability `trawl_extract` and the `cisco_scanner` operation `scan_mcp_server` | Held until 4.1 (MIK-7788): the gateway cannot confine where these tools connect. Capability files are outside the five surfaces, so they have no table row. Class INTERNAL: the definitions stay in the tree, refuse to run and are not offered to clients; they leave the user docs until 4.1. |
 
 ## The minimal setup after 4.0
 
@@ -300,8 +308,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `auth.public_paths` | KEEP | `vec!["/health".to_string()]` | who may call the gateway | - | src/config/features/auth.rs:29 |
 | `auth.single_user` | KEEP | `false` | who may call the gateway | - | src/config/features/auth.rs:45 |
 | `backends` | KEEP | `type default` | how a user declares a backend and its credentials | - | src/config/mod.rs:105 |
-| `backends.<name>.a2a_agent_card_path` | KEEP | `see impl Default` | A2A transport (locked decision); unusable until MIK-8063 lands, which the 0-bug rule puts in 4.0.0 | - | src/config/backend_config.rs:270 |
-| `backends.<name>.a2a_url` | KEEP | `see impl Default` | A2A transport (locked decision); unusable until MIK-8063 lands, which the 0-bug rule puts in 4.0.0 | - | src/config/backend_config.rs:270 |
+| `backends.<name>.a2a_agent_card_path` | KEEP | `see impl Default` | PENDING OPERATOR: the operator decides whether A2A ships in 4.0 (MIK-8063); KEEP is provisional | pending operator: KEEP if A2A ships in 4.0, REMOVE (refused at load, `upgrade` deletes it) if not | src/config/backend_config.rs:270 |
+| `backends.<name>.a2a_url` | KEEP | `see impl Default` | PENDING OPERATOR: the operator decides whether A2A ships in 4.0 (MIK-8063); KEEP is provisional | pending operator: KEEP if A2A ships in 4.0, REMOVE (refused at load, `upgrade` deletes it) if not | src/config/backend_config.rs:270 |
 | `backends.<name>.account` | KEEP | `None` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:99 |
 | `backends.<name>.allow_cleartext_credentials` | KEEP | `false` | per-backend security opt-out; stays explicit | - | src/config/backend_config.rs:83 |
 | `backends.<name>.allow_flagged_tools` | KEEP | `std::collections::BTreeMap::new()` | per-backend security opt-out; stays explicit | - | src/config/backend_config.rs:70 |
@@ -760,7 +768,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway accounts migrate-credentials --legacy-issuer` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:193 |
 | `mcp-gateway add` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:399 |
 | `mcp-gateway add --command` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:399 |
-| `mcp-gateway add --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | the global `--config` (and `MCP_GATEWAY_CONFIG`) takes over; a clap error names it | src/cli/mod.rs:399 |
+| `mcp-gateway add --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes (UPGRADING entry) | src/cli/mod.rs:399 |
 | `mcp-gateway add --description` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:399 |
 | `mcp-gateway add --env` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:399 |
 | `mcp-gateway add --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:399 |
@@ -839,7 +847,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway events dead-letters <action>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/events.rs:37 |
 | `mcp-gateway events dead-letters <id>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/events.rs:39 |
 | `mcp-gateway get` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:455 |
-| `mcp-gateway get --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | the global `--config` (and `MCP_GATEWAY_CONFIG`) takes over; a clap error names it | src/cli/mod.rs:455 |
+| `mcp-gateway get --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes (UPGRADING entry) | src/cli/mod.rs:455 |
 | `mcp-gateway get <name>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:455 |
 | `mcp-gateway hash-key` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:280 |
 | `mcp-gateway hash-key --verify` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:280 |
@@ -911,14 +919,14 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway kubernetes plan <resources>` | INTERNAL | enterprise-alpha controller | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) | src/cli/subcommands.rs:295 |
 | `mcp-gateway list` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:441 |
 | `mcp-gateway list --available` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:441 |
-| `mcp-gateway list --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | the global `--config` (and `MCP_GATEWAY_CONFIG`) takes over; a clap error names it | src/cli/mod.rs:441 |
+| `mcp-gateway list --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes (UPGRADING entry) | src/cli/mod.rs:441 |
 | `mcp-gateway list --json` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:441 |
 | `mcp-gateway ranking` | INTERNAL | offline evaluation of the adaptive ranker; developer tooling | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:253 |
 | `mcp-gateway ranking eval` | INTERNAL | offline evaluation of the adaptive ranker; developer tooling | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:264 |
 | `mcp-gateway ranking eval --format` | INTERNAL | offline evaluation of the adaptive ranker; developer tooling | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:264 |
 | `mcp-gateway ranking eval <file>` | INTERNAL | offline evaluation of the adaptive ranker; developer tooling | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/subcommands.rs:264 |
 | `mcp-gateway remove` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:430 |
-| `mcp-gateway remove --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | the global `--config` (and `MCP_GATEWAY_CONFIG`) takes over; a clap error names it | src/cli/mod.rs:430 |
+| `mcp-gateway remove --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes (UPGRADING entry) | src/cli/mod.rs:430 |
 | `mcp-gateway remove <name>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:430 |
 | `mcp-gateway runtime` | INTERNAL | sandbox substrate compiler behind the non-default `runtime-substrate` feature (feature runtime-substrate) | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:580 |
 | `mcp-gateway runtime compile` | INTERNAL | sandbox substrate compiler behind the non-default `runtime-substrate` feature | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:590 |
@@ -1054,7 +1062,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `MCP_GATEWAY_CLIENT_KEY` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:26 |
 | `MCP_GATEWAY_CONFIG` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:125 |
 | `MCP_GATEWAY_CONFIG_DIR` | KEEP | data directory for persisted state (src/gateway/server/persistence.rs:181); volume-mounted deployments set it | - | src/cli/mod.rs:559 |
-| `MCP_GATEWAY_FIREWALL_SKIP_KEYS` | INTERNAL | undocumented override of the argument keys the injection scan treats as free text; the built-in list stays | hidden: still read, so injection enforcement is unchanged; `doctor` lists it when set | src/security/firewall/input_scanner.rs:85 |
+| `MCP_GATEWAY_FIREWALL_SKIP_KEYS` | KEEP | security policy list (rule 1): replaces the argument keys the injection scan treats as free text, so it can widen or narrow the scan; an explicit operator decision (rule 2) | - | src/security/firewall/input_scanner.rs:85 |
 | `MCP_GATEWAY_HOST` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:133 |
 | `MCP_GATEWAY_KIND_CLUSTER` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh:19 |
 | `MCP_GATEWAY_KIND_KEEP` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/README.md:155 |
@@ -1147,7 +1155,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp_gateway::OfflineInitError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:108 |
 | `mcp_gateway::OfflineMigrationError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:108 |
 | `mcp_gateway::Result` | INTERNAL | bin 1, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:102 |
-| `mcp_gateway::a2a` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature a2a) | `pub(crate)`; no caller outside the crate | src/lib.rs:31 |
+| `mcp_gateway::a2a` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature a2a); PENDING OPERATOR: the A2A decision (MIK-8063) may remove the module | `pub(crate)`; no caller outside the crate | src/lib.rs:31 |
 | `mcp_gateway::attestation` | INTERNAL | bin 1, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:32 |
 | `mcp_gateway::autotag` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:33 |
 | `mcp_gateway::backend` | INTERNAL | bin 0, tests 52, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:34 |

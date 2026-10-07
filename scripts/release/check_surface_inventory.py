@@ -382,6 +382,11 @@ class ConfigWalker:
             return
         # enum: unit-only enums are a scalar value; payload variants add keys
         tagged = serde_attr(item.attrs, "untagged") is not None or serde_attr(item.attrs, "tag") is not None
+        # An internally or adjacently tagged enum adds its tag (and content) key.
+        for attr in ("tag", "content"):
+            name = serde_attr(item.attrs, attr)
+            if name:
+                self.emit(f"{key}.{name}" if key else name, item.file, item.line, note)
         for v in item.members:
             if serde_attr(v.attrs, "skip") is not None or serde_attr(v.attrs, "skip_deserializing") is not None:
                 continue
@@ -601,8 +606,10 @@ def extract_routes() -> list[Entry]:
             if m.group(1) not in owned and m.group(1) != "OWNED":
                 rid = f"unresolved routes::{m.group(1)} ({rel(p)})"
                 out.setdefault(rid, Entry(rid, rel(p), line_of(code, m.start()), "not in routes.rs"))
-        for m in re.finditer(r"\.\s*(?:route|route_service|nest|nest_service)\s*\(\s*([^,]+?)\s*,", code):
-            arg = m.group(1)
+        # Method calls take the path first; `Router::route(router, path, ..)` takes it second.
+        calls = [(m, m.group(1)) for m in re.finditer(r"\.\s*(?:route|route_service|nest|nest_service)\s*\(\s*([^,]+?)\s*,", code)]
+        calls += [(m, m.group(1)) for m in re.finditer(r"\bRouter\s*::\s*(?:route|route_service|nest|nest_service)\s*\(\s*[^,]+?,\s*([^,]+?)\s*,", code)]
+        for m, arg in calls:
             # Only a bare declared constant is already a row; any expression over one is not.
             if (re.fullmatch(r"routes::([A-Z][A-Z0-9_]*)", arg) and arg[8:] in owned) or (rel(p), arg) in NOT_HTTP_ROUTES:
                 continue
@@ -616,7 +623,7 @@ def extract_routes() -> list[Entry]:
 
 LIB_ITEM_RE = re.compile(
     r"^((?:#\[[^\n]*\]\s*)*)pub\s+(?:(?:async|unsafe|extern\s+\"\w+\")\s+)*"
-    r"(mod|use|fn|const\s+fn|const|static|struct|enum|trait|type|union)\s+([^;{(=<]+)",
+    r"(mod|use|fn|const\s+fn|const|static|struct|enum|trait|type|union|extern\s+crate)\s+([^;{(=<]+)",
     re.M,
 )
 
