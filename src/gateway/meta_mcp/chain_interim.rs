@@ -109,6 +109,9 @@ where
         // `null`. A driver that changed the default would turn a wiring change
         // into a behaviour change for every step that omits the field.
         let arguments = step.get("arguments").cloned().unwrap_or_else(|| json!({}));
+        // MIK-7993 r5: what the gateway writes into this step's value is noted
+        // relative to it; once the value sits in `results`, its notes follow.
+        let writes_mark = crate::gateway::gateway_writes::mark();
         let result = run_step(idx, tool_ref.clone(), arguments).await?;
 
         // Classified before the result is recorded, so a step that asked is
@@ -116,6 +119,15 @@ where
         // two different things.
         let Some(round) = classify_step_result(idx, &tool_ref, &result)? else {
             completed.push(json!({"step": idx, "tool": tool_ref, "result": result}));
+            // Its position in `completed`, which is its place in `results`:
+            // NOT `idx`, since a resumed chain starts `completed` empty.
+            let at = vec![
+                "results".to_owned(),
+                (completed.len() - 1).to_string(),
+                "result".to_owned(),
+            ];
+            let taken = crate::gateway::gateway_writes::take_since(writes_mark);
+            crate::gateway::gateway_writes::restore(&taken.rebased(&at));
             continue;
         };
 

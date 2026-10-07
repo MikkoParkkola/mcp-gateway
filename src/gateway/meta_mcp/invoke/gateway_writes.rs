@@ -264,6 +264,88 @@ pub(crate) fn restore(record: &WriteRecord) {
     });
 }
 
+/// Take the notes made since `mark` out of the delivery's record: a
+/// composite step's own, to be put back rebased onto the composite's answer
+/// (MIK-7993 r5). Empty outside a scope.
+pub(crate) fn take_since(mark: Mark) -> WriteRecord {
+    WriteRecord(
+        GATEWAY_WRITES
+            .try_with(|w| {
+                let mut writes = w.borrow_mut();
+                let (taken, kept): (Vec<Written>, Vec<Written>) = std::mem::take(&mut writes.list)
+                    .into_iter()
+                    .partition(|written| written.seq >= mark.0);
+                writes.list = kept;
+                taken
+            })
+            .unwrap_or_default(),
+    )
+}
+
+/// The segments a playbook output mapping's path (`a.b[0].c`) names, as a
+/// note's path spells them; `None` for a wildcard, which projects no note.
+pub(crate) fn mapping_segments(path: &str) -> Option<Vec<String>> {
+    crate::transform::parse_json_path(path)
+        .into_iter()
+        .map(|segment| match segment {
+            crate::transform::JsonPathSegment::Key(key) => Some(key),
+            crate::transform::JsonPathSegment::ArrayIndex(index) => Some(index.to_string()),
+            crate::transform::JsonPathSegment::ArrayWildcard => None,
+        })
+        .collect()
+}
+
+impl WriteRecord {
+    /// Every note moved under `prefix`: what it describes now sits at
+    /// `prefix` of a composite's answer, inside its value.
+    pub(crate) fn rebased(self, prefix: &[String]) -> Self {
+        Self(
+            self.0
+                .into_iter()
+                .map(|mut written| {
+                    written.layer = Layer::Value;
+                    written.dest = prefix.iter().cloned().chain(written.dest).collect();
+                    written
+                })
+                .collect(),
+        )
+    }
+
+    /// The notes a projection of `from` out of `step` (a step's value)
+    /// carries to `to` in a composite's answer. A note inside the projected
+    /// value moves with it. A note that holds the projected value (part of
+    /// what the gateway wrote was taken out) becomes a note of that part,
+    /// but only while the member still holds what was written: a part of
+    /// backend bytes is never the gateway's. Any other note does not reach
+    /// the answer, and its member there stays receipted.
+    pub(crate) fn projected(&self, step: &Value, from: &[String], to: &[String]) -> Self {
+        let mut carried = Vec::new();
+        for written in &self.0 {
+            if let Some(rest) = written.dest.strip_prefix(from) {
+                carried.push(Written {
+                    layer: Layer::Value,
+                    dest: to.iter().chain(rest).cloned().collect(),
+                    ..written.clone()
+                });
+            } else if let Some(inside) = from.strip_prefix(written.dest.as_slice()) {
+                let holds = member(step, &written.dest).and_then(digest) == Some(written.digest);
+                let Some(part) = member(step, from).filter(|_| holds).and_then(digest) else {
+                    continue;
+                };
+                carried.push(Written {
+                    layer: Layer::Value,
+                    dest: to.to_vec(),
+                    kind: written.kind,
+                    within: written.within.iter().chain(inside).cloned().collect(),
+                    digest: part,
+                    seq: 0,
+                });
+            }
+        }
+        Self(carried)
+    }
+}
+
 /// Run `delivery` with a write record, beside its receipt collector.
 ///
 /// Not an `async fn`: one would hold `delivery` twice (as its argument and

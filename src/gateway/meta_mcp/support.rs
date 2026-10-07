@@ -399,12 +399,61 @@ pub(super) struct MetaMcpInvoker<'a, 'c> {
     /// authorizer, which nothing on this path consulted — an identity no check
     /// reads is not a check.
     pub(super) caller: &'c MetaMcpCallerContext<'c>,
+    /// Each successful step call's gateway notes, taken out of the delivery's
+    /// record, with the value they describe (MIK-7993 r5): put back onto the
+    /// playbook's answer once its output is built.
+    pub(super) steps: parking_lot::Mutex<Vec<(crate::gateway::gateway_writes::WriteRecord, Value)>>,
+}
+
+impl MetaMcpInvoker<'_, '_> {
+    /// Put each completed step's gateway notes back, rebased onto the
+    /// playbook's stored answer (the `output` of its serialized result): by
+    /// step name with no output mapping, through each mapping otherwise.
+    /// Successful calls pair with `completed` in order; if the counts differ,
+    /// nothing is carried, and those members stay receipted.
+    pub(super) fn carry_writes(
+        &self,
+        output: Option<&crate::playbook::PlaybookOutput>,
+        completed: &[String],
+    ) {
+        let steps = std::mem::take(&mut *self.steps.lock());
+        if steps.len() != completed.len() {
+            return;
+        }
+        let named: Vec<(&String, crate::gateway::gateway_writes::WriteRecord, Value)> = completed
+            .iter()
+            .zip(steps)
+            .map(|(name, (record, value))| (name, record, value))
+            .collect();
+        let Some(output) = output else {
+            for (name, record, _) in named {
+                crate::gateway::gateway_writes::restore(
+                    &record.rebased(&["output".to_owned(), name.clone()]),
+                );
+            }
+            return;
+        };
+        for (prop, mapping) in &output.properties {
+            let path = mapping.path.trim_start_matches('$');
+            let (step, rest) = path.split_once('.').unwrap_or((path, ""));
+            let Some((_, record, value)) = named.iter().find(|(name, ..)| name.as_str() == step)
+            else {
+                continue;
+            };
+            let Some(from) = crate::gateway::gateway_writes::mapping_segments(rest) else {
+                continue;
+            };
+            let to = ["output".to_owned(), prop.clone()];
+            crate::gateway::gateway_writes::restore(&record.projected(value, &from, &to));
+        }
+    }
 }
 
 #[async_trait::async_trait]
 impl ToolInvoker for MetaMcpInvoker<'_, '_> {
     async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
         let args = internal_invoke_args(server, tool, arguments);
+        let writes_mark = crate::gateway::gateway_writes::mark();
         // Steps inherit the invoking caller's standing, admin included.
         // Hard-coding non-admin meant an operator's own playbook failed on a
         // step they could run directly, which is a regression rather than a
@@ -420,7 +469,7 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
         // may not reach, so it is replaced with a neutral one (A3). Decided
         // from the refusal plus the silent non-authorizer pieces, so the
         // authorizer is consulted once per step, as before.
-        match outcome {
+        let answered = match outcome {
             Err(e)
                 if matches!(e, crate::Error::Forbidden { .. })
                     || self
@@ -434,7 +483,13 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
                 })
             }
             other => other,
+        };
+        // A failed attempt's notes describe nothing the playbook keeps.
+        let taken = crate::gateway::gateway_writes::take_since(writes_mark);
+        if let Ok(value) = &answered {
+            self.steps.lock().push((taken, value.clone()));
         }
+        answered
     }
 }
 

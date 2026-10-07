@@ -218,3 +218,124 @@ fn a_record_reads_at_most_its_bound_of_entries() {
         serde_json::from_value(Value::Array(vec![entry; 300])).expect("never fails");
     assert_eq!(decoded.0.len(), 256);
 }
+
+/// The record of `notes` made on `value`, as a step's own.
+async fn noted(value: &Value, notes: &[&'static [&'static str]]) -> WriteRecord {
+    scope(async {
+        for &path in notes {
+            note(Layer::Value, path, value);
+        }
+        recorded()
+    })
+    .await
+}
+
+fn dests(record: &WriteRecord) -> Vec<Vec<String>> {
+    record.0.iter().map(|w| w.dest.clone()).collect()
+}
+
+fn path(segments: &[&str]) -> Vec<String> {
+    segments.iter().map(|s| (*s).to_owned()).collect()
+}
+
+/// `MIK-7993` r5 T10: with no output mapping a playbook stores each step's
+/// value under its name, inside the serialized result's `output`.
+#[tokio::test]
+async fn a_rebased_note_sits_under_its_prefix_in_the_value() {
+    let step = json!({"text": "t", "_cost_warnings": ["w"]});
+    let record = noted(&step, &[&["_cost_warnings"]]).await;
+    let rebased = record.rebased(&path(&["output", "fetch"]));
+    assert_eq!(
+        dests(&rebased),
+        vec![path(&["output", "fetch", "_cost_warnings"])]
+    );
+    assert!(rebased.0.iter().all(|w| w.layer == Layer::Value));
+    let answer = json!({"output": {"fetch": step}});
+    let receipt = without(&answer, &rebased);
+    assert_eq!(
+        receipt.as_ref(),
+        &json!({"output": {"fetch": {"text": "t"}}})
+    );
+}
+
+/// `MIK-7993` r5 T11: a mapping carries the notes inside what it projects
+/// (i), the noted member itself (ii), a part of a noted member while the
+/// member still holds what was written (iv), each projection on its own
+/// (v); a member of the same name elsewhere is not carried (iii).
+#[tokio::test]
+async fn a_projection_carries_only_the_notes_it_takes() {
+    let findings = json!([{"description": "a pattern", "severity": "low"}]);
+    let step = json!({
+        "text": "t",
+        "_security_findings": findings,
+        "nested": {"_security_findings": ["the backend's own"]},
+    });
+    let record = noted(&step, &[&["_security_findings"]]).await;
+    let to = path(&["output", "p"]);
+
+    // (i) the whole step value.
+    let whole = record.projected(&step, &[], &to);
+    assert_eq!(
+        dests(&whole),
+        vec![path(&["output", "p", "_security_findings"])]
+    );
+    // (ii) the noted member itself.
+    let member_itself = record.projected(&step, &path(&["_security_findings"]), &to);
+    assert_eq!(dests(&member_itself), vec![to.clone()]);
+    assert_eq!(member_itself.0[0].digest, record.0[0].digest);
+    // (iii) a member of that name the gateway did not write.
+    let elsewhere = record.projected(&step, &path(&["nested", "_security_findings"]), &to);
+    assert!(elsewhere.is_empty(), "{elsewhere:?}");
+    // (iv) a part of the noted member, while it holds what was written.
+    let part_path = path(&["_security_findings", "0", "description"]);
+    let part = record.projected(&step, &part_path, &to);
+    assert_eq!(dests(&part), vec![to.clone()]);
+    assert_eq!(part.0[0].within, path(&["0", "description"]));
+    assert_eq!(part.0[0].digest, digest(&json!("a pattern")).unwrap());
+    // ...and not once the member no longer holds it, even though the
+    // projected bytes are the same.
+    let mut changed = step.clone();
+    changed["_security_findings"][0]["severity"] = json!("high");
+    assert!(record.projected(&changed, &part_path, &to).is_empty());
+    // (v) one member projected into two properties: one note each.
+    let twice: Vec<Vec<String>> = ["p", "q"]
+        .iter()
+        .flat_map(|prop| {
+            dests(&record.projected(
+                &step,
+                &path(&["_security_findings"]),
+                &path(&["output", prop]),
+            ))
+        })
+        .collect();
+    assert_eq!(twice, vec![path(&["output", "p"]), path(&["output", "q"])]);
+}
+
+/// A playbook mapping path names the same segments a note does; a wildcard
+/// names none.
+#[test]
+fn a_mapping_path_reads_as_note_segments() {
+    assert_eq!(
+        mapping_segments("results[0].title"),
+        Some(path(&["results", "0", "title"]))
+    );
+    assert_eq!(mapping_segments(""), Some(Vec::new()));
+    assert_eq!(mapping_segments("items[].v"), None);
+}
+
+/// A composite step's notes are taken out of the delivery's record, leaving
+/// the notes made before it.
+#[tokio::test]
+async fn taking_since_a_mark_leaves_the_earlier_notes() {
+    let value = json!({"trace_id": "t-1", "_cost_warnings": ["w"]});
+    let (taken, left) = scope(async {
+        note(Layer::Value, &["trace_id"], &value);
+        let mark = mark();
+        note(Layer::Value, &["_cost_warnings"], &value);
+        let taken = take_since(mark);
+        (taken, recorded())
+    })
+    .await;
+    assert_eq!(dests(&taken), vec![path(&["_cost_warnings"])]);
+    assert_eq!(dests(&left), vec![path(&["trace_id"])]);
+}
