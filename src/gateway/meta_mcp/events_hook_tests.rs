@@ -451,3 +451,24 @@ async fn a_capability_refused_at_a_partial_reload_counts_as_read() {
         "refused before, unread now"
     );
 }
+
+/// MIK-8037 (review of #3406): an unload, a rug-pull quarantine's for one,
+/// is a confirmed removal: a partial catalogue counts the unloaded capability
+/// as read, so its subscriptions end rather than wait for a complete load.
+/// An unload of a name not loaded marks nothing.
+#[tokio::test]
+async fn an_unloaded_capability_counts_as_read_in_a_partial_catalogue() {
+    let root = tempfile::tempdir().expect("root");
+    let (caps, meta) = with_refused(root.path()).await;
+    std::fs::remove_dir_all(root.path().join("d2")).expect("make d2 unreadable");
+    caps.reload().await.expect("partial reload");
+    assert!(caps.unload_capability("alpha"), "unloaded");
+    assert!(
+        !caps.unload_capability("beta"),
+        "not loaded: nothing to unload"
+    );
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(partial.present.contains("alpha"), "removed, not unread");
+    assert!(!partial.present.contains("beta"), "still unread");
+}
