@@ -12,15 +12,16 @@ use std::io::{self, IsTerminal};
 use std::path::Path;
 use std::process::ExitCode;
 
+use super::config_write::CommentLoss;
 #[cfg(feature = "config-export")]
 use mcp_gateway::cli::{ConnectionMode, ExportTarget};
 #[cfg(test)]
-use mcp_gateway::config_persistence::load_config_or_default;
+use mcp_gateway::config_persistence::{load_config_or_default, write_config};
 use mcp_gateway::security::sanitize::redact_url_for_diagnostics;
 use mcp_gateway::{
     cli::InitProfile,
     config::{Config, TransportConfig},
-    config_persistence::{load_existing_or_default, write_config},
+    config_persistence::load_existing_or_default,
     discovery::{AutoDiscovery, DiscoveredServer, DiscoverySource},
 };
 
@@ -33,7 +34,12 @@ use mcp_gateway::{
 /// * `yes` – skip all prompts and import every discovered server
 /// * `output` – gateway config file to create or extend
 /// * `configure_client` – write gateway entry into each detected AI client
-pub async fn run_setup_command(yes: bool, output: &Path, configure_client: bool) -> ExitCode {
+pub async fn run_setup_command(
+    yes: bool,
+    output: &Path,
+    configure_client: bool,
+    mode: CommentLoss,
+) -> ExitCode {
     println!("MCP Gateway Setup");
     println!("=================");
     println!();
@@ -93,8 +99,8 @@ pub async fn run_setup_command(yes: bool, output: &Path, configure_client: bool)
     };
     let added = merge_servers_into_config(&mut config, &selected);
 
-    if let Err(e) = write_config(output, &config) {
-        eprintln!("Error: Failed to write {}: {e}", output.display());
+    if let Err(e) = super::config_write::write(output, &config, mode) {
+        eprintln!("Error: {e}");
         return ExitCode::FAILURE;
     }
 

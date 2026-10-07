@@ -11,6 +11,7 @@ mod add_remove;
 mod cap;
 #[cfg(feature = "config-export")]
 mod config_export;
+pub mod config_write;
 #[cfg(feature = "webui")]
 mod dashboard_link;
 #[cfg(feature = "discovery")]
