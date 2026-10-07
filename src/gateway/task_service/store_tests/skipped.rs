@@ -122,6 +122,10 @@ async fn an_unrestorable_record_keeps_its_binding() {
                 .any(|(b, id)| b.identity == identity && id == damaged_id),
             "{case}: the damaged row's key stays taken, bound to its own task id"
         );
+        assert!(
+            matches!(store.get(OWNER, damaged_id), Err(StoreError::NotFound)),
+            "{case}: a reserved key, never a restored task"
+        );
         store.close().await.unwrap();
     }
 }
