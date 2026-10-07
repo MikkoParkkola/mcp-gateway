@@ -225,13 +225,19 @@ impl A2aTransport {
                 "`{TOOL_NAME}` requires a `message` string argument"
             ));
         };
-        let guard = CancelGuard::new(
+        let mut guard = CancelGuard::new(
             self.client.clone(),
             self.endpoint.clone(),
             extra_headers.to_vec(),
         );
-        self.delegate(id, Message::user_text(text), extra_headers, identity, guard)
-            .await
+        self.delegate(
+            id,
+            Message::user_text(text),
+            extra_headers,
+            identity,
+            &mut guard,
+        )
+        .await
     }
 
     /// Redeem a parked question and act on the caller's answer.
@@ -297,20 +303,21 @@ impl A2aTransport {
         let mut message = Message::user_text(reply);
         message.task_id = Some(pending.task_id);
         message.context_id = pending.context_id;
-        self.delegate(id, message, extra_headers, identity, guard)
+        self.delegate(id, message, extra_headers, identity, &mut guard)
             .await
     }
 
     /// Send `message` and follow the agent's task to an answer, a question or
-    /// the deadline. `guard` owns the task: armed already when the message
-    /// continues a known task, armed as soon as a new task is named.
+    /// the deadline. The caller's `guard` owns the task: armed already when
+    /// the message continues a known task, armed as soon as a new task is
+    /// named, and dropped with the caller's future if this one is abandoned.
     async fn delegate(
         &self,
         id: RequestId,
         message: Message,
         extra_headers: &[(String, String)],
         identity: Option<&str>,
-        mut guard: CancelGuard,
+        guard: &mut CancelGuard,
     ) -> Result<JsonRpcResponse> {
         let deadline = tokio::time::Instant::now() + self.timeout;
         // Before the agent names a new task nothing can cancel it, so a

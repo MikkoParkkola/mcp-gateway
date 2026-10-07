@@ -303,6 +303,29 @@ impl Backend {
         self.config.transport.transport_type() == "a2a"
     }
 
+    /// Start the outbound A2A bridge (MIK-8063) under `destination`: the agent
+    /// becomes one tool behind the same funnel as every backend. Like the HTTP
+    /// arm, the configured address is checked before anything connects and
+    /// every request goes through the guarded client. An agent has no
+    /// server-initiated stream, so the caller sets no listener.
+    #[cfg(feature = "a2a")]
+    async fn start_a2a(
+        &self,
+        a2a_url: &str,
+        card_path: Option<&str>,
+        destination: crate::security::ssrf::DestinationPolicy,
+    ) -> crate::Result<Arc<crate::a2a::transport::A2aTransport>> {
+        self.begin_connecting(destination)?;
+        crate::a2a::transport::A2aTransport::start(
+            a2a_url,
+            card_path,
+            &self.config.headers,
+            self.config.timeout,
+            destination,
+        )
+        .await
+    }
+
     /// Start a WebSocket transport under `destination`, the policy the start
     /// read when it marked the backend.
     async fn start_websocket(

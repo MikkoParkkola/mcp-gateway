@@ -170,7 +170,7 @@ impl A2aClient {
         let envelope = self
             .rpc(endpoint, "SendMessage", params, extra_headers)
             .await?;
-        decode_reply(envelope)
+        decode_reply(&envelope)
     }
 
     /// `GetTask`: the task's current state.
@@ -183,7 +183,7 @@ impl A2aClient {
         let envelope = self
             .rpc(endpoint, "GetTask", json!({"id": task_id}), extra_headers)
             .await?;
-        decode_task(envelope, "GetTask")
+        decode_task(&envelope, "GetTask")
     }
 
     /// `CancelTask`: ask the agent to stop the task.
@@ -201,7 +201,7 @@ impl A2aClient {
                 extra_headers,
             )
             .await?;
-        decode_task(envelope, "CancelTask")
+        decode_task(&envelope, "CancelTask")
     }
 
     /// One JSON-RPC request to `endpoint`; the raw envelope it answered with.
@@ -285,7 +285,7 @@ async fn read_capped_json(mut response: reqwest::Response, what: &str) -> Result
 }
 
 /// A JSON-RPC envelope as the agent's error or its raw result.
-fn decode_envelope(envelope: Value) -> Result<Reply<Value>> {
+fn decode_envelope(envelope: &Value) -> Result<Reply<Value>> {
     if let Some(error) = envelope.get("error") {
         let code = error
             .get("code")
@@ -308,7 +308,7 @@ fn decode_envelope(envelope: Value) -> Result<Reply<Value>> {
 
 /// A `SendMessage` envelope: the agent's error, or exactly one of a task and
 /// a message.
-fn decode_reply(envelope: Value) -> Result<Reply<Box<SendMessageResponse>>> {
+fn decode_reply(envelope: &Value) -> Result<Reply<Box<SendMessageResponse>>> {
     let result = match decode_envelope(envelope)? {
         Reply::Answer(result) => result,
         Reply::AgentError { code, message } => return Ok(Reply::AgentError { code, message }),
@@ -324,7 +324,7 @@ fn decode_reply(envelope: Value) -> Result<Reply<Box<SendMessageResponse>>> {
 }
 
 /// A `GetTask` or `CancelTask` envelope: the agent's error, or a task.
-fn decode_task(envelope: Value, method: &str) -> Result<Reply<Task>> {
+fn decode_task(envelope: &Value, method: &str) -> Result<Reply<Task>> {
     match decode_envelope(envelope)? {
         Reply::Answer(result) => serde_json::from_value(result)
             .map(Reply::Answer)

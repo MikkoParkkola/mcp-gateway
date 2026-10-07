@@ -26,10 +26,7 @@ fn a_user_message_serializes_in_the_1_0_shape() {
 
 #[test]
 fn every_user_message_gets_its_own_id() {
-    assert_ne!(
-        Message::user_text("a").message_id,
-        Message::user_text("a").message_id
-    );
+    assert_ne!(Message::user_text("a").id, Message::user_text("a").id);
 }
 
 #[test]

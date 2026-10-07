@@ -10,7 +10,7 @@ fn reply(value: Value) -> SendMessageResponse {
     serde_json::from_value(value).unwrap()
 }
 
-fn completed(parts: Value) -> SendMessageResponse {
+fn completed(parts: &Value) -> SendMessageResponse {
     reply(
         json!({"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"},
         "artifacts": [{"artifactId": "a", "parts": parts}]}}),
@@ -37,7 +37,7 @@ fn a_card_is_one_tool_whose_text_carries_the_skills() {
 
 #[test]
 fn every_part_kind_is_kept() {
-    let result = reply_to_result(&completed(json!([
+    let result = reply_to_result(&completed(&json!([
         {"text": "hello"},
         {"data": {"k": 1}},
         {"raw": "AAEC", "mediaType": "image/png"},
@@ -56,9 +56,9 @@ fn every_part_kind_is_kept() {
 
 #[test]
 fn structured_content_is_only_a_sole_object() {
-    let array = reply_to_result(&completed(json!([{"data": [1, 2]}])));
+    let array = reply_to_result(&completed(&json!([{"data": [1, 2]}])));
     assert!(array.get("structuredContent").is_none());
-    let two = reply_to_result(&completed(json!([{"data": {"a": 1}}, {"data": {"b": 2}}])));
+    let two = reply_to_result(&completed(&json!([{"data": {"a": 1}}, {"data": {"b": 2}}])));
     assert!(
         two.get("structuredContent").is_none(),
         "two data parts: no single object"
@@ -70,7 +70,7 @@ fn a_message_reply_is_an_answer_and_an_empty_one_says_so() {
     let result = reply_to_result(&reply(json!({"message": {
         "messageId": "m", "role": "ROLE_AGENT", "parts": [{"text": "direct"}]}})));
     assert_eq!(result["content"][0]["text"], "direct");
-    let empty = reply_to_result(&completed(json!([])));
+    let empty = reply_to_result(&completed(&json!([])));
     assert_eq!(empty["isError"], false);
     assert_eq!(
         empty["content"][0]["text"],
@@ -106,7 +106,7 @@ fn every_other_state_is_a_tool_error_with_the_agents_words() {
 
 #[test]
 fn a_null_data_part_is_an_answer_not_empty_content() {
-    let result = reply_to_result(&completed(json!([{"data": null}])));
+    let result = reply_to_result(&completed(&json!([{"data": null}])));
     assert_eq!(result["content"], json!([{"type": "text", "text": "null"}]));
     assert!(result.get("structuredContent").is_none());
 }

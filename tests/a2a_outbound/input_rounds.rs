@@ -30,7 +30,9 @@ fn first_call() -> Value {
 fn retry(state: &Value, answer: Value) -> Value {
     let mut params = first_call();
     params["requestState"] = state.clone();
-    params["inputResponses"] = json!({ ASK_KEY: answer });
+    let mut responses = serde_json::Map::new();
+    responses.insert(ASK_KEY.to_owned(), answer);
+    params["inputResponses"] = Value::Object(responses);
     params
 }
 
@@ -235,7 +237,11 @@ async fn a2a_9_a_hanging_first_send_reports_an_unknown_outcome() {
         "bounded by the deadline"
     );
     let text = match response {
-        Ok(response) => response.result.map(|r| r.to_string()).unwrap_or_default(),
+        Ok(response) => response
+            .result
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
         Err(error) => error.to_string(),
     };
     assert!(text.contains("not known"), "{text}");
@@ -310,7 +316,14 @@ async fn a2a_8_an_input_round_through_the_gateway_funnel() {
         json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
     };
 
-    let asked = post_as(&state, "/mcp", frame("a2a-8-ask", &[]), None, Some("alice")).await;
+    let asked = post_as(
+        &state,
+        "/mcp",
+        &frame("a2a-8-ask", &[]),
+        None,
+        Some("alice"),
+    )
+    .await;
     let result = &asked["result"];
     assert_eq!(result["resultType"], "input_required", "{asked}");
     let envelope = result["requestState"].clone();
@@ -320,7 +333,7 @@ async fn a2a_8_an_input_round_through_the_gateway_funnel() {
     let answered = post_as(
         &state,
         "/mcp",
-        frame(
+        &frame(
             "a2a-8-retry",
             &[("requestState", envelope), ("inputResponses", accept)],
         ),
@@ -342,7 +355,7 @@ async fn a2a_8_an_input_round_through_the_gateway_funnel() {
 async fn post_as(
     state: &std::sync::Arc<super::common::AppState>,
     uri: &str,
-    body: Value,
+    body: &Value,
     key: Option<&str>,
     subject: Option<&str>,
 ) -> Value {
@@ -362,7 +375,7 @@ async fn post_as(
         builder = builder.header("mcp-name", name);
     }
     let mut request = builder
-        .body(Body::from(serde_json::to_vec(&body).expect("body")))
+        .body(Body::from(serde_json::to_vec(body).expect("body")))
         .expect("request");
     if let Some(subject) = subject {
         request
@@ -423,7 +436,7 @@ async fn a2a_8_a_leaked_token_is_refused_to_another_caller_on_the_backend_route(
     let asked = post_as(
         &state,
         "/mcp/agent",
-        call(&[], "d2-ask"),
+        &call(&[], "d2-ask"),
         Some("key-alice"),
         None,
     )
@@ -436,7 +449,7 @@ async fn a2a_8_a_leaked_token_is_refused_to_another_caller_on_the_backend_route(
     let stolen = post_as(
         &state,
         "/mcp/agent",
-        call(&answer, "d2-bob"),
+        &call(&answer, "d2-bob"),
         Some("key-bob"),
         None,
     )
@@ -454,7 +467,7 @@ async fn a2a_8_a_leaked_token_is_refused_to_another_caller_on_the_backend_route(
     let resumed = post_as(
         &state,
         "/mcp/agent",
-        call(&answer, "d2-alice"),
+        &call(&answer, "d2-alice"),
         Some("key-alice"),
         None,
     )
