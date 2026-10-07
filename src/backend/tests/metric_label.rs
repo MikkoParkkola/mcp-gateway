@@ -103,38 +103,44 @@ fn every_backend_label_is_the_shared_one() {
 /// MIK-8014.PERF.5 site 3: the `tools/list` shadow counter now takes literal
 /// labels per call. They must spell exactly what its pre-registration spells
 /// (`bool::to_string`), or one counter splits into two series at scrape.
+/// Every one of the 16 filter combinations runs, so a label that takes another
+/// key's value, or inverts its own, differs from the expectation in some case.
 #[cfg(feature = "metrics")]
 #[test]
 fn the_shadow_counter_labels_match_their_registration() {
     use crate::protocol_revision_telemetry::{ListFilters, observe_tools_list};
 
-    let filters = ListFilters {
-        principal: true,
-        profile: false,
-        session: true,
-        request: false,
-    };
-    let recorder = BackendLabels::default();
-    telemetry_metrics::with_local_recorder(&recorder, || {
-        let _ = observe_tools_list(filters);
-    });
+    for bits in 0u8..16 {
+        let filters = ListFilters {
+            principal: bits & 1 != 0,
+            profile: bits & 2 != 0,
+            session: bits & 4 != 0,
+            request: bits & 8 != 0,
+        };
+        let recorder = BackendLabels::default();
+        telemetry_metrics::with_local_recorder(&recorder, || {
+            let _ = observe_tools_list(filters);
+        });
 
-    let seen = recorder.0.into_inner();
-    for (key, flag) in [
-        ("principal", filters.principal),
-        ("profile", filters.profile),
-        ("session", filters.session),
-        ("request", filters.request),
-    ] {
-        let values: Vec<&str> = seen
-            .iter()
-            .filter(|(name, k, _, _)| name == "mcp_tools_list_cache_scope_shadow_total" && k == key)
-            .map(|(_, _, value, _)| value.as_str())
-            .collect();
-        assert_eq!(
-            values,
-            [flag.to_string()],
-            "{key}: label spelled as registered"
-        );
+        let seen = recorder.0.into_inner();
+        for (key, flag) in [
+            ("principal", filters.principal),
+            ("profile", filters.profile),
+            ("session", filters.session),
+            ("request", filters.request),
+        ] {
+            let values: Vec<&str> = seen
+                .iter()
+                .filter(|(name, k, _, _)| {
+                    name == "mcp_tools_list_cache_scope_shadow_total" && k == key
+                })
+                .map(|(_, _, value, _)| value.as_str())
+                .collect();
+            assert_eq!(
+                values,
+                [flag.to_string()],
+                "{key}: label spelled as registered for {filters:?}"
+            );
+        }
     }
 }
