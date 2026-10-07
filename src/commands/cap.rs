@@ -5,6 +5,8 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use super::config_write::CommentLoss;
+
 use mcp_gateway::{
     capability::{
         AuthTemplate, CapabilityExecutor, CapabilityLoader, IssueSeverity, OpenApiConverter,
@@ -12,7 +14,6 @@ use mcp_gateway::{
         validate_capability_definition,
     },
     cli::CapCommand,
-    config_persistence::CommentLoss,
     discovery::{
         AutoDiscovery,
         shadow::{ShadowRemediationAction, ShadowScanReport, ShadowTrustStatus},

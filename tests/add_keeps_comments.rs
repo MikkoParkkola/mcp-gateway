@@ -229,7 +229,7 @@ fn several_backends_at_once_keep_comments() {
 /// a removal plus an addition: it is refused, never spliced over `c`.
 #[test]
 fn a_stale_multi_change_is_refused_not_spliced() {
-    use mcp_gateway::config_persistence::{CommentLoss, Unwritten, write_config_with};
+    use mcp_gateway::config_persistence::write_config_preserving;
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED).expect("write");
@@ -237,10 +237,10 @@ fn a_stale_multi_change_is_refused_not_spliced() {
     stale.backends.insert("b".into(), echo_backend());
     let current = format!("{NOTED}  c:\n    command: c\n");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, &current).expect("write");
-    let result = write_config_with(&path, &stale, CommentLoss::Refuse);
+    let refusal = write_config_preserving(&path, &stale, false).expect_err("refused");
     assert!(
-        matches!(result, Err(Unwritten::CommentLoss(_))),
-        "{result:?}"
+        refusal.starts_with("Not saved") && refusal.contains("--force"),
+        "{refusal}"
     );
     assert_eq!(std::fs::read_to_string(&path).expect("read"), current);
 }

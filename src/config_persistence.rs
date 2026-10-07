@@ -82,9 +82,9 @@ mod splice;
 
 /// What a write does when it cannot keep the file's comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CommentLoss {
+pub(crate) enum CommentLoss {
     /// Re-serialise the whole file (a CLI write given `--force`, and the
-    /// public `config_reload` write API).
+    /// `config_reload` write API).
     Rewrite,
     /// Write nothing and say what would be lost (web UI backend edits and
     /// CLI writes), and skip a write that would change nothing.
@@ -93,7 +93,7 @@ pub enum CommentLoss {
 
 /// A config write that did not happen.
 #[derive(Debug)]
-pub enum Unwritten {
+pub(crate) enum Unwritten {
     /// Validation, serialisation or I/O failed; the message says which.
     Failed(String),
     /// Refused under [`CommentLoss::Refuse`]; the message names the comments.
@@ -121,8 +121,44 @@ impl From<String> for Unwritten {
 ///
 /// [`Unwritten::CommentLoss`] when `mode` refuses a write that would drop
 /// comments; [`Unwritten::Failed`] on validation, serialisation or I/O failure.
-pub fn write_config_with(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), Unwritten> {
+pub(crate) fn write_config_with(
+    path: &Path,
+    config: &Config,
+    mode: CommentLoss,
+) -> Result<(), Unwritten> {
     write_spliced(path, config, mode, Splice::One)
+}
+
+/// Write `config` to `path` for a CLI command, keeping the file's comments.
+///
+/// The file's text is edited in place when `config` differs from it in
+/// `backends` alone: one backend added, removed or edited, or several added
+/// (setup and discovery import). A write that would drop comments is refused
+/// unless `force`; a forced one rewrites the file in full and returns the
+/// refusal it overrode, which names the comment lines it dropped. A `config`
+/// that is what the file already loads as writes nothing.
+///
+/// # Errors
+///
+/// The refusal, or a validation, serialisation or I/O failure, as a message
+/// ready to print.
+pub fn write_config_preserving(
+    path: &Path,
+    config: &Config,
+    force: bool,
+) -> Result<Option<String>, String> {
+    let message = |e: Unwritten| match e {
+        Unwritten::CommentLoss(message) => message,
+        Unwritten::Failed(message) => format!("Failed to write {}: {message}", path.display()),
+    };
+    match write_spliced(path, config, CommentLoss::Refuse, Splice::Additions) {
+        Err(Unwritten::CommentLoss(refusal)) if force => {
+            write_spliced(path, config, CommentLoss::Rewrite, Splice::Additions)
+                .map_err(message)?;
+            Ok(Some(refusal))
+        }
+        result => result.map(|()| None).map_err(message),
+    }
 }
 
 /// How many backends one splice may change.

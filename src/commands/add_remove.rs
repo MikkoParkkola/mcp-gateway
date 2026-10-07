@@ -11,9 +11,11 @@
 use std::path::Path;
 use std::process::ExitCode;
 
+use super::config_write::CommentLoss;
+
 use mcp_gateway::{
     config::TransportConfig,
-    config_persistence::{CommentLoss, load_existing_or_default},
+    config_persistence::load_existing_or_default,
     gateway::ui::backend_ops::{
         self, BackendUpdate, add_backend, get_backend, list_backends, parse_env_vars,
         remove_backend, resolve_backend, update_backend,

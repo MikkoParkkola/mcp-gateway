@@ -13,6 +13,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 #[cfg(feature = "config-export")]
+use super::config_write::CommentLoss;
 use mcp_gateway::cli::{ConnectionMode, ExportTarget};
 #[cfg(test)]
 use mcp_gateway::config_persistence::{load_config_or_default, write_config};
@@ -20,7 +21,7 @@ use mcp_gateway::security::sanitize::redact_url_for_diagnostics;
 use mcp_gateway::{
     cli::InitProfile,
     config::{Config, TransportConfig},
-    config_persistence::{CommentLoss, load_existing_or_default},
+    config_persistence::load_existing_or_default,
     discovery::{AutoDiscovery, DiscoveredServer, DiscoverySource},
 };
 

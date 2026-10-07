@@ -7,7 +7,16 @@
 use std::path::Path;
 
 use mcp_gateway::config::Config;
-use mcp_gateway::config_persistence::{CommentLoss, Unwritten, write_config_with};
+use mcp_gateway::config_persistence::write_config_preserving;
+
+/// What a CLI write does when it cannot keep the file's comments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommentLoss {
+    /// Rewrite the whole file (`--force`).
+    Rewrite,
+    /// Write nothing and say which comment lines would be lost.
+    Refuse,
+}
 
 /// `--force` rewrites a file whose comments cannot be kept; without it that
 /// write is refused and nothing is written.
@@ -26,34 +35,25 @@ pub fn comment_loss(force: bool) -> CommentLoss {
 /// keeps the file's comments but removes an entry names the comment lines
 /// that went with that entry.
 pub fn write(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), String> {
-    let message = |e: Unwritten| match e {
-        Unwritten::CommentLoss(message) => message,
-        Unwritten::Failed(message) => format!("Failed to write {}: {message}", path.display()),
-    };
     let before = std::fs::read_to_string(path).unwrap_or_default();
-    match write_config_with(path, config, CommentLoss::Refuse) {
-        Err(Unwritten::CommentLoss(refusal)) if mode == CommentLoss::Rewrite => {
-            eprintln!(
-                "Warning: --force rewrites {} in full. Without it this write is refused:\n  {refusal}",
-                path.display()
-            );
-            write_config_with(path, config, CommentLoss::Rewrite).map_err(message)
-        }
-        result => {
-            result.map_err(message)?;
-            let after = std::fs::read_to_string(path).unwrap_or_default();
-            let gone = dropped_comments(&before, &after);
-            if !gone.is_empty() {
-                // A removed entry takes its own comments with it; say so.
-                eprintln!(
-                    "Note: comments inside the changed entry went with it ({}): {}",
-                    path.display(),
-                    gone.join("; ")
-                );
-            }
-            Ok(())
-        }
+    if let Some(refusal) = write_config_preserving(path, config, mode == CommentLoss::Rewrite)? {
+        eprintln!(
+            "Warning: --force rewrites {} in full. Without it this write is refused:\n  {refusal}",
+            path.display()
+        );
+        return Ok(());
     }
+    let after = std::fs::read_to_string(path).unwrap_or_default();
+    let gone = dropped_comments(&before, &after);
+    if !gone.is_empty() {
+        // A removed entry takes its own comments with it; say so.
+        eprintln!(
+            "Note: comments inside the changed entry went with it ({}): {}",
+            path.display(),
+            gone.join("; ")
+        );
+    }
+    Ok(())
 }
 
 /// The lines of `before` whose comment `after` no longer has, as `line N`.

@@ -758,7 +758,7 @@ async fn run_server(cli: Cli) -> ExitCode {
 pub fn write_discovered_to_config(
     servers: &[mcp_gateway::discovery::DiscoveredServer],
     config_path: Option<&Path>,
-    mode: mcp_gateway::config_persistence::CommentLoss,
+    mode: crate::commands::config_write::CommentLoss,
 ) -> mcp_gateway::Result<std::path::PathBuf> {
     let path = config_path.map_or_else(
         || std::path::PathBuf::from("mcp-gateway-discovered.yaml"),

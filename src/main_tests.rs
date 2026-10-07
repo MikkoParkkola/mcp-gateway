@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
+use crate::commands::config_write::CommentLoss;
 use mcp_gateway::cli::{Cli, InitProfile};
 use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
-use mcp_gateway::config_persistence::{CommentLoss, write_config};
+use mcp_gateway::config_persistence::write_config;
 use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
 #[path = "main_dangling_tests.rs"]
 mod dangling;
