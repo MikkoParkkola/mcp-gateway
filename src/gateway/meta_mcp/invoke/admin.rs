@@ -298,11 +298,16 @@ impl MetaMcp {
         })?;
 
         match backend.reload().await {
-            Ok(total) => Ok(json!({
-                "status": "ok",
-                "backend": backend.name,
-                "total_capabilities": total,
-            })),
+            Ok(total) => {
+                // As a file reload does: the drain refreshes the webhook
+                // routes and announces the new tool list (MIK-8034).
+                self.backends.announce_change(&backend.name);
+                Ok(json!({
+                    "status": "ok",
+                    "backend": backend.name,
+                    "total_capabilities": total,
+                }))
+            }
             Err(e) => Err(Error::json_rpc(-32603, format!("{e}"))),
         }
     }
