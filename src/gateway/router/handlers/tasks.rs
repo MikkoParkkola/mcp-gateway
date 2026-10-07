@@ -82,18 +82,34 @@ pub(super) fn task_owner_key(
 pub(super) fn route_task_owner(
     state: &AppState,
     verified_identity: Option<&VerifiedIdentity>,
+    agent: Option<&OAuthAgentIdentity>,
     owner_key: &str,
 ) -> String {
     match verified_identity {
         Some(identity) => identity.stable_actor_id(),
-        // No identity exists to be kept apart when authentication is off, and
-        // pooling those callers is the operator's own configuration choice.
+        // Agent auth runs whether or not gateway auth does, so with gateway
+        // auth off a validated agent JWT is still an identity: pooling it with
+        // every other agent would let one read and cancel another's tasks
+        // (MIK-8031).
+        None if !state.auth_config.enabled => agent.map_or_else(
+            || AUTH_DISABLED_TASK_OWNER.to_owned(),
+            |agent| agent_task_owner(&agent.client_id),
+        ),
         // With authentication ON the owner key decides (`task_owner_key`:
         // proven subject, else credential), and an empty one is refused
         // upstream rather than pooled here.
-        None if !state.auth_config.enabled => AUTH_DISABLED_TASK_OWNER.to_owned(),
         None => task_principal(None, owner_key),
     }
+}
+
+/// The owner of a validated agent's tasks on a gateway with auth off.
+///
+/// Length-prefixed like `credential:`, so no `client_id` can spell another's
+/// owner, and prefixed apart from `oidc:`, `credential:`, `subject:` and
+/// `local:`. `client_id` is the agent registry's key, so two agents never share
+/// one owner.
+fn agent_task_owner(client_id: &str) -> String {
+    format!("agent-jwt:{}:{client_id}", client_id.len())
 }
 
 /// Everything the task-intent decision reads about one `tools/call`.
@@ -515,6 +531,8 @@ pub(super) async fn tasks_cancel(
     route(state, &owner_text).cancel(id, params).await
 }
 
+#[cfg(test)]
+mod agent_owner_tests;
 #[cfg(test)]
 mod frame_subject_tests;
 #[cfg(test)]
