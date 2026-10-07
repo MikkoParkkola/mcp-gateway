@@ -79,7 +79,11 @@ async fn an_edit_keeps_comments_in_crlf_and_unterminated_files() {
         let (status, body) = patch(&router, "svc", json!({"description": "new"})).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         let after = read(&path);
-        kept_in_order(&yaml.replace("    description: old", ""), &after);
+        let untouched: Vec<&str> = yaml
+            .lines()
+            .filter(|l| !l.contains("description: old"))
+            .collect();
+        kept_in_order(&untouched.join("\n"), &after);
         let config = Config::load_literal(Some(&path)).expect("loads");
         assert_eq!(config.backends["svc"].description, "new");
     }

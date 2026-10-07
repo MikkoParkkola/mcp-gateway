@@ -375,6 +375,7 @@ pub use watcher::ConfigWatcher;
 use watcher::{ReloadTrigger, watch_dir_of};
 #[cfg(test)]
 use watcher::{absolute_watch_path, config_watch_paths, is_config_event, is_config_event_for};
+pub(crate) use write::mutate_config_and_reload_with;
 pub use write::{
     ConfigMutation, ConfigWriteError, mutate_config_and_reload, write_config_and_reload,
     write_config_and_reload_outcome,

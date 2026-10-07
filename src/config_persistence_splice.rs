@@ -357,14 +357,18 @@ fn apply_delta(raw: &mut Mapping, old: &Mapping, new: &Mapping) {
         if was == now {
             continue;
         }
-        match (was, now, raw.get_mut(key)) {
-            (_, None, _) => {
+        match (was, now) {
+            (_, None) => {
                 raw.remove(key);
             }
-            (Some(Value::Mapping(was)), Some(Value::Mapping(now)), Some(Value::Mapping(raw))) => {
-                apply_delta(raw, was, now);
+            (Some(Value::Mapping(was)), Some(Value::Mapping(now)))
+                if matches!(raw.get(key), Some(Value::Mapping(_))) =>
+            {
+                if let Some(Value::Mapping(raw)) = raw.get_mut(key) {
+                    apply_delta(raw, was, now);
+                }
             }
-            (_, Some(now), _) => {
+            (_, Some(now)) => {
                 raw.insert(key.clone(), now.clone());
             }
         }

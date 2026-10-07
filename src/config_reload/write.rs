@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use crate::config::Config;
+use crate::config_persistence::{CommentLoss, Unwritten};
 
 use super::{ReloadContext, ReloadOutcome};
 
@@ -114,17 +115,36 @@ pub async fn mutate_config_and_reload<T, E, F>(
 where
     F: FnOnce(&mut Config) -> std::result::Result<T, E>,
 {
+    mutate_config_and_reload_with(path, reload_context, CommentLoss::Rewrite, mutate)
+        .await
+        .map_err(Into::into)
+}
+
+/// [`mutate_config_and_reload`] in `mode`: the web UI refuses a write that
+/// would drop the file's comments, and a write that changes nothing writes
+/// and reloads nothing.
+pub(crate) async fn mutate_config_and_reload_with<T, E, F>(
+    path: &Path,
+    reload_context: Option<&ReloadContext>,
+    mode: CommentLoss,
+    mutate: F,
+) -> std::result::Result<ConfigMutation<T, E>, Unwritten>
+where
+    F: FnOnce(&mut Config) -> std::result::Result<T, E>,
+{
     if let Some(ctx) = reload_context {
-        return ctx.mutate_and_reload_outcome(path, mutate).await;
+        return ctx
+            .mutate_locked(path, super::RELOAD_LOCK_WAIT, mode, mutate)
+            .await;
     }
 
     // No live gateway to reload, so no reload lock exists to hold. This path is
     // the CLI acting on a config file nothing else is serving.
     let mut config = crate::config_persistence::load_existing_or_default(path)
-        .map_err(|e| ConfigWriteError::Failed(format!("Failed to load {}: {e}", path.display())))?;
+        .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
     match mutate(&mut config) {
         Ok(value) => {
-            crate::config_persistence::write_config(path, &config)?;
+            crate::config_persistence::write_config_with(path, &config, mode)?;
             Ok(ConfigMutation::Applied(value, None))
         }
         Err(rejection) => Ok(ConfigMutation::Rejected(rejection)),

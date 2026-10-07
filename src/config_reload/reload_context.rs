@@ -12,6 +12,7 @@ use std::fmt::Write as _;
 use crate::Result;
 use crate::backend::BackendRegistry;
 use crate::config::{Config, EnvOverlay, LiveEnv, ResolvedEnvFiles};
+use crate::config_persistence::{CommentLoss, Unwritten};
 use crate::security::{posture, ssrf::DestinationPolicy};
 
 use super::{
@@ -486,19 +487,37 @@ impl ReloadContext {
     where
         F: FnOnce(&mut Config) -> std::result::Result<T, E>,
     {
+        self.mutate_locked(path, wait, CommentLoss::Rewrite, mutate)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// [`Self::mutate_and_reload_outcome_within`] in `mode` for a write that
+    /// would drop comments. A write that changes nothing reloads nothing.
+    pub(crate) async fn mutate_locked<T, E, F>(
+        &self,
+        path: &std::path::Path,
+        wait: Duration,
+        mode: CommentLoss,
+        mutate: F,
+    ) -> std::result::Result<ConfigMutation<T, E>, Unwritten>
+    where
+        F: FnOnce(&mut Config) -> std::result::Result<T, E>,
+    {
         let _reload_guard = self.lock_reload_within(wait).await?;
-        let mut config =
-            crate::config_persistence::load_existing_or_default(path).map_err(|e| {
-                ConfigWriteError::Failed(format!("Failed to load {}: {e}", path.display()))
-            })?;
+        let mut config = crate::config_persistence::load_existing_or_default(path)
+            .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
         let value = match mutate(&mut config) {
             Ok(value) => value,
             Err(rejection) => return Ok(ConfigMutation::Rejected(rejection)),
         };
-        crate::config_persistence::write_config(path, &config)?;
-        let outcome = self.reload_outcome_locked().await.map_err(|e| {
-            ConfigWriteError::Failed(format!("Config written but reload failed: {e}"))
-        })?;
+        if !crate::config_persistence::write_config_with(path, &config, mode)? {
+            return Ok(ConfigMutation::Applied(value, None));
+        }
+        let outcome = self
+            .reload_outcome_locked()
+            .await
+            .map_err(|e| format!("Config written but reload failed: {e}"))?;
         Ok(ConfigMutation::Applied(value, Some(outcome)))
     }
 

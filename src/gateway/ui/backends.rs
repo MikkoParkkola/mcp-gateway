@@ -32,7 +32,8 @@ use super::{
     is_admin,
 };
 use crate::config::TransportConfig;
-use crate::config_reload::{ConfigMutation, ConfigWriteError, mutate_config_and_reload};
+use crate::config_persistence::{CommentLoss, Unwritten};
+use crate::config_reload::{ConfigMutation, ConfigWriteError, mutate_config_and_reload_with};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::registry::server_registry;
@@ -214,9 +215,10 @@ async fn add_backend(
 
     // Load, check for duplicates, persist and reload - all inside one lock, so
     // a second request cannot build its change on the pre-edit config.
-    let mutation = mutate_config_and_reload(
+    let mutation = mutate_config_and_reload_with(
         config_path,
         state.meta_mcp.reload_context().as_deref(),
+        CommentLoss::Refuse,
         |config| {
             add_backend_config(config, &req.name, resolved)
                 .map(|notes| {
@@ -240,14 +242,7 @@ async fn add_backend(
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
-        // A busy gateway has written nothing, so this is a retry-me, not a
-        // failure. 500 would tell the operator their edit broke something.
-        Err(e @ ConfigWriteError::Busy) => {
-            return flat_error(StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response();
-        }
-        Err(e) => {
-            return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
+        Err(e) => return unwritten(e),
     };
 
     // The reload registered it, and registration announces (F24).
@@ -282,9 +277,10 @@ async fn remove_backend(
         return config_path_unavailable().into_response();
     };
 
-    let mutation = mutate_config_and_reload(
+    let mutation = mutate_config_and_reload_with(
         config_path,
         state.meta_mcp.reload_context().as_deref(),
+        CommentLoss::Refuse,
         |config| {
             remove_backend_config(config, &name)
                 .map_err(|_| (StatusCode::NOT_FOUND, format!("Backend '{name}' not found")))
@@ -297,14 +293,7 @@ async fn remove_backend(
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
-        // A busy gateway has written nothing, so this is a retry-me, not a
-        // failure. 500 would tell the operator their edit broke something.
-        Err(e @ ConfigWriteError::Busy) => {
-            return flat_error(StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response();
-        }
-        Err(e) => {
-            return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
+        Err(e) => return unwritten(e),
     }
 
     // The reload removed it, and removal announces (F24).
@@ -403,9 +392,10 @@ async fn update_backend(
     // Everything from here reads the config and writes it back, so it all runs
     // inside one lock. Splitting the read from the write is what lets one edit
     // overwrite another.
-    let mutation = mutate_config_and_reload(
+    let mutation = mutate_config_and_reload_with(
         config_path,
         state.meta_mcp.reload_context().as_deref(),
+        CommentLoss::Refuse,
         |config| {
             if !config.backends.contains_key(&name) {
                 return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
@@ -463,17 +453,27 @@ async fn update_backend(
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
-        // A busy gateway has written nothing, so this is a retry-me, not a
-        // failure. 500 would tell the operator their edit broke something.
-        Err(e @ ConfigWriteError::Busy) => {
-            return flat_error(StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response();
-        }
-        Err(e) => {
-            return flat_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
+        Err(e) => return unwritten(e),
     };
 
     Json(json!({"status": "updated", "name": name, "reload": reload})).into_response()
+}
+
+/// The answer to a backend write that did not happen.
+fn unwritten(e: Unwritten) -> axum::response::Response {
+    let code = match &e {
+        // Nothing was written, and saving it would drop the operator's comments.
+        Unwritten::CommentLoss(_) => StatusCode::CONFLICT,
+        // A busy gateway has written nothing, so this is a retry-me, not a
+        // failure. 500 would tell the operator their edit broke something.
+        Unwritten::Write(ConfigWriteError::Busy) => StatusCode::SERVICE_UNAVAILABLE,
+        Unwritten::Write(ConfigWriteError::Failed(_)) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    let message = match e {
+        Unwritten::CommentLoss(message) => message,
+        Unwritten::Write(e) => e.to_string(),
+    };
+    flat_error(code, message).into_response()
 }
 
 /// `GET /ui/api/registry` — list all built-in registry entries as JSON.
