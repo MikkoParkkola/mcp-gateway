@@ -631,10 +631,33 @@ LIB_ITEM_RE = re.compile(
 )
 
 
+def module_files(root: Path) -> list[Path]:
+    """Files compiled into the crate rooted at `root`: `mod x;` declarations, `#[path]` honoured, test modules skipped."""
+    seen: list[Path] = []
+    stack = [root]
+    while stack:
+        f = stack.pop()
+        if f in seen or not f.exists():
+            continue
+        seen.append(f)
+        code, mask = prod_scan(f)
+        child_dir = f.parent if f.name in ("lib.rs", "main.rs", "mod.rs") else f.parent / f.stem
+        for m in re.finditer(r"((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;", mask):
+            attrs = code[m.start(1) : m.end(1)]
+            if re.search(r"cfg\((?:all\()?test\b", attrs):
+                continue
+            via = re.search(r'path\s*=\s*"([^"]+)"', attrs)
+            if via:
+                stack.append(f.parent / via.group(1))
+            else:
+                stack += [child_dir / f"{m.group(2)}.rs", child_dir / m.group(2) / "mod.rs"]
+    return sorted(seen)
+
+
 def extract_lib(path: Path | None = None) -> list[Entry]:
-    # `#[macro_export]` puts a macro at the crate root from any module file.
-    files = [path] if path else sorted(SRC.rglob("*.rs"))
+    # `#[macro_export]` puts a macro at the crate root from any module of the library.
     path = path or SRC / "lib.rs"
+    files = module_files(path)
     code, mask = prod_scan(path)
     out = []
     for f in files:

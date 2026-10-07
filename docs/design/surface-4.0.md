@@ -14,7 +14,7 @@ story, or no longer exists. `--summary` prints the counts. The check runs in CI 
 
 What the check guards against: a contributor adding a config key, flag, variable, route or crate-root
 item in the forms this codebase uses (serde derives, clap derives, axum `route`/`nest` calls in either
-call form, `pub` items in `src/lib.rs`, `#[macro_export]` macros anywhere under `src`) without classifying it. It reads
+call form, `pub` items in `src/lib.rs`, `#[macro_export]` macros in any module the library compiles) without classifying it. It reads
 source text, not compiled types, so it is not a proof against code written to evade it; a construct it
 cannot read is added to the extractor, with a planted-source test, when the codebase first uses it.
 
