@@ -251,3 +251,29 @@ async fn meta_surfaced_replay_leaves_the_cost_suggestion_out() {
     let prose_copy = format!("{PROSE} ");
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &prose_copy).await, 1);
 }
+
+/// MIK-7991.CACHE.1 (plan step): a chain step that is a response-cache hit
+/// serves the suggestion the gateway wrote on the first call. A plan's step
+/// receipts are kept to what its answer delivers, never rebuilt from it, so
+/// only the hit itself keeps the suggestion out of the step's receipt.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn meta_chain_step_cache_hit_leaves_the_cost_suggestion_out() {
+    let cache = Some(Arc::new(crate::cache::ResponseCache::new()));
+    let mut fx = meta_fixture(short_window(), cache).await;
+    suggest(&mut fx, "read", "send");
+    let read = invoke("read", &json!({}));
+    let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &json!({})).await;
+    assert!(
+        first.contains(CATEGORY),
+        "base: the gateway suggested a cheaper tool: {first}"
+    );
+    lapse().await;
+    let reads = fx.reads();
+    let chain = json!({"chain": [{"tool": "alpha:read", "arguments": {}}]});
+    let (_, body) = post(&fx, Some("a"), "gateway_execute", &chain, &json!({})).await;
+    assert_eq!(fx.reads(), reads, "base: the step is a cache hit: {body}");
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), CATEGORY).await, 1);
+    let prose_copy = format!("{PROSE} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &prose_copy).await, 1);
+}
