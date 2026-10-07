@@ -426,7 +426,17 @@ impl MetaMcpInvoker<'_, '_> {
             .map(|(name, (record, value))| (name, record, value))
             .collect();
         let Some(output) = output else {
+            // The engine keeps the LAST result under a repeated name, so only
+            // that call's notes describe what is stored there (delta D2).
+            let mut last: Vec<(&String, crate::gateway::gateway_writes::WriteRecord)> = Vec::new();
             for (name, record, _) in named {
+                if let Some(slot) = last.iter_mut().find(|(kept, _)| *kept == name) {
+                    slot.1 = record;
+                } else {
+                    last.push((name, record));
+                }
+            }
+            for (name, record) in last {
                 crate::gateway::gateway_writes::restore(
                     &record.rebased(&["output".to_owned(), name.clone()]),
                 );

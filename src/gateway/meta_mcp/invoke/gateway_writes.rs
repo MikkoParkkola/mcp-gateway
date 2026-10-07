@@ -508,46 +508,65 @@ pub(crate) fn without<'v>(value: &'v Value, record: &WriteRecord) -> Cow<'v, Val
 }
 
 /// Remove each `layer` member of `writes` that still holds what was written;
-/// the names of those removed (their noted kinds).
+/// the names of those removed (their noted kinds). An object member is
+/// removed; an array element becomes `null`, so the indices of the elements
+/// after it, and the notes that name them, still hold (impl delta D3).
 fn remove_owned(value: &mut Value, writes: &[Written], layer: Layer) -> Vec<String> {
     let mut removed = Vec::new();
     for w in writes.iter().filter(|w| w.layer == layer) {
         let Some((last, parent)) = w.dest.split_last() else {
             continue;
         };
-        let owned = member(value, &w.dest).and_then(digest) == Some(w.digest);
-        if owned
-            && let Some(map) = member_mut(value, parent).and_then(Value::as_object_mut)
-            && map.remove(last).is_some()
-        {
+        if member(value, &w.dest).and_then(digest) != Some(w.digest) {
+            continue;
+        }
+        let gone = match member_mut(value, parent) {
+            Some(Value::Object(map)) => map.remove(last).is_some(),
+            Some(Value::Array(items)) => index(last)
+                .and_then(|i| items.get_mut(i))
+                .map(|slot| *slot = Value::Null)
+                .is_some(),
+            _ => false,
+        };
+        if gone {
             removed.push(w.kind.join("."));
         }
     }
     removed
 }
 
-/// MIK-7993 F1 (lead ruling c): `result` without every member `record` would
-/// exempt, wherever a stored result carries the noted value: the answer
-/// itself, its `structuredContent`, and the JSON text of its first content
-/// block. For a row that cannot hold its record, so the gateway's own text is
-/// never stored unrecorded and never receipted as backend text. Returns the
-/// names of the members removed.
-pub(crate) fn strip_recorded(result: &mut Value, record: &WriteRecord) -> Vec<String> {
+/// MIK-7993 F1 (lead ruling c): `result`, as a task row stores it for a
+/// call to `tool`, without every member `record` would exempt. For a row
+/// that cannot hold its record, so the gateway's own text is never stored
+/// unrecorded and never receipted as backend text. Returns the names of the
+/// members removed.
+///
+/// Each note is applied only where its layer lives, as the receipt reads it
+/// (impl delta D1): the answer layer on the answer; the value layer on the
+/// answer itself, or, for a wrapped `gateway_invoke`/`gateway_execute`
+/// answer, on the value it wraps (its `structuredContent` and the JSON text
+/// of its first content block, two copies of one value). A note is never
+/// applied at a place it does not describe, so a backend member there is
+/// never removed.
+pub(crate) fn strip_recorded(result: &mut Value, record: &WriteRecord, tool: &str) -> Vec<String> {
     let mut stripped = remove_owned(result, &record.0, Layer::Answer);
-    stripped.extend(remove_owned(result, &record.0, Layer::Value));
-    if let Some(structured) = result.get_mut("structuredContent") {
-        stripped.extend(remove_owned(structured, &record.0, Layer::Value));
-    }
-    if let Some(text) = result.pointer_mut("/content/0/text")
-        && let Some(mut decoded) = text
-            .as_str()
-            .and_then(|t| serde_json::from_str::<Value>(t).ok())
-    {
-        let removed = remove_owned(&mut decoded, &record.0, Layer::Value);
-        if !removed.is_empty() {
-            *text = Value::String(decoded.to_string());
-            stripped.extend(removed);
+    if matches!(tool, "gateway_invoke" | "gateway_execute") {
+        if let Some(structured) = result.get_mut("structuredContent") {
+            stripped.extend(remove_owned(structured, &record.0, Layer::Value));
         }
+        if let Some(text) = result.pointer_mut("/content/0/text")
+            && let Some(mut decoded) = text
+                .as_str()
+                .and_then(|t| serde_json::from_str::<Value>(t).ok())
+        {
+            let removed = remove_owned(&mut decoded, &record.0, Layer::Value);
+            if !removed.is_empty() {
+                *text = Value::String(decoded.to_string());
+                stripped.extend(removed);
+            }
+        }
+    } else {
+        stripped.extend(remove_owned(result, &record.0, Layer::Value));
     }
     stripped.sort();
     stripped.dedup();

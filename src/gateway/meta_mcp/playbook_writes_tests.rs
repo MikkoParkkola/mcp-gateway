@@ -111,7 +111,7 @@ async fn a_carry_follows_the_engines_reading_of_its_mappings() {
     };
     let carried = |steps: Vec<(&'static [&'static str], Value, Vec<String>)>,
                    completed: Vec<&str>,
-                   output: crate::playbook::PlaybookOutput| {
+                   output: Option<crate::playbook::PlaybookOutput>| {
         let (meta, caller) = (&meta, &caller);
         crate::gateway::meta_mcp::invoke::relay::collecting(async move {
             let invoker = MetaMcpInvoker {
@@ -141,7 +141,7 @@ async fn a_carry_follows_the_engines_reading_of_its_mappings() {
                 invoker.steps.lock().push((record, whole));
             }
             let completed: Vec<String> = completed.into_iter().map(str::to_owned).collect();
-            invoker.carry_writes(Some(&output), &completed);
+            invoker.carry_writes(output.as_ref(), &completed);
             let stored = serde_json::to_value(recorded()).expect("serializes");
             stored
                 .as_array()
@@ -162,7 +162,7 @@ async fn a_carry_follows_the_engines_reading_of_its_mappings() {
             vec!["items".to_owned(), "1".to_owned()],
         )],
         vec!["s"],
-        mapping(&[("p", "$s.items[]")]),
+        Some(mapping(&[("p", "$s.items[]")])),
     )
     .await;
     assert_eq!(dests, vec![json!(["output", "p", "1", "_cost_warnings"])]);
@@ -176,17 +176,34 @@ async fn a_carry_follows_the_engines_reading_of_its_mappings() {
             (&["_cost_warnings"], last, Vec::new()),
         ],
         vec!["s", "s"],
-        mapping(&[("p", "$s")]),
+        Some(mapping(&[("p", "$s")])),
     )
     .await;
     assert_eq!(dests, vec![json!(["output", "p", "_cost_warnings"])]);
+
+    // Delta D2: with no mapping too, a repeated step name means its last
+    // result: the first call's note is not carried under the name.
+    let dests = carried(
+        vec![
+            (&["trace_id"], json!({"trace_id": "first"}), Vec::new()),
+            (
+                &["_cost_warnings"],
+                json!({"_cost_warnings": ["last"]}),
+                Vec::new(),
+            ),
+        ],
+        vec!["s", "s"],
+        None,
+    )
+    .await;
+    assert_eq!(dests, vec![json!(["output", "s", "_cost_warnings"])]);
 
     // F5: `$inputs.x` is the caller's input, even beside a step of that name.
     let named_inputs = json!({"trace_id": "t"});
     let dests = carried(
         vec![(&["trace_id"], named_inputs, Vec::new())],
         vec!["inputs"],
-        mapping(&[("p", "$inputs")]),
+        Some(mapping(&[("p", "$inputs")])),
     )
     .await;
     assert!(dests.is_empty(), "{dests:?}");
