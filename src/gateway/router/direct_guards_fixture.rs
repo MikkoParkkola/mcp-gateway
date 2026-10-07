@@ -261,6 +261,16 @@ pub(crate) async fn fixture_hardened_signed(answer: Answer, require_nonce: bool)
     fx
 }
 
+/// [`fixture_firewalled`] with relay detection on for `alpha:read` and
+/// `alpha:resources/read`, so the direct route stages receipts (MIK-8022).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_relayed(answer: Answer) -> Fx {
+    RELAY.with(|r| r.set(true));
+    let fx = fixture_inner(answer, true, |meta| meta).await;
+    RELAY.with(|r| r.set(false));
+    fx
+}
+
 /// [`fixture_firewalled`] with sequence-anomaly blocking armed: `read` was only
 /// ever followed by `other`, so a second `read` in one session scores as a
 /// never-seen transition and is blocked.
@@ -284,6 +294,7 @@ thread_local! {
         const { std::cell::Cell::new(None) };
     static CLIENT_BREAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ANOMALY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static RELAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The auth the fixture serves: four keys, plus a client breaker when asked.
@@ -385,6 +396,15 @@ async fn fixture_inner(
             anomaly_threshold: 0.7,
             anomaly_block_threshold: anomaly.then_some(0.9),
             anomaly_min_observations: 1,
+            collusion: if RELAY.with(std::cell::Cell::get) {
+                crate::security::firewall::CollusionConfig {
+                    action: crate::security::firewall::CollusionAction::Block,
+                    sources: vec!["alpha:read".into(), "alpha:resources/read".into()],
+                    ..crate::security::firewall::CollusionConfig::default()
+                }
+            } else {
+                crate::security::firewall::CollusionConfig::default()
+            },
             ..FirewallConfig::default()
         };
         state_mut.firewall = Some(Arc::new(Firewall::from_config(
