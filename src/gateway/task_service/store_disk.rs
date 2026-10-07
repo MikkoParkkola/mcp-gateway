@@ -4,6 +4,8 @@
 //! the durable write path.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+use serde::Deserialize as _;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -18,13 +20,13 @@ use super::{
     TEMP_ATTEMPTS, fits, is_record_name, record_name,
 };
 use crate::fs_lock::{DirPin, ExclusiveFileLock};
-use crate::gateway::task_service::record::{MAX_LOADABLE_VERSION, Record};
+use crate::gateway::task_service::record::{AdmissionRecord, MAX_LOADABLE_VERSION, Record};
 use crate::protocol::tasks::Task;
 
 pub(super) fn open_blocking(
     dir: &Path,
     limits: StoreLimits,
-) -> Result<(ExclusiveFileLock, BTreeMap<String, Entry>), StoreError> {
+) -> Result<(ExclusiveFileLock, Loaded), StoreError> {
     let pin = prepare_dir(dir)?;
     let lease = acquire_lease(&dir.join(LEASE))?.pinning(pin);
     Ok((lease, load(dir, limits)?))
@@ -84,14 +86,100 @@ pub(super) fn acquire_lease(lease: &Path) -> Result<ExclusiveFileLock, StoreErro
     })
 }
 
-/// Read every record. Any unreadable, foreign-moded, non-regular, unsupported,
-/// duplicated or over-budget record refuses readiness with the directory left
-/// exactly as found. The disk is a trust boundary, so limits apply here too and
-/// the cap is enforced on the BYTES ACTUALLY READ rather than on a stat taken
-/// beforehand — a length observed before the read is a fact about a moment that
-/// has already passed.
-fn load(dir: &Path, limits: StoreLimits) -> Result<BTreeMap<String, Entry>, StoreError> {
-    let mut entries: BTreeMap<String, Entry> = BTreeMap::new();
+/// What `load` found: the tasks it restored, the rows whose task does not
+/// restore but whose admission block still reads, and how many rows nothing
+/// could be read from.
+pub(super) struct Loaded {
+    pub(super) entries: BTreeMap<String, Entry>,
+    /// Their keys stay taken: a retry finds the original task id, which reads
+    /// as not found, and never starts a second task (MIK-8023).
+    pub(super) reserved: Vec<(AdmissionRecord, String)>,
+    pub(super) unreadable: usize,
+}
+
+/// The parts of a record read before, and independently of, the strict
+/// parse, each on its own: one malformed member never hides another. Enough to
+/// refuse a newer build's row and to keep a damaged row's key.
+#[derive(Default)]
+struct Envelope {
+    version: Option<u64>,
+    admission: Option<AdmissionRecord>,
+    task_id: Option<String>,
+}
+
+impl Envelope {
+    /// Walks the record's top-level members in file order and keeps each one
+    /// that reads. A syntax error ends the walk but keeps what came before it:
+    /// a record cut off inside `model`, which is written after `admission`,
+    /// still yields its version and its key.
+    fn read(bytes: &[u8]) -> Self {
+        let mut envelope = Self::default();
+        let _ = serde::Deserializer::deserialize_map(
+            &mut serde_json::Deserializer::from_slice(bytes),
+            Members(&mut envelope),
+        );
+        envelope
+    }
+}
+
+struct Members<'e>(&'e mut Envelope);
+
+impl<'de> serde::de::Visitor<'de> for Members<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a task record")
+    }
+
+    /// A duplicated member is damage too, and no later copy may undo what an
+    /// earlier one gave: the key and task id keep the first copy that reads
+    /// (any readable binding is the safe side), the version keeps the highest
+    /// (a newer build's row must refuse whichever copy says so).
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut members: A) -> Result<(), A::Error> {
+        while let Some(key) = members.next_key::<String>()? {
+            match key.as_str() {
+                "version" => {
+                    let version = members.next_value::<serde_json::Value>()?.as_u64();
+                    self.0.version = self.0.version.max(version);
+                }
+                "admission" => {
+                    let admission = members.next_value::<serde_json::Value>()?;
+                    let admission = AdmissionRecord::deserialize(admission).ok();
+                    self.0.admission = self.0.admission.take().or(admission);
+                }
+                "model" => {
+                    let model = members.next_value::<serde_json::Value>()?;
+                    let task_id = model
+                        .pointer("/task/taskId")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned);
+                    self.0.task_id = self.0.task_id.take().or(task_id);
+                }
+                _ => {
+                    members.next_value::<serde::de::IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Read every record. A row that cannot be read is skipped where it lies,
+/// never moved or rewritten, and the rest load (MIK-8023): one damaged row no
+/// longer refuses the whole store. A row whose admission block still reads
+/// keeps its key reserved. What guards the trust boundary still refuses
+/// readiness with the directory left exactly as found: a foreign-moded or
+/// non-regular file, an over-budget record or store, a name or identity that is
+/// not the row's own, and a version newer than this build reads (a downgrade,
+/// not damage). The cap is enforced on the BYTES ACTUALLY READ rather than on a
+/// stat taken beforehand — a length observed before the read is a fact about a
+/// moment that has already passed.
+fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
+    let mut loaded = Loaded {
+        entries: BTreeMap::new(),
+        reserved: Vec::new(),
+        unreadable: 0,
+    };
     let mut identities = BTreeSet::new();
     let mut principals: BTreeMap<String, usize> = BTreeMap::new();
     for entry in fs::read_dir(dir).map_err(|_| StoreError::Unavailable)? {
@@ -114,43 +202,92 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<BTreeMap<String, Entry>, Stor
             tracing::warn!(path = %shown_path, "task record is not a private regular file");
             return Err(StoreError::UnsafeStore);
         }
-        fits(limits, entries.len())?;
+        // Every candidate row counts, skipped ones included: a directory full
+        // of damaged rows is still refused before it is all read.
+        fits(
+            limits,
+            loaded.entries.len() + loaded.reserved.len() + loaded.unreadable,
+        )?;
         let bytes = read_bounded(&mut file, limits.record_bytes).inspect_err(|error| {
             if *error == StoreError::Capacity {
                 tracing::warn!(path = %shown_path, "task record exceeds the record budget");
             }
         })?;
-        let record: Record = serde_json::from_slice(&bytes).map_err(|error| {
-            tracing::warn!(%error, path = %shown_path, "task record does not parse");
-            StoreError::CorruptRecord
-        })?;
-        if !(1..=MAX_LOADABLE_VERSION).contains(&record.version) {
-            let version = record.version;
-            tracing::warn!(path = %shown_path, version, "unsupported task record version");
+        let envelope = Envelope::read(&bytes);
+        if let Some(version) = envelope.version
+            && version > u64::from(MAX_LOADABLE_VERSION)
+        {
+            tracing::warn!(path = %shown_path, version, "task record was written by a newer gateway");
             return Err(StoreError::CorruptRecord);
         }
-        let task = Task::from_snapshot(record.model.clone()).map_err(|error| {
-            tracing::warn!(%error, path = %shown_path, "task record does not restore");
-            StoreError::CorruptRecord
-        })?;
+        let restored = restore(&bytes, &shown_path);
+        let (admission, task_id) = match (&restored, envelope) {
+            (Some((record, task)), _) => (record.admission.clone(), task.id().to_owned()),
+            (
+                None,
+                Envelope {
+                    admission: Some(admission),
+                    task_id,
+                    ..
+                },
+            ) => {
+                // The id the row names for itself; the file name when even
+                // that is gone, which the name check below then accepts.
+                let named = task_id
+                    .unwrap_or_else(|| name.strip_suffix(".json").unwrap_or(name).to_owned());
+                (admission, named)
+            }
+            (None, _) => {
+                tracing::warn!(
+                    path = %shown_path,
+                    "task record skipped: nothing in it can be read; its key is not kept; the file stays and counts against the store limit until an operator removes or repairs it"
+                );
+                loaded.unreadable += 1;
+                continue;
+            }
+        };
         // A record living under another task's name would let a rename rebind it.
-        if record_name(task.id()) != name
-            || !identities.insert(record.admission.identity_digest.clone())
-        {
+        if record_name(&task_id) != name || !identities.insert(admission.identity_digest.clone()) {
             tracing::warn!(path = %shown_path, "task record identity or name is not its own");
             return Err(StoreError::CorruptRecord);
         }
         let held = principals
-            .entry(record.admission.principal_digest.clone())
+            .entry(admission.principal_digest.clone())
             .or_default();
         *held += 1;
         if *held > limits.per_principal {
             tracing::warn!(path = %shown_path, "stored tasks exceed the per-principal cap");
             return Err(StoreError::Capacity);
         }
-        entries.insert(task.id().to_owned(), Entry { task, record });
+        if let Some((record, task)) = restored {
+            loaded.entries.insert(task_id, Entry { task, record });
+        } else {
+            tracing::warn!(
+                path = %shown_path,
+                "task record skipped: its task does not restore; its key stays taken; the file stays and counts against the store limits until an operator removes or repairs it"
+            );
+            loaded.reserved.push((admission, task_id));
+        }
     }
-    Ok(entries)
+    Ok(loaded)
+}
+
+/// The record and its task, when both read and the version is one this build
+/// loads. Why one does not is logged here, the file named, never its content.
+fn restore(bytes: &[u8], shown_path: &std::path::Display<'_>) -> Option<(Record, Task)> {
+    // The file named, never the parser's message: it can quote the record.
+    let record: Record = serde_json::from_slice(bytes)
+        .inspect_err(|_| tracing::warn!(path = %shown_path, "task record does not parse"))
+        .ok()?;
+    if !(1..=MAX_LOADABLE_VERSION).contains(&record.version) {
+        let version = record.version;
+        tracing::warn!(path = %shown_path, version, "unsupported task record version");
+        return None;
+    }
+    let task = Task::from_snapshot(record.model.clone())
+        .inspect_err(|_| tracing::warn!(path = %shown_path, "task record does not restore"))
+        .ok()?;
+    Some((record, task))
 }
 
 /// Read at most `cap` bytes, refusing as soon as one more than that arrives.
