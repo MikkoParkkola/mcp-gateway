@@ -140,7 +140,21 @@ impl MetaMcp {
         provenance.origin = Some(format!("{server}:{tool}"));
 
         let (read_only, destructive) = self.capability_context_flags(server, tool);
-        let mut input = ContextIntegrityInput::read_only_tool_result(provenance, result.clone());
+        // MIK-7994: the continuation the gateway minted is its own token, not
+        // backend output, so it is not judged and Strip never renders it into
+        // the delivered text. A backend's own `requestState` is judged as
+        // ever: only a member the gateway still owns is left out. The handle
+        // still crosses: it is read from `result` itself.
+        let mut judged = result.clone();
+        if super::gateway_writes::owns(
+            super::gateway_writes::Layer::Value,
+            super::gateway_writes::REQUEST_STATE,
+            &result,
+        ) && let Some(map) = judged.as_object_mut()
+        {
+            map.remove("requestState");
+        }
+        let mut input = ContextIntegrityInput::read_only_tool_result(provenance, judged);
         input.read_only = read_only;
         input.destructive = destructive;
         input.action_risk = if destructive {

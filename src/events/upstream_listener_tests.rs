@@ -276,3 +276,6 @@ async fn a_backend_left_alone_during_the_lookup_is_admitted() {
     let verdict = verdict_after_a_reload_during_the_lookup(Reload::Nothing).await;
     assert!(verdict.is_ok(), "{verdict:?}");
 }
+
+#[path = "upstream_listener_revive_tests.rs"]
+mod revive;

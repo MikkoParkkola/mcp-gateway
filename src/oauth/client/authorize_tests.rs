@@ -575,6 +575,80 @@ async fn taking_up_a_shared_login_takes_up_its_registered_client_id() {
     );
 }
 
+/// MIK-7982: a client with a configured id that takes up a stored login keeps
+/// its configured id, whatever registered id that login stored.
+#[tokio::test]
+async fn taking_up_a_shared_login_keeps_a_configured_client_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let issuer = "https://as.example";
+    let client = client(dir.path(), Some(issuer))
+        .with_login_gate(Arc::new(crate::oauth::login_gate::LoginGate::default()));
+    let key = storage_key(BACKEND, issuer);
+    let shared = token("shared-access", None, Expiry::Live);
+    client.storage.save(&key, RESOURCE, &shared).unwrap();
+    client
+        .storage
+        .save_client_id(&key, RESOURCE, "another-registered-id")
+        .unwrap();
+
+    let access = client.authorize_shared(true, None).await.unwrap();
+
+    assert_eq!(access, "shared-access", "the stored login is taken up");
+    assert_eq!(
+        client.client_id.read().as_deref(),
+        Some(CLIENT_ID),
+        "a configured id is never replaced by a stored one"
+    );
+}
+
+/// MIK-7982: a stored login is taken up only when its token is live and was
+/// stored under this client's own key (backend and issuer) and resource;
+/// otherwise the caller opens its own.
+#[tokio::test]
+async fn an_expired_or_foreign_stored_login_is_not_taken_up() {
+    let issuer = "https://as.example";
+    for (stored_issuer, resource, expiry, case) in [
+        (issuer, RESOURCE, Expiry::Expired, "an expired token"),
+        (
+            issuer,
+            "https://other.example.com/mcp",
+            Expiry::Live,
+            "another resource's token",
+        ),
+        (
+            "https://other-as.example",
+            RESOURCE,
+            Expiry::Live,
+            "another issuer's token",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = client(dir.path(), Some(issuer));
+        let opened = Arc::new(tokio::sync::Notify::new());
+        let signal = Arc::clone(&opened);
+        client.open_browser = Box::new(move |_| {
+            signal.notify_one();
+            true
+        });
+        let client =
+            client.with_login_gate(Arc::new(crate::oauth::login_gate::LoginGate::default()));
+        let stored = token("stored-access", None, expiry);
+        client
+            .storage
+            .save(&storage_key(BACKEND, stored_issuer), resource, &stored)
+            .unwrap();
+
+        let opened_own = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::select! {
+                taken = client.authorize_shared(true, None) => panic!("{case} was taken up: {taken:?}"),
+                () = opened.notified() => {}
+            }
+        })
+        .await;
+        assert!(opened_own.is_ok(), "{case}: no login opened within 10 s");
+    }
+}
+
 /// MIK-7982.BOUND.1: when the window passes, the callback listener is closed
 /// before the wait returns, not on a later poll of an aborted task: the port
 /// binds again with no await in between.
@@ -602,4 +676,36 @@ async fn the_window_closes_the_callback_listener_before_the_wait_returns() {
     );
     std::net::TcpListener::bind(("127.0.0.1", port))
         .expect("the window's end closes the callback listener before it returns");
+}
+
+/// MIK-7982: a login cancelled before it registers (a restart or shutdown of
+/// the backend) ends as cancelled and opens no browser.
+#[tokio::test]
+async fn a_login_cancelled_before_registration_opens_no_browser() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client(dir.path(), Some("https://as.example"));
+    let opened = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seen = Arc::clone(&opened);
+    client.open_browser = Box::new(move |_| {
+        seen.store(true, std::sync::atomic::Ordering::SeqCst);
+        true
+    });
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+
+    let ended = tokio::time::timeout(
+        Duration::from_secs(10),
+        client.authorize_until(&cancel, None),
+    )
+    .await
+    .expect("a cancelled login ends at once");
+
+    assert!(
+        matches!(ended, Err(crate::Error::AuthorizationCancelled { ref backend }) if backend == BACKEND),
+        "{ended:?}"
+    );
+    assert!(
+        !opened.load(std::sync::atomic::Ordering::SeqCst),
+        "no browser opens for a cancelled login"
+    );
 }
