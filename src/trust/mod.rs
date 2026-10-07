@@ -39,6 +39,8 @@ pub use descriptor::{
     project_tool_descriptor_trust_card, project_tool_descriptors_trust_cards,
     tools_list_result_with_trust_cards, trust_card_digest_sha256,
 };
+#[cfg(test)]
+pub(crate) use descriptor::memo_counters;
 pub use kinds::{CbomComponentKind, CbomSubjectKind, TrustEvidenceKind};
 pub use result_extractor::extract_row_count;
 pub use result_provenance::{CacheOutcome, RuntimeProvenanceReceipt, SignedResultProvenance};

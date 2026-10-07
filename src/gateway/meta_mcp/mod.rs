@@ -72,6 +72,7 @@ mod audit_record_tests;
 #[cfg(test)]
 mod callback_admin_denial_tests;
 mod caller_forward;
+mod catalogue_cache;
 mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;

@@ -224,6 +224,8 @@ pub fn project_tool_descriptors_trust_cards(
 /// apart). Maps are `BTreeMap`s (no `preserve_order`), so equal maps serialise
 /// alike; `equal_maps_serialise_alike` pins that.
 fn same_tool(seen: &Tool, tool: &Tool) -> bool {
+    #[cfg(test)]
+    SAME_TOOL_CALLS.with(|n| n.set(n.get() + 1));
     let Tool {
         name,
         title,
@@ -280,6 +282,16 @@ fn held_or_default<'a, V: Default>(map: &'a mut HashMap<String, V>, key: &str) -
         .expect("present: inserted above when absent")
 }
 
+/// Test-only: (cards computed, exact tool compares) on this thread, for tests
+/// outside this module that prove a repeat list recomputes nothing.
+#[cfg(test)]
+pub(crate) fn memo_counters() -> (usize, usize) {
+    (
+        CARD_COMPUTATIONS.with(std::cell::Cell::get),
+        SAME_TOOL_CALLS.with(std::cell::Cell::get),
+    )
+}
+
 /// Build a JSON-RPC `tools/list` result with projected `TrustCard` references.
 #[must_use]
 pub fn tools_list_result_with_trust_cards(tools: Vec<Value>) -> Value {
@@ -294,6 +306,8 @@ thread_local! {
     static CARD_COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Test-only: tools serialised into a descriptor on this thread.
     static TOOL_SERIALISATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Test-only: exact tool compares made on this thread.
+    static SAME_TOOL_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
