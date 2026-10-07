@@ -1,7 +1,7 @@
 name: MRTR.7b full burst
 
 # MIK-7479: the ticket's exact scenario (1026 stdio calls against a client that
-# never answers) is given up to eight and a half minutes, so it runs here rather than in the
+# never answers) is given up to about ten minutes (590 s), so it runs here rather than in the
 # per-PR Tests job, which skips it. Nightly from the default branch, on demand,
 # on a PR carrying the `mrtr7b-full-burst` label, and from release.yml, whose
 # `verify` needs it green on the revision being released.
@@ -30,7 +30,7 @@ jobs:
     name: MRTR.7b full burst ledger
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'mrtr7b-full-burst')
     runs-on: ubuntu-latest
-    # A cold --all-features compile plus a burst of up to 8.5 minutes. No
+    # A cold --all-features compile plus a burst of up to 590 s. No
     # build cache: the release calls this too, and a restored cache is input
     # nobody reviewed at the tag.
     timeout-minutes: 40

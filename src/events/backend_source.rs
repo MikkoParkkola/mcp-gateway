@@ -149,6 +149,9 @@ impl EventSource for BackendSource {
         let refused = known && (up.ineligible)().contains(backend);
         if !known || refused {
             return if matches!(interest, Interest::ToolsChanged) {
+                // Counted with no task: the revive sweep starts one once the
+                // backend can be listened to (MIK-7944 D6.EVENTS_MISC.6).
+                up.listeners.hold(backend, &interest);
                 Ok(())
             } else if refused {
                 Err(RpcError::forbidden())

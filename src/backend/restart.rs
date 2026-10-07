@@ -11,8 +11,8 @@ use tracing::{debug, warn};
 use super::pool::PoolKey;
 use super::{Backend, RestartOutcome};
 
-use crate::Result;
 use crate::transport::Transport;
+use crate::{Error, Result};
 
 impl Backend {
     /// Tear down the current transport (killing any child process) and start a
@@ -51,8 +51,32 @@ impl Backend {
             return Ok(RestartOutcome::SkippedStopping);
         }
 
+        // A start stalled on an interactive login holds the start lock for
+        // up to the whole authorization window, and its callback listener
+        // holds the port this restart's own login binds: end that login
+        // first. Starts queued behind it share its Cancelled end (MIK-7982).
+        // A non-interactive restart (the health probe's rebuild) neither ends
+        // a login, nor bumps the cancel epoch under a start still
+        // discovering, nor queues behind a start in flight: it does nothing.
+        let interactive = crate::oauth::login_gate::interactive();
+        let required = || Error::AuthorizationRequired {
+            backend: self.name.clone(),
+        };
+        if interactive {
+            self.login_gate.cancel_and_join().await;
+        } else if self.login_gate.in_flight() {
+            return Err(required());
+        }
+        // Set out after this restart's own cancel, before it queues: a second
+        // restart that cancels while this one waits refuses this one's login.
+        let set_out = self.login_gate.epoch();
+
         let entry = self.shared_entry();
-        let _guard = entry.start_lock.lock().await;
+        let _guard = if interactive {
+            entry.start_lock.lock().await
+        } else {
+            entry.start_lock.try_lock().map_err(|_| required())?
+        };
 
         // Re-checked after the await. The lock above normally prevents shutdown
         // from interleaving at all, but it is not the only line of defence:
@@ -94,7 +118,9 @@ impl Backend {
         // is no window here in which a live transport can be left behind and
         // nothing to take back. A start that failed for THAT reason is not a
         // fault worth reporting as one.
-        match self.start_entry(&PoolKey::Shared, &entry).await {
+        match crate::oauth::login_gate::set_out(set_out, self.start_entry(&PoolKey::Shared, &entry))
+            .await
+        {
             Ok(transport) => {
                 // Same obligation as the cold start path: the era describes the
                 // process on the other end, and this one has just been

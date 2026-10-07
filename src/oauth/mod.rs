@@ -14,6 +14,7 @@
 
 mod callback;
 pub mod client;
+pub(crate) mod login_gate;
 mod metadata;
 mod storage;
 mod token_file;
