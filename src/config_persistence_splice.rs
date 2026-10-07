@@ -449,14 +449,16 @@ pub(super) fn changed_backends(before: &Config, config: &Config) -> Vec<String> 
 
 /// `text` with every backend that differs between `before` and `config`
 /// spliced in one at a time, each step through [`with_backend_edited`] and
-/// its proof. `None` when a step cannot be spliced, or when `config` differs
-/// from `before` outside `backends`.
+/// its proof. `None` when a step cannot be spliced, when several backends
+/// differ and one of them is not an addition, or when `config` differs from
+/// `before` outside `backends`.
 pub(super) fn with_backends_edited(text: &str, before: &Config, config: &Config) -> Option<String> {
     let names = changed_backends(before, config);
     // Several changes are spliced only when all are additions (setup and
     // discovery import). A removal among several is what a stale `config`
-    // looks like after another writer added a backend: refuse or rewrite
-    // instead of deleting that backend.
+    // looks like after another writer added a backend, so it takes the
+    // ordinary path: refused when comments would be lost, otherwise the full
+    // rewrite, last writer wins (MIK-8042 tracks a base-revision check).
     if names.len() > 1 && names.iter().any(|n| before.backends.contains_key(n)) {
         return None;
     }
