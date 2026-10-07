@@ -334,6 +334,7 @@ impl OAuthClient {
             backend: self.backend_name.clone(),
             state,
             destination: self.destination,
+            route: self.refresh_route,
         };
         let outcome = exchange
             .spawn()

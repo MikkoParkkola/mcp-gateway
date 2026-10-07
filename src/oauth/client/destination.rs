@@ -36,6 +36,18 @@ pub(crate) fn http_client(destination: DestinationPolicy) -> Result<Client> {
     finish(builder, destination, route)
 }
 
+/// Which client a refresh-token request goes through (MIK-8018).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RefreshRoute {
+    /// The client was built here for the destination policy: a refresh uses
+    /// the same route with redirects off.
+    Owned,
+    /// The caller supplied the client ([`OAuthClient::new`]): a refresh keeps
+    /// its transport settings (proxy, roots, identity). It may follow
+    /// redirects, so no send error proves the token was not sent.
+    Supplied,
+}
+
 /// Whether a client may send through the environment's proxy.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Route {
@@ -145,6 +157,7 @@ impl OAuthClient {
             cfg,
         );
         client.destination = destination;
+        client.refresh_route = RefreshRoute::Owned;
         client
     }
 
@@ -173,6 +186,9 @@ impl OAuthClient {
     pub(super) fn refresh_client_for(&self, url: &str) -> Result<Client> {
         if !url::Url::parse(url).is_ok_and(|u| crate::gateway::is_tls_or_loopback(&u)) {
             return Err(Error::Protocol(cleartext_refusal("endpoint")));
+        }
+        if self.refresh_route == RefreshRoute::Supplied {
+            return self.client_for(url).cloned();
         }
         let loopback = self.loopback_cleartext(url);
         let slot = &self.refresh_clients[usize::from(loopback)];

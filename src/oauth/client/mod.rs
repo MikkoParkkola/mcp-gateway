@@ -124,6 +124,10 @@ pub struct OAuthClient {
     /// the policy route, 1 the unproxied loopback route (MIK-8018).
     refresh_clients: [std::sync::OnceLock<Client>; 2],
 
+    /// Whether refreshes go through `refresh_clients` or the caller's own
+    /// `http_client` (MIK-8018).
+    refresh_route: destination::RefreshRoute,
+
     /// Backend name (for storage key)
     backend_name: String,
 
@@ -290,6 +294,7 @@ impl OAuthClient {
             http_client,
             loopback_client: destination::loopback_client().ok(),
             refresh_clients: [std::sync::OnceLock::new(), std::sync::OnceLock::new()],
+            refresh_route: destination::RefreshRoute::Supplied,
             backend_name,
             login_gate: None,
             resource_url,

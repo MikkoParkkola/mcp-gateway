@@ -16,11 +16,13 @@ use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use super::TokenResponse;
-use super::destination::{Hop, hop};
+use super::destination::{Hop, RefreshRoute, hop};
 use crate::Error;
 use crate::oauth::storage::{RefreshState, TokenInfo, TokenStorage};
 use crate::security::http_diagnostics::oauth_request_error;
-use crate::security::ssrf::{DestinationPolicy, is_ssrf_refusal};
+use crate::security::ssrf::{
+    DestinationPolicy, PinningResolver, SystemResolver, is_ssrf_refusal, ssrf_denial,
+};
 use crate::security::{safe_oauth_http_error, safe_reqwest_message};
 
 /// The refresh coordination of one stored credential.
@@ -113,6 +115,7 @@ pub(super) struct Exchange {
     pub(super) backend: String,
     pub(super) state: RefreshState,
     pub(super) destination: DestinationPolicy,
+    pub(super) route: RefreshRoute,
 }
 
 impl Exchange {
@@ -150,7 +153,10 @@ impl Exchange {
             Ok(response) => response,
             Err(error) => {
                 let mapped = oauth_request_error("Token refresh failed", &error);
-                return if error.is_connect() || is_ssrf_refusal(&mapped) {
+                // Only a client that follows no redirect proves nothing was sent:
+                // through a followed hop the server may already have the token.
+                let unsent = error.is_connect() || is_ssrf_refusal(&mapped);
+                return if unsent && self.route == RefreshRoute::Owned {
                     Outcome::NotSent(mapped)
                 } else {
                     Outcome::Uncertain(mapped)
@@ -159,7 +165,8 @@ impl Exchange {
         };
         let status = response.status();
         if status.is_redirection() {
-            return Outcome::Uncertain(self.redirect_error(&response));
+            let target = self.redirect_target(&response);
+            return Outcome::Uncertain(self.redirect_error(status.as_u16(), target).await);
         }
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -218,23 +225,28 @@ impl Exchange {
         }
     }
 
-    /// A redirect is never followed. A target the destination policy refuses
-    /// stays `-32600 SSRF blocked` (MIK-7701), so no caller walks past it.
-    fn redirect_error(&self, response: &reqwest::Response) -> Error {
-        let target = response
-            .headers()
-            .get(reqwest::header::LOCATION)
-            .and_then(|location| location.to_str().ok())
-            .and_then(|location| url::Url::parse(&self.endpoint).ok()?.join(location).ok());
+    /// A redirect is never followed. A target the destination policy refuses,
+    /// by its literal or by what its name resolves to, stays
+    /// `-32600 SSRF blocked` (MIK-7701), so no caller walks past it into a
+    /// login.
+    async fn redirect_error(&self, status: u16, target: Option<url::Url>) -> Error {
         if let Some(target) = target
-            && let Hop::Refuse(reason) = hop(self.destination, 0, &target)
+            && let Some(reason) = refused_target(self.destination, &target).await
         {
             return Error::Protocol(reason);
         }
         Error::OAuth(format!(
-            "Token refresh failed: the token endpoint answered HTTP {}; redirects are not followed",
-            response.status().as_u16()
+            "Token refresh failed: the token endpoint answered HTTP {status}; redirects are not followed"
         ))
+    }
+
+    /// The redirect's `Location`, resolved against the token endpoint.
+    fn redirect_target(&self, response: &reqwest::Response) -> Option<url::Url> {
+        response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|location| location.to_str().ok())
+            .and_then(|location| url::Url::parse(&self.endpoint).ok()?.join(location).ok())
     }
 
     /// The sent refresh token may be consumed: see [`spend`].
@@ -264,7 +276,9 @@ pub(super) fn spend(
     flight.spend(sent);
     warn!(backend = %backend, "A refresh with an unknown outcome spent its refresh token");
     let Some(mut stored) = storage.load(key, resource_url) else {
-        return true;
+        // Absent is retired. A record that exists but cannot be read may
+        // still hold `sent`: not retired, so the marker stays.
+        return !storage.token_path(key, resource_url).exists();
     };
     if stored.refresh_token.as_deref() != Some(sent) {
         return true;
@@ -275,6 +289,28 @@ pub(super) fn spend(
         return false;
     }
     true
+}
+
+/// Why `destination` refuses a redirect to `target`, if it does: a literal
+/// through [`hop`], a name through the pinning resolver a followed hop would
+/// have met. A name that does not resolve is not a refusal: nothing was sent.
+pub(super) async fn refused_target(
+    destination: DestinationPolicy,
+    target: &url::Url,
+) -> Option<String> {
+    if let Hop::Refuse(reason) = hop(destination, 0, target) {
+        return Some(reason);
+    }
+    if destination == DestinationPolicy::Configured {
+        return None;
+    }
+    let url::Host::Domain(name) = target.host()? else {
+        return None;
+    };
+    let name = name.parse::<reqwest::dns::Name>().ok()?;
+    let resolver = PinningResolver::new(SystemResolver).with_policy(destination);
+    let error = reqwest::dns::Resolve::resolve(&resolver, name).await.err()?;
+    ssrf_denial(&*error).map(ToString::to_string)
 }
 
 /// Whether `body` is an RFC 6749 error response (an `error` string field).
