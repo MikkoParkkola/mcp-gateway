@@ -68,8 +68,8 @@ impl MetaMcp {
 
     /// Record the caller's transition and return predictions for the current tool.
     ///
-    /// `key` is [`super::super::MetaMcpCallerContext::experiment_key`]: `None` (a
-    /// keyless modern caller) records nothing and is served no hints (G4).
+    /// `key` is [`super::super::MetaMcpCallerContext::experiment_key`]: `None` (any
+    /// keyless caller, stdio included) records nothing and is served no hints (G4).
     ///
     /// Side-effects:
     /// - Records `key → tool_key` in the `TransitionTracker`.

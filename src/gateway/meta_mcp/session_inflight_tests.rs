@@ -118,14 +118,12 @@ async fn call(meta: &MetaMcp) -> crate::Result<Value> {
 }
 
 /// MIK-7997: the A/B arm and the prefetch hints key on the caller key only.
-/// A session id, legacy or stdio, never stands in for a missing key.
+/// A session id, legacy or stdio, never stands in for a missing key, so the
+/// key takes no session at all.
 #[test]
 fn a_keyless_caller_has_no_experiment_key_under_any_session() {
     let retry = crate::protocol::mrtr::RetryFields::default();
-    let context = keyless_legacy(&retry);
-    for session in [SESSION, "stdio-session"] {
-        assert_eq!(context.experiment_key(Some(session)), None, "{session}");
-    }
+    assert_eq!(keyless_legacy(&retry).experiment_key(), None);
 }
 
 #[tokio::test]

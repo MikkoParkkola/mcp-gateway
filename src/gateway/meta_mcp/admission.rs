@@ -508,7 +508,7 @@ impl MetaMcp {
         let owner_principal = caller.owner_principal();
         let retry = caller.retry;
         // The arm the dispatch will use, so a retry's representation names it.
-        let arm_key = caller.experiment_key(session);
+        let arm_key = caller.experiment_key();
         if let Some((server, tool, mut operation_arguments)) =
             self.check_target_policy(caller, tool_name, arguments, session)?
         {
