@@ -128,6 +128,8 @@ pub(crate) enum Revived {
     Written,
     /// The subscription is gone or expired.
     NoSubscription,
+    /// The subscription is suspended until its subscriber refreshes it.
+    Suspended,
     /// The outbox is at a cap.
     Full,
     /// The outbox already holds this event id.
@@ -173,7 +175,10 @@ impl Store {
             return Ok(Enqueued::NoSubscription);
         }
         // The same occurrence offered twice keeps the record already
-        // retrying or on the wire, attempt count and all.
+        // retrying or on the wire, attempt count and all. So does a later
+        // occurrence re-admitted under the id while the first is held (past
+        // the inbound dedupe window, as a suspension or an outage can hold it):
+        // receivers dedupe on the event id, so it is coalesced, not sent.
         if state.outbox.contains_key(&record.event_id) {
             return Ok(Enqueued::Written);
         }
@@ -246,7 +251,7 @@ impl Store {
         )
     )]
     /// Move dead letter `event_id` back to the outbox as `record` (the same
-    /// event id, a fresh attempt count), in one locked step: the dead letter
+    /// event id and fan-out stamp, a fresh attempt count), in one locked step: the dead letter
     /// leaves `dead/` only once the record is placed. `dead_at` names the
     /// dead letter the caller scanned, so one buried again meanwhile is not
     /// replayed on the old verdict.
@@ -261,20 +266,31 @@ impl Store {
         let mut state = self.state.lock();
         // Read under the lock: an expiry that lands while this waits counts.
         let now = clock();
-        if state
+        let Some(stamp) = state
             .dead
             .get(event_id)
-            .is_none_or(|(dead, _)| dead.dead_at != dead_at)
-        {
+            .filter(|(dead, _)| dead.dead_at == dead_at)
+            .map(|(dead, _)| dead.record.created_at)
+        else {
             return Ok(Revived::Missing);
-        }
-        // An expired subscription takes nothing, even before its sweep.
-        if !state
-            .subs
-            .get(&record.subscription_id)
-            .is_some_and(|s| s.live(now))
-        {
-            return Ok(Revived::NoSubscription);
+        };
+        // The occurrence's own fan-out stamp: should a crash leave this record
+        // and its dead letter both on disk, `load` reads them as one settled
+        // occurrence and keeps only the dead letter.
+        let record = OutboxRecord {
+            created_at: stamp,
+            ..record
+        };
+        match state.subs.get(&record.subscription_id) {
+            // An expired subscription takes nothing, even before its sweep.
+            Some(sub) if sub.live(now) => {
+                // Suspended: never attempted, and dropped unburied should it
+                // expire unrefreshed, so the dead letter stays.
+                if !sub.active {
+                    return Ok(Revived::Suspended);
+                }
+            }
+            _ => return Ok(Revived::NoSubscription),
         }
         // The same occurrence is already pending: nothing to place, and the
         // dead letter is not dropped for a record that is not the replay.
@@ -300,9 +316,8 @@ impl Store {
         // The dead file must be unlinked before the replay counts: if it
         // cannot be, the new record is rolled back so one of the two stands.
         // A sync failure after the unlink is logged, never undone.
-        // ponytail: a failed rollback unlink leaves a stray outbox file that
-        // delivers once after a restart; stage records outside outbox/ if
-        // double faults ever matter.
+        // A failed rollback unlink leaves a stray outbox file; it carries the
+        // dead letter's stamp, so `load` drops it on the next start.
         if let Err(error) = remove_record(&self.dead_dir, &OutboxRecord::file(event_id)) {
             state.outbox.remove(event_id);
             let _ = remove_record(&self.outbox_dir, &OutboxRecord::file(event_id));

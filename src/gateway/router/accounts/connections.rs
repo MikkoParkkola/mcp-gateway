@@ -5,6 +5,7 @@
 //! An API credential is forwarded into the authenticated half unchanged; a
 //! browser session is verified through the bridge; both at once is refused.
 
+use crate::gateway::routes;
 use std::sync::Arc;
 
 use axum::Router;
@@ -39,7 +40,7 @@ pub(super) fn api_route(revocation: Arc<dyn AccountRevocation>) -> Router<Arc<Ap
         };
         super::revoke_for(&state, &*revocation, &identity, account_id).await
     };
-    Router::new().route(super::ROUTE, delete(handler))
+    Router::new().route(routes::ACCOUNTS_CONNECTION, delete(handler))
 }
 
 /// The mounted route. `api` is [`api_route`] already wrapped in the auth layers.
