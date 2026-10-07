@@ -528,3 +528,29 @@ async fn a_route_a_reload_removes_inside_the_grace_period_is_withdrawn_at_once()
         "the removal withdraws it"
     );
 }
+
+/// A route the startup scan registered and an unannounced reload removed
+/// before the first pass is withdrawn by that pass, as a reload inside the
+/// grace period withdraws what it removes: a narrower restore must not
+/// inherit the subscription.
+#[tokio::test]
+async fn a_route_removed_before_the_first_pass_is_withdrawn_by_it() {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = tempfile::tempdir().expect("store");
+    std::fs::write(dir.path().join("a.yaml"), capability("alpha")).expect("write");
+    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    seed_subscription(store.path(), "beta");
+    seed_sentinel(store.path());
+    let (caps, registry, meta) = wired(&[dir.path()], store.path()).await;
+    caps.mark_initial_scan_complete();
+    std::fs::remove_file(dir.path().join("b.yaml")).expect("remove beta");
+    caps.reload()
+        .await
+        .expect("reload, its notice not yet handled");
+    first_pass(&meta, store.path()).await;
+    assert_eq!(routes(&registry), ["alpha.push"]);
+    assert!(
+        !subscribed(store.path(), "beta"),
+        "the first pass withdraws the type its refresh removed"
+    );
+}
