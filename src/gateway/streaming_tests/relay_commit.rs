@@ -102,7 +102,12 @@ fn a_second_written_copy_waits_for_the_receipt() {
         let watch = Arc::clone(&watch);
         move || watch.report(true)
     });
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while !started.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the first written copy never recorded its receipt"
+        );
         std::thread::yield_now();
     }
     watch.report(true);
