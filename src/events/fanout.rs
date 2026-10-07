@@ -182,6 +182,7 @@ impl EventsHub {
             firewall: Some(firewall.to_owned()),
             body_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
             attempt: 0,
+            unsent: 0,
             next_attempt_at: now,
             first_attempt_at: None,
             created_at: now,
@@ -199,14 +200,16 @@ impl EventsHub {
         if let Some(reason) = refusal {
             let policy = self.dead_policy();
             let buried = record.clone();
+            // Receipt order, as in the worker's burials: see `receipts`.
+            let _ordered = self.receipts.lock().await;
             let settled = self
                 .blocking(move |store| store.dead_letter(record, reason, now, policy))
                 .await;
             let (evicted, receipt) = settled.map_or((Vec::new(), false), |s| (s.evicted, s.buried));
-            services.audit_evictions(evicted).await;
             if receipt {
                 self.dead_lettered(services, &buried, reason).await;
             }
+            services.audit_evictions(evicted).await;
             return;
         }
         let caps = self.outbox_caps();

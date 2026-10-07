@@ -69,6 +69,7 @@ fn record(event: &str, sub: &str, now: DateTime<Utc>) -> OutboxRecord {
         attribution_keys: Vec::new(),
         firewall: None,
         attempt: 0,
+        unsent: 0,
         next_attempt_at: now,
         first_attempt_at: None,
         created_at: now,
@@ -676,10 +677,10 @@ fn has_due_sees_a_pending_record_behind_one_in_flight() {
     assert!(!store.has_due("gone", now));
 }
 
-/// MIK-7805 AC5: a burial that is durable keeps its receipt even when the
-/// cleanup after it (the outbox file) cannot complete.
+/// MIK-7944 .2: a claim settled `Unsent` keeps its attempt number but is
+/// not a send, across a restart too; the next claim numbers on from it.
 #[test]
-fn a_burial_keeps_its_receipt_when_the_cleanup_after_it_fails() {
+fn an_unsent_claim_keeps_its_number_but_is_not_a_send() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
     let store = open_with(dir.path(), now, &["s1"]);
@@ -692,112 +693,73 @@ fn a_burial_keeps_its_receipt_when_the_cleanup_after_it_fails() {
         store.claim("a", now).expect("io"),
         Claim::Ready(_)
     ));
-    // The outbox directory is replaced by a file: removing the record's file
-    // after the dead letter is written then fails.
-    std::fs::remove_dir_all(dir.path().join("outbox")).expect("rm");
-    std::fs::write(dir.path().join("outbox"), b"x").expect("block");
-    let dead = Settle::Dead {
-        reason: DeadReason::Gone,
-        status: Some("http_4xx"),
+    let unsent = Settle::Unsent {
+        next: now,
+        status: "audit_unavailable",
     };
-    let settled = store.settle("a", now, dead, now, ROOMY).expect("settled");
-    assert!(
-        settled.buried,
-        "the dead letter was written, so it is reported"
-    );
-    assert!(store.dead_letter_by_id("a").is_some());
-}
-
-/// MIK-7805: a dead letter renamed into place whose directory sync then
-/// fails is still a burial. `Store::settle` reports it and drops the outbox
-/// record, so the occurrence is never resent.
-#[test]
-fn a_burial_whose_dead_letter_sync_fails_is_still_reported() {
-    let dir = tempfile::tempdir().expect("dir");
-    let now = Utc::now();
-    let store = open_with(dir.path(), now, &["s1"]);
-    let caps = OutboxCaps {
-        global: 10,
-        per_subscription: 10,
+    store.settle("a", now, unsent, now, ROOMY).expect("io");
+    // Across a restart: the count is on disk with the record.
+    drop(store);
+    let store = Store::open(dir.path(), now, TAIL).expect("reopen");
+    let Claim::Ready(claimed) = store.claim("a", now).expect("io") else {
+        panic!("claimable again");
     };
-    store.enqueue(record("a", "s1", now), caps).expect("io");
-    assert!(matches!(
-        store.claim("a", now).expect("io"),
-        Claim::Ready(_)
-    ));
-    store
-        .fail_next_dead_sync
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    let dead = Settle::Dead {
-        reason: DeadReason::Gone,
-        status: Some("http_4xx"),
-    };
-    let settled = store.settle("a", now, dead, now, ROOMY).expect("settled");
-    assert!(
-        settled.buried,
-        "the dead letter is in place, so it is reported"
-    );
-    assert!(store.dead_letter_by_id("a").is_some());
-    assert!(
-        matches!(store.claim("a", now).expect("io"), Claim::Skip),
-        "a buried occurrence is never resent"
-    );
-}
-
-/// MIK-7805: a fan-out burial whose dead letter is renamed into place but
-/// whose directory sync fails is still a burial, so its receipt (and with it
-/// the governance record) is not dropped.
-#[test]
-fn a_fan_out_burial_whose_dead_letter_sync_fails_keeps_its_receipt() {
-    let dir = tempfile::tempdir().expect("dir");
-    let now = Utc::now();
-    let store = open_with(dir.path(), now, &["s1"]);
-    store
-        .fail_next_dead_sync
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    let settled = store
-        .dead_letter(record("a", "s1", now), DeadReason::Gone, now, ROOMY)
-        .expect("the burial is reported, not its sync failure");
-    assert!(settled.buried);
-    assert!(store.dead_letter_by_id("a").is_some());
-}
-
-/// MIK-7805 AC5: evictions that completed before a later one failed still
-/// reach the caller, so each keeps its governance record.
-#[test]
-fn an_eviction_that_fails_part_way_still_reports_the_ones_it_made() {
-    let dir = tempfile::tempdir().expect("dir");
-    let now = Utc::now();
-    let store = open_with(dir.path(), now, &["s1"]);
-    for (n, id) in ["x", "y"].iter().enumerate() {
-        let at = now + chrono::Duration::seconds(i64::try_from(n).expect("small"));
-        store
-            .dead_letter(record(id, "s1", at), DeadReason::Gone, at, ROOMY)
-            .expect("io");
-    }
-    // "y"'s dead letter cannot be unlinked: a directory stands in its place.
-    let y = dir.path().join("dead").join(OutboxRecord::file("y"));
-    std::fs::remove_file(&y).expect("rm");
-    std::fs::create_dir(&y).expect("block");
-    let policy = DeadPolicy {
-        max_records: 1,
-        ..ROOMY
-    };
-    let at = now + chrono::Duration::seconds(5);
-    let settled = store
-        .dead_letter(record("z", "s1", at), DeadReason::Gone, at, policy)
-        .expect("the burial stands");
-    assert!(settled.buried);
+    assert_eq!(claimed.record.attempt, 2, "numbers stay unique");
     assert_eq!(
-        settled
-            .evicted
-            .iter()
-            .map(|e| e.event_id.as_str())
-            .collect::<Vec<_>>(),
-        ["x"],
-        "x went before y failed"
+        claimed.record.sends(),
+        1,
+        "the refused claim was not a send"
     );
 }
+
+/// MIK-7944 .2: an `Unsent` settlement the disk refused still counts the
+/// claim as unsent, so a store fault on top of an audit outage burns no send.
+#[test]
+fn an_unsent_settlement_the_disk_refused_is_still_not_a_send() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    assert!(matches!(
+        store.claim("a", now).expect("io"),
+        Claim::Ready(_)
+    ));
+    // The outbox directory is gone, so writing the settlement fails.
+    let outbox = dir.path().join("outbox");
+    std::fs::remove_dir_all(&outbox).expect("rm");
+    let unsent = Settle::Unsent {
+        next: now,
+        status: "audit_unavailable",
+    };
+    assert!(store.settle("a", now, unsent, now, ROOMY).is_err());
+    std::fs::create_dir(&outbox).expect("mkdir");
+    let retry_at = now + super::SETTLE_RETRY;
+    let Claim::Ready(claimed) = store.claim("a", retry_at).expect("io") else {
+        panic!("pending again");
+    };
+    assert_eq!(claimed.record.attempt, 2, "numbers stay unique");
+    assert_eq!(
+        claimed.record.sends(),
+        1,
+        "the refused claim was not a send"
+    );
+}
+
+/// MIK-7944 .2: a record written before `unsent` existed loads with none.
+#[test]
+fn a_record_without_unsent_reads_as_none() {
+    let mut value = serde_json::to_value(record("a", "s1", Utc::now())).expect("json");
+    value.as_object_mut().expect("object").remove("unsent");
+    let read: OutboxRecord = serde_json::from_value(value).expect("an older record");
+    assert_eq!(read.unsent, 0);
+}
+
+#[path = "store_pending_burial_tests.rs"]
+mod burial;
 #[path = "store_pending_crash_tests.rs"]
 mod crash;
 #[path = "store_revive_tests.rs"]

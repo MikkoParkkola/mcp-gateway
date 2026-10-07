@@ -43,6 +43,12 @@ pub(crate) enum Settle {
         next: DateTime<Utc>,
         status: &'static str,
     },
+    /// Retried after a claim that sent nothing (the audit log refused): it
+    /// keeps its attempt number but does not count toward the attempt limit.
+    Unsent {
+        next: DateTime<Utc>,
+        status: &'static str,
+    },
     Dead {
         reason: DeadReason,
         status: Option<&'static str>,
@@ -469,8 +475,13 @@ impl Store {
             } else if let Some(left) = state.outbox.get_mut(event_id) {
                 left.state = OutboxState::Pending;
                 left.next_attempt_at = now + SETTLE_RETRY;
-                if let Settle::Dead { reason, .. } = outcome {
-                    left.dead_as = Some(reason);
+                match outcome {
+                    Settle::Dead { reason, .. } => left.dead_as = Some(reason),
+                    // Still not a send: the refusal counts even if its write failed.
+                    Settle::Unsent { .. } => left.unsent = left.unsent.saturating_add(1),
+                    Settle::Delivered | Settle::Retry { .. } => {}
+                }
+                if matches!(outcome, Settle::Dead { .. } | Settle::Unsent { .. }) {
                     // Best effort now; the next claim writes it in any case.
                     let _ = write_record(&self.outbox_dir, &OutboxRecord::file(event_id), &*left);
                 }
@@ -479,6 +490,7 @@ impl Store {
         let (delivered, error) = match outcome {
             Settle::Delivered => (true, None),
             Settle::Retry { status, .. }
+            | Settle::Unsent { status, .. }
             | Settle::Dead {
                 status: Some(status),
                 ..
@@ -516,7 +528,10 @@ impl Store {
                 state.outbox.remove(&event_id);
                 Ok(Settled::default())
             }
-            Settle::Retry { next, status } => {
+            Settle::Retry { next, status } | Settle::Unsent { next, status } => {
+                if matches!(outcome, Settle::Unsent { .. }) {
+                    record.unsent = record.unsent.saturating_add(1);
+                }
                 record.state = OutboxState::Pending;
                 record.next_attempt_at = next;
                 record.last_status = Some(status.to_owned());
