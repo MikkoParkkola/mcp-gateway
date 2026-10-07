@@ -194,8 +194,9 @@ backend.
 ## Residual risks, stated
 
 - `localhost` can be repointed by DNS or `/etc/hosts`. Accepted by the board.
-- `::ffff:127.0.0.1` (IPv4-mapped IPv6) is not `Ipv6Addr::is_loopback()` and is
-  refused. Not chased; an operator who hits it writes `127.0.0.1`.
+- `::ffff:127.0.0.1` (IPv4-mapped IPv6) is loopback since MIK-8059: the classifier
+  canonicalises the address first, so it reads as the `127.0.0.1` it maps, and any
+  other mapped address stays refused.
 - A backend whose plain-`http` non-loopback URL carries a benign query or a benign
   header now needs the opt-in line. Accepted, knowingly: that is the cost of the strict
   reading, and it is one line in the stanza that already declares the URL.

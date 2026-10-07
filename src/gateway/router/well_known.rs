@@ -72,8 +72,10 @@ pub(super) fn is_loopback_host(host: &str) -> bool {
     if bare.eq_ignore_ascii_case("localhost") {
         return true;
     }
+    // Canonical first, so an IPv4-mapped loopback (`::ffff:127.0.0.1`) is
+    // loopback, as the address it maps is, and any other mapped address is not.
     bare.parse::<std::net::IpAddr>()
-        .is_ok_and(|ip| ip.is_loopback())
+        .is_ok_and(|ip| ip.to_canonical().is_loopback())
 }
 
 /// The startup bind address as an RFC 9728 resource origin, or `None` when it

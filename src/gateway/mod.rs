@@ -95,8 +95,9 @@ pub use webhooks::WebhookRegistry;
 
 /// Where a credential may travel: `https://`, or `http://` to a loopback host,
 /// which never leaves the machine. Every cleartext-credential guard decides
-/// here, on [`is_loopback_host`], so no two of them can drift. A spelling the
-/// classifier does not know (`localhost.`, `[::ffff:127.0.0.1]`) is refused.
+/// here, on [`is_loopback_host`], so no two of them can drift. An IPv4-mapped
+/// loopback (`[::ffff:127.0.0.1]`) is loopback; a spelling the classifier does
+/// not know (`localhost.`) is refused.
 pub(crate) fn is_tls_or_loopback(url: &url::Url) -> bool {
     match url.scheme() {
         "https" => true,
