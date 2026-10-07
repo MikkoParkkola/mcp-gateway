@@ -573,8 +573,19 @@ impl BudgetEnforcer {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let micro = (cost_usd * 1_000_000.0) as u64;
 
-        let global = self.global_daily.add(micro);
         let budgets = &self.config.budgets;
+        // Before the adds, so the first spend of a day never finds yesterday's
+        // rows filling the cap. No entry guard is held: `retain` takes every
+        // shard lock.
+        if super::tally::sweep_due(&self.next_sweep, super::persistence::now_secs()) {
+            for (map, limits) in [
+                (&self.tool_daily, &budgets.per_tool),
+                (&self.key_daily, &budgets.per_key),
+            ] {
+                map.retain(|name, day| limits.contains_key(name) || day.is_current());
+            }
+        }
+        let global = self.global_daily.add(micro);
         let tool = add_capped(self.tool_maps(), tool_name, &budgets.per_tool, micro);
         let key = api_key_name.map(|key| add_capped(self.key_maps(), key, &budgets.per_key, micro));
         if self.observer.is_set() {
@@ -584,15 +595,6 @@ impl BudgetEnforcer {
                 micro,
                 [global, tool, key.unwrap_or(0)],
             );
-        }
-        // Every entry guard is dropped above: `retain` takes every shard lock.
-        if super::tally::sweep_due(&self.next_sweep, super::persistence::now_secs()) {
-            for (map, limits) in [
-                (&self.tool_daily, &budgets.per_tool),
-                (&self.key_daily, &budgets.per_key),
-            ] {
-                map.retain(|name, day| limits.contains_key(name) || day.is_current());
-            }
         }
     }
 
