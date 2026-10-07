@@ -3631,7 +3631,13 @@ fn spawn_health_loop(
                             // success, and rebuilds the transport on failure —
                             // the automatic equivalent of gateway_revive_server.
                             if let Err(e) = backend.health_probe(probe_timeout).await {
-                                warn!(backend = %backend.name, error = %e, "Health check failed");
+                                // A start in flight (perhaps a login) is a
+                                // skipped tick, not a failed check (MIK-7982).
+                                if e.is_authorization_wait() {
+                                    debug!(backend = %backend.name, error = %e, "Health check skipped");
+                                } else {
+                                    warn!(backend = %backend.name, error = %e, "Health check failed");
+                                }
                             }
                         }
                     }

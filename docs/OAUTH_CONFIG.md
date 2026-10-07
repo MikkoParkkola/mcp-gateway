@@ -206,6 +206,31 @@ Set `RUST_LOG=info` (the default) to see the full discovery + callback-server
 now emitted at INFO level so operators can complete the browser flow even
 when the gateway is running detached.
 
+### The authorization window (MIK-7982)
+
+A login waits at most **300 s** for the browser callback. If nobody completes
+it in that time, the callback port is released and every start waiting on
+that login ends with `authorization for backend '<name>' was not completed
+within 300s; retry to open a new login, then complete it in the browser`. The window is not
+the backend's `timeout` (that bounds one request; a login with MFA routinely
+takes longer) and is not configurable in 4.0. With every HTTP step of the flow
+bounded at 30 s, a start's whole OAuth phase takes at most about 420 s.
+
+- **One login per backend.** Starts that arrive while a login is open share
+  it: one browser tab, one window, one outcome. A start after a login that
+  ended unfinished, cancelled or refused begins a fresh one.
+- **Not a backend failure.** A login in progress, unfinished or cancelled is
+  never counted by the circuit breaker, and a call whose own deadline passes
+  while it waits on the login reports `authorization ... is still in progress`
+  rather than a timeout.
+- **Restart and shutdown end it.** A forced restart (the web UI's revive
+  action) and a config reload that retires the backend cancel the open login
+  and free its callback port before anything else. The health loop's rebuild
+  never ends a login: while one is open it skips the rebuild.
+- **Health checks never log in.** A health probe that would need a login, or
+  that finds a start in flight, skips its tick instead of opening a browser or
+  restarting the backend.
+
 ---
 
 ## See Also

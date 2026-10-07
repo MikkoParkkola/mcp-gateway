@@ -7,6 +7,7 @@ use super::super::router::AppState;
 use super::errors::auth_required;
 use crate::control_plane::role_mapping::ControlPlaneBaseSource;
 use crate::control_plane::{ControlPlaneAction, ControlPlaneRbac};
+use crate::gateway::routes;
 use crate::key_server::oidc::VerifiedIdentity;
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
@@ -48,12 +49,12 @@ use snapshot::{
 /// refuse with 409 because dispatch never reads the store (E2-min).
 pub fn control_plane_router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/ui/api/control-plane", get(control_plane_snapshot))
-        .route("/ui/api/control-plane/grants", post(mutate_grant))
-        .route("/ui/api/control-plane/policies", post(mutate_policy))
-        .route("/ui/api/control-plane/decisions", post(resolve_decision))
+        .route(routes::UI_CONTROL_PLANE, get(control_plane_snapshot))
+        .route(routes::UI_CONTROL_PLANE_GRANTS, post(mutate_grant))
+        .route(routes::UI_CONTROL_PLANE_POLICIES, post(mutate_policy))
+        .route(routes::UI_CONTROL_PLANE_DECISIONS, post(resolve_decision))
         .route(
-            "/ui/api/control-plane/export-status",
+            routes::UI_CONTROL_PLANE_EXPORT_STATUS,
             get(export_status_handler),
         )
         // Governance data is refused to a caller that presented no credential,
