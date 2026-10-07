@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! HTTP router and handlers
 
+use crate::gateway::routes;
 use std::sync::Arc;
 
 use axum::{
@@ -83,6 +84,8 @@ mod direct_guards_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
 #[cfg(test)]
+mod direct_modern_shape_tests;
+#[cfg(test)]
 mod direct_notification_credential_tests;
 #[cfg(test)]
 mod direct_notification_refusal_tests;
@@ -112,6 +115,8 @@ mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
+#[cfg(test)]
+mod webhook_mount_tests;
 /// The meta route's post-judge delivery record, shared with stdio (MIK-7920).
 pub(in crate::gateway) use judged_answer::record_delivery as record_judged_delivery;
 #[cfg(test)]
@@ -386,7 +391,7 @@ fn metrics_route(config: &crate::config::Config) -> Router {
         .resolve_metrics_token(&config.env_overlay())
         .map(Arc::<str>::from);
     Router::new()
-        .route("/metrics", get(handlers::metrics_handler))
+        .route(routes::METRICS, get(handlers::metrics_handler))
         .with_state(token)
 }
 
@@ -441,7 +446,7 @@ pub(crate) fn create_router_with_accounts(
 
     // JWKS endpoint — unauthenticated, no agent auth required.
     let jwks_route = Router::new()
-        .route("/.well-known/jwks.json", get(jwks_handler))
+        .route(routes::JWKS, get(jwks_handler))
         .with_state(Arc::clone(&state.gateway_key_pair));
 
     // RFC 9728 protected-resource metadata — unauthenticated (clients fetch it
@@ -457,7 +462,7 @@ pub(crate) fn create_router_with_accounts(
     let protected_resource_route =
         Router::new()
             .route(
-                "/.well-known/oauth-protected-resource",
+                routes::PROTECTED_RESOURCE,
                 get({
                     let bind_origin = bind_origin.clone();
                     move |axum::extract::State(state): axum::extract::State<Arc<AppState>>| {
@@ -472,28 +477,28 @@ pub(crate) fn create_router_with_accounts(
 
     #[allow(unused_mut)]
     let mut routes = Router::new()
-        .route("/health", get(handlers::health_handler))
+        .route(routes::HEALTH, get(handlers::health_handler))
         // Orchestrator probes answer from the process alone. `/health` fails
         // when any backend is down, and probing it restarted every replica for
         // one flapping upstream. Reaching this handler means the config loaded
         // and the listener is up; readiness adds the audit log (D1-f) and the
         // startup capability scan (MIK-7268).
         // Graceful shutdown closes the listener, which is how both turn red.
-        .route("/livez", get(probe_ok))
-        .route("/readyz", get(readyz))
-        .route("/api/costs", get(backend_handlers::costs_handler))
+        .route(routes::LIVEZ, get(probe_ok))
+        .route(routes::READYZ, get(readyz))
+        .route(routes::API_COSTS, get(backend_handlers::costs_handler))
         .route(
-            "/mcp",
+            routes::MCP,
             post(handlers::meta_mcp_handler)
                 .get(handlers::mcp_sse_handler)
                 .delete(handlers::mcp_delete_handler),
         )
         // No sub-path alias: one with a wildcard tail never served, because
         // `backend_handler` extracts the name alone and answered 500 (MIK-7650).
-        .route("/mcp/{name}", post(backend_handlers::backend_handler))
+        .route(routes::MCP_BACKEND, post(backend_handlers::backend_handler))
         // Helpful error for deprecated SSE endpoint (common misconfiguration)
         .route(
-            "/sse",
+            routes::SSE,
             get(handlers::sse_deprecated_handler).post(handlers::sse_deprecated_handler),
         );
 

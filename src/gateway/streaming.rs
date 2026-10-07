@@ -69,6 +69,9 @@ pub(crate) struct DeliveryWatch {
     outstanding: std::sync::atomic::AtomicIsize,
     written: std::sync::atomic::AtomicBool,
     failed: tokio::sync::Notify,
+    /// A bridged prompt's relay receipt (MIK-7939): committed by the first
+    /// copy written, never for a copy withheld, skipped or dropped.
+    commit: parking_lot::Mutex<Option<crate::gateway::input_bridge::DeliveryCommit>>,
 }
 
 impl DeliveryWatch {
@@ -87,6 +90,13 @@ impl DeliveryWatch {
         use std::sync::atomic::Ordering::{AcqRel, Release};
         if written {
             self.written.store(true, Release);
+            // Held while the work runs: another copy's stream waits here and
+            // cannot write the prompt before its receipt is recorded. The
+            // work is an in-memory record that never touches this watch.
+            let mut slot = self.commit.lock();
+            if let Some(commit) = slot.take() {
+                commit.commit();
+            }
         }
         self.settle(self.outstanding.fetch_sub(1, AcqRel).saturating_sub(1));
     }
@@ -117,6 +127,14 @@ impl SessionFrame {
     #[must_use]
     pub fn into_inner(self) -> TaggedNotification {
         self.note
+    }
+
+    /// Report this copy written, as the SSE stream does past its gates.
+    #[cfg(test)]
+    pub(crate) fn written(&self) {
+        if let Some(watch) = &self.watch {
+            watch.report(true);
+        }
     }
 }
 
@@ -328,6 +346,11 @@ impl NotificationMultiplexer {
     /// run while the other is wedged, and the divergence is invisible —
     /// nothing errors when a callback is simply never called.
     pub fn spawn_reaper_on(self: &Arc<Self>, lifecycle: Arc<SessionLifecycle>) {
+        // The one place the two meet, so every lifecycle that can end a
+        // session can also tell a call whether its session still exists
+        // (MIK-7996). A dropped multiplexer is a shutdown: every id is live.
+        let probe = Arc::downgrade(self);
+        lifecycle.set_liveness(move |id| probe.upgrade().is_none_or(|mux| mux.has_session(id)));
         let weak = Arc::downgrade(self);
         let ttl = self.config.session_ttl;
         let interval = self.config.session_reaper_interval;
@@ -629,19 +652,23 @@ impl NotificationMultiplexer {
     }
 
     /// [`Self::send_to_session`] for a server-to-client request: the watch
-    /// reports whether any queued copy is written (MIK-7975 WAIT.1). `None`
-    /// when nothing was queued.
+    /// reports whether any queued copy is written (MIK-7975 WAIT.1), and runs
+    /// `commit` when one is (MIK-7939). `None` when nothing was queued.
     pub(crate) fn send_request_to_session(
         &self,
         session_id: &str,
         notification: TaggedNotification,
+        commit: Option<crate::gateway::input_bridge::DeliveryCommit>,
     ) -> Option<Arc<DeliveryWatch>> {
         if session_id.is_empty() {
             return None;
         }
         let sessions = self.sessions.read();
         let session = sessions.get(session_id)?;
-        let watch = Arc::new(DeliveryWatch::default());
+        let watch = Arc::new(DeliveryWatch {
+            commit: parking_lot::Mutex::new(commit),
+            ..DeliveryWatch::default()
+        });
         self.enqueue(session, notification, None, Some(Arc::clone(&watch)))
             .ok()
             .map(|_| watch)

@@ -19,8 +19,6 @@ use crate::personal_accounts::{
     JourneyError, JourneyLimits, JourneyRefusal, JourneyService, JourneyStarted,
 };
 
-pub(super) const START: &str = "/accounts/v1/journeys/{id}/start";
-
 /// The gateway's own pages. Constant text only, so nothing needs escaping and
 /// nothing a request carries is ever rendered.
 #[derive(Clone, Copy)]

@@ -619,7 +619,9 @@ impl MetaMcp {
     /// A prompt handed to a client, as it is recorded: its own text, since
     /// that is what the client receives, plus the context-integrity verdict
     /// read from a classified copy (an enforcing gate may have rewritten or
-    /// withheld that copy, so it is never the recorded text).
+    /// withheld that copy, so it is never the recorded text). Both are the
+    /// form the caller is handed, so text delivery strips (the chain member,
+    /// a clamped scope) sets no verdict and no audit class (MIK-7942).
     pub(crate) fn recorded_prompt(
         &self,
         (server, tool): (&str, &str),
@@ -627,11 +629,10 @@ impl MetaMcp {
         trace_id: &str,
         prompt: &Value,
     ) -> Value {
-        let (classified, _) =
-            self.apply_context_integrity(server, tool, api_key_name, trace_id, prompt.clone());
-        // Recorded in the form the caller is handed.
         let mut recorded = prompt.clone();
         delivered_form(&mut recorded);
+        let (classified, _) =
+            self.apply_context_integrity(server, tool, api_key_name, trace_id, recorded.clone());
         let Some(verdict) = classified.get("_context_integrity") else {
             return recorded;
         };
@@ -647,7 +648,7 @@ impl MetaMcp {
     }
 }
 
-/// `value` as a receipt for `who` under `fw`; `None` with relay detection off/// `value` as a receipt for `who` under `fw`; `None` with relay detection off
+/// `value` as a receipt for `who` under `fw`; `None` with relay detection off
 /// or outside a collector.
 #[cfg(feature = "firewall")]
 fn receipt_with(
@@ -657,7 +658,12 @@ fn receipt_with(
     value: &Value,
 ) -> Option<Receipt> {
     RELAY_RECEIPTS.try_with(|_| ()).ok()?;
-    let digest = fw.delivery_digest(server, tool, value)?;
+    // MIK-7994: capped without the members the gateway wrote on this call. A
+    // plan step's receipt is only retained later, never rebuilt, so text the
+    // cap drops here for the gateway's members is gone for good.
+    let mut value = value.clone();
+    super::gateway_writes::strip(&mut value, super::gateway_writes::Layer::Value);
+    let digest = fw.delivery_digest(server, tool, &value)?;
     Some(Receipt {
         key: who.key.to_owned(),
         keyed: who.keyed,
@@ -679,8 +685,26 @@ pub(crate) fn stage_with(
     value: &Value,
 ) {
     if let Some(receipt) = receipt_with(fw, who, target, value) {
+        // Only a value a receipt was built from, so a row that sees nothing
+        // staged also catches receipt construction switched off.
+        #[cfg(test)]
+        STAGED_FOR_TEST.with(|staged| staged.borrow_mut().push(value.clone()));
         let _ = RELAY_RECEIPTS.try_with(|receipts| receipts.borrow_mut().push(receipt));
     }
+}
+
+#[cfg(all(test, feature = "firewall"))]
+thread_local! {
+    /// Every value the direct route staged on this thread, so a route-level
+    /// row can read what a receipt was built from (MIK-8022.FOLLOW.1).
+    static STAGED_FOR_TEST: std::cell::RefCell<Vec<Value>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Take what [`stage_with`] staged on this thread since the last take.
+#[cfg(all(test, feature = "firewall"))]
+pub(crate) fn take_staged_for_test() -> Vec<Value> {
+    STAGED_FOR_TEST.with(|staged| std::mem::take(&mut *staged.borrow_mut()))
 }
 
 /// Record every staged receipt into `fw` when `delivered`; drop them either way.
@@ -761,6 +785,8 @@ impl crate::gateway::input_bridge::ClientChannel for RecordingChannel<'_> {
 
 #[path = "relay_delivered.rs"]
 mod delivered;
+#[cfg(feature = "firewall")]
+pub(crate) use delivered::strip_gateway_stamps;
 pub(crate) use delivered::{AnswerShape, GatewayStamps};
 
 #[cfg(all(test, feature = "firewall"))]

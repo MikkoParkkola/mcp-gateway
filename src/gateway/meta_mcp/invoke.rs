@@ -410,6 +410,8 @@ impl MetaMcp {
         })?;
         #[cfg(feature = "cost-governance")]
         let cost_warnings = std::mem::take(&mut admission.warnings);
+        #[cfg(not(feature = "cost-governance"))]
+        let admission = dispatch_guards::Admission::default();
 
         let prompt_cache_key: Option<String> = derive_prompt_cache_key(args, session_id);
 
@@ -481,10 +483,10 @@ impl MetaMcp {
             caller.scope(),
             backend.clone(),
             &chain_slot,
+            &admission,
         ))
         .await;
-        // The spend is recorded: give the reservation back.
-        #[cfg(feature = "cost-governance")]
+        // The spend is settled; an unsettled reservation is given back here.
         drop(admission);
 
         // A raw-receipt chain refusal is the answer, not a tool failure (D3).
@@ -621,6 +623,15 @@ impl MetaMcp {
                 return Err(unbindable_continuation(server, tool));
             };
             result["requestState"] = json!(envelope);
+            // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
+            // must not take the receipt's capped budget from the backend's
+            // prompt. Noted at the value layer: `tool_value` still reads
+            // `requestState` to know the answer is interim, not wrapped.
+            gateway_writes::note(
+                gateway_writes::Layer::Value,
+                gateway_writes::REQUEST_STATE,
+                &result,
+            );
         }
 
         let call = dispatch_guards::BackendCall {

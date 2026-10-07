@@ -379,6 +379,9 @@ pub use write::{
     ConfigMutation, ConfigWriteError, mutate_config_and_reload, write_config_and_reload,
     write_config_and_reload_outcome,
 };
+// Only the web UI writes in refusing mode.
+#[cfg(feature = "webui")]
+pub(crate) use write::{MutateError, mutate_config_and_reload_with};
 
 mod env_poll;
 // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
@@ -395,6 +398,8 @@ mod watch_chain;
 mod c4_enable_tests;
 #[cfg(test)]
 mod c9_file_ref_tests;
+#[cfg(test)]
+mod webhook_base_path_reload_tests;
 
 #[cfg(test)]
 mod grant_change_trigger_tests;

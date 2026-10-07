@@ -18,6 +18,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use notify::event::{EventKind, ModifyKind};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
 use tracing::{info, warn};
@@ -30,8 +31,35 @@ const MAX_HOPS: usize = 40;
 /// How often a chain that cannot be resolved is tried again without an event.
 pub(super) const CHAIN_RETRY: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How often a resolved chain is resolved again without an event. Events
+/// off the chain no longer wake the task (MIK-8013), so a link changed in the
+/// moment between a resolve and its names landing would otherwise go unheard
+/// until the next event on the chain.
+const CHAIN_REFRESH: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A resolved chain: the directories to watch, the file it ends at, and the
+/// paths whose change can move it.
+pub(super) struct Chain {
+    pub(super) dirs: BTreeSet<PathBuf>,
+    pub(super) end: PathBuf,
+    /// Each hop's file and each followed directory link, under its canonical
+    /// directory: the paths notify reports for a write, rename or retarget
+    /// that moves the chain (MIK-8013).
+    pub(super) names: BTreeSet<PathBuf>,
+}
+
 /// The directories a config's link chain runs through, each canonical, and
-/// where it ends.
+/// where it ends. See [`resolve_chain`].
+///
+/// # Errors
+///
+/// As [`resolve_chain`].
+pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, PathBuf)> {
+    resolve_chain(named).map(|chain| (chain.dirs, chain.end))
+}
+
+/// The directories a config's link chain runs through, each canonical, where
+/// it ends, and the paths on it.
 ///
 /// `named` is the path as the operator gave it, made absolute but with its
 /// links intact: canonicalizing it first would erase a release link such as
@@ -50,8 +78,9 @@ pub(super) const CHAIN_RETRY: std::time::Duration = std::time::Duration::from_se
 /// Returns the I/O error of a hop that cannot be resolved, or an error past
 /// [`MAX_HOPS`] link expansions. A caller keeps its last good set on error:
 /// mid-update (the old directory being deleted) a hop can briefly fail.
-pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, PathBuf)> {
+pub(super) fn resolve_chain(named: &Path) -> std::io::Result<Chain> {
     let mut dirs = BTreeSet::new();
+    let mut entries = BTreeSet::new();
     let mut hop = std::path::absolute(named)?;
     let mut steps = 0;
     let mut expand = || {
@@ -76,6 +105,10 @@ pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, Pa
             let holder = watch_dir_of(&dir);
             let holder_real = std::fs::canonicalize(&holder)?;
             let target = std::fs::read_link(&dir)?;
+            // A link is never named `..`, so it always has a file name.
+            if let Some(link) = dir.file_name() {
+                entries.insert(holder_real.join(link));
+            }
             dirs.insert(holder_real);
             dir = if target.is_absolute() {
                 target
@@ -86,6 +119,7 @@ pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, Pa
         let real_dir = std::fs::canonicalize(&dir)?;
         let file = real_dir.join(&name);
         dirs.insert(real_dir);
+        entries.insert(file.clone());
         // Ask for the file type first: `read_link` on a plain file is
         // `InvalidInput` on unix but os error 4390 (not a reparse point) on
         // Windows, so its error kind cannot tell "not a link" from a fault.
@@ -105,7 +139,13 @@ pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, Pa
                 };
             }
             // Not a link: the chain ends at this file.
-            Ok(None) => return Ok((dirs, file)),
+            Ok(None) => {
+                return Ok(Chain {
+                    dirs,
+                    end: file,
+                    names: entries,
+                });
+            }
             Err(e) => {
                 return Err(std::io::Error::new(
                     e.kind(),
@@ -140,6 +180,88 @@ pub(super) fn startup_dirs(named: &Path) -> BTreeSet<PathBuf> {
     )
 }
 
+/// The paths an event must touch to wake the rewatch task (MIK-8013).
+///
+/// Each wake re-resolves the whole chain, so a writer beside the config would
+/// otherwise cost a resolve per write. The notify callback reads this; the
+/// rewatch task replaces it after each resolve with the chain's
+/// [`Chain::names`] and its watched directories. `None` (no chain resolved
+/// yet, or the last resolve failed) wakes on every event, as before.
+///
+/// A link changed between a resolve reading it and the set landing is heard
+/// at the next event on the chain, or at the latest [`CHAIN_REFRESH`] later.
+#[derive(Default)]
+pub(super) struct ChainNames {
+    names: Mutex<Option<BTreeSet<PathBuf>>>,
+    /// Paths a passed event removed or renamed. A watched directory among
+    /// them lost its kernel watch, or the watch left with the renamed inode,
+    /// so the rewatch task drops it from the ledger to watch it anew
+    /// (MIK-8024). Locked alone, or after [`ChainWatch::ledger`], never
+    /// before it.
+    gone: Mutex<BTreeSet<PathBuf>>,
+    /// The paths of every event that passed (tests read it).
+    #[cfg(test)]
+    pub(super) passed: Mutex<Vec<Vec<PathBuf>>>,
+    /// Events judged and dropped (tests read it).
+    #[cfg(test)]
+    pub(super) dropped: std::sync::atomic::AtomicUsize,
+}
+
+impl ChainNames {
+    /// Whether `event` can concern the config: a rescan (events were lost),
+    /// or [`ChainNames::may_move_chain`] on its paths.
+    pub(super) fn concerns(&self, event: &notify::Event) -> bool {
+        let concerns = event.need_rescan() || self.may_move_chain(&event.paths);
+        #[cfg(test)]
+        if concerns {
+            self.passed.lock().push(event.paths.clone());
+        } else {
+            self.dropped
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        concerns
+    }
+
+    /// Whether an event on `paths` can have moved the chain: one of them is a
+    /// hop, a followed directory link or a watched directory, or there is no
+    /// path or no resolved chain to judge by.
+    ///
+    /// Linux only: inotify reports each path as the watched directory, byte
+    /// for byte as it was registered, joined with the entry's name as stored,
+    /// so a recorded path matches exactly. Elsewhere an entry can be reported
+    /// under another spelling than the one recorded (case, Unicode
+    /// normalization, an 8.3 short name), so every event still wakes the
+    /// task, as before; enabling the filter there needs that re-verified.
+    pub(super) fn may_move_chain(&self, paths: &[PathBuf]) -> bool {
+        !cfg!(target_os = "linux")
+            || paths.is_empty()
+            || self
+                .names
+                .lock()
+                .as_ref()
+                .is_none_or(|names| paths.iter().any(|path| names.contains(path)))
+    }
+
+    /// Record the paths of a removal or a rename, which can end a watched
+    /// directory's watch. Other events cannot, and cost nothing here.
+    pub(super) fn note_gone(&self, event: &notify::Event) {
+        if matches!(
+            event.kind,
+            EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+        ) {
+            self.gone.lock().extend(event.paths.iter().cloned());
+        }
+    }
+
+    fn take_gone(&self) -> BTreeSet<PathBuf> {
+        std::mem::take(&mut *self.gone.lock())
+    }
+
+    fn set(&self, names: Option<BTreeSet<PathBuf>>) {
+        *self.names.lock() = names;
+    }
+}
+
 /// The watcher and the directories it has actually been told to watch.
 ///
 /// The ledger records a directory only after `watch()` succeeded and drops it
@@ -153,6 +275,8 @@ pub(super) struct ChainWatch {
     /// every wake does not repeat it. Cleared on success, and pruned when the
     /// directory leaves the chain.
     warned: Mutex<BTreeSet<PathBuf>>,
+    /// Shared with the notify callback, which wakes the task only for these.
+    pub(super) names: Arc<ChainNames>,
     /// Wakes the rewatch task has finished handling (tests wait on it).
     #[cfg(test)]
     pub(super) wakes_handled: std::sync::atomic::AtomicUsize,
@@ -162,11 +286,13 @@ pub(super) struct ChainWatch {
 }
 
 impl ChainWatch {
-    pub(super) fn new(watcher: RecommendedWatcher) -> Arc<Self> {
+    /// The watch ledger for `watcher`, sharing `names` with its callback.
+    pub(super) fn with_names(watcher: RecommendedWatcher, names: Arc<ChainNames>) -> Arc<Self> {
         Arc::new(Self {
             watcher: Mutex::new(Some(watcher)),
             ledger: Mutex::new(BTreeSet::new()),
             warned: Mutex::new(BTreeSet::new()),
+            names,
             #[cfg(test)]
             wakes_handled: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
@@ -212,6 +338,34 @@ impl ChainWatch {
         *ledger != before
     }
 
+    /// Drop each of `gone` that the ledger holds, and its watch, so the next
+    /// [`ChainWatch::reconcile`] watches it again if the chain still runs
+    /// through it. A directory deleted and recreated at the same path lost its
+    /// watch with the old one, and the ledger would otherwise keep the dead
+    /// entry and never watch the new directory (MIK-8024).
+    fn forget(&self, gone: &BTreeSet<PathBuf>) {
+        let mut guard = self.watcher.lock();
+        let mut ledger = self.ledger.lock();
+        for dir in gone {
+            if ledger.remove(dir)
+                && let Some(watcher) = guard.as_mut()
+            {
+                // Deleted: the watch is already gone. Renamed: it followed
+                // the old directory, and is dropped here.
+                let _ = watcher.unwatch(dir);
+            }
+        }
+    }
+
+    /// Keep only the recorded paths the ledger holds. While the chain cannot
+    /// be resolved every event passes and nothing drains the record, so this
+    /// bounds it by the ledger's size; the paths kept are the only ones
+    /// [`ChainWatch::forget`] acts on.
+    fn keep_gone_watched(&self) {
+        let ledger = self.ledger.lock();
+        self.names.gone.lock().retain(|path| ledger.contains(path));
+    }
+
     /// The ledger: the directories actually watched.
     pub(super) fn watched_now(&self) -> BTreeSet<PathBuf> {
         self.ledger.lock().clone()
@@ -251,6 +405,9 @@ pub(super) fn spawn_rewatch_task(
         let mut broken = false;
         let mut retry = tokio::time::interval(retry_every);
         retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut refresh =
+            tokio::time::interval_at(tokio::time::Instant::now() + CHAIN_REFRESH, CHAIN_REFRESH);
+        refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // Env files are polled by content, never watched (#1286): a watch
         // goes stale when a link in the path is retargeted.
         let mut env_poll = tokio::time::interval(env_poll_every);
@@ -264,6 +421,7 @@ pub(super) fn spawn_rewatch_task(
                     }
                 }
                 _ = retry.tick(), if broken => {}
+                _ = refresh.tick() => {}
                 _ = env_poll.tick() => {
                     // No memo: a file that differs is re-triggered every tick
                     // until a reload succeeds; the debounce coalesces them.
@@ -284,9 +442,23 @@ pub(super) fn spawn_rewatch_task(
                     continue;
                 }
             }
-            let (wanted, end) = match chain_dirs(&named) {
-                Ok(chain_now) => chain_now,
+            let (wanted, end) = match resolve_chain(&named) {
+                Ok(Chain {
+                    dirs,
+                    end,
+                    names: mut filter,
+                }) => {
+                    // Before the watches change: a new directory's events
+                    // cannot arrive before its watch, so they meet these names.
+                    // A watched directory itself (deleted, moved) wakes too.
+                    filter.extend(dirs.iter().cloned());
+                    chain.names.set(Some(filter));
+                    (dirs, end)
+                }
                 Err(e) => {
+                    // Without a chain nothing says which events matter.
+                    chain.names.set(None);
+                    chain.keep_gone_watched();
                     if !broken {
                         warn!(error = %e, "Config watcher: cannot resolve the config's link chain; keeping the last watches");
                     }
@@ -298,13 +470,16 @@ pub(super) fn spawn_rewatch_task(
                     continue; // keep the last good set; the timer and the next event retry
                 }
             };
-            broken = false;
+            // A chain that was broken may have healed with another file at its
+            // end, read by nobody while it could not be resolved (MIK-8024).
+            let healed = std::mem::replace(&mut broken, false);
+            chain.forget(&chain.names.take_gone());
             let rewatched = chain.reconcile(&wanted);
             #[cfg(test)]
             chain
                 .wakes_handled
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if rewatched || last_end.as_ref() != Some(&end) {
+            if rewatched || healed || last_end.as_ref() != Some(&end) {
                 info!(
                     end = %end.display(),
                     directories = wanted.len(),
@@ -322,6 +497,10 @@ pub(super) fn spawn_rewatch_task(
 #[cfg(test)]
 #[path = "watch_chain_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "watch_chain_filter_tests.rs"]
+mod filter_tests;
 
 #[cfg(test)]
 mod plain_file_tests {

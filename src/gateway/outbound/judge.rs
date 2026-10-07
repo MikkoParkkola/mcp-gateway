@@ -15,7 +15,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::{Admission, Assessment, OutboundFrame, Payload};
-use crate::protocol::JsonRpcResponse;
+use crate::protocol::{JsonRpcError, JsonRpcResponse};
 use crate::security::firewall::Firewall;
 use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuard};
 use crate::security::tenant_reads::{ReadAttribution, ReadTicket, ReadVerdict, RejectionEvidence};
@@ -44,25 +44,46 @@ pub(crate) fn attribute(firewall: &Firewall, value: &Value) -> ReadAttribution {
 
 /// The document a response or notification is serialized as: the one value
 /// the sink writes, so a new field is in the scan by default (MIK-7883).
-/// Serialization clamps `cacheScope` to `private`; the gateway wrote that
-/// value, so it is no evidence of a tenant. The raw `result` and `error.data`
-/// are put back, so the document names what the backend sent, not the clamp.
+/// A response's `result` and `error.data` are `null` placeholders here: `scan`
+/// walks the raw values already, and serializing them would copy a large
+/// result twice (MIK-7942) and read the `cacheScope` clamp, the gateway's own
+/// value, as evidence. Their member names stay; [`slot_name_tenants`] matches
+/// a configured key equal to one against the raw value.
 fn emitted_document(payload: &Payload) -> Option<Value> {
     match payload {
         Payload::Response(response) => {
-            let mut document = serde_json::to_value(response).ok()?;
-            if let (Some(slot), Some(raw)) = (document.get_mut("result"), &response.result) {
-                *slot = raw.clone();
-            }
-            let raw_data = response.error.as_ref().and_then(|e| e.data.as_ref());
-            if let (Some(slot), Some(raw)) = (document.pointer_mut("/error/data"), raw_data) {
-                *slot = raw.clone();
-            }
-            Some(document)
+            let placeholder = |slot: &Option<Value>| slot.as_ref().map(|_| Value::Null);
+            let view = JsonRpcResponse {
+                jsonrpc: response.jsonrpc.clone(),
+                id: response.id.clone(),
+                result: placeholder(&response.result),
+                error: response.error.as_ref().map(|e| JsonRpcError {
+                    code: e.code,
+                    message: e.message.clone(),
+                    data: placeholder(&e.data),
+                }),
+                confirmation_refusal: false,
+                delivery_refusal: false,
+                discovery_inspected: false,
+                chain_source: crate::protocol::ChainSource::NotEligible,
+                chain_upstream: None,
+            };
+            serde_json::to_value(view).ok()
         }
         Payload::Notification(note) => serde_json::to_value(note).ok(),
         _ => None,
     }
+}
+
+/// The tenants a configured key equal to `result` or to an error's `data`
+/// names through the raw value: the one match the placeholders hide.
+fn slot_name_tenants(guard: &TenantGuard, response: &JsonRpcResponse) -> Vec<String> {
+    let result = response.result.as_ref();
+    let data = response.error.as_ref().and_then(|e| e.data.as_ref());
+    [("result", result), ("data", data)]
+        .into_iter()
+        .filter_map(|(key, value)| guard.key_names_tenant(key, value?))
+        .collect()
 }
 
 /// One walk over everything the payload emits but `jsonrpc` and `id`.
@@ -105,6 +126,9 @@ fn scan(guard: &TenantGuard, payload: &Payload) -> ReadAttribution {
         let (more, unread) = guard.scan_document(&document, &["jsonrpc", "id"]);
         tenants.extend(more);
         uninspected |= unread;
+    }
+    if let Payload::Response(response) = payload {
+        tenants.extend(slot_name_tenants(guard, response));
     }
     ReadAttribution::of(tenants, uninspected)
 }
@@ -276,8 +300,11 @@ pub(crate) fn admit_stream_item(
     attribution.extend(&ReadAttribution::of(tenants, uninspected));
     // A non-message event is written as the whole tagged notification, so its
     // `source` and `event_id` are scanned with their member names (MIK-7883).
+    // Its `data` was scanned above (minus `jsonrpc` and `id`): only the name
+    // match at the member `data` is left (MIK-7942).
     if let Some(wrapper) = wrapper {
-        let (tenants, uninspected) = guard.scan_document(wrapper, &["jsonrpc", "id"]);
+        let (mut tenants, uninspected) = guard.scan_document(wrapper, &["data"]);
+        tenants.extend(guard.key_names_tenant("data", data));
         attribution.extend(&ReadAttribution::of(tenants, uninspected));
     }
     if let Some(hidden) = hidden {
@@ -299,4 +326,64 @@ pub(crate) fn admit_stream_item(
         key: key.map(Arc::from),
         delivery: None,
     })
+}
+
+#[cfg(test)]
+mod emitted_document_tests {
+    use serde_json::{Value, json};
+
+    use super::{Payload, emitted_document};
+    use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId};
+
+    /// The member names of `doc` and of its `error` object.
+    fn key_set(doc: &Value) -> Vec<String> {
+        let mut keys: Vec<String> = doc
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, _)| k.clone())
+            .collect();
+        if let Some(error) = doc.get("error").and_then(Value::as_object) {
+            keys.extend(error.keys().map(|k| format!("error.{k}")));
+        }
+        keys.sort();
+        keys
+    }
+
+    /// Every field written out: a new serialized member fails to compile
+    /// here until it is set, and then the pin below checks the view has it.
+    fn every_member(result: Option<Value>, data: Option<Value>) -> JsonRpcResponse {
+        JsonRpcResponse {
+            jsonrpc: "2.0".to_owned(),
+            id: Some(RequestId::Number(1)),
+            result,
+            error: Some(JsonRpcError {
+                code: -32000,
+                message: "no".to_owned(),
+                data,
+            }),
+            confirmation_refusal: true,
+            delivery_refusal: true,
+            discovery_inspected: true,
+            chain_source: crate::protocol::ChainSource::NotEligible,
+            chain_upstream: None,
+        }
+    }
+
+    /// MIK-7942 D6.CATALOGUE.8 (pin b): the placeholder view serializes every
+    /// envelope member the sink writes for the same response.
+    #[test]
+    fn the_view_keeps_every_envelope_member() {
+        let responses = [
+            every_member(Some(json!({"a": 1})), Some(json!([1]))),
+            every_member(Some(Value::Null), Some(Value::Null)),
+            JsonRpcResponse::success(RequestId::Number(2), json!({"a": 1})),
+            JsonRpcResponse::error(None, -32601, "missing"),
+        ];
+        for response in responses {
+            let written = serde_json::to_value(&response).expect("serializes");
+            let view = emitted_document(&Payload::Response(response)).expect("a document");
+            assert_eq!(key_set(&view), key_set(&written), "{written}");
+        }
+    }
 }
