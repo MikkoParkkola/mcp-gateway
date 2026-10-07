@@ -340,9 +340,11 @@ pub(super) async fn mcp_delete_handler(
         Err(refusal) => return gateway_reply(refusal),
     };
 
-    let status = match session_id {
-        Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
-            let session = session_fp(id);
+    let removed = session_id.and_then(|id| state.multiplexer.remove_session_for(id, &owner));
+    let status = match (session_id, removed) {
+        (Some(id), Some(removed)) => {
+            // Read before the macro so its count is graded (MIK-7725).
+            let session = removed.fp();
             info!(session_id = %session, "Session terminated by client");
             // The id is dead from here; what was keyed by it goes too.
             if let Some(ref lifecycle) = state.session_lifecycle {
@@ -350,12 +352,12 @@ pub(super) async fn mcp_delete_handler(
             }
             StatusCode::NO_CONTENT
         }
-        Some(id) => {
+        (Some(id), None) => {
             let session = session_fp(id);
             debug!(session_id = %session, "No owned session for DELETE");
             StatusCode::NOT_FOUND
         }
-        None => StatusCode::BAD_REQUEST,
+        (None, _) => StatusCode::BAD_REQUEST,
     };
     gateway_reply(status)
 }

@@ -584,21 +584,26 @@ impl NotificationMultiplexer {
     /// Remove a session
     pub fn remove_session(&self, session_id: &str) {
         let mut sessions = self.sessions.write();
-        if sessions.remove(session_id).is_some() {
-            info!(session_id = %session_fp(session_id), "Removed streaming session");
+        // The removed key carries its fingerprint (PERF.2a).
+        if let Some((id, _)) = sessions.remove_entry(session_id) {
+            info!(session_id = %id, "Removed streaming session");
         }
     }
 
-    /// Remove only a matching owner, with lookup and removal under one write lock.
-    pub(crate) fn remove_session_for(&self, session_id: &str, owner: &SessionOwner) -> bool {
+    /// Remove only a matching owner, with lookup and removal under one write
+    /// lock. Returns the removed id, which carries its fingerprint, so the
+    /// caller logs it without hashing again; the lookup is by `&str`, so no
+    /// key is built for it (PERF.2a).
+    pub(crate) fn remove_session_for(
+        &self,
+        session_id: &str,
+        owner: &SessionOwner,
+    ) -> Option<SessionId> {
         let mut sessions = self.sessions.write();
-        match sessions.entry(SessionId::new(session_id)) {
-            std::collections::hash_map::Entry::Occupied(entry) if entry.get().owner == *owner => {
-                entry.remove();
-                true
-            }
-            _ => false,
+        if sessions.get(session_id)?.owner != *owner {
+            return None;
         }
+        sessions.remove_entry(session_id).map(|(id, _)| id)
     }
 
     /// Check if a session exists
