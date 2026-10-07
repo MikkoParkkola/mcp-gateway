@@ -225,7 +225,6 @@ fn several_backends_at_once_keep_comments() {
     assert_eq!(names, ["old", "one", "two"], "{written}");
 }
 
-
 /// The binary in `home`, isolated as the setup and discovery tests run it:
 /// no inherited environment, and a PATH with no host programs to scan.
 fn run(home: &Path, args: &[&str]) -> std::process::Output {
