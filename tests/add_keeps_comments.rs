@@ -481,3 +481,30 @@ fn shadow_adopt_that_would_drop_comments_is_refused() {
         ],
     );
 }
+
+/// `MIK-CLI-COMMENTS.SILENT.1`: `remove` keeps every comment outside the
+/// entry and names, by line, the ones that went with it.
+#[test]
+fn remove_names_the_comments_that_went_with_the_entry() {
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("gateway.yaml");
+    let yaml = "# top\nbackends:\n  keep:\n    command: x\n  drop:\n    command: y  # why\n";
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, yaml).expect("write");
+    let p = path.to_str().unwrap();
+    let output = run(home.path(), &["remove", "--config", p, "drop"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("line 6"),
+        "the dropped line is named:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("# why"),
+        "comment text is never printed:\n{stderr}"
+    );
+    let after = std::fs::read_to_string(&path).expect("read");
+    assert!(
+        after.contains("# top") && !after.contains("drop:"),
+        "{after}"
+    );
+}
