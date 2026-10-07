@@ -66,8 +66,7 @@ pub fn create_sse_response(
                         }
                         Delivery::Dead => {
                             withhold(&item);
-                            settle_stranded(&mut rx);
-                            warn!(target: STREAMING_TARGET, "session stream's credential no longer authenticates; closing");
+                            close_dead(&mut rx);
                             break;
                         }
                     }
@@ -114,8 +113,7 @@ pub fn create_sse_response(
                     // A frame like any other: a dead credential gets none.
                     let audience = crate::gateway::auth::live::Audience::Any;
                     if credential_at_write(&multiplexer, &session, audience).await == Delivery::Dead {
-                        settle_stranded(&mut rx);
-                        warn!(target: STREAMING_TARGET, "session stream's credential no longer authenticates; closing");
+                        close_dead(&mut rx);
                         break;
                     }
                     // Client fell behind, notify them
@@ -156,6 +154,14 @@ fn withhold(item: &super::SessionFrame) {
     if let Some(watch) = &item.watch {
         watch.report(false);
     }
+}
+
+/// The one ending of a session stream whose credential died: every copy still
+/// queued is settled, then the stream closes. Both dead exits route here so
+/// they cannot drift.
+fn close_dead(rx: &mut broadcast::Receiver<super::SessionFrame>) {
+    settle_stranded(rx);
+    warn!(target: STREAMING_TARGET, "session stream's credential no longer authenticates; closing");
 }
 
 /// H2: a stream ending on a dead credential reports every copy still queued

@@ -122,9 +122,10 @@ pub fn validate_agent_token(
 
 /// [`validate_agent_token`] judged at `now` (Unix seconds) as well as by the
 /// library's own clock: a token is refused once `exp + 30 < now`, the leeway
-/// rule jsonwebtoken applies. `now` is read before the library reads its own,
-/// so on the real clock this refuses nothing the library accepts; a test that
-/// moves the registry's clock moves only this check.
+/// rule jsonwebtoken applies. In production `now` is the wall clock read just
+/// before the library reads it, so the two checks agree up to a clock step
+/// landing between the reads; a test that moves the registry's clock moves
+/// only this check.
 pub(crate) fn validate_agent_token_at(
     token: &str,
     registry: &AgentRegistry,
