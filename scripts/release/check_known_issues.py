@@ -107,15 +107,17 @@ def opens_comment(line):
 
 
 def is_text(line):
-    """True when `line` can be paragraph text: not blank, and, indent aside
-    (a continuation line may be indented), no list, quote, heading, fence,
-    raw HTML or open comment."""
-    bare = line.lstrip()
+    """True when `line` can be paragraph text: not blank, and no list, quote,
+    heading, fence, raw HTML or open comment. Indented four columns or more,
+    any line is text: a continuation line's markers are literal there."""
+    wide = line.expandtabs(4)
+    if wide.strip() and len(wide) - len(wide.lstrip()) >= 4:
+        return True
     return bool(
-        bare
-        and not NOT_A_PARAGRAPH.match(bare)
-        and not FENCE.match(bare)
-        and not HTML.match(bare)
+        line.strip()
+        and not NOT_A_PARAGRAPH.match(line)
+        and not FENCE.match(line)
+        and not HTML.match(line)
         and not opens_comment(line)
     )
 
@@ -213,14 +215,21 @@ def known_issues(text):
             inside, underline = True, not atx_start(line)
             # The longest reading that holds the title, so text around it in
             # the same heading is kept.
-            title = max((t for t in title_lines(lines, i) + (line,) if is_title(t)), key=len)
+            # An ATX title is its own line; a setext title the longest
+            # reading that holds it, so text above it in the heading is kept.
+            atx = atx_start(line)
+            title = line if atx else max(
+                (t for t in title_lines(lines, i) + (line,) if is_title(t)), key=len
+            )
             # Content too: a title with both a code span and a tag (which
             # renders depends on span boundaries this reader does not
             # decide), a title only its letters spell, or leftover letters
             # or digits (an issue number).
             alnum = title_readings(title, "a-z0-9")
             extra = (
-                ("`" in title and "<" in title)
+                # A list item or quote over a thematic break is no heading.
+                (not atx and bool(NOT_A_PARAGRAPH.match(line)))
+                or ("`" in title and "<" in title)
                 or not any(TITLE in r for r in alnum)
                 or any(TITLE in r and r.replace(TITLE, "", 1) for r in alnum)
             )
@@ -264,6 +273,15 @@ def is_prerelease_tag(tag):
     return bool(PRERELEASE_TAG.match(tag))
 
 
+def in_range(text, match):
+    """True when the version `match` ends a hyphen range (4.0.0-rc.1-4.0.1,
+    v4.0.0-rc.1-v4.0.1) rather than sitting in the suffix before it: a
+    hyphen, then a whole x.y.z or a v-prefixed version."""
+    return text[: match.start()].endswith("-") and (
+        match.group(3) is not None or match.group(0)[:1] in "vV"
+    )
+
+
 def later_releases(line):
     """The versions `line` renders that are later than this release.
 
@@ -295,17 +313,19 @@ def later_releases(line):
             match.group(0)
             for match in VERSION_TOKEN.finditer(text)
             if tuple(int(part or 0) for part in match.groups()) > THIS_RELEASE
-            and not IN_SUFFIX.search(text[: match.start()])
+            and not (IN_SUFFIX.search(text[: match.start()]) and not in_range(text, match))
             and match.group(0) not in found
         ]
     return found
 
 
 def problems(section, release):
-    # A comment may span lines and split a version, so the section is also
-    # read with every comment removed across line breaks.
+    # A comment or tag may span lines and split a version, so the section is
+    # also read with comments, then tags, removed across line breaks.
     joined = re.sub(r"<!--.*?(?:-->|$)", "", "\n".join(section), flags=re.S)
-    lines = section + [line for line in joined.splitlines() if line not in section]
+    untagged = HIDDEN_MARKUP.sub("", QUOTED_TAG.sub("", joined))
+    extra = joined.splitlines() + untagged.splitlines()
+    lines = section + [line for line in dict.fromkeys(extra) if line not in section]
     found = [
         f"Known issues names a later release ({', '.join(later)}): {line.strip()}"
         for line in lines
