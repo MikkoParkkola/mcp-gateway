@@ -41,7 +41,8 @@ VERSION_TOKEN = re.compile(r"(?<![\w.])v?([45])\.(\d+)(?:\.(\d+))?(?!\d|\.\d)")
 # 4.0.0's; any other version or suffix, build metadata included, is held to the
 # final-tag rule.
 # Text that ends inside a version's pre-release or build suffix.
-IN_SUFFIX = re.compile(r"\d\.\d+\.\d+[-+][0-9a-z.-]*$", re.IGNORECASE)
+# The suffix must hold a letter: 4.0.0-4.0.1 is a range, not a suffix.
+IN_SUFFIX = re.compile(r"\d\.\d+\.\d+[-+][0-9a-z.-]*[a-z][0-9a-z.-]*$", re.IGNORECASE)
 PRERELEASE_TAG = re.compile(r"^v4\.0\.0-(beta|rc)\.\d+$")
 # ATX level 1-2 headings: up to three spaces of indent; the title is compared as
 # letters only (see title_letters), so no inline Markdown can hide it.
@@ -163,11 +164,12 @@ def known_issues(text):
             inside, underline = True, not atx_start(line)
             above = lines[i - 1] if i else ""
             title = line if TITLE in title_letters(line) else f"{above} {line}"
-            if title_letters(title).replace(TITLE, "", 1) or later_releases(line):
+            if title_letters(title).replace(TITLE, "", 1) or later_releases(title):
                 # A start line that says more than the title (a bullet read
                 # as one, or a version in an annotation, read from the raw
-                # text) is content too, so nothing it says is dropped.
-                body.append(line)
+                # text) is content too, so nothing it says is dropped. A
+                # wrapped title is kept whole: both of its lines.
+                body.append(title)
             continue
         if underline:
             underline = False
