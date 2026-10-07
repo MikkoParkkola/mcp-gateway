@@ -32,6 +32,30 @@ fn a_chain_wakes_on_its_paths_only() {
     assert!(names.may_move_chain(&[]));
 }
 
+/// A rescan means events were lost, so it wakes whatever path it carries.
+#[test]
+fn a_rescan_wakes_on_an_unrelated_path() {
+    use notify::event::{Event, EventKind, Flag};
+    let names = ChainNames::default();
+    names.set(Some(BTreeSet::from([PathBuf::from("/c/gateway.yaml")])));
+    let unrelated = Event::new(EventKind::Any).add_path(PathBuf::from("/c/perf.data"));
+    assert!(!names.concerns(&unrelated));
+    assert!(names.concerns(&unrelated.set_flag(Flag::Rescan)));
+}
+
+/// Where the file system ignores case by default, an entry reported in
+/// another case than the operator spelled it still wakes.
+#[test]
+fn case_matches_where_the_file_system_ignores_it() {
+    let names = ChainNames::default();
+    names.set(Some(BTreeSet::from([PathBuf::from("/c/Current")])));
+    let reported = [PathBuf::from("/c/current")];
+    assert_eq!(
+        names.may_move_chain(&reported),
+        cfg!(any(windows, target_os = "macos"))
+    );
+}
+
 /// A plain file's chain names the file, canonical, and nothing beside it.
 #[test]
 fn a_plain_file_names_itself() {
@@ -76,17 +100,21 @@ mod real_watcher {
     use super::super::tests::real_watcher::{Harness, start};
 
     /// Wait until the task has handled every wake it was sent: the count
-    /// stops moving for half a second.
+    /// stops moving for half a second. Ten seconds of constant wakes fail.
     async fn settled_wakes(h: &Harness) -> usize {
-        let mut seen = h.wakes();
-        loop {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            let now = h.wakes();
-            if now == seen {
-                return now;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut seen = h.wakes();
+            loop {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let now = h.wakes();
+                if now == seen {
+                    return now;
+                }
+                seen = now;
             }
-            seen = now;
-        }
+        })
+        .await
+        .expect("the rewatch task never stopped waking")
     }
 
     fn plain_config() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -104,8 +132,9 @@ mod real_watcher {
 
     /// MIK-8013.WATCH.2: 1000 files written beside the config run no chain
     /// re-resolution. The config edit after them is the barrier: notify
-    /// delivers events in order, so once its reload arrives every earlier
-    /// event was seen.
+    /// delivers events in order and the callback wakes the task before it
+    /// sends the reload, so once the reload arrives every earlier event was
+    /// judged.
     #[tokio::test]
     async fn watch2_unrelated_files_beside_the_config_resolve_nothing() {
         let (root, cfg) = plain_config();
@@ -113,17 +142,24 @@ mod real_watcher {
         h.wait_wakes_above(0).await;
         h.drain_idle().await;
         let before = settled_wakes(&h).await;
+        h.chain.names.passed.lock().clear();
 
         write_unrelated(root.path(), 1000);
         std::fs::write(&cfg, "a: 2\n").unwrap();
         assert!(h.triggered_within(10).await, "the config edit reloads");
         let resolves = settled_wakes(&h).await - before;
 
-        // The edit itself is up to two events (truncate, write); the 1000
-        // files add none.
+        // Only the edit's own events (truncate, write) passed the filter.
+        let config = std::fs::canonicalize(&cfg).unwrap();
+        let passed = h.chain.names.passed.lock().clone();
         assert!(
-            resolves <= 2,
-            "{resolves} chain re-resolutions for 1000 unrelated files and one edit"
+            !passed.is_empty() && passed.iter().all(|paths| paths.contains(&config)),
+            "events that woke the task: {passed:?}"
+        );
+        assert!(
+            resolves <= passed.len(),
+            "{resolves} chain re-resolutions for {} waking events",
+            passed.len()
         );
         let _ = h.shutdown.send(());
     }

@@ -180,23 +180,51 @@ pub(super) fn startup_dirs(named: &Path) -> BTreeSet<PathBuf> {
 /// rewatch task replaces it after each resolve. `None` (no chain resolved yet,
 /// or the last resolve failed) wakes on every event, as before.
 #[derive(Default)]
-pub(super) struct ChainNames(Mutex<Option<BTreeSet<PathBuf>>>);
+pub(super) struct ChainNames {
+    names: Mutex<Option<BTreeSet<PathBuf>>>,
+    /// The paths of every event that passed (tests read it).
+    #[cfg(test)]
+    pub(super) passed: Mutex<Vec<Vec<PathBuf>>>,
+}
 
 impl ChainNames {
+    /// Whether `event` can concern the config: a rescan (events were lost),
+    /// or [`ChainNames::may_move_chain`] on its paths.
+    pub(super) fn concerns(&self, event: &notify::Event) -> bool {
+        let concerns = event.need_rescan() || self.may_move_chain(&event.paths);
+        #[cfg(test)]
+        if concerns {
+            self.passed.lock().push(event.paths.clone());
+        }
+        concerns
+    }
+
     /// Whether an event on `paths` can have moved the chain: one of them is a
     /// hop, a followed directory link or a watched directory, or there is no
-    /// path (a rescan) or no resolved chain to judge by.
+    /// path or no resolved chain to judge by.
     pub(super) fn may_move_chain(&self, paths: &[PathBuf]) -> bool {
         paths.is_empty()
-            || self
-                .0
-                .lock()
-                .as_ref()
-                .is_none_or(|names| paths.iter().any(|path| names.contains(path)))
+            || self.names.lock().as_ref().is_none_or(|names| {
+                paths
+                    .iter()
+                    .any(|path| names.iter().any(|name| same_entry(path, name)))
+            })
     }
 
     fn set(&self, names: Option<BTreeSet<PathBuf>>) {
-        *self.0.lock() = names;
+        *self.names.lock() = names;
+    }
+}
+
+/// Whether two paths name the same directory entry. Names are spelled as the
+/// operator wrote them, which a case-insensitive file system (the macOS and
+/// Windows defaults) may report in another case; ignoring case there costs at
+/// most a spare resolve on a case-sensitive volume.
+fn same_entry(a: &Path, b: &Path) -> bool {
+    if cfg!(any(windows, target_os = "macos")) {
+        a.as_os_str().eq_ignore_ascii_case(b.as_os_str())
+    } else {
+        a == b
     }
 }
 
