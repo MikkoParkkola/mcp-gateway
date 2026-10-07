@@ -473,3 +473,22 @@ async fn a_refused_startup_import_leaves_the_seal_as_it_found_it() {
     assert_eq!(admission.set_sealed(0), 7, "the earlier seal is restored");
     drop(held);
 }
+
+/// Sealed rows count while the load is still reading: a directory holding more
+/// damaged rows than the record cap is refused at open, not loaded whole.
+#[tokio::test]
+async fn sealed_rows_count_against_the_record_cap_during_the_load() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, _rows, _admission, service) =
+        sealed_service(dir.path(), &["k-one", "k-two", "k-three"]).await;
+    service.close().await.unwrap();
+    let limits = StoreLimits {
+        records: 2,
+        ..StoreLimits::default()
+    };
+    let opened = TaskService::open(&path, limits, services()).await;
+    assert!(
+        opened.is_err(),
+        "three sealed rows loaded under a record cap of two"
+    );
+}
