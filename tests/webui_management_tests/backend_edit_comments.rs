@@ -110,13 +110,16 @@ async fn an_env_edit_appends_inside_the_block() {
     );
 }
 
-/// No-op PATCH: the value is already there, so nothing is written.
+/// No-op PATCH: the value is already there, so nothing is written or reloaded.
 #[tokio::test]
 async fn an_edit_that_changes_nothing_writes_nothing() {
-    let (router, path, _keep) = served(SVC, Route::File).await;
-    let (status, body) = patch(&router, "svc", json!({"description": "old"})).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(read(&path), SVC);
+    for route in [Route::Live, Route::File] {
+        let (router, path, _keep) = served(SVC, route).await;
+        let (status, body) = patch(&router, "svc", json!({"description": "old"})).await;
+        assert_eq!(status, StatusCode::OK, "{route:?}: {body}");
+        assert!(body["reload"].is_null(), "{route:?}: reloaded: {body}");
+        assert_eq!(read(&path), SVC, "{route:?}");
+    }
 }
 
 /// T3 KEEP.2: the inline comment on `enabled:` is carried onto the new value.
