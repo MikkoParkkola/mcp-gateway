@@ -78,10 +78,12 @@ impl A2aClient {
     /// Fetch the Agent Card (also the liveness probe).
     pub(crate) async fn fetch_card(&self) -> Result<AgentCard> {
         let request = self.with_headers(self.http.get(&self.card_url), &[]);
-        let response = request
-            .send()
-            .await
-            .map_err(|e| safe_request_error("A2A Agent Card fetch failed", &e))?;
+        let response = request.send().await.map_err(|e| {
+            safe_request_error(
+                &format!("A2A Agent Card fetch from {} failed", self.target()),
+                &e,
+            )
+        })?;
         if !response.status().is_success() {
             return Err(Error::Protocol(format!(
                 "A2A Agent Card at {} returned HTTP {}",
@@ -148,10 +150,15 @@ impl A2aClient {
             "params": params,
         });
         let request = self.with_headers(self.http.post(&endpoint.url).json(&body), extra_headers);
-        let response = request
-            .send()
-            .await
-            .map_err(|e| safe_request_error("A2A SendMessage failed", &e))?;
+        let response = request.send().await.map_err(|e| {
+            safe_request_error(
+                &format!(
+                    "A2A SendMessage to {} failed",
+                    diagnostic_url(&endpoint.url)
+                ),
+                &e,
+            )
+        })?;
         if !response.status().is_success() {
             return Err(Error::Protocol(format!(
                 "A2A SendMessage to {} returned HTTP {}",

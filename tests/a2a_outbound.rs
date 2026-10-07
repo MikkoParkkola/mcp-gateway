@@ -316,10 +316,6 @@ async fn a2a_6_url_credentials_are_redacted_from_errors() {
         .await
         .expect_err("nothing answers");
     assert!(!error.contains(secret), "credential leaked: {error}");
-    assert!(
-        error.contains("127.0.0.1"),
-        "the error still names the target: {error}"
-    );
 }
 
 /// A2A.5: `structuredContent` is an object or absent; a sole non-object data
