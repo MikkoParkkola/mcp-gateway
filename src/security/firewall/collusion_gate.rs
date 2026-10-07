@@ -242,8 +242,8 @@ fn detector_for(config: &CollusionConfig) -> Option<Arc<CollusionDetector>> {
 
 /// Result text kept per delivery: the first and last half of this, so an
 /// excerpt from either end still matches. Sized under the detector's
-/// 1,024-fingerprint keep limit (one fingerprint per ~8.5 chars, kept in
-/// text order): a larger cap would silently drop the tail's fingerprints.
+/// per-delivery keep limit (about one fingerprint per 4 chars and form, kept
+/// in text order): a larger cap would silently drop the tail's fingerprints.
 pub(super) const RECORD_CAP: usize = 6 * 1024;
 
 /// A context-integrity data class that makes a delivery sensitive.

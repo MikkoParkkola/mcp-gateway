@@ -212,8 +212,8 @@ impl DeliveryDigest {
             retained: Vec::new(),
             sensitive: self.sensitive,
         };
-        // A removed leaf splits its run, and re-winnowing the pieces can drop
-        // minima of text still delivered: the original runs' fingerprints stay
+        // A removed leaf splits its run, and the pieces' own fingerprints miss
+        // a k-gram that ran across a cut: the original runs' fingerprints stay
         // too, wherever their k-gram is in a delivered leaf or spans adjacent
         // kept leaves.
         let across = kept.run_kgrams(detector);
@@ -276,7 +276,7 @@ impl DeliveryDigest {
 
 /// The string leaves of a plan's final answer, and every k-gram hash in them,
 /// taken leaf by leaf when first needed. With the kept runs' own k-grams they
-/// decide which fingerprints a receipt keeps, whichever window selected them.
+/// decide which fingerprints a receipt keeps.
 pub(crate) struct Delivered<'v> {
     values: HashSet<&'v str>,
     keys: HashSet<&'v str>,

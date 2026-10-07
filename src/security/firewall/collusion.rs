@@ -7,7 +7,7 @@
 //! backend call, when B never received it from that source itself. Each side
 //! looks ordinary to a per-principal control; only the pair is suspicious.
 //!
-//! This is the pure core: winnowed fingerprints, bounded in-process state and
+//! This is the pure core: sampled fingerprints, bounded in-process state and
 //! the relay predicate. Wiring into the request and response paths, the
 //! config surface and metrics come in later increments.
 
@@ -70,9 +70,10 @@ pub(crate) struct RelayFinding {
 
 /// Characters per k-gram. Nothing shorter than this can ever match.
 pub(super) const K: usize = 48;
-/// Hashes per winnowing window: a shared run of `K + W - 1` chars yields at
-/// least one common fingerprint.
-const W: usize = 16;
+/// One k-gram in `SAMPLE` is kept, by its own hash: whether a k-gram is kept
+/// never depends on the text around it, so two texts sharing a k-gram keep it
+/// in both or in neither, and the same-source excuse is exact (MIK-8083).
+const SAMPLE: u64 = 4;
 /// Tuples one fingerprint may hold before it is `Saturated`.
 const MAX_TUPLES: usize = 8;
 /// The most distinct principals one tracked fingerprint can reach: a 9th
@@ -81,9 +82,10 @@ pub(super) const MAX_COMMON_PRINCIPALS: usize = MAX_TUPLES + 1;
 /// Fingerprints kept per delivered result; the rest are counted, not stored.
 /// Twice one form's share: a split delivery records its newline-joined and
 /// its run-together forms, which share almost no k-grams, and both are
-/// expected to fit for a copy up to the record cap (winnowing keeps about
-/// 2 in 17 positions; crafted text can exceed it, costing only an excuse).
-const MAX_SOURCE_FINGERPRINTS: usize = 2 * 1_024;
+/// expected to fit for a copy up to the record cap (sampling keeps about 1
+/// in [`SAMPLE`] positions; crafted text can exceed it, costing only an
+/// excuse).
+const MAX_SOURCE_FINGERPRINTS: usize = 4 * 1_024;
 
 /// Delivery instants kept per pair; see [`Copies`].
 const MAX_COPIES: usize = 3;
@@ -209,28 +211,15 @@ impl State {
     }
 }
 
-/// Winnowing: the rightmost minimum of every `W`-hash window, distinct, in
-/// position order. Fewer than `W` hashes form one short window.
-fn winnow(hashes: &[u64]) -> Vec<u64> {
-    let mut out = Vec::new();
+/// The hashes kept as fingerprints: those 0 mod [`SAMPLE`], distinct, in
+/// position order.
+fn sample(hashes: &[u64]) -> Vec<u64> {
     let mut seen = HashSet::new();
-    let mut last = None;
-    for start in 0..=hashes.len().saturating_sub(W) {
-        let end = (start + W).min(hashes.len());
-        // Rightmost minimum: `min_by_key` keeps the first of equals, so scan
-        // the window backwards.
-        let pos = (start..end)
-            .rev()
-            .min_by_key(|&i| hashes[i])
-            .unwrap_or(start);
-        if end > start && last != Some(pos) {
-            last = Some(pos);
-            if seen.insert(hashes[pos]) {
-                out.push(hashes[pos]);
-            }
-        }
-    }
-    out
+    hashes
+        .iter()
+        .copied()
+        .filter(|h| h % SAMPLE == 0 && seen.insert(*h))
+        .collect()
 }
 
 /// Relay detector state for one gateway process.
@@ -273,22 +262,22 @@ impl CollusionDetector {
         key().hash_one(id)
     }
 
-    /// Winnowed fingerprints of `text`, distinct, in position order.
+    /// Sampled fingerprints of `text`, distinct, in position order.
     ///
     /// Characters input sanitization strips are dropped first, so text
     /// interleaved with them matches what a backend receives; then
     /// NFC-normalized and whitespace-collapsed; then every `K`-char
-    /// k-gram is hashed and the rightmost minimum of each `W`-hash window is
-    /// kept. Offset-independent: a shifted copy selects the same minima.
+    /// k-gram is hashed and those [`sample`] keeps are kept. Context-free: a
+    /// k-gram is kept wherever it occurs, whatever surrounds it.
     ///
     /// Scratch memory is linear in `text`; callers bound it with the request
     /// and response size limits, not this function.
     pub(crate) fn fingerprints(&self, text: &str) -> Vec<u64> {
-        winnow(&self.kgram_hashes(text))
+        sample(&self.kgram_hashes(text))
     }
 
     /// Every `K`-char k-gram hash of `text`, normalised as
-    /// [`Self::fingerprints`] reads it, before winnowing: a fingerprint is
+    /// [`Self::fingerprints`] reads it, before sampling: a fingerprint is
     /// one of these.
     #[expect(
         clippy::unused_self,
