@@ -214,6 +214,33 @@ async fn a_reload_that_cannot_read_a_directory_keeps_its_subscriptions() {
     assert_eq!(routes(&registry), ["alpha.push"], "beta is unoffered");
 }
 
+/// MIK-8028 `PARTIAL.1`, at startup: a scan that could not read a directory
+/// keeps that directory's subscriptions through the startup reconcile.
+#[tokio::test]
+async fn a_startup_scan_that_cannot_read_a_directory_keeps_its_subscriptions() {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = tempfile::tempdir().expect("store");
+    std::fs::write(dir.path().join("a.yaml"), capability("alpha")).expect("write");
+    seed_subscription(store.path(), "beta");
+    // Withdrawn by the same reconcile, just before its webhook decision.
+    seed_named(store.path(), "gone", "backend.gone.tools_changed");
+    let (caps, registry, meta) = wired(&[dir.path()], store.path()).await;
+
+    // Beta's directory failed to load.
+    caps.mark_initial_scan_failed();
+    caps.mark_initial_scan_complete();
+    meta.reconcile_events_after_scan();
+    settled(|| !subscribed(store.path(), "gone")).await;
+    // Past the webhook decision, which follows in the same call.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!subscribed(store.path(), "gone"), "the reconcile ran");
+    assert!(
+        subscribed(store.path(), "beta"),
+        "the unread directory's subscription is kept"
+    );
+    assert_eq!(routes(&registry), ["alpha.push"]);
+}
+
 /// MIK-8028 `PARTIAL.2`: the next complete reload withdraws a type that is
 /// still absent, and keeps the rest.
 #[tokio::test]
