@@ -608,3 +608,79 @@ async fn copies_of_a_delivered_leaf_do_not_crowd_out_a_mapped_member() {
         "undelivered copies pushed the mapped member out of the step's receipt"
     );
 }
+
+/// Stage `step` as one plan step of alice's and commit it against `answer`.
+async fn deliver_step(
+    meta: &std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>,
+    step: &Value,
+    answer: &Value,
+) {
+    let ((), staged) = meta
+        .collecting_staged(async {
+            plan_step(async {
+                meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), step);
+            })
+            .await;
+            meta.rebuild_receipt_from_final(
+                Some(answer),
+                GatewayStamps::Legacy,
+                AnswerShape::Literal,
+            );
+        })
+        .await;
+    staged.commit(true);
+}
+
+/// MIK-7992: two short fields the plan delivers next to each other, where
+/// the step holds the first one twice with padding between. The caller got
+/// them adjacent, so the run across them stays receipted.
+#[tokio::test]
+async fn short_fields_delivered_adjacent_keep_their_run() {
+    let (meta, firewall) = relay_meta();
+    let (p, s) = (
+        "row 01: late pears, north slope, ok",
+        "row 02: grafting dates logged, ok",
+    );
+    assert!(p.len() < 48 && s.len() < 48 && p.len() + s.len() >= 64);
+    let step = json!({"a": p, "b": filler("pad", 60), "c": p, "d": s});
+    let delivered = json!({"x": p, "y": s});
+    deliver_step(&meta, &step, &plan_answer(&delivered)).await;
+    firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "b", &delivered);
+    let relayed = |who: &str| {
+        let params = json!({"name": "send", "arguments": delivered.clone()});
+        !firewall
+            .check_relay(
+                RelayCaller::Keyed(who),
+                "alpha",
+                "send",
+                &params,
+                ("s", who),
+            )
+            .allowed
+    };
+
+    assert!(relayed("bob"), "control: bob holds no copy of the row");
+    assert!(!relayed("alice"), "the row was delivered adjacent");
+}
+
+/// MIK-7992: many undelivered copies of a delivered leaf, sorted before a
+/// member the plan delivers redacted. The copies must not crowd the
+/// member's surviving text out of the receipt's retained fingerprints.
+#[tokio::test]
+async fn copies_do_not_crowd_out_a_redacted_members_survivors() {
+    let (meta, firewall) = relay_meta();
+    let copy = filler("rep", 25);
+    let step = json!({"a": vec![copy.as_str(); 800], "body": format!("{PROSE} {SECRET}")});
+    let answer = plan_answer(&json!({"a": copy, "body": PROSE}));
+    deliver_step(&meta, &step, &answer).await;
+    carol_holds(&firewall, "a", PROSE);
+
+    assert!(
+        refused(&firewall, "bob", PROSE),
+        "control: bob holds no copy"
+    );
+    assert!(
+        !refused(&firewall, "alice", PROSE),
+        "repeated copies crowded the delivered text out of the receipt"
+    );
+}
