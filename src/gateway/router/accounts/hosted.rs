@@ -3,6 +3,7 @@
 //! The `/accounts/v1` router's shell (design §4.3, §6.4): one header layer and
 //! one trace span over every route under the prefix, including 404 and 405.
 
+use crate::gateway::routes;
 use std::sync::Arc;
 
 use axum::Router;
@@ -18,19 +19,20 @@ use super::super::AppState;
 const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; \
                    form-action 'self'; frame-ancestors 'none'";
 /// Where the provider redirects back; routed in `accounts::router`.
-pub(crate) const CALLBACK: &str = "/accounts/v1/callback";
-/// Every path under the prefix that no route claims.
-const UNROUTED: &str = "/accounts/v1/{*rest}";
-/// The bare prefix, which the catch-all does not match; claimed here so it
-/// never reaches the main router's full-URI trace span.
-const PREFIX_ROOT: &str = "/accounts/v1";
+pub(crate) const CALLBACK: &str = routes::ACCOUNTS_CALLBACK;
 
 /// `owner` (already authenticated) plus the unauthenticated browser routes,
 /// wrapped so no response under the prefix leaves without the three headers.
 pub(super) fn shell(owner: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     owner
-        .route(UNROUTED, any(|| async { StatusCode::NOT_FOUND }))
-        .route(PREFIX_ROOT, any(|| async { StatusCode::NOT_FOUND }))
+        .route(
+            routes::ACCOUNTS_UNROUTED,
+            any(|| async { StatusCode::NOT_FOUND }),
+        )
+        .route(
+            routes::ACCOUNTS_ROOT,
+            any(|| async { StatusCode::NOT_FOUND }),
+        )
         .layer(axum::middleware::map_response(harden))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http().make_span_with(super::super::trace_span::span_for))

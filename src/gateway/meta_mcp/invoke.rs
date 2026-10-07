@@ -494,7 +494,9 @@ impl MetaMcp {
         {
             let message = super::signing::wire_error_message(&error);
             if let Some(reservation) = idem_reservation.as_mut() {
-                reservation.fail(&json!({"code": error.to_rpc_code(), "message": message}));
+                reservation.fail(&audit::stored_failure(
+                    json!({"code": error.to_rpc_code(), "message": message}),
+                ));
             }
             return Err(error);
         }
@@ -619,6 +621,15 @@ impl MetaMcp {
                 return Err(unbindable_continuation(server, tool));
             };
             result["requestState"] = json!(envelope);
+            // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
+            // must not take the receipt's capped budget from the backend's
+            // prompt. Noted at the value layer: `tool_value` still reads
+            // `requestState` to know the answer is interim, not wrapped.
+            gateway_writes::note(
+                gateway_writes::Layer::Value,
+                gateway_writes::REQUEST_STATE,
+                &result,
+            );
         }
 
         let call = dispatch_guards::BackendCall {

@@ -43,9 +43,13 @@ async fn t39m_a_legacy_stdio_tools_notice_becomes_an_event() {
     let gw = start_listed(dir.path(), &receiver, cfg).await;
     let name = event("tools_changed");
     let id = sub(&gw, ALICE, &name, &receiver, json!({})).await;
-    // The backend starts for the subscription; give the listener its channel.
-    tokio::time::sleep(QUIET).await;
-    peer.push(TOOLS_CHANGED, json!({}));
+    // A legacy peer shows no attach signal: send the notice until the
+    // listener, which attaches some time after the subscribe, passes one on.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while delivered(&receiver, &id, &name).is_empty() && tokio::time::Instant::now() < deadline {
+        peer.push(TOOLS_CHANGED, json!({}));
+        wait_until(QUIET, || !delivered(&receiver, &id, &name).is_empty()).await;
+    }
     expect_events(&receiver, &id, &name, 1).await;
 }
 

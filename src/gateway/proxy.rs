@@ -260,7 +260,7 @@ impl ProxyManager {
         // rather than a control on a gateway with more than one client.
         let Some(watch) = self
             .multiplexer
-            .send_request_to_session(session_id, notification)
+            .send_request_to_session(session_id, notification, None)
         else {
             // The entry was registered before the send; an undeliverable
             // prompt has no responder, so nothing would ever remove it.
@@ -313,7 +313,7 @@ impl ProxyManager {
         // confirmation another client can answer is not a confirmation.
         let Some(watch) = self
             .multiplexer
-            .send_request_to_session(session_id, notification)
+            .send_request_to_session(session_id, notification, None)
         else {
             // Same reason as sampling: registered before the send, and an
             // undeliverable prompt never reaches a responder that clears it.
@@ -427,7 +427,7 @@ impl ProxyManager {
 
         let Some(watch) = self
             .multiplexer
-            .send_request_to_session(session_id, notification)
+            .send_request_to_session(session_id, notification, None)
         else {
             // Registered before the send; an undeliverable request has no
             // responder, so nothing would ever remove the entry.
@@ -565,18 +565,16 @@ impl ClientChannel for ProxyManager {
 
         // To the originating session only, for the same reason as sampling and
         // elicitation: a prompt another client can answer is not a prompt.
-        let Some(watch) = self
-            .multiplexer
-            .send_request_to_session(session_id, notification)
+        // MIK-7887.RECEIPT.3, MIK-7939: the watch commits when a stream of the
+        // session writes the prompt past its gates (SSE has no client
+        // acknowledgement), not when it is queued; the frame owns the commit,
+        // so a written prompt stays committed if the wait below is cancelled.
+        let Some(watch) =
+            self.multiplexer
+                .send_request_to_session(session_id, notification, commit)
         else {
             return Err(DeliveryError::NoSession);
         };
-        // MIK-7887.RECEIPT.3: in the live session's stream is delivered as far
-        // as this channel can tell (SSE has no write acknowledgement), and it
-        // stays delivered if the wait below is cancelled.
-        if let Some(commit) = commit {
-            commit.commit();
-        }
         debug!(%id, session_id = %session_fp(session_id), %method, "Sent bridged request to the originating session");
 
         // A dropped sender means the entry went away without an answer, which

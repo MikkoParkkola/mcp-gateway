@@ -181,9 +181,10 @@ backend" and "fails a capability file" first.**
 | 154 | A same-key retry after a lost round (a broken stream, a timeout, a reload stopping the backend mid-call, an HTTP 5xx, or a 400, 404, 407, 408, 429 or session-expiry answer) is served the uncertain-outcome notice instead of the original error; `BackendUnavailable` frees the key | A client that read a served error as "the work failed" treats the notice as "may have run" and checks before re-issuing under a new key |
 | 155 | A caller signed in through the key server (an `/auth/token` token or a delegated OIDC bearer) has a principal of the form `kst:<sha256 hex>` or `oidc:<sha256 hex>`, no longer 12 hex characters | Update any log or audit query that matched these callers' 12-hex principal |
 | 156 | A REST capability body field that is a pure placeholder (`"{cursor}"`) now sends an explicit `null` the property's schema admits (`type: [string, "null"]`); 3.x left the field out. A null the schema does not admit is still left out, and query and path parameters are unchanged | To keep the field out, leave the argument out instead of sending `null`; a static param or URL default for the same name still fills it, as before |
-| 157 | Reserved: a change in review | None |
+| 157 | `webhooks.base_path` may not overlap a gateway route | Move the receiver to a path outside `/mcp`, `/ui`, `/dashboard`, `/accounts/v1`, `/auth`, `/.well-known` and the probe paths |
 | 158 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
+| 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4140,6 +4141,19 @@ path parameters are unchanged, because they cannot carry a JSON null.
 To keep the field out, leave the argument out instead of sending `null`. A static param or a URL
 default for the same name still fills it, as before.
 
+## 157. `webhooks.base_path` may not overlap a gateway route
+
+**Startup:** no notice, the start is refused with its own error, which names the setting and the path, and for an overlap also the route; refuses to start
+
+With the webhook receiver enabled, `webhooks.base_path` is mounted beside the gateway's own
+routes. A path on or under one of them, such as `/mcp/hooks`, put a webhook handler where the
+gateway's own handlers are expected, and a path over one, such as `/ui/api/backends`, made axum
+panic at startup. Config load and reload now refuse an enabled receiver's `base_path` that is
+equal to, under or over any route the gateway listener registers, and a path axum cannot mount
+as written (`/`, a trailing `/`, an empty, `.` or `..` segment, `{`, `}`, or a segment starting
+with `:` or `*`). The default `/webhooks` is unaffected, and a disabled receiver is not
+checked. Choose a path outside the gateway's own routes.
+
 ## 158. `audit verify --anchor` checks the log against an off-host anchor
 
 **Startup:** no notice
@@ -4189,6 +4203,29 @@ count:
 
 Library users: `CostTracker::evict_old_records` is removed. Nothing called it
 in the gateway, and there is nothing left to evict.
+
+## 160. The budget enforcer's day rows are bounded
+
+**Startup:** no notice
+
+With cost governance on, the budget enforcer kept a per-tool and a per-key day
+row for every name that ever spent and never removed one. Now:
+
+- A tool or key with a budget always keeps its own row, so budget checks are
+  unchanged.
+- Other names get their own row up to about 256 per map (calls racing on a
+  first insert can add a few more). Past that, or for a name
+  longer than 256 bytes, their spend is counted in `tool_overflow_usd` or
+  `key_overflow_usd`. It still counts toward the global daily budget.
+- Rows from an earlier day without a budget are removed on a later spend.
+
+`EnforcerSnapshot` and the saved `costs.json` (`PersistedCosts`) carry the two
+overflow totals; the admin cost stats show them as `tool_overflow_spend_usd`
+and `key_overflow_spend_usd`. A file saved by an earlier
+build loads with both at 0.
+
+Library users: code that builds `EnforcerSnapshot` or `PersistedCosts` with a
+struct literal adds the two fields.
 
 ## Upgrading from 3.5.x: a walkthrough
 

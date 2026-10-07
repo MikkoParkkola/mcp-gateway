@@ -176,3 +176,63 @@ async fn a_stdio_hinted_failure_is_receipted_without_its_hint() {
         "the gateway's hint was receipted: {own}"
     );
 }
+
+/// MIK-7994 over stdio: the continuation the gateway mints for an interim
+/// answer is the gateway's text, so it cannot push the backend's prompt out
+/// of the capped receipt; a nested backend member named `requestState` stays.
+#[tokio::test]
+async fn a_stdio_interim_answer_is_receipted_without_its_continuation() {
+    let prompt = crate::gateway::meta_mcp::invoke::receipt_test_support::distinct_prose(4800);
+    let (meta, firewall) = stdio_meta(json!({
+        "resultType": "input_required",
+        "inputRequests": { "confirm": {
+            "method": "elicitation/create",
+            "params": {
+                "message": prompt,
+                "requestState": PROSE,
+                "requestedSchema": { "type": "object", "properties": {} }
+            }
+        }},
+        "requestState": "s".repeat(3000)
+    }));
+    let request = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+    "params": {"name": "gateway_invoke",
+               "arguments": {"server": "alpha", "tool": "read", "arguments": {}},
+               "_meta": {
+                   "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                   "io.modelcontextprotocol/clientCapabilities": {"elicitation": {}}
+               }}});
+    let read = dispatch(&meta, &request).await;
+    assert_eq!(
+        read["result"]["resultType"], "input_required",
+        "base: the interim answer is delivered: {read}"
+    );
+    let envelope = read["result"]["requestState"].as_str().unwrap_or_default();
+    assert_ne!(
+        envelope,
+        "s".repeat(3000),
+        "base: the gateway minted its own: {read}"
+    );
+    // Half of RECORD_CAP (collusion_gate.rs:245): the envelope alone fills
+    // the digest's tail.
+    assert!(
+        envelope.len() > 3 * 1024,
+        "base: the envelope must outgrow the digest's tail: {}",
+        envelope.len()
+    );
+
+    let head: String = prompt.chars().take(400).collect();
+    assert!(
+        relayed_by_bob(&firewall, &head),
+        "control: the prompt's head is receipted"
+    );
+    let tail: String = prompt.chars().skip(prompt.chars().count() - 400).collect();
+    assert!(
+        relayed_by_bob(&firewall, &tail),
+        "the continuation pushed the prompt's tail out of its receipt"
+    );
+    assert!(
+        relayed_by_bob(&firewall, PROSE),
+        "a backend member named requestState lost its receipt"
+    );
+}
