@@ -107,7 +107,7 @@ struct Gateway {
     router: axum::Router,
     wire: Wire,
     _store: tempfile::TempDir,
-    _audit: [tempfile::NamedTempFile; 2],
+    audit: [tempfile::NamedTempFile; 2],
 }
 
 fn logger(file: &tempfile::NamedTempFile) -> Arc<TransparencyLogger> {
@@ -163,7 +163,7 @@ async fn gateway(strategy: PropagationStrategyKind) -> Gateway {
         router: create_router(state),
         wire,
         _store: store,
-        _audit: audit,
+        audit,
     }
 }
 
@@ -299,7 +299,7 @@ async fn a_client_cancel_never_reaches_the_backend() {
 async fn a_dropped_cancel_mints_no_credential() {
     let gw = gateway(PropagationStrategyKind::SignedAssertion).await;
     let minted = |gw: &Gateway| {
-        gw._audit
+        gw.audit
             .iter()
             .map(|f| std::fs::read_to_string(f.path()).expect("audit log readable"))
             .any(|log| log.contains("idp_mint"))
