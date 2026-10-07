@@ -25,6 +25,7 @@ const FOREIGN_NAME: &str = "task-00000000-0000-4000-8000-000000000000";
 mod adapter_marker;
 mod admission;
 mod durability;
+mod fallback_room;
 mod input_round;
 mod qualification;
 mod sealed;

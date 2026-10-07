@@ -17,6 +17,7 @@
 //! `version` and marker fields and nothing else, with the untouched record as
 //! the positive control that proves the seed was valid before the mutation.
 use super::*;
+use crate::gateway::task_service::record::Target;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 mod boundary;
@@ -54,6 +55,16 @@ async fn admitted(
     admission: &Arc<ExecutionAdmission>,
     key: &str,
 ) -> (Task, TaskBinding) {
+    admitted_with(store, admission, key, Vec::new()).await
+}
+
+/// [`admitted`] with `targets` recorded at creation.
+async fn admitted_with(
+    store: &TaskStore,
+    admission: &Arc<ExecutionAdmission>,
+    key: &str,
+    targets: Vec<Target>,
+) -> (Task, TaskBinding) {
     let lease = match admission.admit_task(task_request(ALICE, key)) {
         Ok(TaskAdmission::Owned(lease)) => lease,
         other => panic!("the fixture needs a real admitted binding, got {other:?}"),
@@ -61,11 +72,12 @@ async fn admitted(
     let binding = lease.binding().clone();
     let task = task();
     store
-        .create(PreparedTask::admitted(
+        .create(PreparedTask::admitted_with_targets(
             &task,
             &binding,
             lease.into_publication(),
             "fixture",
+            targets,
         ))
         .await
         .expect("the fixture's own creation must commit before anything is asserted about it");

@@ -610,7 +610,11 @@ impl MetaMcp {
         };
         if let Some(target) = target {
             let value = unwrapped.as_ref().unwrap_or(result);
-            self.stage_relay_receipt(caller.relay_caller(session_id), target, value);
+            // MIK-7991: the stored record was restored on decode; the replay
+            // wrote nothing else, so the delivery's record is exactly it.
+            let record = super::gateway_writes::recorded();
+            let value = super::gateway_writes::without(value, &record);
+            self.stage_relay_receipt(caller.relay_caller(session_id), target, &value);
         }
     }
 }

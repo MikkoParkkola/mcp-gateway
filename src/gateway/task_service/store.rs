@@ -433,6 +433,11 @@ impl Shared {
             reject_duplicate(&state, task.id(), &record)?;
             admit(&state, self.limits, &record, bytes.len())?;
         }
+        // Room for the bounded failure this task may have to settle as, or a
+        // too-large outcome would leave it working (MIK-7651).
+        if targets::fallback_bytes(&task, &record, self.now())? > self.limits.record_bytes {
+            return Err(StoreError::Capacity);
+        }
         self.commit(&record_name(task.id()), &bytes)?;
         // Readable FIRST, discoverable second. Reversed, a retry could be told
         // the task exists and then fail to read it.

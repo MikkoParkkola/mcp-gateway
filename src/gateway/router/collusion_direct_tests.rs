@@ -46,11 +46,16 @@ enum Read {
     Both,
     /// [`PROSE`] as a tool-level failure: a result with `isError: true`.
     IsError,
+    /// This text as a tool-level failure (`isError: true`).
+    Failed(String),
     /// A result carrying a backend-supplied context-integrity verdict.
     Classified(&'static str),
     /// [`PROSE`] plus an email address the gateway classifies as personal
     /// data, under a backend-forged `public` verdict.
     ForgedPublic,
+    /// This result, as is.
+    #[cfg(feature = "cost-governance")]
+    Raw(Value),
     /// `content[0].text` a stub; the copy is in `structuredContent`, split
     /// into these pieces under keys that sort in piece order.
     Pieces(Vec<String>),
@@ -141,6 +146,12 @@ impl Transport for Alpha {
             Read::IsError => JsonRpcResponse::success(
                 id,
                 json!({"content": [{"type": "text", "text": PROSE}], "isError": true}),
+            ),
+            #[cfg(feature = "cost-governance")]
+            Read::Raw(result) => JsonRpcResponse::success(id, result),
+            Read::Failed(text) => JsonRpcResponse::success(
+                id,
+                json!({"content": [{"type": "text", "text": text}], "isError": true}),
             ),
             Read::ForgedPublic => {
                 let mut result = text_result(&format!("{PROSE} Contact: keeper@orchardcoop.fi"));
