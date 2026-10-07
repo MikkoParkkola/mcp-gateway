@@ -176,6 +176,21 @@ async fn r6_an_unbindable_caller_is_refused_not_handed_the_state() {
     }
 }
 
+/// R6b: a refused seal releases the idempotency key. The backend asked and
+/// did not act, so re-sending the call under the same key reaches it again
+/// rather than finding the key held. Mutant: the release on the refusal path
+/// removed.
+#[tokio::test]
+async fn r6b_a_refused_seal_releases_the_key() {
+    for backend in BACKENDS {
+        let fx = fixture(Answer::AskOnce, |_| {}).await;
+        let opening = json!({"_meta": { IDEMPOTENCY_KEY_META: format!("k-8078-6b-{backend}") }});
+        let _ = call(&fx, backend, None, opening.clone()).await;
+        let (_, again) = call(&fx, backend, None, opening).await;
+        assert_eq!(dispatched(&fx), 2, "{backend}: the key was held: {again}");
+    }
+}
+
 /// R7 (preservation, green on the base too: the cache already refuses a
 /// non-final result): an interim answer is not settled under the
 /// idempotency key, so re-sending the opening call under the same key reaches
