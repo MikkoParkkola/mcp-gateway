@@ -9,7 +9,9 @@
 //! an absence is about the credential and not a transition never published.
 use super::super::super::*;
 use super::super::support::*;
-use super::agent_task_owner::{AGENT_A, agent_gateway, agent_token, listen_as};
+use super::agent_task_owner::{
+    AGENT_A, agent_gateway, agent_gateway_expiring, agent_token, listen_as,
+};
 use super::helpers::{
     ARRIVES_WITHIN, EventStream, ReleasedOnDrop, StreamEvent, assert_only_its_own_task,
     expect_message,
@@ -89,6 +91,31 @@ async fn a_listener_holding_a_rotated_out_key_receives_nothing_and_ends() {
     assert_ends_unread(&mut old_key, "agent A's key was rotated").await;
 }
 
+/// R1: agent A's token passes `exp` plus the 30 s leeway while its listener is
+/// open. A's next delivery reaches nothing and ends the stream; B, whose token
+/// is still valid, receives. The clock moved is the registry's, which every
+/// delivery judges by; the library's own check still sees a live token.
+#[tokio::test]
+async fn an_expired_agent_tokens_listener_receives_nothing_and_ends() {
+    let (mock, gate) = MockBackend::holding(Answer::ok());
+    let mut gate = ReleasedOnDrop(gate);
+    let (state, _store, token_a, token_b) = agent_gateway_expiring(&mock, 60).await;
+    let own_a = task_id(&post(&state, &token_a, task_invoke(77961, "expired-a", json!({}))).await);
+    gate.0.wait_for_dispatch().await;
+    let own_b = task_id(&post(&state, &token_b, task_invoke(77962, "kept-b", json!({}))).await);
+    gate.0.wait_for_dispatch().await;
+    let mut expired = listen_as(&state, &token_a, 77963, json!({ "taskIds": [&own_a] })).await;
+    let mut kept = listen_as(&state, &token_b, 77964, json!({ "taskIds": [&own_b] })).await;
+
+    // A: exp = t + 60, refused once exp + 30 < now. B: exp = t + 3600.
+    state.agent_auth.registry.advance_clock(200);
+    gate.0.release_all();
+    poll_until_terminal(&state, &token_b, &own_b).await;
+
+    assert_only_its_own_task(&mut kept, &own_b, 77964, "agent B, whose token is valid").await;
+    assert_ends_unread(&mut expired, "agent A's token expired").await;
+}
+
 /// R14 (listen leg): an embedder mutates the registry mid-stream. A receives
 /// while registered; after `remove` its next delivery ends the stream; once
 /// registered again with the same key, a NEW listener receives.
@@ -155,12 +182,13 @@ async fn an_agent_removed_then_registered_again_is_seen_at_each_delivery() {
 async fn a_valid_agent_listens_on_public_mcp_with_gateway_auth_on() {
     let mut auth = two_principal_auth();
     auth.public_paths = vec!["/mcp".to_string()];
-    let (mut state, _store) = fixture_state(&auth).await;
     let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
     let token = agent_token(&registry, AGENT_A);
-    Arc::get_mut(&mut state)
-        .expect("no other state handle")
-        .agent_auth = crate::gateway::oauth::AgentAuthState::new(true, registry);
+    let (state, _store) = agent_fixture_state(
+        &auth,
+        crate::gateway::oauth::AgentAuthState::new(true, registry),
+    )
+    .await;
 
     let mut stream = listen_as(
         &state,

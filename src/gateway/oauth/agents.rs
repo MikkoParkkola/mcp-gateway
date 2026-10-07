@@ -74,6 +74,11 @@ impl AgentDefinition {
 #[derive(Default, Clone)]
 pub struct AgentRegistry {
     inner: Arc<DashMap<String, AgentDefinition>>,
+    /// Seconds added to the wall clock this registry's tokens are judged by,
+    /// so a row can move a stream's view of time past a token's `exp`. Shared
+    /// by clones, as the map is; production has no such field.
+    #[cfg(test)]
+    skew: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl AgentRegistry {
@@ -82,7 +87,25 @@ impl AgentRegistry {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(DashMap::new()),
+            #[cfg(test)]
+            skew: Arc::default(),
         }
+    }
+
+    /// The time, in Unix seconds, a token is judged at: the wall clock, which
+    /// tests may move forward.
+    pub(crate) fn now(&self) -> u64 {
+        let now = jsonwebtoken::get_current_timestamp();
+        #[cfg(test)]
+        let now = now.saturating_add(self.skew.load(std::sync::atomic::Ordering::SeqCst));
+        now
+    }
+
+    /// Move this registry's clock `secs` forward.
+    #[cfg(test)]
+    pub(crate) fn advance_clock(&self, secs: u64) {
+        self.skew
+            .fetch_add(secs, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Register (or replace) an agent definition.

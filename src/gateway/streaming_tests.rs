@@ -703,3 +703,6 @@ async fn a_withheld_confirmation_prompt_reads_as_undelivered() {
 
 #[path = "streaming_tests/relay_commit.rs"]
 mod relay_commit;
+
+#[path = "streaming_tests/listen_graceful.rs"]
+mod listen_graceful;

@@ -486,6 +486,10 @@ pub struct AuthState {
     /// The live config, whose `control_plane.role_mapping` confers admin per
     /// request (E1-a).
     pub live_config: Arc<crate::config_reload::LiveConfig>,
+    /// Agent authentication, holding the same registry the agent middleware
+    /// validates against at ingress, so a held agent token is re-judged by
+    /// the one validator.
+    pub agent_auth: crate::gateway::oauth::AgentAuthState,
 }
 
 /// Authentication middleware
