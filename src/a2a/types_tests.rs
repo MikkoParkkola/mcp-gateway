@@ -22,6 +22,13 @@ fn a_user_message_serializes_in_the_1_0_shape() {
         "messageId is required: {wire}"
     );
     assert!(wire.get("contextId").is_none() && wire.get("taskId").is_none());
+    // The Rust field is `id`; the wire key must stay `messageId`.
+    assert!(
+        wire.get("id").is_none() && wire.get("message_id").is_none(),
+        "only messageId names the message: {wire}"
+    );
+    let back: Message = serde_json::from_value(wire).unwrap();
+    assert_eq!(back.id, message.id, "messageId reads back into the id");
 }
 
 #[test]
