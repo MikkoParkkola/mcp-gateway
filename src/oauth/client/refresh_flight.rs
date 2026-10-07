@@ -85,7 +85,8 @@ pub(super) fn fingerprint_hex(refresh_token: &str) -> String {
 pub(super) enum Outcome {
     /// The server answered with a token, and it is saved.
     Refreshed(TokenInfo),
-    /// The server refused with an OAuth error: the token was not consumed.
+    /// The server refused with an OAuth error: the token was not consumed,
+    /// unless a supplied client followed a redirect to the refusal.
     Rejected {
         status: reqwest::StatusCode,
         body: String,
@@ -127,8 +128,14 @@ impl Exchange {
         let outcome = self.send().await;
         // The marker stays when a possibly consumed token could not be retired
         // from storage: a later refresh, even after a restart, retires it then.
-        let retired =
-            !(matches!(outcome, Outcome::Uncertain(_)) && self.state.rotates) || self.spend();
+        // A supplied client may follow a redirect, so even an OAuth refusal
+        // can come from a hop after the server consumed the token.
+        let possibly_consumed = match outcome {
+            Outcome::Uncertain(_) => true,
+            Outcome::Rejected { .. } => self.route == RefreshRoute::Supplied,
+            Outcome::Refreshed(_) | Outcome::NotSent(_) => false,
+        };
+        let retired = !(possibly_consumed && self.state.rotates) || self.spend();
         if retired {
             self.state.in_flight = None;
         }

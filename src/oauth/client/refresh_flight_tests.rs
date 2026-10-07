@@ -36,6 +36,8 @@ enum Answer {
     RotateThenBrokenBody,
     /// Rotate, then redirect to a port nobody listens on.
     RotateThenRedirect,
+    /// Rotate, then redirect to an endpoint that answers an OAuth refusal.
+    RotateThenRedirectToRefusal,
     /// Answer with the refresh token sent, as a non-rotating server does;
     /// reusing it is allowed.
     Keep,
@@ -79,7 +81,11 @@ impl TokenServer {
             release: tokio::sync::Notify::new(),
         });
         let handler = Arc::clone(&server);
-        let app = Router::new().route(
+        let refusal = || async {
+            let body = serde_json::json!({ "error": "invalid_request" });
+            (axum::http::StatusCode::BAD_REQUEST, axum::Json(body))
+        };
+        let app = Router::new().route("/refused", post(refusal)).route(
             "/token",
             post(
                 move |headers: axum::http::HeaderMap, Form(form): Form<HashMap<String, String>>| {
@@ -139,6 +145,10 @@ impl TokenServer {
                     [("location", "http://127.0.0.1:1/token")],
                 )
                     .into_response();
+            }
+            Answer::RotateThenRedirectToRefusal => {
+                let location = format!("{}/refused", self.base);
+                return (StatusCode::TEMPORARY_REDIRECT, [("location", location)]).into_response();
             }
             Answer::RotateThenBrokenBody | Answer::KeepThenBrokenBody => {
                 let broken = futures::stream::iter([
@@ -411,6 +421,14 @@ async fn a_rotated_answer_behind_a_redirect_is_not_replayed() {
 #[tokio::test]
 async fn a_followed_redirect_through_a_supplied_client_is_not_replayed() {
     an_uncertain_refresh_is_not_replayed(Answer::RotateThenRedirect, supplied_client).await;
+}
+
+/// As above, with the followed hop answering an OAuth refusal: the refusal
+/// came after the server may have consumed the token, so it is spent too.
+#[tokio::test]
+async fn a_refusal_behind_a_supplied_clients_redirect_is_not_replayed() {
+    an_uncertain_refresh_is_not_replayed(Answer::RotateThenRedirectToRefusal, supplied_client)
+        .await;
 }
 
 /// ADOPT.1: a client whose cached token has expired, while storage holds a
