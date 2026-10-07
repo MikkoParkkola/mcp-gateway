@@ -476,6 +476,26 @@ def test_strikethrough_does_not_hide_a_version():
         assert run(notes(f"\n{line}\n"), "--check") == 1, line
 
 
+def test_a_tilde_before_a_version_does_not_hide_it():
+    for line in ("- Fixed in release~4.0.1.", "- Seen in 4.0.0-rc.1~4.0.1."):
+        assert run(notes(f"\n{line}\n"), "--check") == 1, line
+
+
+def test_a_title_paragraph_over_a_fence_opener_does_not_hide_the_fence():
+    text = notes("\nKnown\nissues\n```\n---\n## x\n```\n- Fixed in 4.0.1.\n")
+    assert run(text.replace("The 4.0.1 numbers come later.", "Later."), "--check") == 1
+
+
+def test_a_title_paragraph_over_a_comment_opener_does_not_hide_the_comment():
+    text = notes("\nKnown\nissues\nmore\n<!--\n---\n## x\n-->\n- Fixed in 4.0.1.\n")
+    assert run(text.replace("The 4.0.1 numbers come later.", "Later."), "--check") == 1
+
+
+def test_a_long_title_paragraph_over_a_fence_opener_does_not_hide_the_fence():
+    text = notes("\nKnown\nissues\nmore\n```\n---\n# x\n```\n- Fixed in 4.0.1.\n")
+    assert run(text.replace("The 4.0.1 numbers come later.", "Later."), "--check") == 1
+
+
 def test_a_hyphen_range_to_a_later_release_fails_the_check():
     assert run(notes("\n- Seen in 4.0.0-4.0.1.\n"), "--check") == 1
 
