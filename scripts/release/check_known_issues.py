@@ -56,7 +56,18 @@ INLINE_NOISE = re.compile(r"<!--.*?(?:-->|$)|<[^>]*>|\]\([^)]*\)|\]\[[^\]]*\]")
 # The same, for body text: only real tags go, so an autolink's URL, which
 # renders, is still scanned.
 HIDDEN_MARKUP = re.compile(
-    r"<!--.*?(?:-->|$)|</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?/?>|\]\([^)]*\)|\]\[[^\]]*\]"
+    r"<!--.*?(?:-->|$)|<\?.*?(?:\?>|$)|<!\[CDATA\[.*?(?:\]\]>|$)|<![A-Za-z][^>]*>"
+    r"|</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?/?>|\]\([^)]*\)|\]\[[^\]]*\]"
+)
+# Raw HTML that can interrupt a paragraph (CommonMark HTML block types 1-6):
+# any other tag line inside a paragraph is paragraph text.
+BLOCK_HTML = re.compile(
+    r"^ {0,3}<(?:[?!]|/?(?:script|pre|style|textarea|address|article|aside|"
+    r"blockquote|body|center|details|dialog|dir|div|dl|dt|dd|fieldset|figcaption|"
+    r"figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|"
+    r"li|link|main|menu|nav|noframes|ol|optgroup|option|p|param|search|section|"
+    r"summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[\s/>]|$))",
+    re.IGNORECASE,
 )
 # A tag read with quoted attribute values, so a quoted > does not end it. An
 # extra reading only: an unbalanced quote defeats it, and the plain one holds.
@@ -108,8 +119,9 @@ def opens_comment(line):
 
 def is_text(line):
     """True when `line` can be paragraph text: not blank, and no list, quote,
-    heading, fence, raw HTML or open comment. Indented four columns or more,
-    any line is text: a continuation line's markers are literal there."""
+    heading, fence, HTML block that can interrupt a paragraph, or open
+    comment. Indented four columns or more, any line is text: a continuation
+    line's markers are literal there."""
     wide = line.expandtabs(4)
     if wide.strip() and len(wide) - len(wide.lstrip()) >= 4:
         return True
@@ -117,7 +129,7 @@ def is_text(line):
         line.strip()
         and not NOT_A_PARAGRAPH.match(line)
         and not FENCE.match(line)
-        and not HTML.match(line)
+        and not BLOCK_HTML.match(line)
         and not opens_comment(line)
     )
 
