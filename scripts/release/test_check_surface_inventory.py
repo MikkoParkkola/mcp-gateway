@@ -98,6 +98,20 @@ def test_route_with_named_handler_is_extracted() -> None:
         assert any(path in i for i in ids), (path, sorted(ids))
 
 
+def test_versioned_route_constant_is_read() -> None:
+    names = [n for n, _, _ in inv.route_constants('owned_routes! {\n    HEALTH_V2 = "/v2/health",\n}')]
+    assert names == ["HEALTH_V2"], names
+
+
+def test_unresolved_route_constant_is_an_item() -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory(dir=inv.ROOT / "src") as tmp:
+        (Path(tmp) / "planted.rs").write_text("fn r() { x.route(routes::NOT_DECLARED_V9, h); }\n", encoding="utf-8")
+        ids = {e.id for e in inv.extract_routes()}
+    assert any(i.startswith("unresolved routes::NOT_DECLARED_V9") for i in ids), sorted(ids)
+
+
 def test_not_http_route_allowlist_is_live() -> None:
     """Every allowlisted non-HTTP `.route(` call still exists, so the list cannot rot."""
     for file, arg in inv.NOT_HTTP_ROUTES:

@@ -576,16 +576,31 @@ NOT_HTTP_ROUTES = {
 }
 
 
+def route_constants(code: str) -> list[tuple[str, str, int]]:
+    """(NAME, path, line) for each `NAME = "path",` entry of `owned_routes!`."""
+    return [
+        (m.group(1), m.group(2), line_of(code, m.start()))
+        for m in re.finditer(r"\b([A-Z][A-Z0-9_]*)\s*=\s*\"([^\"]+)\"", code)
+    ]
+
+
 def extract_routes() -> list[Entry]:
     path = SRC / "gateway/routes.rs"
     code, _ = scan(path.read_text(encoding="utf-8"))
     out = {}
-    for m in re.finditer(r"\b([A-Z_]+)\s*=\s*\"([^\"]+)\"", code):
-        out[m.group(2)] = Entry(m.group(2), rel(path), line_of(code, m.start()), m.group(1))
+    owned = set()
+    for name, route, line in route_constants(code):
+        owned.add(name)
+        out[route] = Entry(route, rel(path), line, name)
     # A listener path that is not one of the owned constants: the webhook
     # receiver under `webhooks.base_path`, the backend OAuth callback listener.
     for p in src_files():
         code, _ = prod_scan(p)
+        # A `routes::NAME` the table does not declare is an item nobody classified.
+        for m in re.finditer(r"\broutes::([A-Z][A-Z0-9_]*)\b", code):
+            if m.group(1) not in owned and m.group(1) != "OWNED":
+                rid = f"unresolved routes::{m.group(1)} ({rel(p)})"
+                out.setdefault(rid, Entry(rid, rel(p), line_of(code, m.start()), "not in routes.rs"))
         for m in re.finditer(r"\.(?:route|route_service|nest|nest_service)\(\s*([^,]+?)\s*,", code):
             arg = m.group(1)
             if arg.startswith("routes::") or (rel(p), arg) in NOT_HTTP_ROUTES:

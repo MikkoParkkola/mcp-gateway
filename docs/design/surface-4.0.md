@@ -56,7 +56,9 @@ where the value differs from the default or is a credential.
    `restart`) carry information only the operator has. Retry, breaker, cache, buffer,
    queue, TTL, poll and capacity numbers do not: they become INTERNAL (hidden keys). Retention and
    eviction policies (audit rotation, dead-letter retention) are operator intent and stay KEEP.
-   "Budget" in this rule means a guard or cost budget, not store capacity.
+   "Budget" in this rule means a guard or cost budget, not store capacity. A feature switch is a key that turns a
+   mechanism on or off (`enabled`, `action`, a source toggle); it is KEEP. A hidden key that refuses a
+   request names itself and `mcp-gateway doctor` in the error, so it stays findable where it bites (P2).
 4. **AUTO only with a concrete derivation**, each one becomes P2 work with a red-then-green test. Where
    the gateway already derives the value (transport detection, protocol negotiation) AUTO is cheap;
    elsewhere the row says what to build.
@@ -90,7 +92,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `env_files` | 1 |  |  |  |  |
 | `error_budget` |  |  | `error_budget`; `capability`; `capability.cooldown`; `capability.min_samples`; `capability.threshold`; `capability.window_duration`; `capability.window_size`; `min_samples`; `threshold`; `window_duration`; `window_size` |  |  |
 | `events` | 13 |  | 31 |  |  |
-| `failsafe` |  |  | 20 |  |  |
+| `failsafe` | 9 |  | `circuit_breaker.failure_threshold`; `circuit_breaker.reset_timeout`; `circuit_breaker.success_threshold`; `health_check.interval`; `health_check.timeout`; `rate_limit.burst_size`; `rate_limit.requests_per_second`; `retry.initial_backoff`; `retry.max_attempts`; `retry.max_backoff`; `retry.multiplier` |  |  |
 | `idempotency` | 4 |  |  |  |  |
 | `key_server` | 21 | `oidc[].auto_discover` | `cleanup_interval_secs`; `max_oidc_token_age_secs`; `max_tokens_per_identity` |  |  |
 | `marketplace` |  |  |  |  | `marketplace` |
@@ -99,7 +101,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `playbooks` | 3 |  |  |  |  |
 | `routing_profiles` | 6 |  |  |  |  |
 | `runtime` | 30 |  |  |  |  |
-| `security` | 117 |  | `claim_capture`; `claim_capture.enabled`; `claim_capture.path`; `firewall.anomaly_min_observations`; `firewall.anomaly_threshold`; `firewall.collusion.common_principals`; `firewall.collusion.min_matches`; `firewall.collusion.window_secs`; `firewall.memory_poisoning.max_entry_size_bytes`; `message_signing.replay_window` |  |  |
+| `security` | 120 |  | `firewall.anomaly_min_observations`; `firewall.anomaly_threshold`; `firewall.collusion.common_principals`; `firewall.collusion.min_matches`; `firewall.collusion.window_secs`; `firewall.memory_poisoning.max_entry_size_bytes`; `message_signing.replay_window` |  |  |
 | `server` | 10 |  | `max_body_size`; `modern_protocol`; `shutdown_timeout` |  | `request_timeout`; `ws_port` |
 | `streaming` | 3 |  | `buffer_size`; `keep_alive_interval`; `session_reaper_interval`; `session_ttl` |  |  |
 | `tasks` | 3 |  | `default_ttl_ms`; `expiry_interval`; `logical_budget_bytes`; `max_per_principal`; `max_record_bytes`; `max_records`; `max_workers`; `poll_interval_ms` |  |  |
@@ -199,8 +201,8 @@ backends:
 ## Open decisions for the operator
 
 1. Hide `kubernetes` while DEPLOYMENT.md still documents it, or keep it as an advanced command.
-2. Every lib item becomes INTERNAL. That assumes nobody outside the workspace builds on the crate from
-   crates.io.
+2. Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mcp-gateway`
+   (checked 2026-10-07), so no published crate builds on the library.
 
 ## Surface: config
 
@@ -330,7 +332,7 @@ backends:
 | `backends.<name>.oauth.enabled` | KEEP | `true` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:141 |
 | `backends.<name>.oauth.scopes` | KEEP | — | how a user declares a backend and its credentials | - | src/config/backend_config.rs:144 |
 | `backends.<name>.oauth.shared_account` | KEEP | — | how a user declares a backend and its credentials | - | src/config/backend_config.rs:183 |
-| `backends.<name>.oauth.token_refresh_buffer_secs` | AUTO | `300` | refresh at a fixed fraction of the token lifetime | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:172 |
+| `backends.<name>.oauth.token_refresh_buffer_secs` | AUTO | `300` | unset: refresh at max(300 s, 10 % of the token lifetime) before expiry, today's 300 s as the floor | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:172 |
 | `backends.<name>.passthrough` | KEEP | `false` | per-backend security opt-out; stays explicit | - | src/config/backend_config.rs:65 |
 | `backends.<name>.protocol_version` | AUTO | `None` | negotiated in `initialize` | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:220 |
 | `backends.<name>.runtime_profile` | KEEP | `None` | multi-user and provenance deployments (MULTI_USER.md) | - | src/config/backend_config.rs:86 |
@@ -450,22 +452,22 @@ backends:
 | `events.watch` | INTERNAL | `EventsWatchConfig::default()` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:164 |
 | `events.watch.max_pollers` | INTERNAL | `100` | delivery, retry, TTL and capacity limits; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:58 |
 | `events.watch.max_pollers_per_principal` | INTERNAL | `10` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/events.rs:60 |
-| `failsafe` | INTERNAL | `type default` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/mod.rs:101 |
-| `failsafe.circuit_breaker` | INTERNAL | `type default` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:38 |
-| `failsafe.circuit_breaker.enabled` | INTERNAL | `true` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:52 |
+| `failsafe` | KEEP | `type default` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/mod.rs:101 |
+| `failsafe.circuit_breaker` | KEEP | `type default` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/features/failsafe.rs:38 |
+| `failsafe.circuit_breaker.enabled` | KEEP | `true` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/features/failsafe.rs:52 |
 | `failsafe.circuit_breaker.failure_threshold` | INTERNAL | `DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:54 |
 | `failsafe.circuit_breaker.reset_timeout` | INTERNAL | `Duration::from_secs(DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_SE` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:59 |
 | `failsafe.circuit_breaker.success_threshold` | INTERNAL | `DEFAULT_CIRCUIT_BREAKER_SUCCESS_THRESHOLD` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:56 |
-| `failsafe.health_check` | INTERNAL | `type default` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:44 |
-| `failsafe.health_check.enabled` | INTERNAL | `true` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:138 |
+| `failsafe.health_check` | KEEP | `type default` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/features/failsafe.rs:44 |
+| `failsafe.health_check.enabled` | KEEP | `true` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/features/failsafe.rs:138 |
 | `failsafe.health_check.interval` | INTERNAL | `Duration::from_secs(DEFAULT_HEALTH_CHECK_INTERVAL_SECS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:141 |
 | `failsafe.health_check.timeout` | INTERNAL | `Duration::from_secs(DEFAULT_HEALTH_CHECK_TIMEOUT_SECS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:144 |
-| `failsafe.rate_limit` | INTERNAL | `type default` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:42 |
+| `failsafe.rate_limit` | KEEP | `type default` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/features/failsafe.rs:42 |
 | `failsafe.rate_limit.burst_size` | INTERNAL | `DEFAULT_RATE_LIMIT_BURST` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:120 |
-| `failsafe.rate_limit.enabled` | INTERNAL | `true` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:116 |
+| `failsafe.rate_limit.enabled` | KEEP | `true` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/features/failsafe.rs:116 |
 | `failsafe.rate_limit.requests_per_second` | INTERNAL | `DEFAULT_RATE_LIMIT_RPS` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:118 |
-| `failsafe.retry` | INTERNAL | `type default` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:40 |
-| `failsafe.retry.enabled` | INTERNAL | `true` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:78 |
+| `failsafe.retry` | KEEP | `type default` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/features/failsafe.rs:40 |
+| `failsafe.retry.enabled` | KEEP | `true` | turn a resilience mechanism on or off (non-idempotent backends turn retries off) | - | src/config/features/failsafe.rs:78 |
 | `failsafe.retry.initial_backoff` | INTERNAL | `Duration::from_millis(DEFAULT_RETRY_INITIAL_BACKOFF_MS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:91 |
 | `failsafe.retry.max_attempts` | INTERNAL | `DEFAULT_RETRY_MAX_ATTEMPTS` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:88 |
 | `failsafe.retry.max_backoff` | INTERNAL | `Duration::from_secs(DEFAULT_RETRY_MAX_BACKOFF_SECS)` | breaker, retry, rate-limit and health-check tuning; fixed defaults, per-backend `timeout` stays | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/failsafe.rs:94 |
@@ -589,9 +591,9 @@ backends:
 | `security.caller_identity.cloudflare_access.team_domain` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:30 |
 | `security.caller_identity.mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:43 |
 | `security.caller_identity.trusted_proxies` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:45 |
-| `security.claim_capture` | INTERNAL | `ClaimCaptureConfig::default()` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/security.rs:659 |
-| `security.claim_capture.enabled` | INTERNAL | `false` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/security.rs:571 |
-| `security.claim_capture.path` | INTERNAL | `"~/.mcp-gateway/claim-capture/claims.jsonl".to_string()` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/security.rs:573 |
+| `security.claim_capture` | KEEP | `ClaimCaptureConfig::default()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:659 |
+| `security.claim_capture.enabled` | KEEP | `false` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:571 |
+| `security.claim_capture.path` | KEEP | `"~/.mcp-gateway/claim-capture/claims.jsonl".to_string()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:573 |
 | `security.context_integrity` | KEEP | `ContextIntegrityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:647 |
 | `security.context_integrity.non_bypassable` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:535 |
 | `security.context_integrity.preset` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:530 |
@@ -1034,7 +1036,7 @@ backends:
 | `mcp-gateway validate` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:328 |
 | `mcp-gateway validate --fix` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:328 |
 | `mcp-gateway validate --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:328 |
-| `mcp-gateway validate --no-color` | AUTO | colour follows the terminal and `NO_COLOR` | accepted and ignored with a warning; UPGRADING entry | src/cli/mod.rs:328 |
+| `mcp-gateway validate --no-color` | AUTO | unset: colour follows the terminal and `NO_COLOR` | hidden flag, still honoured | src/cli/mod.rs:328 |
 | `mcp-gateway validate --severity` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:328 |
 | `mcp-gateway validate <paths>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:328 |
 
