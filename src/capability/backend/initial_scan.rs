@@ -108,21 +108,33 @@ impl CapabilityBackend {
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 
+    /// Record `name` as read but refused by the account gate (MIK-8037): a
+    /// catalogue write, so the generation moves.
+    pub(super) fn note_refused(&self, name: &str) {
+        let mut caps = self.capabilities.write();
+        caps.refused.insert(name.to_owned());
+        self.bump_catalogue_generation(&caps);
+    }
+
     /// The capabilities and whether every directory loaded, read under one
     /// lock, so a reload cannot change one without the other (MIK-8028).
     pub(crate) fn catalogue_snapshot(&self) -> (Vec<super::CapabilityDefinition>, bool) {
-        let (catalogue, complete, _) = self.catalogue_snapshot_at();
+        let (catalogue, complete, ..) = self.catalogue_snapshot_at();
         (catalogue, complete)
     }
 
-    /// [`Self::catalogue_snapshot`] and the generation it was read at, all
-    /// under the one lock (MIK-8037).
-    pub(crate) fn catalogue_snapshot_at(&self) -> (Vec<super::CapabilityDefinition>, bool, u64) {
+    /// [`Self::catalogue_snapshot`], the generation it was read at and the
+    /// names the account gate refused from the directories read, all under
+    /// the one lock (MIK-8037).
+    pub(crate) fn catalogue_snapshot_at(
+        &self,
+    ) -> (Vec<super::CapabilityDefinition>, bool, u64, Vec<String>) {
         let caps = self.capabilities.read();
         (
             caps.entries.clone(),
             self.initial_scan_loaded_every_directory(),
             self.catalogue_generation(),
+            caps.refused.iter().cloned().collect(),
         )
     }
 }

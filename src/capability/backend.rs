@@ -60,6 +60,8 @@ struct IndexedCapabilities {
     index: HashMap<String, usize>,
     /// Pre-built MCP `Tool` representations — rebuilt whenever `entries` changes.
     tools: Vec<Tool>,
+    /// Names a load read but the account gate refused: read, not unread.
+    refused: std::collections::HashSet<String>,
 }
 
 /// True when `new` differs from `old` in any serialised field. A definition
@@ -347,6 +349,7 @@ impl CapabilityBackend {
                     "Capability refused: its account binding does not resolve"
                 );
                 report.admitted -= 1;
+                self.note_refused(&capability);
                 report.rejected.push(format!("{capability}: {error}"));
             }
             tokio::task::yield_now().await;
@@ -393,11 +396,13 @@ impl CapabilityBackend {
 
         // The same admission gate the initial load applies.
         let mut admitted = Vec::with_capacity(all_caps.len());
+        let mut refused = std::collections::HashSet::new();
         for cap in all_caps {
             match validate_capability_account_binding(&cap, self.executor.account_strategies()) {
                 Ok(()) => admitted.push(cap),
                 Err(error) => {
                     total -= 1;
+                    refused.insert(cap.name.clone());
                     warn!(
                         backend = %self.name,
                         capability = %cap.name,
@@ -428,6 +433,7 @@ impl CapabilityBackend {
                 }
             }
             caps.replace_all(admitted);
+            caps.refused = refused;
             // With the swap, under the same lock: `catalogue_snapshot` never
             // sees one without the other.
             self.set_catalogue_partial(partial);

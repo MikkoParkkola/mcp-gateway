@@ -226,8 +226,15 @@ impl MetaMcp {
         // Read first: once `true` it stays true, so it always covers the
         // snapshot read after it.
         let scanned = capabilities.initial_scan_complete();
-        let (catalogue, every_directory, generation) = capabilities.catalogue_snapshot_at();
-        let present = catalogue.iter().map(|c| c.name.clone()).collect();
+        let (catalogue, every_directory, generation, refused) =
+            capabilities.catalogue_snapshot_at();
+        // A capability the account gate refused was read: its absence is
+        // confirmed, not unread.
+        let present = catalogue
+            .iter()
+            .map(|c| c.name.clone())
+            .chain(refused)
+            .collect();
         let targets = catalogue
             .into_iter()
             .filter(crate::capability::served_over_rest)
