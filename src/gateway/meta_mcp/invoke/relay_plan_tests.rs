@@ -520,11 +520,17 @@ async fn a_plan_steps_continuation_never_takes_its_receipts_budget() {
     carol_holds(&firewall, "a", &prompt);
 
     let head: String = prompt.chars().take(400).collect();
+    let tail: String = prompt.chars().skip(prompt.chars().count() - 400).collect();
+    for text in [&head, &tail] {
+        assert!(
+            refused(&firewall, "bob", text),
+            "control: bob holds no copy, so carol's makes his relay a match"
+        );
+    }
     assert!(
         !refused(&firewall, "alice", &head),
         "control: alice holds the prompt's head"
     );
-    let tail: String = prompt.chars().skip(prompt.chars().count() - 400).collect();
     assert!(
         !refused(&firewall, "alice", &tail),
         "the continuation pushed the prompt's tail out of the step's receipt"
