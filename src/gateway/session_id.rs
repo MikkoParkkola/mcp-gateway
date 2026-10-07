@@ -64,38 +64,66 @@ pub(crate) fn session_fp(id: &str) -> String {
 ///
 /// `Display` and `Debug` both print [`session_fp`], so a log that names a
 /// stored id is fingerprinted without a call-site rule. The raw value is
-/// reachable only through [`SessionId::expose_secret`].
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub(crate) struct SessionId(Arc<str>);
+/// reachable only through [`SessionId::expose_secret`]. The fingerprint is a
+/// function of the raw id alone, so it is computed once, here, and a request
+/// that resumes the session reads it instead of hashing again (PERF.2a).
+#[derive(Clone)]
+pub(crate) struct SessionId {
+    raw: Arc<str>,
+    fp: Arc<str>,
+}
 
 impl SessionId {
     pub(crate) fn new(id: &str) -> Self {
-        Self(Arc::from(id))
+        Self {
+            raw: Arc::from(id),
+            fp: Arc::from(session_fp(id)),
+        }
     }
 
     /// The raw id: for the map key, the response header and id comparison only.
     pub(crate) fn expose_secret(&self) -> &str {
-        &self.0
+        &self.raw
+    }
+
+    /// [`session_fp`] of the raw id, computed when this id was made.
+    pub(crate) fn fp(&self) -> &str {
+        &self.fp
     }
 }
 
-// Hashes as the `str` it wraps (the derive hashes the one field), so the map
-// can be queried by `&str`.
+// Equal and hashed as the raw `str` alone, so the map can be queried by
+// `&str` (`Borrow` requires the two hashes to agree). The fingerprint follows
+// from the raw id and adds nothing to its identity.
+impl PartialEq for SessionId {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw == other.raw
+    }
+}
+
+impl Eq for SessionId {}
+
+impl std::hash::Hash for SessionId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.raw.hash(state);
+    }
+}
+
 impl std::borrow::Borrow<str> for SessionId {
     fn borrow(&self) -> &str {
-        &self.0
+        &self.raw
     }
 }
 
 impl fmt::Display for SessionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&session_fp(&self.0))
+        f.write_str(&self.fp)
     }
 }
 
 impl fmt::Debug for SessionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SessionId({})", session_fp(&self.0))
+        write!(f, "SessionId({})", self.fp)
     }
 }
 

@@ -497,15 +497,17 @@ impl NotificationMultiplexer {
     }
 
     /// As [`Self::get_or_create_session_scoped`], for a caller that only needs
-    /// the id: it opens no notification channel (NFR.WORKLOAD.1).
+    /// the id: it opens no notification channel (`NFR.WORKLOAD.1`). The held id
+    /// carries its fingerprint, so the caller logs it without hashing again.
     pub(crate) fn get_or_create_session_id_scoped(
         &self,
         session_id: Option<&str>,
         owner: &SessionOwner,
         credential: Option<HeldCredential>,
-    ) -> String {
-        let session = self.open_session_scoped(session_id, owner, credential);
-        session.id.expose_secret().to_string()
+    ) -> SessionId {
+        self.open_session_scoped(session_id, owner, credential)
+            .id
+            .clone()
     }
 
     fn open_session_scoped(

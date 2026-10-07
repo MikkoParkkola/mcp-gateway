@@ -103,7 +103,10 @@ fn an_anonymous_holder_resumes_by_its_minted_id() {
 #[test]
 fn an_id_only_session_opens_its_channel_on_first_subscribe() {
     let m = mux();
-    let id = m.get_or_create_session_id_scoped(None, &cred("alice"), None);
+    let id = m
+        .get_or_create_session_id_scoped(None, &cred("alice"), None)
+        .expose_secret()
+        .to_owned();
     let session = Arc::clone(m.sessions.read().get(id.as_str()).expect("opened"));
     assert!(
         session.tx.get().is_none(),
@@ -118,7 +121,8 @@ fn an_id_only_session_opens_its_channel_on_first_subscribe() {
     m.broadcast(note());
     assert!(session.tx.get().is_none(), "a fan-out built a channel");
     assert_eq!(
-        m.resume_session_id_scoped(Some(&id), &cred("alice"), None),
+        m.resume_session_id_scoped(Some(&id), &cred("alice"), None)
+            .map(|resumed| resumed.expose_secret().to_owned()),
         Some(id.clone()),
         "the owner resumes by id"
     );
@@ -150,7 +154,10 @@ fn note() -> TaggedNotification {
 #[test]
 fn the_reaper_removes_an_unopened_session() {
     let m = mux();
-    let id = m.get_or_create_session_id_scoped(None, &cred("alice"), None);
+    let id = m
+        .get_or_create_session_id_scoped(None, &cred("alice"), None)
+        .expose_secret()
+        .to_owned();
     assert_eq!(
         m.reap_expired_sessions(std::time::Duration::ZERO),
         vec![id.clone()]
@@ -173,7 +180,10 @@ fn streams_subscribing_at_once_to_an_unopened_session_share_one_channel() {
     const STREAMS: usize = 8;
     for _ in 0..200 {
         let m = Arc::new(mux());
-        let id = m.get_or_create_session_id_scoped(None, &cred("alice"), None);
+        let id = m
+            .get_or_create_session_id_scoped(None, &cred("alice"), None)
+            .expose_secret()
+            .to_owned();
         let start = Arc::new(std::sync::Barrier::new(STREAMS));
         let streams: Vec<_> = (0..STREAMS)
             .map(|_| {
@@ -202,4 +212,25 @@ fn streams_subscribing_at_once_to_an_unopened_session_share_one_channel() {
             );
         }
     }
+}
+
+/// `MIK-8014.PERF.2a`: the fingerprint is held with the id, so a session that
+/// ended and was opened again under the same id is logged as the new session,
+/// not by a value left over from the old one.
+#[test]
+fn a_reused_id_is_fingerprinted_as_the_new_session() {
+    use crate::gateway::session_id::session_fp;
+    let m = mux();
+    drop(m.seed_session("gw-reused"));
+    m.remove_session("gw-reused");
+    drop(m.seed_session("gw-reused"));
+    let resumed =
+        m.get_or_create_session_id_scoped(Some("gw-reused"), &SessionOwner::Anonymous, None);
+    assert_eq!(
+        resumed.expose_secret(),
+        "gw-reused",
+        "the reused id resumed"
+    );
+    assert_eq!(resumed.fp(), session_fp("gw-reused"));
+    assert_eq!(resumed.to_string(), session_fp("gw-reused"));
 }
