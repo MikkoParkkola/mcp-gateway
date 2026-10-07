@@ -328,4 +328,13 @@ async fn a_refresh_that_cannot_take_the_cross_process_lock_sends_nothing() {
         stored(&owned).and_then(|t| t.refresh_token).as_deref(),
         Some("r1")
     );
+
+    std::fs::remove_dir(&lock).unwrap();
+    headless(&owned).await.expect("the kept token refreshes");
+    assert_eq!(
+        server.uses("r1"),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
 }

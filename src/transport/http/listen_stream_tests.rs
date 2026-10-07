@@ -29,13 +29,18 @@ async fn a_streamed_frame_over_the_cap_ends_the_listen() {
 }
 
 /// A stream whose body breaks off mid-chunk is a read error: the listen
-/// ends without a note, and a frame cut short is not delivered.
+/// ends without a note. A complete frame still waiting for its closing blank
+/// line is not delivered either, as it would be at a clean end of the body.
 #[tokio::test]
 async fn a_stream_that_breaks_off_ends_the_listen() {
-    let url = peer(|_| {
-        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
-         transfer-encoding: chunked\r\n\r\n40\r\ndata: {\"jsonrpc\""
-            .to_owned()
+    let url = peer(|id| {
+        let end = json!({"jsonrpc": "2.0", "id": id, "result": {"resultType": "complete"}});
+        let pending = format!("data: {end}\n");
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+             transfer-encoding: chunked\r\n\r\n{:x}\r\n{pending}\r\n40\r\ndata:",
+            pending.len()
+        )
     })
     .await;
     let mut stream = transport(&url).listen(req()).await.expect("opened");
