@@ -152,7 +152,8 @@ impl SessionLifecycle {
     /// Fire all registered callbacks for the given session ID.
     ///
     /// Called by the notification multiplexer when a session is reaped
-    /// or by the DELETE /mcp handler.
+    /// or by the DELETE /mcp handler. The cleanup handlers run even for a key
+    /// the idle sweep already reclaimed, so they must be idempotent.
     pub fn on_disconnect(&self, session_id: &str) {
         // Whatever brought us here, this key is done: drop its deadline so a
         // later reap cannot fire the handlers for it a second time. The
@@ -230,8 +231,8 @@ impl SessionLifecycle {
     /// renew its deadline. Taken around a task's backend call, which can run
     /// far past [`IDLE_TTL`] with no request from its caller in between. A
     /// key not yet tracked is tracked from the moment the guard drops.
-    /// Registering waits for a sweep that is running that key's handlers
-    /// (`held` is taken across them), which is why handlers must stay
+    /// Registering waits while a sweep runs any key's handlers (`held` is
+    /// taken across each key's section), which is why handlers must stay
     /// in-memory and short.
     pub(crate) fn hold(self: &Arc<Self>, key: &str) -> KeyHold {
         *self.held.lock().entry(key.to_owned()).or_default() += 1;
