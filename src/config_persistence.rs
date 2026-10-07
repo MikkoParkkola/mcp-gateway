@@ -134,9 +134,9 @@ pub(crate) fn write_config_with(
 /// The file's text is edited in place when `config` differs from it in
 /// `backends` alone: one backend added, removed or edited, or several added or
 /// edited (setup and discovery import). A write that would drop comments is
-/// refused, and the refusal names the comment lines; [`write_config`] is the
-/// full rewrite (`--force`). A `config` that is what the file already loads
-/// as writes nothing.
+/// refused, and the refusal names the comment lines; [`write_config`] (the
+/// CLI's `--force`) rewrites the file in full when it cannot splice. A `config`
+/// that is what the file already loads as writes nothing.
 ///
 /// # Errors
 ///
