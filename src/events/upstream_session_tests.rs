@@ -542,6 +542,28 @@ async fn a_silent_retry_keeps_a_readers_fill() {
     }
 }
 
+/// MIK-8007: a backend tools notice owes a refill, due within a tick, that
+/// the hub has not heard of yet.
+#[test]
+fn a_tools_notice_owes_a_refill_due_within_a_tick() {
+    let shared = shared();
+    shared
+        .need
+        .lock()
+        .add(&Interest::ToolsChanged)
+        .expect("room");
+    let mut state = State::new(&shared, Era::Legacy);
+    let noted = Instant::now();
+    state.note(changed(NoteKind::ToolsChanged), false);
+    let debt = shared.tools.lock();
+    let due = debt.due.expect("the notice's refill is owed");
+    assert!(
+        due <= Instant::now() + TICK && due >= noted,
+        "due within a tick"
+    );
+    assert!(debt.unannounced, "the hub has not heard of it");
+}
+
 /// MIK-8007: a backend gone from the config owes no tools notice; one added
 /// again later starts afresh.
 #[tokio::test]
