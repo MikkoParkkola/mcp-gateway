@@ -11,7 +11,7 @@ left at a final tag is shipped, so it blocks the tag instead. A prerelease tag
 (v4.0.0-beta.N, v4.0.0-rc.N) may ship open items as known gaps
 (docs/release/v4.0.0-prerelease-channel.md), so only the later-release rule
 applies to it. The tag is --tag, else $GITHUB_REF_NAME; anything that is not a
-vX.Y.Z-beta.N or vX.Y.Z-rc.N tag, a branch name included, is held to the
+v4.0.0-beta.N or v4.0.0-rc.N tag, a branch name included, is held to the
 final-tag rule.
 
 Exit 0 when the gate holds, 1 otherwise (an unreadable notes file included).
@@ -27,9 +27,10 @@ DEFAULT_NOTES = "docs/release/v4.0.0-release-notes-DRAFT.md"
 LATER_RELEASE = "4.0.1"
 # The version as a whole token: not 14.0.1, not 4.0.10; v4.0.1 and "4.0.1." count.
 LATER_RELEASE_TOKEN = re.compile(r"(?<![\d.])4\.0\.1(?!\.?\d)")
-# Same two forms as check_scope_acceptance.py PRERELEASE_400; any other suffix,
-# build metadata included, is held to the final-tag rule.
-PRERELEASE_TAG = re.compile(r"^v\d+\.\d+\.\d+-(beta|rc)\.\d+$")
+# Same two forms as check_scope_acceptance.py PRERELEASE_400, these notes being
+# 4.0.0's; any other version or suffix, build metadata included, is held to the
+# final-tag rule.
+PRERELEASE_TAG = re.compile(r"^v4\.0\.0-(beta|rc)\.\d+$")
 # ATX headings: up to three spaces of indent, optional closing hashes.
 HEADING = re.compile(r"^ {0,3}##[ \t]+known issues(?:[ \t]+#*)?[ \t]*$", re.IGNORECASE)
 SECTION_END = re.compile(r"^ {0,3}#{1,2}(?:[ \t]|$)")
@@ -49,7 +50,7 @@ def known_issues(text):
 
 
 def is_prerelease_tag(tag):
-    """True only for a vX.Y.Z-beta.N or vX.Y.Z-rc.N tag."""
+    """True only for a v4.0.0-beta.N or v4.0.0-rc.N tag."""
     return bool(PRERELEASE_TAG.match(tag))
 
 
