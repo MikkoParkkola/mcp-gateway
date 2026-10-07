@@ -391,4 +391,8 @@ async fn a_subscribe_whose_route_narrows_during_its_challenge_is_refused() {
         records(root.path(), "subs").is_empty(),
         "nothing was stored"
     );
+    assert!(
+        !rx.challenges().is_empty(),
+        "the subscribe passed its first check and was challenged, so the refusal came at commit"
+    );
 }
