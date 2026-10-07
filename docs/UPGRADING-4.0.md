@@ -185,6 +185,7 @@ backend" and "fails a capability file" first.**
 | 158 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 | 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
+| 161 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair the named file (its key is kept) or remove it (its key is released); probes (`/livez`, `/readyz`) are unaffected |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4226,6 +4227,28 @@ build loads with both at 0.
 
 Library users: code that builds `EnforcerSnapshot` or `PersistedCosts` with a
 struct literal adds the two fields.
+
+## 161. A task row with an unreadable key refuses new keyed calls
+
+**Startup:** no notice
+
+A stored task row whose idempotency key cannot be read unambiguously (damage
+before or inside its `admission` block, or a second copy of it) used to release
+that key, so a client retry was admitted as new work and its backend ran again.
+Now, while any such row is in the task store:
+
+- Every NEW keyed call, task or synchronous, answers the existing "unavailable"
+  refusal (409). Keys already held and unkeyed calls work as before.
+- The log names each file at startup and on every expiry sweep, the
+  `mcp_task_store_skipped_records{class="sealed"}` gauge counts the rows, and
+  `/health` reads `degraded` (503; the admin view adds `task_store.sealed_rows`).
+
+It clears without a restart, at the next expiry sweep. Repairing the file keeps
+its key, so a retry finds its task. Removing the file releases the key, so a
+retry of that call runs again.
+
+A record-named FIFO in the task store is now refused as unsafe at startup
+instead of hanging it.
 
 ## Upgrading from 3.5.x: a walkthrough
 
