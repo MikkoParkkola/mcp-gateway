@@ -762,5 +762,7 @@ fn a_record_without_unsent_reads_as_none() {
 mod burial;
 #[path = "store_pending_crash_tests.rs"]
 mod crash;
+#[path = "store_expiry_tests.rs"]
+mod expiry;
 #[path = "store_revive_tests.rs"]
 mod revive;
