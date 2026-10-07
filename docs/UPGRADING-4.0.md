@@ -185,6 +185,7 @@ backend" and "fails a capability file" first.**
 | 158 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 | 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
+| 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`. A change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4226,6 +4227,24 @@ build loads with both at 0.
 
 Library users: code that builds `EnforcerSnapshot` or `PersistedCosts` with a
 struct literal adds the two fields.
+
+## 161. CLI config writes keep comments, or refuse
+
+**Startup:** no notice
+
+`mcp-gateway add`, `remove`, `setup wizard` and `cap discover --write-config`
+(including the `--shadow` adoption) used to re-serialise `gateway.yaml`
+whenever the change was not a single block-style backend, which dropped every
+comment in the file, including the credential warning `init` writes.
+
+They now edit the file as text, one backend at a time, and write it once. When
+a change cannot be written that way (a flow-style `backends:` mapping, or a
+comment inside a changed value), the command writes nothing, exits non-zero,
+and names the line numbers of the comments a rewrite would drop. It never
+prints their text, which could hold a quoted secret.
+
+`--force` keeps the old behaviour: it names the same lines, then rewrites the
+file without them.
 
 ## Upgrading from 3.5.x: a walkthrough
 
