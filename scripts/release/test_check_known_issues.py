@@ -551,6 +551,15 @@ def test_a_version_inside_build_metadata_is_not_a_range_end():
         assert run(notes(f"\n{line}\n"), "--check") == 0, line
 
 
+def test_a_title_paragraph_with_an_inline_tag_line_is_the_section():
+    text = "Known\n<span>issues</span>\nfor 4.0\n---\n\n- Open.\n"
+    assert run(text, "--release", "--tag", "v4.0.0") == 1
+
+
+def test_a_processing_instruction_does_not_hide_a_version():
+    assert run(notes("\n- Fixed in 4.0.<?note?>1.\n"), "--check") == 1
+
+
 def test_a_hyphen_range_to_a_later_release_fails_the_check():
     assert run(notes("\n- Seen in 4.0.0-4.0.1.\n"), "--check") == 1
 
