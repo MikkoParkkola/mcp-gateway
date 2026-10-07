@@ -3,7 +3,7 @@
 //! MIK-7798: an agent-JWT listener is re-validated at every delivery, so an
 //! agent the registry no longer holds, or holds under another key, receives
 //! nothing more and its stream ends with no further frame (design r6: G1, G5,
-//! J1). Gateway authentication off, agent authentication on.
+//! J1). Agent authentication on; gateway authentication off except in R3.
 //!
 //! Every row pairs the refused listener with a live twin that DOES receive, so
 //! an absence is about the credential and not a transition never published.
@@ -12,6 +12,7 @@ use super::super::support::*;
 use super::agent_task_owner::{AGENT_A, agent_gateway, agent_token, listen_as};
 use super::helpers::{
     ARRIVES_WITHIN, EventStream, ReleasedOnDrop, StreamEvent, assert_only_its_own_task,
+    expect_message,
 };
 
 /// The next read on `stream` is its end: no message, not even a graceful one.
@@ -144,4 +145,36 @@ async fn an_agent_removed_then_registered_again_is_seen_at_each_delivery() {
     gate.0.release();
     poll_until_terminal(&state, &token_again, &third).await;
     assert_only_its_own_task(&mut fresh, &third, 77995, "agent A registered again").await;
+}
+
+/// R3: gateway authentication on, `/mcp` public, agent authentication on. A
+/// valid agent JWT is admitted to a listen there and receives a backend's
+/// change. Positive by itself: agent authentication demands an agent JWT on
+/// every request, so no configured-key twin can share this gateway.
+#[tokio::test]
+async fn a_valid_agent_listens_on_public_mcp_with_gateway_auth_on() {
+    let mut auth = two_principal_auth();
+    auth.public_paths = vec!["/mcp".to_string()];
+    let (mut state, _store) = fixture_state(&auth).await;
+    let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
+    let token = agent_token(&registry, AGENT_A);
+    Arc::get_mut(&mut state)
+        .expect("no other state handle")
+        .agent_auth = crate::gateway::oauth::AgentAuthState::new(true, registry);
+
+    let mut stream = listen_as(
+        &state,
+        &token,
+        77971,
+        json!({ "notifications": { "toolsListChanged": true } }),
+    )
+    .await;
+    state.announce_tools_changed("alpha").await;
+
+    let told = expect_message(&mut stream, "the valid agent's tools/list_changed").await;
+    std::assert_eq!(
+        told["method"],
+        "notifications/tools/list_changed",
+        "a valid agent listener receives the change: {told}"
+    );
 }
