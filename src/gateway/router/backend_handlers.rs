@@ -543,11 +543,11 @@ fn settle_direct_idempotency(
     reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
     response: &JsonRpcResponse,
 ) {
+    // MIK-7636: a failure keeps the uninspected note across its replay.
+    use crate::gateway::meta_mcp::invoke::audit::stored_failure;
     let Some(reservation) = reservation else {
         return;
     };
-    // MIK-7636: a failure keeps the uninspected note across its replay.
-    use crate::gateway::meta_mcp::invoke::audit::stored_failure;
     if response.delivery_refusal {
         reservation.fail(&stored_failure(
             crate::gateway::meta_mcp::invoke::dispatch_guards::firewall_refusal_body(),
