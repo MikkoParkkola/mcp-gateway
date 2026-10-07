@@ -505,5 +505,11 @@ mod tests {
             None,
             "a native answer is read whole"
         );
+        let stamped = json!({"content": [{"type": "text", "text": broken}],
+            "resultType": "complete", "_signature": {}, "_meta": {}});
+        assert!(
+            rewritten_text(&stamped).is_some(),
+            "the gateway's final stamps stay a wrapper"
+        );
     }
 }

@@ -396,13 +396,18 @@ pub(super) fn delivered_value(delivered: &Value) -> std::borrow::Cow<'_, Value> 
 /// `None` for an answer [`delivered_value`] reads decoded.
 #[cfg(feature = "firewall")]
 pub(super) fn rewritten_text(delivered: &Value) -> Option<&str> {
-    // Only the wrapper's own members: a native answer passed through (an
-    // interim one carries `inputRequests` and `requestState`) is read as
+    // Only the wrapper's own members and the gateway's final stamps (the
+    // modern `resultType: complete`, a signature): a native answer passed
+    // through, such as an interim one with `inputRequests`, is read as
     // delivered, its other members included.
     let wrapper = delivered
         .as_object()?
-        .keys()
-        .all(|key| matches!(key.as_str(), "content" | "isError" | "_meta"));
+        .iter()
+        .all(|(key, value)| match key.as_str() {
+            "content" | "isError" | "_meta" | "_signature" => true,
+            "resultType" => value == "complete",
+            _ => false,
+        });
     if !wrapper {
         return None;
     }
