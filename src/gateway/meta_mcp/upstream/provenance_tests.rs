@@ -58,6 +58,9 @@ fn stamping_on_replaces_a_peer_receipt_with_the_gateways_own() {
         .unwrap_or_else(|_| panic!("the peer's receipt was kept: {receipt}"));
     assert_eq!(signed.receipt.backend_id, "peer");
     assert_eq!(signed.receipt.tool, "slow_echo");
+    // Fetched live from the backend, as the live path labels it: not a
+    // deliberate cache bypass.
+    assert_eq!(signed.receipt.cache, crate::trust::CacheOutcome::Miss);
     let validator = AttestationValidator::new(
         BnautAttestationSigner::new(b"prov-key".to_vec(), "unit").with_audience("test-gateway"),
     );
