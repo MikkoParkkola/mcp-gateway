@@ -212,6 +212,12 @@ impl State {
 /// Winnowing: the rightmost minimum of every `W`-hash window, distinct, in
 /// position order. Fewer than `W` hashes form one short window.
 fn winnow(hashes: &[u64]) -> Vec<u64> {
+    winnow_at(hashes).into_iter().map(|i| hashes[i]).collect()
+}
+
+/// [`winnow`] as positions in `hashes`: the first position of each distinct
+/// fingerprint, in position order.
+fn winnow_at(hashes: &[u64]) -> Vec<usize> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     let mut last = None;
@@ -226,7 +232,7 @@ fn winnow(hashes: &[u64]) -> Vec<u64> {
         if end > start && last != Some(pos) {
             last = Some(pos);
             if seen.insert(hashes[pos]) {
-                out.push(hashes[pos]);
+                out.push(pos);
             }
         }
     }
@@ -466,7 +472,7 @@ impl CollusionDetector {
             return None;
         }
         let sender = self.digest(principal);
-        let fps = self.fingerprints(args);
+        let hashes = self.kgram_hashes(args);
         let window = self.params.window;
         // Held at `now`: some copy delivered by then, inside the window.
         let live = |t: &&Holder| t.copies.held(now, window);
@@ -474,7 +480,21 @@ impl CollusionDetector {
         state.sweep(now, window);
         let mut matches = 0;
         let mut first = None;
-        for fp in fps {
+        // The sender's own live copy from `source` of the fingerprint `fp`.
+        let holds = |fp: &u64, source: u64| {
+            state
+                .entries
+                .get(fp)
+                .is_some_and(|entry| match &entry.holders {
+                    Holders::Tracked(tuples) => tuples
+                        .iter()
+                        .filter(live)
+                        .any(|t| t.source == source && t.principal == sender),
+                    _ => false,
+                })
+        };
+        for pos in winnow_at(&hashes) {
+            let fp = hashes[pos];
             let Some(Entry {
                 holders: Holders::Tracked(tuples),
                 ..
@@ -482,12 +502,13 @@ impl CollusionDetector {
             else {
                 continue;
             };
-            let excused = |source| {
-                tuples
-                    .iter()
-                    .filter(live)
-                    .any(|t| t.source == source && t.principal == sender)
-            };
+            // Excused by the sender's own copy of this text or of the text a
+            // window either side (MIK-8083): a copy holds a fingerprint in
+            // every `W` consecutive k-grams it covers, and which one
+            // winnowing selects near a copy's edge depends on the text
+            // around it. `near` includes `pos`.
+            let near = &hashes[pos.saturating_sub(W - 1)..hashes.len().min(pos + W)];
+            let excused = |source| near.iter().any(|h| holds(h, source));
             let sensitive =
                 |t: &&Holder| t.sensitive.is_some_and(|copies| copies.held(now, window));
             if let Some(t) = tuples.iter().filter(sensitive).find(|t| {
