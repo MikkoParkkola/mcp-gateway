@@ -331,7 +331,7 @@ fn edit_block(
         // anchor or flow collection can hide a quote from the scanner, and
         // then the "comment" is the rest of the old value: carrying it would
         // leave old (secret) text on the edited line.
-        if comment.is_some_and(|comment| !parsed_as_comment(value, comment)) {
+        if comment.is_some_and(|comment| !parsed_as_comment(lines, line, comment)) {
             return None;
         }
         match (was, now) {
@@ -356,15 +356,15 @@ fn edit_block(
     Some(())
 }
 
-/// Whether the YAML parser reads `comment` after `value` as a comment: the
-/// value alone parses, and adding the comment changes nothing. Text the
-/// parser keeps as part of the value is never carried as a comment.
-fn parsed_as_comment(value: &str, comment: &str) -> bool {
-    let parse = |text: &str| serde_yaml::from_str::<Value>(&format!("k:{text}")).ok();
-    matches!(
-        (parse(value), parse(&format!("{value}{comment}"))),
-        (Some(alone), Some(with)) if alone == with
-    )
+/// Whether the YAML parser reads `comment`, the tail of `lines[line]`, as a
+/// comment: the whole document parses the same with and without it, so
+/// anchors defined elsewhere still resolve. Text the parser keeps as part of
+/// a value is never carried as a comment.
+fn parsed_as_comment(lines: &[&str], line: usize, comment: &str) -> bool {
+    let parse = |text: &[&str]| serde_yaml::from_str::<Value>(&text.join("\n")).ok();
+    let mut cut = lines.to_vec();
+    cut[line] = &lines[line][..lines[line].len() - comment.len()];
+    matches!((parse(lines), parse(&cut)), (Some(with), Some(without)) if with == without)
 }
 
 /// The text of `original` with backend `name`'s block entry edited from
@@ -601,6 +601,24 @@ mod tests {
         let sequence = "backends:\n  svc:\n    args: [!!str \"old # secret\"]\n";
         let old = "args: [\"old # secret\"]\n";
         assert_eq!(edited(sequence, old, "args: [new]\n"), None);
+    }
+
+    #[test]
+    fn a_real_comment_after_a_tag_or_alias_is_kept() {
+        let tagged = "backends:\n  svc:\n    env:\n      TOKEN: !!str \"old\"  # keep\n";
+        assert_eq!(
+            edited(tagged, "env:\n  TOKEN: old\n", "env:\n  TOKEN: new\n"),
+            Some("backends:\n  svc:\n    env:\n      TOKEN: new  # keep\n".to_owned())
+        );
+        // The alias resolves only in the whole document.
+        let aliased = "x: &shared {A: one}\nbackends:\n  svc:\n    env: *shared  # keep\n";
+        assert_eq!(
+            edited(aliased, "env:\n  A: one\n", "env:\n  A: one\n  B: two\n"),
+            Some(
+                "x: &shared {A: one}\nbackends:\n  svc:\n    env:  # keep\n      A: one\n      B: two\n"
+                    .to_owned()
+            )
+        );
     }
 
     #[test]
