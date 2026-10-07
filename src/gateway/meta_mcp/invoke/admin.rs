@@ -406,3 +406,38 @@ mod cost_section_tests {
         assert_eq!(section["key_overflow_spend_usd"], 0.5);
     }
 }
+
+/// MIK-8034: an admin capability reload reports the change on the feed the
+/// file watcher uses, so the drain refreshes the webhook routes and announces
+/// the new tool list, as after a file reload.
+#[cfg(test)]
+mod reload_tests {
+    use std::sync::Arc;
+
+    use crate::backend::BackendRegistry;
+    use crate::capability::{CapabilityBackend, CapabilityExecutor};
+    use crate::gateway::meta_mcp::MetaMcp;
+
+    #[tokio::test]
+    async fn an_admin_reload_reports_the_change_like_a_file_reload() {
+        let dir = tempfile::tempdir().expect("dir");
+        let caps = Arc::new(CapabilityBackend::new(
+            "hooks",
+            Arc::new(CapabilityExecutor::new()),
+        ));
+        caps.load_from_directory(dir.path().to_str().expect("utf8"))
+            .await
+            .expect("load");
+        let registry = Arc::new(BackendRegistry::new());
+        let (feed, mut drain) = tokio::sync::mpsc::unbounded_channel();
+        registry.set_change_feed(feed);
+        let meta = MetaMcp::new(registry);
+        meta.set_capabilities(caps);
+        meta.reload_capabilities().await.expect("reload");
+        assert_eq!(
+            drain.try_recv().ok().as_deref(),
+            Some("hooks"),
+            "the drain hears of the reload"
+        );
+    }
+}
