@@ -245,10 +245,13 @@ async fn a_loser_parked_behind_a_resume_answers_when_the_resume_commits() {
     let barrier: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         if armed.swap(false, Ordering::SeqCst) {
             let _ = entered_tx.send(());
-            let _ = release_rx
+            // A barrier never released fails the winner's write, and the
+            // test with it, instead of passing a stall off as a slow write.
+            release_rx
                 .lock()
                 .expect("release lock")
-                .recv_timeout(Duration::from_secs(5));
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the test releases the barrier");
         }
     });
     state.task_executor.barrier_on_record_write(barrier).await;
@@ -264,6 +267,9 @@ async fn a_loser_parked_behind_a_resume_answers_when_the_resume_commits() {
         .expect("the winner's write reached the barrier");
     let held = get_task(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&held), "input_required", "{held}");
+    // Nothing else waits on the release signal here, so the next subscriber
+    // can only be the loser.
+    std::assert_eq!(state.task_executor.release_waiters_for_test(), 0);
 
     let loser = spawn_update(3);
     // The winner's own subscription ended when it took the handoff, so a
