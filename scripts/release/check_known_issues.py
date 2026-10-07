@@ -36,13 +36,16 @@ THIS_RELEASE = (4, 0, 0)
 # 4.0.10, 4.1 and 5.0 alike. A pre-release or build suffix of 4.0.0 is not,
 # nor a number inside one (4.0.0+build-5.1, see IN_SUFFIX). Other 4.x/5.x numbers (a model
 # version, a size) read as deferrals too: a false red, reworded away.
-VERSION_TOKEN = re.compile(r"(?<![\w.])v?([45])\.(\d+)(?:\.(\d+))?(?!\d|\.\d)")
+VERSION_TOKEN = re.compile(r"(?<![\w.])[vV]?([45])\.(\d+)(?:\.(\d+))?(?!\d|\.\d)")
 # Same two forms as check_scope_acceptance.py PRERELEASE_400, these notes being
 # 4.0.0's; any other version or suffix, build metadata included, is held to the
 # final-tag rule.
 # Text that ends inside a version's pre-release or build suffix.
-# The suffix must hold a letter: 4.0.0-4.0.1 is a range, not a suffix.
-IN_SUFFIX = re.compile(r"\d\.\d+\.\d+[-+][0-9a-z.-]*[a-z][0-9a-z.-]*$", re.IGNORECASE)
+# A pre-release suffix must hold a letter (4.0.0-4.0.1 is a range, not a
+# suffix); build metadata need not (4.0.0+4.0.1 is a build of 4.0.0).
+IN_SUFFIX = re.compile(
+    r"\d\.\d+\.\d+(?:-[0-9a-z.-]*[a-z][0-9a-z.-]*|\+[0-9a-z.-]*)$", re.IGNORECASE
+)
 PRERELEASE_TAG = re.compile(r"^v4\.0\.0-(beta|rc)\.\d+$")
 # ATX level 1-2 headings: up to three spaces of indent; the title is compared as
 # letters only (see title_letters), so no inline Markdown can hide it.
@@ -55,6 +58,9 @@ INLINE_NOISE = re.compile(r"<!--.*?(?:-->|$)|<[^>]*>|\]\([^)]*\)|\]\[[^\]]*\]")
 HIDDEN_MARKUP = re.compile(
     r"<!--.*?(?:-->|$)|</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?/?>|\]\([^)]*\)|\]\[[^\]]*\]"
 )
+# A tag read with quoted attribute values, so a quoted > does not end it. An
+# extra reading only: an unbalanced quote defeats it, and the plain one holds.
+QUOTED_TAG = re.compile(r"<[A-Za-z/!](?:[^>\"']|\"[^\"]*\"|'[^']*')*>")
 TITLE = "knownissues"
 SECTION_END = re.compile(r"^#{1,2}(?:[ \t]|$)")
 # Setext: a paragraph line underlined with = (level 1) or - (level 2). A list
@@ -88,13 +94,19 @@ def title_letters(text):
     return re.sub(r"[^a-z]", "", INLINE_NOISE.sub("", html.unescape(text)).lower())
 
 
+def title_readings(text):
+    """title_letters of `text`, as written and with quoted-attribute tags
+    dropped first; a title either reading holds counts (fail closed)."""
+    return (title_letters(text), title_letters(QUOTED_TAG.sub("", text)))
+
+
 def is_title(text):
     """True when the letters of `text` hold "knownissues".
 
     Containment, not an exact match: whatever else the title says only makes
     a doubtful start, and a start fails closed.
     """
-    return TITLE in title_letters(text)
+    return any(TITLE in letters for letters in title_readings(text))
 
 
 def atx_start(line):
@@ -168,8 +180,9 @@ def known_issues(text):
         if starts_section(lines, i):
             inside, underline = True, not atx_start(line)
             above = lines[i - 1] if i else ""
-            title = line if TITLE in title_letters(line) else f"{above} {line}"
-            if title_letters(title).replace(TITLE, "", 1) or later_releases(title):
+            title = line if is_title(line) else f"{above} {line}"
+            extra = any(r.replace(TITLE, "", 1) for r in title_readings(title))
+            if extra or later_releases(title):
                 # A start line that says more than the title (a bullet read
                 # as one, or a version in an annotation, read from the raw
                 # text) is content too, so nothing it says is dropped. A
@@ -205,16 +218,18 @@ def later_releases(line):
     """The versions `line` renders that are later than this release.
 
     Markdown decides what renders (a code span keeps its markup), so the line
-    is read two ways and a version either reading shows counts (fail closed).
+    is read three ways and a version any reading shows counts (fail closed).
     Both decode entities and drop backslash escapes, emphasis and code marks,
     so 4\\.0\\.1 and 4.0.&#49; count. The second also drops inline tags, link
     targets and brackets (tags before decoding, so &lt;b&gt; stays text), so
-    4.0.<em>1</em> and 4.0.[1](url) count.
+    4.0.<em>1</em> and 4.0.[1](url) count. The third first drops tags read
+    with quoted attribute values, so 4.0.<em title="a>b">1</em> counts.
     """
     found = []
     readings = (
         re.sub(r"[\\`*_]", "", html.unescape(line)),
         re.sub(r"[\\`*_\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", line))),
+        re.sub(r"[\\`*_\[\]]", "", html.unescape(HIDDEN_MARKUP.sub("", QUOTED_TAG.sub("", line)))),
     )
     for text in readings:
         found += [
