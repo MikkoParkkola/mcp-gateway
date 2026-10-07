@@ -11,10 +11,9 @@
 //! - `support.rs` — free functions: tag collection, ranking helpers, `MetaMcpInvoker`, augment
 //! - `surfaced.rs` — `with_surfaced_tools`, `resolve_surfaced_tool`, `list_servers`
 
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+use std::{collections::HashMap, sync::Arc};
 
 #[cfg(feature = "spec-preview")]
 use dashmap::DashMap;
@@ -23,8 +22,6 @@ use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use crate::attestation::signer::BnautAttestationSigner;
-use crate::backend::BackendRegistry;
-use crate::cache::ResponseCache;
 use crate::capability::CapabilityBackend;
 use crate::config::SurfacedToolConfig;
 use crate::config_reload::ReloadContext;
@@ -46,14 +43,14 @@ use crate::protocol::{ChainSource, JsonRpcResponse, LoggingLevel, RequestId, neg
 use crate::ranking::SearchRanker;
 use crate::routing_profile::{ProfileRegistry, SessionProfileStore};
 use crate::security::message_signing::{MessageSigner, NonceStore};
-use crate::stats::UsageStats;
-use crate::tool_registry::ToolRegistry;
 use crate::transition::TransitionTracker;
 use crate::trust::{
     project_tool_descriptor_trust_card, project_tool_descriptors_trust_cards,
     tools_list_result_with_trust_cards,
 };
 use crate::{Error, Result};
+use crate::{backend::BackendRegistry, cache::ResponseCache};
+use crate::{stats::UsageStats, tool_registry::ToolRegistry};
 
 use super::meta_mcp_helpers::{
     build_code_mode_tools, build_discovery_preamble, build_initialize_result,
@@ -202,6 +199,8 @@ pub struct MetaMcpCallerContext<'a> {
     /// Whether the caller holds admin: meta-tools with admin-only PARAMETERS cannot be gated by
     /// the tool-name allow-list in `router::authorization`, which knows only whole tools.
     pub is_admin: bool,
+    /// The meta-tool surface this request asked for; recovery hints follow it (MIK-7974).
+    pub(crate) surface_request: crate::gateway::recovery::SurfaceRequest,
     /// What this caller declared on **this** request.
     ///
     /// A parsed set rather than a single "may be asked for input" bit, because MRTR.9 refuses per
@@ -321,6 +320,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             stdio_nonce: self.stdio_nonce,
             caller_key: self.caller_key,
             is_admin: self.is_admin,
+            surface_request: self.surface_request,
             input_capabilities: self.input_capabilities,
             confirmation: self.confirmation.clone(),
             retry,
