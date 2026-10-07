@@ -320,17 +320,11 @@ impl TransportConfig {
     /// but is evaluated statically from config alone, so the
     /// identity-propagation dispatch gate can refuse a `required` backend
     /// BEFORE its transport is started (and before any credential is
-    /// minted) rather than after. Keep the two in sync: only the transport
-    /// backing [`Self::Http`] (`HttpTransport`) applies `extra_headers` to
-    /// the wire today.
+    /// minted) rather than after. Keep the two in sync: `HttpTransport` and
+    /// the A2A transport (MIK-8063) apply `extra_headers` to the wire; stdio
+    /// and WebSocket carry no per-request header channel.
     #[must_use]
     pub fn carries_identity_headers(&self) -> bool {
-        match self {
-            Self::Http { .. } => true,
-            Self::Stdio { .. } | Self::WebSocket { .. } => false,
-            // Applied per request by the A2A transport (MIK-8063).
-            #[cfg(feature = "a2a")]
-            Self::A2a { .. } => true,
-        }
+        !matches!(self, Self::Stdio { .. } | Self::WebSocket { .. })
     }
 }

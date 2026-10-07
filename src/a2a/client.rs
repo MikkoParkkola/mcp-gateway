@@ -29,7 +29,7 @@ pub(crate) struct Endpoint {
 /// What one `SendMessage` came back as.
 pub(crate) enum Reply {
     /// A `{task}` or `{message}` result.
-    Answer(SendMessageResponse),
+    Answer(Box<SendMessageResponse>),
     /// The agent's own JSON-RPC error, passed on as the agent's.
     AgentError { code: i32, message: String },
 }
@@ -224,7 +224,7 @@ fn decode_reply(envelope: Value) -> Result<Reply> {
             "A2A SendMessage result must hold exactly one of task and message".into(),
         ));
     }
-    Ok(Reply::Answer(reply))
+    Ok(Reply::Answer(Box::new(reply)))
 }
 
 #[cfg(test)]

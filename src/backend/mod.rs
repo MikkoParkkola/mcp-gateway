@@ -287,16 +287,13 @@ impl Backend {
     }
 
     /// Whether this backend's transports connect under its destination
-    /// policy. A stdio child reaches no network destination of its own; an
-    /// A2A agent is reached over HTTP like an HTTP backend (MIK-8063).
+    /// policy. A stdio child reaches no network destination of its own; every
+    /// other transport does, an A2A agent included (MIK-8063).
     pub(crate) fn destination_bound(&self) -> bool {
-        match self.config.transport {
-            crate::config::TransportConfig::Http { .. }
-            | crate::config::TransportConfig::WebSocket { .. } => true,
-            #[cfg(feature = "a2a")]
-            crate::config::TransportConfig::A2a { .. } => true,
-            crate::config::TransportConfig::Stdio { .. } => false,
-        }
+        !matches!(
+            self.config.transport,
+            crate::config::TransportConfig::Stdio { .. }
+        )
     }
 
     /// Start a WebSocket transport under `destination`, the policy the start
