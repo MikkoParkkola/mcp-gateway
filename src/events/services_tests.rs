@@ -372,3 +372,32 @@ async fn a_dashboard_session_subscription_ends_at_logout() {
         "logged out"
     );
 }
+
+/// MIK-7903: an event charge settles its reservation with its spend, so a
+/// check that runs inside the settle sees the charge once.
+#[cfg(feature = "cost-governance")]
+#[test]
+fn an_event_charge_settles_its_reservation_with_its_spend() {
+    use crate::cost_accounting::config::CostGovernanceConfig;
+    use crate::cost_accounting::enforcer::BudgetEnforcer;
+    use crate::cost_accounting::registry::CostRegistry;
+
+    // GIVEN: room for two charges of 1.0 on `dev`
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..CostGovernanceConfig::default()
+    };
+    cfg.budgets.per_key.insert("dev".to_owned(), 2.5);
+    let registry = Arc::new(CostRegistry::new(&cfg));
+    let enforcer = Arc::new(BudgetEnforcer::new(cfg, Arc::clone(&registry)));
+    let mut services = services(Vec::new());
+    services.budget = Some((Arc::clone(&enforcer), registry));
+    let competing = enforcer.check_during_next_settle("events:ev", Some("dev"));
+    // WHEN: one charge settles while another check runs
+    assert!(services.charge("ev", Some("dev"), 1.0));
+    // THEN: the charge counts once, so the second still fits
+    assert!(
+        competing.admitted(),
+        "the charge was counted twice inside its settle"
+    );
+}

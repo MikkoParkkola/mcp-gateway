@@ -218,6 +218,27 @@ async fn t3c_an_admission_holds_its_cost_until_it_is_dropped() {
     );
 }
 
+/// T3e (MIK-7903). A direct call settles its reservation with its spend: a
+/// check that runs inside the settle sees the call once, on both routes.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn t3e_a_direct_call_settles_its_reservation_with_its_spend() {
+    for backend in BACKENDS {
+        // GIVEN: room for two calls of 1.0 on `k-budget`
+        let fx = budget_fixture(Answer::Ok, 2.5).await;
+        let enforcer = fx.state.meta_mcp.budget_enforcer.clone().expect("armed");
+        let competing = enforcer.check_during_next_settle("read", Some("k-budget"));
+        // WHEN: one call settles while another check runs
+        let (_, body) = post_direct(&fx, backend, "k-budget", "read", json!({}), None, None).await;
+        assert!(body.get("result").is_some(), "{backend}: {body}");
+        // THEN: the call counts once, so the second still fits
+        assert!(
+            competing.admitted(),
+            "{backend}: counted twice in its settle"
+        );
+    }
+}
+
 /// T3d (DIRECT.2, guard). A cached success replays after the budget is
 /// exhausted, without dispatching or spending.
 #[cfg(feature = "cost-governance")]

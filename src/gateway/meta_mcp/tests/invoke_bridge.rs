@@ -111,16 +111,7 @@ async fn a_legacy_clients_question_is_bridged_from_the_invoke_path() {
         Duration::from_secs(300),
     ));
     let script = Arc::new(ScriptedToolCallTransport::new(vec![
-        json!({
-            "resultType": "input_required",
-            "inputRequests": {
-                "k1": {
-                    "method": "elicitation/create",
-                    "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
-                }
-            },
-            "requestState": "backend-state-1"
-        }),
+        question(),
         json!({"content": [{"type": "text", "text": "booked on work"}]}),
     ]));
     let transport: Arc<dyn Transport> = script.clone();
@@ -226,16 +217,7 @@ async fn a_dispatched_round_refused_by_the_firewall_settles_the_key_as_a_refusal
         Duration::from_secs(300),
     ));
     let script = Arc::new(ScriptedToolCallTransport::new(vec![
-        json!({
-            "resultType": "input_required",
-            "inputRequests": {
-                "k1": {
-                    "method": "elicitation/create",
-                    "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
-                }
-            },
-            "requestState": "backend-state-1"
-        }),
+        question(),
         json!({
             "resultType": "input_required",
             "inputRequests": {
@@ -356,16 +338,7 @@ async fn a_failed_bridged_round_settles_the_idempotency_key() {
         Duration::from_secs(300),
     ));
     let script = Arc::new(ScriptedToolCallTransport::new(vec![
-        json!({
-            "resultType": "input_required",
-            "inputRequests": {
-                "k1": {
-                    "method": "elicitation/create",
-                    "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
-                }
-            },
-            "requestState": "backend-state-1"
-        }),
+        question(),
         json!({"__transport_error": "the backend went away mid-exchange"}),
     ]));
     let transport: Arc<dyn Transport> = script.clone();
@@ -440,9 +413,17 @@ async fn a_failed_bridged_round_settles_the_idempotency_key() {
 // and records its spend, which is what puts the bridged round over the limit.
 // Map the refusal back to `BackendFailed` and the cache holds a stored error
 // instead of being empty.
+/// `asking_backend` answering from `results`, behind cost governance that
+/// charges 0.01 per `book` against a per-tool day limit of `limit`.
 #[cfg(feature = "cost-governance")]
-#[tokio::test]
-async fn a_budget_refused_bridged_round_releases_the_idempotency_key() {
+fn budgeted(
+    results: Vec<serde_json::Value>,
+    limit: f64,
+) -> (
+    MetaMcp,
+    Arc<crate::cost_accounting::enforcer::BudgetEnforcer>,
+    Arc<ScriptedToolCallTransport>,
+) {
     use crate::backend::Backend;
     use crate::config::{BackendConfig, FailsafeConfig};
     use crate::cost_accounting::config::{BudgetLimits, CostGovernanceConfig};
@@ -457,16 +438,7 @@ async fn a_budget_refused_bridged_round_releases_the_idempotency_key() {
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
-    let script = Arc::new(ScriptedToolCallTransport::new(vec![json!({
-        "resultType": "input_required",
-        "inputRequests": {
-            "k1": {
-                "method": "elicitation/create",
-                "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
-            }
-        },
-        "requestState": "backend-state-1"
-    })]));
+    let script = Arc::new(ScriptedToolCallTransport::new(results));
     let transport: Arc<dyn Transport> = script.clone();
     backend.set_transport_for_test(transport);
     let _ = registry.register(backend);
@@ -475,7 +447,7 @@ async fn a_budget_refused_bridged_round_releases_the_idempotency_key() {
         enabled: true,
         budgets: BudgetLimits {
             daily: None,
-            per_tool: [("book".to_string(), 0.015)].into_iter().collect(),
+            per_tool: [("book".to_string(), limit)].into_iter().collect(),
             per_key: std::collections::HashMap::new(),
         },
         ..CostGovernanceConfig::default()
@@ -483,9 +455,29 @@ async fn a_budget_refused_bridged_round_releases_the_idempotency_key() {
     cost_config.tool_costs.insert("book".to_string(), 0.01);
     let cost_registry = Arc::new(CostRegistry::new(&cost_config));
     let enforcer = Arc::new(BudgetEnforcer::new(cost_config, Arc::clone(&cost_registry)));
+    let meta = MetaMcp::new(registry).with_cost_governance(Arc::clone(&enforcer), cost_registry);
+    (meta, enforcer, script)
+}
 
+/// An input-required answer asking one form question, for a bridged round.
+fn question() -> serde_json::Value {
+    json!({
+        "resultType": "input_required",
+        "inputRequests": {
+            "k1": {
+                "method": "elicitation/create",
+                "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
+            }
+        },
+        "requestState": "backend-state-1"
+    })
+}
+
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_budget_refused_bridged_round_releases_the_idempotency_key() {
+    let (mut meta, _, script) = budgeted(vec![question()], 0.015);
     let cache = Arc::new(crate::idempotency::IdempotencyCache::new());
-    let mut meta = MetaMcp::new(registry).with_cost_governance(enforcer, cost_registry);
     meta.enable_idempotency(Arc::clone(&cache), Duration::from_secs(300));
 
     let channel = AcceptingChannel {
@@ -570,4 +562,55 @@ fn every_pre_dispatch_failure_releases_the_bridged_idempotency_key() {
         classify_bridged_dispatch_error(&crate::Error::BackendTimeout("timed out".into())),
         BridgeError::BackendFailed { .. }
     ));
+}
+
+/// MIK-7903: a meta-routed call settles its reservation with its spend, so a
+/// check that runs inside the settle sees the call once.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn an_invoked_call_settles_its_reservation_with_its_spend() {
+    // GIVEN: room for two calls of 0.01 on `book`
+    let answer = json!({"content": [{"type": "text", "text": "booked"}]});
+    let (meta, enforcer, _) = budgeted(vec![answer], 0.025);
+    let competing = enforcer.check_during_next_settle("book", None);
+    // WHEN: one call settles while another check runs
+    let call = json!({"server": "asking_backend", "tool": "book", "arguments": {}});
+    meta.invoke_tool(&call, Some("session-settle-1"), &allow_all_ctx())
+        .await
+        .expect("the call fits");
+    // THEN: the call counts once, so the second still fits
+    assert!(competing.admitted(), "counted twice inside its settle");
+}
+
+/// MIK-7903: a bridged round settles its own reservation with its spend. The
+/// first round's settle is skipped; the check runs inside the second.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_bridged_round_settles_its_reservation_with_its_spend() {
+    // GIVEN: room for three calls of 0.01 on `book`; the first round asks
+    let answer = json!({"content": [{"type": "text", "text": "booked on work"}]});
+    let (meta, enforcer, script) = budgeted(vec![question(), answer], 0.035);
+    let competing = enforcer.check_during_settle_after(1, "book", None);
+    let channel = AcceptingChannel {
+        asked: std::sync::Mutex::new(Vec::new()),
+    };
+    let mut ctx = allow_all_ctx();
+    ctx.era = crate::protocol::meta::Era::Legacy;
+    ctx.input_capabilities = crate::protocol::meta::classify_request(
+        Some(&json!({"_meta": {
+            crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+            crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}},
+        }})),
+        None,
+    )
+    .declared_capabilities();
+    ctx.channel = &channel;
+    // WHEN: the bridged round settles while another check runs
+    let call = json!({"server": "asking_backend", "tool": "book", "arguments": {}});
+    meta.invoke_tool(&call, Some("session-settle-2"), &ctx)
+        .await
+        .expect("both rounds fit");
+    assert_eq!(script.calls().len(), 2, "the round was bridged");
+    // THEN: the round counts once, so a third call still fits
+    assert!(competing.admitted(), "counted twice inside its settle");
 }

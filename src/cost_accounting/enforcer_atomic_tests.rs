@@ -174,27 +174,16 @@ fn an_add_inside_the_day_reset_window_is_kept() {
 /// spend and the reservation together and is refused.
 #[test]
 fn a_check_during_a_settle_counts_the_call_once() {
-    use std::sync::Mutex;
-    use std::thread::JoinHandle;
-
     for scope in [Scope::Global, Scope::Tool, Scope::Key] {
         // GIVEN: room for exactly two calls, and call A admitted
         let enforcer = enforcer(scope, 2);
         let a = enforcer.check(TOOL, Some(KEY));
         assert!(a.allowed, "{scope:?}: call A is admitted");
-        let slot: Arc<Mutex<Option<JoinHandle<bool>>>> = Arc::default();
-        let (inner, hook_slot) = (Arc::clone(&enforcer), Arc::clone(&slot));
-        AFTER_SPEND_ADDED.with(|hook| {
-            *hook.borrow_mut() = Some(Box::new(move || {
-                let b = std::thread::spawn(move || inner.check(TOOL, Some(KEY)).allowed);
-                *hook_slot.lock().unwrap() = Some(b);
-            }));
-        });
+        let b = enforcer.check_during_next_settle(TOOL, Some(KEY));
         // WHEN: A settles while B checks
         enforcer.settle(a.hold.as_deref(), TOOL, Some(KEY), a.cost_usd);
-        let b = slot.lock().unwrap().take().expect("the hook ran");
         // THEN: B fits, because A counts once (spent), not twice (spent + held)
-        assert!(b.join().unwrap(), "{scope:?}: call B was refused");
+        assert!(b.admitted(), "{scope:?}: call B was refused");
         drop(a);
     }
 }
