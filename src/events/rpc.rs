@@ -573,6 +573,8 @@ impl EventsHub {
             if let Err(refused) = hub.still_admits(&attempt) {
                 return Ok(Err(refused));
             }
+            #[cfg(test)]
+            tokio::runtime::Handle::current().block_on(hub.before_admit.pause());
             store
                 .admit_granted(attempt, grant, fresh, policy, now)
                 .map(Ok)

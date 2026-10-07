@@ -154,3 +154,42 @@ async fn a_narrower_restore_after_a_failed_withdraw_is_refused() {
     );
     assert!(subscribed(store.path(), "beta"));
 }
+
+/// MIK-8038 `SHAPE.5` at startup (A3): the first startup pass withdraws the
+/// route its refresh removed, but the withdraw fails; a reload inside the
+/// grace period then restores beta narrower, and is refused.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_narrower_restore_after_a_failed_first_pass_withdraw_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().expect("dir");
+    let store = tempfile::tempdir().expect("store");
+    std::fs::write(dir.path().join("a.yaml"), capability("alpha")).expect("write");
+    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    seed_subscription(store.path(), "beta");
+    let (caps, registry, meta) = wired(&[dir.path()], store.path()).await;
+    caps.mark_initial_scan_complete();
+    std::fs::remove_file(dir.path().join("b.yaml")).expect("remove beta");
+    caps.reload()
+        .await
+        .expect("reload, its notice not yet handled");
+    let subs = store.path().join("subs");
+    std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(0o500)).expect("lock");
+    meta.reconcile_events_after_scan();
+    settled(|| routes(&registry) == ["alpha.push"]).await;
+    // Past the first pass's webhook decision, which runs under this gate.
+    drop(meta.events().expect("hub").catalogue_lock());
+    std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(0o700)).expect("unlock");
+    assert!(
+        subscribed(store.path(), "beta"),
+        "the failed withdraw kept it"
+    );
+    std::fs::write(dir.path().join("b.yaml"), narrower("beta")).expect("write");
+    reload(&caps, &meta).await;
+    assert_eq!(
+        routes(&registry),
+        ["alpha.push"],
+        "the narrower restore is refused"
+    );
+    assert!(subscribed(store.path(), "beta"));
+}

@@ -97,6 +97,10 @@ pub(crate) struct EventsHub {
     /// Test-only: one subscribe pauses between its commit and its audit.
     #[cfg(test)]
     after_commit: test_pause::Slot,
+    /// Test-only: one subscribe pauses after its commit-time re-check, still
+    /// holding the catalogue gate, before its store admit (MIK-8038).
+    #[cfg(test)]
+    before_admit: test_pause::Slot,
     /// Test-only: one burial pauses between its store call and its receipts.
     #[cfg(test)]
     before_receipts: test_pause::Slot,
@@ -219,6 +223,8 @@ impl EventsHub {
             receipts: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             after_commit: test_pause::Slot::default(),
+            #[cfg(test)]
+            before_admit: test_pause::Slot::default(),
             #[cfg(test)]
             before_receipts: test_pause::Slot::default(),
         }))
