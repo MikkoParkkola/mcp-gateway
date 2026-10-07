@@ -365,7 +365,7 @@ fn resolve_audit_log_config(
 fn resolve_audit_log_path(path: Option<std::path::PathBuf>) -> std::path::PathBuf {
     use std::path::PathBuf;
     path.unwrap_or_else(|| {
-        dirs::home_dir().map_or_else(
+        crate::home_dir::home_dir().map_or_else(
             || PathBuf::from("transparency.jsonl"),
             |h| {
                 h.join(".mcp-gateway")

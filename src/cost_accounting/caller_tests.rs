@@ -118,3 +118,25 @@ fn concurrent_records_during_sweeps_finish_with_exact_totals() {
 
 /// Larger than the sweep interval, far smaller than the idle window.
 const SWEEP_STEP: u64 = 61;
+
+#[test]
+fn a_callers_breakdown_folds_tools_past_the_cap() {
+    // GIVEN: one caller on 300 distinct tools, then once more on the first
+    let costs = CallerCosts::default();
+    for i in 0..300 {
+        costs.record("k", &rec(&format!("t{i}")), 1000);
+    }
+    costs.record("k", &rec("t0"), 1000);
+    // THEN: the cap plus (other), a known row still counting, totals exact
+    let snap = costs.snapshot("k", 1000).expect("the caller's spend");
+    assert_eq!(snap.by_tool.len(), super::tally::MAX_TOOL_ROWS + 1);
+    let calls = |key: &str| {
+        snap.by_tool
+            .iter()
+            .find(|t| t.tool_key == key)
+            .map(|t| t.call_count)
+    };
+    assert_eq!(calls(super::tally::OTHER), Some(300 - 256));
+    assert_eq!(calls("alpha:t0"), Some(2));
+    assert_eq!(snap.call_count, 301);
+}

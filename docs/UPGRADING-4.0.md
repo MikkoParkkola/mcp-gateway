@@ -183,6 +183,7 @@ backend" and "fails a capability file" first.**
 | 156 | A REST capability body field that is a pure placeholder (`"{cursor}"`) now sends an explicit `null` the property's schema admits (`type: [string, "null"]`); 3.x left the field out. A null the schema does not admit is still left out, and query and path parameters are unchanged | To keep the field out, leave the argument out instead of sending `null`; a static param or URL default for the same name still fills it, as before |
 | 157 | Reserved: a change in review | None |
 | 158 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
+| 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4165,6 +4166,29 @@ archive mode.
 Independently, a log whose oldest surviving segment opens with a
 `prev_entry_hash` other than the `prev_segment_final_hash` it links to now
 fails verification. The gateway never writes such a log.
+
+## 159. Cost accounting keeps running sums
+
+**Startup:** no notice
+
+Per-key and per-session cost accounting kept one record per answered call and
+never trimmed it, so a caller without a credential (authentication off, or
+`/mcp` public as in the shipped presets) grew gateway memory once per request.
+It now keeps running sums, and what it holds no longer depends on the call
+count:
+
+- A key's 24h, 7d and 30d windows sum hourly buckets (at most 721). A window
+  counts its whole cutoff hour, so it can include up to one hour of older
+  spend at its edge. Budget enforcement is the cost-governance enforcer and is
+  unchanged.
+- Per-tool breakdowns (per key, per session and per session-less caller) keep
+  at most 256 rows; later tools share one `(other)` row, and every total stays
+  exact.
+- A key with no spend for 30 days and no budget set through `set_key_budget`
+  is dropped on a later call, and reads as a key that never spent.
+
+Library users: `CostTracker::evict_old_records` is removed. Nothing called it
+in the gateway, and there is nothing left to evict.
 
 ## Upgrading from 3.5.x: a walkthrough
 
