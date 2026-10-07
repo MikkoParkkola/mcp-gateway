@@ -373,10 +373,21 @@ fn a_restore_skips_rows_that_hold_no_spend() {
         saved.tool_totals.insert(format!("idle-{i}"), zero);
         saved.key_totals.insert(format!("idle-key-{i}"), 0.0);
     }
+    // AND: one tool and one key that did spend today
+    let used = ToolTotal {
+        call_count: 1,
+        total_cost_usd: 0.02,
+        avg_cost_usd: 0.02,
+    };
+    saved.tool_totals.insert("used".to_string(), used);
+    saved.key_totals.insert("used-key".to_string(), 0.03);
     // WHEN: it is restored
     let e = enforcer_with(true, None, &[], &[], &[]);
     e.restore(&saved);
-    // THEN: no zero row takes a place in the cap
-    assert!(e.tool_daily.is_empty());
-    assert!(e.key_daily.is_empty());
+    // THEN: only the rows with spend are back; no zero row takes a cap place
+    let snap = e.snapshot();
+    assert_eq!(e.tool_daily.len(), 1);
+    assert_eq!(e.key_daily.len(), 1);
+    assert!((snap.tool_daily["used"] - 0.02).abs() < 1e-9);
+    assert!((snap.key_daily["used-key"] - 0.03).abs() < 1e-9);
 }

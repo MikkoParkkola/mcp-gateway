@@ -581,11 +581,10 @@ impl BudgetEnforcer {
         // Before the adds, so the first spend of a day never finds yesterday's
         // rows filling the cap. No entry guard is held: `retain` takes every
         // shard lock.
+        // The new day is published only after the sweep, so every spend that
+        // reads the old day sweeps first; concurrent sweeps are idempotent.
         let today = current_day();
-        let new_day = self
-            .swept_day
-            .fetch_max(today, std::sync::atomic::Ordering::Relaxed)
-            < today;
+        let new_day = self.swept_day.load(std::sync::atomic::Ordering::Relaxed) < today;
         if new_day || super::tally::sweep_due(&self.next_sweep, super::persistence::now_secs()) {
             for (map, limits) in [
                 (&self.tool_daily, &budgets.per_tool),
@@ -593,6 +592,8 @@ impl BudgetEnforcer {
             ] {
                 map.retain(|name, day| limits.contains_key(name) || day.is_current());
             }
+            self.swept_day
+                .fetch_max(today, std::sync::atomic::Ordering::Relaxed);
         }
         let global = self.global_daily.add(micro);
         let tool = add_capped(self.tool_maps(), tool_name, &budgets.per_tool, micro);
