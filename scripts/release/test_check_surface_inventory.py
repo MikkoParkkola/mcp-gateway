@@ -134,22 +134,36 @@ def test_serde_tag_key_is_a_config_item() -> None:
             "#[derive(Deserialize)]\n#[serde(tag = \"kind\")]\nenum PlantedMode { A { x: u8 } }\n",
             encoding="utf-8",
         )
+        g = Path(tmp) / "planted_adj.rs"
+        g.write_text(
+            "#[derive(Deserialize)]\n#[serde(tag = \"t\", content = \"c\")]\nenum PlantedAdj { A { y: u8 } }\n",
+            encoding="utf-8",
+        )
         w = inv.ConfigWalker()
         w.walk_item(inv.parse_items(f)[0], "planted", "", ())
-    assert {"planted.kind", "planted.x"} <= set(w.out), sorted(w.out)
+        w.walk_item(inv.parse_items(g)[0], "adj", "", ())
+    assert {"planted.kind", "planted.x", "adj.t", "adj.c", "adj.c.y"} <= set(w.out), sorted(w.out)
+    assert "adj.y" not in w.out, sorted(w.out)
 
 
 def test_ufcs_route_and_extern_crate_are_items() -> None:
     import tempfile
 
     with tempfile.TemporaryDirectory(dir=inv.ROOT / "src") as tmp:
-        (Path(tmp) / "planted.rs").write_text('fn r() { Router::route(app, "/ufcs", h); }\n', encoding="utf-8")
+        (Path(tmp) / "planted.rs").write_text(
+            'fn r() { Router::route(app, "/ufcs", h); Router::<()>::route(app, "/generic", h); }\n', encoding="utf-8"
+        )
         lib = Path(tmp) / "planted_lib.rs"
-        lib.write_text("pub extern crate planted_dep;\n", encoding="utf-8")
+        lib.write_text(
+            "pub extern crate planted_dep;\npub extern crate planted_raw as planted_alias;\n"
+            "pub const unsafe fn planted_cu() {}\n#[macro_export(local_inner_macros)]\nmacro_rules! planted_lim { () => {} }\n",
+            encoding="utf-8",
+        )
         ids = {e.id for e in inv.extract_routes()}
         libs = {e.id for e in inv.extract_lib(lib)}
     assert any('"/ufcs"' in i for i in ids), sorted(ids)
-    assert "mcp_gateway::planted_dep" in libs, libs
+    assert any('"/generic"' in i for i in ids), sorted(ids)
+    assert {"mcp_gateway::planted_dep", "mcp_gateway::planted_alias", "mcp_gateway::planted_cu", "mcp_gateway::planted_lim!"} <= libs, libs
 
 
 def test_versioned_route_constant_is_read() -> None:

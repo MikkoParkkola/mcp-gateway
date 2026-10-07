@@ -382,6 +382,9 @@ class ConfigWalker:
             return
         # enum: unit-only enums are a scalar value; payload variants add keys
         tagged = serde_attr(item.attrs, "untagged") is not None or serde_attr(item.attrs, "tag") is not None
+        # Adjacent tagging nests each variant's payload under the content key.
+        content = serde_attr(item.attrs, "content")
+        tagged_key = (f"{key}.{content}" if key else content) if content else key
         # An internally or adjacently tagged enum adds its tag (and content) key.
         for attr in ("tag", "content"):
             name = serde_attr(item.attrs, attr)
@@ -391,7 +394,7 @@ class ConfigWalker:
             if serde_attr(v.attrs, "skip") is not None or serde_attr(v.attrs, "skip_deserializing") is not None:
                 continue
             vname = serde_attr(v.attrs, "rename") or rename(v.name, rule)
-            vkey = key if tagged else f"{key}.{vname}".lstrip(".")
+            vkey = tagged_key if tagged else f"{key}.{vname}".lstrip(".")
             vnote = feature_of(v.attrs) or note
             if v.ty.startswith("{"):
                 if not tagged:
@@ -608,7 +611,7 @@ def extract_routes() -> list[Entry]:
                 out.setdefault(rid, Entry(rid, rel(p), line_of(code, m.start()), "not in routes.rs"))
         # Method calls take the path first; `Router::route(router, path, ..)` takes it second.
         calls = [(m, m.group(1)) for m in re.finditer(r"\.\s*(?:route|route_service|nest|nest_service)\s*\(\s*([^,]+?)\s*,", code)]
-        calls += [(m, m.group(1)) for m in re.finditer(r"\bRouter\s*::\s*(?:route|route_service|nest|nest_service)\s*\(\s*[^,]+?,\s*([^,]+?)\s*,", code)]
+        calls += [(m, m.group(1)) for m in re.finditer(r"\bRouter\s*(?:::\s*<[^>]*>\s*)?::\s*(?:route|route_service|nest|nest_service)\s*\(\s*[^,]+?,\s*([^,]+?)\s*,", code)]
         for m, arg in calls:
             # Only a bare declared constant is already a row; any expression over one is not.
             if (re.fullmatch(r"routes::([A-Z][A-Z0-9_]*)", arg) and arg[8:] in owned) or (rel(p), arg) in NOT_HTTP_ROUTES:
@@ -622,7 +625,7 @@ def extract_routes() -> list[Entry]:
 
 
 LIB_ITEM_RE = re.compile(
-    r"^((?:#\[[^\n]*\]\s*)*)pub\s+(?:(?:async|unsafe|extern\s+\"\w+\")\s+)*"
+    r"^((?:#\[[^\n]*\]\s*)*)pub\s+(?:(?:const(?=\s+(?:async\s+|unsafe\s+|extern\s+\"\w+\"\s+)*fn\b)|async|unsafe|extern\s+\"\w+\")\s+)*"
     r"(mod|use|fn|const\s+fn|const|static|struct|enum|trait|type|union|extern\s+crate)\s+([^;{(=<]+)",
     re.M,
 )
@@ -632,7 +635,7 @@ def extract_lib(path: Path | None = None) -> list[Entry]:
     path = path or SRC / "lib.rs"
     code, mask = prod_scan(path)
     out = []
-    for m in re.finditer(r"^#\[macro_export\][^\n]*\n(?:#\[[^\n]*\]\s*)*macro_rules!\s*(\w+)", code, re.M):
+    for m in re.finditer(r"^#\[macro_export(?:\([^)]*\))?\][^\n]*\n(?:#\[[^\n]*\]\s*)*macro_rules!\s*(\w+)", code, re.M):
         out.append(Entry(f"mcp_gateway::{m.group(1)}!", rel(path), line_of(code, m.start()), "exported macro"))
     for m in LIB_ITEM_RE.finditer(code):
         kind, rest = m.group(2).split()[-1], " ".join(m.group(3).split())
@@ -646,7 +649,8 @@ def extract_lib(path: Path | None = None) -> list[Entry]:
                 if name:
                     out.append(Entry(f"mcp_gateway::{name}", rel(path), line_of(code, m.start(2)), f"re-export from {root.strip(' :')}"))
             continue
-        name = rest.split(":")[0].strip()
+        # `extern crate a as b` exports `b`.
+        name = rest.split(" as ")[-1].split(":")[0].strip()
         out.append(Entry(f"mcp_gateway::{name}", rel(path), line_of(code, m.start(2)), " ".join(x for x in (kind, note) if x)))
     return sorted(out, key=lambda e: e.id)
 

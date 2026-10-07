@@ -12,6 +12,12 @@ when any item is missing from the tables below, is listed twice, carries no vali
 story, or no longer exists. `--summary` prints the counts. The check runs in CI through
 `scripts/release/test_check_surface_inventory.py`.
 
+What the check guards against: a contributor adding a config key, flag, variable, route or crate-root
+item in the forms this codebase uses (serde derives, clap derives, axum `route`/`nest` calls in either
+call form, `pub` items and `#[macro_export]` macros in `src/lib.rs`) without classifying it. It reads
+source text, not compiled types, so it is not a proof against code written to evade it; a construct it
+cannot read is added to the extractor, with a planted-source test, when the codebase first uses it.
+
 ## Classes
 
 | Class | Meaning | What the user sees in 4.0 |
