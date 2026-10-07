@@ -10,10 +10,10 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::config::TransportConfig;
-#[cfg(not(target_os = "macos"))]
-use crate::home_dir::config_dir;
 use crate::home_dir::home_dir;
 use crate::{Error, Result};
+#[cfg(not(target_os = "macos"))]
+use dirs::config_dir;
 
 use super::{DiscoveredServer, DiscoverySource, ServerMetadata};
 
