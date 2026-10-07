@@ -195,7 +195,9 @@ fn rendered(cap: &CapabilityDefinition, args: &Value) -> (String, Vec<(String, S
     let mut query = executor.substitute_params(&config.params, &params).unwrap();
     query.sort();
     let body = config.body.as_ref().map_or(Value::Null, |template| {
-        executor.substitute_value(template, &params).unwrap()
+        executor
+            .substitute_value(template, &params, super::KeptNulls::None)
+            .unwrap()
     });
     (url, query, body)
 }
