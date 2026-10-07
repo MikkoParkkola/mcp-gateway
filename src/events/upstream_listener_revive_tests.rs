@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Rows for a tools listener that comes back with its backend (MIK-7944
-//! D6.EVENTS_MISC.6): a `tools_changed` key held while the backend could not
+//! `D6.EVENTS_MISC.6`): a `tools_changed` key held while the backend could not
 //! be listened to gets a listener once it can, with no reload and no new
 //! subscription.
 
