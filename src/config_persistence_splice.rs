@@ -464,7 +464,7 @@ pub(super) fn with_backends_edited(text: &str, before: &Config, config: &Config)
         done = next;
     }
     let value = |c: &Config| serde_json::to_value(c).ok();
-    (value(&done) == value(config)).then_some(text)
+    matches!((value(&done), value(config)), (Some(a), Some(b)) if a == b).then_some(text)
 }
 
 /// The refusal for a write that would drop the comments in `text`. Any `#`
@@ -488,8 +488,8 @@ pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
     format!(
         "Not saved: this edit cannot be written into {} as a text change (flow style, or a \
          comment inside the changed value), and a full rewrite would drop its comments: {}{more}. \
-         Edit the file by hand, or run the CLI command again with `--force` to rewrite \
-         the file without its comments.",
+         Edit the file by hand, or use the CLI with `--force` to rewrite the file \
+         without its comments.",
         path.display(),
         comments[..comments.len().min(SHOWN)].join("; ")
     )

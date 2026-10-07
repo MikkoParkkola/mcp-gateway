@@ -16,7 +16,7 @@ use mcp_gateway::{
     config_persistence::{CommentLoss, load_existing_or_default},
     gateway::ui::backend_ops::{
         self, BackendUpdate, add_backend, get_backend, list_backends, parse_env_vars,
-        remove_backend, resolve_backend, update_backend, write_config,
+        remove_backend, resolve_backend, update_backend,
     },
     gateway::ui::backends::RegistryEntryJson,
     registry::server_registry,
@@ -282,7 +282,8 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
 pub fn run_update_backend(name: &str, update: BackendUpdate, config: &Path) -> Result<(), String> {
     let mut gateway_config = backend_ops::load_config_or_default(config);
     update_backend(&mut gateway_config, name, update)?;
-    write_config(config, &gateway_config)
+    // No `--force` reaches here: an edit that would drop comments is refused.
+    super::config_write::write(config, &gateway_config, CommentLoss::Refuse)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -461,6 +462,22 @@ mod tests {
 
         let config = Config::load(Some(&path)).unwrap();
         assert_eq!(config.backends["tavily"].description, "updated desc");
+    }
+
+    /// `MIK-CLI-COMMENTS.SILENT.1`: an update that cannot keep the comments
+    /// is refused and leaves the file as it was.
+    #[test]
+    fn update_that_would_drop_comments_is_refused() {
+        let (_dir, path) = temp_config();
+        let flow = "# keep\nbackends: {a: {command: x}}\n";
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, flow).unwrap();
+        let update = BackendUpdate {
+            description: Some("new".into()),
+            ..BackendUpdate::default()
+        };
+        let error = run_update_backend("a", update, &path).unwrap_err();
+        assert!(error.contains("line 1"), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), flow);
     }
 
     #[test]
