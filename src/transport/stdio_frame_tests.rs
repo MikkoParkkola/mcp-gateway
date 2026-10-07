@@ -224,9 +224,16 @@ async fn a_dropped_request_leaves_no_partial_frame_for_the_next_caller() {
         torn.len(),
         torn.first()
     );
-    assert!(
-        frames.contains("notifications/roots/list_changed"),
-        "the later message arrived: {} bytes logged",
+    // The admitted large frame is finished first, whole; the later message follows.
+    let methods: Vec<String> = frames
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .map(|frame| frame["method"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        methods,
+        ["tools/call", "notifications/roots/list_changed"],
+        "{} bytes logged",
         frames.len()
     );
 }
@@ -266,5 +273,8 @@ async fn close_returns_while_a_write_is_stuck_on_a_peer_that_stopped_reading() {
     let closed = tokio::time::timeout(std::time::Duration::from_secs(5), transport.close()).await;
     assert!(closed.is_ok(), "close() waited behind a stuck write");
     let ended = tokio::time::timeout(std::time::Duration::from_secs(5), stuck).await;
-    assert!(ended.is_ok(), "the stuck request never ended after close()");
+    assert!(
+        matches!(ended, Ok(Ok(Err(_)))),
+        "the stuck request did not end in an error after close(): {ended:?}"
+    );
 }

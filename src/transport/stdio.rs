@@ -581,9 +581,9 @@ impl StdioTransport {
     async fn write_message(&self, message: &str) -> Result<()> {
         debug!(message_len = message.len(), "Writing to stdin");
         let frame = [message.as_bytes(), b"\n"].concat();
-        let writer = Arc::clone(&self.writer);
+        // Locked first: a caller cancelled while waiting for stdin sends nothing.
+        let mut writer = Arc::clone(&self.writer).lock_owned().await;
         tokio::spawn(async move {
-            let mut writer = writer.lock().await;
             let Some(stdin) = writer.as_mut() else {
                 return Err(Error::TransportConnect("Not connected".to_string()));
             };
