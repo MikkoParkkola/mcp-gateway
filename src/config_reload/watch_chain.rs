@@ -18,6 +18,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use notify::event::{EventKind, ModifyKind};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex;
 use tracing::{info, warn};
@@ -192,6 +193,11 @@ pub(super) fn startup_dirs(named: &Path) -> BTreeSet<PathBuf> {
 #[derive(Default)]
 pub(super) struct ChainNames {
     names: Mutex<Option<BTreeSet<PathBuf>>>,
+    /// Paths a passed event removed or renamed. A watched directory among
+    /// them lost its kernel watch, or the watch left with the renamed inode,
+    /// so the rewatch task drops it from the ledger to watch it anew
+    /// (MIK-8024).
+    gone: Mutex<BTreeSet<PathBuf>>,
     /// The paths of every event that passed (tests read it).
     #[cfg(test)]
     pub(super) passed: Mutex<Vec<Vec<PathBuf>>>,
@@ -233,6 +239,21 @@ impl ChainNames {
                 .lock()
                 .as_ref()
                 .is_none_or(|names| paths.iter().any(|path| names.contains(path)))
+    }
+
+    /// Record the paths of a removal or a rename, which can end a watched
+    /// directory's watch. Other events cannot, and cost nothing here.
+    pub(super) fn note_gone(&self, event: &notify::Event) {
+        if matches!(
+            event.kind,
+            EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+        ) {
+            self.gone.lock().extend(event.paths.iter().cloned());
+        }
+    }
+
+    fn take_gone(&self) -> BTreeSet<PathBuf> {
+        std::mem::take(&mut *self.gone.lock())
     }
 
     fn set(&self, names: Option<BTreeSet<PathBuf>>) {
@@ -314,6 +335,25 @@ impl ChainWatch {
         }
         warned.retain(|dir| wanted.contains(dir));
         *ledger != before
+    }
+
+    /// Drop each of `gone` that the ledger holds, and its watch, so the next
+    /// [`ChainWatch::reconcile`] watches it again if the chain still runs
+    /// through it. A directory deleted and recreated at the same path lost its
+    /// watch with the old one, and the ledger would otherwise keep the dead
+    /// entry and never watch the new directory (MIK-8024).
+    fn forget(&self, gone: &BTreeSet<PathBuf>) {
+        let mut guard = self.watcher.lock();
+        let mut ledger = self.ledger.lock();
+        for dir in gone {
+            if ledger.remove(dir)
+                && let Some(watcher) = guard.as_mut()
+            {
+                // Deleted: the watch is already gone. Renamed: it followed
+                // the old directory, and is dropped here.
+                let _ = watcher.unwatch(dir);
+            }
+        }
     }
 
     /// The ledger: the directories actually watched.
@@ -419,13 +459,16 @@ pub(super) fn spawn_rewatch_task(
                     continue; // keep the last good set; the timer and the next event retry
                 }
             };
-            broken = false;
+            // A chain that was broken may have healed with another file at its
+            // end, read by nobody while it could not be resolved (MIK-8024).
+            let healed = std::mem::replace(&mut broken, false);
+            chain.forget(&chain.names.take_gone());
             let rewatched = chain.reconcile(&wanted);
             #[cfg(test)]
             chain
                 .wakes_handled
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if rewatched || last_end.as_ref() != Some(&end) {
+            if rewatched || healed || last_end.as_ref() != Some(&end) {
                 info!(
                     end = %end.display(),
                     directories = wanted.len(),
