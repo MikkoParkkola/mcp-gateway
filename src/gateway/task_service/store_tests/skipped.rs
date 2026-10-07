@@ -37,6 +37,16 @@ fn rewrite(record: &Path, edit: impl FnOnce(&mut Value)) {
     fs::write(record, serde_json::to_vec(&value).unwrap()).unwrap();
 }
 
+/// Cut the record off `offset` bytes into the member named `member`, as a
+/// write that stopped part way would.
+fn truncate_inside(record: &Path, member: &str, offset: usize) {
+    let bytes = fs::read(record).unwrap();
+    let at = String::from_utf8_lossy(&bytes)
+        .find(&format!("\"{member}\""))
+        .unwrap();
+    fs::write(record, &bytes[..at + offset]).unwrap();
+}
+
 /// Opens, keeps the intact task readable and leaves every file as it was.
 async fn assert_skipped(path: &Path, kept: &str, case: &str) -> TaskStore {
     let before = files(path);
@@ -51,11 +61,12 @@ async fn assert_skipped(path: &Path, kept: &str, case: &str) -> TaskStore {
 
 #[tokio::test]
 async fn an_unparseable_record_is_skipped_and_the_rest_load() {
-    for case in ["syntax", "no_admission"] {
+    for case in ["syntax", "no_admission", "cut_in_admission"] {
         let dir = tempfile::tempdir().unwrap();
         let (path, record, kept) = two_tasks(dir.path()).await;
         match case {
             "syntax" => fs::write(&record, b"{broken").unwrap(),
+            "cut_in_admission" => truncate_inside(&record, "admission", 20),
             _ => rewrite(&record, |v| {
                 v.as_object_mut().unwrap().remove("admission");
             }),
@@ -87,9 +98,7 @@ async fn an_unrestorable_record_keeps_its_binding() {
         if case == "truncated" {
             // A write cut off inside `model`, which the record serializes
             // after `admission`: the key read before the damage is kept.
-            let bytes = fs::read(&record).unwrap();
-            let cut = String::from_utf8_lossy(&bytes).find("\"model\"").unwrap() + 12;
-            fs::write(&record, &bytes[..cut]).unwrap();
+            truncate_inside(&record, "model", 12);
         } else {
             rewrite(&record, |v| match case {
                 "snapshot" => v["model"]["task"]["lastUpdatedAt"] = json!("2026-09-06T00:00:00Z"),
@@ -100,9 +109,12 @@ async fn an_unrestorable_record_keeps_its_binding() {
         let store = assert_skipped(&path, &kept, case).await;
         let bindings = store.restored_bindings();
         assert_eq!(bindings.len(), 2, "{case}: both bindings, one reserved");
+        let damaged_id = record.file_stem().unwrap().to_str().unwrap();
         assert!(
-            bindings.iter().any(|(b, _)| b.identity == identity),
-            "{case}: the damaged row's key stays taken"
+            bindings
+                .iter()
+                .any(|(b, id)| b.identity == identity && id == damaged_id),
+            "{case}: the damaged row's key stays taken, bound to its own task id"
         );
         store.close().await.unwrap();
     }
@@ -115,12 +127,22 @@ async fn a_newer_or_rebound_record_still_refuses() {
     for case in [
         "newer",
         "newer_broken_model",
+        "newer_truncated",
         "rebound_broken",
         "duplicate_broken",
     ] {
         let dir = tempfile::tempdir().unwrap();
         let (path, record, _) = two_tasks(dir.path()).await;
-        if case.starts_with("newer") {
+        if case == "newer_truncated" {
+            // In the bytes as written (version first, model last), so the cut
+            // cannot reorder anything: the version must still be read.
+            let text = String::from_utf8(fs::read(&record).unwrap()).unwrap();
+            let version: Value = serde_json::from_str::<Value>(&text).unwrap()["version"].clone();
+            let newer = text.replacen(&format!("\"version\":{version}"), "\"version\":999", 1);
+            assert_ne!(newer, text, "the version was rewritten in place");
+            fs::write(&record, newer).unwrap();
+            truncate_inside(&record, "model", 12);
+        } else if case.starts_with("newer") {
             rewrite(&record, |v| {
                 v["version"] = json!(999);
                 v["aFieldFromTheFuture"] = json!(true);
