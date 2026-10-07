@@ -52,6 +52,16 @@ pub(super) async fn drain_list_pages(
         // (`transport::SIDE_EFFECT_FREE_METHODS`), so a retried fetch
         // cannot duplicate an upstream effect.
         let permission = crate::transport::ResendPermission::Permitted;
+        if family.method == "tools/list" {
+            // Probe only (throwaway): who sends each tools/list.
+            tracing::info!(
+                target: "probe_list",
+                page,
+                at = ?std::time::SystemTime::now(),
+                bt = %std::backtrace::Backtrace::force_capture(),
+                "PROBE tools/list sent"
+            );
+        }
         let response = transport
             .request_with_headers(family.method, params, headers, identity_key, permission)
             .await?;

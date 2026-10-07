@@ -29,6 +29,8 @@ mod upstream_snapshot;
 mod upstream_sub;
 #[path = "mik_7630_events/upstream_tools.rs"]
 mod upstream_tools;
+#[path = "mik_7630_events/upstream_tools_probe.rs"]
+mod upstream_tools_probe;
 
 use std::path::Path;
 use std::time::Duration;

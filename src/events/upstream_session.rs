@@ -179,6 +179,7 @@ fn requested(shared: &Shared) -> Requested {
 
 /// One connection's life.
 async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<EventsHub>) -> Outcome {
+    tracing::info!(target: "probe_list", at = ?std::time::SystemTime::now(), "PROBE session start");
     let _lease = backend.listen_lease();
     let target = match backend.listen_target().await {
         Ok(target) => target,
