@@ -11,7 +11,7 @@
 //! delivered leaf or across adjacent kept leaves.
 
 use std::cell::OnceCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use serde_json::Value;
 
@@ -247,51 +247,20 @@ impl DeliveryDigest {
     /// fingerprint (the original runs' and retained ones) stays when its
     /// k-gram is in a delivered leaf or in a kept run.
     pub(super) fn retaining(self, detector: &CollusionDetector, delivered: &Delivered<'_>) -> Self {
-        // A deferred digest keeps no more verbatim copies of a leaf than the
-        // plan delivered (MIK-7992): its cap applies after this, and copies
-        // the caller never got must not take the budget of text it did.
-        let mut left: Option<HashMap<&str, usize>> = self.deferred.then(|| {
-            let mut counts = HashMap::new();
-            for leaf in &delivered.all {
-                *counts.entry(*leaf).or_insert(0) += 1;
-            }
-            counts
-        });
-        let listed: Vec<bool> = self
-            .segments
-            .iter()
-            .map(|s| s.whole && delivered.leaves.contains(s.text.as_str()))
-            .collect();
-        let keep: Vec<bool> = self
-            .segments
-            .iter()
-            .zip(&listed)
-            .map(|(s, &on)| {
-                on && left.as_mut().is_none_or(|left| {
-                    left.get_mut(s.text.as_str()).is_some_and(|n| {
-                        let unused = *n > 0;
-                        *n = n.saturating_sub(1);
-                        unused
-                    })
-                })
-            })
-            .collect();
-        if self.retained.is_empty() && keep.iter().all(|&k| k) {
+        if self.deferred {
+            return self.retaining_deferred(detector, delivered);
+        }
+        let verbatim = |s: &Segment| s.whole && delivered.leaves.contains(s.text.as_str());
+        if self.retained.is_empty() && self.segments.iter().all(verbatim) {
             return self;
         }
         let original = self.fingerprints(detector);
         let found = delivered.kgrams(detector);
-        // A removed leaf splits its run, and re-winnowing the pieces can drop
-        // minima of text still delivered: the original runs' fingerprints stay
-        // too, wherever their k-gram is in a delivered leaf or spans adjacent
-        // delivered leaves. Every verbatim copy counts for adjacency, the ones
-        // the cap budget leaves out included (MIK-7992).
-        let across = self.kgrams_where(detector, &listed);
         let mut retained = Vec::new();
         let mut segments = Vec::with_capacity(self.segments.len());
         let mut gap = false;
-        for (segment, verbatim) in self.segments.into_iter().zip(keep) {
-            if verbatim {
+        for segment in self.segments {
+            if verbatim(&segment) {
                 segments.push(Segment {
                     gap_before: gap || segment.gap_before,
                     ..segment
@@ -307,41 +276,89 @@ impl DeliveryDigest {
                 gap = true;
             }
         }
+        let kept = Self {
+            segments,
+            retained: Vec::new(),
+            sensitive: self.sensitive,
+            deferred: false,
+        };
+        kept.with_original(detector, found, original, retained)
+    }
+
+    /// [`Self::retaining`] for a digest whose cap is deferred (MIK-7992): its
+    /// kept segments are the delivered leaves, in delivered order, that equal
+    /// a whole leaf of the step, so every kept run is text the caller received
+    /// as it stands; a delivered leaf the step did not produce whole is a seam.
+    /// A step leaf delivered verbatim is covered by those; any other keeps its
+    /// fingerprints whose k-gram a delivered leaf holds. Kept text is at most
+    /// the delivered text, and copies the caller never got spend nothing.
+    fn retaining_deferred(self, detector: &CollusionDetector, delivered: &Delivered<'_>) -> Self {
+        let whole: HashSet<&str> = self
+            .segments
+            .iter()
+            .filter(|s| s.whole)
+            .map(|s| s.text.as_str())
+            .collect();
+        let mut segments = Vec::new();
+        let mut gap = false;
+        for leaf in &delivered.all {
+            if whole.contains(leaf) {
+                segments.push(Segment {
+                    text: (*leaf).to_owned(),
+                    whole: true,
+                    gap_before: gap,
+                });
+                gap = false;
+            } else {
+                gap = true;
+            }
+        }
+        let original = self.fingerprints(detector);
+        let found = delivered.kgrams(detector);
+        let retained = self
+            .segments
+            .iter()
+            .filter(|s| !(s.whole && delivered.leaves.contains(s.text.as_str())))
+            .flat_map(|s| detector.fingerprints(&s.text))
+            .filter(|fp| found.contains(fp))
+            .collect();
+        let kept = Self {
+            segments,
+            retained: Vec::new(),
+            sensitive: self.sensitive,
+            deferred: true,
+        };
+        kept.with_original(detector, found, original, retained)
+    }
+
+    /// This kept digest with `retained`, then the `original` fingerprints
+    /// whose k-gram is `found` in a delivered leaf or spans adjacent kept
+    /// leaves (a removed leaf splits its run, and re-winnowing the pieces can
+    /// drop minima of text still delivered); each fingerprint once, so a
+    /// later cap on their count never drops a distinct one for a repeat.
+    fn with_original(
+        mut self,
+        detector: &CollusionDetector,
+        found: &HashSet<u64>,
+        original: Vec<u64>,
+        mut retained: Vec<u64>,
+    ) -> Self {
+        let across = self.run_kgrams(detector);
         retained.extend(
             original
                 .into_iter()
                 .filter(|fp| found.contains(fp) || across.contains(fp)),
         );
-        // Copies retain the same fingerprints many times over; one each, so
-        // the deferred cap on their count never drops a distinct one for a
-        // repeat (MIK-7992).
         let mut seen = HashSet::new();
         retained.retain(|fp| seen.insert(*fp));
-        Self {
-            segments,
-            retained,
-            sensitive: self.sensitive,
-            deferred: self.deferred,
-        }
+        self.retained = retained;
+        self
     }
 
-    /// Every k-gram hash of each run of the segments `listed` marks; a
-    /// segment left out stands as a seam.
-    fn kgrams_where(&self, detector: &CollusionDetector, listed: &[bool]) -> HashSet<u64> {
-        let mut runs: Vec<Vec<&str>> = Vec::new();
-        let mut gap = false;
-        for (segment, &on) in self.segments.iter().zip(listed) {
-            if !on {
-                gap = true;
-                continue;
-            }
-            match runs.last_mut() {
-                Some(run) if !(gap || segment.gap_before) => run.push(&segment.text),
-                _ => runs.push(vec![&segment.text]),
-            }
-            gap = false;
-        }
-        runs.iter()
+    /// Every k-gram hash of each run of this digest's segments.
+    fn run_kgrams(&self, detector: &CollusionDetector) -> HashSet<u64> {
+        self.runs()
+            .iter()
             .flat_map(|run| detector.kgram_hashes(&run.join("\n")))
             .collect()
     }
