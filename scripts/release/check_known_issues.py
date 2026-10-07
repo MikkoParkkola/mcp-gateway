@@ -42,11 +42,42 @@ NOT_A_PARAGRAPH = re.compile(
     r"^(?: {4}|\t| {0,3}(?:(?:[-+*]|\d+[.)]|#{1,6})(?:[ \t]|$)|>|```|~~~"
     r"|([-*_])[ \t]*(?:\1[ \t]*){2,}$))"
 )
-# A fenced block's lines are text, never headings; it closes on a run of the
-# same character at least as long as the one that opened it.
-FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
-# An HTML comment's lines are text too, up to the line that holds "-->".
-COMMENT = re.compile(r"^ {0,3}<!--")
+# A fenced block's lines are text, never section ends; it closes on a run of
+# the same character at least as long as the one that opened it. A backtick
+# run followed by another backtick is an inline span, not a fence.
+FENCE = re.compile(r"^ {0,3}(`{3,}(?=[^`]*$)|~{3,})")
+# HTML blocks that run across blank lines (CommonMark types 1-5): their lines
+# are text too, up to the line that holds the closer.
+HTML_BLOCKS = tuple(
+    (re.compile(opener, re.IGNORECASE), re.compile(closer, re.IGNORECASE))
+    for opener, closer in (
+        (r"^ {0,3}<(?:pre|script|style|textarea)(?:[ \t>]|$)", r"</(?:pre|script|style|textarea)>"),
+        (r"^ {0,3}<!--", r"-->"),
+        (r"^ {0,3}<\?", r"\?>"),
+        (r"^ {0,3}<![a-z]", r">"),
+        (r"^ {0,3}<!\[CDATA\[", r"\]\]>"),
+    )
+)
+# A link reference definition is not paragraph text, so it is never a heading.
+REFERENCE = re.compile(r"^ {0,3}\[[^\]]+\]:")
+
+
+def starts_section(lines, i):
+    """True when line i opens a Known issues section.
+
+    Liberal on purpose, and checked before fences and HTML blocks: a doubtful
+    start only makes the gate read more. A setext start is the whole paragraph
+    over a dash underline, so a title wrapped over two lines still counts.
+    """
+    if HEADING.match(lines[i]):
+        return True
+    underline = UNDERLINE.match(lines[i + 1]) if i + 1 < len(lines) else None
+    if not underline or underline.group(1)[0] != "-" or not lines[i].strip():
+        return False
+    first = i
+    while first > 0 and lines[first - 1].strip():
+        first -= 1
+    return " ".join(" ".join(lines[first : i + 1]).split()).lower() == "known issues"
 
 
 def ends_section(lines, i):
@@ -57,9 +88,15 @@ def ends_section(lines, i):
     paragraph text at column 0 after a blank line. Every other form (a heading
     that spans lines, an indented line, a lazy continuation) stays section
     text, so the gate can only read too much, never too little. Starts stay
-    liberal: setext_level alone decides them.
+    liberal: starts_section decides them.
     """
-    return not lines[i][:1].isspace() and i > 0 and not lines[i - 1].strip()
+    line = lines[i]
+    return (
+        not line[:1].isspace()
+        and not REFERENCE.match(line)
+        and i > 0
+        and not lines[i - 1].strip()
+    )
 
 
 def setext_level(line, underline):
@@ -73,11 +110,24 @@ def setext_level(line, underline):
 def known_issues(text):
     """Every Known issues section's lines, each up to the next level 1-2 heading."""
     lines = text.splitlines()
-    body, inside, underline, fence, comment = [], False, False, "", False
+    body, inside, underline, fence, block = [], False, False, "", None
     for i, line in enumerate(lines):
-        if comment or (not fence and COMMENT.match(line)):
-            start = 0 if comment else line.index("<!--") + 4
-            comment = "-->" not in line[start:]
+        if starts_section(lines, i):
+            inside, underline = True, not HEADING.match(line)
+            continue
+        if underline:
+            underline = False
+            continue
+        start = 0
+        if not block and not fence:
+            for opener, closer in HTML_BLOCKS:
+                found = opener.match(line)
+                if found:
+                    block, start = closer, found.end()
+                    break
+        if block:
+            if block.search(line, start):
+                block = None
             if inside:
                 body.append(line)
             continue
@@ -91,13 +141,8 @@ def known_issues(text):
             if inside:
                 body.append(line)
             continue
-        if underline:
-            underline = False
-            continue
         level = setext_level(line, lines[i + 1] if i + 1 < len(lines) else "")
-        if HEADING.match(line) or (level == 2 and line.strip().lower() == "known issues"):
-            inside, underline = True, bool(level)
-        elif SECTION_END.match(line) or (level and ends_section(lines, i)):
+        if SECTION_END.match(line) or (level and ends_section(lines, i)):
             inside, underline = False, bool(level)
         elif inside:
             body.append(line)
