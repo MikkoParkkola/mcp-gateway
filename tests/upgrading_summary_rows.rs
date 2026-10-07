@@ -298,6 +298,21 @@ fn column_rules_on_fixtures() {
             .unwrap_err()
             .contains("item 1 has 3 cells, the header 4")
     );
+    assert!(
+        check_columns(&ok.replace("| 1 | a | g | b |", "| 1 | a | g | b | x |"))
+            .unwrap_err()
+            .contains("item 1 has 5 cells, the header 4")
+    );
+    assert!(
+        check_columns(&ok.replace("| Action needed |", "| Action |"))
+            .unwrap_err()
+            .contains("no `Action needed` column")
+    );
+    // Columns are found by name, so their order is free.
+    let reordered = ok
+        .replace("| Change | What you gain |", "| What you gain | Change |")
+        .replace("| 1 | a | g |", "| 1 | g | a |");
+    assert_eq!(check_columns(&reordered), Ok(()));
     assert!(check_columns("## What changed\n\nno table\n").is_err());
 }
 
