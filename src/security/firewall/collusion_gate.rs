@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::collusion::{CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams};
+#[cfg(test)]
 pub(super) use super::collusion_digest::delivery_leaves;
+pub(super) use super::collusion_digest::delivery_parts;
 pub(crate) use super::collusion_digest::{Delivered, DeliveryDigest};
 use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
@@ -412,7 +414,8 @@ impl Firewall {
         let source = format!("{server}:{tool}");
         let sensitive = self.relay.sources.iter().any(|p| p.matches(&source))
             || context_integrity_sensitive(result);
-        let (digest, cut) = DeliveryDigest::of_leaves(&delivery_leaves(result), sensitive);
+        let (leaves, values) = delivery_parts(result);
+        let (digest, cut) = DeliveryDigest::of_parts(&leaves, values, sensitive);
         if cut {
             self.relay.text_cut.fetch_add(1, Ordering::Relaxed);
         }
@@ -424,7 +427,8 @@ impl Firewall {
     /// the bound, where the plan's receipts are dropped and counted.
     pub(crate) fn delivered_for_plan<'v>(&self, answer: &'v Value) -> Option<Delivered<'v>> {
         self.relay_detector()?;
-        let delivered = Delivered::of_leaves(delivery_leaves(answer));
+        let (leaves, values) = delivery_parts(answer);
+        let delivered = Delivered::of_parts(leaves, values);
         if delivered.is_none() {
             self.relay.plan_drop.fetch_add(1, Ordering::Relaxed);
             telemetry_metrics::counter!(PLAN_DROP_METRIC).increment(1);
@@ -483,7 +487,7 @@ fn relay_finding(description: String, matched: String) -> Finding {
 /// leaves once more run together, since a copy split mid-word over fields
 /// shorter than a fingerprint is still one the backend can join, then every
 /// object key, since a key reaches the backend like a value. What a caller
-/// is delivered is read by [`delivery_leaves`].
+/// is delivered is read by [`delivery_parts`].
 pub(super) fn egress_text(value: &Value) -> String {
     fn visit<'v>(value: &'v Value, leaves: &mut Vec<&'v str>, keys: &mut Vec<&'v str>) {
         match value {

@@ -21,8 +21,11 @@ fn gh462_discovery_persistence_preserves_dangling_symlink() {
         let metadata = std::fs::symlink_metadata(&output).unwrap();
         (metadata.dev(), metadata.ino())
     };
-    let result =
-        write_discovered_to_config(&[make_discovered_server("gh462-import")], Some(&output));
+    let result = write_discovered_to_config(
+        &[make_discovered_server("gh462-import")],
+        Some(&output),
+        CommentLoss::Refuse,
+    );
     assert!(
         result.is_err(),
         "a dangling symlink was replaced by defaults"

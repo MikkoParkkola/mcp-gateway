@@ -10,6 +10,7 @@
 
 use serde_json::Value;
 
+use crate::gateway::gateway_writes::WriteRecord;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::admission::SyncLease;
 use crate::gateway::meta_mcp::invoke::relay::StagedReceipts;
@@ -35,6 +36,9 @@ pub(super) struct Finalized {
     tool: String,
     execution: Option<SyncLease>,
     signing: Option<SigningInvocationContext>,
+    /// What the gateway wrote into `response`, taken inside the dispatch's
+    /// scope, which settlement outlives (MIK-7991).
+    writes: WriteRecord,
 }
 
 impl StdioAnswer {
@@ -49,6 +53,7 @@ impl StdioAnswer {
             tool,
             execution,
             signing,
+            writes: crate::gateway::gateway_writes::recorded(),
         }))
     }
 
@@ -81,6 +86,7 @@ impl Finalized {
             execution: self.execution,
             signing: self.signing,
             stored,
+            writes: self.writes,
         };
         (self.response, settle)
     }
@@ -92,6 +98,7 @@ struct Settle {
     execution: Option<SyncLease>,
     signing: Option<SigningInvocationContext>,
     stored: Option<JsonRpcResponse>,
+    writes: WriteRecord,
 }
 
 impl super::Gateway {
@@ -142,7 +149,7 @@ async fn deliver(
         crate::gateway::router::record_judged_delivery(meta, frame, &correlation, settle.stored)
             .await;
     if let (Some(execution), Some(stored)) = (settle.execution, stored) {
-        execution.complete_delivery_read(&stored, settle.signing.as_ref(), read);
+        execution.complete_delivery_read(&stored, settle.signing.as_ref(), (read, settle.writes));
     }
     frame
 }

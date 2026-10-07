@@ -389,3 +389,47 @@ fn the_declared_revision_is_observed() {
     );
     assert_eq!(observed["fields"]["revision_source"], "_meta", "{observed}");
 }
+
+/// MIK-8022.FOLLOW.1: through the route, a modern answer is delivered with
+/// the gateway's `serverInfo`, and the receipt is built without it, on both
+/// call arms, on a replay, and on a catalogue read. This pins the stamps
+/// from `deliver_tail` to each stager, not only inside the stagers.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_direct_receipt_is_built_without_the_gateway_stamp() {
+    use super::super::direct_guards_fixture::fixture_relayed;
+    use crate::gateway::meta_mcp::invoke::relay::take_staged_for_test;
+    let info = crate::protocol::meta::KEY_SERVER_INFO;
+    let unstamped = |label: &str, delivered: &Value| {
+        assert!(
+            delivered["result"]["_meta"][info].is_object(),
+            "{label}: {delivered}"
+        );
+        let staged = take_staged_for_test();
+        assert!(!staged.is_empty(), "{label}: nothing staged");
+        for copy in &staged {
+            assert!(
+                copy["_meta"].get(info).is_none(),
+                "{label}: stamped receipt {copy}"
+            );
+        }
+    };
+    for backend in BACKENDS {
+        let fx = fixture_relayed(Answer::Ok).await;
+        let _ = take_staged_for_test();
+        let first = keyed(&fx, backend, (true, 1), "receipt").await;
+        unstamped(&format!("{backend} fresh"), &first);
+        let dispatched = fx.calls.load(std::sync::atomic::Ordering::SeqCst);
+        let again = keyed(&fx, backend, (true, 2), "receipt").await;
+        assert_eq!(
+            fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+            dispatched,
+            "{backend}: the replay dispatched again"
+        );
+        unstamped(&format!("{backend} replay"), &again);
+    }
+    let fx = fixture_relayed(Answer::Ok).await;
+    let _ = take_staged_for_test();
+    let read = modern(&fx, "alpha", "resources/read", json!({"uri": "res://x"})).await;
+    unstamped("catalogue", &read);
+}
