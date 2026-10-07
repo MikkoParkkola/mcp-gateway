@@ -61,12 +61,37 @@ impl MetaMcp {
         stamped
     }
 
+    /// Stamp provenance onto an upstream task result recovered after its call
+    /// returned (MIK-8030), through the same chokepoint as a live call.
+    ///
+    /// Tagged [`CacheOutcome::Miss`], as the live path tags its own fetches:
+    /// the result came from the backend, and no cache was skipped on purpose.
+    /// With stamping disabled a backend-supplied receipt is removed.
+    #[must_use]
+    pub fn stamp_recovered_result(
+        &self,
+        result: Value,
+        backend_id: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+    ) -> Value {
+        // A recovered result carries no gateway-parsed `_claim` directive.
+        self.maybe_stamp_provenance(
+            result,
+            backend_id,
+            tool,
+            api_key_name,
+            crate::trust::CacheOutcome::Miss,
+            None,
+        )
+    }
+
     /// Stamp provenance onto a direct per-backend route result (the
     /// `/mcp/{name}` passthrough, which bypasses the meta chokepoint — rung 3).
     ///
     /// Tagged [`CacheOutcome::Bypass`] because the direct route never consults
-    /// the meta response cache. No-op when stamping is disabled, so the
-    /// passthrough stays byte-identical with the feature off.
+    /// the meta response cache. With stamping disabled a backend-supplied
+    /// receipt is removed and nothing else changes.
     #[must_use]
     pub fn stamp_direct_result(
         &self,

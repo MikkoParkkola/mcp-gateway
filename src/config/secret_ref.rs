@@ -129,25 +129,20 @@ static TEMPLATE: LazyLock<Regex> = LazyLock::new(|| {
 pub(crate) enum Unresolved {
     /// `${NAME}` whose variable is unset or empty, with no default.
     Unset(String),
-    /// A `${` that is not a `${NAME}` reference. Carries the name only when it
-    /// is identifier-like, so a literal secret containing `${` is not echoed.
-    Malformed(Option<String>),
+    /// A `${` that is not a `${NAME}` reference. It carries nothing from the
+    /// text: a literal secret can look like `${s3cr3t}`.
+    Malformed,
 }
 
 /// A `${` in text the pattern did not consume is a reference that cannot
 /// resolve, such as a lowercase `${github_token}`; it is refused rather than
 /// sent upstream verbatim.
 fn refuse_stray(segment: &str) -> std::result::Result<(), Unresolved> {
-    let Some(at) = segment.find("${") else {
-        return Ok(());
-    };
-    let rest = &segment[at + 2..];
-    let name = rest.split('}').next().filter(|n| {
-        rest.contains('}')
-            && !n.is_empty()
-            && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-    });
-    Err(Unresolved::Malformed(name.map(str::to_owned)))
+    if segment.contains("${") {
+        Err(Unresolved::Malformed)
+    } else {
+        Ok(())
+    }
 }
 
 /// Whether every `${` in `text` starts a `${NAME}` or `${NAME:-default}`
@@ -233,13 +228,10 @@ pub(crate) fn expand_field(
                 )
             }
         }
-        Unresolved::Malformed(Some(name)) => format!(
-            "{field} contains ${{{name}}}, which is not a variable reference: names are \
+        Unresolved::Malformed => format!(
+            "{field} contains a '${{' that is not a ${{NAME}} variable reference: names are \
              uppercase letters, digits and '_', starting with a letter or '_'."
         ),
-        Unresolved::Malformed(None) => {
-            format!("{field} contains a '${{' that is not a ${{NAME}} variable reference.")
-        }
     })
 }
 
@@ -344,11 +336,11 @@ mod tests {
         );
         assert_eq!(
             expand_template("Bearer ${lower}", &o).unwrap_err(),
-            Unresolved::Malformed(Some("lower".into()))
+            Unresolved::Malformed
         );
         assert_eq!(
             expand_template("x${", &o).unwrap_err(),
-            Unresolved::Malformed(None)
+            Unresolved::Malformed
         );
     }
 }

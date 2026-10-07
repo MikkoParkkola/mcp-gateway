@@ -81,6 +81,16 @@ pub(crate) struct EventsHub {
     debounce: backend_source::Debounce,
     /// Held while the catalogue changes or is read to delete from it.
     catalogue_gate: parking_lot::Mutex<()>,
+    /// Held by each burial and dead-letter sweep from its store call through
+    /// its last receipt, so a burial's receipt comes before any eviction of
+    /// it. Taken before the store's own lock, and never with `lifecycle`.
+    receipts: tokio::sync::Mutex<()>,
+    /// Test-only: one subscribe pauses between its commit and its audit.
+    #[cfg(test)]
+    after_commit: crate::test_pause::Slot,
+    /// Test-only: one burial pauses between its store call and its receipts.
+    #[cfg(test)]
+    before_receipts: crate::test_pause::Slot,
 }
 
 /// One producer of events (design §4). The core knows sources only through
@@ -195,6 +205,11 @@ impl EventsHub {
             lifecycle: lifecycle::Started::default(),
             debounce: backend_source::Debounce::default(),
             catalogue_gate: parking_lot::Mutex::new(()),
+            receipts: tokio::sync::Mutex::new(()),
+            #[cfg(test)]
+            after_commit: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_receipts: crate::test_pause::Slot::default(),
         }))
     }
 
