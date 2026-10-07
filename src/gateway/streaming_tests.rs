@@ -706,3 +706,6 @@ mod relay_commit;
 
 #[path = "streaming_tests/listen_graceful.rs"]
 mod listen_graceful;
+
+#[path = "streaming_tests/credential_at_write.rs"]
+mod credential_at_write;

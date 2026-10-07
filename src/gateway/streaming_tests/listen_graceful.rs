@@ -7,7 +7,7 @@
 use super::*;
 use crate::key_server::store::TokenStore as _;
 
-fn bearer(token: &str) -> Option<HeldCredential> {
+pub(super) fn bearer(token: &str) -> Option<HeldCredential> {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
         axum::http::header::AUTHORIZATION,
@@ -17,7 +17,7 @@ fn bearer(token: &str) -> Option<HeldCredential> {
 }
 
 /// A key-server temporary token, as `auth_live`'s rows mint one.
-fn temporary_token() -> crate::key_server::TemporaryToken {
+pub(super) fn temporary_token() -> crate::key_server::TemporaryToken {
     use crate::key_server::InMemoryTokenStore;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -45,7 +45,7 @@ fn temporary_token() -> crate::key_server::TemporaryToken {
 }
 
 /// Authentication on, with `key_server` issuing the tokens.
-fn authorizer(key_server: Arc<crate::key_server::KeyServer>) -> AuthState {
+pub(super) fn authorizer(key_server: Arc<crate::key_server::KeyServer>) -> AuthState {
     let config = crate::config::AuthConfig {
         enabled: true,
         ..crate::config::AuthConfig::default()

@@ -77,6 +77,10 @@ mod agent_task_owner;
 #[path = "agent_listener_liveness.rs"]
 mod agent_listener_liveness;
 
+// MIK-7798: a legacy-stream copy is re-validated when it is written.
+#[path = "agent_legacy_stream.rs"]
+mod agent_legacy_stream;
+
 use helpers::{
     ReleasedOnDrop, SUBSCRIPTION_ID_META, TASK_NOTIFICATION, assert_only_its_own_task,
     assert_receives_nothing, expect_message, open_listen, task_notification,
