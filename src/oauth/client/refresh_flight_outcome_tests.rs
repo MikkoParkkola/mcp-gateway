@@ -246,11 +246,14 @@ fn an_unreadable_refresh_state_reads_as_rotating() {
 }
 
 /// A token marked in flight by an exchange that never settled is retired at
-/// the next start. When storage refuses to clear it, the marker stays: no
-/// process sends the possibly consumed token, now or after a restart.
+/// the next start, and nothing is sent even when storage refuses to clear
+/// it: the token is spent in this process and both records are left as they
+/// were. This does not tell a conditional marker clear from an unconditional
+/// one (both writes share the refused directory); that needs a token-only
+/// write fault, which the MIK-7324 follow-up adds.
 #[cfg(unix)]
 #[tokio::test]
-async fn a_marked_token_that_cannot_be_cleared_keeps_its_marker() {
+async fn a_marked_token_that_cannot_be_cleared_is_not_sent() {
     let server = TokenServer::start(&[]).await;
     let dir = tempfile::tempdir().unwrap();
     let owned = client(dir.path(), &server);
@@ -290,5 +293,9 @@ async fn a_marked_token_that_cannot_be_cleared_keeps_its_marker() {
         stored(&owned).and_then(|t| t.refresh_token).as_deref(),
         Some("r2")
     );
-    assert_eq!(marker(&owned), Some(fingerprint), "the marker stays");
+    assert_eq!(
+        marker(&owned),
+        Some(fingerprint),
+        "the sidecar is as it was"
+    );
 }
