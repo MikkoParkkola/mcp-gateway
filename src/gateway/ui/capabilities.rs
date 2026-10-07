@@ -17,6 +17,7 @@
 //! | POST | `/ui/api/capabilities` | Create from template or provided YAML |
 //! | DELETE | `/ui/api/capabilities/:name` | Delete a capability file |
 
+use crate::gateway::routes;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -39,11 +40,11 @@ use super::is_admin;
 pub fn capabilities_router() -> Router<Arc<AppState>> {
     Router::new()
         .route(
-            "/ui/api/capabilities",
+            routes::UI_CAPABILITIES,
             get(list_capabilities).post(create_capability),
         )
         .route(
-            "/ui/api/capabilities/{name}",
+            routes::UI_CAPABILITY,
             get(get_capability)
                 .put(put_capability)
                 .delete(delete_capability),

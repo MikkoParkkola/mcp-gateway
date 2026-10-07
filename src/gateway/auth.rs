@@ -46,7 +46,7 @@ mod handoff;
 use crate::security::security_metrics::{AuthFailureKind, auth_failure};
 use bootstrap::{bootstrap_param, try_dashboard_bootstrap};
 #[cfg(feature = "webui")]
-pub(crate) use handoff::{HANDOFF_PATH, handoff_form, private as handoff_private, redeem_handoff};
+pub(crate) use handoff::{handoff_form, private as handoff_private, redeem_handoff};
 
 /// The `tracing` target of the events this module raises, its `resolved`
 /// child included: code moved into a child module keeps the target a log

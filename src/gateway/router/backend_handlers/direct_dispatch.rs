@@ -244,7 +244,7 @@ pub(super) async fn admit<'a>(
             return Err(build_http_response(&response, StatusCode::OK));
         }
         Some(crate::idempotency::GuardOutcome::CachedError(error)) => {
-            crate::gateway::meta_mcp::invoke::audit::note_cached();
+            crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
             let response = super::cached_error_response(Some(id.clone()), &error);
             return Err(build_http_response(&response, StatusCode::OK));
         }
