@@ -47,6 +47,16 @@ fn truncate_inside(record: &Path, member: &str, offset: usize) {
     fs::write(record, &bytes[..at + offset]).unwrap();
 }
 
+/// Append a second, later copy of a top-level member, as damage could: the
+/// strict parse refuses the duplicate, and the member walk must keep the
+/// first value that reads rather than the last one seen.
+fn append_duplicate(record: &Path, member: &str) {
+    let mut bytes = fs::read(record).unwrap();
+    assert_eq!(bytes.pop(), Some(b'}'), "the record ends with its brace");
+    bytes.extend_from_slice(format!(",\"{member}\":null}}").as_bytes());
+    fs::write(record, bytes).unwrap();
+}
+
 /// Opens, keeps the intact task readable and leaves every file as it was.
 async fn assert_skipped(path: &Path, kept: &str, case: &str) -> TaskStore {
     let before = files(path);
@@ -85,7 +95,14 @@ async fn an_unparseable_record_is_skipped_and_the_rest_load() {
 /// task inside it does not restore, so its idempotency key stays taken.
 #[tokio::test]
 async fn an_unrestorable_record_keeps_its_binding() {
-    for case in ["snapshot", "model", "version_zero", "truncated", "trailing"] {
+    for case in [
+        "snapshot",
+        "model",
+        "version_zero",
+        "truncated",
+        "trailing",
+        "duplicate_admission",
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let (path, record, kept) = two_tasks(dir.path()).await;
         let identity: String = {
@@ -95,7 +112,11 @@ async fn an_unrestorable_record_keeps_its_binding() {
                 .unwrap()
                 .to_owned()
         };
-        if case == "trailing" {
+        if case == "duplicate_admission" {
+            // A later `"admission":null` must not erase the valid one read
+            // first, or a retry of the key runs the backend again.
+            append_duplicate(&record, "admission");
+        } else if case == "trailing" {
             // Whole and valid, then bytes after its closing brace: the strict
             // parse refuses it, the member walk still reads the key.
             let mut bytes = fs::read(&record).unwrap();
@@ -138,6 +159,7 @@ async fn a_newer_or_rebound_record_still_refuses() {
         "newer",
         "newer_broken_model",
         "newer_truncated",
+        "newer_then_null_version",
         "rebound_broken",
         "duplicate_broken",
     ] {
@@ -152,6 +174,10 @@ async fn a_newer_or_rebound_record_still_refuses() {
             assert_ne!(newer, text, "the version was rewritten in place");
             fs::write(&record, newer).unwrap();
             truncate_inside(&record, "model", 12);
+        } else if case == "newer_then_null_version" {
+            // A later junk copy must not hide the newer version read first.
+            rewrite(&record, |v| v["version"] = json!(999));
+            append_duplicate(&record, "version");
         } else if case.starts_with("newer") {
             rewrite(&record, |v| {
                 v["version"] = json!(999);
