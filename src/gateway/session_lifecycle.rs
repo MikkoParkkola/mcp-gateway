@@ -287,7 +287,8 @@ impl SessionLifecycle {
             // One key at a time (MIK-7746): its handlers run under the locks
             // that decided and removed it, so a hold or a renewal for it waits
             // until they are done and whatever it writes next outlives them.
-            // A renewal of another key waits out one key's handlers at most.
+            // The sweep holds the locks one key at a time, so a renewal of
+            // another key waits only while some key's handlers run.
             let held = self.held.lock();
             let mut tracked = self.tracked.write();
             let due = tracked
@@ -705,7 +706,15 @@ mod tests {
         let (written_tx, written_rx) = channel::<()>();
         let written_rx = parking_lot::Mutex::new(written_rx);
         let wiped = Arc::clone(&store);
+        let probe = Arc::downgrade(&lifecycle);
         lifecycle.register("hints", move |_key| {
+            // Whatever the scheduler does, the handler runs under the lock
+            // a renewal takes.
+            let lifecycle = probe.upgrade().expect("the registry is alive");
+            assert!(
+                lifecycle.tracked.try_read().is_none(),
+                "a cleanup handler ran outside the lock a renewal takes"
+            );
             let _ = entered_tx.send(());
             let _ = written_rx.lock().recv_timeout(Duration::from_millis(500));
             wiped.lock().clear();
