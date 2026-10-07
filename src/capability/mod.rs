@@ -52,6 +52,7 @@ mod tenant_read_tests;
 pub mod validator;
 mod watcher;
 
+pub(crate) use backend::LoadState;
 pub use backend::{CapabilityBackend, CapabilityBackendStatus, DirectoryLoad, RugPullRecord};
 pub use definition::ProtocolConfig;
 pub use definition::*;

@@ -38,6 +38,8 @@ use crate::protocol::{Content, Tool, ToolsCallResult};
 
 mod definition_access;
 mod initial_scan;
+mod load_state;
+pub(crate) use load_state::LoadState;
 mod path_selector;
 
 use path_selector::path_selector_type_error;
@@ -168,6 +170,11 @@ pub struct CapabilityBackend {
     /// [`validate_oauth_isolation`] inside `call_tool_with_context`.
     multi_user: std::sync::atomic::AtomicBool,
     initial_scan: std::sync::atomic::AtomicU8,
+    /// What each directory's last read proved (MIK-8050).
+    dirs_loaded: load_state::DirsLoaded,
+    /// Held by each directory read through its publication, so the catalogue
+    /// and `dirs_loaded` change together and in read order.
+    load_order: tokio::sync::Mutex<()>,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -194,6 +201,8 @@ impl CapabilityBackend {
             rug_pull_state: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
             initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
+            dirs_loaded: load_state::DirsLoaded::default(),
+            load_order: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -315,7 +324,15 @@ impl CapabilityBackend {
     /// capability is not an error here — it is reported in
     /// [`DirectoryLoad::rejected`] so the caller decides.
     pub async fn load_from_directory_reporting(&self, path: &str) -> Result<DirectoryLoad> {
-        let loaded = CapabilityLoader::load_directory(path).await?;
+        let _order = self.load_order.lock().await;
+        let (loaded, file_failed) = match CapabilityLoader::load_directory_reporting(path).await {
+            Ok(read) => read,
+            Err(error) => {
+                self.record_read(path, None);
+                return Err(error);
+            }
+        };
+        let mut names = std::collections::BTreeSet::new();
         let mut report = DirectoryLoad {
             admitted: loaded.len(),
             rejected: Vec::new(),
@@ -335,6 +352,7 @@ impl CapabilityBackend {
         // tool whose account reference cannot resolve.
         for cap in loaded {
             let capability = cap.name.clone();
+            names.insert(capability.clone());
             if let Err(error) = self.register_capability(cap) {
                 warn!(
                     backend = %self.name,
@@ -348,93 +366,12 @@ impl CapabilityBackend {
             tokio::task::yield_now().await;
         }
 
+        // A refused capability is not proven deleted: its directory reads as
+        // failed for the keep rule (MIK-8050).
+        let failed = file_failed || !report.rejected.is_empty();
+        self.record_read(path, Some((names, failed)));
         info!(backend = %self.name, count = report.admitted, path = path, "Loaded capabilities");
         Ok(report)
-    }
-
-    /// Reload all capabilities from registered directories
-    ///
-    /// This is the hot-reload entry point. It re-reads all capability
-    /// files from the registered directories and updates the registry.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if reloading fails for all directories.
-    pub async fn reload(&self) -> Result<usize> {
-        let dirs: Vec<String> = self.directories.read().clone();
-
-        if dirs.is_empty() {
-            debug!(backend = %self.name, "No directories to reload");
-            return Ok(0);
-        }
-
-        let mut all_caps = Vec::new();
-        let mut total = 0;
-        // A directory that could not be read leaves the catalogue partial:
-        // its capabilities are missing from this load, not deleted (MIK-8028).
-        let mut partial = false;
-
-        for dir in &dirs {
-            match CapabilityLoader::load_directory(dir).await {
-                Ok(loaded) => {
-                    total += loaded.len();
-                    all_caps.extend(loaded);
-                }
-                Err(e) => {
-                    partial = true;
-                    warn!(backend = %self.name, directory = %dir, error = %e, "Failed to reload directory");
-                }
-            }
-        }
-
-        // The same admission gate the initial load applies.
-        let mut admitted = Vec::with_capacity(all_caps.len());
-        for cap in all_caps {
-            match validate_capability_account_binding(&cap, self.executor.account_strategies()) {
-                Ok(()) => admitted.push(cap),
-                Err(error) => {
-                    total -= 1;
-                    warn!(
-                        backend = %self.name,
-                        capability = %cap.name,
-                        error = %error,
-                        "Capability refused on reload: its account binding does not resolve"
-                    );
-                }
-            }
-        }
-
-        // Atomic swap: rebuild index and tool cache in one write lock, then
-        // bump the shared policy epoch while that lock is still held.
-        {
-            let mut caps = self.capabilities.write();
-            let incoming: HashMap<&str, &CapabilityDefinition> =
-                admitted.iter().map(|c| (c.name.as_str(), c)).collect();
-            // Revoke the in-flight calls of a capability that is gone OR edited,
-            // and stop its children: a call holding the old definition must not
-            // start or replace a child under the new one (MIK-7870, MIK-7925).
-            let mut revoked = std::collections::HashSet::new();
-            for (name, &pos) in &caps.index {
-                if incoming
-                    .get(name.as_str())
-                    .is_none_or(|new| definition_changed(&caps.entries[pos], new))
-                {
-                    self.executor.bump_mcp_generation(name);
-                    revoked.insert(name.clone());
-                }
-            }
-            caps.replace_all(admitted);
-            // With the swap, under the same lock: `catalogue_snapshot` never
-            // sees one without the other.
-            self.set_catalogue_partial(partial);
-            self.executor.bump_policy_epoch();
-            self.executor.stop_unloaded_mcp(&|name| {
-                !revoked.contains(name) && caps.index.contains_key(name)
-            });
-        }
-
-        info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
-        Ok(total)
     }
 
     /// Get the tools clients are shown (pre-built MCP tool representations).

@@ -27,6 +27,19 @@ impl CapabilityLoader {
     ///
     /// Returns an error if the directory does not exist or is not a valid directory.
     pub async fn load_directory(path: &str) -> Result<Vec<CapabilityDefinition>> {
+        Ok(Self::load_directory_reporting(path).await?.0)
+    }
+
+    /// [`Self::load_directory`], also reporting whether any capability file in
+    /// it failed to load. Such a file is skipped, but its capability is not
+    /// proven deleted (MIK-8050).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::load_directory`].
+    pub(crate) async fn load_directory_reporting(
+        path: &str,
+    ) -> Result<(Vec<CapabilityDefinition>, bool)> {
         let path = Path::new(path);
 
         if !path.exists() {
@@ -44,7 +57,8 @@ impl CapabilityLoader {
         }
 
         let mut capabilities = Vec::new();
-        Self::load_directory_recursive(path, &mut capabilities).await?;
+        let mut file_failed = false;
+        Self::load_directory_recursive(path, &mut capabilities, &mut file_failed).await?;
 
         let unpinned = count_unpinned(&capabilities);
         info!(
@@ -55,13 +69,15 @@ impl CapabilityLoader {
             capabilities.len(),
         );
 
-        Ok(capabilities)
+        Ok((capabilities, file_failed))
     }
 
-    /// Recursively load capabilities from a directory
+    /// Recursively load capabilities from a directory; `file_failed` is set
+    /// when a capability file in it cannot be loaded.
     async fn load_directory_recursive(
         dir: &Path,
         capabilities: &mut Vec<CapabilityDefinition>,
+        file_failed: &mut bool,
     ) -> Result<()> {
         let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| {
             Error::Config(format!("Failed to read directory {}: {e}", dir.display()))
@@ -88,7 +104,12 @@ impl CapabilityLoader {
 
             if path.is_dir() {
                 // Recurse into subdirectories
-                Box::pin(Self::load_directory_recursive(&path, capabilities)).await?;
+                Box::pin(Self::load_directory_recursive(
+                    &path,
+                    capabilities,
+                    file_failed,
+                ))
+                .await?;
             } else if path
                 .extension()
                 .is_some_and(|ext| ext == "yaml" || ext == "yml")
@@ -100,6 +121,7 @@ impl CapabilityLoader {
                         capabilities.push(cap);
                     }
                     Err(e) => {
+                        *file_failed = true;
                         warn!(error = %e, path = %path.display(), "Failed to load capability");
                     }
                 }

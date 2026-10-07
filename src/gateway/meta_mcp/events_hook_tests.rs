@@ -240,7 +240,14 @@ async fn a_startup_scan_that_cannot_read_a_directory_keeps_its_subscriptions() {
     let (caps, registry, meta) = wired(&[dir.path()], store.path()).await;
 
     // Beta's directory failed to load.
-    caps.mark_initial_scan_failed();
+    let gone = dir
+        .path()
+        .join("beta-dir")
+        .to_str()
+        .expect("utf8")
+        .to_owned();
+    caps.register_directories(std::slice::from_ref(&gone));
+    assert!(caps.load_from_directory(&gone).await.is_err());
     caps.mark_initial_scan_complete();
     first_pass(&meta, store.path()).await;
     assert!(
@@ -396,15 +403,18 @@ async fn a_type_nothing_offers_again_is_withdrawn_by_the_deferred_pass() {
     assert!(!subscribed(store.path(), "beta"));
 }
 
-/// The deferred pass withdraws nothing from a partial catalogue.
+/// The deferred pass on a partial catalogue keeps what the failed directory
+/// held (MIK-8050 narrowed the earlier "withdraws nothing": what a clean read
+/// proved gone is withdrawn, see `partial_tests`).
 #[tokio::test]
-async fn the_deferred_pass_withdraws_nothing_from_a_partial_catalogue() {
+async fn the_deferred_pass_keeps_what_a_failed_directory_held() {
     let root = tempfile::tempdir().expect("root");
     let store = tempfile::tempdir().expect("store");
     let (d1, d2) = (root.path().join("d1"), root.path().join("d2"));
     std::fs::create_dir_all(&d1).expect("d1");
     std::fs::create_dir_all(&d2).expect("d2");
     std::fs::write(d1.join("a.yaml"), capability("alpha")).expect("write");
+    std::fs::write(d2.join("b.yaml"), capability("beta")).expect("write");
     seed_subscription(store.path(), "beta");
     seed_sentinel(store.path());
     let (caps, _registry, meta) = wired(&[&d1, &d2], store.path()).await;
@@ -416,7 +426,7 @@ async fn the_deferred_pass_withdraws_nothing_from_a_partial_catalogue() {
     meta.run_deferred_webhook_withdraw().await;
     assert!(
         subscribed(store.path(), "beta"),
-        "a partial catalogue proves nothing about beta"
+        "d2 held beta and could not be read: kept"
     );
 }
 

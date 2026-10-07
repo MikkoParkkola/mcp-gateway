@@ -12,10 +12,11 @@
 
 use super::CapabilityBackend;
 
-/// `initial_scan` bits: the scan has loaded every directory; a directory
-/// failed to load.
+/// `initial_scan` bit: the scan has read every directory. Whether each read
+/// succeeded is in the backend's directory state (MIK-8050).
 const COMPLETE: u8 = 0b01;
-const FAILED: u8 = 0b10;
+/// A reload published while the scan was still running (MIK-8050).
+const RELOADED: u8 = 0b10;
 /// A capability reload arrived before the scan completed and awaits its turn.
 const RELOAD_HELD: u8 = 0b100;
 
@@ -36,11 +37,20 @@ impl CapabilityBackend {
             .fetch_or(COMPLETE, std::sync::atomic::Ordering::Release);
     }
 
-    /// Record that a configured directory could not be loaded: what the
-    /// scan registered is partial.
-    pub(crate) fn mark_initial_scan_failed(&self) {
+    /// Called by a reload with its swap: note it if the scan is still running.
+    pub(super) fn note_reload_during_scan(&self) {
+        use std::sync::atomic::Ordering::{AcqRel, Acquire};
+        let _ = self.initial_scan.try_update(AcqRel, Acquire, |bits| {
+            (bits & COMPLETE == 0).then_some(bits | RELOADED)
+        });
+    }
+
+    /// Whether a reload published during the scan; clears the note.
+    pub(super) fn take_reloaded_during_scan(&self) -> bool {
         self.initial_scan
-            .fetch_or(FAILED, std::sync::atomic::Ordering::Release);
+            .fetch_and(!RELOADED, std::sync::atomic::Ordering::AcqRel)
+            & RELOADED
+            != 0
     }
 
     /// A capability reload arrived: hold it if the scan has not completed.
@@ -71,34 +81,12 @@ impl CapabilityBackend {
         self.initial_scan.load(std::sync::atomic::Ordering::Acquire) & COMPLETE != 0
     }
 
-    /// Whether every configured directory loaded (meaningful once the scan
-    /// is complete): a failed one leaves the catalogue partial. A reload
-    /// rewrites this for the catalogue it installs (MIK-8028), so it always
-    /// describes the current catalogue.
+    /// Whether every configured directory's latest read succeeded (meaningful
+    /// once the scan is complete). It always describes the current catalogue
+    /// (MIK-8028, MIK-8050).
     #[must_use]
     pub(crate) fn initial_scan_loaded_every_directory(&self) -> bool {
-        self.initial_scan.load(std::sync::atomic::Ordering::Acquire) & FAILED == 0
-    }
-
-    /// Record whether the catalogue a reload is installing misses a
-    /// directory. Called under the capabilities write lock, with the swap.
-    pub(crate) fn set_catalogue_partial(&self, partial: bool) {
-        use std::sync::atomic::Ordering::AcqRel;
-        if partial {
-            self.initial_scan.fetch_or(FAILED, AcqRel);
-        } else {
-            self.initial_scan.fetch_and(!FAILED, AcqRel);
-        }
-    }
-
-    /// The capabilities and whether every directory loaded, read under one
-    /// lock, so a reload cannot change one without the other (MIK-8028).
-    pub(crate) fn catalogue_snapshot(&self) -> (Vec<super::CapabilityDefinition>, bool) {
-        let caps = self.capabilities.read();
-        (
-            caps.entries.clone(),
-            self.initial_scan_loaded_every_directory(),
-        )
+        self.load_state().complete
     }
 }
 
@@ -156,11 +144,14 @@ mod failed_tests {
     use super::super::CapabilityExecutor;
     use super::*;
 
-    #[test]
-    fn a_failed_directory_marks_the_scan_partial_even_once_complete() {
+    #[tokio::test]
+    async fn a_failed_directory_marks_the_scan_partial_even_once_complete() {
         let backend = CapabilityBackend::new("test", Arc::new(CapabilityExecutor::new()));
         backend.begin_initial_scan();
-        backend.mark_initial_scan_failed();
+        let missing = tempfile::tempdir().expect("dir").path().join("gone");
+        let missing = missing.to_str().expect("utf8").to_owned();
+        backend.register_directories(std::slice::from_ref(&missing));
+        assert!(backend.load_from_directory(&missing).await.is_err());
         assert!(!backend.initial_scan_complete(), "still scanning");
         backend.mark_initial_scan_complete();
         assert!(backend.initial_scan_complete());
