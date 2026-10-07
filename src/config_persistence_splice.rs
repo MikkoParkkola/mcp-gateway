@@ -191,8 +191,12 @@ fn remove_entry(original: &str, name: &str) -> Option<String> {
         let after_key = lines[header]["backends:".len()..].trim_start();
         out[header] = if after_key.starts_with('#') {
             format!("backends: {{}} {after_key}")
-        } else {
+        } else if after_key.is_empty() {
             "backends: {}".to_owned()
+        } else {
+            // An anchor or tag on the header (`backends: &pool # keep`)
+            // cannot be carried onto `{}` here; leave it to the caller.
+            return None;
         };
     }
     Some(out.join("\n") + "\n")
@@ -530,6 +534,11 @@ mod tests {
         assert_eq!(
             remove_entry("backends:\n  a:\n    command: x\nauth: {}\n", "a").expect("a"),
             "backends: {}\nauth: {}\n"
+        );
+        // An anchor on the header cannot be kept on `{}`: no splice.
+        assert_eq!(
+            remove_entry("backends: &pool # keep\n  a:\n    command: x\n", "a"),
+            None
         );
     }
 

@@ -237,6 +237,20 @@ async fn an_edit_through_a_commented_flow_mapping_is_refused() {
     .await;
 }
 
+/// The backstop: a comment the quote scanner misreads (the quote after `,`
+/// looks like a scalar start) leaves a `#` in the replaced value, so the
+/// edit is refused rather than dropping that comment.
+#[tokio::test]
+async fn a_misread_comment_is_refused_not_dropped() {
+    refused(
+        "backends:\n  svc:\n    command: x\n    description: say,\"hello  # keep\n",
+        "svc",
+        json!({"description": "new"}),
+        "# keep",
+    )
+    .await;
+}
+
 /// T10: a tab-separated inline comment counts as a comment.
 #[tokio::test]
 async fn a_tab_separated_comment_is_not_lost_silently() {
