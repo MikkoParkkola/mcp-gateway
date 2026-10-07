@@ -126,3 +126,46 @@ async fn a_stream_on_a_held_session_is_not_fingerprinted_again() {
         "a stream on a held session computed its fingerprint again"
     );
 }
+
+/// DELETE `/mcp` naming `session`.
+async fn delete(router: axum::Router, session: &str) -> StatusCode {
+    let request = axum::http::Request::builder()
+        .method("DELETE")
+        .uri("/mcp")
+        .header("mcp-session-id", session)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    router.oneshot(request).await.unwrap().status()
+}
+
+/// A DELETE of a held session logs the fingerprint the session already holds;
+/// one naming no owned session fingerprints the id it names once. The lookup
+/// key is never fingerprinted.
+#[tokio::test]
+async fn a_delete_fingerprints_at_most_once() {
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router_with(std::sync::Arc::clone(&state), None);
+    let (_captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
+    let (_, headers) = ping(router.clone(), None).await;
+    let id = headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .expect("a legacy request is answered with its minted session")
+        .to_owned();
+
+    FINGERPRINTS.with(|n| n.set(0));
+    assert_eq!(delete(router.clone(), &id).await, StatusCode::NO_CONTENT);
+    assert_eq!(
+        FINGERPRINTS.with(std::cell::Cell::get),
+        0,
+        "deleting a held session computed its fingerprint again"
+    );
+
+    FINGERPRINTS.with(|n| n.set(0));
+    assert_eq!(delete(router, &id).await, StatusCode::NOT_FOUND);
+    assert_eq!(
+        FINGERPRINTS.with(std::cell::Cell::get),
+        1,
+        "a DELETE naming no session fingerprints the named id exactly once"
+    );
+}
