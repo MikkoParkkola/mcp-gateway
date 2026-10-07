@@ -327,11 +327,11 @@ fn edit_block(
         let comment = inline_comment(value_text);
         let value = &value_text[..value_text.len() - comment.map_or(0, str::len)];
         let block = value.trim().is_empty();
-        // A tag or anchor before a quoted scalar (`!!str "a # b"`, also inside
-        // a flow collection) hides the quote from the scanner, so a "comment"
-        // found after it may be the rest of the old value; carrying that
-        // would leave it on disk.
-        if comment.is_some() && value.contains(['!', '&']) && value.contains(['"', '\'']) {
+        // The scanner only proposes a comment; the parser decides. A tag,
+        // anchor or flow collection can hide a quote from the scanner, and
+        // then the "comment" is the rest of the old value: carrying it would
+        // leave old (secret) text on the edited line.
+        if comment.is_some_and(|comment| !parsed_as_comment(value, comment)) {
             return None;
         }
         match (was, now) {
@@ -354,6 +354,17 @@ fn edit_block(
         }
     }
     Some(())
+}
+
+/// Whether the YAML parser reads `comment` after `value` as a comment: the
+/// value alone parses, and adding the comment changes nothing. Text the
+/// parser keeps as part of the value is never carried as a comment.
+fn parsed_as_comment(value: &str, comment: &str) -> bool {
+    let parse = |text: &str| serde_yaml::from_str::<Value>(&format!("k:{text}")).ok();
+    matches!(
+        (parse(value), parse(&format!("{value}{comment}"))),
+        (Some(alone), Some(with)) if alone == with
+    )
 }
 
 /// The text of `original` with backend `name`'s block entry edited from
@@ -587,6 +598,9 @@ mod tests {
         assert_eq!(edited(original, old, "env:\n  TOKEN: new\n"), None);
         let flow = "backends:\n  svc:\n    env: {TOKEN: !!str \"old # secret\"}\n";
         assert_eq!(edited(flow, old, "env:\n  TOKEN: new\n"), None);
+        let sequence = "backends:\n  svc:\n    args: [!!str \"old # secret\"]\n";
+        let old = "args: [\"old # secret\"]\n";
+        assert_eq!(edited(sequence, old, "args: [new]\n"), None);
     }
 
     #[test]
