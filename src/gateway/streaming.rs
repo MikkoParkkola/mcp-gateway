@@ -468,7 +468,9 @@ impl NotificationMultiplexer {
         }
         let id = format!("gw-{}", Uuid::new_v4());
         let session = self.insert_session(&mut sessions, &id, owner.clone());
-        info!(session_id = %session_fp(&id), "Created new streaming session");
+        // The id's fingerprint, made once when it was inserted (PERF.2a).
+        let fp = session.id.fp();
+        info!(session_id = %fp, "Created new streaming session");
         session
     }
 
@@ -510,15 +512,17 @@ impl NotificationMultiplexer {
     }
 
     /// As [`Self::get_or_create_session_scoped`], for a caller that only needs
-    /// the id: it opens no notification channel (NFR.WORKLOAD.1).
+    /// the id: it opens no notification channel (`NFR.WORKLOAD.1`). The held id
+    /// carries its fingerprint, so the caller logs it without hashing again.
     pub(crate) fn get_or_create_session_id_scoped(
         &self,
         session_id: Option<&str>,
         owner: &SessionOwner,
         credential: Option<HeldCredential>,
-    ) -> String {
-        let session = self.open_session_scoped(session_id, owner, credential);
-        session.id.expose_secret().to_string()
+    ) -> SessionId {
+        self.open_session_scoped(session_id, owner, credential)
+            .id
+            .clone()
     }
 
     fn open_session_scoped(
@@ -593,21 +597,26 @@ impl NotificationMultiplexer {
     /// Remove a session
     pub fn remove_session(&self, session_id: &str) {
         let mut sessions = self.sessions.write();
-        if sessions.remove(session_id).is_some() {
-            info!(session_id = %session_fp(session_id), "Removed streaming session");
+        // The removed key carries its fingerprint (PERF.2a).
+        if let Some((id, _)) = sessions.remove_entry(session_id) {
+            info!(session_id = %id, "Removed streaming session");
         }
     }
 
-    /// Remove only a matching owner, with lookup and removal under one write lock.
-    pub(crate) fn remove_session_for(&self, session_id: &str, owner: &SessionOwner) -> bool {
+    /// Remove only a matching owner, with lookup and removal under one write
+    /// lock. Returns the removed id, which carries its fingerprint, so the
+    /// caller logs it without hashing again; the lookup is by `&str`, so no
+    /// key is built for it (PERF.2a).
+    pub(crate) fn remove_session_for(
+        &self,
+        session_id: &str,
+        owner: &SessionOwner,
+    ) -> Option<SessionId> {
         let mut sessions = self.sessions.write();
-        match sessions.entry(SessionId::new(session_id)) {
-            std::collections::hash_map::Entry::Occupied(entry) if entry.get().owner == *owner => {
-                entry.remove();
-                true
-            }
-            _ => false,
+        if sessions.get(session_id)?.owner != *owner {
+            return None;
         }
+        sessions.remove_entry(session_id).map(|(id, _)| id)
     }
 
     /// Check if a session exists
