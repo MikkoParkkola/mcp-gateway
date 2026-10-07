@@ -5,7 +5,6 @@
 //! one gets nothing and learns of the refusal when it re-subscribes.
 
 use super::*;
-use crate::key_server::store::TokenStore as _;
 
 pub(super) fn bearer(token: &str) -> Option<HeldCredential> {
     let mut headers = axum::http::HeaderMap::new();

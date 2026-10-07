@@ -10,7 +10,6 @@
 
 use super::listen_graceful::{authorizer, bearer, temporary_token};
 use super::*;
-use crate::key_server::store::TokenStore as _;
 use futures::StreamExt as _;
 
 /// A key server holding one live temporary token; its credential and `jti`.
@@ -130,7 +129,7 @@ async fn a_token_revoked_after_its_copy_is_queued_is_written_nothing() {
 async fn prompt_behind_a_frame(
     revoke: bool,
 ) -> (
-    Option<Result<serde_json::Value, crate::gateway::input_bridge::DeliveryError>>,
+    Option<std::result::Result<serde_json::Value, crate::gateway::input_bridge::DeliveryError>>,
     usize,
     String,
 ) {
