@@ -68,3 +68,21 @@ fn the_table_is_not_empty() {
         HIDDEN_CONFIG_KEYS.len()
     );
 }
+
+#[test]
+fn doctor_adds_no_hidden_settings_row_for_a_fresh_init_config() {
+    use mcp_gateway::cli::InitProfile;
+    let dir = tempfile::tempdir().expect("tempdir");
+    for profile in [InitProfile::Local, InitProfile::Minimal] {
+        for with_examples in [true, false] {
+            let path = dir.path().join(format!("{profile}-{with_examples}.yaml"));
+            let config = crate::commands::build_init_config(with_examples, profile, "");
+            std::fs::write(&path, &config).expect("write init config");
+            assert!(
+                check_hidden_keys(&path).is_none(),
+                "init --profile {profile} (examples: {with_examples}) writes a hidden key: {:?}",
+                set_hidden_keys(&serde_yaml::from_str(&config).expect("init config parses"))
+            );
+        }
+    }
+}
