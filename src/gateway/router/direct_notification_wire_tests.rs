@@ -301,7 +301,7 @@ async fn a_dropped_cancel_mints_no_credential() {
     let minted = |gw: &Gateway| {
         gw._audit
             .iter()
-            .map(|f| std::fs::read_to_string(f.path()).unwrap_or_default())
+            .map(|f| std::fs::read_to_string(f.path()).expect("audit log readable"))
             .any(|log| log.contains("idp_mint"))
     };
     let cancel = json!({ "jsonrpc": "2.0", "method": "notifications/cancelled",
@@ -316,6 +316,24 @@ async fn a_dropped_cancel_mints_no_credential() {
         StatusCode::ACCEPTED
     );
     assert!(minted(&gw), "control: a forwarded notification mints");
+}
+
+/// MIK-8072: a caller with no propagation identity gets 202 for a cancel (it
+/// is dropped before identity is resolved) and 403 for an ordinary
+/// notification; neither reaches the upstream.
+#[tokio::test]
+async fn an_unidentified_cancel_is_accepted_and_an_ordinary_notification_refused() {
+    let gw = gateway(PropagationStrategyKind::SignedAssertion).await;
+    let cancel = json!({ "jsonrpc": "2.0", "method": "notifications/cancelled",
+        "params": { "requestId": 1 } });
+    assert_eq!(send(&gw, &cancel, None, None).await, StatusCode::ACCEPTED);
+    assert_eq!(send(&gw, &note(), None, None).await, StatusCode::FORBIDDEN);
+    assert!(
+        gw.wire
+            .lock()
+            .iter()
+            .all(|(m, _)| m != NOTE && m != "notifications/cancelled")
+    );
 }
 
 /// Neither strategy's forwarded credential reaches a trace span on the HTTP
