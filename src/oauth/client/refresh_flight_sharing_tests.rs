@@ -25,6 +25,29 @@ async fn a_supplied_client_carries_its_refreshes() {
     assert_eq!(*server.agents.lock().unwrap(), [SUPPLIED_AGENT]);
 }
 
+/// A supplied client may have no timeout of its own. An exchange whose server
+/// takes the request and never answers still ends at the exchange bound, as
+/// possibly consumed, and frees the credential for the next refresh.
+#[tokio::test]
+async fn an_unanswered_refresh_through_a_supplied_client_ends_at_its_bound() {
+    let server = TokenServer::start(&[Answer::HoldThenRotate]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut supplied = supplied_client(dir.path(), &server);
+    supplied.destination = DestinationPolicy::Private;
+    hold(&supplied, &token("a1", Some("r1"), true));
+    let key = supplied.credential_key().unwrap();
+    let flight =
+        super::super::refresh_flight::Flight::of(&supplied.storage.token_path(&key, RESOURCE));
+    *flight.exchange_limit.lock() = Some(Duration::from_millis(300));
+
+    let outcome = tokio::time::timeout(Duration::from_secs(10), headless(&supplied)).await;
+
+    outcome
+        .expect("an unanswered refresh must end at the exchange bound")
+        .expect_err("no answer arrived, so there is no token");
+    assert!(flight.lock.try_lock().is_ok(), "the credential stayed held");
+}
+
 /// A token file that exists but cannot be read may still hold the spent
 /// token: spending does not count it retired, so the in-flight marker stays.
 #[tokio::test]

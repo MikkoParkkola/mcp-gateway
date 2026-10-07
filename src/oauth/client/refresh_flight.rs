@@ -39,6 +39,9 @@ pub(super) struct Flight {
     /// before the token is saved, with the flight still held.
     #[cfg(test)]
     pub(super) save_gate: parking_lot::Mutex<Option<Arc<SaveGate>>>,
+    /// A test's shorter bound on one exchange, in place of `EXCHANGE_LIMIT`.
+    #[cfg(test)]
+    pub(super) exchange_limit: parking_lot::Mutex<Option<std::time::Duration>>,
 }
 
 /// Holds an exchange before its save: it signals `reached` and waits for
