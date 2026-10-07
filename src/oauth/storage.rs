@@ -54,6 +54,31 @@ fn default_token_type() -> String {
     "Bearer".to_string()
 }
 
+/// What a credential's refreshes have shown, kept beside its token (MIK-8018).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct RefreshState {
+    /// A refresh answer once carried a refresh token different from the one
+    /// sent: the server rotates, so a refresh token whose exchange had an
+    /// unknown outcome may already be consumed.
+    #[serde(default)]
+    pub(crate) rotates: bool,
+    /// SHA-256 (hex) of the refresh token an exchange was started with and has
+    /// not settled; set before sending, cleared when the exchange settles. Left
+    /// set by a process that died mid-exchange.
+    #[serde(default)]
+    pub(crate) in_flight: Option<String>,
+}
+
+impl RefreshState {
+    /// What an unreadable sidecar reads as: rotating, nothing in flight.
+    fn unreadable() -> Self {
+        Self {
+            rotates: true,
+            in_flight: None,
+        }
+    }
+}
+
 // Manual `Debug` that redacts the bearer/refresh secrets and the client
 // secret. A derived `Debug` would print `access_token`, `refresh_token`, and
 // `client_secret` verbatim into any trace or error context — a full compromise
@@ -264,6 +289,68 @@ impl TokenStorage {
             info!(backend = %backend_name, "Deleted OAuth token");
         }
 
+        Ok(())
+    }
+
+    /// Path to the refresh-state sidecar beside a credential's token file
+    /// (MIK-8018). Separate from the token record so every token save, from a
+    /// refresh or a login, carries the rotation observation forward untouched.
+    pub(crate) fn refresh_state_path(&self, backend_name: &str, resource_url: &str) -> PathBuf {
+        let key = Self::storage_key(backend_name, resource_url);
+        self.base_dir.join(format!("{key}_refresh.json"))
+    }
+
+    /// The credential's refresh state; default when none was ever written.
+    ///
+    /// A sidecar that exists but cannot be read or parsed reads as "the server
+    /// rotates" (MIK-8018): an unknown outcome then retires the refresh token
+    /// rather than retrying one that may be consumed. The next settled refresh
+    /// rewrites the file.
+    #[must_use]
+    pub(crate) fn load_refresh_state(
+        &self,
+        backend_name: &str,
+        resource_url: &str,
+    ) -> RefreshState {
+        let path = self.refresh_state_path(backend_name, resource_url);
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return RefreshState::default(),
+            Err(e) => {
+                warn!(backend = %backend_name, error = %e, "Unreadable refresh state; assuming the server rotates");
+                return RefreshState::unreadable();
+            }
+        };
+        serde_json::from_str(&content).unwrap_or_else(|e| {
+            warn!(backend = %backend_name, error = %e, "Corrupt refresh state; assuming the server rotates");
+            RefreshState::unreadable()
+        })
+    }
+
+    /// Replace the credential's refresh state, through a 0600 scratch file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the state cannot be serialized or written to disk.
+    pub(crate) fn save_refresh_state(
+        &self,
+        backend_name: &str,
+        resource_url: &str,
+        state: &RefreshState,
+    ) -> Result<()> {
+        let path = self.refresh_state_path(backend_name, resource_url);
+        let content = serde_json::to_string(state)
+            .map_err(|e| Error::OAuth(format!("Failed to serialize refresh state: {e}")))?;
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("refresh");
+        let tmp = self.create_secret_tmp(file_name)?;
+        let tmp = Self::write_secret_tmp(tmp, &content)?;
+        if let Err(e) = fs::rename(&tmp, &path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(Error::OAuth(format!("Failed to write refresh state: {e}")));
+        }
         Ok(())
     }
 

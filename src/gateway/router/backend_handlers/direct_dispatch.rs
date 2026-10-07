@@ -289,9 +289,8 @@ async fn forward_sanitized(
     .await;
     let client = caller.client.as_ref();
     let seen = (&admitted.call, preflight.challenge.as_deref());
-    let forward =
-        DirectRouteGuards::after_dispatch(state, seen, client, &admission.warnings, forward);
-    // The spend is recorded: give the reservation back.
+    let forward = DirectRouteGuards::after_dispatch(state, seen, client, &admission, forward);
+    // The spend is settled; an unsettled reservation is given back here.
     drop(admission);
     match forward {
         // The same delivery as a plain answer: one tail, so a modern
@@ -363,11 +362,11 @@ async fn forward_plain(
     .await;
     let answered = if method == "tools/call" {
         let seen = (&admitted.call, preflight.challenge.as_deref());
-        DirectRouteGuards::after_dispatch(state, seen, client, &admission.warnings, forward)
+        DirectRouteGuards::after_dispatch(state, seen, client, &admission, forward)
     } else {
         forward.inspect(|_| super::record_client_success(state, client))
     };
-    // The spend is recorded: give the reservation back.
+    // The spend is settled; an unsettled reservation is given back here.
     drop(admission);
     Ok(answered)
 }

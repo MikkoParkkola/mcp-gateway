@@ -61,17 +61,33 @@ fn same(a: &Arc<dyn Transport>, b: &Arc<dyn Transport>) -> bool {
 /// it: a replacement takes the write guard, so it either happened before this check (the
 /// answer is refused) or waits for the write (the answer was about the peer then in service).
 /// Both halves are synchronous, which is what makes check and write one step.
-pub(super) fn install_if_held(
+///
+/// Serving means pooled as well as holding it: a removed busy entry keeps its transport, and
+/// the pool marks it retired under that same write guard before it leaves the map (MIK-7643).
+pub(super) fn with_serving(
     entry: &PooledEntry,
     transport: &Arc<dyn Transport>,
     store: &mut dyn FnMut(),
 ) -> bool {
     let slot = entry.transport.read();
-    let held = slot.as_ref().is_some_and(|held| same(held, transport));
+    let held = !entry.retired.load(std::sync::atomic::Ordering::SeqCst)
+        && slot.as_ref().is_some_and(|held| same(held, transport));
     if held {
         store();
     }
     held
+}
+
+/// Run `step` unless the pool has retired `entry`, holding the slot's read guard through
+/// it, as [`with_serving`] does. For the start path, whose transport the entry may not
+/// hold yet (an HTTP start probes before it publishes), so membership is the whole test.
+pub(super) fn unless_retired(entry: &PooledEntry, step: &mut dyn FnMut()) -> bool {
+    let _slot = entry.transport.read();
+    let live = !entry.retired.load(std::sync::atomic::Ordering::SeqCst);
+    if live {
+        step();
+    }
+    live
 }
 
 /// The JSON-RPC error code in an answer, whichever way the peer carried it.
@@ -164,7 +180,19 @@ impl Backend {
     /// `resolve_era` itself, so the production visibility stays `pub(super)`.
     #[cfg(test)]
     pub(crate) async fn resolve_era_for_test(&self, transport: &Arc<dyn Transport>) {
-        self.resolve_era(transport).await;
+        let unpooled = PooledEntry::new(&self.name, &self.failsafe_config);
+        self.resolve_era(transport, &unpooled).await;
+    }
+
+    /// Test-only: the start path's era step for the slot `entry` (MIK-7643),
+    /// which the pool may have retired while the start ran.
+    #[cfg(test)]
+    pub(crate) async fn resolve_era_for_entry_test(
+        &self,
+        transport: &Arc<dyn Transport>,
+        entry: &PooledEntry,
+    ) {
+        self.resolve_era(transport, entry).await;
     }
 
     /// Resolve the era of a freshly started peer, probing at most once.
@@ -176,7 +204,7 @@ impl Backend {
     /// `start_lock` -> era mutex. Anything holding the era mutex must therefore
     /// use a transport handle it already owns and must never call back into
     /// `ensure_entry_started`, which would invert the order.
-    pub(super) async fn resolve_era(&self, transport: &Arc<dyn Transport>) {
+    pub(super) async fn resolve_era(&self, transport: &Arc<dyn Transport>, entry: &PooledEntry) {
         let timeout = self.probe_timeout();
         // A start hands over a transport to a process that has only just come
         // up. Any era already determined describes the peer that came before
@@ -184,7 +212,14 @@ impl Backend {
         // the verdict across the swap asserts something never observed about
         // the peer now on the wire. Discard and probe are one locked step: a
         // detached re-probe of the old peer must not be able to land between them.
-        self.era.restart_with(|| probe(transport, timeout)).await;
+        // A revocation removes a per-user slot without its start lock, so the slot this
+        // start serves may be retired before the discard or before the install (MIK-7643).
+        self.era
+            .restart_while_serving(
+                || probe(transport, timeout),
+                |step| unless_retired(entry, step),
+            )
+            .await;
     }
 
     /// Re-probe when an ordinary response contradicts the cached verdict.
@@ -228,21 +263,23 @@ impl Backend {
         else {
             return;
         };
+        #[cfg(test)]
+        self.after_reprobe_lookup.pause().await;
         // Judging the verdict and dropping it are one locked step, and only the task that
         // dropped it probes. Reading the era and clearing it separately would let two answers
         // arriving at once both find the stale verdict and each fan out a detached probe.
         let discarded = self
             .era
-            .discard_if(|era| {
-                // Re-checked under the era lock: a restart may have installed and resolved a new
-                // peer since the lookup above, and a contradiction from the old one must not
-                // erase that peer's verdict.
-                holds(&entry, transport)
-                    && match era {
-                        Era::Legacy => contradicts_legacy(code),
-                        Era::Modern => contradicts_modern(method, code),
-                    }
-            })
+            .discard_if_serving(
+                |era| match era {
+                    Era::Legacy => contradicts_legacy(code),
+                    Era::Modern => contradicts_modern(method, code),
+                },
+                // Re-checked under the era lock, and held through the clear: a restart may have
+                // installed and resolved a new peer since the lookup above, or the pool removed
+                // the slot, and a contradiction from the old one must not erase the verdict.
+                |clear| with_serving(&entry, transport, clear),
+            )
             .await;
         if !discarded {
             return;
@@ -254,7 +291,7 @@ impl Backend {
         tokio::spawn(async move {
             era.reprobe_with(
                 || probe(&transport, timeout),
-                |store| install_if_held(&entry, &transport, store),
+                |store| with_serving(&entry, &transport, store),
             )
             .await;
         });
