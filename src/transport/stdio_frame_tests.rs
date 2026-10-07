@@ -206,13 +206,28 @@ async fn a_dropped_request_leaves_no_partial_frame_for_the_next_caller() {
         "precondition: the large request was still writing"
     );
 
+    // A caller queued behind the stuck write and then cancelled sends nothing.
+    let queued = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        transport.request("resources/list", None),
+    )
+    .await;
+    assert!(queued.is_err(), "precondition: the queued request gave up");
+
     transport
         .notify("notifications/roots/list_changed", None)
         .await
         .expect("a later message is written");
 
-    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-    let frames = std::fs::read_to_string(&log).unwrap_or_default();
+    // Bounded polling for the two frames the backend should log.
+    let mut frames = String::new();
+    for _ in 0..100 {
+        frames = std::fs::read_to_string(&log).unwrap_or_default();
+        if frames.contains("notifications/roots/list_changed") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
     let torn: Vec<String> = frames
         .lines()
         .filter(|line| serde_json::from_str::<serde_json::Value>(line).is_err())
@@ -224,7 +239,8 @@ async fn a_dropped_request_leaves_no_partial_frame_for_the_next_caller() {
         torn.len(),
         torn.first()
     );
-    // The admitted large frame is finished first, whole; the later message follows.
+    // The admitted large frame is finished first, whole; the cancelled queued
+    // request never reaches the peer; the later message follows.
     let methods: Vec<String> = frames
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
