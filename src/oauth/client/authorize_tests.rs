@@ -495,16 +495,24 @@ async fn taking_up_a_shared_login_takes_up_its_registered_client_id() {
 }
 
 /// MIK-7982: a stored login is taken up only when its token is live and was
-/// stored for this client's own resource; otherwise the caller opens its own.
+/// stored under this client's own key (backend and issuer) and resource;
+/// otherwise the caller opens its own.
 #[tokio::test]
 async fn an_expired_or_foreign_stored_login_is_not_taken_up() {
     let issuer = "https://as.example";
-    for (resource, expiry, case) in [
-        (RESOURCE, Expiry::Expired, "an expired token"),
+    for (stored_issuer, resource, expiry, case) in [
+        (issuer, RESOURCE, Expiry::Expired, "an expired token"),
         (
+            issuer,
             "https://other.example.com/mcp",
             Expiry::Live,
             "another resource's token",
+        ),
+        (
+            "https://other-as.example",
+            RESOURCE,
+            Expiry::Live,
+            "another issuer's token",
         ),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -520,13 +528,17 @@ async fn an_expired_or_foreign_stored_login_is_not_taken_up() {
         let stored = token("stored-access", None, expiry);
         client
             .storage
-            .save(&storage_key(BACKEND, issuer), resource, &stored)
+            .save(&storage_key(BACKEND, stored_issuer), resource, &stored)
             .unwrap();
 
-        tokio::select! {
-            taken = client.authorize_shared(true, None) => panic!("{case} was taken up: {taken:?}"),
-            () = opened.notified() => {}
-        }
+        let opened_own = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::select! {
+                taken = client.authorize_shared(true, None) => panic!("{case} was taken up: {taken:?}"),
+                () = opened.notified() => {}
+            }
+        })
+        .await;
+        assert!(opened_own.is_ok(), "{case}: no login opened within 10 s");
     }
 }
 
