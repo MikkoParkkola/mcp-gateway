@@ -635,6 +635,7 @@ fn damage(record: &std::path::Path, how: &Damage) {
 /// backend never runs twice.
 #[tokio::test]
 async fn an_unreadable_admission_never_frees_its_key() {
+    let mut freed = Vec::new();
     for (case, how) in [
         ("before_admission", Damage::BeforeAdmission),
         ("mistyped_admission", Damage::MistypedAdmission),
@@ -659,10 +660,13 @@ async fn an_unreadable_admission_never_frees_its_key() {
             Err(error) => panic!("{case}: one damaged row stopped the store: {error:?}"),
         };
         let retry = admission.admit_task(task_request("oidc:acme:alice", "k-8052"));
-        assert!(
-            !matches!(retry, Ok(TaskAdmission::Owned(_))),
-            "{case}: a retry of the damaged row's key was admitted as a new task"
-        );
+        if matches!(retry, Ok(TaskAdmission::Owned(_))) {
+            freed.push(case);
+        }
         service.close().await.unwrap();
     }
+    assert!(
+        freed.is_empty(),
+        "a retry of the damaged row's key was admitted as a new task: {freed:?}"
+    );
 }
