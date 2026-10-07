@@ -181,6 +181,21 @@ def test_a_top_level_heading_ends_the_section():
     assert run(text, "--check") == 0
 
 
+def test_a_setext_known_issues_heading_is_the_section():
+    text = "Notes\n=====\n\nKnown issues\n------------\n\n- One (MIK-1).\n"
+    assert run(text, "--release", "--tag", "v4.0.0") == 1
+    assert run(text.replace("One", "Fixed in 4.0.1"), "--check") == 1
+
+
+def test_a_setext_heading_ends_the_section_and_a_thematic_break_does_not():
+    ends = "## Known issues\n\n- One.\n\nPerformance\n-----------\n\n4.0.1 later.\n"
+    assert run(ends, "--check") == 0
+    stays = "## Known issues\n\n---\n\n- Fixed in 4.0.1.\n"
+    assert run(stays, "--check") == 1
+    listed = "## Known issues\n\n- Fixed in 4.0.1.\n---\n"
+    assert run(listed, "--check") == 1
+
+
 def test_every_tag_publish_path_runs_the_release_gate():
     # ci.yml's container publish and release.yml both fire on a v* tag; each
     # must refuse a non-empty section before it publishes.
