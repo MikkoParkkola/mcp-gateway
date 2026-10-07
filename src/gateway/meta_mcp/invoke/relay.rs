@@ -4,7 +4,7 @@
 //! `2026-09-28-asi10-verbatim-relay.md` §13.3: the egress check on what a
 //! backend receives, and the per-call receipts committed at delivery.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use serde_json::Value;
 
@@ -239,6 +239,8 @@ struct Receipt {
 tokio::task_local! {
     /// The receipts of the delivery this task owns (§13.3 "Recording").
     static RELAY_RECEIPTS: RefCell<Vec<Receipt>>;
+    /// What the delivery has staged so far, as `staged_len` counts (MIK-7992).
+    static RELAY_STAGED: Cell<usize>;
     /// Set while one step of a plan dispatches.
     static PLAN_STEP: ();
 }
@@ -255,7 +257,7 @@ pub(crate) async fn collecting<F: std::future::Future>(delivery: F) -> F::Output
     RELAY_RECEIPTS
         .scope(
             RefCell::new(Vec::new()),
-            super::gateway_writes::scope(delivery),
+            RELAY_STAGED.scope(Cell::new(0), super::gateway_writes::scope(delivery)),
         )
         .await
 }
@@ -480,7 +482,8 @@ impl MetaMcp {
     ) -> (F::Output, StagedReceipts) {
         let (output, receipts) = RELAY_RECEIPTS
             .scope(RefCell::new(Vec::new()), async {
-                let output = super::gateway_writes::scope(delivery).await;
+                let writes = super::gateway_writes::scope(delivery);
+                let output = RELAY_STAGED.scope(Cell::new(0), writes).await;
                 let staged = RELAY_RECEIPTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
                 (output, staged)
             })
@@ -657,9 +660,7 @@ fn receipt_with(
     (server, tool): (&str, &str),
     value: &Value,
 ) -> Option<Receipt> {
-    let staged: usize = RELAY_RECEIPTS
-        .try_with(|r| r.borrow().iter().map(|s| s.digest.staged_len()).sum())
-        .ok()?;
+    let staged = RELAY_STAGED.try_with(Cell::get).ok()?;
     // MIK-7994: digested without the gateway's members of this call: a plan
     // step's receipt is only retained later, never rebuilt.
     let mut value = value.clone();
@@ -667,6 +668,7 @@ fn receipt_with(
     let in_plan = PLAN_STEP.try_with(|()| ()).is_ok();
     // MIK-7992: a plan step is capped once kept to what its plan delivers.
     let digest = fw.receipt_digest(server, tool, &value, in_plan.then_some(staged))?;
+    RELAY_STAGED.with(|s| s.set(staged + digest.staged_len()));
     Some(Receipt {
         key: who.key.to_owned(),
         keyed: who.keyed,

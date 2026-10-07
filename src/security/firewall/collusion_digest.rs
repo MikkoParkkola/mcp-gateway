@@ -248,11 +248,12 @@ impl DeliveryDigest {
             .collect()
     }
 
-    /// The bytes its segments hold, as plan-step staging counts them: text
-    /// plus one segment per leaf (MIK-7992).
+    /// The bytes it holds, as plan-step staging counts them: the digest, its
+    /// text, and one segment per leaf (MIK-7992).
     pub(crate) fn staged_len(&self) -> usize {
         let per_leaf = std::mem::size_of::<Segment>();
-        self.segments.iter().map(|s| s.text.len() + per_leaf).sum()
+        let text: usize = self.segments.iter().map(|s| s.text.len() + per_leaf).sum();
+        std::mem::size_of::<Self>() + text
     }
 
     /// This digest, as sensitive as `earlier` was: a rebuild from a redacted

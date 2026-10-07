@@ -21,6 +21,11 @@ use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
 };
 
+/// What one delivery may stage for its plan steps in all (MIK-7992): past it
+/// a step's receipt is dropped and counted, as an over-bound answer's are
+/// (under-receipt, never a false excuse).
+const PLAN_STAGED_CAP: usize = 4 * DELIVERED_SET_CAP;
+
 /// What relay detection does with a finding.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -418,7 +423,8 @@ impl Firewall {
     /// delivery has staged so far, as [`DeliveryDigest::staged_len`] counts)
     /// staged whole, capped once it is kept to what the plan delivers or when
     /// recorded (MIK-7992). From [`DELIVERED_SET_CAP`] staged on, a step is
-    /// capped now, so a plan of many steps stages a bounded total.
+    /// capped now; from [`PLAN_STAGED_CAP`] on, its receipt is dropped and
+    /// counted, so a plan of many steps stages a bounded total.
     pub(crate) fn receipt_digest(
         &self,
         server: &str,
@@ -427,6 +433,11 @@ impl Firewall {
         plan: Option<usize>,
     ) -> Option<DeliveryDigest> {
         match plan {
+            Some(staged) if staged >= PLAN_STAGED_CAP => {
+                self.relay_detector()?;
+                self.count_plan_drop();
+                None
+            }
             Some(staged) if staged < DELIVERED_SET_CAP => {
                 self.digest_with(server, tool, result, DeliveryDigest::of_plan_step_parts)
             }
@@ -473,10 +484,14 @@ impl Firewall {
         let (leaves, values) = delivery_parts(answer);
         let delivered = Delivered::of_parts(leaves, values);
         if delivered.is_none() {
-            self.relay.plan_drop.fetch_add(1, Ordering::Relaxed);
-            telemetry_metrics::counter!(PLAN_DROP_METRIC).increment(1);
+            self.count_plan_drop();
         }
         delivered
+    }
+
+    fn count_plan_drop(&self) {
+        self.relay.plan_drop.fetch_add(1, Ordering::Relaxed);
+        telemetry_metrics::counter!(PLAN_DROP_METRIC).increment(1);
     }
 
     /// `digest` kept to what `delivered` carries; unchanged with relay
