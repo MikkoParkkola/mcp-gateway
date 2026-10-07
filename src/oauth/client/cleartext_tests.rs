@@ -6,7 +6,7 @@
 //!
 //! Loopback is `crate::gateway::is_loopback_host`, the classifier the backend
 //! guard and the transport use. Spellings it does not recognise
-//! (`localhost.`, IPv4-mapped IPv6, `*.localhost`) are refused, not widened:
+//! (`localhost.`, `*.localhost`) are refused, not widened:
 //! a name that has to go through a resolver is not known to stay on the
 //! machine.
 
@@ -200,7 +200,6 @@ fn a_redirect_to_cleartext_off_machine_is_refused_under_every_policy() {
             "http://LOCALHOST.:8080/token",
             "http://foo.localhost/token",
             "http://localhost.localdomain/token",
-            "http://[::ffff:127.0.0.1]/token",
         ] {
             assert!(
                 matches!(hop(policy, 0, &url(refused)), Hop::Refuse(r) if r.starts_with("SSRF blocked")),
@@ -222,6 +221,7 @@ fn a_redirect_to_cleartext_off_machine_is_refused_under_every_policy() {
         "http://LOCALHOST/t",
         "http://[::1]/t",
         "http://127.1/t",
+        "http://[::ffff:127.0.0.1]/t",
     ] {
         assert_eq!(
             hop(DestinationPolicy::Configured, 0, &url(loopback)),
