@@ -389,6 +389,26 @@ pub(super) fn delivered_value(delivered: &Value) -> std::borrow::Cow<'_, Value> 
     )
 }
 
+/// The text of a `gateway_invoke` answer whose block is not the gateway's own
+/// printing (MIK-7998): one text block, no `structuredContent`, that is not
+/// exactly the pretty printing of what it parses to, or not JSON. The gateway
+/// prints every wrapper, so such a block was rewritten by its final pass.
+/// `None` for an answer [`delivered_value`] reads decoded.
+#[cfg(feature = "firewall")]
+pub(super) fn rewritten_text(delivered: &Value) -> Option<&str> {
+    if delivered.get("structuredContent").is_some() {
+        return None;
+    }
+    let [block] = delivered.get("content")?.as_array()?.as_slice() else {
+        return None;
+    };
+    let text = block.get("text")?.as_str()?;
+    let printed = serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|value| serde_json::to_string_pretty(&value).ok());
+    (printed.as_deref() != Some(text)).then_some(text)
+}
+
 /// The tool value a `gateway_invoke` result carries: its `structuredContent`,
 /// else its first text block parsed as JSON.
 pub(super) fn invoke_value(result: &Value) -> Option<Value> {
