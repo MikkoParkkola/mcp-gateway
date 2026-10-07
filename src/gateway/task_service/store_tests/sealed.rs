@@ -393,30 +393,41 @@ async fn a_repaired_key_is_never_free_while_the_seal_lifts() {
 }
 
 /// A repair that would take its owner over the per-principal cap keeps the
-/// seal, as startup would refuse that directory.
+/// seal, as startup would refuse that directory, whether the owner's other row
+/// loaded or was itself kept only as a reserved key.
 #[tokio::test]
 async fn a_repair_over_its_owners_cap_keeps_the_seal() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("tasks");
-    let store = open(&path).await;
-    let writer = services();
-    settled_task(&store, &writer, "k-intact").await;
-    let (damaged, _) = settled_task(&store, &writer, "k-damaged").await;
-    store.close().await.unwrap();
-    let record = path.join(format!("{damaged}.json"));
-    let original = std::fs::read(&record).unwrap();
-    damage(&record, &Damage::BeforeAdmission);
-    let limits = StoreLimits {
-        per_principal: 1,
-        ..StoreLimits::default()
-    };
-    let service = TaskService::open(&path, limits, services()).await.unwrap();
-    std::fs::write(&record, original).unwrap();
-    service.reread_sealed().await;
-    assert_eq!(
-        service.skipped_records().sealed,
-        1,
-        "the owner already holds its one row"
-    );
-    service.close().await.unwrap();
+    for held_as in ["loaded", "reserved"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks");
+        let store = open(&path).await;
+        let writer = services();
+        let (held, _) = settled_task(&store, &writer, "k-held").await;
+        let (damaged, _) = settled_task(&store, &writer, "k-damaged").await;
+        store.close().await.unwrap();
+        if held_as == "reserved" {
+            // Its task no longer restores, but its key still reads.
+            let record = path.join(format!("{held}.json"));
+            let mut value: Value =
+                serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+            value["model"]["task"]["lastUpdatedAt"] = json!("2026-09-06T00:00:00Z");
+            std::fs::write(&record, serde_json::to_vec(&value).unwrap()).unwrap();
+        }
+        let record = path.join(format!("{damaged}.json"));
+        let original = std::fs::read(&record).unwrap();
+        damage(&record, &Damage::BeforeAdmission);
+        let limits = StoreLimits {
+            per_principal: 1,
+            ..StoreLimits::default()
+        };
+        let service = TaskService::open(&path, limits, services()).await.unwrap();
+        std::fs::write(&record, original).unwrap();
+        service.reread_sealed().await;
+        assert_eq!(
+            service.skipped_records().sealed,
+            1,
+            "{held_as}: the owner already holds its one row"
+        );
+        service.close().await.unwrap();
+    }
 }
