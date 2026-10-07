@@ -587,11 +587,10 @@ impl Run {
         Step::Stop
     }
 
-    async fn once(
-        &self,
-        hub: &Arc<EventsHub>,
-        last: &mut Option<(BTreeMap<String, Value>, String)>,
-    ) -> Step {
+    /// The watched target and the catalogue generation it was read at, or
+    /// the step this poll ends with: `Polled` while the absence is unread or
+    /// a write may have undone it, `Stop` once it is confirmed and withdrawn.
+    async fn watched(&self, hub: &Arc<EventsHub>) -> Result<(Target, u64), Step> {
         // The classification is re-read every poll (MIK-7216.IDEM.1). A
         // capability removed, reclassified as side-effecting, or moved to
         // another credential class (a shared poller never calls under one
@@ -610,7 +609,7 @@ impl Run {
         let (target, generation) = if let Some(target) = found {
             (target, first.generation)
         } else if unread(&first, &self.name) {
-            return Step::Polled;
+            return Err(Step::Polled);
         } else {
             // Confirmed under the lock a subscribe commits under: a
             // capability watchable again by now keeps every subscription.
@@ -623,7 +622,7 @@ impl Run {
                 // have undone the absence: decide on the next poll.
                 || self.host.catalogue_generation() != again.generation
             {
-                return Step::Polled;
+                return Err(Step::Polled);
             } else {
                 let (gone, owner) = (vec![self.name.clone()], Arc::clone(hub));
                 let _ = tokio::task::spawn_blocking(move || owner.withdraw(&gone)).await;
@@ -633,8 +632,20 @@ impl Run {
                 self.stop.store(true, Ordering::Release);
                 drop(started);
                 hub.reconcile_stops_in_background();
-                return Step::Stop;
+                return Err(Step::Stop);
             }
+        };
+        Ok((target, generation))
+    }
+
+    async fn once(
+        &self,
+        hub: &Arc<EventsHub>,
+        last: &mut Option<(BTreeMap<String, Value>, String)>,
+    ) -> Step {
+        let (target, generation) = match self.watched(hub).await {
+            Ok(found) => found,
+            Err(step) => return step,
         };
         let now = Utc::now();
         let rows = self.holders(hub);
