@@ -619,7 +619,9 @@ impl MetaMcp {
     /// A prompt handed to a client, as it is recorded: its own text, since
     /// that is what the client receives, plus the context-integrity verdict
     /// read from a classified copy (an enforcing gate may have rewritten or
-    /// withheld that copy, so it is never the recorded text).
+    /// withheld that copy, so it is never the recorded text). Both are the
+    /// form the caller is handed, so text delivery strips (the chain member,
+    /// a clamped scope) sets no verdict and no audit class (MIK-7942).
     pub(crate) fn recorded_prompt(
         &self,
         (server, tool): (&str, &str),
@@ -627,11 +629,10 @@ impl MetaMcp {
         trace_id: &str,
         prompt: &Value,
     ) -> Value {
-        let (classified, _) =
-            self.apply_context_integrity(server, tool, api_key_name, trace_id, prompt.clone());
-        // Recorded in the form the caller is handed.
         let mut recorded = prompt.clone();
         delivered_form(&mut recorded);
+        let (classified, _) =
+            self.apply_context_integrity(server, tool, api_key_name, trace_id, recorded.clone());
         let Some(verdict) = classified.get("_context_integrity") else {
             return recorded;
         };

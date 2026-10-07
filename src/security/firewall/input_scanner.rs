@@ -12,12 +12,15 @@
 //! across every request. A `RegexSet` compiles all patterns into a single DFA,
 //! so each string is scanned in O(n) regardless of the number of patterns.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use regex::RegexSet;
 use serde_json::{Map, Value};
 
 use super::{Finding, FindingLocation, ScanType, Severity};
+
+/// A free-text key list and the published overlay it was parsed from.
+type ParsedKeys = (Arc<crate::config::EnvOverlay>, Arc<[String]>);
 
 /// Pre-compiled input pattern scanner.
 ///
@@ -29,6 +32,11 @@ pub struct InputScanner {
     /// scanner was built with one. Held rather than snapshotted so a config
     /// reload changes the list a later scan uses.
     env: Option<Arc<crate::config::LiveEnv>>,
+    /// The free-text keys last parsed from `env`, with the overlay they were
+    /// parsed from. Reused only while the overlay in force is that same `Arc`:
+    /// a published overlay is never mutated (`LiveEnv::set` swaps a new one
+    /// in), and holding it keeps its address from being reused by a later one.
+    free_text: Mutex<Option<ParsedKeys>>,
     shell: RegexSet,
     path: RegexSet,
     sql: RegexSet,
@@ -78,6 +86,8 @@ const SKIP_KEYS_ENV: &str = "MCP_GATEWAY_FIREWALL_SKIP_KEYS";
 
 /// Resolve the active free-text key list. An override wins over the defaults.
 fn free_text_keys(override_value: Option<&str>) -> Vec<String> {
+    #[cfg(test)]
+    KEY_LIST_PARSES.with(|n| n.set(n.get() + 1));
     if let Some(s) = override_value {
         return s
             .split(',')
@@ -131,6 +141,7 @@ impl InputScanner {
     fn with_optional_env(env: Option<Arc<crate::config::LiveEnv>>) -> Self {
         Self {
             env,
+            free_text: Mutex::new(None),
             shell: RegexSet::new(SHELL_PATTERNS).expect("Shell injection patterns must compile"),
             path: RegexSet::new(PATH_TRAVERSAL_PATTERNS)
                 .expect("Path traversal patterns must compile"),
@@ -142,9 +153,10 @@ impl InputScanner {
     ///
     /// Recursively descends into nested arrays and objects.
     pub fn scan_args(&self, args: &Map<String, Value>) -> Vec<Finding> {
-        // Resolved once per scan, not per scanned string: re-reading it per
-        // value re-allocated the list for every argument, and caching it for
-        // the scanner's lifetime would keep a list a config reload replaced.
+        // Resolved once per scan, not per scanned string, and parsed once per
+        // published overlay: a reload publishes a new overlay, so the next scan
+        // re-parses, while a list held for the scanner's lifetime would keep
+        // one a reload replaced.
         let free_text = self.active_free_text_keys();
         let mut findings = Vec::new();
         for (key, value) in args {
@@ -154,11 +166,28 @@ impl InputScanner {
     }
 
     /// The free-text key list in force right now.
-    fn active_free_text_keys(&self) -> Vec<String> {
-        match &self.env {
-            Some(env) => free_text_keys(env.get().resolve(SKIP_KEYS_ENV).as_deref()),
-            None => free_text_keys(std::env::var(SKIP_KEYS_ENV).ok().as_deref()),
+    ///
+    /// Without a live env the process environment is read on every scan, as
+    /// before: it is not the request path (the gateway builds its firewall
+    /// with one), and a process-wide cache would leak between tests that set
+    /// the variable.
+    fn active_free_text_keys(&self) -> Arc<[String]> {
+        let Some(env) = &self.env else {
+            return free_text_keys(std::env::var(SKIP_KEYS_ENV).ok().as_deref()).into();
+        };
+        let overlay = env.get();
+        let mut held = self
+            .free_text
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some((parsed_from, keys)) = held.as_ref()
+            && Arc::ptr_eq(parsed_from, &overlay)
+        {
+            return Arc::clone(keys);
         }
+        let keys: Arc<[String]> = free_text_keys(overlay.resolve(SKIP_KEYS_ENV).as_deref()).into();
+        *held = Some((overlay, Arc::clone(&keys)));
+        keys
     }
 
     fn scan_value_recursive(
@@ -254,6 +283,12 @@ fn truncate(s: &str, max: usize) -> String {
     format!("{}...", &s[..end])
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only: free-text key lists parsed on this thread.
+    static KEY_LIST_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -301,6 +336,78 @@ mod tests {
         );
 
         assert!(std::env::var("MCP_GATEWAY_FIREWALL_SKIP_KEYS").is_err());
+    }
+
+    fn overlay_skipping(dir: &std::path::Path, keys: &str) -> Arc<crate::config::EnvOverlay> {
+        let env_file = dir.join(format!("{keys}.env"));
+        crate::gateway::test_helpers::write_owner_only(
+            &env_file,
+            format!("MCP_GATEWAY_FIREWALL_SKIP_KEYS={keys}\n"),
+        )
+        .unwrap();
+        Arc::new(crate::config::EnvOverlay::from_paths(&[env_file]))
+    }
+
+    fn parses() -> usize {
+        KEY_LIST_PARSES.with(std::cell::Cell::get)
+    }
+
+    #[test]
+    fn one_overlay_parses_its_key_list_once() {
+        // MIK-8014.PERF.6: the list was re-read and re-parsed on every scan.
+        let dir = tempfile::tempdir().unwrap();
+        let env = Arc::new(crate::config::LiveEnv::new(
+            overlay_skipping(dir.path(), "release_notes"),
+            crate::config::ResolvedEnvFiles::default(),
+        ));
+        let scanner = InputScanner::with_env(env);
+        let args = Map::from_iter([(
+            "release_notes".to_string(),
+            Value::String("run `id`".into()),
+        )]);
+        let before = parses();
+        for _ in 0..3 {
+            assert!(scanner.scan_args(&args).is_empty());
+        }
+        assert_eq!(
+            parses() - before,
+            1,
+            "three scans under one overlay parse once"
+        );
+    }
+
+    #[test]
+    fn each_published_overlay_is_honoured_on_the_next_scan() {
+        // Several reloads between scans, one of them revoking the exemption.
+        let dir = tempfile::tempdir().unwrap();
+        let env = Arc::new(crate::config::LiveEnv::new(
+            overlay_skipping(dir.path(), "release_notes"),
+            crate::config::ResolvedEnvFiles::default(),
+        ));
+        let scanner = InputScanner::with_env(Arc::clone(&env));
+        let args = Map::from_iter([(
+            "release_notes".to_string(),
+            Value::String("run `id`".into()),
+        )]);
+        assert!(
+            scanner.scan_args(&args).is_empty(),
+            "exempt under the first overlay"
+        );
+
+        env.set(overlay_skipping(dir.path(), "changelog"));
+        env.set(overlay_skipping(dir.path(), "release_notes"));
+        assert!(
+            scanner.scan_args(&args).is_empty(),
+            "exempt again after two reloads"
+        );
+
+        let before = parses();
+        env.set(overlay_skipping(dir.path(), "changelog"));
+        assert!(
+            !scanner.scan_args(&args).is_empty(),
+            "the reload that revoked the exemption must reach the next scan"
+        );
+        assert_eq!(parses() - before, 1, "a new overlay is parsed afresh");
     }
     use serde_json::json;
 
