@@ -448,6 +448,11 @@ def test_a_tag_inside_a_code_span_is_title_text():
     assert run(head, "--release", "--tag", "v4.0.0") == 1
 
 
+def test_a_tag_inside_mixed_length_code_spans_is_title_text():
+    head = '## Known iss`` `<span title="a>webhook replay remains">` ``u``</span>``es\n'
+    assert run(head, "--release", "--tag", "v4.0.0") == 1
+
+
 def test_a_hyphen_range_to_a_later_release_fails_the_check():
     assert run(notes("\n- Seen in 4.0.0-4.0.1.\n"), "--check") == 1
 
