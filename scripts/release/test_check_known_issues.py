@@ -100,9 +100,20 @@ def test_only_beta_and_rc_tags_are_prereleases():
         assert run(notes(ITEM), "--release", "--tag", tag) == 1, tag
 
 
-def test_another_version_containing_the_digits_is_not_the_later_release():
-    for line in ("- Needs 14.0.1 of the toolchain.\n", "- Seen with 4.0.10 clients.\n"):
+def test_another_products_version_is_not_a_later_release():
+    for line in (
+        "- Needs 14.0.1 of the toolchain.\n",
+        "- Seen on Node 20.1.\n",
+        "- Upgrading from 3.5.1 works.\n",
+        "- Found in 4.0.0-rc.1.\n",
+    ):
         assert run(notes("\n" + line), "--check") == 0, line
+
+
+def test_any_later_4x_or_5x_release_fails_the_check():
+    for later in ("4.0.2", "4.0.10", "4.1", "4.1.0", "5.0"):
+        line = f"- Fixed in {later}.\n"
+        assert run(notes("\n" + line), "--check") == 1, line
 
 
 def test_the_later_release_is_found_at_any_word_boundary():
@@ -334,6 +345,21 @@ def test_any_html_in_the_section_keeps_it_open_to_the_end():
         "- Fixed in 4.0.1.\n"
     )
     assert run(text, "--check") == 1
+
+
+def test_a_title_with_inline_markdown_is_the_section():
+    for title in ("*Known issues*", "Known issues <!-- note -->", "[Known issues](#k)"):
+        assert run(f"## {title}\n\n- Fixed in 4.0.1.\n", "--check") == 1, title
+
+
+def test_an_autolink_line_does_not_keep_the_section_open():
+    text = "## Known issues\n\n<https://example.com/x>\n\n## Performance\n\n4.0.1 later.\n"
+    assert run(text, "--check") == 0
+
+
+def test_html_inside_a_fence_does_not_keep_the_section_open():
+    text = "## Known issues\n\n```html\n<div>\n```\n\n## Performance\n\n4.0.1 later.\n"
+    assert run(text, "--check") == 0
 
 
 def test_every_tag_publish_path_runs_the_release_gate():
