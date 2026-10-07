@@ -92,17 +92,27 @@ fn an_attempt_past_its_bounds_is_overdue_before_it_is_sent() {
     let inside = first + chrono::Duration::seconds(899);
     let after = first + chrono::Duration::seconds(900);
     assert!(
-        !overdue(1, first, after, POLICY),
+        !overdue(1, 1, first, after, POLICY),
         "a first attempt always goes"
     );
     assert!(
-        !overdue(5, first, inside, POLICY),
+        !overdue(5, 5, first, inside, POLICY),
         "the last allowed attempt"
     );
-    assert!(overdue(6, first, inside, POLICY), "past max_attempts");
+    assert!(overdue(6, 6, first, inside, POLICY), "past max_attempts");
     assert!(
-        overdue(2, first, after, POLICY),
+        overdue(2, 2, first, after, POLICY),
         "a retry at the window's end"
+    );
+    // MIK-7944 .2: unsent claims number the attempt but not the limit, and
+    // never lift the window.
+    assert!(
+        !overdue(6, 1, first, inside, POLICY),
+        "one send of six claims"
+    );
+    assert!(
+        overdue(2, 1, first, after, POLICY),
+        "an unsent retry ages out"
     );
 }
 
@@ -185,6 +195,7 @@ fn queued_as(hub: &EventsHub, port: u16, event_id: &str, name: &str) {
         body_b64: "e30=".into(),
         tenants: Vec::new(),
         attempt: 0,
+        unsent: 0,
         next_attempt_at: now,
         first_attempt_at: None,
         created_at: now,
@@ -220,6 +231,7 @@ fn queued_event(hub: &EventsHub, event_id: &str) {
         body_b64: "e30=".into(),
         tenants: Vec::new(),
         attempt: 0,
+        unsent: 0,
         next_attempt_at: now,
         first_attempt_at: None,
         created_at: now,

@@ -37,10 +37,12 @@ impl EventsHub {
             if swept.is_none_or(|at| at.elapsed() >= SWEEP_EVERY) {
                 swept = Some(Instant::now());
                 let policy = self.dead_policy();
+                let ordered = self.receipts.lock().await;
                 let evicted = self
                     .blocking(move |store| store.sweep_dead(Utc::now(), policy))
                     .await;
                 services.audit_evictions(evicted.unwrap_or_default()).await;
+                drop(ordered);
                 // Gone subscriptions take their rate and failure state along.
                 let held = self.store.live_subscription_ids(Utc::now());
                 self.runtime.rates.retain(&held);
@@ -249,7 +251,7 @@ impl EventsHub {
             return true;
         };
         tracing::warn!(%error, status, subscription = %ctx.sub.id, "events: attempt record not written; retrying");
-        let retry = Settle::Retry {
+        let retry = Settle::Unsent {
             next: Utc::now() + REFUSAL_RETRY,
             status: "audit_unavailable",
         };
@@ -279,7 +281,7 @@ impl EventsHub {
         };
         if services.audit_attempt(&ended(SENDING)).await.is_err() {
             let next = Utc::now() + REFUSAL_RETRY;
-            let retry = Settle::Retry {
+            let retry = Settle::Unsent {
                 next,
                 status: "audit_unavailable",
             };
@@ -388,7 +390,7 @@ impl EventsHub {
                     // The log refused the tenant_read record under
                     // fail-closed: nothing was sent, so this is an audit
                     // outage to retry, never a transport failure.
-                    let retry = Settle::Retry {
+                    let retry = Settle::Unsent {
                         next: Utc::now() + REFUSAL_RETRY,
                         status: "audit_unavailable",
                     };
@@ -461,20 +463,26 @@ impl EventsHub {
             record.created_at,
             self.dead_policy(),
         );
+        // Only a burial evicts: it holds the receipt order from its store
+        // call through its last receipt.
+        let _ordered = match outcome {
+            Settle::Dead { .. } => Some(self.receipts.lock().await),
+            _ => None,
+        };
         let settled = self
             .blocking(move |store| store.settle(&id, created_at, outcome, Utc::now(), policy))
             .await;
         let (evicted, buried) = settled.map_or((Vec::new(), false), |s| (s.evicted, s.buried));
         #[cfg(test)]
         self.before_receipts.pause().await;
-        services.audit_evictions(evicted).await;
-        // The burial's own receipt: a cancelled occurrence settles nothing, and
-        // one the caps evicted at once still happened.
+        // The burial's own receipt first: a cancelled occurrence settles
+        // nothing, and one the caps evicted at once still happened.
         if let Settle::Dead { reason, .. } = outcome
             && buried
         {
             self.dead_lettered(services, record, reason).await;
         }
+        services.audit_evictions(evicted).await;
     }
 
     /// The governance record of a dead letter (design 3.7).
@@ -557,10 +565,11 @@ impl EventsHub {
     }
 
     /// Whether claimed attempt `record.attempt` lies past the attempt limit
-    /// or the retry window.
+    /// (counted in sends) or the retry window.
     fn overdue(&self, record: &super::outbox::OutboxRecord, now: chrono::DateTime<Utc>) -> bool {
         overdue(
             record.attempt,
+            record.sends(),
             record.first_attempt_at.unwrap_or(now),
             now,
             self.retry_policy(),
@@ -578,7 +587,7 @@ impl EventsHub {
         let first = record.first_attempt_at.unwrap_or(now);
         judge(
             answer,
-            record.attempt,
+            record.sends(),
             first,
             now,
             policy,
@@ -647,15 +656,17 @@ fn window_end(first: chrono::DateTime<Utc>, window: Duration) -> chrono::DateTim
 }
 
 /// Whether attempt number `attempt` (1-based, already claimed) may not be
-/// sent: past the attempt limit, or a retry at or after the window's end.
-/// The first attempt is never overdue.
+/// sent: `sends` (the attempts that could have reached the callback) past
+/// the attempt limit, or a retry at or after the window's end. The first
+/// attempt is never overdue.
 fn overdue(
     attempt: u32,
+    sends: u32,
     first: chrono::DateTime<Utc>,
     now: chrono::DateTime<Utc>,
     policy: Retry,
 ) -> bool {
-    attempt > policy.max_attempts || (attempt > 1 && now >= window_end(first, policy.window))
+    sends > policy.max_attempts || (attempt > 1 && now >= window_end(first, policy.window))
 }
 
 /// The stored body as a JSON value, with the SHA-256 of what goes on the

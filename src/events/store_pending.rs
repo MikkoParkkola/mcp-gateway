@@ -43,6 +43,12 @@ pub(crate) enum Settle {
         next: DateTime<Utc>,
         status: &'static str,
     },
+    /// Retried after a claim that sent nothing (the audit log refused): it
+    /// keeps its attempt number but does not count toward the attempt limit.
+    Unsent {
+        next: DateTime<Utc>,
+        status: &'static str,
+    },
     Dead {
         reason: DeadReason,
         status: Option<&'static str>,
@@ -464,6 +470,7 @@ impl Store {
         let (delivered, error) = match outcome {
             Settle::Delivered => (true, None),
             Settle::Retry { status, .. }
+            | Settle::Unsent { status, .. }
             | Settle::Dead {
                 status: Some(status),
                 ..
@@ -501,7 +508,10 @@ impl Store {
                 state.outbox.remove(&event_id);
                 Ok(Settled::default())
             }
-            Settle::Retry { next, status } => {
+            Settle::Retry { next, status } | Settle::Unsent { next, status } => {
+                if matches!(outcome, Settle::Unsent { .. }) {
+                    record.unsent = record.unsent.saturating_add(1);
+                }
                 record.state = OutboxState::Pending;
                 record.next_attempt_at = next;
                 record.last_status = Some(status.to_owned());

@@ -69,6 +69,7 @@ fn record(event: &str, sub: &str, now: DateTime<Utc>) -> OutboxRecord {
         attribution_keys: Vec::new(),
         firewall: None,
         attempt: 0,
+        unsent: 0,
         next_attempt_at: now,
         first_attempt_at: None,
         created_at: now,
