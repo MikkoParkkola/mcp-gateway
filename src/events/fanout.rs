@@ -313,9 +313,12 @@ impl EventsHub {
     /// blocking pool, waiting `retry` between attempts; each attempt refreshes
     /// and recomputes from the stored state. Every failed attempt is
     /// logged, a join error with its cause: a retry that fails silently
-    /// cannot be diagnosed (MIK-7891).
+    /// cannot be diagnosed (MIK-7891). `pass` names the startup pass in
+    /// those logs, so a stuck deferred withdraw reads apart from the first
+    /// pass (MIK-8027).
     pub(crate) async fn reconcile_until_done(
         self: &Arc<Self>,
+        pass: &'static str,
         refresh: Arc<dyn Fn() -> CatalogueScan + Send + Sync>,
         retry: std::time::Duration,
     ) {
@@ -326,12 +329,14 @@ impl EventsHub {
             {
                 Ok(true) => return,
                 Ok(false) => tracing::warn!(
+                    pass,
                     attempt,
                     retry_secs = retry.as_secs(),
                     "events: startup reconcile could not remove a stale subscription \
                      (cause in the preceding log line); the worker stays held, retrying"
                 ),
                 Err(error) => tracing::warn!(
+                    pass,
                     attempt,
                     %error,
                     "events: startup reconcile task failed; the worker stays held, retrying"
