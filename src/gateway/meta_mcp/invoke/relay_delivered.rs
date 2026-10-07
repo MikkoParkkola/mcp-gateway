@@ -105,6 +105,7 @@ impl MetaMcp {
             }
             #[cfg(feature = "firewall")]
             if shape == AnswerShape::InvokeWrapped
+                && staged.len() == 1
                 && let (Some(fw), Some(text)) = (
                     &self.firewall,
                     result.and_then(super::super::audit::rewritten_text),
@@ -181,6 +182,7 @@ impl MetaMcp {
                 // MIK-7998: a wrapper no longer in the gateway's print keeps
                 // its staged receipt, kept to the text delivered.
                 if shape.as_built(result) == AnswerShape::InvokeWrapped
+                    && receipts.len() == 1
                     && !receipts.iter().any(|r| r.in_plan)
                     && let Some(text) = super::super::audit::rewritten_text(result)
                 {
