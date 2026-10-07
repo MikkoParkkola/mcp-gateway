@@ -30,6 +30,7 @@ fn allow_all_ctx_declaring(
         caller_key: None,
         verified_identity: Some(&NAMED_CALLER),
         is_admin: false,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: declared,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,

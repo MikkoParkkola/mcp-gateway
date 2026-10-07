@@ -100,6 +100,9 @@ impl Backend {
             stopped: std::sync::atomic::AtomicBool::new(false),
             budgets: super::ShutdownBudgets::default(),
             starts_in_flight: std::sync::atomic::AtomicUsize::new(0),
+            events_resolution: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            events_resolutions: std::sync::atomic::AtomicUsize::new(0),
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             login_gate: Arc::default(),
             destination: std::sync::OnceLock::new(),

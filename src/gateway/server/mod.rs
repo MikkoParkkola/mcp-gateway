@@ -60,9 +60,8 @@ pub(crate) use cleartext::reload_posture_refusal;
 pub(crate) use support::start_refusal as next_start_refusal;
 mod warmstart;
 
-use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
+use std::{net::SocketAddr, path::PathBuf};
 
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
@@ -72,11 +71,10 @@ use super::auth::ResolvedAuthConfig;
 use super::authz::ToolPolicyAuthorizer;
 use super::meta_mcp::{InvokeScope, MetaMcp, MetaMcpCallerContext};
 use super::oauth::{AgentAuthState, AgentDefinition, AgentRegistry, GatewayKeyPair};
-use super::outbound::OutboundFrame;
-use super::proxy::ProxyManager;
 use super::router::{AppState, CallerStanding, account_handles_of, create_router_with_accounts};
 use super::streaming::NotificationMultiplexer;
 use super::webhooks::WebhookRegistry;
+use super::{outbound::OutboundFrame, proxy::ProxyManager};
 use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
 use crate::cache::ResponseCache;
 use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
@@ -3249,6 +3247,7 @@ impl Gateway {
             // alone, so stdio was never checked and the default
             // non-admin context went unnoticed.
             is_admin: true,
+            surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
             // MRTR.9 declares capabilities per request, in the same `_meta`
             // this shape was classified from, so a modern call is read there.
             //
@@ -3755,6 +3754,7 @@ fn stdio_caller_context<'a>(
         // alone, so stdio was never checked and the default
         // non-admin context went unnoticed.
         is_admin: true,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         // stdio carries no per-request capability
         // declaration to read, and absent means absent.
         input_capabilities: crate::protocol::meta::Declared::NONE,

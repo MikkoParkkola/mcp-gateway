@@ -219,7 +219,7 @@ impl MetaMcp {
         apply_webhook_refresh(hub, &capabilities, &registry);
     }
 
-    /// Every REST capability as the events watch source sees it: its
+    /// Every REST-only capability as the events watch source sees it: its
     /// read-only classification (data, MIK-7216.IDEM.1) and whose credential
     /// a call needs. Empty without a capability backend.
     pub(crate) fn watch_targets(&self) -> Vec<crate::events::watch_source::Target> {
@@ -230,6 +230,7 @@ impl MetaMcp {
         capabilities
             .list_capabilities()
             .into_iter()
+            .filter(crate::capability::served_over_rest)
             .map(|definition| Target {
                 credential: if definition.auth.account.is_some() {
                     CredentialUse::Account
