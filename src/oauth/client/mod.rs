@@ -601,6 +601,8 @@ mod authorize_tests;
 pub(crate) mod destination;
 #[cfg(test)]
 mod refresh_flight_tests;
+#[cfg(test)]
+pub(crate) mod token_server_fixture;
 
 #[cfg(test)]
 impl OAuthClient {

@@ -278,3 +278,6 @@ async fn an_oauth_refresh_parse_error_drops_the_endpoint_credential() {
     assert!(!rendered.contains("PARSE_CANARY_78491"));
     assert!(!rendered.contains("fixture-refresh"));
 }
+
+#[path = "rest_refresh_flight_tests.rs"]
+mod flight;
