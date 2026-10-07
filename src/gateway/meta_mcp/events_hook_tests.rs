@@ -489,3 +489,19 @@ async fn an_unload_survives_a_partial_reload_that_cannot_restore_it() {
     assert!(!partial.complete, "a directory was not read");
     assert!(partial.present.contains("alpha"), "unloaded, not unread");
 }
+
+/// MIK-8037 (review of #3406): admitting a name again clears its unload mark,
+/// so once its own directory goes unread it is unread like any other.
+#[tokio::test]
+async fn an_admission_clears_the_unload_mark() {
+    let root = tempfile::tempdir().expect("root");
+    let (caps, meta) = with_refused(root.path()).await;
+    assert!(caps.unload_capability("alpha"), "unloaded");
+    caps.reload().await.expect("complete reload");
+    assert!(caps.has_capability("alpha"), "admitted again");
+    std::fs::remove_dir_all(root.path().join("d1")).expect("make d1 unreadable");
+    caps.reload().await.expect("partial reload");
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(!partial.present.contains("alpha"), "unread, not unloaded");
+}
