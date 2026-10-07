@@ -171,6 +171,17 @@ impl Backend {
         self.resolve_era(transport).await;
     }
 
+    /// Test-only: the start path's era step for the slot `entry` (MIK-7643),
+    /// which the pool may have retired while the start ran.
+    #[cfg(test)]
+    pub(crate) async fn resolve_era_for_entry_test(
+        &self,
+        transport: &Arc<dyn Transport>,
+        _entry: &PooledEntry,
+    ) {
+        self.resolve_era(transport).await;
+    }
+
     /// Resolve the era of a freshly started peer, probing at most once.
     ///
     /// Awaited on the start path so the first request already knows which

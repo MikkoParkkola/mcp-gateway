@@ -225,3 +225,78 @@ fn a_retired_entry_holding_its_transport_is_not_serving() {
         "a retired entry's answer must not be stored or cleared"
     )));
 }
+
+/// A per-user slot whose cached era is the primed peer's Modern, then revoked:
+/// the entry is retired and out of the map.
+async fn revoked_primed_slot(backend: &Arc<Backend>) -> Arc<PooledEntry> {
+    let (peer, _handles) = Peer::new(Answer::Modern);
+    let primed: Arc<dyn Transport> = peer;
+    backend.set_pooled_transport_for_test(&slot(BINDING), Arc::clone(&primed));
+    backend.resolve_era_for_test(&primed).await;
+    assert_eq!(backend.cached_era().await, Some(Era::Modern), "primed");
+    entry_of(backend, BINDING)
+}
+
+/// MIK-7643: a start whose slot the revocation removed before the start's era
+/// step neither discards the backend's verdict nor installs its peer's answer.
+#[tokio::test]
+async fn a_start_era_step_for_a_revoked_slot_keeps_the_era() {
+    let backend = per_user_backend("era-retired-start");
+    let entry = revoked_primed_slot(&backend).await;
+    assert_eq!(
+        backend.evict_identity_slots("rev:"),
+        1,
+        "the slot was revoked"
+    );
+
+    let (legacy, _handles) = Peer::new(Answer::MethodNotFound);
+    let started: Arc<dyn Transport> = legacy;
+    backend.resolve_era_for_entry_test(&started, &entry).await;
+
+    assert_eq!(
+        backend.cached_era().await,
+        Some(Era::Modern),
+        "a revoked slot's start must not replace the backend's verdict"
+    );
+}
+
+/// MIK-7643: the revocation lands while the start's probe is on the wire. The
+/// verdict was discarded while the slot still served; the revoked peer's
+/// answer is not installed.
+#[tokio::test]
+async fn a_start_probe_answer_for_a_slot_revoked_mid_probe_is_not_stored() {
+    let backend = per_user_backend("era-retired-start-probe");
+    let entry = revoked_primed_slot(&backend).await;
+
+    let (legacy, mut handles) = Peer::new(Answer::MethodNotFound);
+    legacy.hold.store(true, Ordering::SeqCst);
+    let started: Arc<dyn Transport> = legacy;
+    let step = tokio::spawn({
+        let backend = Arc::clone(&backend);
+        let entry = Arc::clone(&entry);
+        async move { backend.resolve_era_for_entry_test(&started, &entry).await }
+    });
+    tokio::time::timeout(WAIT, &mut handles.started)
+        .await
+        .expect("the start's probe reached the peer in time")
+        .expect("the start's probe reaches the peer");
+    assert_eq!(
+        backend.evict_identity_slots("rev:"),
+        1,
+        "the slot was revoked"
+    );
+    handles
+        .release
+        .send(())
+        .expect("the held probe is still waiting");
+    tokio::time::timeout(WAIT, step)
+        .await
+        .expect("the era step finished in time")
+        .expect("the era step task");
+
+    assert_eq!(
+        backend.cached_era().await,
+        None,
+        "discarded while serving, and the revoked peer's Legacy answer not installed"
+    );
+}
