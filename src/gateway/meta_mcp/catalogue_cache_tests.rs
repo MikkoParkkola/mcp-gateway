@@ -274,19 +274,29 @@ fn a_list_no_longer_held_falls_back_to_the_exact_path() {
 
 /// A held list is recognised by address only under the server identity it
 /// was projected for: the same list under another server is another card.
+/// The id and the name each change alone, so either half of the identity
+/// check failing is seen.
 #[test]
 fn a_held_list_matches_only_under_its_own_server_identity() {
-    use crate::trust::SharedProjections;
+    use crate::trust::{SharedProjections, project_tool_descriptors_trust_cards};
     let meta = with_webhooks();
     let tools = meta.meta_tools_for(CallerStanding::Admin, meta.backend_counts());
     assert!(!tools.is_empty());
     let store = SharedProjections::default();
-    let a = store.project("test:mik-7916-ident-a", "ident-a", &tools);
-    let b = store.project("test:mik-7916-ident-b", "ident-b", &tools);
-    assert_ne!(
-        a[0]["trustCard"]["serverId"], b[0]["trustCard"]["serverId"],
-        "the second server must not be served the first one's cards"
-    );
+    let (id, name) = ("test:mik-7916-ident-a", "ident-a");
+    let held = store.project(id, name, &tools);
+    for (other_id, other_name) in [("test:mik-7916-ident-b", name), (id, "ident-b")] {
+        let expected = project_tool_descriptors_trust_cards(other_id, other_name, &tools);
+        assert_ne!(
+            expected, held,
+            "{other_id}/{other_name}: identity shows in the card"
+        );
+        assert_eq!(
+            store.project(other_id, other_name, &tools),
+            expected,
+            "{other_id}/{other_name}: must not be served another identity's cards"
+        );
+    }
 }
 
 #[test]
