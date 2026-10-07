@@ -219,9 +219,6 @@ impl ExecutionAdmission {
         })
     }
 
-    /// Call only after current authorization, with a stable verified principal
-    /// and sanitized operation/representation descriptors. No backend work occurs
-    /// here. A Task lease is only a reservation, never a durable acknowledgement.
     /// Seal or unseal NEW identities: `rows` is how many stored task rows hold
     /// a key nobody can read (MIK-8052). Set by the task service at open and
     /// after each re-read of those rows, always after any repaired row's
@@ -230,6 +227,9 @@ impl ExecutionAdmission {
         self.state.lock().sealed = rows;
     }
 
+    /// Call only after current authorization, with a stable verified principal
+    /// and sanitized operation/representation descriptors. No backend work occurs
+    /// here. A Task lease is only a reservation, never a durable acknowledgement.
     pub(crate) fn admit(self: &Arc<Self>, request: Request<'_>) -> Result<Admission, Refusal> {
         self.admit_round(request, "")
     }
