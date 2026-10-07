@@ -1,0 +1,289 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-8052: a stored row whose idempotency key cannot be read seals new keyed
+//! admissions, so a retry of that key never runs its backend twice. The seal
+//! lifts on its own once the row is repaired or removed.
+
+use std::path::Path;
+use std::sync::Arc;
+
+use serde_json::{Value, json};
+
+use super::super::service::TaskService;
+use super::super::store::StoreLimits;
+use super::admission::{services, settled_task, task_request};
+use super::support::*;
+use crate::idempotency::admission::{ExecutionAdmission, TaskAdmission};
+
+/// MIK-8052: the damage done to a settled row's bytes, each a way its
+/// admission member stops reading unambiguously.
+enum Damage {
+    /// Syntax damage in `dispatched`, the member written before `admission`.
+    BeforeAdmission,
+    /// `admission` present but not an admission block.
+    MistypedAdmission,
+    /// A later, well-formed decoy copy of `identityDigest` inside `admission`.
+    NestedDuplicate,
+    /// A second, later `admission` member: either copy could be the writer's.
+    RepeatedAdmission,
+}
+
+fn damage(record: &std::path::Path, how: &Damage) {
+    let text = String::from_utf8(std::fs::read(record).unwrap()).unwrap();
+    let damaged = match how {
+        Damage::BeforeAdmission => text.replacen("\"dispatched\":", "\"dispatched\":@", 1),
+        Damage::MistypedAdmission => {
+            let mut value: Value = serde_json::from_str(&text).unwrap();
+            value["admission"] = json!(null);
+            serde_json::to_string(&value).unwrap()
+        }
+        Damage::NestedDuplicate => {
+            // The block holds only scalars, so its first closing brace ends it.
+            let start = text.find("\"admission\":{").expect("an admission block");
+            let end = start + text[start..].find('}').unwrap();
+            // A well-formed digest, so only the duplicate is wrong.
+            let decoy = "0".repeat(64);
+            format!(
+                "{},\"identityDigest\":\"{decoy}\"{}",
+                &text[..end],
+                &text[end..]
+            )
+        }
+        Damage::RepeatedAdmission => {
+            let end = text.rfind('}').expect("a record object");
+            format!("{},\"admission\":null{}", &text[..end], &text[end..])
+        }
+    };
+    assert_ne!(damaged, text, "the fixture must change the record");
+    std::fs::write(record, damaged).unwrap();
+}
+
+/// `MIK-8052.AC1`: a row whose admission member cannot be read unambiguously
+/// must not hand its key to a new task. The store still opens (`MIK-8023.LOAD.1`),
+/// and a retry of the row's key is never admitted as a fresh owner, so its
+/// backend never runs twice.
+#[tokio::test]
+async fn an_unreadable_admission_never_frees_its_key() {
+    let mut freed = Vec::new();
+    for (case, how) in [
+        ("before_admission", Damage::BeforeAdmission),
+        ("mistyped_admission", Damage::MistypedAdmission),
+        ("nested_duplicate", Damage::NestedDuplicate),
+        ("repeated_admission", Damage::RepeatedAdmission),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks");
+        let store = open(&path).await;
+        let (id, _) = settled_task(&store, &services(), "k-8052").await;
+        store.close().await.unwrap();
+        damage(&path.join(format!("{id}.json")), &how);
+
+        let admission = services();
+        let service = match super::super::service::TaskService::open(
+            &path,
+            super::super::store::StoreLimits::default(),
+            Arc::clone(&admission),
+        )
+        .await
+        {
+            Ok(service) => service,
+            Err(error) => panic!("{case}: one damaged row stopped the store: {error:?}"),
+        };
+        let retry = admission.admit_task(task_request("oidc:acme:alice", "k-8052"));
+        if matches!(retry, Ok(TaskAdmission::Owned(_))) {
+            freed.push(case);
+        }
+        service.close().await.unwrap();
+    }
+    assert!(
+        freed.is_empty(),
+        "a retry of the damaged row's key was admitted as a new task: {freed:?}"
+    );
+}
+
+/// A store holding one settled task per key, each row then damaged so its key
+/// cannot be read; the service is open over it. Returns the store path, each
+/// row's task id and its original bytes, the admission authority and the
+/// service.
+async fn sealed_service(
+    root: &Path,
+    keys: &[&str],
+) -> (
+    std::path::PathBuf,
+    Vec<(String, Vec<u8>)>,
+    Arc<ExecutionAdmission>,
+    TaskService,
+) {
+    let path = root.join("tasks");
+    let store = open(&path).await;
+    let mut rows = Vec::new();
+    let writer = services();
+    for key in keys {
+        let (id, _) = settled_task(&store, &writer, key).await;
+        rows.push(id);
+    }
+    store.close().await.unwrap();
+    let rows = rows
+        .into_iter()
+        .map(|id| {
+            let record = path.join(format!("{id}.json"));
+            let original = std::fs::read(&record).unwrap();
+            damage(&record, &Damage::BeforeAdmission);
+            (id, original)
+        })
+        .collect();
+    let admission = services();
+    let service = TaskService::open(&path, StoreLimits::default(), Arc::clone(&admission))
+        .await
+        .expect("sealed rows never stop the store");
+    (path, rows, admission, service)
+}
+
+fn is_new_owner(admission: &Arc<ExecutionAdmission>, key: &str) -> bool {
+    matches!(
+        admission.admit_task(task_request("oidc:acme:alice", key)),
+        Ok(TaskAdmission::Owned(_))
+    )
+}
+
+/// A bad admission block must not end the walk before a later `version`: a
+/// newer build's row still refuses the store, however its admission reads.
+#[tokio::test]
+async fn a_bad_admission_never_hides_a_newer_version() {
+    for (case, admission) in [
+        ("null", "null"),
+        (
+            "repeated_field",
+            r#"{"identityDigest":"a","identityDigest":"b"}"#,
+        ),
+        ("list", "[1,2]"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks");
+        let store = open(&path).await;
+        let (id, _) = settled_task(&store, &services(), "k-version").await;
+        store.close().await.unwrap();
+        let record = path.join(format!("{id}.json"));
+        let mut value: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+        value["admission"] = json!(null);
+        let text = serde_json::to_string(&value).unwrap();
+        let text = text.replacen(
+            "\"admission\":null",
+            &format!("\"admission\":{admission}"),
+            1,
+        );
+        let end = text.rfind('}').unwrap();
+        std::fs::write(
+            &record,
+            format!("{},\"version\":999{}", &text[..end], &text[end..]),
+        )
+        .unwrap();
+        assert_eq!(
+            super::super::store::TaskStore::open(&path, StoreLimits::default())
+                .await
+                .err(),
+            Some(super::super::store::StoreError::CorruptRecord),
+            "{case}: a newer build's row must refuse the store"
+        );
+    }
+}
+
+/// Removing the sealed file lifts the seal at the next re-read, with no
+/// restart; until then every new key is refused.
+#[tokio::test]
+async fn removing_a_sealed_row_lifts_the_seal() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, rows, admission, service) = sealed_service(dir.path(), &["k-gone"]).await;
+    assert_eq!(service.skipped_records().sealed, 1);
+    assert!(!is_new_owner(&admission, "k-other"), "sealed: no new key");
+    std::fs::remove_file(path.join(format!("{}.json", rows[0].0))).unwrap();
+    service.reread_sealed().await;
+    assert_eq!(service.skipped_records().sealed, 0);
+    assert!(is_new_owner(&admission, "k-other"), "the seal lifted");
+    service.close().await.unwrap();
+}
+
+/// A repaired row's key is imported BEFORE the seal lifts: its retry finds its
+/// own task id, while a new key is admitted again.
+#[tokio::test]
+async fn repairing_a_sealed_row_keeps_its_key_and_lifts_the_seal() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, rows, admission, service) = sealed_service(dir.path(), &["k-fixed"]).await;
+    let (id, original) = &rows[0];
+    std::fs::write(path.join(format!("{id}.json")), original).unwrap();
+    service.reread_sealed().await;
+    assert_eq!(service.skipped_records().sealed, 0);
+    assert_eq!(
+        service.skipped_records().reserved,
+        1,
+        "the repaired row is kept"
+    );
+    match admission.admit_task(task_request("oidc:acme:alice", "k-fixed")) {
+        Ok(TaskAdmission::Existing { task_id, .. }) => assert_eq!(&task_id, id),
+        other => panic!("a retry of the repaired key must find its task, got {other:?}"),
+    }
+    assert!(is_new_owner(&admission, "k-new"), "the seal lifted");
+    service.close().await.unwrap();
+}
+
+/// Two sealed rows: repairing one keeps the seal; repairing the second lifts
+/// it. Each repaired key is kept.
+#[tokio::test]
+async fn the_seal_lifts_only_when_every_sealed_row_is_repaired() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, rows, admission, service) = sealed_service(dir.path(), &["k-a", "k-b"]).await;
+    for (done, (id, original)) in rows.iter().enumerate() {
+        std::fs::write(path.join(format!("{id}.json")), original).unwrap();
+        service.reread_sealed().await;
+        let left = rows.len() - done - 1;
+        assert_eq!(service.skipped_records().sealed, left);
+        assert_eq!(
+            is_new_owner(&admission, &format!("k-new-{done}")),
+            left == 0
+        );
+    }
+    for key in ["k-a", "k-b"] {
+        assert!(
+            matches!(
+                admission.admit_task(task_request("oidc:acme:alice", key)),
+                Ok(TaskAdmission::Existing { .. })
+            ),
+            "{key}: a repaired key stays taken"
+        );
+    }
+    service.close().await.unwrap();
+}
+
+/// A re-read never blocks and never takes the store down: a sealed row
+/// replaced by a FIFO, or by a newer build's row, stays sealed.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_refused_reread_keeps_the_seal_and_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, rows, admission, service) = sealed_service(dir.path(), &["k-fifo"]).await;
+    let record = path.join(format!("{}.json", rows[0].0));
+    std::fs::remove_file(&record).unwrap();
+    crate::test_fifo::make_fifo(&record);
+    tokio::time::timeout(std::time::Duration::from_secs(5), service.reread_sealed())
+        .await
+        .expect("the re-read never waits on a FIFO");
+    assert_eq!(service.skipped_records().sealed, 1, "a FIFO stays sealed");
+    std::fs::remove_file(&record).unwrap();
+    let mut value: Value = serde_json::from_slice(&rows[0].1).unwrap();
+    value["version"] = json!(999);
+    std::fs::write(&record, serde_json::to_vec(&value).unwrap()).unwrap();
+    // Private, so only the version decides.
+    std::fs::set_permissions(
+        &record,
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o600),
+    )
+    .unwrap();
+    service.reread_sealed().await;
+    assert_eq!(
+        service.skipped_records().sealed,
+        1,
+        "a newer row stays sealed"
+    );
+    assert!(!is_new_owner(&admission, "k-other"));
+    service.close().await.unwrap();
+}
