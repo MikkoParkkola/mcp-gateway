@@ -169,19 +169,9 @@ impl MetaMcp {
         let include_costs = caller_is_admin;
         #[cfg(feature = "cost-governance")]
         if let Some(ref enforcer) = self.budget_enforcer {
-            let snap = enforcer.snapshot();
-            let cost_section = json!({
-                "global_daily_spend_usd": snap.global_daily_usd,
-                "global_daily_limit_usd": snap.global_daily_limit,
-                "tool_daily_spend": snap.tool_daily,
-                "tool_daily_limits": snap.tool_limits,
-                "key_daily_spend": snap.key_daily,
-                // Spend of unbudgeted names past the day maps' cap (MIK-8015).
-                "tool_overflow_spend_usd": snap.tool_overflow_usd,
-                "key_overflow_spend_usd": snap.key_overflow_usd,
-            });
+            let section = cost_section(&enforcer.snapshot());
             if include_costs && let Value::Object(ref mut map) = response {
-                map.insert("cost_governance".to_string(), cost_section);
+                map.insert("cost_governance".to_string(), section);
             }
             if let Some(ref registry) = self.cost_registry {
                 let tool_costs = json!(registry.snapshot());
@@ -375,5 +365,44 @@ impl MetaMcp {
         let result = temp_engine.execute(name, arguments, &invoker).await?;
 
         Ok(serde_json::to_value(&result).unwrap_or(json!(null)))
+    }
+}
+
+/// The admin stats `cost_governance` section, overflow totals included
+/// (MIK-8015), so its per-name rows and the global total reconcile.
+#[cfg(feature = "cost-governance")]
+fn cost_section(snap: &crate::cost_accounting::enforcer::EnforcerSnapshot) -> Value {
+    json!({
+        "global_daily_spend_usd": snap.global_daily_usd,
+        "global_daily_limit_usd": snap.global_daily_limit,
+        "tool_daily_spend": snap.tool_daily,
+        "tool_daily_limits": snap.tool_limits,
+        "key_daily_spend": snap.key_daily,
+        "tool_overflow_spend_usd": snap.tool_overflow_usd,
+        "key_overflow_spend_usd": snap.key_overflow_usd,
+    })
+}
+
+#[cfg(all(test, feature = "cost-governance"))]
+mod cost_section_tests {
+    use super::cost_section;
+    use crate::cost_accounting::enforcer::EnforcerSnapshot;
+
+    #[test]
+    fn the_cost_section_reports_both_overflow_totals() {
+        let snap = EnforcerSnapshot {
+            global_daily_usd: 3.0,
+            global_daily_limit: None,
+            tool_daily: std::collections::HashMap::new(),
+            tool_limits: std::collections::HashMap::new(),
+            key_daily: std::collections::HashMap::new(),
+            key_limits: std::collections::HashMap::new(),
+            taken_at: 0,
+            tool_overflow_usd: 1.25,
+            key_overflow_usd: 0.5,
+        };
+        let section = cost_section(&snap);
+        assert_eq!(section["tool_overflow_spend_usd"], 1.25);
+        assert_eq!(section["key_overflow_spend_usd"], 0.5);
     }
 }

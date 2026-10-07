@@ -303,3 +303,18 @@ fn an_over_long_unbudgeted_name_counts_as_overflow() {
     assert!(e.tool_daily.is_empty());
     assert!((e.snapshot().tool_overflow_usd - 0.01).abs() < 1e-9);
 }
+
+#[test]
+fn budgeted_names_present_first_leave_the_full_unbudgeted_allowance() {
+    // GIVEN: three budgeted keys that spend before any other key
+    let budgets = [("b1", 9.0), ("b2", 9.0), ("b3", 9.0)];
+    let e = enforcer_with(true, None, &[], &budgets, &[]);
+    for (name, _) in budgets {
+        e.record_spend("t", Some(name), 0.01);
+    }
+    for i in 0..300 {
+        e.record_spend("t", Some(&format!("invented-{i}")), 0.01);
+    }
+    // THEN: the invented keys still get the whole cap of their own entries
+    assert_eq!(e.key_daily.len(), budgets.len() + MAX_UNBUDGETED_ROWS);
+}
