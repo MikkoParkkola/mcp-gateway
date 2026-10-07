@@ -556,3 +556,6 @@ async fn a_route_removed_before_the_first_pass_is_withdrawn_by_it() {
     );
     assert!(subscribed(store.path(), "alpha"), "and nothing else");
 }
+
+#[path = "events_hook_shape_tests.rs"]
+mod shape_tests;
