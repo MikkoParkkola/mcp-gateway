@@ -196,24 +196,34 @@ fn a_single_backend_add_and_remove_through_the_ui_writer_keep_comments() {
 }
 
 #[test]
-fn a_change_beyond_one_backend_takes_the_full_rewrite() {
-    for change in [
-        (|c: &mut mcp_gateway::config::Config| {
-            c.backends.insert("one".into(), echo_backend());
-            c.backends.insert("two".into(), echo_backend());
-        }) as fn(&mut mcp_gateway::config::Config),
-        |c| c.server.port += 1,
-    ] {
-        let home = tempfile::tempdir().expect("home");
-        let path = home.path().join("gateway.yaml");
-        mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED).expect("write");
-        let written = ui_write(&path, change);
-        assert!(
-            !written.contains("# kept by hand"),
-            "only a one-backend change is spliced:\n{written}"
-        );
-        mcp_gateway::config::Config::load_literal(Some(&path)).expect("the rewrite loads");
-    }
+fn a_change_outside_backends_takes_the_full_rewrite() {
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED).expect("write");
+    let written = ui_write(&path, |c| c.server.port += 1);
+    assert!(
+        !written.contains("# kept by hand"),
+        "only a backends change is spliced:\n{written}"
+    );
+    mcp_gateway::config::Config::load_literal(Some(&path)).expect("the rewrite loads");
+}
+
+/// MIK-8017: several backends at once are spliced in turn and written once.
+#[test]
+fn several_backends_at_once_keep_comments() {
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED).expect("write");
+    let written = ui_write(&path, |c| {
+        c.backends.insert("one".into(), echo_backend());
+        c.backends.insert("two".into(), echo_backend());
+        c.backends.remove("old");
+    });
+    assert!(written.contains("# kept by hand"), "{written}");
+    let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
+    let mut names: Vec<_> = config.backends.keys().map(String::as_str).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["one", "two"], "{written}");
 }
 
 /// The binary in `home`, isolated as the setup and discovery tests run it:
@@ -327,12 +337,12 @@ fn cli_remove_with_force_rewrites() {
     assert!(!config.backends.contains_key("a") && config.backends.contains_key("b"));
 }
 
-/// A block-style file with a comment on line 1. Importing two servers is
-/// more than the one-backend splice can express.
+/// A block-style file with a comment on line 1.
 const NOTED_BLOCK: &str = "# keep me\nbackends:\n  old:\n    command: x\n";
 
-/// Two Claude Code servers for setup and discovery to import.
-fn two_client_servers() -> (tempfile::TempDir, std::path::PathBuf) {
+/// Two Claude Code servers for setup and discovery to import, and
+/// `gateway.yaml` holding `yaml` (none when `None`).
+fn two_client_servers(yaml: Option<&str>) -> (tempfile::TempDir, std::path::PathBuf) {
     let home = tempfile::tempdir().expect("home");
     mcp_gateway::gateway::test_helpers::write_owner_only(
         home.path().join(".claude.json"),
@@ -344,48 +354,93 @@ fn two_client_servers() -> (tempfile::TempDir, std::path::PathBuf) {
     )
     .expect("seed client");
     let path = home.path().join("gateway.yaml");
-    mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED_BLOCK).expect("write");
+    if let Some(yaml) = yaml {
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, yaml).expect("write");
+    }
     (home, path)
 }
 
 #[test]
+fn setup_import_keeps_comments() {
+    let (home, path) = two_client_servers(Some(NOTED_BLOCK));
+    let p = path.to_str().unwrap();
+    let config = forced(
+        home.path(),
+        &path,
+        &["setup", "wizard", "--yes", "--output", p],
+    );
+    for name in ["old", "one", "two"] {
+        assert!(config.backends.contains_key(name), "{name} missing");
+    }
+    let after = std::fs::read_to_string(&path).expect("read");
+    assert!(after.contains("# keep me"), "{after}");
+}
+
+/// A first run: setup bootstraps the config `init` writes, with its
+/// credential warning, then imports both servers into it.
+#[test]
+fn setup_on_a_fresh_home_keeps_the_init_warning() {
+    let (home, path) = two_client_servers(None);
+    let p = path.to_str().unwrap();
+    let config = forced(
+        home.path(),
+        &path,
+        &["setup", "wizard", "--yes", "--output", p],
+    );
+    assert!(config.backends.contains_key("one") && config.backends.contains_key("two"));
+    let after = std::fs::read_to_string(&path).expect("read");
+    assert!(after.contains("Do not commit it."), "{after}");
+}
+
+#[test]
 fn setup_import_that_would_drop_comments_is_refused() {
-    let (home, path) = two_client_servers();
+    let (home, path) = two_client_servers(Some(FLOW));
     let p = path.to_str().unwrap();
     refused(
         home.path(),
         &path,
-        NOTED_BLOCK,
+        FLOW,
         &["setup", "wizard", "--yes", "--output", p],
     );
 }
 
 #[test]
 fn setup_import_with_force_rewrites() {
-    let (home, path) = two_client_servers();
+    let (home, path) = two_client_servers(Some(FLOW));
     let p = path.to_str().unwrap();
     let args = ["setup", "wizard", "--yes", "--force", "--output", p];
     let config = forced(home.path(), &path, &args);
-    for name in ["old", "one", "two"] {
+    for name in ["a", "b", "one", "two"] {
         assert!(config.backends.contains_key(name), "{name} missing");
     }
 }
 
 #[test]
+fn discover_write_keeps_comments() {
+    let (home, path) = two_client_servers(Some(NOTED_BLOCK));
+    let p = path.to_str().unwrap();
+    let args = ["cap", "discover", "--write-config", "--config-path", p];
+    let config = forced(home.path(), &path, &args);
+    assert!(config.backends.contains_key("one") && config.backends.contains_key("two"));
+    let after = std::fs::read_to_string(&path).expect("read");
+    assert!(after.contains("# keep me"), "{after}");
+}
+
+#[test]
 fn discover_write_that_would_drop_comments_is_refused() {
-    let (home, path) = two_client_servers();
+    let (home, path) = two_client_servers(Some(FLOW));
     let p = path.to_str().unwrap();
     refused(
         home.path(),
         &path,
-        NOTED_BLOCK,
+        FLOW,
         &["cap", "discover", "--write-config", "--config-path", p],
     );
 }
 
 #[test]
 fn discover_write_with_force_rewrites() {
-    let (home, path) = two_client_servers();
+    let (home, path) = two_client_servers(Some(FLOW));
     let p = path.to_str().unwrap();
     let args = [
         "cap",
@@ -396,7 +451,7 @@ fn discover_write_with_force_rewrites() {
         p,
     ];
     let config = forced(home.path(), &path, &args);
-    for name in ["old", "one", "two"] {
+    for name in ["a", "b", "one", "two"] {
         assert!(config.backends.contains_key(name), "{name} missing");
     }
 }
