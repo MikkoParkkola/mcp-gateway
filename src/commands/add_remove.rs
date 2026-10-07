@@ -458,6 +458,22 @@ mod tests {
         assert_eq!(config.backends["tavily"].description, "updated desc");
     }
 
+    /// `MIK-CLI-COMMENTS.SILENT.1`: an update that cannot keep the comments
+    /// is refused and leaves the file as it was.
+    #[test]
+    fn update_that_would_drop_comments_is_refused() {
+        let (_dir, path) = temp_config();
+        let flow = "# keep\nbackends: {a: {command: x}}\n";
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, flow).unwrap();
+        let update = BackendUpdate {
+            description: Some("new".into()),
+            ..BackendUpdate::default()
+        };
+        let error = run_update_backend("a", update, &path).unwrap_err();
+        assert!(error.contains("line 1"), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), flow);
+    }
+
     #[test]
     fn update_missing_backend_returns_error() {
         let (_dir, path) = temp_config();
