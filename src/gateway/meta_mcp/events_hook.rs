@@ -212,6 +212,7 @@ impl MetaMcp {
 
     /// The catalogue as the events watch source sees it, read once
     /// (MIK-8037). Empty and complete without a capability backend.
+    #[allow(dead_code, reason = "red seam: the fix uses it")]
     pub(crate) fn watch_catalogue(&self) -> crate::events::watch_source::Catalogue {
         let targets = self.watch_targets();
         crate::events::watch_source::Catalogue {

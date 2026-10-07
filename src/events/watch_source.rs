@@ -89,6 +89,7 @@ pub(crate) enum Charge {
 pub(crate) struct PollFailed;
 
 /// One read of the capability catalogue (MIK-8037).
+#[allow(dead_code, reason = "red seam: the fix uses it")]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Catalogue {
     /// Every REST capability in it, read-only or not.
@@ -109,6 +110,7 @@ pub(crate) trait WatchHost: Send + Sync {
     /// Every REST capability now, read-only or not.
     fn targets(&self) -> Vec<Target>;
     /// The catalogue now, read once.
+    #[allow(dead_code, reason = "red seam: the fix uses it")]
     fn catalogue(&self) -> Catalogue {
         let targets = self.targets();
         Catalogue {
@@ -119,6 +121,7 @@ pub(crate) trait WatchHost: Send + Sync {
         }
     }
     /// The catalogue generation now: it moves at every catalogue write.
+    #[allow(dead_code, reason = "red seam: the fix uses it")]
     fn catalogue_generation(&self) -> u64 {
         0
     }

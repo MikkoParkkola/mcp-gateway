@@ -93,6 +93,7 @@ impl CapabilityBackend {
 
     /// The catalogue generation: it moves at every catalogue write
     /// (MIK-8037).
+    #[allow(dead_code, reason = "red seam: the fix uses it")]
     pub(crate) fn catalogue_generation(&self) -> u64 {
         0
     }
