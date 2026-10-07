@@ -31,8 +31,9 @@ use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::outbound::{OutboundReply, gateway_reply, judged_reply, stream_reply};
+use crate::gateway::session_id::{SessionId, session_fp};
 use crate::gateway::streaming::create_sse_response;
-use crate::gateway::{recovery::SurfaceRequest, session_id::session_fp, session_lifecycle};
+use crate::gateway::{recovery::SurfaceRequest, session_lifecycle};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
@@ -252,7 +253,7 @@ pub(super) async fn mcp_sse_handler(
         .map(String::from);
 
     let held = crate::gateway::auth::live::held_credential(&headers);
-    let session_id = if super::hardened_elicitation::is_hardened(&state) {
+    let opened = if super::hardened_elicitation::is_hardened(&state) {
         // Hardened (row 10): a stream only resumes a session a declaring
         // `initialize` opened; it never opens one.
         match state.multiplexer.resume_session_id_scoped(
@@ -270,12 +271,13 @@ pub(super) async fn mcp_sse_handler(
             held,
         )
     };
+    let session_id = opened.expose_secret().to_owned();
 
     if let Some(key) = read_key {
         state.multiplexer.bind_session_reader(&session_id, key);
     }
-    // Computed before the macro so its count is graded (MIK-7725).
-    let session = session_fp(&session_id);
+    // Read before the macro so its count is graded (MIK-7725).
+    let session = opened.fp();
     info!(session_id = %session, "Client connected to SSE stream");
 
     // Auto-subscribe to configured backends
@@ -338,9 +340,10 @@ pub(super) async fn mcp_delete_handler(
         Err(refusal) => return gateway_reply(refusal),
     };
 
-    let status = match session_id {
-        Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
-            let session = session_fp(id);
+    let removed = session_id.and_then(|id| state.multiplexer.remove_session_for(id, &owner));
+    let status = match (session_id, removed) {
+        (Some(id), Some(removed)) => {
+            let session = removed.fp();
             info!(session_id = %session, "Session terminated by client");
             // The id is dead from here; what was keyed by it goes too.
             if let Some(ref lifecycle) = state.session_lifecycle {
@@ -348,12 +351,12 @@ pub(super) async fn mcp_delete_handler(
             }
             StatusCode::NO_CONTENT
         }
-        Some(id) => {
+        (Some(id), None) => {
             let session = session_fp(id);
             debug!(session_id = %session, "No owned session for DELETE");
             StatusCode::NOT_FOUND
         }
-        None => StatusCode::BAD_REQUEST,
+        (None, _) => StatusCode::BAD_REQUEST,
     };
     gateway_reply(status)
 }
@@ -649,19 +652,19 @@ async fn meta_mcp_dispatch(
 
     // Not a stream reader, so no branch subscribes: a held subscription
     // fakes a deliverable prompt.
-    let session_id = if declares_modern_by_header {
+    let opened = if declares_modern_by_header {
         // No session, and none minted. Minting one per request grew a table of
         // sessions nothing could reach, and handed the sequence-anomaly
         // detector a fresh identity every call — a detector that sees a first
         // request every time keeps running and stops protecting.
-        String::new()
+        None
     } else {
         // The identity that owns the session. A caller with neither a subject
         // nor a credential is "anonymous", so a single-user gateway behaves
         // exactly as before.
         let held = crate::gateway::auth::live::held_credential(&headers);
         let existing = existing_session_id.as_deref();
-        if !super::hardened_elicitation::is_hardened(&state) {
+        Some(if !super::hardened_elicitation::is_hardened(&state) {
             state
                 .multiplexer
                 .get_or_create_session_id_scoped(existing, &caller_owner, held)
@@ -682,8 +685,12 @@ async fn meta_mcp_dispatch(
                 Some(id) => id,
                 None => return super::hardened_elicitation::refusal().into_response(),
             }
-        }
+        })
     };
+    // The empty id is the router's "no session"; its fingerprint is empty too.
+    let session_id = opened
+        .as_ref()
+        .map_or_else(String::new, |id| id.expose_secret().to_owned());
 
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
     // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).
@@ -875,7 +882,8 @@ async fn meta_mcp_dispatch(
     // still declared what it declared.
     crate::transport::notification_sink::set_request_log_level(shape.declared_log_level());
 
-    let session = session_fp(&session_id);
+    // Read before the macro so its count is graded (MIK-7725).
+    let session = opened.as_ref().map_or("", SessionId::fp);
     debug!(method = %method, session_id = %session, "Meta-MCP request");
 
     if let Some((rpc, status)) = request_checks::request_check_refusal(

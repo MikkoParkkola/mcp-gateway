@@ -24,7 +24,7 @@ use crate::identity_propagation::{
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
 
-const NOTE: &str = "notifications/cancelled";
+const NOTE: &str = "notifications/roots/list_changed";
 
 fn static_auth() -> String {
     format!("Bearer {}", "gateway-static")
@@ -107,7 +107,7 @@ struct Gateway {
     router: axum::Router,
     wire: Wire,
     _store: tempfile::TempDir,
-    _audit: [tempfile::NamedTempFile; 2],
+    audit: [tempfile::NamedTempFile; 2],
 }
 
 fn logger(file: &tempfile::NamedTempFile) -> Arc<TransparencyLogger> {
@@ -163,7 +163,7 @@ async fn gateway(strategy: PropagationStrategyKind) -> Gateway {
         router: create_router(state),
         wire,
         _store: store,
-        _audit: audit,
+        audit,
     }
 }
 
@@ -197,7 +197,7 @@ async fn send(
 }
 
 fn note() -> Value {
-    json!({ "jsonrpc": "2.0", "method": NOTE, "params": { "requestId": 7 } })
+    json!({ "jsonrpc": "2.0", "method": NOTE, "params": {} })
 }
 
 fn list() -> Value {
@@ -263,6 +263,76 @@ async fn passthrough_callers_notifications_carry_their_own_values_on_the_wire() 
             .iter()
             .all(|(m, a)| m != NOTE || a.as_deref() != Some(static_auth.as_str())),
         "a notification carried the static credential"
+    );
+}
+
+/// MIK-8072: a client's `notifications/cancelled` names the client's request
+/// id, which the backend never saw (each transport numbers its own requests
+/// from 1), so forwarding it could cancel another caller's call holding that
+/// number. It is accepted and never sent upstream; other notifications still
+/// are.
+#[tokio::test]
+async fn a_client_cancel_never_reaches_the_backend() {
+    let gw = gateway(PropagationStrategyKind::SignedAssertion).await;
+    assert_eq!(send(&gw, &list(), Some("beta"), None).await, StatusCode::OK);
+    let cancel = json!({ "jsonrpc": "2.0", "method": "notifications/cancelled",
+        "params": { "requestId": 1, "reason": "not yours" } });
+    assert_eq!(
+        send(&gw, &cancel, Some("alpha"), None).await,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        send(&gw, &note(), Some("alpha"), None).await,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        auths(&gw, "notifications/cancelled"),
+        Vec::<Option<String>>::new()
+    );
+    assert_eq!(auths(&gw, NOTE).len(), 1, "the control notification");
+}
+
+/// MIK-8072 (codex P2): a dropped cancel mints no per-user credential and
+/// writes no `idp_mint` record; control: the same caller's ordinary
+/// notification does, so the check can see a mint.
+#[tokio::test]
+async fn a_dropped_cancel_mints_no_credential() {
+    let gw = gateway(PropagationStrategyKind::SignedAssertion).await;
+    let minted = |gw: &Gateway| {
+        gw.audit
+            .iter()
+            .map(|f| std::fs::read_to_string(f.path()).expect("audit log readable"))
+            .any(|log| log.contains("idp_mint"))
+    };
+    let cancel = json!({ "jsonrpc": "2.0", "method": "notifications/cancelled",
+        "params": { "requestId": 1 } });
+    assert_eq!(
+        send(&gw, &cancel, Some("gamma"), None).await,
+        StatusCode::ACCEPTED
+    );
+    assert!(!minted(&gw), "a dropped cancel minted a credential");
+    assert_eq!(
+        send(&gw, &note(), Some("gamma"), None).await,
+        StatusCode::ACCEPTED
+    );
+    assert!(minted(&gw), "control: a forwarded notification mints");
+}
+
+/// MIK-8072: a caller with no propagation identity gets 202 for a cancel (it
+/// is dropped before identity is resolved) and 403 for an ordinary
+/// notification; neither reaches the upstream.
+#[tokio::test]
+async fn an_unidentified_cancel_is_accepted_and_an_ordinary_notification_refused() {
+    let gw = gateway(PropagationStrategyKind::SignedAssertion).await;
+    let cancel = json!({ "jsonrpc": "2.0", "method": "notifications/cancelled",
+        "params": { "requestId": 1 } });
+    assert_eq!(send(&gw, &cancel, None, None).await, StatusCode::ACCEPTED);
+    assert_eq!(send(&gw, &note(), None, None).await, StatusCode::FORBIDDEN);
+    assert!(
+        gw.wire
+            .lock()
+            .iter()
+            .all(|(m, _)| m != NOTE && m != "notifications/cancelled")
     );
 }
 
