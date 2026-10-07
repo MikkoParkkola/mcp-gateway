@@ -272,6 +272,23 @@ fn a_list_no_longer_held_falls_back_to_the_exact_path() {
     );
 }
 
+/// A held list is recognised by address only under the server identity it
+/// was projected for: the same list under another server is another card.
+#[test]
+fn a_held_list_matches_only_under_its_own_server_identity() {
+    use crate::trust::SharedProjections;
+    let meta = with_webhooks();
+    let tools = meta.meta_tools_for(CallerStanding::Admin, meta.backend_counts());
+    assert!(!tools.is_empty());
+    let store = SharedProjections::default();
+    let a = store.project("test:mik-7916-ident-a", "ident-a", &tools);
+    let b = store.project("test:mik-7916-ident-b", "ident-b", &tools);
+    assert_ne!(
+        a[0]["trustCard"]["serverId"], b[0]["trustCard"]["serverId"],
+        "the second server must not be served the first one's cards"
+    );
+}
+
 #[test]
 fn the_nonce_input_changes_what_is_listed() {
     // The nonce row above proves a miss; this one proves the miss matters:
