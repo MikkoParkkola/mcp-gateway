@@ -62,7 +62,7 @@ pub struct Payload {
     pub expires_at: u64,
     /// Unique id, so redemption can be made single-use.
     pub jti: String,
-    /// The [`InFlight`] key for the exchange this continuation continues.
+    /// The [`InFlight`](super::InFlight) key for the exchange this continuation continues.
     ///
     /// Sealed rather than derived, and carried rather than looked up: the table
     /// is keyed by a name the gateway chose at mint, and without that name in

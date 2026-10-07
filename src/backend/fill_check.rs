@@ -247,12 +247,18 @@ pub(super) async fn run_bounded<T>(
     drain: impl Future<Output = Result<T>>,
 ) -> Result<T> {
     let started = tokio::time::Instant::now();
-    let result = match bound {
-        FillBound::CallTimeout(limit) => tokio::time::timeout(limit, drain)
-            .await
-            .unwrap_or_else(|_| Err(list_timeout(backend, limit))),
-        FillBound::DrainBudget | FillBound::Warmup => drain.await,
-    };
+    let result =
+        match bound {
+            FillBound::CallTimeout(limit) => tokio::time::timeout(limit, drain)
+                .await
+                .unwrap_or_else(|_| {
+                    Err(crate::oauth::login_gate::Provenance::expired(
+                        backend,
+                        list_timeout(backend, limit),
+                    ))
+                }),
+            FillBound::DrainBudget | FillBound::Warmup => drain.await,
+        };
     record_fill(
         entry,
         backend,
@@ -278,6 +284,11 @@ fn record_fill(
         record_reachable(entry, warmup, latency);
         return;
     };
+    // A person still logging in is neither a failure nor reachability: the
+    // backend was never asked (MIK-7982).
+    if error.is_authorization_wait() {
+        return;
+    }
     let reason = error.to_string();
     if is_transport_failure(error) {
         if warmup {

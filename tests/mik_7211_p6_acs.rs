@@ -113,7 +113,8 @@ mod source_checks {
     }
 
     /// Test 7 (b). A drift check, and labelled as one: `"cacheScope"` is
-    /// written only by `shape_modern_response` and the clamp.
+    /// written only by `cacheable::write_cache_hints` (which the modern shaper
+    /// and discovery both call) and the clamp.
     #[test]
     fn only_the_shaper_and_the_clamp_name_the_key() {
         let mut files = Vec::new();
@@ -127,7 +128,6 @@ mod source_checks {
         // built without the literal; the wire tests below cover delivery.
         let allowed = [
             "src/gateway/router/handlers.rs",
-            "src/gateway/router/handlers/modern_response.rs",
             "src/protocol/cacheable.rs",
             "src/gateway/meta_mcp/chain_emission_tests.rs",
             // MIK-7910: pins that a bridged prompt reaches the client with its

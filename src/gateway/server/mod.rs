@@ -2981,7 +2981,7 @@ impl Gateway {
         };
         let policy = ToolPolicyAuthorizer { tool_policy };
         let scope = InvokeScope::stdio(&policy);
-        let (response, execution) = if method == "tools/call" {
+        let (mut response, execution) = if method == "tools/call" {
             // D3-a: one grant-decision slot spans signing, admission and dispatch.
             super::meta_mcp::grant_audit::slot_rpc(
                 meta_mcp.transparency_logger.as_ref(),
@@ -3054,6 +3054,12 @@ impl Gateway {
             )
         };
 
+        // As `POST /mcp` does: shaped before signing, receipts stamped to match.
+        let stamps = if request_shape.era() == crate::protocol::meta::Era::Modern {
+            super::router::shape_modern_response(&mut response, &method)
+        } else {
+            super::meta_mcp::invoke::relay::GatewayStamps::Legacy
+        };
         let chain_source = response.chain_source;
         let response = meta_mcp.finalize_content(
             response,
@@ -3075,18 +3081,11 @@ impl Gateway {
             },
             super::meta_mcp::response_security::DeliveryInspection::Required,
         );
-        // MIK-7887.RECEIPT.4: the receipt describes the delivered answer. The
-        // stdio route stamps no `serverInfo` over a backend's. Rebuilt here,
-        // inside the relay-receipt scope; the judge can only replace the
-        // answer, and a replaced answer commits no receipt.
+        // MIK-7887.RECEIPT.4: the receipt describes the delivered answer, with
+        // the stamps its era got; the judge can only replace the answer.
         {
-            use super::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
-            let shape = AnswerShape::of(&external_tool);
-            meta_mcp.rebuild_receipt_from_final(
-                response.result.as_ref(),
-                GatewayStamps::Legacy,
-                shape,
-            );
+            let shape = super::meta_mcp::invoke::relay::AnswerShape::of(&external_tool);
+            meta_mcp.rebuild_receipt_from_final(response.result.as_ref(), stamps, shape);
         }
         // MIK-7920: recorded after the judge, then settled, by the caller
         // (`judge_and_commit`), as `POST /mcp` does.
@@ -3628,7 +3627,13 @@ fn spawn_health_loop(
                             // success, and rebuilds the transport on failure —
                             // the automatic equivalent of gateway_revive_server.
                             if let Err(e) = backend.health_probe(probe_timeout).await {
-                                warn!(backend = %backend.name, error = %e, "Health check failed");
+                                // A start in flight (perhaps a login) is a
+                                // skipped tick, not a failed check (MIK-7982).
+                                if e.is_authorization_wait() {
+                                    debug!(backend = %backend.name, error = %e, "Health check skipped");
+                                } else {
+                                    warn!(backend = %backend.name, error = %e, "Health check failed");
+                                }
                             }
                         }
                     }

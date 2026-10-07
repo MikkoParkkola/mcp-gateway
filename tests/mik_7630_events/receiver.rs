@@ -34,6 +34,8 @@ pub enum Reply {
     Replay,
     /// A bare status, no body.
     Status(u16),
+    /// [`Reply::Echo`] after holding the request this long.
+    SlowEcho(Duration),
 }
 
 /// How the receiver answers an event delivery (any POST that is not a
@@ -143,6 +145,10 @@ async fn hook(
             }
         };
     }
+    let reply = *shared.reply.lock().expect("reply");
+    if let Reply::SlowEcho(hold) = reply {
+        tokio::time::sleep(hold).await;
+    }
     verification_reply(&shared, headers, &body).into_response()
 }
 
@@ -164,7 +170,7 @@ fn verification_reply(shared: &Shared, headers: HeaderMap, body: &Bytes) -> (Sta
     });
     let echo = |c: &str| serde_json::json!({ "challenge": c }).to_string();
     match reply {
-        Reply::Echo => (StatusCode::OK, echo(&challenge)),
+        Reply::Echo | Reply::SlowEcho(_) => (StatusCode::OK, echo(&challenge)),
         Reply::WrongEcho => (StatusCode::OK, echo("not-the-challenge")),
         Reply::Empty => (StatusCode::OK, String::new()),
         Reply::Replay => (StatusCode::OK, echo(&previous.unwrap_or_default())),

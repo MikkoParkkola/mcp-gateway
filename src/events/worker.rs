@@ -114,8 +114,16 @@ impl EventsHub {
         wait
     }
 
-    /// One attempt of record `event_id`, end to end.
+    /// One attempt of record `event_id`, end to end. Its source verdicts
+    /// share one wait on a catalogue that does not answer (MIK-7921).
     async fn attempt(self: &Arc<Self>, services: &Services, event_id: &str) {
+        let failed = std::cell::Cell::new(false);
+        super::upstream_listener::FAILED_LOOKUP
+            .scope(failed, self.attempt_once(services, event_id))
+            .await;
+    }
+
+    async fn attempt_once(self: &Arc<Self>, services: &Services, event_id: &str) {
         let now = Utc::now();
         let claim_id = event_id.to_owned();
         let Some(Claim::Ready(claimed)) = self
@@ -139,8 +147,7 @@ impl EventsHub {
                 .unwrap_or_default()
                 .to_owned(),
         };
-        let grant = (!record.owner_scoped).then_some(record.backend.as_str());
-        if !services.admits_subscription(&sub, grant).await {
+        if !services.admits_subscription(&sub, grant(&record)).await {
             if !self
                 .recorded_or_retry(services, &ctx, "access_revoked")
                 .await
@@ -299,6 +306,19 @@ impl EventsHub {
         // (MIK-7894): the verdict is read again after them, before the row
         // that signs, so only sync steps sit between it and the send.
         match self.source_verdict(sub).await {
+            // Access is read again after the verdict's own wait (MIK-7907):
+            // a grant lost meanwhile is refused like one lost before. It must
+            // not yield: a reload landing inside it would follow the verdict
+            // unseen. Its one await, `TokenStore::live_jti`, completes at
+            // once in the only store there is (`InMemoryTokenStore`); a store
+            // that waits needs the verdict read again after this check.
+            Verdict::Admits if !services.admits_subscription(sub, grant(record)).await => {
+                services.audit_outcome(&ended("access_revoked")).await;
+                self.revoke(sub).await;
+                self.settle(services, record, refusal_retry("access_revoked"))
+                    .await;
+                return;
+            }
             Verdict::Admits => {}
             Verdict::Refuses => {
                 services.audit_outcome(&ended("access_revoked")).await;
@@ -699,6 +719,12 @@ enum Verdict {
 /// The status of an attempt held because no source offers its type: nothing
 /// was revoked, the type is only unavailable for now.
 const HELD: &str = "source_unavailable";
+
+/// The backend grant a delivery of `record` needs: none for an owner-scoped
+/// event, which was authorized where it was made.
+fn grant(record: &OutboxRecord) -> Option<&str> {
+    (!record.owner_scoped).then_some(record.backend.as_str())
+}
 
 /// Back to pending after a refusal before the POST, ending `status`: a
 /// revoked subscription's record goes with it, a held one waits.

@@ -621,3 +621,82 @@ async fn a_request_fails_only_when_every_copy_is_withheld() {
         "both copies were withheld before the count"
     );
 }
+
+/// MIK-7918 AC1, the sampling case: backend sampling content can name a
+/// tenant (here in a tool schema it offers), so under a failing `FailClosed`
+/// log the request is withheld at write and its waiter fails at once.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_withheld_sampling_request_fails_its_waiter_at_once() {
+    use crate::gateway::proxy::ProxyManager;
+    use futures::StreamExt;
+
+    let (_dir, log, multiplexer, id, mut body) = judged_sse();
+    log.set_append_failure_for_test(true);
+    let proxy = ProxyManager::new(Arc::clone(&multiplexer));
+    let ask: crate::protocol::SamplingCreateMessageParams = serde_json::from_value(json!({
+        "messages": [{"role": "user", "content": {"type": "text", "text": "Summarize"}}],
+        "maxTokens": 16,
+        "tools": [{"name": "lookup", "inputSchema": {"customer_id": "cust-b"}}]
+    }))
+    .expect("sampling params");
+    let asked = proxy.forward_sampling_with_response(&id, &ask, Duration::from_secs(30));
+    let mut seen = String::new();
+    let read = async {
+        while let Some(chunk) = body.next().await {
+            seen.push_str(&String::from_utf8_lossy(&chunk.unwrap()));
+        }
+    };
+    let answer = tokio::select! {
+        answer = tokio::time::timeout(Duration::from_secs(5), asked) => answer,
+        () = read => panic!("the stream ended"),
+    };
+    assert!(
+        matches!(
+            answer,
+            Ok(Err(crate::gateway::proxy::SamplingError::SendFailed))
+        ),
+        "the sampling waiter was not failed at once: {answer:?}"
+    );
+    assert!(
+        !seen.contains("sampling/createMessage"),
+        "the withheld request reached the stream: {seen}"
+    );
+    assert!(
+        log.append_attempts_for_test() >= 1,
+        "no record was attempted"
+    );
+}
+
+/// MIK-7918 AC2: a confirmation prompt withheld at write reached nobody. The
+/// gate must read that as `Undelivered`, never as `Unsupported` (a prompt that
+/// may have been seen). The stream here reports its copy withheld directly.
+#[tokio::test]
+async fn a_withheld_confirmation_prompt_reads_as_undelivered() {
+    use crate::gateway::destructive_confirmation::{
+        ConfirmationOutcome, require_destructive_confirmation,
+    };
+    use crate::gateway::proxy::ProxyManager;
+
+    let multiplexer = Arc::new(NotificationMultiplexer::new(
+        Arc::new(BackendRegistry::new()),
+        StreamingConfig::default(),
+    ));
+    let (id, mut rx) = multiplexer.get_or_create_session(Some("s"));
+    let proxy = ProxyManager::new(Arc::clone(&multiplexer));
+    let stream = async {
+        let frame = rx.recv().await.expect("the prompt is queued");
+        frame
+            .watch
+            .as_ref()
+            .expect("a request carries a watch")
+            .report(false);
+    };
+    let asked = require_destructive_confirmation(&proxy, &id, "kill server 'payments'");
+    let (outcome, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(asked, stream)
+    })
+    .await
+    .expect("the withheld prompt ends the wait at once");
+    assert_eq!(outcome, ConfirmationOutcome::Undelivered);
+}

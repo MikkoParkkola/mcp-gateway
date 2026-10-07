@@ -18,8 +18,8 @@
 //! variables are removed, so an operator's own overrides never reach a test, and
 //! an inherited `RUST_LOG` keeps the port banner visible.
 //!
-//! Known gap (MIK-8001): product paths that call `dirs::home_dir()` directly,
-//! not `crate::home_dir`, still resolve the real home on Windows.
+//! Every product home lookup goes through `crate::home_dir`, so the override
+//! reaches all of them; `clippy.toml` refuses a direct `dirs` call (MIK-8001).
 #![allow(dead_code, reason = "each test crate uses part of this helper")]
 
 use std::path::Path;
@@ -44,6 +44,16 @@ pub fn path() -> &'static str {
 /// A command for the gateway binary with `home` as its only home.
 pub fn command(home: &Path, inherit: Inherit) -> Command {
     isolated(Command::new(path()), home, inherit)
+}
+
+/// As [`command`], but `HOME` and `USERPROFILE` name a second temporary
+/// directory, `env_home`, while the debug override still names `home`. A test
+/// that the gateway resolves its home through the override, never through
+/// `HOME`, needs the two to differ; neither is the real home (MIK-8001).
+pub fn command_with_env_home(home: &Path, env_home: &Path, inherit: Inherit) -> Command {
+    let mut command = command(home, inherit);
+    command.env("HOME", env_home).env("USERPROFILE", env_home);
+    command
 }
 
 /// The binary run through `wrapper` (for example `sh -c '...; exec "$0" "$@"'`),
