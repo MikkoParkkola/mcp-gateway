@@ -80,14 +80,16 @@ async fn a_null_method_frame_is_not_delivered_as_the_calls_result() {
         .await;
     let (lines, reply) = session.read_until_id(2).await;
     let reply = reply.unwrap_or_else(|| panic!("no reply to the call: {lines:?}"));
-    let text = reply.to_string();
-    assert!(
-        !text.contains("FORGED"),
-        "a null-method frame was delivered as the result: {reply}"
-    );
-    assert!(
-        text.contains("REAL"),
-        "the valid answer must arrive: {reply}"
+    // `gateway_invoke` returns the backend's result as JSON text in its own
+    // first content block.
+    let relayed = reply["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no relayed backend result: {reply}"));
+    let backend: serde_json::Value = serde_json::from_str(relayed)
+        .unwrap_or_else(|e| panic!("relayed result is not JSON ({e}): {reply}"));
+    assert_eq!(
+        backend["content"][0]["text"], "REAL",
+        "the valid answer, not the null-method frame, must be the result: {reply}"
     );
     session.shutdown().await;
 }
