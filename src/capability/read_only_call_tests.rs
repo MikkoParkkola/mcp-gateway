@@ -71,3 +71,24 @@ async fn a_credential_free_call_refuses_a_credentialed_capability() {
         "refused before any request: {refused}"
     );
 }
+
+/// MIK-7720 (U1): a read-only call runs only a capability served over REST.
+/// One a reload moved to GraphQL after the watch read its targets is refused
+/// at the definition about to run, before any request.
+#[tokio::test]
+async fn a_read_only_call_refuses_a_capability_not_served_over_rest() {
+    let backend = CapabilityBackend::new("test", Arc::new(CapabilityExecutor::new()));
+    let yaml = "name: probe\ndescription: Test capability\nmetadata:\n  read_only: true\n\
+                providers:\n  primary:\n    service: graphql\n    config:\n      \
+                endpoint: https://example.invalid/graphql\n      body: \"{ probe }\"\n";
+    backend
+        .register_capability(crate::capability::parse_capability(yaml).expect("capability"))
+        .expect("registered");
+    let refused = read_only_call_as(false, backend.call_tool("probe", json!({})))
+        .await
+        .expect_err("refused");
+    assert!(
+        refused.to_string().contains("not served over REST"),
+        "refused before any request: {refused}"
+    );
+}

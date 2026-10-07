@@ -233,3 +233,81 @@ async fn a_poll_runs_only_what_the_executor_finds_read_only() {
         assert_eq!(endpoint.arrivals(), hits, "read_only {read_only}: requests");
     }
 }
+
+/// A read-only capability `name` with these `providers`, as a catalogue holds it.
+fn read_only(name: &str, providers: &str) -> crate::capability::CapabilityDefinition {
+    crate::capability::parse_capability(&format!(
+        "name: {name}\n\
+         description: Read one day\n\
+         metadata:\n\
+         \x20 exposure: public\n\
+         \x20 read_only: true\n\
+         providers:\n{providers}"
+    ))
+    .expect(name)
+}
+
+/// MIK-7720 (U1): watch is offered for read-only REST capabilities only. A
+/// read-only capability served over GraphQL, JSON-RPC or a local process is
+/// no target, nor is a REST one with a non-REST fallback, nor a webhook-only
+/// one with no provider to poll; a provider with no `service` is REST.
+#[tokio::test]
+async fn only_read_only_rest_capabilities_are_watch_targets() {
+    const REST: &str = "    config:\n      base_url: http://localhost:9\n      path: /read\n      \
+                        method: GET\n";
+    const CLI: &str = "config:\n      command: gws\n      args: [gmail]\n";
+    let rows = [
+        (
+            "rest_named",
+            format!("  primary:\n    service: rest\n{REST}"),
+        ),
+        ("rest_default", format!("  primary:\n{REST}")),
+        (
+            "over_graphql",
+            "  primary:\n    service: graphql\n    config:\n      endpoint: \
+             http://localhost:9/graphql\n      body: \"{ probe }\"\n"
+                .to_owned(),
+        ),
+        (
+            "over_jsonrpc",
+            "  primary:\n    service: jsonrpc\n    config:\n      endpoint: \
+             http://localhost:9/rpc\n      method: probe\n"
+                .to_owned(),
+        ),
+        (
+            "over_cli",
+            format!("  primary:\n    service: cli\n    {CLI}"),
+        ),
+        (
+            "rest_then_cli",
+            format!(
+                "  primary:\n    service: rest\n{REST}  fallback:\n    - service: cli\n      \
+                 config:\n        command: gws\n        args: [gmail]\n"
+            ),
+        ),
+        (
+            "webhook_only",
+            "  {}\nwebhooks:\n  push:\n    path: /webhook_only/push\n    method: POST\n".to_owned(),
+        ),
+    ];
+    let backend = Arc::new(crate::capability::CapabilityBackend::new(
+        "probe_caps",
+        Arc::new(crate::capability::CapabilityExecutor::new()),
+    ));
+    for (name, providers) in &rows {
+        backend
+            .register_capability(read_only(name, providers))
+            .expect(name);
+    }
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    fx.state.meta_mcp.set_capabilities(backend);
+    let mut watched: Vec<String> = fx
+        .state
+        .meta_mcp
+        .watch_targets()
+        .into_iter()
+        .map(|t| t.capability)
+        .collect();
+    watched.sort();
+    assert_eq!(watched, ["rest_default", "rest_named"]);
+}
