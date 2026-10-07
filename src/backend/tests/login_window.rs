@@ -12,25 +12,25 @@ use super::*;
 use crate::backend::OAuthTestSeam;
 
 /// The person at the browser: every authorization URL a start handed over.
-struct Browser {
+pub(super) struct Browser {
     opened: StdMutex<Vec<String>>,
     signal: tokio::sync::Notify,
 }
 
 impl Browser {
-    fn new() -> Arc<Self> {
+    pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             opened: StdMutex::new(Vec::new()),
             signal: tokio::sync::Notify::new(),
         })
     }
 
-    fn opens(&self) -> usize {
+    pub(super) fn opens(&self) -> usize {
         self.opened.lock().unwrap().len()
     }
 
     /// Wait until the browser has opened `n` times in all.
-    async fn opened(&self, n: usize, what: &str) -> String {
+    pub(super) async fn opened(&self, n: usize, what: &str) -> String {
         within(what, async {
             loop {
                 let notified = self.signal.notified();
@@ -45,7 +45,7 @@ impl Browser {
 }
 
 /// Bounds a wait, so a regression fails at its assertion instead of hanging.
-async fn within<T>(what: &str, wait: impl std::future::Future<Output = T>) -> T {
+pub(super) async fn within<T>(what: &str, wait: impl std::future::Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(20), wait)
         .await
         .unwrap_or_else(|_| panic!("{what} did not happen within 20s"))
@@ -54,7 +54,15 @@ async fn within<T>(what: &str, wait: impl std::future::Future<Output = T>) -> T 
 /// An authorization server on loopback: its metadata, and a token endpoint
 /// that refuses every code (`invalid_grant`). Returns its origin.
 async fn authorization_server() -> String {
+    counted_authorization_server().await.0
+}
+
+/// [`authorization_server`], and how many times its metadata was read: each
+/// OAuth discovery, so each start that got as far as discovering.
+pub(super) async fn counted_authorization_server() -> (String, Arc<AtomicUsize>) {
     use axum::{Json, Router, http::StatusCode, routing::get, routing::post};
+    let discovered = Arc::new(AtomicUsize::new(0));
+    let reads = Arc::clone(&discovered);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let metadata = json!({
@@ -66,6 +74,7 @@ async fn authorization_server() -> String {
         .route(
             "/.well-known/oauth-authorization-server",
             get(move || {
+                reads.fetch_add(1, Ordering::SeqCst);
                 let body = metadata.clone();
                 async move { Json(body) }
             }),
@@ -80,13 +89,13 @@ async fn authorization_server() -> String {
             }),
         );
     tokio::spawn(async move { axum::serve(listener, app).await });
-    origin
+    (origin, discovered)
 }
 
 /// An HTTP backend at `origin` whose OAuth client keeps tokens in `dir` and
 /// opens `browser`, with `timeout` as its request (and fill) bound. A fixed
 /// `callback_port` makes a held callback listener visible as a held port.
-fn login_backend(
+pub(super) fn login_backend(
     origin: &str,
     dir: &std::path::Path,
     browser: &Arc<Browser>,
@@ -178,7 +187,7 @@ async fn approve(url: &str) {
         .expect("the callback answers");
 }
 
-fn variant(error: &Error) -> String {
+pub(super) fn variant(error: &Error) -> String {
     format!("{error:?}")
 }
 
@@ -497,20 +506,24 @@ async fn a_health_probe_never_begins_a_login() {
     assert_eq!(browser.opens(), 0, "a probe never opens the browser");
 }
 
-/// How [`issuing_server`]'s MCP endpoint answers `tools/list`.
+/// How [`issuing_server`]'s MCP endpoint behaves after the handshake.
 #[derive(Clone, Copy)]
-enum List {
-    /// At once, with no tools.
-    Empty,
-    /// A first page after the delay, then a second page that never comes.
-    Stalls(Duration),
+pub(super) enum Upstream {
+    /// Lists no tools, at once.
+    Plain,
+    /// A first `tools/list` page after the delay, then one that never comes.
+    ListStalls(Duration),
+    /// Hands out a session at the handshake, and answers every later request
+    /// after the delay with "session not found".
+    SessionExpires(Duration),
 }
 
 /// An authorization server that issues a token good for `expires_in` seconds
 /// (no refresh token), and an MCP endpoint at `/mcp` that answers the
-/// handshake and lists tools as `list` says. Returns its origin.
-async fn issuing_server(expires_in: u64, list: List) -> String {
-    use axum::{Json, Router, http::StatusCode, routing::get, routing::post};
+/// handshake and behaves as `upstream` says. Returns its origin.
+async fn issuing_server(expires_in: u64, upstream: Upstream) -> String {
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::{Json, Router, routing::get, routing::post};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let metadata = json!({
@@ -520,27 +533,41 @@ async fn issuing_server(expires_in: u64, list: List) -> String {
     });
     let mcp = move |Json(request): Json<Value>| async move {
         let Some(id) = request.get("id").cloned() else {
-            return (StatusCode::ACCEPTED, Json(Value::Null));
+            return (StatusCode::ACCEPTED, HeaderMap::new(), Json(Value::Null));
         };
-        let body = match request["method"].as_str() {
-            Some("initialize") => json!({"jsonrpc": "2.0", "id": id, "result": {
+        let mut headers = HeaderMap::new();
+        let body = match (upstream, request["method"].as_str()) {
+            (Upstream::SessionExpires(_), Some("initialize")) => {
+                headers.insert("mcp-session-id", "login-window-session".parse().unwrap());
+                json!({"jsonrpc": "2.0", "id": id, "result": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "login-window", "version": "1"},
+                }})
+            }
+            (Upstream::SessionExpires(delay), _) => {
+                sleep(delay).await;
+                json!({"jsonrpc": "2.0", "id": id,
+                    "error": {"code": -32600, "message": "session not found"}})
+            }
+            (_, Some("initialize")) => json!({"jsonrpc": "2.0", "id": id, "result": {
                 "protocolVersion": "2025-06-18",
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "login-window", "version": "1"},
             }}),
-            Some("tools/list") => match (list, request["params"].get("cursor")) {
-                (List::Empty, _) => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}}),
-                (List::Stalls(first), None) => {
+            (_, Some("tools/list")) => match (upstream, request["params"].get("cursor")) {
+                (Upstream::ListStalls(first), None) => {
                     sleep(first).await;
                     json!({"jsonrpc": "2.0", "id": id,
                         "result": {"tools": [], "nextCursor": "page-2"}})
                 }
-                (List::Stalls(_), Some(_)) => std::future::pending().await,
+                (Upstream::ListStalls(_), Some(_)) => std::future::pending().await,
+                _ => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}}),
             },
             _ => json!({"jsonrpc": "2.0", "id": id,
                 "error": {"code": -32601, "message": "method not found"}}),
         };
-        (StatusCode::OK, Json(body))
+        (StatusCode::OK, headers, Json(body))
     };
     let app = Router::new()
         .route(
@@ -571,7 +598,7 @@ async fn issuing_server(expires_in: u64, list: List) -> String {
 /// `AuthorizationPending`, and the breaker counts nothing.
 #[tokio::test]
 async fn a_request_waiting_on_a_request_time_login_times_out_as_authorization_pending() {
-    let (backend, browser, _dir) = approved_start(List::Empty, Duration::from_secs(1)).await;
+    let (backend, browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(1)).await;
     sleep(LAPSE).await;
     let before = backend.health_metrics().failure_count;
 
@@ -597,15 +624,16 @@ async fn a_request_waiting_on_a_request_time_login_times_out_as_authorization_pe
 
 /// After [`approved_start`], the token has lapsed (65 s less the 60 s
 /// early-expiry margin): the next request's token step opens a login.
-const LAPSE: Duration = Duration::from_secs(6);
+pub(super) const LAPSE: Duration = Duration::from_secs(6);
 
-/// A backend at an `issuing_server(65, list)` with `timeout` as its request
-/// bound, started through an approved login. Its token is good for 5 s more.
-async fn approved_start(
-    list: List,
+/// A backend at an `issuing_server(65, upstream)` with `timeout` as its
+/// request bound, started through an approved login. Its token is good for
+/// 5 s more.
+pub(super) async fn approved_start(
+    upstream: Upstream,
     timeout: Duration,
 ) -> (Arc<Backend>, Arc<Browser>, tempfile::TempDir) {
-    let origin = issuing_server(65, list).await;
+    let origin = issuing_server(65, upstream).await;
     let dir = tempfile::tempdir().unwrap();
     let browser = Browser::new();
     let backend = login_backend(&origin, dir.path(), &browser, timeout, None);
@@ -620,7 +648,9 @@ async fn approved_start(
 }
 
 /// Send a `tools/call` on `backend` in the background, as a client would.
-fn spawn_call(backend: &Arc<Backend>) -> tokio::task::JoinHandle<Result<JsonRpcResponse>> {
+pub(super) fn spawn_call(
+    backend: &Arc<Backend>,
+) -> tokio::task::JoinHandle<Result<JsonRpcResponse>> {
     let backend = Arc::clone(backend);
     tokio::spawn(async move {
         let params = json!({"name": "noop", "arguments": {}});
@@ -637,7 +667,7 @@ async fn an_unrelated_timeout_during_a_login_stays_a_backend_timeout() {
     // inside that. The second never comes, and its own 10 s transport timeout
     // starts 2 s after the fill's 10 s deadline, so the fill's fires first.
     let (backend, browser, _dir) = approved_start(
-        List::Stalls(Duration::from_secs(2)),
+        Upstream::ListStalls(Duration::from_secs(2)),
         Duration::from_secs(10),
     )
     .await;
@@ -709,7 +739,7 @@ async fn a_call_whose_login_ends_at_the_window_counts_no_failure() {
 /// rebuild leaves the working transport in the pool.
 #[tokio::test]
 async fn a_probe_during_a_request_time_login_neither_waits_nor_rebuilds() {
-    let (backend, browser, _dir) = approved_start(List::Empty, Duration::from_secs(30)).await;
+    let (backend, browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(30)).await;
     sleep(LAPSE).await;
     let call = spawn_call(&backend);
     browser.opened(2, "the call's request-time login").await;
