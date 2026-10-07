@@ -109,12 +109,14 @@ impl Agent {
 
 /// A completed task whose one artifact carries `parts`.
 pub fn completed_task(parts: Value) -> Value {
-    json!({"task": {
+    let mut task = json!({"task": {
         "id": "task-1",
         "contextId": "ctx-1",
         "status": {"state": "TASK_STATE_COMPLETED"},
-        "artifacts": [{"artifactId": "art-1", "parts": parts}],
-    }})
+        "artifacts": [{"artifactId": "art-1"}],
+    }});
+    task["task"]["artifacts"][0]["parts"] = parts;
+    task
 }
 
 /// A task that ended in `state` with an agent status message `text`.
@@ -184,10 +186,11 @@ pub async fn serve(agent: Agent) -> (String, Log) {
     let base = format!("http://{}", listener.local_addr().expect("stub address"));
     let log: Log = Arc::default();
     let (card_log, rpc_log) = (Arc::clone(&log), Arc::clone(&log));
-    let (card_agent, card_base, rpc_agent) = (agent.clone(), base.clone(), agent.clone());
+    let card_path = agent.card_path.clone();
+    let (card_agent, card_base, rpc_agent) = (agent.clone(), base.clone(), agent);
     let app = Router::new()
         .route(
-            &agent.card_path,
+            &card_path,
             get(move |headers: HeaderMap| async move {
                 card_log.lock().expect("log").push(Seen {
                     path: card_agent.card_path.clone(),

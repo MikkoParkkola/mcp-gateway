@@ -104,7 +104,8 @@ impl Part {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Message {
-    pub message_id: String,
+    #[serde(rename = "messageId")]
+    pub id: String,
     pub role: String,
     pub parts: Vec<Part>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,7 +118,7 @@ impl Message {
     /// A user message with one text part and a fresh `messageId`.
     pub(crate) fn user_text(text: &str) -> Self {
         Self {
-            message_id: uuid::Uuid::new_v4().to_string(),
+            id: uuid::Uuid::new_v4().to_string(),
             role: "ROLE_USER".to_owned(),
             parts: vec![Part::text(text)],
             context_id: None,

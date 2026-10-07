@@ -488,24 +488,10 @@ impl Backend {
                 a2a_url,
                 a2a_agent_card_path,
             } => {
-                // The outbound A2A bridge (MIK-8063): the agent becomes one
-                // tool behind the same funnel as every backend. Built under
-                // the destination policy like the HTTP arm: the configured
-                // address is checked before anything connects, and every
-                // request goes through the guarded client.
                 built_under = self.mark_connecting();
-                self.begin_connecting(built_under)?;
-                let transport = crate::a2a::transport::A2aTransport::start(
-                    a2a_url,
-                    a2a_agent_card_path.as_deref(),
-                    &self.config.headers,
-                    self.config.timeout,
-                    built_under,
-                )
-                .await?;
-                // An agent has no server-initiated stream.
                 listen = None;
-                transport
+                self.start_a2a(a2a_url, a2a_agent_card_path.as_deref(), built_under)
+                    .await?
             }
         };
 

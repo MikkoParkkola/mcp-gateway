@@ -181,7 +181,7 @@ impl A2aClient {
                 response.status()
             )));
         }
-        decode_reply(read_capped_json(response, "A2A SendMessage reply").await?)
+        decode_reply(&read_capped_json(response, "A2A SendMessage reply").await?)
     }
 
     /// Configured headers, then this request's own, then the protocol version.
@@ -231,7 +231,7 @@ async fn read_capped_json(mut response: reqwest::Response, what: &str) -> Result
 }
 
 /// A JSON-RPC envelope as the agent's error or its `SendMessage` result.
-fn decode_reply(envelope: Value) -> Result<Reply> {
+fn decode_reply(envelope: &Value) -> Result<Reply> {
     if let Some(error) = envelope.get("error") {
         let code = error
             .get("code")
