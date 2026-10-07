@@ -69,6 +69,10 @@ module = "src/security/transparency_log_segments.rs"
 reason = "segment file naming, listing and the high-water mark codec; a helper for rotation and verify, not a gate"
 
 [[coverage.not_a_control]]
+module = "src/security/transparency_log_session.rs"
+reason = "show_session_entries: reads one session's entries across the segments for lookup; it decides nothing and refuses no call"
+
+[[coverage.not_a_control]]
 module = "src/security/security_metrics.rs"
 reason = "D4 counters for refused credentials and calls; it counts decisions the gates already made and refuses nothing"
 
@@ -386,6 +390,13 @@ description = "audit verify reads every segment and reports a deleted, truncated
 source = "src/security/transparency_log_verify.rs"
 probe = "none"
 reason = "an offline check an operator runs against the files; a live install exposes no verify endpoint to probe"
+
+[[control]]
+id = "audit-log-anchor"
+description = "audit verify --anchor compares the log with an off-host copy of its high-water mark, so a log wiped, truncated or rolled back below the anchored record fails instead of reading as fresh; a boundary in an expired range counts only when the log is signed (MIK-7713)"
+source = "src/security/transparency_log_anchor.rs"
+probe = "none"
+reason = "an offline check an operator runs against the files and a copied anchor; a live install exposes no verify endpoint to probe"
 
 [[control]]
 id = "audit-fail-closed"

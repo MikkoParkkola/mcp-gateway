@@ -1901,11 +1901,16 @@
     },
     {
       "id": "MIK-7630.W401.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-06 by the operator decision moving MIK-7720 (three event sources) and MIK-7811 back into 4.0.0; not built yet."
+      "evidence": [
+        "src/events/watch_source.rs",
+        "src/events/watch_source_tests.rs",
+        "src/gateway/router/watch_poll_parity_tests.rs",
+        "src/capability/read_only_call_tests.rs"
+      ],
+      "note": "Graded 2026-10-07 at 2c0ee122f (PR #3274, REST only and the 60 s floor) on top of 1f9f91348 (PR #3065, the watch source; #3053 for the lifecycle key). #3065: red first run 37411090881, review reds on throwaway heads, green CI run 37497039280 (Tests, Clippy, Windows, macOS, U10 guard), feature combinations run 37497047661, mutants w1-w15 RED (runs 37454272694, 37489368696). #3274: red first on throwaway #3256 (run 37512862298, job 112438231426: 3 rows red at their own assertions), green CI run 37538411590 including Windows, feature combinations run 37528197760, mutants r1-r7 RED (run 37542829615). Offered only for read-only REST capabilities, every provider and fallback served over REST: only_read_only_rest_capabilities_are_watch_targets (src/gateway/router/watch_poll_parity_tests.rs:255) and watch_is_offered_only_for_read_only_capabilities (src/events/watch_source_tests.rs:173); the read-only executor guard refuses any other capability: a_read_only_call_refuses_a_capability_not_served_over_rest (src/capability/read_only_call_tests.rs:79). Emits on a digest change only, first poll silent, pointers and digests with no values: :195. 60 s floor: :235, and jitter only lengthens the wait: jitter_never_shortens_the_interval (:387). Charged by sharing: :265. Shared per canonical arguments and credential, distinct event id per transition: :293. Stops on reclassification (:344), removal (:367) and credential-class change (:402). Default volatile fields ignored: :498. #3222 had graded this row met and reverted it before merge because the watch was offered for non-REST read-only capabilities; #3274 closes that gap."
     },
     {
       "id": "MIK-7630.W401.2",

@@ -681,3 +681,5 @@ fn has_due_sees_a_pending_record_behind_one_in_flight() {
 mod burial;
 #[path = "store_pending_crash_tests.rs"]
 mod crash;
+#[path = "store_revive_tests.rs"]
+mod revive;
