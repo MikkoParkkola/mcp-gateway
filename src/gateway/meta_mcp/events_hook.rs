@@ -324,7 +324,7 @@ fn startup_pass(
         if matches!(pass, Pass::Deferred) {
             hub.arm_webhook_withdrawals();
         }
-        startup_refresh(capabilities.as_deref(), registry.as_ref())
+        startup_refresh(&hub, capabilities.as_deref(), registry.as_ref())
     })
 }
 
@@ -356,6 +356,7 @@ fn withdraw_grace() -> std::time::Duration {
 /// follow the catalogue as it is now (MIK-7944), and only a whole catalogue
 /// whose refresh applied lets the reconcile withdraw webhook types.
 fn startup_refresh(
+    hub: &EventsHub,
     capabilities: Option<&crate::capability::CapabilityBackend>,
     registry: Option<&Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>>,
 ) -> crate::events::CatalogueScan {
@@ -365,7 +366,21 @@ fn startup_refresh(
             // Covered by this refresh, held or not.
             let _ = capabilities.take_held_reload();
             match refresh_from_snapshot(capabilities, registry) {
-                Some(refreshed) if refreshed.complete => Complete,
+                Some(refreshed) if refreshed.complete => {
+                    // A route this refresh removed was registered by the
+                    // scan and taken away by a reload: withdrawn now, as a
+                    // reload inside the grace period withdraws what it
+                    // removes, so a narrower restore cannot inherit its
+                    // subscriptions (MIK-8027). A failure is left to the
+                    // deferred pass, which withdraws by state.
+                    if !hub.withdraw(&refreshed.removed) {
+                        tracing::warn!(
+                            "events: the startup refresh could not remove a withdrawn \
+                             subscription; the deferred pass retries it"
+                        );
+                    }
+                    Complete
+                }
                 _ => Partial,
             }
         }
