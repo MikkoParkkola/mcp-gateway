@@ -203,7 +203,7 @@ impl MetaMcp {
         arguments: &Value,
         (projection_key_suffix, caller_principal): (&str, &CachePrincipal),
         (routing_profile, policy_epoch): (&str, u64),
-        result: &Value,
+        (result, written): (&Value, &super::gateway_writes::WriteRecord),
     ) {
         // `!stopped_to_ask` for the reason the idempotency commit above is
         // gated the same way: a question is not an answer. A cached one would be
@@ -234,7 +234,7 @@ impl MetaMcp {
             && cache.set_read(
                 &cache_key,
                 result.clone(),
-                self.dispatch_reading(args),
+                (self.dispatch_reading(args), written.clone()),
                 self.default_cache_ttl,
             )
         {

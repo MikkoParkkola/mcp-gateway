@@ -983,6 +983,8 @@ jobs:
         run: python3 scripts/release/test_check_keyless_read_only.py
       - name: The published C6 mutation sample still reproduces
         run: python3 scripts/release/test_c6_mutation_sample.py
+      - name: Every user-facing surface item is classified (MIK-8044)
+        run: python3 scripts/release/test_check_surface_inventory.py
       # Proves the workflow-wiring assertions still discriminate: each case
       # breaks one rule, or restates it in an equivalent spelling, and the
       # suite has to return the stated verdict. Runs against a copy of the

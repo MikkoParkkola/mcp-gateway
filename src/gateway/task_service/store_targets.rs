@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike as _, Utc};
 
 use super::{Shared, StoreError, TaskStore, owned, record_name, serialize};
 use crate::gateway::task_service::record::{
@@ -195,14 +195,10 @@ impl Shared {
             }
             (entry.task.clone(), entry.record.clone())
         };
-        let bounded = TaskTransition::Fail(JsonRpcError {
-            code: -32603,
-            message: "the task's result exceeds the record size limit".to_owned(),
-            data: None,
-        });
         // Last resort: an output-free record. It discards the targets and the
-        // recovery descriptor, so it fits whenever any record can, and it is
-        // marked so delivery knows its only content is the gateway's own error.
+        // recovery descriptor, and it is marked so delivery knows its only
+        // content is the gateway's own error. Every live row was admitted
+        // with room for it ([`fallback_bytes`]).
         match self.settle_attempt(&task, &record, (event, targets, false, author), at) {
             Err(StoreError::Capacity) => {}
             settled => return settled,
@@ -210,7 +206,7 @@ impl Shared {
         self.settle_attempt(
             &task,
             &record,
-            (bounded, None, true, ErrorAuthor::Gateway),
+            (bounded(), None, true, ErrorAuthor::Gateway),
             at,
         )
     }
@@ -219,41 +215,12 @@ impl Shared {
         &self,
         task: &Task,
         record: &Record,
-        (event, targets, discard, author): (TaskTransition, Option<Vec<Target>>, bool, ErrorAuthor),
+        settlement: (TaskTransition, Option<Vec<Target>>, bool, ErrorAuthor),
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
-        let (mut task, mut record) = (task.clone(), record.clone());
-        // Only a Fail has an error to attribute; any other outcome clears it.
-        let fails = matches!(event, TaskTransition::Fail(_));
-        let change = task
-            .transition(event, at)
-            .map_err(|_| StoreError::InvalidTransition)?;
-        if !change.changed {
-            return Ok(CommittedTask::of(task, &record));
-        }
-        record.revision = record.revision.checked_add(1).ok_or(StoreError::Capacity)?;
-        record.set_model(&task);
-        // Only the peer's authorship is recorded: absent reads as "not
-        // established", which is what every gateway error is.
-        record.error_author = None;
-        if fails && author == ErrorAuthor::Peer && keep_provenance(&task, &mut record) {
-            record.error_author = Some(ErrorAuthor::Peer);
-            record.version = record.version.max(ERROR_AUTHOR_VERSION);
-        }
-        if discard {
-            record.targets.clear();
-            record.upstream = None;
-            record.output_free = true;
-            record.version = record.version.max(TARGET_VERSION);
-        }
-        if let Some(targets) = targets {
-            for target in targets {
-                if !record.targets.contains(&target) {
-                    record.targets.push(target);
-                }
-            }
-            record.version = record.version.max(TARGET_VERSION);
-        }
+        let Some((task, record)) = settled(task, record, settlement, at)? else {
+            return Ok(CommittedTask::of(task.clone(), record));
+        };
         let bytes = serialize(&record)?;
         if bytes.len() > self.limits.record_bytes {
             return Err(StoreError::Capacity);
@@ -261,6 +228,90 @@ impl Shared {
         self.commit(&record_name(task.id()), &bytes)?;
         Ok(self.publish(task, record))
     }
+}
+
+/// The gateway's own bounded failure: what a row settles as when its real
+/// outcome does not fit the record budget.
+fn bounded() -> TaskTransition {
+    TaskTransition::Fail(JsonRpcError {
+        code: -32603,
+        message: "the task's result exceeds the record size limit".to_owned(),
+        data: None,
+    })
+}
+
+/// `task` and `record` as a settlement by `event` writes them, before the
+/// size check; `None` when the transition changes nothing (a settled row).
+fn settled(
+    task: &Task,
+    record: &Record,
+    (event, targets, discard, author): (TaskTransition, Option<Vec<Target>>, bool, ErrorAuthor),
+    at: DateTime<Utc>,
+) -> Result<Option<(Task, Record)>, StoreError> {
+    let (mut task, mut record) = (task.clone(), record.clone());
+    // Only a Fail has an error to attribute; any other outcome clears it.
+    let fails = matches!(event, TaskTransition::Fail(_));
+    let change = task
+        .transition(event, at)
+        .map_err(|_| StoreError::InvalidTransition)?;
+    if !change.changed {
+        return Ok(None);
+    }
+    record.revision = record.revision.checked_add(1).ok_or(StoreError::Capacity)?;
+    record.set_model(&task);
+    // Only the peer's authorship is recorded: absent reads as "not
+    // established", which is what every gateway error is.
+    record.error_author = None;
+    if fails && author == ErrorAuthor::Peer && keep_provenance(&task, &mut record) {
+        record.error_author = Some(ErrorAuthor::Peer);
+        record.version = record.version.max(ERROR_AUTHOR_VERSION);
+    }
+    if discard {
+        record.targets.clear();
+        record.upstream = None;
+        record.output_free = true;
+        record.version = record.version.max(TARGET_VERSION);
+    }
+    if let Some(targets) = targets {
+        for target in targets {
+            if !record.targets.contains(&target) {
+                record.targets.push(target);
+            }
+        }
+        record.version = record.version.max(TARGET_VERSION);
+    }
+    Ok(Some((task, record)))
+}
+
+/// The encoded size of the bounded failure `record` would settle as, at its
+/// widest: the largest revision, and a settle instant printed with all nine
+/// fractional digits (the serde form trims to 0, 3, 6 or 9). 0 for a settled
+/// row, which never settles again (MIK-7651).
+///
+/// Built by the same [`settled`] the fallback write runs, so the measured and
+/// the written record cannot drift. The fallback keeps the model (its issued
+/// input keys and status message) and drops targets, the upstream descriptor
+/// and the input round: a write that grows a KEPT field must check this
+/// against the record budget. Today those are creation and a new input round;
+/// the loader checks every live row it reads.
+pub(super) fn fallback_bytes(
+    task: &Task,
+    record: &Record,
+    now: DateTime<Utc>,
+) -> Result<usize, StoreError> {
+    let at = now.max(task.last_updated_at());
+    let at = at.with_nanosecond(999_999_999).unwrap_or(at);
+    let Some((_, mut fallback)) = settled(
+        task,
+        record,
+        (bounded(), None, true, ErrorAuthor::Gateway),
+        at,
+    )?
+    else {
+        return Ok(0);
+    };
+    fallback.revision = u64::MAX;
+    Ok(serialize(&fallback)?.len())
 }
 
 /// Before a row is raised past [`TARGET_VERSION`], its calls must be stored on

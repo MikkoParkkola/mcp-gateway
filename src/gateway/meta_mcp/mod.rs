@@ -74,6 +74,8 @@ mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;
 mod confirmation;
+#[cfg(all(test, feature = "cost-governance"))]
+mod cost_test_support;
 #[cfg(test)]
 mod declared_label_carry_tests;
 mod direct_route;
