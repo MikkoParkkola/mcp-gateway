@@ -168,6 +168,9 @@ impl MetaMcp {
         // this strands the insert under the epoch this call was authorized
         // in. A second load at the write site is the 4.g race.
         let policy_epoch = self.policy_epoch.load(Ordering::Acquire);
+        // MIK-7991: this call's own gateway writes start here, apart from an
+        // earlier plan step's in the same delivery; stored with its answer.
+        let writes_mark = gateway_writes::mark();
 
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
@@ -655,6 +658,7 @@ impl MetaMcp {
 
         #[cfg(feature = "cost-governance")]
         self.inject_cost_advice(&mut result, &cost_warnings, tool, caller, session_id);
+        let written = gateway_writes::snapshot_since(writes_mark);
 
         self.store_response(
             caller,
@@ -666,11 +670,11 @@ impl MetaMcp {
             &arguments,
             (&projection_key_suffix, &caller_principal),
             (&profile.name, policy_epoch),
-            &result,
+            (&result, &written),
         );
 
         if let Some(reservation) = idem_reservation.as_mut()
-            && reservation.complete_read(&result, self.dispatch_reading(args))
+            && reservation.complete_read(&result, (self.dispatch_reading(args), written))
         {
             debug!(
                 server,
