@@ -360,7 +360,7 @@ fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
     use super::Delivered;
     let detector = CollusionDetector::new(RelayParams::default());
     let fields = |tag: &str| (0..12).map(|i| format!("{tag} f{i}")).collect::<Vec<_>>();
-    let mut moved = false;
+    let (mut moved, mut moved_together) = (false, false);
     for round in 0..20 {
         let (left, right) = (fields(&format!("l{round}")), fields(&format!("r{round}")));
         let gone = format!("removed paragraph {round} ").repeat(8);
@@ -392,9 +392,23 @@ fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
             .iter()
             .flat_map(|run| detector.fingerprints(run))
             .collect();
+        // The run-together forms' k-grams that no newline form carries.
+        let newline: HashSet<u64> = forms
+            .iter()
+            .step_by(2)
+            .flat_map(|run| detector.kgram_hashes(run))
+            .collect();
+        let together: HashSet<u64> = forms
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .flat_map(|run| detector.kgram_hashes(run))
+            .filter(|k| !newline.contains(k))
+            .collect();
         for fp in &original {
             assert_eq!(kept.contains(fp), allowed.contains(fp), "round {round}");
             moved |= allowed.contains(fp) && !alone.contains(fp);
+            moved_together |= together.contains(fp) && !alone.contains(fp);
         }
         assert!(
             kept.iter().all(|fp| allowed.contains(fp)),
@@ -402,6 +416,10 @@ fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
         );
     }
     assert!(moved, "premise: a split moved some minimum");
+    assert!(
+        moved_together,
+        "premise: a split moved a run-together minimum"
+    );
 }
 
 /// Non-periodic ASCII text cut into 20-character pieces, shorter than a
