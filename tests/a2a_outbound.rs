@@ -340,45 +340,58 @@ async fn a2a_5_a_non_object_data_part_is_not_structured_content() {
 }
 
 /// A2A.7: a delegation is a tool call to the gateway. Through `/mcp`
-/// `gateway_invoke` it meets the same admission as any backend tool: a modern
-/// side-effecting call without an idempotency key is refused before the agent
-/// is contacted, and the same call with a key reaches the agent once.
+/// `gateway_invoke` it meets the same per-client tool policy as any backend
+/// tool: a key that denies `agent:send_message` is refused before the agent
+/// is contacted, and a permitted key's call comes back through the funnel,
+/// stamped with the gateway's trace id.
 #[tokio::test]
 async fn a2a_7_a_delegation_passes_the_gateway_funnel() {
     let (base, log) = stub::serve(Agent::answering(stub::completed_task(
         json!([{"text": "governed"}]),
     )))
     .await;
-    let (state, _store) = common::state(common::Fixture::default()).await;
+    let mut denied = common::api_key("key-denied", 0, None);
+    denied.name = "denied".into();
+    denied.denied_tools = Some(vec!["agent:send_message".into()]);
+    let mut allowed = common::api_key("key-allowed", 0, None);
+    allowed.name = "allowed".into();
+    let fixture = common::Fixture {
+        auth: common::auth_with(vec![denied, allowed], None),
+        ..common::Fixture::default()
+    };
+    let (state, _store) = common::state(fixture).await;
     assert!(
         state
             .backends
             .register(std::sync::Arc::new(backend(&base, None, &[])))
     );
-    let invoke = |key: Option<&str>| {
-        let mut frame = common::modern(
+    let invoke = || {
+        common::modern(
             "tools/call",
             json!({"name": "gateway_invoke", "arguments": {
                 "server": "agent", "tool": TOOL, "arguments": {"message": "hi"}}}),
-        );
-        if let Some(key) = key {
-            frame["params"]["_meta"][mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META] =
-                json!(key);
-        }
-        frame
+        )
     };
 
-    let (_, refused) = common::post(&state, invoke(None), &[]).await;
+    let (_, refused) =
+        common::post(&state, invoke(), &[("authorization", "Bearer key-denied")]).await;
     assert!(
         stub::sends(&log).is_empty(),
-        "an unkeyed side-effecting call never reaches the agent: {refused}"
+        "a denied delegation never reaches the agent: {refused}"
+    );
+    assert!(
+        refused.to_string().contains("agent"),
+        "the refusal names the denied target: {refused}"
     );
 
-    let (status, answered) = common::post(&state, invoke(Some("a2a-7-key")), &[]).await;
+    let (status, answered) =
+        common::post(&state, invoke(), &[("authorization", "Bearer key-allowed")]).await;
     assert!(status.is_success(), "{status}: {answered}");
+    let text = answered.to_string();
+    assert!(text.contains("governed"), "the agent's answer: {answered}");
     assert!(
-        answered.to_string().contains("governed"),
-        "the agent's answer comes back through the funnel: {answered}"
+        text.contains("gw-"),
+        "stamped with the gateway trace id: {answered}"
     );
     assert_eq!(
         stub::sends(&log).len(),
