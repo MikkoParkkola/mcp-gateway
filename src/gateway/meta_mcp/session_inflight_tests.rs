@@ -36,17 +36,17 @@ const SESSION: &str = "session-ended-mid-call";
 /// A backend whose `tools/call` signals arrival, then waits for release.
 /// With `panics` set, a released call panics instead of answering.
 #[derive(Default)]
-struct Parked {
-    arrived: Notify,
-    release: Notify,
-    panics: bool,
+pub(crate) struct Parked {
+    pub(crate) arrived: Notify,
+    pub(crate) release: Notify,
+    pub(crate) panics: bool,
     /// Calls that reached the backend, so a row can wait for a count rather
     /// than for a `Notify` permit an earlier call may have left behind.
-    calls: AtomicUsize,
+    pub(crate) calls: AtomicUsize,
 }
 
 impl Parked {
-    async fn arrivals(&self, n: usize) {
+    pub(crate) async fn arrivals(&self, n: usize) {
         while self.calls.load(Ordering::SeqCst) < n {
             let _ = tokio::time::timeout(Duration::from_millis(20), self.arrived.notified()).await;
         }
@@ -408,6 +408,11 @@ async fn the_end_handlers_run_again_for_a_late_write_and_are_idempotent() {
     w.lifecycle.on_disconnect(SESSION);
     assert_eq!(w.fired(), 4, "the grace pass and a repeated end");
     w.assert_nothing_left("runs on empty stores");
+    assert_eq!(
+        w.meta.cost_tracker.aggregate().total_calls,
+        2,
+        "every run kept both calls in the operator's total"
+    );
 }
 
 /// The session ends while its call is at the backend; how the call then
@@ -478,4 +483,26 @@ async fn only_the_last_of_two_overlapping_holds_ends_the_session_again() {
     }
     assert_eq!(w.fired(), 2, "the last hold ran the end handlers again");
     w.assert_nothing_left("after both calls");
+}
+
+/// `initialize` binds a profile outside the dispatch tail. One that lands
+/// after its session ended must not leave the binding behind.
+#[tokio::test]
+async fn an_initialize_after_its_session_ended_leaves_no_profile() {
+    let w = wired(false);
+    let multiplexer = live_multiplexer(&w);
+    multiplexer.remove_session(SESSION);
+    w.end_with_both_passes();
+
+    let answer = w.meta.handle_initialize(
+        RequestId::Number(1),
+        None,
+        Some(SESSION),
+        Some("focus"),
+        crate::protocol::meta::Era::Legacy,
+        super::InvokeScope::unscoped(crate::gateway::router::CallerStanding::Admin),
+    );
+    assert!(answer.error.is_none(), "initialize is answered: {answer:?}");
+
+    assert_eq!(w.meta.session_profiles.len(), 0, "the late binding is gone");
 }
