@@ -163,7 +163,7 @@ fn a_path_indexes_arrays_only_by_canonical_index() {
 /// MIK-7993 T9 (r5c): a stored record never fails to decode. Whatever its
 /// top-level shape it reads, and each entry that is not a note this build
 /// makes (an older shape, a bad digest, a kind or layer this build does not
-/// note, a path past the bounds) is dropped on its own, leaving the good ones.
+/// note) is dropped on its own, leaving the good ones.
 #[test]
 fn a_damaged_record_drops_only_its_bad_entries() {
     for whole in [json!(null), json!({"layer": "value"}), json!(7), json!("x")] {
@@ -190,8 +190,6 @@ fn a_damaged_record_drops_only_its_bad_entries() {
         with("kind", json!(["not_noted"])),
         with("layer", json!("elsewhere")),
         with("dest", json!([])),
-        with("dest", json!(vec!["x"; 33])),
-        with("dest", json!(["x".repeat(257)])),
         with("within", json!(null)),
         json!("not an entry"),
     ];
@@ -207,16 +205,20 @@ fn a_damaged_record_drops_only_its_bad_entries() {
     );
 }
 
-/// MIK-7993 r5b: a record holds at most 256 entries; the rest are dropped.
+/// MIK-7993 impl F2: every record this build writes reads back whole: many
+/// entries, deep paths and long segments included.
 #[test]
-fn a_record_reads_at_most_its_bound_of_entries() {
+fn every_record_written_reads_back() {
     let entry = json!({
-        "layer": "answer", "dest": ["taskId"], "kind": ["taskId"], "within": [],
+        "layer": "value",
+        "dest": std::iter::repeat_n("x".repeat(300), 40).collect::<Vec<_>>(),
+        "kind": ["_cost_warnings"], "within": [],
         "digest": "636810988c0638ebda7b64c4fcac77cae55b300084dd6c553983f9c1aaf350db",
     });
-    let decoded: WriteRecord =
-        serde_json::from_value(Value::Array(vec![entry; 300])).expect("never fails");
-    assert_eq!(decoded.0.len(), 256);
+    let stored = Value::Array(vec![entry; 300]);
+    let decoded: WriteRecord = serde_json::from_value(stored.clone()).expect("never fails");
+    assert_eq!(decoded.0.len(), 300);
+    assert_eq!(serde_json::to_value(&decoded).expect("serializes"), stored);
 }
 
 /// The record of `notes` made on `value`, as a step's own.
@@ -311,16 +313,28 @@ async fn a_projection_carries_only_the_notes_it_takes() {
     assert_eq!(twice, vec![path(&["output", "p"]), path(&["output", "q"])]);
 }
 
-/// A playbook mapping path names the same segments a note does; a wildcard
-/// names none.
+/// MIK-7993 impl F3: a mapping path names the concrete paths the resolver
+/// visits in a step's value, a wildcard each element in order.
 #[test]
-fn a_mapping_path_reads_as_note_segments() {
+fn a_mapping_path_names_the_paths_it_reaches() {
+    let value = json!({"results": [{"title": "a"}, {"title": "b"}], "one": {"x": 1}});
     assert_eq!(
-        mapping_segments("results[0].title"),
-        Some(path(&["results", "0", "title"]))
+        mapping_paths(&value, "results[0].title"),
+        vec![path(&["results", "0", "title"])]
     );
-    assert_eq!(mapping_segments(""), Some(Vec::new()));
-    assert_eq!(mapping_segments("items[].v"), None);
+    assert_eq!(
+        mapping_paths(&value, "results[].title"),
+        vec![
+            path(&["results", "0", "title"]),
+            path(&["results", "1", "title"])
+        ]
+    );
+    assert_eq!(mapping_paths(&value, ""), vec![Vec::<String>::new()]);
+    assert!(
+        mapping_paths(&value, "one[0]").is_empty(),
+        "an index needs an array"
+    );
+    assert!(mapping_paths(&value, "missing").is_empty());
 }
 
 /// A composite step's notes are taken out of the delivery's record, leaving

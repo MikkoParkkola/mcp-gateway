@@ -118,12 +118,6 @@ pub(super) const CONTRACT_VIOLATION: &[&str] = &["_contract_violation"];
 /// The response-contract reason the gateway writes beside the verdict.
 pub(super) const CONTRACT_REASON: &[&str] = &["_contract_reason"];
 
-/// Bounds a stored note must meet to be read back: anything larger is not
-/// one the gateway wrote, and is dropped rather than trusted.
-const MAX_SEGMENTS: usize = 32;
-const MAX_SEGMENT_BYTES: usize = 256;
-const MAX_ENTRIES: usize = 256;
-
 /// A note as a task row or the sync admission stores it. `seq` is not kept:
 /// a restored note is numbered in the replay's own record.
 ///
@@ -162,7 +156,6 @@ impl<'de> serde::Deserialize<'de> for WriteRecord {
         let entries = stored.as_array().map_or(&[][..], Vec::as_slice);
         let decoded: Vec<Written> = entries
             .iter()
-            .take(MAX_ENTRIES)
             .filter_map(|entry| {
                 let written = decode_entry(entry);
                 if written.is_none() {
@@ -209,19 +202,14 @@ fn decode_entry(entry: &Value) -> Option<Written> {
     })
 }
 
-/// A stored path, within the bounds a note the gateway wrote meets.
+/// A stored path. No length bound of its own: every record this build writes
+/// must read back (MIK-7993 impl F2), and the row it sits in is already held
+/// to its record budget on write and on read.
 fn segments(value: &Value) -> Option<Vec<String>> {
-    let list = value.as_array()?;
-    if list.len() > MAX_SEGMENTS {
-        return None;
-    }
-    list.iter()
-        .map(|segment| {
-            segment
-                .as_str()
-                .filter(|s| s.len() <= MAX_SEGMENT_BYTES)
-                .map(str::to_owned)
-        })
+    value
+        .as_array()?
+        .iter()
+        .map(|segment| segment.as_str().map(str::to_owned))
         .collect()
 }
 
@@ -282,17 +270,59 @@ pub(crate) fn take_since(mark: Mark) -> WriteRecord {
     )
 }
 
-/// The segments a playbook output mapping's path (`a.b[0].c`) names, as a
-/// note's path spells them; `None` for a wildcard, which projects no note.
-pub(crate) fn mapping_segments(path: &str) -> Option<Vec<String>> {
-    crate::transform::parse_json_path(path)
-        .into_iter()
-        .map(|segment| match segment {
-            crate::transform::JsonPathSegment::Key(key) => Some(key),
-            crate::transform::JsonPathSegment::ArrayIndex(index) => Some(index.to_string()),
-            crate::transform::JsonPathSegment::ArrayWildcard => None,
-        })
-        .collect()
+/// The concrete note paths a playbook output mapping's path (`a.b[].c`)
+/// reaches inside `value`, in the order `transform::resolve_path` visits
+/// them: a wildcard names each element it walks (MIK-7993 impl F3). The
+/// engine stores one match as the value itself and several as an array of
+/// them, in this order.
+pub(crate) fn mapping_paths(value: &Value, path: &str) -> Vec<Vec<String>> {
+    fn walk(
+        value: &Value,
+        path: &[crate::transform::JsonPathSegment],
+        at: &mut Vec<String>,
+        found: &mut Vec<Vec<String>>,
+    ) {
+        use crate::transform::JsonPathSegment;
+        let Some((first, rest)) = path.split_first() else {
+            found.push(at.clone());
+            return;
+        };
+        let children: Vec<(String, &Value)> = match first {
+            JsonPathSegment::Key(key) => value
+                .as_object()
+                .and_then(|map| map.get(key))
+                .map(|child| vec![(key.clone(), child)])
+                .unwrap_or_default(),
+            JsonPathSegment::ArrayIndex(index) => value
+                .as_array()
+                .and_then(|items| items.get(*index))
+                .map(|child| vec![(index.to_string(), child)])
+                .unwrap_or_default(),
+            JsonPathSegment::ArrayWildcard => value
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .enumerate()
+                        .map(|(index, child)| (index.to_string(), child))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+        for (segment, child) in children {
+            at.push(segment);
+            walk(child, rest, at, found);
+            at.pop();
+        }
+    }
+    let mut found = Vec::new();
+    walk(
+        value,
+        &crate::transform::parse_json_path(path),
+        &mut Vec::new(),
+        &mut found,
+    );
+    found
 }
 
 impl WriteRecord {

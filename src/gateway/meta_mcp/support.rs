@@ -436,15 +436,34 @@ impl MetaMcpInvoker<'_, '_> {
         for (prop, mapping) in &output.properties {
             let path = mapping.path.trim_start_matches('$');
             let (step, rest) = path.split_once('.').unwrap_or((path, ""));
-            let Some((_, record, value)) = named.iter().find(|(name, ..)| name.as_str() == step)
+            // `inputs` is the caller's namespace even beside a step of that
+            // name, as `PlaybookContext::resolve_var` reads it (impl F5).
+            if step == "inputs" {
+                continue;
+            }
+            // The engine keeps the LAST result under a repeated name (impl F4).
+            let Some((_, record, value)) =
+                named.iter().rev().find(|(name, ..)| name.as_str() == step)
             else {
                 continue;
             };
-            let Some(from) = crate::gateway::gateway_writes::mapping_segments(rest) else {
-                continue;
-            };
+            // One match is stored as itself, several as an array of them in
+            // the order the resolver visits them (impl F3).
+            let found = crate::gateway::gateway_writes::mapping_paths(value, rest);
             let to = ["output".to_owned(), prop.clone()];
-            crate::gateway::gateway_writes::restore(&record.projected(value, &from, &to));
+            match found.as_slice() {
+                [one] => {
+                    crate::gateway::gateway_writes::restore(&record.projected(value, one, &to));
+                }
+                many => {
+                    for (index, from) in many.iter().enumerate() {
+                        let at = [to[0].clone(), to[1].clone(), index.to_string()];
+                        crate::gateway::gateway_writes::restore(
+                            &record.projected(value, from, &at),
+                        );
+                    }
+                }
+            }
         }
     }
 }
