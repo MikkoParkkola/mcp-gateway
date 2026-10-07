@@ -161,7 +161,9 @@ def known_issues(text):
     for i, line in enumerate(lines):
         if starts_section(lines, i):
             inside, underline = True, not atx_start(line)
-            if title_letters(line).replace(TITLE, "", 1) or later_releases(line):
+            above = lines[i - 1] if i else ""
+            title = line if TITLE in title_letters(line) else f"{above} {line}"
+            if title_letters(title).replace(TITLE, "", 1) or later_releases(line):
                 # A start line that says more than the title (a bullet read
                 # as one, or a version in an annotation, read from the raw
                 # text) is content too, so nothing it says is dropped.
@@ -193,7 +195,12 @@ def is_prerelease_tag(tag):
 
 
 def later_releases(line):
-    """The versions in `line` later than this release."""
+    """The versions `line` renders that are later than this release.
+
+    Read from the rendered text: entities decoded, backslash escapes and
+    inline emphasis or code marks dropped, so 4\\.0\\.1 and 4.0.&#49; count.
+    """
+    line = re.sub(r"[\\`*_]", "", html.unescape(line))
     return [
         match.group(0)
         for match in VERSION_TOKEN.finditer(line)
