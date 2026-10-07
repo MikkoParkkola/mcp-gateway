@@ -299,13 +299,14 @@ fn apply_webhook_refresh(
             .filter(|name| !kept(name))
             .cloned()
             .collect();
-        if !gone.is_empty() {
+        let withdrawn = hub.withdraw(&gone);
+        if withdrawn && !gone.is_empty() {
             tracing::info!(
                 withdrawn = gone.len(),
                 "events: a reload inside the startup grace period withdrew the types it removed"
             );
         }
-        hub.withdraw(&gone)
+        withdrawn
     };
     if !withdrawn {
         tracing::warn!("events: a capability reload could not remove a withdrawn subscription");
