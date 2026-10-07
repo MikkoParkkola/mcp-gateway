@@ -140,8 +140,8 @@ pub(crate) fn write_config_with(
 ///
 /// # Errors
 ///
-/// The refusal, or a validation, serialisation or I/O failure, as a message
-/// ready to print.
+/// The refusal, which starts with `Not saved:`, or a validation,
+/// serialisation or I/O failure, as a message ready to print.
 pub fn write_config_preserving(path: &Path, config: &Config) -> Result<(), String> {
     write_spliced(path, config, CommentLoss::Refuse, Splice::NoRemoval).map_err(|e| match e {
         Unwritten::CommentLoss(message) => message,

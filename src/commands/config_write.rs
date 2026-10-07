@@ -28,6 +28,9 @@ pub fn comment_loss(force: bool) -> CommentLoss {
     }
 }
 
+/// How [`write_config_preserving`] starts a comment-loss refusal.
+const REFUSAL: &str = "Not saved:";
+
 /// Write `config` to `path`; the error is a message ready to print.
 ///
 /// Every write is tried as a refusing one first, so `--force` still names
@@ -37,10 +40,11 @@ pub fn comment_loss(force: bool) -> CommentLoss {
 pub fn write(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), String> {
     let before = std::fs::read_to_string(path).unwrap_or_default();
     if let Err(refusal) = write_config_preserving(path, config) {
-        if mode == CommentLoss::Refuse {
+        // `--force` overrides only the comment check; a validation or I/O
+        // failure is reported as itself, never as a comment warning.
+        if mode == CommentLoss::Refuse || !refusal.starts_with(REFUSAL) {
             return Err(refusal);
         }
-        // A validation or I/O failure fails the rewrite the same way.
         write_config(path, config)
             .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
         eprintln!(
@@ -99,6 +103,22 @@ fn dropped_comments(before: &str, after: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::dropped_comments;
+
+    /// An I/O failure under `--force` comes back as that failure, not as a
+    /// comment warning over a rewrite (a directory where the file goes makes
+    /// the rename fail on every platform).
+    #[test]
+    fn an_io_failure_under_force_is_reported_as_itself() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        std::fs::create_dir(&path).expect("dir in the way");
+        let config = mcp_gateway::config::Config::default();
+        let error = super::write(&path, &config, super::CommentLoss::Rewrite).expect_err("fails");
+        assert!(
+            error.starts_with("Failed to write") && !error.contains(super::REFUSAL),
+            "{error}"
+        );
+    }
 
     #[test]
     fn a_removed_entry_names_its_own_line_not_a_repeat_of_it() {
