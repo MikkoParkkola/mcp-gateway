@@ -284,3 +284,30 @@ fn era_reading_matches_mcp() {
         }
     }
 }
+
+/// NFR.OBS.1: the direct route records what a request declared, as `/mcp`
+/// does, because its one reading is the observing classifier.
+#[test]
+fn the_declared_revision_is_observed() {
+    let params = json!({"_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }});
+    let headers = axum::http::HeaderMap::new();
+    let records = crate::test_log_capture::records(|| {
+        let _ = super::super::hardened_elicitation::classify_direct(
+            &headers,
+            "tools/list",
+            Some(&params),
+        );
+    });
+    let observed = records
+        .iter()
+        .find(|r| r["target"] == "mcp_gateway::observed")
+        .unwrap_or_else(|| panic!("no observation: {records:?}"));
+    assert_eq!(
+        observed["fields"]["protocol_revision"], "2026-07-28",
+        "{observed}"
+    );
+    assert_eq!(observed["fields"]["revision_source"], "_meta", "{observed}");
+}
