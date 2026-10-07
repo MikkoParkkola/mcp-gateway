@@ -720,3 +720,29 @@ async fn copies_do_not_crowd_out_a_redacted_members_survivors() {
         "repeated copies crowded the delivered text out of the receipt"
     );
 }
+
+/// MIK-7992: the step holds its first short field twice, and the plan
+/// delivers each field once with another step's field between them. The
+/// step's own run across the two fields stays, as before the deferred cap.
+#[tokio::test]
+async fn a_repeated_field_keeps_its_step_run_when_interleaved() {
+    let (meta, firewall) = relay_meta();
+    let (p, s) = (
+        "the vineyard gate opens at six for the pickers",
+        "dog on premises, ring twice at the side porch!",
+    );
+    let step = json!({"a": p, "b": filler("pad", 60), "c": p, "d": s});
+    let answer = plan_answer(&json!({"x": p, "y": OTHER_PROSE, "z": s}));
+    deliver_step(&meta, &step, &answer).await;
+    let row = json!({"c": p, "d": s});
+    firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "a", &row);
+
+    assert!(
+        relays_row(&firewall, "bob", &row),
+        "control: bob holds no copy of the row"
+    );
+    assert!(
+        !relays_row(&firewall, "alice", &row),
+        "counting the repeated field split the step's run"
+    );
+}
