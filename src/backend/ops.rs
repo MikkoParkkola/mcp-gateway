@@ -438,7 +438,7 @@ impl Backend {
         }
         telemetry_metrics::counter!(
             "mcp_backend_requests_total",
-            "backend" => self.name.clone(),
+            "backend" => self.metric_label.clone(),
             "status" => if rate_limited { "rate_limited" } else { "error" }
         )
         .increment(1);
@@ -448,7 +448,7 @@ impl Backend {
     fn record_dispatch_latency(&self, latency: std::time::Duration) {
         telemetry_metrics::histogram!(
             "mcp_backend_request_duration_seconds",
-            "backend" => self.name.clone()
+            "backend" => self.metric_label.clone()
         )
         .record(latency.as_secs_f64());
     }
@@ -486,7 +486,7 @@ impl Backend {
                 }
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
-                    "backend" => self.name.clone(),
+                    "backend" => self.metric_label.clone(),
                     "status" => if throttled { "rate_limited" } else { "ok" }
                 )
                 .increment(1);
@@ -590,7 +590,7 @@ impl Backend {
                 entry.failsafe.record_success(latency);
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
-                    "backend" => self.name.clone(),
+                    "backend" => self.metric_label.clone(),
                     "status" => "ok"
                 )
                 .increment(1);

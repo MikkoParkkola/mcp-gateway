@@ -94,6 +94,11 @@ impl TaskService {
         Ok(Self { store, admission })
     }
 
+    /// The rows the store skipped when it opened (MIK-8023).
+    pub(crate) fn skipped_records(&self) -> super::store::SkippedRecords {
+        self.store.skipped_records()
+    }
+
     /// Admit, reserve a worker only for a new key, then prepare and commit.
     ///
     /// Admission remains the sole identity authority. Only `Owned` asks `reserve`;

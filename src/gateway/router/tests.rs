@@ -62,6 +62,7 @@ mod origin_gate;
 mod playbook_authz;
 mod request_parsing;
 mod responses;
+mod session_hold_direct;
 mod session_routing;
 
 /// The durable task runtime every fixture in this file is built on.

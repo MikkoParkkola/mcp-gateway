@@ -497,18 +497,17 @@ impl EventsHub {
         // At most two passes: a cached opt-in can vanish (tail eviction)
         // between the read above and the commit; the store then refuses
         // and the callback is challenged before a second commit.
+        let (policy, by) = ((caps, grace, tail), (caller, &url));
         for _pass in 0..2 {
             if !verified {
                 self.challenge(caller, &descriptor.name, &url, &id, &key)
                     .await?;
             }
             let outcome = self
-                .commit_started(&record, grant, !verified, (caps, grace, tail), now)
+                .commit_started(&record, grant, !verified, policy, now, by)
                 .await;
             match outcome? {
-                Ok((admission, expires_at)) => {
-                    self.subscribed(caller, admission, &id, &descriptor.name, &url)
-                        .await;
+                Ok((_, expires_at)) => {
                     // A refresh may have reactivated a suspended row.
                     self.runtime.wake.notify_one();
                     let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())
@@ -528,9 +527,10 @@ impl EventsHub {
     }
 
     /// Start the source's upstream work for the subscription (when it is the
-    /// first of its key) and commit it, under one lifecycle lock: a stop for
-    /// another key cannot land between them (lifecycle.rs). A commit that
-    /// fails undoes the start it made.
+    /// first of its key), commit it and audit it (as `by`), under one
+    /// lifecycle lock: a stop for another key cannot land between them
+    /// (lifecycle.rs), and racing subscribes are audited in commit order. A
+    /// commit that fails undoes the start it made.
     async fn commit_started(
         self: &Arc<Self>,
         record: &Subscription,
@@ -538,6 +538,7 @@ impl EventsHub {
         fresh: bool,
         policy: (Caps, chrono::Duration, super::store::TailPolicy),
         now: DateTime<Utc>,
+        (caller, url): (&Caller, &url::Url),
     ) -> Result<Result<super::store::Admitted, CapHit>, RpcError> {
         let attempt = record.clone();
         let mut started = self.lifecycle.lock().await;
@@ -559,6 +560,13 @@ impl EventsHub {
         {
             self.undo_start(&mut started, key).await;
         }
+        if let Ok(Ok((admission, _))) = &outcome {
+            #[cfg(test)]
+            self.after_commit.pause().await;
+            self.subscribed(caller, *admission, &record.id, &record.name, url)
+                .await;
+        }
+        drop(started);
         outcome
     }
 

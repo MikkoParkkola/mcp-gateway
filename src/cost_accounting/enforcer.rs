@@ -91,6 +91,11 @@ impl DailyAccumulator {
         let state = self.lock();
         if state.0 >= current_day() { state.1 } else { 0 }
     }
+
+    /// False once the stored day is before today: [`Self::current`] reads 0.
+    fn is_current(&self) -> bool {
+        self.lock().0 >= current_day()
+    }
 }
 
 #[cfg(test)]
@@ -99,14 +104,31 @@ thread_local! {
     /// before the counter is cleared: a test lands an add there (MIK-7880).
     static AFTER_DAY_PUBLISH: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
+    /// Runs once on this thread inside a settle, under the ledger lock, right
+    /// after the spend is added: it may start a check but never wait on one.
+    static AFTER_SPEND_ADDED: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+    /// Runs once on this thread when a settle has let the ledger go, before it
+    /// returns: the caller still holds its admission (MIK-7903).
+    static AFTER_SETTLE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+type TestHook = std::thread::LocalKey<std::cell::RefCell<Option<Box<dyn FnOnce()>>>>;
+
+/// Run and clear the hook a test set on this thread, if any.
+#[cfg(test)]
+fn fire(hook: &'static TestHook) {
+    let taken = hook.with(|hook| hook.borrow_mut().take());
+    if let Some(f) = taken {
+        f();
+    }
 }
 
 #[cfg(test)]
 fn fire_after_day_publish() {
-    let taken = AFTER_DAY_PUBLISH.with(|hook| hook.borrow_mut().take());
-    if let Some(f) = taken {
-        f();
-    }
+    fire(&AFTER_DAY_PUBLISH);
 }
 
 #[cfg(all(test, feature = "cost-governance"))]
@@ -119,12 +141,55 @@ impl DailyAccumulator {
     }
 }
 
+/// Micro-USD as USD.
+#[cfg(feature = "cost-governance")]
+#[allow(clippy::cast_precision_loss)]
+fn usd(micro: u64) -> f64 {
+    micro as f64 / 1_000_000.0
+}
+
 fn current_day() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_secs()
         / 86_400
+}
+
+/// Unbudgeted names one day map keeps entries for; later names add into
+/// `(other)`. A check reads only budgeted names, so with R2 off and a non-zero
+/// `default_cost` the caller would otherwise choose how many entries exist.
+#[cfg(feature = "cost-governance")]
+const MAX_UNBUDGETED_ROWS: usize = 256;
+
+/// Add `micro` to `name`'s entry and return that entry's running total. A
+/// budgeted name always has its own. Any other name has one only while `map`
+/// holds fewer than [`MAX_UNBUDGETED_ROWS`] unbudgeted entries, and only if it is no longer than the cost tracker's row-name limit; past
+/// either, its spend goes to `overflow`, which no budget check ever reads, so
+/// a budget whose name happens to be `(other)` keeps its own total.
+/// ponytail: a soft cap; racing first inserts can pass it by the caller count.
+#[cfg(feature = "cost-governance")]
+fn add_capped(
+    (map, overflow): (&DashMap<String, DailyAccumulator>, &DailyAccumulator),
+    name: &str,
+    limits: &HashMap<String, f64>,
+    micro: u64,
+) -> u64 {
+    // Budgeted entries never count against the cap, present or not, so the map
+    // holds at most every budgeted name plus MAX_UNBUDGETED_ROWS others.
+    let unbudgeted = || {
+        let budgeted = limits.keys().filter(|k| map.contains_key(*k)).count();
+        // A sweep may remove entries between the two reads.
+        map.len().saturating_sub(budgeted)
+    };
+    let own = limits.contains_key(name)
+        || map.contains_key(name)
+        || (name.len() <= super::tally::MAX_ROW_NAME_BYTES && unbudgeted() < MAX_UNBUDGETED_ROWS);
+    if own {
+        map.entry(name.to_string()).or_default().add(micro)
+    } else {
+        overflow.add(micro)
+    }
 }
 
 // ── EnforcementResult ────────────────────────────────────────────────────────
@@ -165,6 +230,10 @@ struct Pending {
 #[cfg(feature = "cost-governance")]
 impl Pending {
     fn add(&mut self, tool: &str, key: Option<&str>, micro: u64) {
+        // A zero hold is never released, so it must not create rows.
+        if micro == 0 {
+            return;
+        }
         self.global = self.global.saturating_add(micro);
         let slot = self.tools.entry(tool.to_string()).or_default();
         *slot = slot.saturating_add(micro);
@@ -211,23 +280,36 @@ fn locked(ledger: &Ledger) -> MutexGuard<'_, Pending> {
     ledger.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// One admitted call's reservation. Dropping it gives the allowance back, so a
-/// call that fails without spend, is refused later or is cancelled keeps
-/// nothing. The caller records the spend first and drops the hold after:
-/// a check then never sees the spend missing from both places.
+/// One admitted call's reservation. A settle consumes it in the same step
+/// that records the spend (MIK-7903), so a check never sees the call twice.
+/// Dropping an unsettled hold gives the allowance back, so a call that fails
+/// without spend, is refused later or is cancelled keeps nothing; dropping a
+/// settled one gives back nothing.
 #[cfg(feature = "cost-governance")]
 #[must_use = "dropping a hold gives the reservation back"]
 pub(crate) struct SpendHold {
     ledger: Arc<Ledger>,
     tool: String,
     key: Option<String>,
-    micro: u64,
+    /// Still reserved; 0 once settled or released.
+    micro: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(feature = "cost-governance")]
+impl SpendHold {
+    /// Give the reservation back into `pending`, the locked ledger, once.
+    fn release_into(&self, pending: &mut Pending) {
+        let micro = self.micro.swap(0, std::sync::atomic::Ordering::Relaxed);
+        if micro > 0 {
+            pending.release(&self.tool, self.key.as_deref(), micro);
+        }
+    }
 }
 
 #[cfg(feature = "cost-governance")]
 impl Drop for SpendHold {
     fn drop(&mut self) {
-        locked(&self.ledger).release(&self.tool, self.key.as_deref(), self.micro);
+        self.release_into(&mut locked(&self.ledger));
     }
 }
 
@@ -303,6 +385,12 @@ pub struct EnforcerSnapshot {
     /// Unix seconds read before the accumulators. A snapshot that straddles
     /// UTC midnight then dates its spend to the earlier day, never the later.
     pub taken_at: u64,
+    /// Today's spend of unbudgeted tools past the per-tool map's cap (USD).
+    #[serde(default)]
+    pub tool_overflow_usd: f64,
+    /// Today's spend of unbudgeted keys past the per-key map's cap (USD).
+    #[serde(default)]
+    pub key_overflow_usd: f64,
 }
 
 // ── BudgetEnforcer ───────────────────────────────────────────────────────────
@@ -327,6 +415,14 @@ pub struct BudgetEnforcer {
     ledger: Arc<Ledger>,
     /// Told when committed spend crosses 50, 80 or 100 % of a daily budget.
     observer: crate::observer::Observer<crossings::BudgetCrossing>,
+    /// When the next sweep of earlier days' entries may run (MIK-8015).
+    next_sweep: std::sync::atomic::AtomicU64,
+    /// The latest UTC day a sweep ran on: a new day sweeps at once, whatever
+    /// the minute throttle says, so yesterday's rows never fill today's cap.
+    swept_day: std::sync::atomic::AtomicU64,
+    /// Spend of unbudgeted tool and key names past the day maps' cap.
+    tool_overflow: DailyAccumulator,
+    key_overflow: DailyAccumulator,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -341,6 +437,10 @@ impl BudgetEnforcer {
             key_daily: DashMap::new(),
             ledger: Arc::default(),
             observer: crate::observer::Observer::default(),
+            next_sweep: std::sync::atomic::AtomicU64::new(0),
+            swept_day: std::sync::atomic::AtomicU64::new(0),
+            tool_overflow: DailyAccumulator::new(),
+            key_overflow: DailyAccumulator::new(),
         }
     }
 
@@ -484,7 +584,7 @@ impl BudgetEnforcer {
                 ledger: Arc::clone(&self.ledger),
                 tool: tool_name.to_string(),
                 key: api_key_name.map(str::to_string),
-                micro: cost_micro,
+                micro: std::sync::atomic::AtomicU64::new(cost_micro),
             })
         });
         drop(pending);
@@ -501,30 +601,65 @@ impl BudgetEnforcer {
         }
     }
 
-    /// Record actual spend after a successful invocation.
-    ///
-    /// Must be called AFTER the tool dispatch completes (post-invoke).
+    /// Record actual spend after a successful invocation, with no reservation
+    /// to settle (restore paths and tests). A dispatched call uses
+    /// `settle`.
     pub fn record_spend(&self, tool_name: &str, api_key_name: Option<&str>, cost_usd: f64) {
+        self.settle(None, tool_name, api_key_name, cost_usd);
+    }
+
+    /// Record an admitted call's spend and settle the reservation its check
+    /// made, in one step under the ledger lock (MIK-7903): a concurrent check
+    /// sees the call either reserved or spent, never both.
+    ///
+    /// Must be called AFTER the tool dispatch completes (post-invoke). A zero
+    /// cost records nothing and leaves the hold to its drop.
+    pub(crate) fn settle(
+        &self,
+        hold: Option<&SpendHold>,
+        tool_name: &str,
+        api_key_name: Option<&str>,
+        cost_usd: f64,
+    ) {
         if cost_usd == 0.0 {
             return;
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let micro = (cost_usd * 1_000_000.0) as u64;
 
+        let budgets = &self.config.budgets;
+        // Before the adds, so the first spend of a day never finds yesterday's
+        // rows filling the cap. No entry guard is held: `retain` takes every
+        // shard lock.
+        // The new day is published only after the sweep, so every spend that
+        // reads the old day sweeps first; concurrent sweeps are idempotent.
+        let today = current_day();
+        let new_day = self.swept_day.load(std::sync::atomic::Ordering::Relaxed) < today;
+        if new_day || super::tally::sweep_due(&self.next_sweep, super::persistence::now_secs()) {
+            for (map, limits) in [
+                (&self.tool_daily, &budgets.per_tool),
+                (&self.key_daily, &budgets.per_key),
+            ] {
+                map.retain(|name, day| limits.contains_key(name) || day.is_current());
+            }
+            self.swept_day
+                .fetch_max(today, std::sync::atomic::Ordering::Relaxed);
+        }
+        // Same order as `check`: ledger, then map shard, then accumulator.
+        let mut pending = locked(&self.ledger);
         let global = self.global_daily.add(micro);
-
-        let tool = self
-            .tool_daily
-            .entry(tool_name.to_string())
-            .or_default()
-            .add(micro);
-
-        let key = api_key_name.map(|key| {
-            self.key_daily
-                .entry(key.to_string())
-                .or_default()
-                .add(micro)
-        });
+        let tool = add_capped(self.tool_maps(), tool_name, &budgets.per_tool, micro);
+        let key = api_key_name.map(|key| add_capped(self.key_maps(), key, &budgets.per_key, micro));
+        #[cfg(test)]
+        fire(&AFTER_SPEND_ADDED);
+        // A hold from another enforcer (replaced on reload) belongs to its
+        // own ledger and is released by its drop.
+        if let Some(hold) = hold.filter(|hold| Arc::ptr_eq(&hold.ledger, &self.ledger)) {
+            hold.release_into(&mut pending);
+        }
+        drop(pending);
+        #[cfg(test)]
+        fire(&AFTER_SETTLE);
         if self.observer.is_set() {
             self.report_crossings(
                 tool_name,
@@ -551,17 +686,37 @@ impl BudgetEnforcer {
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let micro = |usd: f64| (usd.max(0.0) * 1_000_000.0).round() as u64;
+        // Through the cap: a snapshot saved before the cap existed may hold
+        // more names than it allows.
+        let budgets = &self.config.budgets;
+        // A zero row (a name saved after midnight before it spent again) is
+        // not restored: it would take a place in the cap and read 0 anyway.
         for (tool, total) in &persisted.tool_totals {
             let spent = micro(total.total_cost_usd);
-            self.global_daily.add(spent);
-            self.tool_daily.entry(tool.clone()).or_default().add(spent);
+            if spent > 0 {
+                self.global_daily.add(spent);
+                add_capped(self.tool_maps(), tool, &budgets.per_tool, spent);
+            }
         }
         for (key, &usd) in &persisted.key_totals {
-            self.key_daily
-                .entry(key.clone())
-                .or_default()
-                .add(micro(usd));
+            if micro(usd) > 0 {
+                add_capped(self.key_maps(), key, &budgets.per_key, micro(usd));
+            }
         }
+        let tool_overflow = micro(persisted.tool_overflow_usd);
+        self.global_daily.add(tool_overflow);
+        self.tool_overflow.add(tool_overflow);
+        self.key_overflow.add(micro(persisted.key_overflow_usd));
+    }
+
+    /// The per-tool day map and its overflow accumulator.
+    fn tool_maps(&self) -> (&DashMap<String, DailyAccumulator>, &DailyAccumulator) {
+        (&self.tool_daily, &self.tool_overflow)
+    }
+
+    /// The per-key day map and its overflow accumulator.
+    fn key_maps(&self) -> (&DashMap<String, DailyAccumulator>, &DailyAccumulator) {
+        (&self.key_daily, &self.key_overflow)
     }
 
     /// Snapshot current accumulator state for persistence and the UI endpoint.
@@ -597,6 +752,8 @@ impl BudgetEnforcer {
             taken_at,
             key_daily,
             key_limits: self.config.budgets.per_key.clone(),
+            tool_overflow_usd: usd(self.tool_overflow.current()),
+            key_overflow_usd: usd(self.key_overflow.current()),
         }
     }
 
@@ -630,170 +787,13 @@ impl BudgetEnforcer {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cost_accounting::config::{BudgetLimits, CostGovernanceConfig};
-    use crate::cost_accounting::registry::CostRegistry;
-
-    fn enforcer_with(
-        enabled: bool,
-        daily: Option<f64>,
-        per_tool: &[(&str, f64)],
-        per_key: &[(&str, f64)],
-        tool_costs: &[(&str, f64)],
-    ) -> BudgetEnforcer {
-        let mut cfg = CostGovernanceConfig {
-            enabled,
-            budgets: BudgetLimits {
-                daily,
-                per_tool: per_tool.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
-                per_key: per_key.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
-            },
-            ..CostGovernanceConfig::default()
-        };
-        for (name, cost) in tool_costs {
-            cfg.tool_costs.insert(name.to_string(), *cost);
-        }
-        let registry = Arc::new(CostRegistry::new(&cfg));
-        BudgetEnforcer::new(cfg, registry)
-    }
-
-    #[test]
-    #[allow(clippy::float_cmp)]
-    fn enforcer_disabled_allows_all() {
-        let e = enforcer_with(false, Some(0.001), &[], &[], &[("paid_tool", 0.01)]);
-        let result = e.check("paid_tool", None);
-        assert!(result.allowed);
-        assert_eq!(result.cost_usd, 0.0);
-        assert!(result.warnings.is_empty());
-    }
-
-    #[test]
-    #[allow(clippy::float_cmp)]
-    fn enforcer_free_tool_skips_checks() {
-        let e = enforcer_with(true, Some(0.001), &[], &[], &[("free_tool", 0.0)]);
-        let result = e.check("free_tool", None);
-        assert!(result.allowed);
-        assert_eq!(result.cost_usd, 0.0);
-        assert!(result.block_reason.is_none());
-    }
-
-    #[test]
-    fn enforcer_per_tool_block_when_exceeded() {
-        // limit = $0.005; cost = $0.01 → projected = $0.01 > limit → block
-        let e = enforcer_with(
-            true,
-            None,
-            &[("expensive_tool", 0.005)],
-            &[],
-            &[("expensive_tool", 0.01)],
-        );
-        // Pre-fill $0.004 (80% of limit)
-        e.record_spend("expensive_tool", None, 0.004);
-        // Next call costs $0.01 → $0.014 total → exceeds $0.005
-        let result = e.check("expensive_tool", None);
-        assert!(!result.allowed);
-        assert!(result.block_reason.is_some());
-    }
-
-    #[test]
-    fn enforcer_global_block_when_exceeded() {
-        let e = enforcer_with(true, Some(0.01), &[], &[], &[("tool", 0.006)]);
-        // Spend $0.006, then try another $0.006 → $0.012 > $0.01
-        e.record_spend("tool", None, 0.006);
-        let result = e.check("tool", None);
-        assert!(!result.allowed);
-        assert!(result.block_reason.as_deref().unwrap().contains("Global"));
-    }
-
-    #[test]
-    fn enforcer_per_key_block_when_exceeded() {
-        let e = enforcer_with(true, None, &[], &[("dev_key", 0.01)], &[("tool", 0.008)]);
-        e.record_spend("tool", Some("dev_key"), 0.008);
-        let result = e.check("tool", Some("dev_key"));
-        assert!(!result.allowed);
-        assert!(result.block_reason.as_deref().unwrap().contains("dev_key"));
-    }
-
-    #[test]
-    fn enforcer_notify_warning_at_80_percent() {
-        // limit = $0.01, cost = $0.009 → 90% → Notify
-        let e = enforcer_with(true, Some(0.01), &[], &[], &[("tool", 0.009)]);
-        let result = e.check("tool", None);
-        assert!(result.allowed, "Should be allowed at 90% (not 100%)");
-        assert!(!result.warnings.is_empty(), "Should have a warning at 90%");
-    }
-
-    #[test]
-    fn enforcer_log_at_50_percent_no_response_warning() {
-        // limit = $0.10, cost = $0.06 → 60% → Log only, no Notify
-        let e = enforcer_with(true, Some(0.10), &[], &[], &[("tool", 0.06)]);
-        let result = e.check("tool", None);
-        assert!(result.allowed);
-        // At 60%: Log fires but NOT Notify, so warnings vec stays empty
-        assert!(
-            result.warnings.is_empty(),
-            "Log-only tier must NOT inject response warnings"
-        );
-    }
-
-    #[test]
-    fn enforcer_record_spend_accumulates() {
-        let e = enforcer_with(true, Some(1.0), &[], &[], &[("tool", 0.01)]);
-        e.record_spend("tool", Some("k1"), 0.30);
-        e.record_spend("tool", Some("k1"), 0.20);
-        let snap = e.snapshot();
-        assert!((snap.global_daily_usd - 0.50).abs() < 1e-6);
-        assert!((snap.tool_daily["tool"] - 0.50).abs() < 1e-6);
-        assert!((snap.key_daily["k1"] - 0.50).abs() < 1e-6);
-    }
-
-    #[test]
-    fn enforcer_check_performance_under_100us() {
-        // 10,000 checks must complete in under 1 second total (<0.1ms each)
-        let e = enforcer_with(true, Some(100.0), &[], &[], &[("tool", 0.001)]);
-        let start = std::time::Instant::now();
-        for _ in 0..10_000 {
-            let _ = e.check("tool", Some("key"));
-        }
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed.as_secs() < 1,
-            "10,000 checks took {elapsed:?} (must be < 1s)"
-        );
-    }
-
-    #[test]
-    fn daily_accumulator_add_increases_current() {
-        let acc = DailyAccumulator::new();
-        acc.add(500_000); // $0.50
-        acc.add(300_000); // $0.30
-        assert_eq!(acc.current(), 800_000);
-    }
-
-    #[test]
-    fn evaluate_alerts_selects_highest_matching_threshold() {
-        // spend=0.09, limit=0.10 → 90% → highest rule that fires is Notify(80)
-        let e = enforcer_with(true, Some(0.10), &[], &[], &[]);
-        let action = e.evaluate_alerts(0.09, 0.10);
-        assert_eq!(action, Some(AlertAction::Notify));
-    }
-
-    #[test]
-    fn evaluate_alerts_returns_block_at_100_percent() {
-        let e = enforcer_with(true, Some(0.10), &[], &[], &[]);
-        let action = e.evaluate_alerts(0.10, 0.10);
-        assert_eq!(action, Some(AlertAction::Block));
-    }
-
-    #[test]
-    fn evaluate_alerts_returns_none_below_50_percent() {
-        let e = enforcer_with(true, Some(1.0), &[], &[], &[]);
-        let action = e.evaluate_alerts(0.40, 1.0);
-        assert_eq!(action, None);
-    }
-}
+#[path = "enforcer_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "enforcer_atomic_tests.rs"]
 mod atomic_tests;
+
+#[cfg(test)]
+#[path = "enforcer_settle_seam.rs"]
+pub(crate) mod settle_seam;
