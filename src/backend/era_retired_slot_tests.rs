@@ -155,6 +155,11 @@ async fn the_reaper_leaves_busy_and_recent_slots_serving() {
 #[test]
 fn a_contradiction_from_a_slot_revoked_before_the_discard_keeps_the_era() {
     let records = run(a_contradiction_from_a_revoked_slot());
+    // The priming probe's cache miss proves the capture saw this test's era records.
+    assert!(
+        records.iter().any(|record| record["fields"]["hit"] == false),
+        "the priming probe's miss was captured: {records:?}"
+    );
     let triggers: Vec<_> = records
         .iter()
         .filter(|record| record["fields"]["reason"] == "trigger")
