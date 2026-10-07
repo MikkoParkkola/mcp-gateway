@@ -195,6 +195,9 @@ pub(super) struct ChainNames {
     /// The paths of every event that passed (tests read it).
     #[cfg(test)]
     pub(super) passed: Mutex<Vec<Vec<PathBuf>>>,
+    /// Events judged and dropped (tests read it).
+    #[cfg(test)]
+    pub(super) dropped: std::sync::atomic::AtomicUsize,
 }
 
 impl ChainNames {
@@ -205,6 +208,9 @@ impl ChainNames {
         #[cfg(test)]
         if concerns {
             self.passed.lock().push(event.paths.clone());
+        } else {
+            self.dropped
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         concerns
     }
@@ -213,9 +219,12 @@ impl ChainNames {
     /// hop, a followed directory link or a watched directory, or there is no
     /// path or no resolved chain to judge by.
     ///
-    /// Linux only. Elsewhere an entry can be reported under another spelling
-    /// than the one recorded (case, Unicode normalization, an 8.3 short
-    /// name), so every event still wakes the task, as before.
+    /// Linux only: inotify reports each path as the watched directory, byte
+    /// for byte as it was registered, joined with the entry's name as stored,
+    /// so a recorded path matches exactly. Elsewhere an entry can be reported
+    /// under another spelling than the one recorded (case, Unicode
+    /// normalization, an 8.3 short name), so every event still wakes the
+    /// task, as before; enabling the filter there needs that re-verified.
     pub(super) fn may_move_chain(&self, paths: &[PathBuf]) -> bool {
         !cfg!(target_os = "linux")
             || paths.is_empty()

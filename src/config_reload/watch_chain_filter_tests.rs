@@ -120,6 +120,7 @@ fn a_configmap_chain_names_every_link_on_it() {
 #[cfg(target_os = "linux")]
 mod real_watcher {
     use std::path::Path;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use super::super::tests::real_watcher::{Harness, start};
@@ -167,25 +168,27 @@ mod real_watcher {
         let mut h = start(&cfg);
         h.wait_wakes_above(0).await;
         h.drain_idle().await;
-        let before = settled_wakes(&h).await;
+        settled_wakes(&h).await;
         h.chain.names.passed.lock().clear();
+        let dropped_before = h.chain.names.dropped.load(Ordering::SeqCst);
 
         write_unrelated(root.path(), 1000);
         std::fs::write(&cfg, "a: 2\n").unwrap();
         assert!(h.triggered_within(10).await, "the config edit reloads");
-        let resolves = settled_wakes(&h).await - before;
 
-        // Only the edit's own events (truncate, write) passed the filter.
+        // Every unrelated file reached the callback and was dropped there, so
+        // none woke the task (each wake is one re-resolution); only the
+        // edit's own events passed.
+        let dropped = h.chain.names.dropped.load(Ordering::SeqCst) - dropped_before;
+        assert!(
+            dropped >= 1000,
+            "only {dropped} unrelated events were judged"
+        );
         let config = std::fs::canonicalize(&cfg).unwrap();
         let passed = h.chain.names.passed.lock().clone();
         assert!(
             !passed.is_empty() && passed.iter().all(|paths| paths.contains(&config)),
             "events that woke the task: {passed:?}"
-        );
-        assert!(
-            resolves <= passed.len(),
-            "{resolves} chain re-resolutions for {} waking events",
-            passed.len()
         );
         let _ = h.shutdown.send(());
     }
