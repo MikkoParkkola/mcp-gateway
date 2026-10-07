@@ -153,7 +153,10 @@ impl A2aClient {
     ) -> Result<Reply> {
         let mut params = json!({
             "message": message,
-            "configuration": {"acceptedOutputModes": ["text/plain", "application/json"]},
+            "configuration": {
+                "acceptedOutputModes": ["text/plain", "application/json"],
+                "returnImmediately": true,
+            },
         });
         if let Some(tenant) = &endpoint.tenant {
             params["tenant"] = json!(tenant);
