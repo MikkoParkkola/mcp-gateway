@@ -342,12 +342,20 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
     );
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let closed = tokio::time::timeout(std::time::Duration::from_secs(10), transport.close()).await;
+    // Judged while the escaped reader still holds the pipe: killing it would
+    // end the write by itself.
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(5), stuck).await;
+    let released = transport.writer.try_lock().is_ok_and(|w| w.is_none());
     let _ = std::process::Command::new("kill")
         .args(["-9", escaped.trim()])
         .status();
-    stuck.abort();
     assert!(
         closed.is_ok(),
         "close() hung on a write an escaped reader keeps stuck"
     );
+    assert!(
+        matches!(ended, Ok(Ok(Err(_)))),
+        "the stuck write outlived close(): {ended:?}"
+    );
+    assert!(released, "close() left stdin held by the stuck write");
 }
