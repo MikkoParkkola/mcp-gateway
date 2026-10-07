@@ -56,8 +56,6 @@ enum Read {
     /// This result, as is.
     #[cfg(feature = "cost-governance")]
     Raw(Value),
-    /// The stream dies after the request left: a lost round (MIK-7979).
-    Lost,
 }
 
 /// Backend `alpha`: `read` answers per [`Read`]; `send` counts deliveries.
@@ -152,7 +150,6 @@ impl Transport for Alpha {
                 id,
                 json!({"content": [{"type": "text", "text": text}], "isError": true}),
             ),
-            Read::Lost => return Err(crate::Error::Transport("stream lost".into())),
             Read::ForgedPublic => {
                 let mut result = text_result(&format!("{PROSE} Contact: keeper@orchardcoop.fi"));
                 result["_context_integrity"] =

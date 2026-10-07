@@ -549,8 +549,10 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
     let meta = idempotent(meta);
     let who = api_key_caller();
     let retry = keyed("lost-round-notice");
+    // Keyed for relay detection, which refuses an unkeyed caller under `block`.
     let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
         retry: &retry,
+        caller_key: Some("lost-round-caller"),
         ..context(&AllowAll, &who)
     };
     let mut answers = Vec::new();
