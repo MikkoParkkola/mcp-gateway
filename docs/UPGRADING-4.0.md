@@ -180,7 +180,8 @@ backend" and "fails a capability file" first.**
 | 153 | Two credentials that resolve to one principal (the same key listed twice, or two digests sharing their first 48 bits) are refused at load, reload and startup | Remove the duplicate entry, or replace one of the two credentials |
 | 154 | A same-key retry after a lost round (a broken stream, a timeout, a reload stopping the backend mid-call, an HTTP 5xx, or a 400, 404, 407, 408, 429 or session-expiry answer) is served the uncertain-outcome notice instead of the original error; `BackendUnavailable` frees the key | A client that read a served error as "the work failed" treats the notice as "may have run" and checks before re-issuing under a new key |
 | 155 | A caller signed in through the key server (an `/auth/token` token or a delegated OIDC bearer) has a principal of the form `kst:<sha256 hex>` or `oidc:<sha256 hex>`, no longer 12 hex characters | Update any log or audit query that matched these callers' 12-hex principal |
-| 156 | `webhooks.base_path` may not overlap a gateway route | Move the receiver to a path outside `/mcp`, `/ui`, `/dashboard`, `/accounts/v1`, `/auth`, `/.well-known` and the probe paths |
+| 156 | A REST capability body field that is a pure placeholder (`"{cursor}"`) now sends an explicit `null` the property's schema admits (`type: [string, "null"]`); 3.x left the field out. A null the schema does not admit is still left out, and query and path parameters are unchanged | To keep the field out, leave the argument out instead of sending `null`; a static param or URL default for the same name still fills it, as before |
+| 157 | `webhooks.base_path` may not overlap a gateway route | Move the receiver to a path outside `/mcp`, `/ui`, `/dashboard`, `/accounts/v1`, `/auth`, `/.well-known` and the probe paths |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4115,7 +4116,21 @@ principal itself is recorded, such as audit attribution. These callers now get
 can equal. Configured principals are unchanged. Update any log or audit query that matched
 these callers' old 12-hex principal.
 
-## 156. `webhooks.base_path` may not overlap a gateway route
+## 156. An admitted explicit null reaches a REST capability's JSON body
+
+**Startup:** no notice
+
+When a body template field is a pure placeholder (`body: {cursor: "{cursor}"}`) and the caller
+sends `"cursor": null` for a property whose `type` admits null (`[string, "null"]`), the
+backend now receives `{"cursor": null}`. 3.x left the field out. The null wins over a schema
+`default` that fills the same parameter in the URL. A null the schema does not admit, a
+placeholder nothing fills and the template's own literal `null` are still left out. Query and
+path parameters are unchanged, because they cannot carry a JSON null.
+
+To keep the field out, leave the argument out instead of sending `null`. A static param or a URL
+default for the same name still fills it, as before.
+
+## 157. `webhooks.base_path` may not overlap a gateway route
 
 **Startup:** no notice, the start is refused with its own error, which names the setting and the path, and for an overlap also the route; refuses to start
 
