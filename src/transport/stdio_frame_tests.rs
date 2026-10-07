@@ -327,9 +327,21 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
         let transport = std::sync::Arc::clone(&transport);
         tokio::spawn(async move { transport.request("tools/call", Some(big)).await })
     };
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Wait until the escaped reader is running and has recorded its pid.
+    let mut escaped = String::new();
+    for _ in 0..100 {
+        escaped = std::fs::read_to_string(&pidfile).unwrap_or_default();
+        if !escaped.trim().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        !escaped.trim().is_empty(),
+        "precondition: the escaped reader started"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let closed = tokio::time::timeout(std::time::Duration::from_secs(10), transport.close()).await;
-    let escaped = std::fs::read_to_string(&pidfile).unwrap_or_default();
     let _ = std::process::Command::new("kill")
         .args(["-9", escaped.trim()])
         .status();
