@@ -79,6 +79,8 @@ async fn a_bridged_prompt_commits_only_when_the_stream_writes_it() {
 
 /// MIK-7939: a second copy written while the first is still recording the
 /// receipt waits for it, so no stream shows the prompt before it is recorded.
+/// The record holds until the second copy has stopped at the lock
+/// (`D6.RELAY.14`), so a slow runner cannot let it finish first and pass.
 #[test]
 fn a_second_written_copy_waits_for_the_receipt() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -87,16 +89,24 @@ fn a_second_written_copy_waits_for_the_receipt() {
         Arc::new(AtomicBool::new(false)),
     );
     let (on_start, on_done) = (Arc::clone(&started), Arc::clone(&done));
-    let watch = Arc::new(DeliveryWatch {
-        commit: parking_lot::Mutex::new(Some(crate::gateway::input_bridge::DeliveryCommit::new(
-            move || {
-                on_start.store(true, Ordering::SeqCst);
-                std::thread::sleep(Duration::from_millis(200));
-                on_done.store(true, Ordering::SeqCst);
-            },
-        ))),
-        ..DeliveryWatch::default()
-    });
+    let watch = Arc::new(DeliveryWatch::default());
+    let (reached, release) = watch.contended.arm();
+    *watch.commit.lock() = Some(crate::gateway::input_bridge::DeliveryCommit::new(
+        move || {
+            on_start.store(true, Ordering::SeqCst);
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut second = std::pin::pin!(reached.notified());
+            while futures::FutureExt::now_or_never(second.as_mut()).is_none() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the second copy never waited on the receipt"
+                );
+                std::thread::yield_now();
+            }
+            release.notify_one();
+            on_done.store(true, Ordering::SeqCst);
+        },
+    ));
     watch.sent(2);
     let first = std::thread::spawn({
         let watch = Arc::clone(&watch);

@@ -72,6 +72,10 @@ pub(crate) struct DeliveryWatch {
     /// A bridged prompt's relay receipt (MIK-7939): committed by the first
     /// copy written, never for a copy withheld, skipped or dropped.
     commit: parking_lot::Mutex<Option<crate::gateway::input_bridge::DeliveryCommit>>,
+    /// Test-only: a copy that finds the receipt still being recorded stops
+    /// here before it waits on the lock (MIK-7939).
+    #[cfg(test)]
+    contended: crate::test_pause::Slot,
 }
 
 impl DeliveryWatch {
@@ -93,6 +97,10 @@ impl DeliveryWatch {
             // Held while the work runs: another copy's stream waits here and
             // cannot write the prompt before its receipt is recorded. The
             // work is an in-memory record that never touches this watch.
+            #[cfg(test)]
+            if self.commit.is_locked() {
+                futures::executor::block_on(self.contended.pause());
+            }
             let mut slot = self.commit.lock();
             if let Some(commit) = slot.take() {
                 commit.commit();

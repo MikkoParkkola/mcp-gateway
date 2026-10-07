@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 
 /// One pause point; idle until [`Slot::arm`].
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct Slot(parking_lot::Mutex<Option<(Arc<Notify>, Arc<Notify>)>>);
 
 impl Slot {
