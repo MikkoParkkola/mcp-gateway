@@ -712,6 +712,43 @@ fn an_unsent_claim_keeps_its_number_but_is_not_a_send() {
     );
 }
 
+/// MIK-7944 .2: an `Unsent` settlement the disk refused still counts the
+/// claim as unsent, so a store fault on top of an audit outage burns no send.
+#[test]
+fn an_unsent_settlement_the_disk_refused_is_still_not_a_send() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    assert!(matches!(
+        store.claim("a", now).expect("io"),
+        Claim::Ready(_)
+    ));
+    // The outbox directory is gone, so writing the settlement fails.
+    let outbox = dir.path().join("outbox");
+    std::fs::remove_dir_all(&outbox).expect("rm");
+    let unsent = Settle::Unsent {
+        next: now,
+        status: "audit_unavailable",
+    };
+    assert!(store.settle("a", now, unsent, now, ROOMY).is_err());
+    std::fs::create_dir(&outbox).expect("mkdir");
+    let retry_at = now + super::SETTLE_RETRY;
+    let Claim::Ready(claimed) = store.claim("a", retry_at).expect("io") else {
+        panic!("pending again");
+    };
+    assert_eq!(claimed.record.attempt, 2, "numbers stay unique");
+    assert_eq!(
+        claimed.record.sends(),
+        1,
+        "the refused claim was not a send"
+    );
+}
+
 /// MIK-7944 .2: a record written before `unsent` existed loads with none.
 #[test]
 fn a_record_without_unsent_reads_as_none() {
