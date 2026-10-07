@@ -14,6 +14,7 @@ use mcp_gateway::backend::Backend;
 use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use serde_json::{Value, json};
 
+mod common;
 #[path = "a2a_outbound/stub.rs"]
 mod stub;
 
@@ -335,5 +336,53 @@ async fn a2a_5_a_non_object_data_part_is_not_structured_content() {
         texts(&result),
         ["[1,2,3]"],
         "the data stays as its JSON text: {result}"
+    );
+}
+
+/// A2A.7: a delegation is a tool call to the gateway. Through `/mcp`
+/// `gateway_invoke` it meets the same admission as any backend tool: a modern
+/// side-effecting call without an idempotency key is refused before the agent
+/// is contacted, and the same call with a key reaches the agent once.
+#[tokio::test]
+async fn a2a_7_a_delegation_passes_the_gateway_funnel() {
+    let (base, log) = stub::serve(Agent::answering(stub::completed_task(
+        json!([{"text": "governed"}]),
+    )))
+    .await;
+    let (state, _store) = common::state(common::Fixture::default()).await;
+    assert!(
+        state
+            .backends
+            .register(std::sync::Arc::new(backend(&base, None, &[])))
+    );
+    let invoke = |key: Option<&str>| {
+        let mut frame = common::modern(
+            "tools/call",
+            json!({"name": "gateway_invoke", "arguments": {
+                "server": "agent", "tool": TOOL, "arguments": {"message": "hi"}}}),
+        );
+        if let Some(key) = key {
+            frame["params"]["_meta"][mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META] =
+                json!(key);
+        }
+        frame
+    };
+
+    let (_, refused) = common::post(&state, invoke(None), &[]).await;
+    assert!(
+        stub::sends(&log).is_empty(),
+        "an unkeyed side-effecting call never reaches the agent: {refused}"
+    );
+
+    let (status, answered) = common::post(&state, invoke(Some("a2a-7-key")), &[]).await;
+    assert!(status.is_success(), "{status}: {answered}");
+    assert!(
+        answered.to_string().contains("governed"),
+        "the agent's answer comes back through the funnel: {answered}"
+    );
+    assert_eq!(
+        stub::sends(&log).len(),
+        1,
+        "exactly one delegation reached the agent"
     );
 }
