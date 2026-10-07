@@ -246,7 +246,7 @@ async fn d4_operator_notification_lands_on_the_operator_slot() {
     let binding = DirectAccountGateway::operator_binding();
     backend.set_pooled_transport_for_test(&PoolKey::PerUser { binding }, slot("operator"));
 
-    let note = json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+    let note = json!({"jsonrpc": "2.0", "method": "notifications/roots/list_changed",
                       "params": {"requestId": 7}});
     let (status, body) = post(&fx, &note, Some(OPERATOR_KEY)).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
