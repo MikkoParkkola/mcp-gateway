@@ -507,6 +507,8 @@ impl EventsHub {
                 .await;
             match outcome? {
                 Ok((admission, expires_at)) => {
+                    #[cfg(test)]
+                    self.after_commit.pause().await;
                     self.subscribed(caller, admission, &id, &descriptor.name, &url)
                         .await;
                     // A refresh may have reactivated a suspended row.

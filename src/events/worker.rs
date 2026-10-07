@@ -465,6 +465,8 @@ impl EventsHub {
             .blocking(move |store| store.settle(&id, created_at, outcome, Utc::now(), policy))
             .await;
         let (evicted, buried) = settled.map_or((Vec::new(), false), |s| (s.evicted, s.buried));
+        #[cfg(test)]
+        self.before_receipts.pause().await;
         services.audit_evictions(evicted).await;
         // The burial's own receipt: a cancelled occurrence settles nothing, and
         // one the caps evicted at once still happened.
