@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Probe (throwaway, never merged): runs the MIK-8007 session-end row 50
-//! times with every `tools/list` the gateway sends logged with its caller.
+//! Probe (throwaway, never merged): runs the MIK-8007 session-end row 120
+//! times (4 lanes of 30) with every `tools/list` the gateway sends logged with its caller.
 //! It prints the log of the first round that sees a list after the notice
 //! was served, plus one clean round to compare against, then fails if any
 //! round saw one.
@@ -9,7 +9,7 @@
 use super::*;
 
 const TOOLS_CHANGED: &str = "notifications/tools/list_changed";
-const ROUNDS: usize = 50;
+const ROUNDS_PER_LANE: usize = 30;
 
 fn lists(peer: &HttpPeer) -> usize {
     peer.frames("tools/list")
@@ -75,12 +75,22 @@ async fn round() -> (usize, usize, Vec<String>, String) {
     (served, lists(&peer), ids, gw.all_logs())
 }
 
-#[tokio::test]
+/// One lane of rounds, run beside the others to fit the job's time limit.
+async fn lane(lane: usize) -> Vec<(String, usize, usize, Vec<String>, String)> {
+    let mut out = Vec::new();
+    for n in 0..ROUNDS_PER_LANE {
+        let (served, after, ids, logs) = round().await;
+        out.push((format!("{lane}.{n}"), served, after, ids, logs));
+    }
+    out
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn probe_who_sends_the_extra_tools_list() {
+    let (a, b, c, d) = tokio::join!(lane(0), lane(1), lane(2), lane(3));
     let mut clean_shown = false;
     let mut extra = 0usize;
-    for n in 0..ROUNDS {
-        let (served, after, ids, logs) = round().await;
+    for (n, served, after, ids, logs) in a.into_iter().chain(b).chain(c).chain(d) {
         let show = after != served || !clean_shown;
         if show {
             println!(
@@ -93,7 +103,7 @@ async fn probe_who_sends_the_extra_tools_list() {
             extra += 1;
         }
     }
-    println!("PROBE summary: {extra} of {ROUNDS} rounds saw a list after the served notice");
+    println!("PROBE summary: {extra} of {} rounds saw a list after the served notice", 4 * ROUNDS_PER_LANE);
     assert_eq!(
         extra, 0,
         "rounds with an extra tools/list (see the PROBE output)"

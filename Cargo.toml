@@ -302,7 +302,7 @@ harness = false
 
 [profile.dev]
 debug = 0               # No debug symbols — biggest size saver (~50%)
-strip = true            # Strip remaining metadata
+strip = false           # Probe only: keep symbol names for backtraces
 
 [profile.release]
 lto = "thin"
