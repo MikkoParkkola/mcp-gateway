@@ -25,7 +25,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
 
-pub(super) const NOTE: &str = "notifications/cancelled";
+pub(super) const NOTE: &str = "notifications/roots/list_changed";
 pub(super) const PASSTHROUGH: &str = "x-mcp-passthrough-authorization";
 
 /// Mints `Bearer minted-for-<subject>` bound to `<subject>@<audience>`, and
@@ -248,7 +248,7 @@ async fn gateway(config: BackendConfig, route_log: bool) -> Gateway {
     }
 }
 
-/// POST `notifications/cancelled` as `subject` (verified identity) or
+/// POST the sample notification (`NOTE`) as `subject` (verified identity) or
 /// anonymously, with an optional passthrough credential.
 async fn notify(gw: &Gateway, subject: Option<&str>, passthrough: Option<&str>) -> StatusCode {
     let mut builder = axum::http::Request::builder()
@@ -260,7 +260,7 @@ async fn notify(gw: &Gateway, subject: Option<&str>, passthrough: Option<&str>) 
     }
     let mut request = builder
         .body(axum::body::Body::from(
-            json!({ "jsonrpc": "2.0", "method": NOTE, "params": { "requestId": 7 } }).to_string(),
+            json!({ "jsonrpc": "2.0", "method": NOTE, "params": {} }).to_string(),
         ))
         .unwrap();
     if let Some(subject) = subject {

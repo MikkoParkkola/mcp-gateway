@@ -112,6 +112,11 @@ pub enum CapCommand {
         /// Defaults to `gateway.yaml` in the current directory.
         #[arg(long)]
         gateway_config: Option<PathBuf>,
+
+        /// Rewrite the whole file when the change cannot keep its comments
+        /// (the comments are lost); without it such a write is refused
+        #[arg(long)]
+        force: bool,
     },
 
     /// Download a capability from a GitHub repository into the local directory

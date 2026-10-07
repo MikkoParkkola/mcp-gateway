@@ -132,6 +132,12 @@ jobs:
         run: bash scripts/release/check-cited-commits.sh HEAD
       - name: Test supplemental acceptance checks
         run: python3 scripts/release/test_scope_acceptance.py
+      - name: Test the Known issues gate
+        run: python3 scripts/release/test_check_known_issues.py
+      - name: Known issues is empty at a final tag
+        # A known issue left at a final tag ships in the release; a prerelease
+        # tag may carry known gaps, and the script reads the tag itself.
+        run: python3 scripts/release/check_known_issues.py --release
       - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
         run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
       - name: Test the tag/manifest publish gate
@@ -287,6 +293,7 @@ jobs:
           if grep -qa MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug scan hold"; exit 1; fi
           if grep -qa MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug era probe cap"; exit 1; fi
           if grep -qa MCP_GATEWAY_TEST_HOME_DIR ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug home override"; exit 1; fi
+          if grep -qa MCP_GATEWAY_TEST_EVENTS_WITHDRAW_GRACE_MS ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug withdraw grace override"; exit 1; fi
           if [ "${{ matrix.suffix }}" = "" ]; then
             chmod +x ${{ matrix.artifact }}
           fi

@@ -12,13 +12,23 @@ pub(super) async fn meta_fixture(
     setup: Setup,
     cache: Option<Arc<crate::cache::ResponseCache>>,
 ) -> Fixture {
+    meta_fixture_with(setup, cache, |meta| meta).await
+}
+
+/// [`meta_fixture`] with `configure` applied to the Meta-MCP before it is
+/// installed.
+async fn meta_fixture_with(
+    setup: Setup,
+    cache: Option<Arc<crate::cache::ResponseCache>>,
+    configure: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fixture {
     let mut fx = fixture(setup).await;
     let st = Arc::get_mut(&mut fx.state).expect("state is unique");
     let ttl = Duration::from_secs(600);
     let mut meta = MetaMcp::with_features(Arc::clone(&st.backends), cache, None, None, ttl);
     meta.set_firewall(st.firewall.clone());
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
-    st.meta_mcp = Arc::new(meta);
+    st.meta_mcp = Arc::new(configure(meta));
     fx
 }
 
@@ -526,3 +536,6 @@ async fn meta_grant_decision_failure_leaves_no_receipt() {
     );
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
 }
+
+#[path = "meta/writes.rs"]
+mod writes;
