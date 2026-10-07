@@ -74,7 +74,7 @@ async fn an_unparseable_record_is_skipped_and_the_rest_load() {
 /// task inside it does not restore, so its idempotency key stays taken.
 #[tokio::test]
 async fn an_unrestorable_record_keeps_its_binding() {
-    for case in ["snapshot", "model", "version_zero"] {
+    for case in ["snapshot", "model", "version_zero", "truncated"] {
         let dir = tempfile::tempdir().unwrap();
         let (path, record, kept) = two_tasks(dir.path()).await;
         let identity: String = {
@@ -84,11 +84,19 @@ async fn an_unrestorable_record_keeps_its_binding() {
                 .unwrap()
                 .to_owned()
         };
-        rewrite(&record, |v| match case {
-            "snapshot" => v["model"]["task"]["lastUpdatedAt"] = json!("2026-09-06T00:00:00Z"),
-            "model" => v["model"] = json!("not a task"),
-            _ => v["version"] = json!(0),
-        });
+        if case == "truncated" {
+            // A write cut off inside `model`, which the record serializes
+            // after `admission`: the key read before the damage is kept.
+            let bytes = fs::read(&record).unwrap();
+            let cut = String::from_utf8_lossy(&bytes).find("\"model\"").unwrap() + 12;
+            fs::write(&record, &bytes[..cut]).unwrap();
+        } else {
+            rewrite(&record, |v| match case {
+                "snapshot" => v["model"]["task"]["lastUpdatedAt"] = json!("2026-09-06T00:00:00Z"),
+                "model" => v["model"] = json!("not a task"),
+                _ => v["version"] = json!(0),
+            });
+        }
         let store = assert_skipped(&path, &kept, case).await;
         let bindings = store.restored_bindings();
         assert_eq!(bindings.len(), 2, "{case}: both bindings, one reserved");
