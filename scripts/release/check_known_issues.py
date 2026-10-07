@@ -53,21 +53,10 @@ NOT_A_PARAGRAPH = re.compile(
 # the same character at least as long as the one that opened it. A backtick
 # run followed by another backtick is an inline span, not a fence.
 FENCE = re.compile(r"^ {0,3}(`{3,}(?=[^`]*$)|~{3,})")
-# HTML blocks that run across blank lines (CommonMark types 1-5): their lines
-# are text too, up to the line that holds the closer.
-HTML_BLOCKS = tuple(
-    (re.compile(opener, re.IGNORECASE), re.compile(closer, re.IGNORECASE))
-    for opener, closer in (
-        (r"^ {0,3}<(?:pre|script|style|textarea)(?:[ \t>]|$)", r"</(?:pre|script|style|textarea)>"),
-        (r"^ {0,3}<!--", r"-->"),
-        (r"^ {0,3}<\?", r"\?>"),
-        (r"^ {0,3}<![a-z]", r">"),
-        (r"^ {0,3}<!\[CDATA\[", r"\]\]>"),
-        # Any other tag opens a block that runs to the next blank line.
-        (r"^ {0,3}</?[a-z]", r"\A\s*\Z"),
-    )
-)
-BLANK_ENDS = HTML_BLOCKS[-1][1]
+# Raw HTML (a tag, comment or declaration at the start of a line). Its block
+# rules nest without end, so a section that holds any never ends: the gate
+# reads it to the end of the notes.
+HTML = re.compile(r"^ {0,3}<[a-z/!?]", re.IGNORECASE)
 # A link reference definition is not paragraph text, so it is never a heading;
 # any line that opens with a bracket is read as one.
 REFERENCE = re.compile(r"^ {0,3}\[")
@@ -76,7 +65,7 @@ REFERENCE = re.compile(r"^ {0,3}\[")
 def starts_section(lines, i):
     """True when line i opens a Known issues section.
 
-    Liberal on purpose, and checked before fences and HTML blocks: a doubtful
+    Liberal on purpose, and checked before fences and raw HTML: a doubtful
     start only makes the gate read more. A setext start is a title of one or
     two lines over a dash underline, so a wrapped title still counts.
     """
@@ -95,10 +84,10 @@ def ends_section(lines, i):
     Stop rule: this is a line reader, not a Markdown parser, so it does not try
     to decide every form. A section ends only on a plain form: an ATX # or ##
     at column 0, or one line of paragraph text at column 0 after a blank line,
-    neither inside a fence or HTML block, and the text not opening with a
-    bracket. Every other form stays section text, so the gate can only read
-    too much, never too little. Starts stay liberal: starts_section decides
-    them.
+    never inside a fence and never after raw HTML in the section, and the text
+    not opening with a bracket. Every other form stays section text, so the
+    gate can only read too much, never too little. Starts stay liberal:
+    starts_section decides them.
     """
     line = lines[i]
     return (
@@ -131,7 +120,7 @@ def step_fence(fence, line):
 def known_issues(text):
     """Every Known issues section's lines, each up to the next level 1-2 heading."""
     lines = text.splitlines()
-    body, inside, underline, fence, block = [], False, False, "", None
+    body, inside, underline, fence, sticky = [], False, False, "", False
     for i, line in enumerate(lines):
         if starts_section(lines, i):
             inside, underline = True, not HEADING.match(line)
@@ -139,30 +128,17 @@ def known_issues(text):
         if underline:
             underline = False
             continue
-        start = 0
-        if not block and not fence:
-            for opener, closer in HTML_BLOCKS:
-                found = opener.match(line)
-                if found:
-                    block, start = closer, found.end()
-                    break
-        if block:
-            if block is BLANK_ENDS and (fence or FENCE.match(line)):
-                # A fence inside a blank-ended block holds the block open
-                # until it closes, so no line in either can end the section.
-                fence = step_fence(fence, line)
-            elif block.search(line, start):
-                block = None
-            if inside:
-                body.append(line)
-            continue
+        if inside and not fence and HTML.match(line):
+            sticky = True
         if fence or FENCE.match(line):
             fence = step_fence(fence, line)
             if inside:
                 body.append(line)
             continue
         level = setext_level(line, lines[i + 1] if i + 1 < len(lines) else "")
-        if SECTION_END.match(line) or (level and ends_section(lines, i)):
+        if sticky:
+            body.append(line)
+        elif SECTION_END.match(line) or (level and ends_section(lines, i)):
             inside, underline = False, bool(level)
         elif inside:
             body.append(line)
