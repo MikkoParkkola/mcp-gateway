@@ -272,6 +272,7 @@ pub(super) fn owns(layer: Layer, path: &[&str], value: &Value) -> bool {
         .try_with(|writes| {
             writes
                 .borrow()
+                .list
                 .iter()
                 .any(|w| w.layer == layer && w.path == path && w.digest == digest)
         })
