@@ -117,6 +117,17 @@ def setext_level(line, underline):
     return 1 if match.group(1)[0] == "=" else 2
 
 
+def step_fence(fence, line):
+    """The open fence run after `line`: opened, kept, or closed ("")."""
+    opener = FENCE.match(line)
+    run = opener.group(1) if opener else ""
+    if not fence:
+        return run
+    if run[:1] == fence[0] and len(run) >= len(fence) and line.strip() == run:
+        return ""
+    return fence
+
+
 def known_issues(text):
     """Every Known issues section's lines, each up to the next level 1-2 heading."""
     lines = text.splitlines()
@@ -135,23 +146,18 @@ def known_issues(text):
                 if found:
                     block, start = closer, found.end()
                     break
-        if block is BLANK_ENDS and FENCE.match(line):
-            # A fence line inside a blank-ended block opens a fence anyway,
-            # so its content can never end the section.
-            block = None
         if block:
-            if block.search(line, start):
+            if block is BLANK_ENDS and (fence or FENCE.match(line)):
+                # A fence inside a blank-ended block holds the block open
+                # until it closes, so no line in either can end the section.
+                fence = step_fence(fence, line)
+            elif block.search(line, start):
                 block = None
             if inside:
                 body.append(line)
             continue
-        opener = FENCE.match(line)
-        if fence or opener:
-            run = opener.group(1) if opener else ""
-            if not fence:
-                fence = run
-            elif run[:1] == fence[0] and len(run) >= len(fence) and line.strip() == run:
-                fence = ""
+        if fence or FENCE.match(line):
+            fence = step_fence(fence, line)
             if inside:
                 body.append(line)
             continue
