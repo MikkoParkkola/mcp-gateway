@@ -98,8 +98,12 @@ impl CapabilityBackend {
             .load(std::sync::atomic::Ordering::Acquire)
     }
 
-    /// Called under the capabilities write lock, with the write.
-    pub(super) fn bump_catalogue_generation(&self) {
+    /// With the write, under its lock: `_held` is that lock's guard, so the
+    /// bump cannot be made outside it.
+    pub(super) fn bump_catalogue_generation(
+        &self,
+        _held: &parking_lot::RwLockWriteGuard<'_, super::IndexedCapabilities>,
+    ) {
         self.catalogue_generation
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }

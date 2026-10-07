@@ -777,3 +777,20 @@ async fn a_denial_across_a_reload_revokes_nothing() {
     poller.once(&hub, &mut last).await;
     assert!(hub.store.subscriptions().is_empty(), "revoked when unmoved");
 }
+
+/// MIK-8037: a confirmed absence withdraws only when no catalogue write
+/// landed since the read it was confirmed in.
+#[tokio::test]
+async fn an_absence_across_a_reload_withdraws_nothing() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    let name = "watch.weather.changed";
+    admit(&hub, "p", name, &json!({}));
+    let poller = run(&hub, &host, "p", name, &json!({}));
+    host.targets.lock().clear();
+    host.moves.store(true, Ordering::Release);
+    let mut last = None;
+    assert!(matches!(poller.once(&hub, &mut last).await, Step::Polled));
+    assert_eq!(hub.store.subscriptions().len(), 1, "kept across the write");
+}

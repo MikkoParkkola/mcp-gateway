@@ -613,7 +613,11 @@ impl Run {
             let again = self.host.catalogue();
             if let Some(target) = again.targets.iter().find(|&t| watchable(t)).cloned() {
                 (target, again.generation)
-            } else if unread(&again, &self.name) {
+            } else if unread(&again, &self.name)
+                // A write since the read (a registration restoring it) may
+                // have undone the absence: decide on the next poll.
+                || self.host.catalogue_generation() != again.generation
+            {
                 return Step::Polled;
             } else {
                 let (gone, owner) = (vec![self.name.clone()], Arc::clone(hub));
