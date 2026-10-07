@@ -18,6 +18,7 @@ use super::authorization::{ToolTarget, authorize_tool_target};
 use super::direct_guards::refusal;
 use super::helpers::{bodiless_accepted, build_http_error_response};
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -518,13 +519,19 @@ fn sign_and_record(
     auth: BackendAuthContext<'_>,
     (server, tool): (&str, &str),
     response: &mut JsonRpcResponse,
-    nonce: Option<&Option<String>>,
+    (nonce, stamps): (Option<&Option<String>>, GatewayStamps),
 ) {
     if let Some(nonce) = nonce.map(Option::as_deref) {
         state.meta_mcp.sign_direct_delivery(response, nonce);
     }
     #[cfg(feature = "firewall")]
-    stage_direct_delivery(state, auth, server, tool, response.result.as_ref());
+    stage_direct_delivery(
+        state,
+        auth,
+        (server, tool),
+        response.result.as_ref(),
+        stamps,
+    );
 }
 
 /// #1962: run a backend dispatch with the reservation armed, so a caller
