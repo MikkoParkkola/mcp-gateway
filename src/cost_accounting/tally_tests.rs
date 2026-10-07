@@ -136,3 +136,21 @@ fn a_name_pair_past_the_byte_limit_counts_in_other() {
     assert_eq!(row(OTHER), Some(7));
     assert_eq!(totals, [2, 10, 16]);
 }
+
+#[test]
+fn a_tally_logs_its_first_overflow_once() {
+    const LINE: &str = "reached its row limit";
+    let records = crate::test_log_capture::records(|| {
+        let mut tally = ToolTally::default();
+        for i in 0..MAX_TOOL_ROWS {
+            tally.add("srv", &format!("t{i}"), 1, 0);
+        }
+        // Calls on known rows after the cap, then many overflowed calls
+        tally.add("srv", "t0", 1, 0);
+        for i in 0..50 {
+            tally.add("srv", &format!("extra{i}"), 1, 0);
+            tally.add("srv", "t1", 1, 0);
+        }
+    });
+    assert_eq!(crate::test_log_capture::count(&records, "WARN", LINE), 1);
+}

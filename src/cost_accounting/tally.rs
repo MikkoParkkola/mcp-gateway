@@ -40,18 +40,28 @@ pub(crate) struct ToolTally {
 impl ToolTally {
     /// Add one call on `backend`/`tool`.
     pub(crate) fn add(&mut self, backend: &str, tool: &str, tokens: u64, micro: u64) {
+        let counts = [1, tokens, micro];
         // An over-long pair never has a row, so it needs no lookup or copy.
-        let row = if backend.len() + tool.len() > MAX_ROW_NAME_BYTES {
-            &mut self.overflow
-        } else {
+        if backend.len() + tool.len() <= MAX_ROW_NAME_BYTES {
             let key = (backend.to_string(), tool.to_string());
             if self.rows.contains_key(&key) || self.rows.len() < MAX_TOOL_ROWS {
-                self.rows.entry(key).or_default()
-            } else {
-                &mut self.overflow
+                let row = self.rows.entry(key).or_default();
+                for (total, add) in row.iter_mut().zip(counts) {
+                    *total += add;
+                }
+                return;
             }
-        };
-        for (total, add) in row.iter_mut().zip([1, tokens, micro]) {
+        }
+        // Once per tally, on its first overflowed call. No name is logged:
+        // with R2 off the caller chooses the tool name.
+        if self.overflow[0] == 0 {
+            tracing::warn!(
+                max_rows = MAX_TOOL_ROWS,
+                max_name_bytes = MAX_ROW_NAME_BYTES,
+                "A cost breakdown reached its row limit; further tools in it are counted under (other)"
+            );
+        }
+        for (total, add) in self.overflow.iter_mut().zip(counts) {
             *total += add;
         }
     }

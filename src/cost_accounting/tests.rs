@@ -292,18 +292,24 @@ fn session_less_spend_still_counts_in_the_aggregate() {
 fn many_calls_on_one_key_hold_a_bounded_number_of_entries() {
     // GIVEN: the shared unauthenticated name answering 1000 calls on one tool
     let tracker = CostTracker::new();
-    for _ in 0..1_000 {
-        tracker.record("", Some("anonymous"), "srv", "t", 1, 15.0);
-    }
+    let calls = |n: u64| {
+        for _ in 0..n {
+            tracker.record("", Some("anonymous"), "srv", "t", 1, 15.0);
+        }
+    };
+    calls(1_000);
+    let after_1k = tracker.key_retained("anonymous");
     // THEN: the key holds one hour bucket and one tool row, not one per call
     assert!(
-        tracker.key_retained("anonymous") <= 2,
-        "the key holds {} entries after 1000 calls",
-        tracker.key_retained("anonymous")
+        after_1k <= 2,
+        "the key holds {after_1k} entries after 1000 calls"
     );
+    // AND: ten times the calls hold no more (the bucket wrap is a tally test)
+    calls(9_000);
+    assert_eq!(tracker.key_retained("anonymous"), after_1k);
     assert_eq!(
         tracker.key_snapshot("anonymous").unwrap().window_24h.tokens,
-        1_000
+        10_000
     );
 }
 
