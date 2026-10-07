@@ -79,7 +79,7 @@ pub(super) fn chain_dirs(named: &Path) -> std::io::Result<(BTreeSet<PathBuf>, Pa
 /// mid-update (the old directory being deleted) a hop can briefly fail.
 pub(super) fn resolve_chain(named: &Path) -> std::io::Result<Chain> {
     let mut dirs = BTreeSet::new();
-    let mut names = BTreeSet::new();
+    let mut entries = BTreeSet::new();
     let mut hop = std::path::absolute(named)?;
     let mut steps = 0;
     let mut expand = || {
@@ -106,7 +106,7 @@ pub(super) fn resolve_chain(named: &Path) -> std::io::Result<Chain> {
             let target = std::fs::read_link(&dir)?;
             // A link is never named `..`, so it always has a file name.
             if let Some(link) = dir.file_name() {
-                names.insert(holder_real.join(link));
+                entries.insert(holder_real.join(link));
             }
             dirs.insert(holder_real);
             dir = if target.is_absolute() {
@@ -118,7 +118,7 @@ pub(super) fn resolve_chain(named: &Path) -> std::io::Result<Chain> {
         let real_dir = std::fs::canonicalize(&dir)?;
         let file = real_dir.join(&name);
         dirs.insert(real_dir);
-        names.insert(file.clone());
+        entries.insert(file.clone());
         // Ask for the file type first: `read_link` on a plain file is
         // `InvalidInput` on unix but os error 4390 (not a reparse point) on
         // Windows, so its error kind cannot tell "not a link" from a fault.
@@ -142,7 +142,7 @@ pub(super) fn resolve_chain(named: &Path) -> std::io::Result<Chain> {
                 return Ok(Chain {
                     dirs,
                     end: file,
-                    names,
+                    names: entries,
                 });
             }
             Err(e) => {
@@ -396,13 +396,13 @@ pub(super) fn spawn_rewatch_task(
                 Ok(Chain {
                     dirs,
                     end,
-                    mut names,
+                    names: mut filter,
                 }) => {
                     // Before the watches change: a new directory's events
                     // cannot arrive before its watch, so they meet these names.
                     // A watched directory itself (deleted, moved) wakes too.
-                    names.extend(dirs.iter().cloned());
-                    chain.names.set(Some(names));
+                    filter.extend(dirs.iter().cloned());
+                    chain.names.set(Some(filter));
                     (dirs, end)
                 }
                 Err(e) => {
