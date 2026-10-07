@@ -475,14 +475,18 @@ pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[Strin
 /// never the structure, so the document still parses and a redacted string
 /// stays a string. No truncation. Injected literals only, as
 /// [`redact_untruncated`]: the credential scanner is the response firewall's.
+///
+/// `secrets` are injected credentials only, never caller values: numbers are
+/// matched by value at any length here, which the caller-value floor
+/// ([`MIN_REDACTED_CALLER_VALUE`]) would forbid (MIK-8065).
 pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
     let needles = needles(secrets, &[]);
     if !needles.is_empty() {
         // A secret that reads as a JSON number or as `true`, `false` or
         // `null`: a result scalar equal to it by exact JSON equality is
-        // redacted whatever the secret's length (below the 4-byte floor
-        // nothing else is looked for in a number, and a literal is never
-        // compared otherwise). "007" and "TRUE" are not JSON: no match.
+        // redacted whatever the secret's length, before any by-value
+        // comparison. "007" and "TRUE" are not JSON: no match here, and
+        // "007" is then compared by value below.
         let literals: Vec<Value> = needles
             .iter()
             .filter_map(|n| serde_json::from_str::<Value>(n).ok())
@@ -538,16 +542,15 @@ fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
     match value {
         Value::String(s) => *s = scrub(s, needles),
         // A credential that is all digits can come back as a JSON number. It
-        // matches a number of the same value only, never one whose digits
-        // merely hold it: 912345 is not the secret 1234 (MIK-7954). Below the
-        // floor (the same as caller values) only the exact-equality check above
-        // applies. An all-digit needle is compared by value: printed as a
-        // number, it loses its leading zeros ("012345" comes back as 12345),
-        // and past u64 it parses as a float and prints in exponent form. The
-        // floor is on the needle as injected, so "0007" redacts the number 7
-        // but never the 7 inside 1771. The sign is ignored on both paths: a
-        // needle has none, so -12345, -12345.0 and -0.0 are the same value as
-        // one.
+        // matches a number of the same value only, never one whose digits merely
+        // hold it: 912345 is not the secret 1234 (MIK-7954). Every injected needle
+        // is compared, whatever its length: a short one left out leaked as a
+        // number (MIK-8065). An all-digit needle is compared by value: printed as
+        // a number, it loses its leading zeros ("012345" comes back as 12345), and
+        // past u64 it parses as a float and prints in exponent form. So "007"
+        // redacts the number 7 but never the 7 inside 1771. The sign is ignored on
+        // both paths: a needle has none, so -12345, -12345.0 and -0.0 are the same
+        // value as one.
         Value::Number(n) => {
             let digits = n.to_string();
             let float = n.as_f64().filter(|_| n.is_f64()).map(f64::abs);
@@ -569,7 +572,15 @@ fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
                 // the JSON parser does ("12345.0\n" is 12345).
                 let needle = needle.trim_ascii();
                 let needle = needle.strip_prefix(['+', '-']).unwrap_or(needle);
-                if needle.is_empty() || !needle.bytes().all(|b| b.is_ascii_digit()) {
+                // A needle with no digit before its exponent ("e123", "+",
+                // whitespace) names no number: read as one it became 0 and
+                // blanked every zero in the result (MIK-8065). So every needle
+                // past this point is non-empty.
+                let coefficient = needle.split(['e', 'E']).next().unwrap_or_default();
+                if !coefficient.bytes().any(|b| b.is_ascii_digit()) {
+                    return false;
+                }
+                if !needle.bytes().all(|b| b.is_ascii_digit()) {
                     // A credential injected in another number form ("12.5",
                     // "1.5e10") comes back printed differently, so it is
                     // compared by value: exactly, from its text, when the
@@ -608,10 +619,7 @@ fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
                 }
                 digits.trim_start_matches('-') == value
             };
-            if needles
-                .iter()
-                .any(|needle| needle.len() >= MIN_REDACTED_CALLER_VALUE && same_value(needle))
-            {
+            if needles.iter().copied().any(same_value) {
                 *value = Value::String(marker_for(needles).to_owned());
             }
         }
