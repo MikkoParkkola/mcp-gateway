@@ -468,14 +468,19 @@ fn the_drain_deadline_budgets_slack_per_wave() {
     let one = drain_deadline(ADMISSION_CAP);
     assert_eq!(drain_deadline(1), one, "a partial wave is a wave");
     assert_eq!(
+        drain_deadline(ADMISSION_CAP + 1) - one,
+        PER_PROMPT + WAVE_SLACK,
+        "one call past a wave opens the next, with its own slack"
+    );
+    assert_eq!(
         drain_deadline(2 * ADMISSION_CAP) - one,
         PER_PROMPT + WAVE_SLACK,
         "each further wave brings its own slack"
     );
     assert_eq!(
         drain_deadline(INFLIGHT_CAP),
-        (PER_PROMPT + WAVE_SLACK) * 16 + Duration::from_secs(30),
-        "the full burst: 16 waves"
+        Duration::from_secs(590),
+        "the full burst: 16 waves of 30 s + 5 s, plus 30 s"
     );
 }
 
