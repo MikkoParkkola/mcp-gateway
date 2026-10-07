@@ -374,8 +374,8 @@ impl MetaMcp {
         // projected through the same served set `tools/list` answers from.
         let served: HashSet<String> = self
             .meta_tools_for(standing, self.backend_counts())
-            .into_iter()
-            .map(|tool| tool.name)
+            .iter()
+            .map(|tool| tool.name.clone())
             .collect();
         if let Some(response) = try_serve_guide(id.clone(), uri, &served) {
             return response;

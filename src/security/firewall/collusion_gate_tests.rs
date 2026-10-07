@@ -14,6 +14,9 @@ use crate::security::firewall::{
     Severity,
 };
 
+#[path = "collusion_gate_plan_tests.rs"]
+mod plan;
+
 fn finding(scan_type: ScanType, severity: Severity) -> Finding {
     Finding {
         scan_type,
@@ -354,20 +357,20 @@ fn empty_leaves_past_the_cap_add_no_segments() {
 /// text, none across a seam.
 #[test]
 fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
-    use std::collections::HashSet;
-
     use super::super::collusion::{CollusionDetector, RelayParams};
-    use super::Delivered;
+    use super::{Delivered, DeliveryDigest as D};
+    use std::collections::HashSet;
     let detector = CollusionDetector::new(RelayParams::default());
     let fields = |tag: &str| (0..12).map(|i| format!("{tag} f{i}")).collect::<Vec<_>>();
-    let mut moved = false;
-    for round in 0..20 {
+    let (mut moved, mut moved_together) = (false, false);
+    let ofs = [D::of_leaves, D::of_plan_step_leaves];
+    for round in 0..40 {
         let (left, right) = (fields(&format!("l{round}")), fields(&format!("r{round}")));
         let gone = format!("removed paragraph {round} ").repeat(8);
         let mut leaves: Vec<&str> = left.iter().map(String::as_str).collect();
         leaves.push(&gone);
         leaves.extend(right.iter().map(String::as_str));
-        let (digest, _) = DeliveryDigest::of_leaves(&leaves, false);
+        let (digest, _) = ofs[round % 2](&leaves, false);
         let original = digest.fingerprints(&detector);
         let mut shown: Vec<&str> = left.iter().map(String::as_str).collect();
         shown.extend(right.iter().map(String::as_str));
@@ -377,17 +380,38 @@ fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
             .fingerprints(&detector)
             .into_iter()
             .collect();
-        let allowed: HashSet<u64> = [left.join("\n"), right.join("\n")]
+        // Each kept run in both forms, newline-joined and run together.
+        let forms = [
+            left.join("\n"),
+            left.concat(),
+            right.join("\n"),
+            right.concat(),
+        ];
+        let allowed: HashSet<u64> = forms
             .iter()
             .flat_map(|run| detector.kgram_hashes(run))
             .collect();
-        let alone: HashSet<u64> = [left.join("\n"), right.join("\n")]
+        let alone: HashSet<u64> = forms
             .iter()
             .flat_map(|run| detector.fingerprints(run))
+            .collect();
+        // The run-together forms' k-grams that no newline form carries.
+        let newline: HashSet<u64> = forms
+            .iter()
+            .step_by(2)
+            .flat_map(|run| detector.kgram_hashes(run))
+            .collect();
+        let together: HashSet<u64> = forms
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .flat_map(|run| detector.kgram_hashes(run))
+            .filter(|k| !newline.contains(k))
             .collect();
         for fp in &original {
             assert_eq!(kept.contains(fp), allowed.contains(fp), "round {round}");
             moved |= allowed.contains(fp) && !alone.contains(fp);
+            moved_together |= together.contains(fp) && !alone.contains(fp);
         }
         assert!(
             kept.iter().all(|fp| allowed.contains(fp)),
@@ -395,6 +419,88 @@ fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
         );
     }
     assert!(moved, "premise: a split moved some minimum");
+    assert!(
+        moved_together,
+        "premise: a split moved a run-together minimum"
+    );
+}
+
+/// Non-periodic ASCII text cut into 20-character pieces, shorter than a
+/// fingerprint's k-gram, so a word is split at most piece edges.
+fn split_copy(words: usize) -> (String, Vec<String>) {
+    let mut flat = String::new();
+    for i in 0..words {
+        flat.push('w');
+        flat.push_str(&(i * 7_919 % 10_007).to_string());
+        flat.push(' ');
+    }
+    let pieces = flat
+        .as_bytes()
+        .chunks(20)
+        .map(|c| String::from_utf8(c.to_vec()).expect("ascii"))
+        .collect();
+    (flat, pieces)
+}
+
+/// `RELAY-SPLIT-FP.1` (MIK-7773): a copy delivered split mid-word over
+/// short fields records the flat text's fingerprints too, as egress reads
+/// the pieces run together, so its holder forwarding them is excused by its
+/// own receipt.
+#[test]
+fn a_split_delivery_records_the_flat_copys_fingerprints() {
+    use std::collections::HashSet;
+
+    use super::super::collusion::{CollusionDetector, RelayParams};
+    let detector = CollusionDetector::new(RelayParams::default());
+    let (flat, pieces) = split_copy(80);
+    let leaves: Vec<&str> = pieces.iter().map(String::as_str).collect();
+    let (digest, cut) = DeliveryDigest::of_leaves(&leaves, false);
+    assert!(!cut, "premise: under the record cap");
+    let recorded: HashSet<u64> = digest.fingerprints(&detector).into_iter().collect();
+    let newline: HashSet<u64> = detector
+        .fingerprints(&leaves.join("\n"))
+        .into_iter()
+        .collect();
+    let wanted = detector.fingerprints(&flat);
+    assert!(
+        wanted.iter().any(|fp| !newline.contains(fp)),
+        "premise: the newline form alone misses the flat copy"
+    );
+    assert!(wanted.iter().all(|fp| recorded.contains(fp)));
+}
+
+/// `RELAY-SPLIT-FP.1` (MIK-7773), near the cap: a split copy near the
+/// record cap keeps both forms, none of its fingerprints cut by the
+/// per-delivery bound.
+#[test]
+fn a_split_copy_near_the_cap_keeps_both_forms() {
+    use std::time::Instant;
+
+    use super::super::collusion::{CollusionDetector, RelayAction, RelayParams};
+    let detector = CollusionDetector::new(RelayParams {
+        action: RelayAction::Observe,
+        ..RelayParams::default()
+    });
+    let (_, pieces) = split_copy(RECORD_CAP / 4);
+    // As many pieces as fit the cap, each counted with its separator.
+    let mut used = 0;
+    let leaves: Vec<&str> = pieces
+        .iter()
+        .map(String::as_str)
+        .take_while(|p| {
+            used += p.len() + 1;
+            used <= RECORD_CAP + 1
+        })
+        .collect();
+    let total = leaves.iter().map(|l| l.len() + 1).sum::<usize>() - 1;
+    assert!(total > RECORD_CAP - 32, "premise: near the cap");
+    let (digest, cut) = DeliveryDigest::of_leaves(&leaves, false);
+    assert!(!cut, "premise: under the record cap");
+    let fps = digest.fingerprints(&detector);
+    assert!(fps.len() > 1_024, "premise: more than one form's old share");
+    detector.record_fingerprints_at("alpha:t", "b", (false, 0), fps.clone(), Instant::now());
+    assert_eq!(detector.source_truncated(), 0);
+    assert_eq!(detector.tracked_fingerprints(), fps.len());
 }
 
 fn observing(extra: impl FnOnce(&mut CollusionConfig)) -> (Firewall, tempfile::TempDir) {
@@ -691,110 +797,4 @@ fn a_clean_call_and_a_blocked_relay_log_no_observed_warning() {
         "{message}"
     );
     assert!(warnings.is_empty(), "{warnings:?}");
-}
-
-/// MIK-7992: a plan step is staged whole and capped later exactly as a
-/// delivery is capped now: the same head, seam and tail, char boundaries
-/// included, and capped once.
-#[test]
-fn a_plan_step_digest_is_capped_later_as_a_delivery_is_now() {
-    let half = RECORD_CAP / 2;
-    let text = format!(
-        "{}{}{}",
-        "a".repeat(half - 1),
-        "\u{1D11E}".repeat(RECORD_CAP),
-        "z"
-    );
-    let leaves = ["short leaf", text.as_str(), "last leaf"];
-    let (staged, cut) = DeliveryDigest::of_plan_step_leaves(&leaves, false);
-    assert!(!cut && staged.is_deferred(), "staged whole, cap deferred");
-    assert_eq!(staged.segment_texts().len(), 3, "every leaf whole");
-    let (capped, cut) = staged.capped().expect("the cap is deferred");
-    assert!(cut && !capped.is_deferred());
-    let (now, _) = DeliveryDigest::of_leaves(&leaves, false);
-    assert_eq!(capped.segment_texts(), now.segment_texts());
-    assert!(capped.capped().is_none(), "a capped digest is capped once");
-    let empty = vec![""; 1 << 16];
-    let (many, _) = DeliveryDigest::of_plan_step_leaves(&empty, false);
-    assert!(!many.is_deferred(), "each leaf costs a segment: capped now");
-    let over = super::super::collusion_digest::Delivered::of_leaves(empty);
-    assert!(over.is_none(), "each delivered leaf costs a segment too");
-}
-
-/// MIK-7992: a plan step's digest recorded without being kept to its plan's
-/// answer is capped where it is recorded: the cut is counted and the middle
-/// of an over-cap text is not recorded, as for any other delivery.
-#[test]
-fn a_deferred_digest_is_capped_where_it_is_recorded() {
-    let (fw, _dir) = observing(|_| {});
-    let pad = |tag: &str| {
-        (0..700)
-            .map(|i| format!("{tag}{i:05}"))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    let step = json!({"a": pad("head"), "body": PROSE, "z": pad("tail")});
-    let digest = fw
-        .plan_step_digest("alpha", "read", &step)
-        .expect("relay detection is on");
-    assert_eq!(fw.relay_text_cuts(), 0, "premise: staged whole");
-    fw.record_digest(RelayCaller::Keyed("carol"), "alpha", "read", &digest);
-
-    assert_eq!(fw.relay_text_cuts(), 1, "the cap applied at the sink");
-    assert!(
-        egress(&fw, RelayCaller::Keyed("bob")).findings.is_empty(),
-        "the dropped middle was recorded"
-    );
-}
-
-/// MIK-7992: a plan step kept to its answer can retain more fingerprints
-/// than its text would record; the deferred cap bounds them too.
-#[test]
-fn a_capped_plan_step_retains_at_most_the_cap_of_fingerprints() {
-    use super::super::collusion::{CollusionDetector, RelayParams};
-    use super::super::collusion_digest::Delivered;
-    let detector = CollusionDetector::new(RelayParams::default());
-    let text = (0..25_000)
-        .map(|i| format!("w{i:06}"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let answer = format!("{text} as delivered");
-    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&[&text], false);
-    let delivered = Delivered::of_leaves(vec![answer.as_str()]).expect("under the bound");
-    let kept = staged.retaining(&detector, &delivered);
-    assert!(
-        kept.retained_len() > RECORD_CAP,
-        "premise: retention alone passes the cap"
-    );
-    let (capped, cut) = kept.capped().expect("the cap is deferred");
-    assert!(cut, "the truncation counts as a cut");
-    assert_eq!(capped.retained_len(), RECORD_CAP);
-}
-
-/// MIK-7992: repeats of a changed leaf retain the same fingerprints; once
-/// each, so the count cap keeps a later leaf's.
-#[test]
-fn repeated_changed_leaves_do_not_crowd_out_a_later_leafs_fingerprints() {
-    use super::super::collusion::{CollusionDetector, RelayParams};
-    use super::super::collusion_digest::Delivered;
-    let detector = CollusionDetector::new(RelayParams::default());
-    let words = |tag: &str, n: usize| (0..n).map(|i| format!("{tag}{i:05}")).collect::<Vec<_>>();
-    let (copy, last) = (words("rep", 25).join(" "), PROSE.to_owned());
-    let mut leaves = vec![copy.as_str(); 400];
-    leaves.push(last.as_str());
-    let (copy_sent, last_sent) = (format!("{copy} sent"), format!("{last} sent"));
-    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&leaves, false);
-    let delivered = Delivered::of_leaves(vec![copy_sent.as_str(), last_sent.as_str()])
-        .expect("under the bound");
-    let (capped, _) = staged
-        .retaining(&detector, &delivered)
-        .capped()
-        .expect("deferred");
-    let kept: std::collections::HashSet<u64> = capped.fingerprints(&detector).into_iter().collect();
-    assert!(
-        detector
-            .fingerprints(&last)
-            .iter()
-            .all(|fp| kept.contains(fp))
-    );
 }
