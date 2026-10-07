@@ -131,14 +131,16 @@ impl<'de> serde::de::Visitor<'de> for Members<'_> {
         formatter.write_str("a task record")
     }
 
-    /// A duplicated member is damage too: the first copy that reads wins, so a
-    /// later junk copy never erases a kept key or hides a newer version.
+    /// A duplicated member is damage too, and no later copy may undo what an
+    /// earlier one gave: the key and task id keep the first copy that reads
+    /// (any readable binding is the safe side), the version keeps the highest
+    /// (a newer build's row must refuse whichever copy says so).
     fn visit_map<A: serde::de::MapAccess<'de>>(self, mut members: A) -> Result<(), A::Error> {
         while let Some(key) = members.next_key::<String>()? {
             match key.as_str() {
                 "version" => {
                     let version = members.next_value::<serde_json::Value>()?.as_u64();
-                    self.0.version = self.0.version.or(version);
+                    self.0.version = self.0.version.max(version);
                 }
                 "admission" => {
                     let admission = members.next_value::<serde_json::Value>()?;

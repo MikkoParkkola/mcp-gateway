@@ -102,6 +102,7 @@ async fn an_unrestorable_record_keeps_its_binding() {
         "truncated",
         "trailing",
         "duplicate_admission",
+        "duplicate_model",
     ] {
         let dir = tempfile::tempdir().unwrap();
         let (path, record, kept) = two_tasks(dir.path()).await;
@@ -116,6 +117,9 @@ async fn an_unrestorable_record_keeps_its_binding() {
             // A later `"admission":null` must not erase the valid one read
             // first, or a retry of the key runs the backend again.
             append_duplicate(&record, "admission", "null");
+        } else if case == "duplicate_model" {
+            // A later model naming another task must not rebind the key to it.
+            append_duplicate(&record, "model", r#"{"task":{"taskId":"another"}}"#);
         } else if case == "trailing" {
             // Whole and valid, then bytes after its closing brace: the strict
             // parse refuses it, the member walk still reads the key.
