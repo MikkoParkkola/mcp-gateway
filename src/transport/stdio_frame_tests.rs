@@ -218,11 +218,22 @@ mod tree_kill {
         )
     }
 
+    /// The `ps` state letter of `pid`, or `None` once it no longer exists.
+    fn pid_state(pid: u32) -> Option<char> {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        String::from_utf8_lossy(&out.stdout)
+            .trim_start()
+            .chars()
+            .next()
+    }
+
+    /// Running: present and not a zombie. A descendant reparented to a PID 1
+    /// that never reaps stays a zombie, which is dead for these rows.
     fn pid_is_alive(pid: u32) -> bool {
-        std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .status()
-            .is_ok_and(|status| status.success())
+        pid_state(pid).is_some_and(|state| state != 'Z')
     }
 
     /// Wait for a pid to disappear, then report whether it did.
@@ -266,14 +277,18 @@ mod tree_kill {
 
     /// Whether `pid` is an exited process nobody has reaped yet.
     fn is_zombie(pid: u32) -> bool {
-        std::process::Command::new("ps")
-            .args(["-o", "stat=", "-p", &pid.to_string()])
-            .output()
-            .is_ok_and(|out| {
-                String::from_utf8_lossy(&out.stdout)
-                    .trim_start()
-                    .starts_with('Z')
-            })
+        pid_state(pid) == Some('Z')
+    }
+
+    /// Wait until `pid` is gone entirely, reaped and not a zombie.
+    async fn wait_until_reaped(pid: u32) -> bool {
+        for _ in 0..100 {
+            if pid_state(pid).is_none() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        false
     }
 
     #[tokio::test]
@@ -389,8 +404,49 @@ mod tree_kill {
             "descendant pid {descendant} survived close()"
         );
         assert!(
-            wait_until_gone(leader, Duration::from_secs(5)).await,
+            wait_until_reaped(leader).await,
             "close() did not reap leader {leader}"
+        );
+    }
+
+    /// MIK-8080: `close()` gives up the child it reaped, so nothing (a second
+    /// `close()`, `Drop`, a read error) can signal that group id again.
+    #[tokio::test]
+    async fn close_gives_up_the_reaped_child() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let (command, _pidfile) = tree_backend(workspace.path(), false);
+        let transport = start_tree_transport(workspace.path(), &command);
+        transport.start().await.expect("start");
+        transport.close().await.expect("close");
+        assert!(
+            transport.child.lock().await.is_none(),
+            "close() kept the reaped child, whose group id can be reused"
+        );
+    }
+
+    /// MIK-8080: a transport dropped without `close()` while its leader is an
+    /// unreaped zombie still ends the descendants: the zombie keeps the group id.
+    #[tokio::test]
+    async fn dropping_a_transport_with_an_exited_leader_ends_the_descendants() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let (command, pidfile) = tree_backend(workspace.path(), false);
+        let transport = start_tree_transport(workspace.path(), &command);
+        transport.start().await.expect("start");
+        let (leader, descendant) = read_pids(&pidfile);
+        std::process::Command::new("kill")
+            .args(["-9", &leader.to_string()])
+            .status()
+            .expect("kill leader");
+        assert!(
+            await_leader_exit(&transport).await,
+            "precondition: the liveness check saw the leader exit"
+        );
+
+        drop(transport);
+
+        assert!(
+            wait_until_gone(descendant, Duration::from_secs(5)).await,
+            "descendant pid {descendant} outlived a dropped transport whose leader had exited"
         );
     }
 }
