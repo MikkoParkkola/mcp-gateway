@@ -48,6 +48,21 @@ const SNAPSHOT_RETRY: Duration = Duration::from_secs(5);
 const STABLE: Duration = Duration::from_secs(60);
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
 const BACKOFF_CAP: Duration = Duration::from_secs(300);
+/// A tools refill that did not fill is retried once after this: the backend's
+/// list-fill cooldown, which fails every fill inside it without reaching the
+/// backend (MIK-8007). Taken from it, so the two cannot drift apart.
+const REFILL_RETRY: Duration = crate::backend::LIST_FILL_COOLDOWN;
+
+/// The backend tools notices a listener task has not yet served (MIK-8007).
+#[derive(Default)]
+pub(super) struct ToolsDebt {
+    /// The earliest the next refill may start (one per tick).
+    due: Option<Instant>,
+    /// That refill retries one that did not fill.
+    retrying: bool,
+    /// A notice the hub has not heard of yet.
+    unannounced: bool,
+}
 
 enum Outcome {
     Stopped,
@@ -128,6 +143,8 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         }
         let Some(backend) = registry.get(&shared.name) else {
             // Gone: park until the interest changes or the keys are deleted.
+            // A removed backend owes nothing; a re-added one starts afresh.
+            *shared.tools.lock() = ToolsDebt::default();
             let mut wake = shared.wake.subscribe();
             tokio::select! {
                 () = shared.stop.cancelled() => return,
@@ -215,7 +232,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             }
             note = recv(&mut state.current) => Ev::Current(note),
             note = recv_pending(&mut state.pending) => Ev::Pending(note),
-            () = refilled(&mut refill) => Ev::Refilled,
+            filled = refilled(&mut refill) => Ev::Refilled(filled),
             _ = wake.changed() => Ev::Wake,
             _ = tick.tick() => Ev::Tick,
         };
@@ -232,14 +249,18 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
                 state.note(note, true);
             }
             Ev::Pending(None) => state.pending = None,
-            Ev::Refilled => {
+            Ev::Refilled(filled) => {
                 // The refill ended (filled or timed out): the hub may hear now.
                 refill = None;
-                state.tools_pending = true;
+                state.refill_ended(filled);
             }
             Ev::Wake | Ev::Tick => {}
         }
-        start_due_refill(&mut state, backend, &mut refill);
+        // Not while a finished refill's change is still unannounced: invalidating
+        // now would have the hub announce it over an emptied cache.
+        if refill.is_none() && !state.tools_pending {
+            refill = start_due_refill(&mut state, backend);
+        }
         if !backend_still_current(backend, &target.handle) {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
             return finish_refill(&mut state, shared, backend, hub, refill, started).await;
@@ -282,22 +303,21 @@ fn on_tick(live: Option<bool>, refused: impl FnOnce() -> bool) -> OnTick {
     }
 }
 
-/// A notice arrived: drop the cached tool list and refill it before the hub
-/// hears, so the subscriber's re-read is fresh and nothing sees an emptied
-/// cache. At most once per tick however many notices came; a notice during a
-/// refill waits for the next one. Not while a finished refill's change is
-/// still unannounced: invalidating then would have the hub announce it over
-/// an emptied cache.
-fn start_due_refill(state: &mut State<'_>, backend: &Arc<Backend>, refill: &mut Option<Refill>) {
-    if refill.is_some()
-        || state.tools_pending
-        || state.tools_due.is_none_or(|due| Instant::now() < due)
-    {
-        return;
+/// The refill a due notice starts, unpolled. A notice arrived: drop the cached
+/// list and refill it before the hub hears, so the subscriber's re-read is
+/// fresh and nothing sees an emptied cache. At most once per tick however many
+/// notices came; a notice during a refill waits for the next one. A silent
+/// retry keeps the cache: the failed refill already emptied it, so what is
+/// there now was read after the notice, and invalidating again could void a
+/// reader's fill into a new cooldown (MIK-8007).
+fn start_due_refill(state: &mut State<'_>, backend: &Arc<Backend>) -> Option<Refill> {
+    if !state.take_due_refill() {
+        return None;
     }
-    state.tools_due = None;
-    backend.invalidate_tools();
-    *refill = Some(start_refill(backend, &state.shared.name));
+    if state.refill_announces {
+        backend.invalidate_tools();
+    }
+    Some(start_refill(backend, &state.shared.name))
 }
 
 /// The tools refill a notice starts. The shared fetch, so a reader of the list
@@ -315,6 +335,7 @@ fn start_refill(backend: &Arc<Backend>, name: &str) -> Refill {
         if !filled {
             warn!(backend = %name, "upstream listener: tools refill did not complete; announcing the change anyway");
         }
+        filled
     })
 }
 
@@ -332,13 +353,13 @@ fn backend_still_current(backend: &Backend, handle: &Weak<dyn UpstreamListen>) -
 enum Ev {
     Current(Option<UpstreamNote>),
     Pending(Option<UpstreamNote>),
-    Refilled,
+    Refilled(bool),
     Wake,
     Tick,
 }
 
-/// An in-flight tools refill.
-type Refill = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+/// An in-flight tools refill; `true` when it filled the list.
+type Refill = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
 
 /// End the session, first letting an in-flight refill finish and any tools
 /// change it produced reach the hub, as when the refill ran inline and the
@@ -358,9 +379,8 @@ async fn finish_refill(
                 state.release(backend).await;
                 return Outcome::Stopped;
             }
-            () = refill => {}
+            filled = refill => state.refill_ended(filled),
         }
-        state.tools_pending = true;
     }
     // Also a refill that finished this iteration, its change not yet
     // announced when the transport was found replaced, and every notice
@@ -373,7 +393,7 @@ async fn finish_refill(
 }
 
 /// Resolves when the in-flight refill ends; never, when there is none.
-async fn refilled(refill: &mut Option<Refill>) {
+async fn refilled(refill: &mut Option<Refill>) -> bool {
     match refill {
         Some(future) => future.await,
         None => std::future::pending().await,
@@ -440,8 +460,8 @@ struct State<'a> {
     reread: bool,
     /// A backend tools notice waits to be handed to the hub (§14).
     tools_pending: bool,
-    /// The earliest the next tools handoff may run (one per tick).
-    tools_due: Option<Instant>,
+    /// The refill in flight serves a notice the hub has not heard of yet.
+    refill_announces: bool,
     snapshot_due: Instant,
     /// A catalogue read is not retried before this.
     snapshot_retry_at: Instant,
@@ -466,7 +486,7 @@ impl<'a> State<'a> {
             resource_interest_unsupported: false,
             reread: false,
             tools_pending: false,
-            tools_due: None,
+            refill_announces: false,
             // Due at once: a session that starts with no URI watched reads
             // the catalogue as soon as one is, even when the shared snapshot
             // is known from an earlier session.
@@ -474,6 +494,34 @@ impl<'a> State<'a> {
             snapshot_retry_at: now,
             retry_open_at: now,
         }
+    }
+
+    /// Take the tools refill when one is due, with the notices it serves.
+    fn take_due_refill(&mut self) -> bool {
+        let mut debt = self.shared.tools.lock();
+        if debt.due.is_none_or(|due| Instant::now() < due) {
+            return false;
+        }
+        debt.due = None;
+        self.refill_announces = std::mem::take(&mut debt.unannounced);
+        // A newer notice earns its own retry.
+        debt.retrying &= !self.refill_announces;
+        true
+    }
+
+    /// A refill ended. One that did not fill (inside the backend's list-fill
+    /// cooldown it never reaches the backend) is retried once, no sooner than
+    /// the cooldown, so the notice is served (MIK-8007). The hub hears once
+    /// per notice: a failed refill still announces (MIK-7951), and its retry
+    /// only refreshes the list unless a newer notice joined it.
+    fn refill_ended(&mut self, filled: bool) {
+        let mut debt = self.shared.tools.lock();
+        debt.retrying = !filled && !debt.retrying;
+        if debt.retrying {
+            let retry = Instant::now() + REFILL_RETRY;
+            debt.due = Some(debt.due.map_or(retry, |due| due.max(retry)));
+        }
+        self.tools_pending |= std::mem::take(&mut self.refill_announces);
     }
 
     fn ended(&self, started: Instant) -> Outcome {
@@ -541,7 +589,9 @@ impl<'a> State<'a> {
                 if kind == NoteKind::ToolsChanged {
                     // Not coalesced here: the hub's own quiet window does it.
                     if self.shared.need.lock().emits(kind, None) {
-                        self.tools_due.get_or_insert(Instant::now() + TICK);
+                        let mut debt = self.shared.tools.lock();
+                        debt.due.get_or_insert(Instant::now() + TICK);
+                        debt.unannounced = true;
                     }
                 } else if self.shared.need.lock().emits(kind, uri.as_deref()) {
                     self.coalescer.offer(kind, uri, Instant::now());
