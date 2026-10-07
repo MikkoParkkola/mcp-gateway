@@ -232,6 +232,7 @@ async fn call_alpha(
         caller_key: None,
         verified_identity: Some(&identity),
         is_admin: false,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,

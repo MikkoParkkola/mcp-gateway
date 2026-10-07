@@ -56,7 +56,9 @@ fn the_typed_body_path_sends_a_caller_reference_as_text() {
     let (_dir, executor) = executor_holding("MIK7787_TEST_SECRET=gateway-owned\n");
     let params = json!({ "q": "see {env.MIK7787_TEST_SECRET}" });
     let body = json!({ "query": "{q}", "note": "x {q}" });
-    let out = executor.substitute_value(&body, &params).unwrap();
+    let out = executor
+        .substitute_value(&body, &params, super::KeptNulls::None)
+        .unwrap();
     assert_eq!(
         out,
         json!({ "query": "see {env.MIK7787_TEST_SECRET}", "note": "x see {env.MIK7787_TEST_SECRET}" })
@@ -276,7 +278,9 @@ fn a_filled_body_field_that_looks_like_a_placeholder_is_kept() {
         "secret": "{env.MIK7909_TEST_SECRET}",
     });
     let params = json!({ "q": "{x}", "r": "}" });
-    let body = executor.substitute_value(&template, &params).unwrap();
+    let body = executor
+        .substitute_value(&template, &params, super::KeptNulls::None)
+        .unwrap();
     assert_eq!(body["pure"], "{x}", "{body}");
     assert_eq!(body["spliced"], "{x}}", "{body}");
     assert_eq!(body["secret"], "{abc}", "{body}");
@@ -294,7 +298,7 @@ fn a_body_field_nothing_fills_is_still_left_out() {
         "indexed": "{filter[id]}",
     });
     let body = executor
-        .substitute_value(&template, &json!({ "q": "cats" }))
+        .substitute_value(&template, &json!({ "q": "cats" }), super::KeptNulls::None)
         .unwrap();
     assert_eq!(body, json!({ "kept": "cats" }));
     // The query path omits them the same way.
@@ -341,4 +345,36 @@ fn an_unfilled_parameter_whose_name_holds_a_quote_is_omitted() {
         .substitute_params(&template, &json!({ "a\"b": "x" }))
         .unwrap();
     assert_eq!(pairs, vec![("k".to_owned(), "x".to_owned())]);
+}
+
+/// MIK-7970: a caller's explicit null that fills a pure placeholder reaches
+/// the JSON body; an absent value and the template's own null, at any depth,
+/// are still left out.
+#[test]
+fn a_callers_explicit_null_is_sent_in_the_body() {
+    let (_dir, executor) = executor_holding("");
+    let template = json!({
+        "cursor": "{cursor}",
+        "missing": "{absent}",
+        "fixed": null,
+        "outer": { "x": null, "y": "{cursor}" },
+    });
+    let body = executor
+        .substitute_value(
+            &template,
+            &json!({ "cursor": null }),
+            super::KeptNulls::Named(&["cursor".to_owned()]),
+        )
+        .unwrap();
+    assert_eq!(
+        body,
+        json!({ "cursor": null, "outer": { "y": null } }),
+        "{body}"
+    );
+    // A query string cannot carry a JSON null: it is still left out there.
+    let query = std::collections::HashMap::from([("cursor".to_owned(), "{cursor}".to_owned())]);
+    let pairs = executor
+        .substitute_params(&query, &json!({ "cursor": null }))
+        .unwrap();
+    assert!(pairs.is_empty(), "{pairs:?}");
 }

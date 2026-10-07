@@ -74,6 +74,7 @@ pub(in crate::gateway) fn anonymous_caller() -> MetaMcpCallerContext<'static> {
         caller_key: None,
         verified_identity: None,
         is_admin: false,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         retry,
