@@ -384,6 +384,20 @@ pub(super) async fn redeem_retry(
     })
 }
 
+/// MRTR.2a for a result that claims `input_required` but is not a usable
+/// round (`InputRequired::from_result` declines it: a malformed
+/// `inputRequests`, a non-string state, neither question nor state). No
+/// continuation is minted for it, so it travels back as the ordinary result it
+/// failed to be, and the backend's state must not travel with it.
+pub(super) fn withhold_unsealed_state(result: &mut Value) {
+    if crate::protocol::mrtr::InputRequired::claims_input_required(result)
+        && crate::protocol::mrtr::InputRequired::from_result(result).is_none()
+        && let Some(object) = result.as_object_mut()
+    {
+        object.remove("requestState");
+    }
+}
+
 /// The tool and the argument object a direct-route `tools/call` names: the two
 /// parts of the request a continuation is bound to (MIK-8078). Read from the
 /// params as the client sent them, at the mint and at the redeem alike, so a
@@ -461,6 +475,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
         result: &mut Value,
     ) -> Result<()> {
         let Some(interim) = crate::protocol::mrtr::InputRequired::from_result(result) else {
+            withhold_unsealed_state(result);
             return Ok(());
         };
         let (tool, arguments) = direct_call_parts(sent);

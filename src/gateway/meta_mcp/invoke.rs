@@ -642,6 +642,9 @@ impl MetaMcp {
                 gateway_writes::REQUEST_STATE,
                 &result,
             );
+        } else {
+            // MRTR.2a holds for an unusable round too (MIK-8078).
+            continuation::withhold_unsealed_state(&mut result);
         }
 
         let call = dispatch_guards::BackendCall {
