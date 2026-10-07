@@ -422,6 +422,15 @@ def extract_config() -> list[Entry]:
     w = ConfigWalker()
     root = w.index.resolve("Config", SRC / "config/mod.rs")
     w.walk_item(root, "", "", ("Config",))
+    # Retired keys still load (with a warning), so a user can still write them.
+    sk = SRC / "config/strict_keys.rs"
+    code, _ = scan(sk.read_text(encoding="utf-8"))
+    for block, prefix in (("RETIRED_BACKEND_KEYS", "backends.<name>."), ("RETIRED_KEYS", "")):
+        m = re.search(rf"const {block}\b[^=]*=\s*&\[", code)
+        body = code[m.end() : code.index("];", m.end())]
+        for t in re.finditer(r"\(\s*(&\[[^\]]*\]|\"[^\"]+\")", body):
+            key = prefix + ".".join(re.findall(r'"([^"]+)"', t.group(1)))
+            w.out.setdefault(key, Entry(key, rel(sk), line_of(code, m.end() + t.start()), "retired: loads with a warning"))
     return sorted(w.out.values(), key=lambda e: e.id)
 
 
@@ -512,7 +521,16 @@ def extract_cli(index: Index | None = None) -> list[Entry]:
 
 ENV_RE = re.compile(r"MCP_GATEWAY_[A-Z0-9_]*")
 # User-facing docs whose env names count as published surface.
-ENV_DOC_GLOBS = ("README.md", "docs/*.md", "gateway.example.yaml", "examples/**/*", "deploy/**/*")
+ENV_DOC_GLOBS = (
+    "README.md",
+    "docs/*.md",
+    "docs/runbooks/**/*",
+    "docs/runtime/**/*",
+    "docs/capabilities/**/*",
+    "gateway.example.yaml",
+    "examples/**/*",
+    "deploy/**/*",
+)
 ENV_DOC_SKIP = re.compile(r"UPGRADING-|release-notes|CHANGELOG")
 
 
@@ -537,9 +555,10 @@ def extract_env() -> list[Entry]:
                 continue
             for m in ENV_RE.finditer(text):
                 name = m.group()
-                if name == "MCP_GATEWAY_" or "__" in name:
-                    continue  # overlay spellings fold into the overlay row
-                out.setdefault(name, Entry(name, rel(path), line_of(text, m.start()), "documented only"))
+                if name == "MCP_GATEWAY_":
+                    continue
+                note = "documented overlay spelling" if "__" in name else "documented only"
+                out.setdefault(name, Entry(name, rel(path), line_of(text, m.start()), note))
     return sorted(out.values(), key=lambda e: e.id)
 
 
@@ -682,7 +701,18 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--list", choices=SURFACES, help="print one surface's extracted items")
     ap.add_argument("--doc", type=Path, default=DOC)
+    ap.add_argument("--summary", action="store_true", help="print class counts per surface from the doc")
     args = ap.parse_args(argv)
+    if args.summary:
+        table: dict[str, dict[str, int]] = {}
+        for r in parse_doc(args.doc.read_text(encoding="utf-8")):
+            table.setdefault(r.surface, {}).setdefault(r.cls, 0)
+            table[r.surface][r.cls] += 1
+        print("surface  " + "  ".join(f"{c:>8}" for c in sorted(CLASSES)) + "     total")
+        for surface in SURFACES:
+            row = table.get(surface, {})
+            print(f"{surface:<8} " + "  ".join(f"{row.get(c, 0):>8}" for c in sorted(CLASSES)) + f"  {sum(row.values()):>8}")
+        return 0
     if args.list:
         for e in EXTRACTORS[args.list]():
             print(f"{e.id}\t{e.file}:{e.line}\t{e.note}")
