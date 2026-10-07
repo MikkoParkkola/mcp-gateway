@@ -126,6 +126,8 @@ async fn the_creation_bound_is_the_widest_fallback() {
     let below = TaskStore::open(&dir.path().join("below"), limits(bound - 1))
         .await
         .unwrap();
+    // A whole-second clock: an unwidened instant would print no fraction.
+    below.set_clock_for_test(Some(at(1)));
     let refused = below.create(PreparedTask::for_test(&task, OWNER, 1)).await;
     assert!(matches!(refused, Err(StoreError::Capacity)), "{refused:?}");
     below.close().await.unwrap();
