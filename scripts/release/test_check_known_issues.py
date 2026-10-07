@@ -320,6 +320,14 @@ def test_a_heading_with_extra_spaces_between_the_words_is_the_section():
     assert run("## Known  issues\n\n- Fixed in 4.0.1.\n", "--check") == 1
 
 
+def test_a_heading_after_a_fence_inside_details_does_not_end_the_section():
+    text = (
+        "## Known issues\n\n<details>\n```\nx\n```\n## Example\n</details>\n\n"
+        "- Fixed in 4.0.1.\n"
+    )
+    assert run(text, "--check") == 1
+
+
 def test_every_tag_publish_path_runs_the_release_gate():
     # ci.yml's container publish and release.yml both fire on a v* tag; each
     # must refuse a non-empty section before it publishes.
