@@ -653,6 +653,10 @@ async fn an_unrelated_timeout_during_a_login_stays_a_backend_timeout() {
     browser
         .opened(2, "another caller's request-time login")
         .await;
+    assert!(
+        !fill.is_finished(),
+        "the login must open before the fill's deadline, or the row tests nothing"
+    );
 
     let error = within("the fill's own deadline", fill)
         .await

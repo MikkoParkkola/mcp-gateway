@@ -499,15 +499,18 @@ async fn taking_up_a_shared_login_takes_up_its_registered_client_id() {
 /// binds again with no await in between.
 #[tokio::test(start_paused = true)]
 async fn the_window_closes_the_callback_listener_before_the_wait_returns() {
-    let port = free_port().await;
     let server = crate::oauth::callback::start_callback_server(
         "window-state".to_string(),
         Some("127.0.0.1"),
-        Some(port),
+        None,
         None,
     )
     .await
     .expect("the callback listener binds");
+    let port = url::Url::parse(&server.callback_url)
+        .ok()
+        .and_then(|url| url.port())
+        .expect("the callback URL names the port the listener holds");
     let cancel = tokio_util::sync::CancellationToken::new();
 
     let ended = server.wait_within(Duration::from_secs(1), &cancel).await;
