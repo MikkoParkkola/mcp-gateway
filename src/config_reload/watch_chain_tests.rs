@@ -173,7 +173,7 @@ fn t12_a_repeated_watch_failure_warns_once() {
     let root = tempfile::tempdir().expect("root");
     let missing = root.path().join("missing");
     let watcher = notify::recommended_watcher(|_| {}).expect("watcher");
-    let chain = super::ChainWatch::new(watcher);
+    let chain = super::ChainWatch::with_names(watcher, std::sync::Arc::default());
     let wanted = BTreeSet::from([missing.clone()]);
     chain.reconcile(&wanted);
     chain.reconcile(&wanted);

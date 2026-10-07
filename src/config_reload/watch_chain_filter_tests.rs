@@ -3,78 +3,144 @@
 //! Which events wake the rewatch task (MIK-8013). Each wake re-resolves the
 //! config's whole link chain, so a write beside the config that cannot move
 //! the chain must not cost one.
-//!
-//! Linux-only, as the other real-watcher rows (W-L9).
 
-use std::path::Path;
-use std::time::Duration;
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 
-use super::tests::real_watcher::{Harness, start};
+use super::{ChainNames, resolve_chain};
 
-/// Wait until the task has handled every wake it was sent: the count stops
-/// moving for half a second.
-async fn settled_wakes(h: &Harness) -> usize {
-    let mut seen = h.wakes();
-    loop {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let now = h.wakes();
-        if now == seen {
-            return now;
-        }
-        seen = now;
-    }
+fn canonical(path: &std::path::Path) -> PathBuf {
+    std::fs::canonicalize(path).expect("canonical")
 }
 
-fn plain_config() -> (tempfile::TempDir, std::path::PathBuf) {
+/// Before any resolve, and after a failed one, every event wakes the task.
+#[test]
+fn no_chain_wakes_on_any_path() {
+    let names = ChainNames::default();
+    assert!(names.may_move_chain(&[PathBuf::from("/x/unrelated")]));
+}
+
+/// A resolved chain wakes only on its own paths, and a pathless event (a
+/// rescan) always wakes.
+#[test]
+fn a_chain_wakes_on_its_paths_only() {
+    let names = ChainNames::default();
+    names.set(Some(BTreeSet::from([PathBuf::from("/c/gateway.yaml")])));
+    assert!(names.may_move_chain(&[PathBuf::from("/c/gateway.yaml")]));
+    assert!(names.may_move_chain(&[PathBuf::from("/c/.tmp"), PathBuf::from("/c/gateway.yaml")]));
+    assert!(!names.may_move_chain(&[PathBuf::from("/c/perf.data")]));
+    assert!(names.may_move_chain(&[]));
+}
+
+/// A plain file's chain names the file, canonical, and nothing beside it.
+#[test]
+fn a_plain_file_names_itself() {
     let root = tempfile::tempdir().expect("root");
     let cfg = root.path().join("gateway.yaml");
-    std::fs::write(&cfg, "a: 1\n").expect("config");
-    (root, cfg)
+    std::fs::write(&cfg, "a: 1\n").unwrap();
+    let chain = resolve_chain(&cfg).expect("resolves");
+    assert_eq!(chain.names, BTreeSet::from([canonical(&cfg)]));
 }
 
-/// MIK-8013.WATCH.2: 1000 files written beside the config run no chain
-/// re-resolution. The config edit after them is the barrier: notify delivers
-/// events in order, so once its reload arrives every earlier event was seen.
-#[tokio::test]
-async fn watch2_unrelated_files_beside_the_config_resolve_nothing() {
-    let (root, cfg) = plain_config();
-    let mut h = start(&cfg);
-    h.wait_wakes_above(0).await;
-    h.drain_idle().await;
-    let before = settled_wakes(&h).await;
+/// A `ConfigMap` layout names the projected link, the `..data` directory link
+/// and the file it ends at: the three paths an update touches.
+#[cfg(unix)]
+#[test]
+fn a_configmap_chain_names_every_link_on_it() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().expect("root");
+    let generation = root.path().join("..2026_10_07");
+    std::fs::create_dir(&generation).unwrap();
+    std::fs::write(generation.join("gateway.yaml"), "a: 1\n").unwrap();
+    symlink("..2026_10_07", root.path().join("..data")).unwrap();
+    symlink("..data/gateway.yaml", root.path().join("gateway.yaml")).unwrap();
 
-    write_unrelated(root.path(), 1000);
-    std::fs::write(&cfg, "a: 2\n").unwrap();
-    assert!(h.triggered_within(10).await, "the config edit reloads");
-    let resolves = settled_wakes(&h).await - before;
-
-    // The edit itself is up to two events (truncate, write); the 1000 files
-    // add none.
-    assert!(
-        resolves <= 2,
-        "{resolves} chain re-resolutions for 1000 unrelated files and one edit"
+    let chain = resolve_chain(&root.path().join("gateway.yaml")).expect("resolves");
+    let real = canonical(root.path());
+    assert_eq!(
+        chain.names,
+        BTreeSet::from([
+            real.join("gateway.yaml"),
+            real.join("..data"),
+            real.join("..2026_10_07").join("gateway.yaml"),
+        ])
     );
-    let _ = h.shutdown.send(());
 }
 
-fn write_unrelated(dir: &Path, count: usize) {
-    for i in 0..count {
-        std::fs::write(dir.join(format!("perf-{i}.data")), "x").unwrap();
+// Linux-only (W-L9): the real-watcher rows run on inotify.
+#[cfg(target_os = "linux")]
+mod real_watcher {
+    use std::path::Path;
+    use std::time::Duration;
+
+    use super::super::tests::real_watcher::{Harness, start};
+
+    /// Wait until the task has handled every wake it was sent: the count
+    /// stops moving for half a second.
+    async fn settled_wakes(h: &Harness) -> usize {
+        let mut seen = h.wakes();
+        loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let now = h.wakes();
+            if now == seen {
+                return now;
+            }
+            seen = now;
+        }
     }
-}
 
-/// MIK-8013.WATCH.3: an atomic rename onto the config (write a temporary
-/// file, rename it over the config) still reloads.
-#[tokio::test]
-async fn watch3_an_atomic_rename_onto_the_config_reloads() {
-    let (root, cfg) = plain_config();
-    let mut h = start(&cfg);
-    h.wait_wakes_above(0).await;
-    h.drain_idle().await;
+    fn plain_config() -> (tempfile::TempDir, std::path::PathBuf) {
+        let root = tempfile::tempdir().expect("root");
+        let cfg = root.path().join("gateway.yaml");
+        std::fs::write(&cfg, "a: 1\n").expect("config");
+        (root, cfg)
+    }
 
-    let tmp = root.path().join(".gateway.yaml.tmp");
-    std::fs::write(&tmp, "a: 2\n").unwrap();
-    std::fs::rename(&tmp, &cfg).unwrap();
-    assert!(h.triggered_within(10).await, "the rename reloads");
-    let _ = h.shutdown.send(());
+    fn write_unrelated(dir: &Path, count: usize) {
+        for i in 0..count {
+            std::fs::write(dir.join(format!("perf-{i}.data")), "x").unwrap();
+        }
+    }
+
+    /// MIK-8013.WATCH.2: 1000 files written beside the config run no chain
+    /// re-resolution. The config edit after them is the barrier: notify
+    /// delivers events in order, so once its reload arrives every earlier
+    /// event was seen.
+    #[tokio::test]
+    async fn watch2_unrelated_files_beside_the_config_resolve_nothing() {
+        let (root, cfg) = plain_config();
+        let mut h = start(&cfg);
+        h.wait_wakes_above(0).await;
+        h.drain_idle().await;
+        let before = settled_wakes(&h).await;
+
+        write_unrelated(root.path(), 1000);
+        std::fs::write(&cfg, "a: 2\n").unwrap();
+        assert!(h.triggered_within(10).await, "the config edit reloads");
+        let resolves = settled_wakes(&h).await - before;
+
+        // The edit itself is up to two events (truncate, write); the 1000
+        // files add none.
+        assert!(
+            resolves <= 2,
+            "{resolves} chain re-resolutions for 1000 unrelated files and one edit"
+        );
+        let _ = h.shutdown.send(());
+    }
+
+    /// MIK-8013.WATCH.3: an atomic rename onto the config (write a temporary
+    /// file, rename it over the config) still reloads.
+    #[tokio::test]
+    async fn watch3_an_atomic_rename_onto_the_config_reloads() {
+        let (root, cfg) = plain_config();
+        let mut h = start(&cfg);
+        h.wait_wakes_above(0).await;
+        h.drain_idle().await;
+
+        let tmp = root.path().join(".gateway.yaml.tmp");
+        std::fs::write(&tmp, "a: 2\n").unwrap();
+        std::fs::rename(&tmp, &cfg).unwrap();
+        assert!(h.triggered_within(10).await, "the rename reloads");
+        let _ = h.shutdown.send(());
+    }
 }

@@ -185,17 +185,23 @@ impl ConfigWatcher {
     ) -> Result<Arc<watch_chain::ChainWatch>> {
         let named_config_path = config_path.to_path_buf();
         let closure_config_path = named_config_path.clone();
+        let names = Arc::new(watch_chain::ChainNames::default());
+        let closure_names = Arc::clone(&names);
 
         let watcher = RecommendedWatcher::new(
             move |result: std::result::Result<Event, notify::Error>| {
                 let Ok(event) = result else { return };
 
-                // Every event that changes a directory may have moved the
-                // chain: a link unlinked and re-created is an event on the
-                // named path itself. An access (open, read, close) cannot, and
-                // the reload's own read must not wake the task again. The task decides;
-                // this thread must not block or call `watch`.
-                if !matches!(event.kind, EventKind::Access(_)) {
+                // An event on a path of the chain may have moved it: a link
+                // unlinked and re-created is an event on the named path
+                // itself. An access (open, read, close) cannot, and the
+                // reload's own read must not wake the task again. A write to
+                // any other file in a watched directory cannot either
+                // (MIK-8013). The task decides; this thread must not block or
+                // call `watch`.
+                if !matches!(event.kind, EventKind::Access(_))
+                    && closure_names.may_move_chain(&event.paths)
+                {
                     wake_tx.send_replace(());
                 }
                 if is_config_event_for(&event, &closure_config_path) {
@@ -209,7 +215,7 @@ impl ConfigWatcher {
         })?;
 
         let wanted = watch_chain::startup_dirs(&named_config_path);
-        let chain = watch_chain::ChainWatch::new(watcher);
+        let chain = watch_chain::ChainWatch::with_names(watcher, names);
         chain.reconcile(&wanted);
         let in_ledger = chain.watched_now();
         if let Some(missing) = wanted.iter().find(|dir| !in_ledger.contains(*dir)) {
