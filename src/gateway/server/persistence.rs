@@ -9,7 +9,6 @@ use tracing::{info, warn};
 use crate::cost_accounting::{
     config::CostGovernanceConfig, enforcer::BudgetEnforcer, registry::CostRegistry,
 };
-#[cfg(any(feature = "cost-governance", test))]
 use std::sync::Arc;
 
 pub(super) fn standard_data_dir() -> PathBuf {
@@ -128,7 +127,12 @@ pub(super) fn spawn_cost_saver(
         tokio::pin!(stopped);
         loop {
             tokio::select! {
-                _ = interval.tick() => save_costs(&enforcer, &data_dir),
+                // Off the runtime's threads: a write stuck on a stalled
+                // mount must not block one (MIK-8157).
+                _ = interval.tick() => {
+                    let (enforcer, data_dir) = (Arc::clone(&enforcer), data_dir.clone());
+                    drop(tokio::task::spawn_blocking(move || save_costs(&enforcer, &data_dir)).await);
+                }
                 () = &mut stopped => break,
             }
         }
@@ -169,6 +173,95 @@ impl super::AbortOnDrop {
         // Cancelled is the expected outcome; a panic is reported by the runtime.
         drop((&mut self.0).await);
     }
+}
+
+/// How long an HTTP gateway's shutdown gives its state saves (MIK-8157).
+pub(super) const SHUTDOWN_SAVES_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// One state save run at shutdown: its name, for the log, and the write.
+pub(super) type ShutdownSave = (&'static str, Box<dyn FnOnce() + Send>);
+
+/// Run `saves` in order under one `deadline`, each on its own detached thread
+/// (MIK-8157). A write stuck on a stalled mount is abandoned at the deadline
+/// and logged by name, so it can neither hold the shutdown nor, being off the
+/// blocking pool, the runtime's drop after it.
+pub(super) async fn run_shutdown_saves(deadline: tokio::time::Instant, saves: Vec<ShutdownSave>) {
+    // Stub: waits for every save without a bound, as the shutdown did.
+    let _ = deadline;
+    for (_, save) in saves {
+        drop(tokio::task::spawn_blocking(save).await);
+    }
+}
+
+/// What the final cost save needs: the enforcer, the periodic saver to stop
+/// first, and the data directory. Uninhabited without cost governance.
+#[cfg(feature = "cost-governance")]
+pub(super) type CostShutdown = (
+    Arc<BudgetEnforcer>,
+    Option<tokio::task::JoinHandle<()>>,
+    PathBuf,
+);
+#[cfg(not(feature = "cost-governance"))]
+pub(super) type CostShutdown = std::convert::Infallible;
+
+/// The HTTP shutdown's saves of search ranking, transition tracking and, with
+/// cost governance on, today's spend, under [`SHUTDOWN_SAVES_TIMEOUT`]. The
+/// periodic cost saver is stopped first so an older save cannot land after the
+/// final one; if it does not stop in time the final cost save is skipped
+/// rather than raced, as stdio does.
+pub(super) async fn save_state_on_shutdown(
+    ranker: Arc<crate::ranking::SearchRanker>,
+    ranker_path: PathBuf,
+    tracker: Arc<crate::transition::TransitionTracker>,
+    transition_path: PathBuf,
+    cost: Option<CostShutdown>,
+) {
+    let deadline = tokio::time::Instant::now() + SHUTDOWN_SAVES_TIMEOUT;
+    #[allow(unused_mut)]
+    let mut saves: Vec<ShutdownSave> = vec![
+        (
+            "search ranking save",
+            Box::new(move || {
+                save_with_logging(
+                    &ranker_path,
+                    |path| ranker.save(path),
+                    "Failed to save search ranker usage data",
+                    "Saved search ranking usage data",
+                );
+            }),
+        ),
+        (
+            "transition tracking save",
+            Box::new(move || {
+                save_with_logging(
+                    &transition_path,
+                    |path| tracker.save(path),
+                    "Failed to save transition tracking data",
+                    "Saved transition tracking data",
+                );
+            }),
+        ),
+    ];
+    #[cfg(feature = "cost-governance")]
+    if let Some((enforcer, saver, data_dir)) = cost {
+        let stopped = match saver {
+            Some(saver) => super::stdio_shutdown::bounded_step(deadline, "cost saver stop", saver)
+                .await
+                .is_some(),
+            None => true,
+        };
+        if stopped {
+            saves.push((
+                "final cost save",
+                Box::new(move || save_costs(&enforcer, &data_dir)),
+            ));
+        } else {
+            warn!("final cost snapshot skipped: the periodic saver is still running");
+        }
+    }
+    #[cfg(not(feature = "cost-governance"))]
+    let _ = cost;
+    run_shutdown_saves(deadline, saves).await;
 }
 
 #[cfg(test)]
@@ -311,6 +404,41 @@ mod tests {
             Arc::strong_count(&held),
             1,
             "stop returned while the aborted task still held its state"
+        );
+    }
+
+    /// `MIK-8157.SAVE.1` and `.2`: a shutdown save stuck on a stalled mount is
+    /// abandoned at the deadline, so the shutdown returns; a save that
+    /// finishes inside the bound completes.
+    #[tokio::test]
+    async fn a_stuck_shutdown_save_is_abandoned_at_the_deadline() {
+        let (release, stuck) = std::sync::mpsc::channel::<()>();
+        let (finished, done) = std::sync::mpsc::channel();
+        let saves: Vec<ShutdownSave> = vec![
+            (
+                "quick save",
+                Box::new(move || {
+                    let _ = finished.send(());
+                }),
+            ),
+            (
+                "stuck save",
+                Box::new(move || {
+                    let _ = stuck.recv();
+                }),
+            ),
+        ];
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(200);
+        let returned = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_shutdown_saves(deadline, saves),
+        )
+        .await;
+        drop(release);
+        assert!(returned.is_ok(), "a stuck save held the shutdown");
+        assert!(
+            done.try_recv().is_ok(),
+            "the save that fits the bound did not run to completion"
         );
     }
 }

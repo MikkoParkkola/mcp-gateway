@@ -2108,30 +2108,17 @@ impl Gateway {
         )
         .await?;
 
-        // Save search ranker usage data
-        persistence::save_with_logging(
-            &ranker_path,
-            |path| ranker_for_shutdown.save(path),
-            "Failed to save search ranker usage data",
-            "Saved search ranking usage data",
-        );
-
-        // Save transition tracking data
-        persistence::save_with_logging(
-            &transition_path,
-            |path| tracker_for_shutdown.save(path),
-            "Failed to save transition tracking data",
-            "Saved transition tracking data",
-        );
-
+        // Saved under one deadline, off the runtime's threads (MIK-8157).
         #[cfg(feature = "cost-governance")]
-        if let Some(ref enforcer) = meta_mcp_for_shutdown.budget_enforcer {
-            // A periodic save still running must not land after this one.
-            if let Some(saver) = cost_saver {
-                drop(saver.await);
-            }
-            persistence::save_costs(enforcer, &data_dir);
-        }
+        let cost = meta_mcp_for_shutdown
+            .budget_enforcer
+            .clone()
+            .map(|enforcer| (enforcer, cost_saver, data_dir.clone()));
+        #[cfg(not(feature = "cost-governance"))]
+        let cost = None;
+        let (ranker, tracker) = (ranker_for_shutdown, tracker_for_shutdown);
+        let paths = (ranker_path.clone(), transition_path.clone());
+        persistence::save_state_on_shutdown(ranker, paths.0, tracker, paths.1, cost).await;
 
         // Graceful drain: wait for in-flight requests to complete.
         // The semaphore has 10,000 permits; each in-flight request holds one.

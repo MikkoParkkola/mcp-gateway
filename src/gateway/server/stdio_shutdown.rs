@@ -30,7 +30,7 @@ pub(super) async fn bounded_step<F: Future>(
     if finished.is_none() {
         warn!(
             step,
-            "stdio: shutdown step did not finish within the teardown deadline; abandoned"
+            "shutdown step did not finish within its deadline; abandoned"
         );
     }
     finished
@@ -47,13 +47,13 @@ pub(super) async fn bounded_blocking(
 ) {
     let (done, finished) = tokio::sync::oneshot::channel();
     let spawned = std::thread::Builder::new()
-        .name(format!("stdio-shutdown: {step}"))
+        .name(format!("shutdown: {step}"))
         .spawn(move || {
             work();
             let _ = done.send(());
         });
     if let Err(error) = spawned {
-        warn!(step, %error, "stdio: shutdown step could not start a thread; skipped");
+        warn!(step, %error, "shutdown step could not start a thread; skipped");
         return;
     }
     bounded_step(deadline, step, finished).await;
