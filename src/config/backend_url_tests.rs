@@ -170,3 +170,50 @@ fn two_transport_keys_in_the_file_are_refused_naming_both() {
         "{message}"
     );
 }
+
+/// Writes an env file holding `env_line` and a config naming it with backend
+/// `b` on `http_url`; returns the config path.
+fn file_with_env(dir: &std::path::Path, env_line: &str) -> std::path::PathBuf {
+    let env = dir.join("gw.env");
+    crate::gateway::test_helpers::write_owner_only(&env, env_line).expect("write env file");
+    let path = dir.join("gateway.yaml");
+    let yaml = format!(
+        "env_files: ['{}']\nbackends:\n  b:\n    http_url: \"https://file.example.com/mcp\"\n",
+        env.display()
+    );
+    crate::gateway::test_helpers::write_owner_only(&path, &yaml).expect("write config");
+    path
+}
+
+#[test]
+fn an_environment_value_for_the_same_transport_key_still_overrides() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = file_with_env(
+        dir.path(),
+        "MCP_GATEWAY_BACKENDS__B__HTTP_URL=https://env.example.com/mcp\n",
+    );
+    let config = Config::load(Some(&path)).unwrap_or_else(|e| panic!("config loads: {e}"));
+    match &config.backends["b"].transport {
+        TransportConfig::Http { http_url, .. } => {
+            assert_eq!(http_url, "https://env.example.com/mcp");
+        }
+        other => panic!("built {other:?}"),
+    }
+}
+
+#[test]
+fn a_literal_load_reads_the_file_alone_so_an_environment_transport_is_no_conflict() {
+    // A rewrite loads the file without the environment layer; the file has one
+    // transport key, so it loads and keeps it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = file_with_env(
+        dir.path(),
+        "MCP_GATEWAY_BACKENDS__B__WS_URL=wss://env.example.com/mcp\n",
+    );
+    let config = Config::load_literal(Some(&path)).unwrap_or_else(|e| panic!("config loads: {e}"));
+    assert!(
+        matches!(config.backends["b"].transport, TransportConfig::Http { .. }),
+        "{:?}",
+        config.backends["b"].transport
+    );
+}
