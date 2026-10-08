@@ -364,3 +364,41 @@ async fn r13_the_backend_gets_the_sanitized_answers() {
     let seen = fx.seen.lock().unwrap().last().cloned().unwrap();
     assert_eq!(seen["inputResponses"], answers(), "{seen}");
 }
+
+/// R14: a client-authored state that is not a string never reaches the
+/// backend: the preflight refuses it as a malformed retry field.
+#[tokio::test]
+async fn r14_a_non_string_client_state_is_refused_before_the_backend() {
+    for backend in BACKENDS {
+        let fx = fixture(Answer::AskOnce, |_| {}).await;
+        for forged in [json!(5), json!({"k": BACKEND_STATE}), json!(null)] {
+            let retry = json!({"requestState": forged, "inputResponses": answers()});
+            let (_, body) = call(&fx, backend, Some("alice"), retry).await;
+            assert_eq!(code(&body), Some(-32602), "{backend} {forged}: {body}");
+        }
+        assert_eq!(dispatched(&fx), 0, "{backend}: a forged state dispatched");
+    }
+}
+
+/// R15 (`MRTR.2a`, both routes): a state a backend put on a completed answer
+/// does not reach the client either. Mutant: the blanking limited to answers
+/// claiming `input_required`.
+#[tokio::test]
+async fn r15_a_completed_answer_does_not_carry_the_backends_state() {
+    for backend in BACKENDS {
+        let fx = fixture(Answer::DoneWithState, |_| {}).await;
+        let (_, body) = call(&fx, backend, Some("alice"), json!({})).await;
+        assert!(body.get("error").is_none(), "direct {backend}: {body}");
+        assert!(
+            !body.to_string().contains(BACKEND_STATE),
+            "direct {backend}: {body}"
+        );
+        let fx = fixture(Answer::DoneWithState, |_| {}).await;
+        let (_, body) =
+            post_meta_invoke(&fx, "k-std", backend, "read", json!({}), None, None).await;
+        assert!(
+            !body.to_string().contains(BACKEND_STATE),
+            "meta {backend}: {body}"
+        );
+    }
+}

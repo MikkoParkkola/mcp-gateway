@@ -384,19 +384,18 @@ pub(super) async fn redeem_retry(
     })
 }
 
-/// MRTR.2a for a result that claims `input_required` but is not a usable
-/// round (`InputRequired::from_result` declines it: a malformed
-/// `inputRequests`, a non-string state, neither question nor state). No
-/// continuation is minted for it, so it travels back as the ordinary result it
-/// failed to be, and the backend's state must not travel with it.
+/// MRTR.2a for any result that is not a usable round
+/// (`InputRequired::from_result` declines it): a completed answer, or one
+/// claiming `input_required` that is malformed (a bad `inputRequests`, a
+/// non-string state, neither question nor state). No continuation is minted
+/// for it, so a `requestState` the backend put on it must not travel with it.
 ///
 /// Blanked to `null`, not removed: a present state that is not a string keeps
 /// the round unusable everywhere it is read again. Removed, a malformed state
 /// would leave a valid state-less round, which the task path parks instead of
 /// settling (#2416).
 pub(super) fn withhold_unsealed_state(result: &mut Value) {
-    if crate::protocol::mrtr::InputRequired::claims_input_required(result)
-        && crate::protocol::mrtr::InputRequired::from_result(result).is_none()
+    if crate::protocol::mrtr::InputRequired::from_result(result).is_none()
         && let Some(state) = result.get_mut("requestState")
     {
         *state = Value::Null;
