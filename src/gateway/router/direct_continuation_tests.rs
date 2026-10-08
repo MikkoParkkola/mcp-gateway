@@ -78,12 +78,12 @@ pub(super) fn code(body: &Value) -> Option<i64> {
         .and_then(Value::as_i64)
 }
 
-fn answers() -> Value {
+pub(super) fn answers() -> Value {
     json!({"k1": {"action": "accept", "content": {"account": "work"}}})
 }
 
 /// The continuation the interim answer carries.
-fn state_of(body: &Value) -> String {
+pub(super) fn state_of(body: &Value) -> String {
     body["result"]["requestState"]
         .as_str()
         .unwrap_or_else(|| panic!("an interim answer with a state: {body}"))
@@ -689,18 +689,26 @@ async fn r19_the_propagated_binding_binds_ahead_of_the_identity() {
             "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}}},
         "requestState": BACKEND_STATE
     });
-    meta.seal_direct_interim(who("binding-a"), ("alpha", Some(&sent)), &mut asked)
+    meta.seal_direct_interim(who("binding-a"), ("alpha", None, Some(&sent)), &mut asked)
         .await
         .expect("sealed");
     let retry = json!({"name": "read", "arguments": {},
         "requestState": asked["requestState"], "inputResponses": answers()});
     let mut outbound = retry.clone();
-    meta.redeem_direct_retry(who("binding-b"), ("alpha", Some(&retry)), &mut outbound)
-        .await
-        .expect_err("another binding redeemed it");
-    meta.redeem_direct_retry(who("binding-a"), ("alpha", Some(&retry)), &mut outbound)
-        .await
-        .expect("its own binding redeems it");
+    meta.redeem_direct_retry(
+        who("binding-b"),
+        ("alpha", None, Some(&retry)),
+        &mut outbound,
+    )
+    .await
+    .expect_err("another binding redeemed it");
+    meta.redeem_direct_retry(
+        who("binding-a"),
+        ("alpha", None, Some(&retry)),
+        &mut outbound,
+    )
+    .await
+    .expect("its own binding redeems it");
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         verified_identity: Some(&alice),
         ..crate::gateway::meta_mcp::anonymous_caller()

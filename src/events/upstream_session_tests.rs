@@ -17,6 +17,9 @@ fn shared_with(ineligible: crate::events::backend_source::Ineligible) -> Arc<Sha
     Arc::new(Shared {
         name: "b".to_owned(),
         need: Mutex::new(Need::default()),
+        ledger: Mutex::new(Arc::default()),
+        resolve: Box::new(|| None),
+        recycle: RECYCLE,
         snapshot: Mutex::new(Snapshot::default()),
         wake: watch::channel(0).0,
         stop: CancellationToken::new(),
@@ -717,3 +720,6 @@ async fn a_notice_before_the_acknowledgement_is_not_delivered() {
     legacy.flush_at(&weak, Instant::now() + WINDOW);
     assert!(intake.try_recv().is_ok(), "control: a legacy stream");
 }
+
+#[path = "upstream_session_backoff_tests.rs"]
+mod backoff;
