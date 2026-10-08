@@ -547,16 +547,19 @@ jobs:
     name: macOS check
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: macos-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-      # macOS is a shipped target, and every test target has to compile for
-      # it: a Linux-only API in a unix-gated test breaks the whole lib suite
-      # on a Mac without any other job noticing.
-      - run: cargo test --all-features --no-run
+      # macOS is a shipped target (Homebrew, release binaries), so its tests
+      # run here, not only compile (MIK-8174): signals, process groups, file
+      # locks and paths behave differently on a Mac. The two skips are the
+      # Tests job's, for the same reason; every test that does not run on
+      # macOS is listed in docs/release/macos-test-exclusions.tsv.
+      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
   test:
     name: Tests
