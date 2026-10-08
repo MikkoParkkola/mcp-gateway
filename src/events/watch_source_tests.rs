@@ -789,3 +789,6 @@ mod partial;
 
 #[path = "watch_hold_tests.rs"]
 mod hold;
+
+#[path = "reconcile_table_watch_tests.rs"]
+mod reconcile_table;
