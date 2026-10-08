@@ -361,6 +361,9 @@ pub async fn apply_patch(
 mod diff;
 mod reload_context;
 mod reload_warm_hook;
+// Linux-only, as the other real-watcher rows (inotify).
+#[cfg(all(test, target_os = "linux"))]
+mod reload_warm_hook_tests;
 pub(crate) use reload_warm_hook::{OnRegistered, RegisteredChange};
 mod watcher;
 mod write;
