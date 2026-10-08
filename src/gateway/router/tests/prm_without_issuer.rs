@@ -5,6 +5,7 @@
 //! that cannot complete.
 
 use super::*;
+use pretty_assertions::assert_eq;
 
 async fn metadata_status(state: Arc<AppState>) -> StatusCode {
     let request = axum::http::Request::builder()
