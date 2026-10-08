@@ -90,7 +90,8 @@ impl std::fmt::Display for ChangeError {
 ///
 /// The journal and lock derive from this, so a CLI and a gateway that spell
 /// one grant file two ways (a symlink, relative against absolute) share them.
-fn resolved(grants: &Path) -> PathBuf {
+/// `gateway.yaml`'s lock and atomic replace use it too (MIK-8153).
+pub(crate) fn resolved(grants: &Path) -> PathBuf {
     resolved_within(grants, 8)
 }
 
