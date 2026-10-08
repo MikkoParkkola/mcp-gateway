@@ -432,9 +432,18 @@ async fn a_chains_two_results_form_a_seam() {
     )
     .await;
     assert!(read.get("error").is_none(), "base: delivered: {read}");
-    // As the caller reads it: step one's field, its block's type and the
-    // chain's tool reference, then step two's field.
-    let received = format!("{FIELD_A}\ntext\n{BACKEND}:{TOOL}\n{FIELD_B}");
+    // As the caller reads it: the answer's string leaves in walk order.
+    let block = read["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    let answer: Value = serde_json::from_str(block).unwrap_or_else(|_| panic!("base: {read}"));
+    let mut leaves = Vec::new();
+    string_leaves(&answer, &mut leaves);
+    let received = leaves.join("\n");
+    assert!(
+        received.contains(FIELD_A) && received.contains(FIELD_B),
+        "base: both fields delivered: {read}"
+    );
     assert!(
         refused(&state, "key-b", 2, &received).await,
         "a seam between a chain's results was not receipted"
@@ -533,4 +542,14 @@ async fn a_redacted_field_is_no_steps_text() {
         !refused(&state, "key-b", 2, &format!("{delivered}{FIELD_B}")).await,
         "a redacted field was credited to its step"
     );
+}
+
+/// `value`'s string leaves in the order a delivery walk reads them.
+fn string_leaves<'v>(value: &'v Value, out: &mut Vec<&'v str>) {
+    match value {
+        Value::String(s) => out.push(s),
+        Value::Array(items) => items.iter().for_each(|v| string_leaves(v, out)),
+        Value::Object(map) => map.values().for_each(|v| string_leaves(v, out)),
+        _ => {}
+    }
 }
