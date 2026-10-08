@@ -143,6 +143,9 @@ pub struct InFlight {
     capacity: usize,
     /// key -> (replica holding it, deadline).
     held: tokio::sync::Mutex<std::collections::HashMap<String, (String, u64)>>,
+    /// How many times a reader walked the whole table to reclaim (`MIK-8060`).
+    #[cfg(test)]
+    walks: std::sync::atomic::AtomicUsize,
 }
 
 /// Drop exchanges whose deadline has passed.
@@ -177,6 +180,8 @@ impl InFlight {
             replica: replica.to_string(),
             capacity,
             held: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            #[cfg(test)]
+            walks: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -226,6 +231,8 @@ impl InFlight {
         now: u64,
     ) -> tokio::sync::MutexGuard<'_, std::collections::HashMap<String, (String, u64)>> {
         let mut held = self.held.lock().await;
+        #[cfg(test)]
+        self.walks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         reclaim_abandoned(&mut held, now);
         held
     }
