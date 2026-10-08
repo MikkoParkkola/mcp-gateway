@@ -169,7 +169,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "playbook YAML definitions; public",
     ),
     (
-        "src/protocol_revision_telemetry.rs",
+        "src/protocol_revision_telemetry/durable.rs",
         "telemetry window counters in a 0700 directory; no secret",
     ),
     ("src/ranking/ranker.rs", "tool usage counts JSON; no secret"),
