@@ -105,6 +105,54 @@ fn question(answer: Answer) -> Value {
     asked
 }
 
+/// What the backend answers a `tools/call` with, past the question rounds.
+fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRpcResponse> {
+    match answer {
+        Answer::DoneWithState => Ok(JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
+                   "requestState": "backend-state-1"}),
+        )),
+        Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) => Ok(JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+        )),
+        Answer::ModernList => Ok(JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": "ok"}], "isError": false, "ttlMs": 3000}),
+        )),
+        Answer::PublicScope => Ok(JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
+                   "cacheScope": "public"}),
+        )),
+        Answer::IsError => Ok(JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": "backend says no"}], "isError": true}),
+        )),
+        Answer::RpcError(code) => Ok(JsonRpcResponse::error(Some(id), code, "backend says no")),
+        Answer::RateLimited => Ok(JsonRpcResponse::error(
+            Some(id),
+            -32000,
+            "rate limit exceeded",
+        )),
+        Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
+        Answer::Unreachable => Err(crate::Error::TransportConnect("no route".to_string())),
+        Answer::AskOnce
+        | Answer::AskNoState
+        | Answer::AskMalformed
+        | Answer::AskBig
+        | Answer::AskWith(_)
+        | Answer::AskBadMeta => {
+            unreachable!("answered above")
+        }
+        Answer::Text(text) => Ok(JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": text}], "isError": false}),
+        )),
+    }
+}
+
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
 /// and counting every `tools/call`. `tools/list` names the one tool the rows
 /// call, `read`, so the direct route's listing check (F13) admits it; a
@@ -180,52 +228,7 @@ impl Transport for CountingBackend {
                 )
             });
         }
-        match &self.answer {
-            Answer::DoneWithState => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
-                       "requestState": "backend-state-1"}),
-            )),
-            Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
-            )),
-            Answer::ModernList => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "ok"}], "isError": false, "ttlMs": 3000}),
-            )),
-            Answer::PublicScope => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
-                       "cacheScope": "public"}),
-            )),
-            Answer::IsError => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "backend says no"}], "isError": true}),
-            )),
-            Answer::RpcError(code) => {
-                Ok(JsonRpcResponse::error(Some(id), *code, "backend says no"))
-            }
-            Answer::RateLimited => Ok(JsonRpcResponse::error(
-                Some(id),
-                -32000,
-                "rate limit exceeded",
-            )),
-            Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
-            Answer::Unreachable => Err(crate::Error::TransportConnect("no route".to_string())),
-            Answer::AskOnce
-            | Answer::AskNoState
-            | Answer::AskMalformed
-            | Answer::AskBig
-            | Answer::AskWith(_)
-            | Answer::AskBadMeta => {
-                unreachable!("answered above")
-            }
-            Answer::Text(text) => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": text}], "isError": false}),
-            )),
-        }
+        call_answer(self.answer, id)
     }
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
         Ok(())
