@@ -13,7 +13,7 @@ use tokio::sync::{Notify, mpsc};
 
 use super::dedupe::Seen;
 use super::fanout::SourceEvent;
-use super::outbox::{DeadPolicy, OutboxCaps};
+use super::outbox::{DeadPolicy, DeadReason, OutboxCaps, OutboxRecord};
 use super::rate::{FailureWindows, RateLimits};
 use super::records::ApiKeyRef;
 use super::services::Services;
@@ -133,6 +133,39 @@ impl EventsHub {
             max_records: self.config.dead_letter_max_records,
             max_bytes: self.config.dead_letter_max_bytes,
         }
+    }
+
+    /// The governance record of a dead letter (design 3.7).
+    pub(super) async fn dead_lettered(
+        &self,
+        services: &Services,
+        record: &OutboxRecord,
+        reason: DeadReason,
+    ) {
+        // Stamped at fan-out from the subscription the record is for; a record
+        // written before the stamp existed falls back to the store.
+        let host = if record.callback_host.is_empty() {
+            self.store
+                .get(&record.subscription_id)
+                .map(|s| super::outbox::callback_host_of(&s.url))
+                .unwrap_or_default()
+        } else {
+            record.callback_host.clone()
+        };
+        services
+            .audit_lifecycle(
+                &super::governance::Lifecycle {
+                    action: "events.dead_letter",
+                    subscription_id: &record.subscription_id,
+                    event_name: &record.name,
+                    callback_host: &host,
+                    detail: reason.as_str(),
+                    event_id: Some(&record.event_id),
+                    failed_with: Some(-32015),
+                },
+                super::governance::Attribution::Gateway,
+            )
+            .await;
     }
 
     pub(super) fn outbox_caps(&self) -> OutboxCaps {

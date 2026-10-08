@@ -377,5 +377,70 @@ impl crate::events::EventSource for AfterTenantRecord {
     }
 }
 
+/// MIK-8061 L15: the subscription expires while an attempt waits on its
+/// second source verdict (a barrier, not a sleep). An expired row is kept for
+/// its burials, so the signing row is still found; liveness is read again
+/// after that wait, so nothing is sent and the claim settles unsent. The
+/// control keeps the row live and is sent.
+#[tokio::test]
+async fn a_subscription_expiring_during_the_second_verdict_is_not_sent() {
+    for expire in [false, true] {
+        let dir = tempfile::tempdir().expect("dir");
+        let hub = open_hub(dir.path());
+        let source = Arc::new(Parking {
+            asked: AtomicUsize::new(0),
+            reached: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        hub.register_source(Arc::clone(&source) as Arc<dyn crate::events::EventSource>);
+        let services = logged_services(dir.path());
+        let (port, accepted) = counting_callback().await;
+        queued_with(&hub, port, "evt_exp", "probe.park", |_, _| {});
+        let drive = async {
+            source.reached.notified().await;
+            if expire {
+                let now = chrono::Utc::now();
+                let mut row = hub.store.subscriptions().remove(0);
+                row.expires_at = Some(now - chrono::Duration::seconds(1));
+                let caps = crate::events::store::Caps {
+                    per_principal: 10,
+                    global: 10,
+                };
+                let tail = crate::events::store::TailPolicy {
+                    ttl: Duration::from_secs(3600),
+                    max: 10,
+                    max_per_principal: 10,
+                };
+                hub.store
+                    .admit(row, true, caps, chrono::Duration::zero(), now, tail)
+                    .expect("io")
+                    .expect("refreshed to an expiry in the past");
+            }
+            source.release.notify_one();
+        };
+        tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::join!(hub.attempt(&services, "evt_exp"), drive)
+        })
+        .await
+        .expect("the attempt finished");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(source.asked.load(Ordering::SeqCst), 2, "expire {expire}");
+        assert_eq!(
+            accepted.load(Ordering::SeqCst) >= 1,
+            !expire,
+            "sent only while the subscription is live (expire {expire})"
+        );
+        if expire {
+            assert!(
+                hub.store
+                    .subscriptions()
+                    .iter()
+                    .any(|s| hub.store.has_due(&s.id, chrono::Utc::now())),
+                "the claim settled unsent: pending again for the expiry pass"
+            );
+        }
+    }
+}
+
 #[path = "worker_admission_tests.rs"]
 mod admission;

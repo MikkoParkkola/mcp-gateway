@@ -92,6 +92,10 @@ async fn assert_listing_is_payload_free(gw: &Gateway, id: &str, callback: &str) 
     }
     assert_eq!(listing(gw, "?reason=gone").await.len(), 1);
     assert!(listing(gw, "?reason=budget").await.is_empty());
+    // Every reason a dead letter is written with filters (MIK-8061).
+    for reason in ["tenant", "subscription_expired"] {
+        assert!(listing(gw, &format!("?reason={reason}")).await.is_empty());
+    }
     let (status, _) = gw
         .admin(Some(ADMIN), "GET", &format!("{LIST}?reason=nope"))
         .await;
