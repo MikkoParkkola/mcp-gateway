@@ -10,8 +10,8 @@ use chrono::Utc;
 use serde_json::{Value, json};
 
 use super::{
-    Caller, callback_url, cap_refusal, credential_ceiling, granted_ttl, subscribe_answer,
-    subscription_id, to_wire_time,
+    Caller, callback_url, cap_refusal, credential_ceiling, granted_ttl, rotation_grace,
+    subscribe_answer, subscription_id, to_wire_time,
 };
 use crate::events::EventsHub;
 use crate::events::records::Subscription;
@@ -86,8 +86,7 @@ impl EventsHub {
         };
         let caps = self.caps();
         let tail = crate::events::tail_policy(&self.config);
-        let grace = chrono::Duration::from_std(self.config.secret_rotation_grace)
-            .unwrap_or_else(|_| chrono::Duration::zero());
+        let grace = rotation_grace(self);
         let mut verified = self.store.is_verified(principal, url.as_str(), now, tail);
         for _pass in 0..2 {
             if !verified {

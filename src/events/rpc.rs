@@ -365,6 +365,12 @@ fn callback_url(raw: Option<&Value>) -> Result<url::Url, RpcError> {
         .ok_or_else(|| RpcError::invalid("delivery.url"))
 }
 
+/// How long a rotated-out secret still signs; one that does not fit is none.
+fn rotation_grace(hub: &EventsHub) -> chrono::Duration {
+    chrono::Duration::from_std(hub.config.secret_rotation_grace)
+        .unwrap_or_else(|_| chrono::Duration::zero())
+}
+
 /// The granted length for a `ttlMs` (design §6.3, TTL); `None` is no
 /// expiry. It becomes a time only at the commit ([`Grant`]).
 fn granted_ttl(hub: &EventsHub, params: &Value) -> Result<Option<chrono::Duration>, RpcError> {
@@ -477,8 +483,7 @@ impl EventsHub {
         let tail = super::tail_policy(&self.config);
         let mut verified = self.store.is_verified(&principal, url.as_str(), now, tail);
         let existing = self.store.get(&id).filter(|s| s.live(now));
-        let grace = chrono::Duration::from_std(self.config.secret_rotation_grace)
-            .unwrap_or_else(|_| chrono::Duration::zero());
+        let grace = rotation_grace(self);
         let record = Subscription {
             v: 1,
             id: id.clone(),
