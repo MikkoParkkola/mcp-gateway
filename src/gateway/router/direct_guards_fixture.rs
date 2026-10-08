@@ -57,6 +57,13 @@ pub(crate) enum Answer {
     Unreadable(Option<u64>),
     /// Like `Ok`, claiming `cacheScope: "public"` for the call's answer.
     PublicScope,
+    /// JSON-RPC `error` whose message is the given text (MIK-8139).
+    RpcErrorText(&'static str),
+    /// JSON-RPC `error` with a plain message and the given text in `data`.
+    RpcErrorData(&'static str),
+    /// A failed dispatch: the backend's refusal as `Error::JsonRpc` with the
+    /// given message, as a non-2xx JSON-RPC answer arrives (MIK-8139).
+    FailedWith(&'static str),
 }
 
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
@@ -159,6 +166,14 @@ impl Transport for CountingBackend {
                 "rate limit exceeded",
             )),
             Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
+            Answer::RpcErrorText(text) => Ok(JsonRpcResponse::error(Some(id), -32001, text)),
+            Answer::RpcErrorData(text) => Ok(JsonRpcResponse::error_with_data(
+                Some(id),
+                -32001,
+                "backend says no",
+                json!({"detail": text}),
+            )),
+            Answer::FailedWith(text) => Err(crate::Error::json_rpc(-32001, text)),
             Answer::AskOnce => unreachable!("answered above"),
             Answer::Text(text) => Ok(JsonRpcResponse::success(
                 id,

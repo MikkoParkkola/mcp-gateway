@@ -650,3 +650,74 @@ fn t3c_the_bridged_round_admits_spend_through_the_shared_stage() {
 
 #[path = "watch_poll_parity_tests.rs"]
 mod watch_poll_parity;
+
+/// MIK-8139 (`ERRSCAN.FW.1`, `ERRSCAN.FW.3`): a backend's JSON-RPC error carrying a
+/// credential, in its message, in its `data`, or as a failed dispatch, never
+/// reaches the caller on either route, after one dispatch. Meta already
+/// folds the error into a result its gates scan; the direct route must not
+/// deliver it verbatim.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn errscan_a_backend_error_with_a_credential_is_screened_on_both_routes() {
+    use super::direct_guards_fixture::fixture_firewalled_with;
+    let answers = [
+        ("message", Answer::RpcErrorText(WITH_SECRET)),
+        ("data", Answer::RpcErrorData(WITH_SECRET)),
+        ("failed", Answer::FailedWith(WITH_SECRET)),
+    ];
+    for (shape, answer) in answers {
+        for backend in BACKENDS {
+            for direct in [false, true] {
+                let at = format!("{shape} {backend} direct={direct}");
+                let fx = fixture_firewalled_with(answer, None, false).await;
+                let (_, body) = fw_call(&fx, direct, backend, None).await;
+                assert!(
+                    !body.to_string().contains(REDACTED_SECRET),
+                    "{at}: the backend's error text reached the caller unscanned: {body}"
+                );
+                assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{at}");
+            }
+        }
+    }
+}
+
+/// MIK-8139: a plain backend error (nothing the firewall acts on) is still
+/// delivered as the backend's error on the direct route: code and message
+/// unchanged, so screening never rewrites a clean refusal.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn errscan_a_clean_backend_error_is_delivered_unchanged() {
+    use super::direct_guards_fixture::fixture_firewalled_with;
+    for backend in BACKENDS {
+        let fx = fixture_firewalled_with(Answer::RpcErrorText("benign refusal"), None, false).await;
+        let (_, body) = fw_call(&fx, true, backend, None).await;
+        assert_eq!(body["error"]["code"], -32001, "{backend}: {body}");
+        assert_eq!(
+            body["error"]["message"], "benign refusal",
+            "{backend}: {body}"
+        );
+    }
+}
+
+/// MIK-8139: a keyed direct call whose backend error was screened replays
+/// the screened answer without dispatching again.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn errscan_a_screened_direct_error_replays_without_redispatch() {
+    use super::direct_guards_fixture::fixture_firewalled_with;
+    for backend in BACKENDS {
+        let fx = fixture_firewalled_with(Answer::RpcErrorText(WITH_SECRET), None, false).await;
+        let (_, first) = fw_call(&fx, true, backend, Some("errscan")).await;
+        let (_, replay) = fw_call(&fx, true, backend, Some("errscan")).await;
+        assert!(
+            !replay.to_string().contains(REDACTED_SECRET),
+            "{backend}: {replay}"
+        );
+        assert_eq!(replay["error"], first["error"], "{backend}");
+        assert_eq!(
+            fx.calls.load(Ordering::SeqCst),
+            1,
+            "{backend}: re-dispatched"
+        );
+    }
+}
