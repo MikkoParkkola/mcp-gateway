@@ -74,7 +74,7 @@ pub(crate) fn reply_to_result(reply: &SendMessageResponse) -> Value {
     }
 }
 
-fn task_to_result(task: &Task) -> Value {
+pub(crate) fn task_to_result(task: &Task) -> Value {
     let reason = status_text(task.status.message.as_ref());
     let state = task.status.state;
     match state {
@@ -99,9 +99,10 @@ fn task_to_result(task: &Task) -> Value {
             "the A2A task ended {}: {reason}",
             state_name(state)
         )),
+        // The transport turns these into an input round before they get here;
+        // a caller that reaches this arm still learns what the agent asked.
         TaskState::InputRequired | TaskState::AuthRequired => error_result(&format!(
-            "the A2A agent stopped in state {} and asked: {reason}. This gateway cannot relay \
-             that question yet; rephrase the request with the missing detail.",
+            "the A2A agent is waiting ({}): {reason}",
             state_name(state)
         )),
         TaskState::Submitted | TaskState::Working | TaskState::Unspecified => {
@@ -127,7 +128,7 @@ fn state_name(state: TaskState) -> &'static str {
     }
 }
 
-fn status_text(message: Option<&Message>) -> String {
+pub(crate) fn status_text(message: Option<&Message>) -> String {
     let text: Vec<&str> = message
         .map(|message| {
             message
@@ -144,7 +145,7 @@ fn status_text(message: Option<&Message>) -> String {
     }
 }
 
-fn error_result(text: &str) -> Value {
+pub(crate) fn error_result(text: &str) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": true})
 }
 
