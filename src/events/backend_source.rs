@@ -310,15 +310,16 @@ impl EventsHub {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        // A removed backend takes its subscriptions with it, as a reload that
-        // removes a webhook route does; re-adding the name starts clean.
+        // Every change reconciles the backend's rows, keys and listener
+        // (MIK-7940 family): a removed backend takes every kind with it, an
+        // ineligible one its upstream kinds, and a re-added one is listened
+        // to at once.
+        self.reconcile_backend(backend);
         if let Some(source) = self.source(SourceKind::BackendNotification)
             && !source.offers(&event_name(backend))
         {
             // A report still waiting for its quiet period must not outlive the backend.
             self.debounce.latest.lock().remove(backend);
-            self.withdraw(&[event_name(backend)]);
-            self.reconcile_stops_in_background();
             return;
         }
         let generation = {
