@@ -210,3 +210,35 @@ async fn a_legacy_watch_waits_for_its_class_then_polls_shared() {
     assert_eq!(class(&hub), Some(WatchClass::Free), "pinned shared");
     assert!(hub.store.held(&id).is_none(), "not held");
 }
+
+/// MIK-8151: a watch row written before its class was recorded, whose
+/// capability a whole catalogue read does not offer, is held and bounded
+/// with no class recorded; once the capability is offered the row takes its
+/// class, its poller starts and resumes it.
+#[tokio::test]
+async fn a_legacy_watch_the_catalogue_drops_is_held_then_resumes() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(Vec::new());
+    admit(&hub, "p", NAME, &json!({}));
+    hub.install_watch_source(Arc::clone(&host) as Arc<dyn WatchHost>);
+    tokio::task::yield_now().await;
+    sweep(&hub).await;
+    let id = only_row(&hub);
+    assert!(hub.store.held(&id).is_some(), "held by a whole read");
+    let row = &hub.store.subscriptions()[0];
+    assert!(row.held_until.is_some(), "bounded: {row:?}");
+    assert_eq!(row.watch_class, None, "no class guessed");
+    *host.targets.lock() = vec![target("weather", true, CredentialUse::Free)];
+    sweep(&hub).await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while hub.store.held(&id).is_some() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(hub.store.held(&id).is_none(), "resumed by its poller");
+    assert_eq!(
+        hub.store.subscriptions()[0].watch_class,
+        Some(WatchClass::Free),
+        "pinned once offered"
+    );
+}
