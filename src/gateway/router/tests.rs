@@ -58,6 +58,8 @@ mod metrics_scrape;
 mod authz_and_sse;
 mod code_mode_param;
 mod direct_route_identity;
+/// `MIK-7642.PR.B` C2: a client disconnect cancels the backend call.
+mod mik7642_disconnect;
 mod origin_gate;
 mod playbook_authz;
 mod request_parsing;
