@@ -160,8 +160,9 @@ async fn full_of_live_holds() -> InFlight {
 async fn row_09_readers_of_a_table_with_nothing_expired_never_walk_it() {
     let table = full_of_live_holds().await;
     let before = table.walks.load(std::sync::atomic::Ordering::SeqCst);
+    let key = "absent".to_string();
     for _ in 0..100 {
-        assert!(matches!(table.route("absent", T).await, Routing::Gone));
+        assert!(matches!(table.route(&key, T).await, Routing::Gone));
     }
     assert_eq!(table.len(T).await, IN_FLIGHT_CAPACITY);
     let walked = table.walks.load(std::sync::atomic::Ordering::SeqCst) - before;
