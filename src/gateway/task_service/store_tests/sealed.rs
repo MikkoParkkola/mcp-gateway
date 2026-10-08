@@ -567,3 +567,22 @@ async fn a_reread_after_shutdown_puts_no_seal_back() {
         "a re-read after shutdown sealed the caller's admission again"
     );
 }
+
+/// The admin view names a sealed file by its full path even when the store
+/// directory is configured relative, so the operator never resolves it
+/// against the gateway's working directory.
+#[tokio::test]
+async fn sealed_files_are_absolute_under_a_relative_store_dir() {
+    let dir = tempfile::tempdir_in(".").unwrap();
+    // The store creates its own private directory inside the scratch one.
+    let relative = Path::new(".")
+        .join(dir.path().file_name().unwrap())
+        .join("store");
+    let store = open(&relative).await;
+    store.seal_for_test("task-relative.json");
+
+    let files = store.sealed_files();
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert!(files[0].is_absolute(), "not a full path: {files:?}");
+    assert!(files[0].ends_with("task-relative.json"), "{files:?}");
+}
