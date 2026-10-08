@@ -187,6 +187,7 @@ backend" and "fails a capability file" first.**
 | 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
 | 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`, except those on lines the change deletes (a removed backend's entry, or a field an edit drops), which the command names by line number. On a file with comments, a change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. A file without comments is rewritten as before. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
 | 162 | An A2A backend (`transport: a2a`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public | None for gateway operators. Library users: configure the agent as a `transport: a2a` backend, or use your own A2A client to poll or cancel tasks |
+| 163 | A running gateway's web UI and admin edits load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4274,6 +4275,30 @@ send messages to an agent can configure the agent as a backend, as above. A prog
 polled or cancelled tasks itself (`get_task`, `cancel_task`), or continued a conversation by its
 `context_id`, needs its own A2A client: each `send_message` call to the backend starts a new
 conversation with the agent and answers with the task's final result.
+
+## 163. Config writers take a lock
+
+**Startup:** no notice
+
+Two writers editing `gateway.yaml` at the same moment (the web UI saving while a CLI command
+runs, or two gateways on one config) could lose a change: each loaded the file, edited its copy
+and wrote it, and the later write erased the earlier one while both reported success.
+
+A running gateway now holds one lock from loading the file through writing it and reloading
+what it wrote, for every web UI and admin edit. The lock is a hidden file,
+`.gateway.yaml.lock`, next to the config. It stays there by design: deleting it would let two
+writers lock different files. If your config lives in a git repository, add it to
+`.gitignore`.
+
+CLI writes take the same lock for their write. One that finds it held prints
+`Waiting for gateway.yaml ...` and continues once it is free; if another writer holds it for
+30 seconds, the command writes nothing and exits non-zero with "Not saved: ... locked by
+another writer; retry." A config directory where the lock file cannot be created (a
+read-only mount) refuses the write instead of writing unlocked. A write refused because the
+existing file does not load leaves the directory as it was.
+
+Editors such as vim do not take the lock; avoid editing the file by hand while a CLI command
+or the web UI is saving it.
 
 ## Upgrading from 3.5.x: a walkthrough
 
