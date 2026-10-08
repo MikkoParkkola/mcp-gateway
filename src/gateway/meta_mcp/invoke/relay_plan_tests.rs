@@ -808,5 +808,34 @@ async fn probe_mik8124_in_process_rate() {
             fails += 1;
         }
     }
-    assert_eq!(fails, 0, "PROBE MIK-8124: {fails}/{RUNS} in-process runs refused alice");
+    assert_eq!(
+        fails, 0,
+        "PROBE MIK-8124: {fails}/{RUNS} in-process runs refused alice"
+    );
+}
+
+/// Diagnostic probe for MIK-8124 (throwaway only): the same scenario under
+/// a fresh fingerprint key each run.
+#[tokio::test]
+async fn probe_mik8124_key_rate() {
+    use crate::security::firewall::collusion::PROBE_KEY;
+    const RUNS: usize = 1000;
+    let mut fails = 0;
+    for _ in 0..RUNS {
+        PROBE_KEY.with(|k| *k.borrow_mut() = Some(std::hash::RandomState::new()));
+        let (meta, firewall) = relay_meta();
+        let copy = filler("rep", 25);
+        let step = json!({"a": vec![copy.as_str(); 800], "body": format!("{PROSE} {SECRET}")});
+        let answer = plan_answer(&json!({"a": copy, "body": PROSE}));
+        deliver_step(&meta, &step, &answer).await;
+        carol_holds(&firewall, "a", PROSE);
+        if refused(&firewall, "alice", PROSE) {
+            fails += 1;
+        }
+    }
+    PROBE_KEY.with(|k| *k.borrow_mut() = None);
+    assert_eq!(
+        fails, 0,
+        "PROBE MIK-8124 key: {fails}/{RUNS} keys refused alice"
+    );
 }

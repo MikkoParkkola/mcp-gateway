@@ -249,6 +249,21 @@ fn key() -> &'static RandomState {
     KEY.get_or_init(RandomState::new)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// MIK-8124 probe: a key a test can replace on its own thread.
+    pub(crate) static PROBE_KEY: std::cell::RefCell<Option<RandomState>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn hash_one<T: std::hash::Hash>(value: T) -> u64 {
+    #[cfg(test)]
+    if let Some(h) = PROBE_KEY.with(|k| k.borrow().as_ref().map(|k| k.hash_one(&value))) {
+        return h;
+    }
+    key().hash_one(value)
+}
+
 fn count(n: usize) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
 }
@@ -270,7 +285,7 @@ impl CollusionDetector {
         reason = "the key is per process; a method keeps callers from hashing with any other"
     )]
     pub(crate) fn digest(&self, id: &str) -> u64 {
-        key().hash_one(id)
+        hash_one(id)
     }
 
     /// Winnowed fingerprints of `text`, distinct, in position order.
@@ -311,7 +326,7 @@ impl CollusionDetector {
             return Vec::new();
         }
         (0..=chars - K)
-            .map(|i| key().hash_one(&norm[bounds[i]..bounds[i + K]]))
+            .map(|i| hash_one(&norm[bounds[i]..bounds[i + K]]))
             .collect()
     }
 
