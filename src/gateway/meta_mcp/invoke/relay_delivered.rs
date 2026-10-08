@@ -143,6 +143,8 @@ impl MetaMcp {
                     digest,
                     in_plan: false,
                     pending_retain: false,
+                    step: None,
+                    kind: super::Kind::Delivered,
                 });
             }
             #[cfg(not(feature = "firewall"))]
@@ -244,13 +246,18 @@ fn keep_plan_receipts(
     // were dropped at staging and are dropped again here counts once.
     let staged = super::RELAY_STAGED.try_with(|s| fw.delivered_for_plan(answer, Some(s)));
     let Some(delivered) = staged.unwrap_or_else(|_| fw.delivered_for_plan(answer, None)) else {
-        receipts.retain(|r| !r.in_plan);
+        receipts.retain(|r| !r.in_plan && r.kind != super::Kind::Seam);
         return;
     };
     for r in receipts.iter_mut().filter(|r| r.in_plan) {
         let digest = std::mem::take(&mut r.digest);
         r.digest = fw.retain_delivered(digest, &delivered);
         r.pending_retain = false;
+    }
+    super::seams::add_seams(fw, receipts, answer);
+    for r in receipts.iter_mut().filter(|r| r.in_plan) {
+        let digest = std::mem::take(&mut r.digest);
+        r.digest = fw.cap_kept(digest);
     }
 }
 
