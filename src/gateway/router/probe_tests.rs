@@ -439,6 +439,18 @@ async fn health_is_degraded_while_a_task_row_is_sealed() {
     assert_eq!(fields, ["status", "version"], "public body shape");
     let admin = admin_health(&router).await;
     assert_eq!(admin["task_store"]["sealed_rows"], 1, "{admin}");
+    // The operator never hunts: the admin view names the file and the one
+    // action that clears it (operator rule, ideal UX).
+    let files = admin["task_store"]["sealed_files"].to_string();
+    assert!(
+        files.contains("task-00000000-0000-4000-8000-000000000000.json"),
+        "the sealed file is not named: {admin}"
+    );
+    let action = admin["task_store"]["action"].as_str().unwrap_or_default();
+    assert!(
+        action.contains("repair or remove") && action.contains("next expiry sweep"),
+        "the clearing action is not stated: {admin}"
+    );
 
     // No such file: the re-read clears it.
     tasks.reread_sealed().await;
@@ -446,6 +458,11 @@ async fn health_is_degraded_while_a_task_row_is_sealed() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let admin = admin_health(&router).await;
     assert_eq!(admin["task_store"]["sealed_rows"], 0, "{admin}");
+    assert_eq!(
+        admin["task_store"]["sealed_files"],
+        serde_json::json!([]),
+        "{admin}"
+    );
 }
 
 async fn admin_health(router: &axum::Router) -> serde_json::Value {

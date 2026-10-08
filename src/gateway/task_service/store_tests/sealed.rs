@@ -547,3 +547,23 @@ async fn a_shutdown_releases_only_its_own_share_of_the_seal_once() {
         "a second shutdown released the other holder's seal"
     );
 }
+
+/// Seat-2 review: a sweep's re-read that finishes after shutdown cannot put
+/// the service's share of the seal back.
+#[tokio::test]
+async fn a_reread_after_shutdown_puts_no_seal_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_path, _rows, admission, service) = sealed_service(dir.path(), &["k-sealed"]).await;
+    service.shutdown().await.expect("the store closes");
+    assert_eq!(
+        admission.sealed_for_test(),
+        0,
+        "premise: the share was released"
+    );
+    service.reread_sealed().await;
+    assert_eq!(
+        admission.sealed_for_test(),
+        0,
+        "a re-read after shutdown sealed the caller's admission again"
+    );
+}
