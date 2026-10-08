@@ -47,30 +47,41 @@ async fn a_name_that_cannot_be_looked_at_stays_sealed() {
 }
 
 /// A symlink at the row's name is never followed: the open refuses it and the
-/// seal stays, even when the link leads to a readable private record.
+/// seal stays, although the link leads to the task's own valid record.
 #[tokio::test]
 async fn a_symlinked_row_stays_sealed() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tasks");
     let store = open(&path).await;
+    let (id, _) = settled_task(&store, &services(), "k-link").await;
+    let row = path.join(format!("{id}.json"));
     let elsewhere = dir.path().join("elsewhere.json");
-    std::fs::write(&elsewhere, b"{}").unwrap();
-    private(&elsewhere);
-    std::os::unix::fs::symlink(&elsewhere, path.join(NAME)).unwrap();
-    assert_eq!(reread_open(&store, NAME).await, (1, vec![]));
+    std::fs::rename(&row, &elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &row).unwrap();
+    assert_eq!(
+        reread_open(&store, &format!("{id}.json")).await,
+        (1, vec![])
+    );
 }
 
-/// A row larger than the record cap is not read past the cap; it stays sealed.
+/// A valid row padded one byte past the record cap is not read past the cap;
+/// it stays sealed.
 #[tokio::test]
 async fn a_row_over_the_record_cap_stays_sealed() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tasks");
     let store = open(&path).await;
-    let row = path.join(NAME);
+    let (id, _) = settled_task(&store, &services(), "k-big").await;
+    let row = path.join(format!("{id}.json"));
+    let mut bytes = std::fs::read(&row).unwrap();
     let cap = super::super::store::StoreLimits::default().record_bytes;
-    std::fs::write(&row, vec![b' '; cap + 1]).unwrap();
+    bytes.resize(cap + 1, b' ');
+    std::fs::write(&row, bytes).unwrap();
     private(&row);
-    assert_eq!(reread_open(&store, NAME).await, (1, vec![]));
+    assert_eq!(
+        reread_open(&store, &format!("{id}.json")).await,
+        (1, vec![])
+    );
 }
 
 /// A valid row copied under another task's name names another task: the
@@ -106,4 +117,25 @@ async fn a_row_whose_envelope_still_reads_is_repaired_by_its_named_id() {
         reread_open(&store, &format!("{id}.json")).await,
         (0, vec![id])
     );
+}
+
+/// The same envelope-only row under another task's name: the id it names is
+/// not the file's, so it stays sealed.
+#[tokio::test]
+async fn an_envelope_only_row_under_another_name_stays_sealed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (id, _) = settled_task(&store, &services(), "k-moved").await;
+    let text = std::fs::read_to_string(path.join(format!("{id}.json"))).unwrap();
+    let end = text.rfind('}').expect("a record object");
+    let copy = path.join(NAME);
+    assert_ne!(format!("{id}.json"), NAME);
+    std::fs::write(
+        &copy,
+        format!("{},\"tail\":@{}", &text[..end], &text[end..]),
+    )
+    .unwrap();
+    private(&copy);
+    assert_eq!(reread_open(&store, NAME).await, (1, vec![]));
 }
