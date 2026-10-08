@@ -184,9 +184,12 @@ pub(crate) fn write_config_with(
 /// edited (setup and discovery import). A write that would drop comments is
 /// refused under [`CommentLoss::Refuse`], and the refusal names the comment
 /// lines; under [`CommentLoss::Rewrite`] (the CLI's `--force`) the file is
-/// rewritten in full instead and that refusal is returned beside `edit`'s
-/// value, so the caller can say which lines went. An edit that changes
-/// nothing writes nothing, in either mode.
+/// rewritten in full instead. An edit that changes nothing writes nothing, in
+/// either mode.
+///
+/// Beside `edit`'s value comes the note for the user, ready to print, when
+/// there is one: the comment lines a forced rewrite dropped, or the comment
+/// lines that went with a removed entry (line numbers only, never text).
 ///
 /// # Errors
 ///
@@ -202,19 +205,39 @@ pub fn write_config_preserving<T>(
         say_waiting(path, lock);
     })
     .map_err(|e| not_locked(path, e))?;
+    let before = std::fs::read_to_string(path).unwrap_or_default();
     let mut config = load_existing_or_default(path)
         .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
     let value = edit(&mut config)?;
     let failed = |message: String| format!("Failed to write {}: {message}", path.display());
     match write_spliced(path, &config, CommentLoss::Refuse, Splice::NoRemoval) {
-        Ok(()) => Ok((value, None)),
+        Ok(()) => {
+            // A removed entry takes its own comments with it; name the lines.
+            // Both texts are read under the lock, so this is this write's.
+            let after = std::fs::read_to_string(path).unwrap_or_default();
+            let gone = comments::dropped_comment_lines(&before, &after);
+            let note = (!gone.is_empty()).then(|| {
+                format!(
+                    "Note: comments inside the changed entry went with it ({}): {}",
+                    path.display(),
+                    gone.join("; ")
+                )
+            });
+            Ok((value, note))
+        }
         Err(Unwritten::CommentLoss(refusal)) if mode == CommentLoss::Rewrite => {
             write_spliced(path, &config, CommentLoss::Rewrite, Splice::NoRemoval).map_err(|e| {
                 match e {
                     Unwritten::Failed(message) | Unwritten::CommentLoss(message) => failed(message),
                 }
             })?;
-            Ok((value, Some(refusal)))
+            Ok((
+                value,
+                Some(format!(
+                    "Warning: --force rewrote {} in full. Without it this write is refused:\n  {refusal}",
+                    path.display()
+                )),
+            ))
         }
         Err(Unwritten::CommentLoss(refusal)) => Err(refusal),
         Err(Unwritten::Failed(message)) => Err(failed(message)),
