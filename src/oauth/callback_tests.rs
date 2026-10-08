@@ -142,6 +142,17 @@ async fn an_ipv6_callback_host_is_advertised_bracketed_and_bound() {
     served_where_advertised("[0:0:0:0:0:0:0:1]", "[0:0:0:0:0:0:0:1]").await;
 }
 
+/// MIK-7739: the redirect URI's host keeps the configured IPv6 spelling,
+/// checked without binding, so it holds on a machine with no IPv6 loopback.
+#[test]
+fn an_ipv6_callback_host_keeps_its_configured_spelling() {
+    let ip = "0:0:0:0:0:0:0:1".parse().ok();
+    assert_eq!(url_host("0:0:0:0:0:0:0:1", ip), "[0:0:0:0:0:0:0:1]");
+    assert_eq!(url_host("[0:0:0:0:0:0:0:1]", ip), "[0:0:0:0:0:0:0:1]");
+    assert_eq!(url_host("::1", "::1".parse().ok()), "[::1]");
+    assert_eq!(url_host("127.0.0.1", "127.0.0.1".parse().ok()), "127.0.0.1");
+}
+
 /// Any other host keeps today's behaviour: the redirect URI names
 /// `localhost`, and the server answers on 127.0.0.1, never beyond loopback.
 #[tokio::test]
