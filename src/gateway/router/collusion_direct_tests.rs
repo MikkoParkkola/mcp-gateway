@@ -210,6 +210,8 @@ struct Setup {
     tenants: bool,
     /// The firewall's audit log, for a row that reads its entries.
     audit_log: Option<std::path::PathBuf>,
+    /// Arms the Meta-MCP (cost governance, provenance stamping).
+    arm: fn(MetaMcp) -> MetaMcp,
 }
 
 impl Default for Setup {
@@ -225,6 +227,7 @@ impl Default for Setup {
             rules: "[{match: \"*\", action: allow}]",
             tenants: false,
             audit_log: None,
+            arm: std::convert::identity,
         }
     }
 }
@@ -300,7 +303,7 @@ async fn fixture(setup: Setup) -> Fixture {
     state_mut.firewall = Some(Arc::new(Firewall::from_config(config, None)));
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
-    state_mut.meta_mcp = Arc::new(meta);
+    state_mut.meta_mcp = Arc::new((setup.arm)(meta));
     Fixture {
         state,
         read,
@@ -766,6 +769,7 @@ mod catalogue;
 mod meta;
 mod relay_split;
 mod verdict;
+mod writes;
 
 /// Row 13: an allowlisted flow is not refused under `block`; the same content
 /// from a source outside the entry still is.
