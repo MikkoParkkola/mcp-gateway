@@ -214,7 +214,7 @@ async fn watch_is_offered_only_for_read_only_capabilities() {
         .authorize("p", "watch.send_mail.changed", &json!({}))
         .await
         .expect_err("side-effecting");
-    assert_eq!(refused.code, -32012);
+    assert_eq!(refused.code, -32011, "not offered: refused, never revoked");
 }
 
 /// U2: A, A, B, B, A emits after the third and fifth polls; the first poll
