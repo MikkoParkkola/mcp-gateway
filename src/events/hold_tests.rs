@@ -367,3 +367,22 @@ async fn a_held_refresh_whose_row_goes_at_the_commit_is_checked_afresh() {
     assert!(answer.is_err(), "checked afresh and refused: {answer:?}");
     assert!(hub.store.get(&id).is_none(), "not recreated");
 }
+
+/// Review G4: a refresh records the payload fields the route carries at its
+/// commit, not at its read: a reload that widens the payload while the
+/// refresh waits is what the row commits to.
+#[tokio::test]
+async fn a_refresh_records_the_payload_fields_served_at_its_commit() {
+    let (_dir, hub, registry) = restarted(json!({}), &full()).await;
+    let started = hub.lifecycle.lock().await;
+    let hub_ref = &hub;
+    let routes = &registry;
+    let widen = async move {
+        refresh(hub_ref, routes, &wider());
+        drop(started);
+    };
+    let (answer, ()) = tokio::join!(subscribe(&hub, json!({})), widen);
+    let id = id_of(&answer.expect("refresh"));
+    let fields = hub.store.get(&id).expect("row").payload_fields;
+    assert!(fields.iter().any(|f| f == "tag"), "{fields:?}");
+}
