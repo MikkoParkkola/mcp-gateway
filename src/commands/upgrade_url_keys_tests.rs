@@ -124,3 +124,33 @@ fn upgrade_refuses_a_named_config_that_does_not_exist() {
         assert!(!data.exists(), "dry_run={dry_run}: the upgrade went ahead");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn upgrade_refuses_a_config_that_is_not_a_regular_file_at_once() {
+    // A FIFO would block a plain read forever, dry run included.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let status = std::process::Command::new("mkfifo")
+        .args(["-m", "600"])
+        .arg(&path)
+        .status()
+        .expect("run mkfifo(1)");
+    assert!(status.success(), "mkfifo(1) failed");
+    let data = dir.path().join("data");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (probe, stamp_dir) = (path.clone(), data.clone());
+    std::thread::spawn(move || {
+        let _ = tx.send(run_upgrade_with_config(
+            true,
+            true,
+            Some(&stamp_dir),
+            Some(&probe),
+        ));
+    });
+    let code = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("upgrade blocked on a FIFO");
+    assert_eq!(code, ExitCode::FAILURE);
+    assert!(!data.exists(), "the upgrade went ahead");
+}
