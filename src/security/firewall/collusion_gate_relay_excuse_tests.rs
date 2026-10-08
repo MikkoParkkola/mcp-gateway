@@ -30,9 +30,11 @@ fn observing() -> Firewall {
 
 /// Text `i`: unique words, so no two texts share a k-gram.
 fn text(i: usize) -> String {
-    (0..60)
-        .map(|n| format!("x{i}y{} ", n * 7_919 % 10_007))
-        .collect()
+    use std::fmt::Write as _;
+    (0..60).fold(String::new(), |mut text, n| {
+        let _ = write!(text, "x{i}y{} ", n * 7_919 % 10_007);
+        text
+    })
 }
 
 /// `text` cut into 20-byte pieces (ASCII), under keys that sort in order.
