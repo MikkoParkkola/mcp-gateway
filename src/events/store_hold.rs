@@ -45,7 +45,7 @@ impl Store {
     /// Apply what `judge` decides for each live row it owns (`Some`): hold
     /// it, stamping a row that becomes held (`unoffered_since` now,
     /// `held_until` now plus `max_ttl`), or resume it, clearing the stamp;
-    /// and back-fill payload fields and the watch class. A row the judge
+    /// and back-fill payload fields. A row the judge
     /// does not own (`None`) keeps its hold state as it is: each source
     /// judges its own rows (MIK-8122). A row past its effective expiry is
     /// left to the expiry path, never resumed. The held set is in place even
@@ -129,7 +129,7 @@ impl Store {
         let legacy: Vec<Subscription> = state
             .subs
             .values()
-            .filter(|s| s.name == name && s.watch_class.is_none())
+            .filter(|s| s.name == name && s.watch_class.is_none() && s.live(Utc::now()))
             .cloned()
             .collect();
         for mut row in legacy {
