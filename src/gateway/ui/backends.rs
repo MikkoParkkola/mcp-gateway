@@ -248,7 +248,8 @@ async fn add_backend(
         Err(e) => return unwritten(e),
     };
 
-    // The reload registered it, and registration announces (F24).
+    // The reload registered it; listeners hear of it once its tools are
+    // listed, through the change drain (F24, `MIK-8127`).
 
     (
         StatusCode::CREATED,
@@ -306,7 +307,8 @@ async fn remove_backend(
         Err(e) => return unwritten(e),
     }
 
-    // The reload removed it, and removal announces (F24).
+    // The reload removed it; listeners hear of it if it had tools they could
+    // see, through the change drain (F24, `MIK-8127`).
 
     // A removed entry takes its own comments with it (MIK-8051): name the
     // lines, never their text (a `#` inside a quoted value can be a secret).
