@@ -25,6 +25,15 @@ type Forms = Arc<Mutex<Vec<HashMap<String, String>>>>;
 /// A token endpoint on loopback. `Some(token)` answers with that access token;
 /// `None` refuses every request with `invalid_grant`.
 async fn token_endpoint(answer: Option<&'static str>) -> (String, Forms) {
+    token_endpoint_issuing(answer, Some("r-next")).await
+}
+
+/// As [`token_endpoint`], answering with `refresh` as the refresh token, or
+/// with none at all, as a server that keeps its refresh tokens does.
+async fn token_endpoint_issuing(
+    answer: Option<&'static str>,
+    refresh: Option<&'static str>,
+) -> (String, Forms) {
     use axum::{Form, Json, Router, http::StatusCode, response::IntoResponse, routing::post};
     let forms: Forms = Arc::default();
     let seen = Arc::clone(&forms);
@@ -34,13 +43,17 @@ async fn token_endpoint(answer: Option<&'static str>) -> (String, Forms) {
             seen.lock().unwrap().push(form);
             async move {
                 match answer {
-                    Some(token) => Json(serde_json::json!({
-                        "access_token": token,
-                        "token_type": "Bearer",
-                        "expires_in": 3600,
-                        "refresh_token": "r-next"
-                    }))
-                    .into_response(),
+                    Some(token) => {
+                        let mut body = serde_json::json!({
+                            "access_token": token,
+                            "token_type": "Bearer",
+                            "expires_in": 3600,
+                        });
+                        if let Some(refresh) = refresh {
+                            body["refresh_token"] = refresh.into();
+                        }
+                        Json(body).into_response()
+                    }
                     None => (
                         StatusCode::BAD_REQUEST,
                         Json(serde_json::json!({ "error": "invalid_grant" })),
@@ -306,13 +319,81 @@ async fn get_token_refreshes_an_expired_token() {
     let dir = tempfile::tempdir().unwrap();
     let (issuer, forms) = token_endpoint(Some("access-b")).await;
     let client = client(dir.path(), Some(&issuer));
-    *client.current_token.write() = Some(token("access-old", Some("r1"), Expiry::Expired));
+    cache_and_store(&client, token("access-old", Some("r1"), Expiry::Expired));
 
     assert_eq!(client.get_token().await.unwrap(), "access-b");
     let forms = forms.lock().unwrap().clone();
     assert_eq!(forms.len(), 1, "{forms:?}");
     assert_eq!(forms[0]["grant_type"], "refresh_token");
     assert_eq!(forms[0]["refresh_token"], "r1");
+}
+
+/// Cache `token` in `client` and store it as the credential, as a login does:
+/// a refresh sends the stored refresh token, never an in-memory one (MIK-8018).
+fn cache_and_store(client: &OAuthClient, token: TokenInfo) {
+    let key = client.credential_key().unwrap();
+    client.storage.save(&key, RESOURCE, &token).unwrap();
+    *client.current_token.write() = Some(token);
+}
+
+/// Expire the stored record and the cached copy alike, so the next
+/// `get_token` refreshes rather than taking up a fresher stored token
+/// (MIK-8018: a client adopts a fresh stored token instead of refreshing).
+fn expire_stored_and_cached(client: &OAuthClient) {
+    let key = client.credential_key().unwrap();
+    let mut stored = client.storage.load(&key, RESOURCE).expect("a stored token");
+    stored.expires_at = Some(1);
+    client.storage.save(&key, RESOURCE, &stored).unwrap();
+    *client.current_token.write() = Some(stored);
+}
+
+/// MIK-8021.KEEPRT.1: a server that answers a refresh without a new refresh
+/// token means "keep the one you have" (RFC 6749 section 6). The kept token
+/// must survive in memory and in storage, so the next expiry refreshes again
+/// instead of sending the user through a login.
+#[tokio::test]
+async fn a_refresh_without_a_new_refresh_token_keeps_the_old_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, forms) = token_endpoint_issuing(Some("access-b"), None).await;
+    let client = client(dir.path(), Some(&issuer));
+    cache_and_store(&client, token("access-old", Some("r1"), Expiry::Expired));
+
+    assert_eq!(client.get_token().await.unwrap(), "access-b");
+    let cached = client.current_token.read().clone().expect("a cached token");
+    assert_eq!(cached.refresh_token.as_deref(), Some("r1"), "cached");
+    let key = client.credential_key().unwrap();
+    let stored = client.storage.load(&key, RESOURCE).expect("a stored token");
+    assert_eq!(stored.refresh_token.as_deref(), Some("r1"), "stored");
+
+    // The next expiry refreshes headlessly with the kept token.
+    expire_stored_and_cached(&client);
+    assert_eq!(client.get_token().await.unwrap(), "access-b");
+    let forms = forms.lock().unwrap().clone();
+    assert_eq!(forms.len(), 2, "{forms:?}");
+    assert_eq!(forms[1]["refresh_token"], "r1");
+}
+
+/// MIK-8021.KEEPRT.2: a server that rotates is still followed.
+#[tokio::test]
+async fn a_refresh_with_a_new_refresh_token_stores_the_new_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, forms) = token_endpoint(Some("access-b")).await;
+    let client = client(dir.path(), Some(&issuer));
+    cache_and_store(&client, token("access-old", Some("r1"), Expiry::Expired));
+
+    assert_eq!(client.get_token().await.unwrap(), "access-b");
+    let cached = client.current_token.read().clone().expect("a cached token");
+    assert_eq!(cached.refresh_token.as_deref(), Some("r-next"), "cached");
+    let key = client.credential_key().unwrap();
+    let stored = client.storage.load(&key, RESOURCE).expect("a stored token");
+    assert_eq!(stored.refresh_token.as_deref(), Some("r-next"), "stored");
+
+    // The next refresh sends the rotated token, never the replaced one.
+    expire_stored_and_cached(&client);
+    assert_eq!(client.get_token().await.unwrap(), "access-b");
+    let forms = forms.lock().unwrap().clone();
+    assert_eq!(forms.len(), 2, "{forms:?}");
+    assert_eq!(forms[1]["refresh_token"], "r-next");
 }
 
 /// No authorization server known: the refresh cannot run, the fall-back to
@@ -494,6 +575,80 @@ async fn taking_up_a_shared_login_takes_up_its_registered_client_id() {
     );
 }
 
+/// MIK-7982: a client with a configured id that takes up a stored login keeps
+/// its configured id, whatever registered id that login stored.
+#[tokio::test]
+async fn taking_up_a_shared_login_keeps_a_configured_client_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let issuer = "https://as.example";
+    let client = client(dir.path(), Some(issuer))
+        .with_login_gate(Arc::new(crate::oauth::login_gate::LoginGate::default()));
+    let key = storage_key(BACKEND, issuer);
+    let shared = token("shared-access", None, Expiry::Live);
+    client.storage.save(&key, RESOURCE, &shared).unwrap();
+    client
+        .storage
+        .save_client_id(&key, RESOURCE, "another-registered-id")
+        .unwrap();
+
+    let access = client.authorize_shared(true, None).await.unwrap();
+
+    assert_eq!(access, "shared-access", "the stored login is taken up");
+    assert_eq!(
+        client.client_id.read().as_deref(),
+        Some(CLIENT_ID),
+        "a configured id is never replaced by a stored one"
+    );
+}
+
+/// MIK-7982: a stored login is taken up only when its token is live and was
+/// stored under this client's own key (backend and issuer) and resource;
+/// otherwise the caller opens its own.
+#[tokio::test]
+async fn an_expired_or_foreign_stored_login_is_not_taken_up() {
+    let issuer = "https://as.example";
+    for (stored_issuer, resource, expiry, case) in [
+        (issuer, RESOURCE, Expiry::Expired, "an expired token"),
+        (
+            issuer,
+            "https://other.example.com/mcp",
+            Expiry::Live,
+            "another resource's token",
+        ),
+        (
+            "https://other-as.example",
+            RESOURCE,
+            Expiry::Live,
+            "another issuer's token",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = client(dir.path(), Some(issuer));
+        let opened = Arc::new(tokio::sync::Notify::new());
+        let signal = Arc::clone(&opened);
+        client.open_browser = Box::new(move |_| {
+            signal.notify_one();
+            true
+        });
+        let client =
+            client.with_login_gate(Arc::new(crate::oauth::login_gate::LoginGate::default()));
+        let stored = token("stored-access", None, expiry);
+        client
+            .storage
+            .save(&storage_key(BACKEND, stored_issuer), resource, &stored)
+            .unwrap();
+
+        let opened_own = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::select! {
+                taken = client.authorize_shared(true, None) => panic!("{case} was taken up: {taken:?}"),
+                () = opened.notified() => {}
+            }
+        })
+        .await;
+        assert!(opened_own.is_ok(), "{case}: no login opened within 10 s");
+    }
+}
+
 /// MIK-7982.BOUND.1: when the window passes, the callback listener is closed
 /// before the wait returns, not on a later poll of an aborted task: the port
 /// binds again with no await in between.
@@ -521,4 +676,36 @@ async fn the_window_closes_the_callback_listener_before_the_wait_returns() {
     );
     std::net::TcpListener::bind(("127.0.0.1", port))
         .expect("the window's end closes the callback listener before it returns");
+}
+
+/// MIK-7982: a login cancelled before it registers (a restart or shutdown of
+/// the backend) ends as cancelled and opens no browser.
+#[tokio::test]
+async fn a_login_cancelled_before_registration_opens_no_browser() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client(dir.path(), Some("https://as.example"));
+    let opened = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seen = Arc::clone(&opened);
+    client.open_browser = Box::new(move |_| {
+        seen.store(true, std::sync::atomic::Ordering::SeqCst);
+        true
+    });
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+
+    let ended = tokio::time::timeout(
+        Duration::from_secs(10),
+        client.authorize_until(&cancel, None),
+    )
+    .await
+    .expect("a cancelled login ends at once");
+
+    assert!(
+        matches!(ended, Err(crate::Error::AuthorizationCancelled { ref backend }) if backend == BACKEND),
+        "{ended:?}"
+    );
+    assert!(
+        !opened.load(std::sync::atomic::Ordering::SeqCst),
+        "no browser opens for a cancelled login"
+    );
 }

@@ -14,6 +14,9 @@ use crate::security::firewall::{
     Severity,
 };
 
+#[path = "collusion_gate_plan_tests.rs"]
+mod plan;
+
 fn finding(scan_type: ScanType, severity: Severity) -> Finding {
     Finding {
         scan_type,
@@ -347,54 +350,82 @@ fn empty_leaves_past_the_cap_add_no_segments() {
     assert_eq!(digest.segment_texts().len(), 2, "the two edge leaves only");
 }
 
-/// MIK-7887.RECEIPT.2: removing a middle leaf splits its run, and the
-/// neighbours re-winnowed can select other minima. Every fingerprint of the
-/// original run whose k-gram is still delivered, inside one leaf or across
-/// adjacent kept short fields, is kept, and no other: none of the removed
-/// text, none across a seam.
+/// Non-periodic ASCII text cut into 20-character pieces, shorter than a
+/// fingerprint's k-gram, so a word is split at most piece edges.
+fn split_copy(words: usize) -> (String, Vec<String>) {
+    let mut flat = String::new();
+    for i in 0..words {
+        flat.push('w');
+        flat.push_str(&(i * 7_919 % 10_007).to_string());
+        flat.push(' ');
+    }
+    let pieces = flat
+        .as_bytes()
+        .chunks(20)
+        .map(|c| String::from_utf8(c.to_vec()).expect("ascii"))
+        .collect();
+    (flat, pieces)
+}
+
+/// `RELAY-SPLIT-FP.1` (MIK-7773): a copy delivered split mid-word over
+/// short fields records the flat text's fingerprints too, as egress reads
+/// the pieces run together, so its holder forwarding them is excused by its
+/// own receipt.
 #[test]
-fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
+fn a_split_delivery_records_the_flat_copys_fingerprints() {
     use std::collections::HashSet;
 
     use super::super::collusion::{CollusionDetector, RelayParams};
-    use super::Delivered;
     let detector = CollusionDetector::new(RelayParams::default());
-    let fields = |tag: &str| (0..12).map(|i| format!("{tag} f{i}")).collect::<Vec<_>>();
-    let mut moved = false;
-    for round in 0..20 {
-        let (left, right) = (fields(&format!("l{round}")), fields(&format!("r{round}")));
-        let gone = format!("removed paragraph {round} ").repeat(8);
-        let mut leaves: Vec<&str> = left.iter().map(String::as_str).collect();
-        leaves.push(&gone);
-        leaves.extend(right.iter().map(String::as_str));
-        let (digest, _) = DeliveryDigest::of_leaves(&leaves, false);
-        let original = digest.fingerprints(&detector);
-        let mut shown: Vec<&str> = left.iter().map(String::as_str).collect();
-        shown.extend(right.iter().map(String::as_str));
-        let delivered = Delivered::of_leaves(shown).expect("bounded");
-        let kept: HashSet<u64> = digest
-            .retaining(&detector, &delivered)
-            .fingerprints(&detector)
-            .into_iter()
-            .collect();
-        let allowed: HashSet<u64> = [left.join("\n"), right.join("\n")]
-            .iter()
-            .flat_map(|run| detector.kgram_hashes(run))
-            .collect();
-        let alone: HashSet<u64> = [left.join("\n"), right.join("\n")]
-            .iter()
-            .flat_map(|run| detector.fingerprints(run))
-            .collect();
-        for fp in &original {
-            assert_eq!(kept.contains(fp), allowed.contains(fp), "round {round}");
-            moved |= allowed.contains(fp) && !alone.contains(fp);
-        }
-        assert!(
-            kept.iter().all(|fp| allowed.contains(fp)),
-            "round {round}: kept text never delivered"
-        );
-    }
-    assert!(moved, "premise: a split moved some minimum");
+    let (flat, pieces) = split_copy(80);
+    let leaves: Vec<&str> = pieces.iter().map(String::as_str).collect();
+    let (digest, cut) = DeliveryDigest::of_leaves(&leaves, false);
+    assert!(!cut, "premise: under the record cap");
+    let recorded: HashSet<u64> = digest.fingerprints(&detector).into_iter().collect();
+    let newline: HashSet<u64> = detector
+        .fingerprints(&leaves.join("\n"))
+        .into_iter()
+        .collect();
+    let wanted = detector.fingerprints(&flat);
+    assert!(
+        wanted.iter().any(|fp| !newline.contains(fp)),
+        "premise: the newline form alone misses the flat copy"
+    );
+    assert!(wanted.iter().all(|fp| recorded.contains(fp)));
+}
+
+/// `RELAY-SPLIT-FP.1` (MIK-7773), near the cap: a split copy near the
+/// record cap keeps both forms, none of its fingerprints cut by the
+/// per-delivery bound.
+#[test]
+fn a_split_copy_near_the_cap_keeps_both_forms() {
+    use std::time::Instant;
+
+    use super::super::collusion::{CollusionDetector, RelayAction, RelayParams};
+    let detector = CollusionDetector::new(RelayParams {
+        action: RelayAction::Observe,
+        ..RelayParams::default()
+    });
+    let (_, pieces) = split_copy(RECORD_CAP / 4);
+    // As many pieces as fit the cap, each counted with its separator.
+    let mut used = 0;
+    let leaves: Vec<&str> = pieces
+        .iter()
+        .map(String::as_str)
+        .take_while(|p| {
+            used += p.len() + 1;
+            used <= RECORD_CAP + 1
+        })
+        .collect();
+    let total = leaves.iter().map(|l| l.len() + 1).sum::<usize>() - 1;
+    assert!(total > RECORD_CAP - 32, "premise: near the cap");
+    let (digest, cut) = DeliveryDigest::of_leaves(&leaves, false);
+    assert!(!cut, "premise: under the record cap");
+    let fps = digest.fingerprints(&detector);
+    assert!(fps.len() > 1_024, "premise: more than one form's old share");
+    detector.record_fingerprints_at("alpha:t", "b", (false, 0), fps.clone(), Instant::now());
+    assert_eq!(detector.source_truncated(), 0);
+    assert_eq!(detector.tracked_fingerprints(), fps.len());
 }
 
 fn observing(extra: impl FnOnce(&mut CollusionConfig)) -> (Firewall, tempfile::TempDir) {
@@ -626,7 +657,7 @@ fn a_dropped_plan_receipt_increments_the_metric() {
     let text = "x".repeat(super::super::collusion_digest::DELIVERED_SET_CAP + 1);
     let answer = json!({"content": [{"type": "text", "text": text}]});
     assert!(
-        fw.delivered_for_plan(&answer).is_none(),
+        fw.delivered_for_plan(&answer, None).is_none(),
         "premise: over the bound"
     );
     assert!(rendered_count(series) > before, "dropped plan: not counted");

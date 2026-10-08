@@ -700,3 +700,6 @@ async fn a_withheld_confirmation_prompt_reads_as_undelivered() {
     .expect("the withheld prompt ends the wait at once");
     assert_eq!(outcome, ConfirmationOutcome::Undelivered);
 }
+
+#[path = "streaming_tests/relay_commit.rs"]
+mod relay_commit;

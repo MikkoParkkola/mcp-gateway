@@ -11,6 +11,9 @@ use super::{OTHER_PROSE, PROSE, relay_meta, text_result};
 use crate::gateway::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps, RelayKey, plan_step};
 use crate::security::firewall::{Firewall, RelayCaller};
 
+#[path = "relay_plan_budget_tests.rs"]
+mod budget;
+
 /// Text a redaction removes from step A, long enough to be matched alone.
 const SECRET: &str = "Account recovery phrase for the vineyard terminal: amber kettle \
     seventeen lantern quiet harbour violet anchor, rotated after the September audit.";
@@ -482,4 +485,307 @@ async fn a_short_field_step_keeps_its_receipt_through_its_run() {
 
     assert!(relayed("bob"), "control: bob holds no copy of the row");
     assert!(!relayed("alice"), "the row was delivered unchanged");
+}
+
+/// MIK-7994: a plan step's receipt is staged once and only kept later,
+/// never rebuilt, so the continuation the gateway wrote into the step
+/// must not take the cap's budget there: the end of the backend's prompt the
+/// plan delivers stays receipted, whether the receipt is kept to the plan's
+/// answer or recorded as staged (`commit_with`, capped where it is recorded).
+#[tokio::test]
+async fn a_plan_steps_continuation_never_takes_its_receipts_budget() {
+    use crate::gateway::meta_mcp::invoke::gateway_writes::{Layer, note};
+    for kept in [true, false] {
+        let (meta, firewall) = relay_meta();
+        let prompt = crate::gateway::meta_mcp::invoke::receipt_test_support::distinct_prose(4800);
+        let step = json!({
+            "resultType": "input_required",
+            "inputRequests": { "confirm": {
+                "method": "elicitation/create",
+                "params": { "message": prompt, "requestedSchema": { "type": "object" } }
+            }},
+            "requestState": "e".repeat(4000)
+        });
+        let answer = plan_answer(&json!({"a": step}));
+        let ((), staged) = meta
+            .collecting_staged(async {
+                plan_step(async {
+                    note(Layer::Value, &["requestState"], &step);
+                    meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), &step);
+                })
+                .await;
+                if kept {
+                    meta.rebuild_receipt_from_final(
+                        Some(&answer),
+                        GatewayStamps::Legacy,
+                        AnswerShape::Literal,
+                    );
+                }
+            })
+            .await;
+        staged.commit(true);
+        carol_holds(&firewall, "a", &prompt);
+
+        let head: String = prompt.chars().take(400).collect();
+        let tail: String = prompt.chars().skip(prompt.chars().count() - 400).collect();
+        for text in [&head, &tail] {
+            assert!(
+                refused(&firewall, "bob", text),
+                "control: bob holds no copy, so carol's makes his relay a match"
+            );
+        }
+        assert!(
+            !refused(&firewall, "alice", &head),
+            "control: alice holds the prompt's head (kept = {kept})"
+        );
+        assert!(
+            !refused(&firewall, "alice", &tail),
+            "the continuation pushed the prompt's tail out (kept = {kept})"
+        );
+    }
+}
+
+/// MIK-7992: a playbook's output mapping delivers one member of a step whose
+/// other members the backend padded. Sorted, the delivered member sits in the
+/// middle of the step's leaves, past the receipt's head budget, and the caller
+/// still got it: it stays receipted.
+#[tokio::test]
+async fn a_mapped_member_past_the_padding_stays_receipted() {
+    let (meta, firewall) = relay_meta();
+    let step = json!({"a": filler("pad", 600), "body": PROSE, "z": filler("tail", 600)});
+    let answer = plan_answer(&json!({"summary": PROSE}));
+    let ((), staged) = meta
+        .collecting_staged(async {
+            plan_step(async {
+                meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), &step);
+            })
+            .await;
+            meta.rebuild_receipt_from_final(
+                Some(&answer),
+                GatewayStamps::Legacy,
+                AnswerShape::Literal,
+            );
+        })
+        .await;
+    staged.commit(true);
+    carol_holds(&firewall, "a", PROSE);
+
+    assert!(
+        refused(&firewall, "bob", PROSE),
+        "control: bob holds no copy"
+    );
+    assert!(
+        !refused(&firewall, "alice", PROSE),
+        "the padding pushed the mapped member out of the step's receipt"
+    );
+}
+
+/// MIK-7992: the padding is copies of a leaf the plan also delivers, once.
+/// Each copy matches the delivered leaf verbatim, but only one copy was
+/// delivered: the others must not take the budget of the mapped member, so
+/// an answer under the receipt cap is receipted whole.
+#[tokio::test]
+async fn copies_of_a_delivered_leaf_do_not_crowd_out_a_mapped_member() {
+    let (meta, firewall) = relay_meta();
+    let copy = filler("rep", 30);
+    let copies = vec![copy.as_str(); 15];
+    let step = json!({"a": copies, "body": PROSE, "z": copies});
+    let answer = plan_answer(&json!({"summary": PROSE, "x": copy}));
+    let ((), staged) = meta
+        .collecting_staged(async {
+            plan_step(async {
+                meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), &step);
+            })
+            .await;
+            meta.rebuild_receipt_from_final(
+                Some(&answer),
+                GatewayStamps::Legacy,
+                AnswerShape::Literal,
+            );
+        })
+        .await;
+    staged.commit(true);
+    carol_holds(&firewall, "a", PROSE);
+
+    assert!(
+        refused(&firewall, "bob", PROSE),
+        "control: bob holds no copy"
+    );
+    assert!(
+        !refused(&firewall, "alice", PROSE),
+        "undelivered copies pushed the mapped member out of the step's receipt"
+    );
+}
+
+/// Stage `step` as one plan step of alice's and commit it against `answer`.
+async fn deliver_step(
+    meta: &std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>,
+    step: &Value,
+    answer: &Value,
+) {
+    let ((), staged) = meta
+        .collecting_staged(async {
+            plan_step(async {
+                meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), step);
+            })
+            .await;
+            meta.rebuild_receipt_from_final(
+                Some(answer),
+                GatewayStamps::Legacy,
+                AnswerShape::Literal,
+            );
+        })
+        .await;
+    staged.commit(true);
+}
+
+/// MIK-7992: two short fields the plan delivers next to each other, where
+/// the step holds the first one twice with padding between. The caller got
+/// them adjacent, so the run across them stays receipted.
+#[tokio::test]
+async fn short_fields_delivered_adjacent_keep_their_run() {
+    let (meta, firewall) = relay_meta();
+    let (p, s) = (
+        "row 01: late pears on the north slope, crate 17",
+        "row 02: grafting dates logged by Aino, frost 3x",
+    );
+    assert!(
+        p.len() < 48 && s.len() < 48,
+        "premise: each field under a k-gram"
+    );
+    let step = json!({"a": p, "b": filler("pad", 60), "c": p, "d": s});
+    let delivered = json!({"x": p, "y": s});
+    deliver_step(&meta, &step, &plan_answer(&delivered)).await;
+    firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "a", &delivered);
+
+    assert!(
+        relays_row(&firewall, "bob", &delivered),
+        "control: bob holds no copy of the row"
+    );
+    assert!(
+        !relays_row(&firewall, "alice", &delivered),
+        "the row was delivered adjacent"
+    );
+}
+
+/// Whether `who` sending `row` as a tool's arguments is refused as a relay.
+fn relays_row(firewall: &Firewall, who: &str, row: &Value) -> bool {
+    let params = json!({"name": "send", "arguments": row});
+    !firewall
+        .check_relay(
+            RelayCaller::Keyed(who),
+            "alpha",
+            "send",
+            &params,
+            ("s", who),
+        )
+        .allowed
+}
+
+/// MIK-7992: a step's two short fields delivered with another step's field
+/// between them. The run across them is the step's own; its fingerprints
+/// stay, as before the deferred cap.
+#[tokio::test]
+async fn interleaved_short_fields_keep_their_step_run() {
+    let (meta, firewall) = relay_meta();
+    let (p, s) = (
+        "the vineyard gate opens at six for the pickers",
+        "dog on premises, ring twice at the side porch!",
+    );
+    assert!(
+        p.len() < 48 && s.len() < 48,
+        "premise: each field under a k-gram"
+    );
+    let row = json!({"a": p, "b": s});
+    let answer = plan_answer(&json!({"x": p, "y": OTHER_PROSE, "z": s}));
+    deliver_step(&meta, &row, &answer).await;
+    firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "a", &row);
+
+    assert!(
+        relays_row(&firewall, "bob", &row),
+        "control: bob holds no copy of the row"
+    );
+    assert!(
+        !relays_row(&firewall, "alice", &row),
+        "another step's field between them split the step's run"
+    );
+}
+
+/// MIK-7992: many undelivered copies of a delivered leaf, sorted before a
+/// member the plan delivers redacted. The copies must not crowd the
+/// member's surviving text out of the receipt's retained fingerprints.
+#[tokio::test]
+async fn copies_do_not_crowd_out_a_redacted_members_survivors() {
+    let (meta, firewall) = relay_meta();
+    let copy = filler("rep", 25);
+    let step = json!({"a": vec![copy.as_str(); 800], "body": format!("{PROSE} {SECRET}")});
+    let answer = plan_answer(&json!({"a": copy, "body": PROSE}));
+    deliver_step(&meta, &step, &answer).await;
+    carol_holds(&firewall, "a", PROSE);
+
+    assert!(
+        refused(&firewall, "bob", PROSE),
+        "control: bob holds no copy"
+    );
+    assert!(
+        !refused(&firewall, "alice", PROSE),
+        "repeated copies crowded the delivered text out of the receipt"
+    );
+}
+
+/// MIK-7992: the step holds its first short field twice, and the plan
+/// delivers each field once with another step's field between them. The
+/// step's own run across the two fields stays, as before the deferred cap.
+#[tokio::test]
+async fn a_repeated_field_keeps_its_step_run_when_interleaved() {
+    let (meta, firewall) = relay_meta();
+    let (p, s) = (
+        "the vineyard gate opens at six for the pickers",
+        "dog on premises, ring twice at the side porch!",
+    );
+    assert!(
+        p.len() < 48 && s.len() < 48,
+        "premise: each field under a k-gram"
+    );
+    let step = json!({"a": p, "b": filler("pad", 60), "c": p, "d": s});
+    let answer = plan_answer(&json!({"x": p, "y": OTHER_PROSE, "z": s}));
+    deliver_step(&meta, &step, &answer).await;
+    let row = json!({"c": p, "d": s});
+    firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "a", &row);
+
+    assert!(
+        relays_row(&firewall, "bob", &row),
+        "control: bob holds no copy of the row"
+    );
+    assert!(
+        !relays_row(&firewall, "alice", &row),
+        "counting the repeated field split the step's run"
+    );
+}
+
+/// MIK-7992: the plan delivers a step's two short fields in the other order.
+/// The run the caller received is the delivered one, and it is receipted.
+#[tokio::test]
+async fn short_fields_delivered_reordered_keep_the_delivered_run() {
+    let (meta, firewall) = relay_meta();
+    let (p, s) = (
+        "the vineyard gate opens at six for the pickers",
+        "dog on premises, ring twice at the side porch!",
+    );
+    assert!(
+        p.len() < 48 && s.len() < 48,
+        "premise: each field under a k-gram"
+    );
+    let delivered = json!({"x": p, "y": s});
+    deliver_step(&meta, &json!({"a": s, "b": p}), &plan_answer(&delivered)).await;
+    firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "a", &delivered);
+
+    assert!(
+        relays_row(&firewall, "bob", &delivered),
+        "control: bob holds no copy of the row"
+    );
+    assert!(
+        !relays_row(&firewall, "alice", &delivered),
+        "the receipt kept the step's order, not the delivered one"
+    );
 }

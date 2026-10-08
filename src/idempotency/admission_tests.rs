@@ -510,3 +510,36 @@ fn sub4_core_clock_overflow_after_dispatch_never_readmits_uncertain_effect() {
     ));
     assert_eq!(service.snapshot().entries, 1);
 }
+
+/// `MIK-8052`: while a stored task row's key cannot be read, a NEW sync
+/// identity is refused (the 409 "unavailable" answer), in a continuation round
+/// too; an identity already held answers exactly as before; lifting the seal
+/// admits new work again.
+#[test]
+fn a_sealed_authority_refuses_only_new_identities() {
+    let (service, _) = fixture();
+    let held = owned(admit(&service, "alice", "held"));
+    service.adjust_sealed(0, 1);
+    assert!(matches!(
+        admit(&service, "alice", "new"),
+        Ok(Admission::Sealed)
+    ));
+    let round = service.admit_round(
+        Request {
+            principal: "alice",
+            key: "new",
+            operation: &json!({"backend": "orders", "tool": "create", "arguments": {"quantity": 1}}),
+            representation: &json!({"full": false}),
+            mode: Mode::Sync,
+        },
+        "round-2",
+    );
+    assert!(matches!(round, Ok(Admission::Sealed)));
+    assert!(
+        matches!(admit(&service, "alice", "held"), Ok(Admission::InFlight)),
+        "a held identity is unaffected by the seal"
+    );
+    service.adjust_sealed(1, 0);
+    drop(owned(admit(&service, "alice", "new")));
+    drop(held);
+}

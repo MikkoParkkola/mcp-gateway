@@ -11,6 +11,9 @@ mod differential;
 mod http_error;
 pub mod input_bridge;
 mod meta_mcp;
+/// The per-delivery write record, shared with the response and idempotency
+/// caches that store it beside an answer (MIK-7991).
+pub(crate) use meta_mcp::invoke::gateway_writes;
 /// The one write-then-bump-under-lock grant publisher, re-exported so the
 /// reload path can share it WITHOUT `meta_mcp` itself becoming crate-visible.
 /// Same shape as `STDIO_CREDENTIAL_PRINCIPAL`. A second copy of those four
@@ -37,6 +40,9 @@ mod proxy_scope_tests;
 mod proxy_session_tests;
 pub mod recovery;
 mod router;
+pub(crate) mod routes;
+#[cfg(test)]
+mod routes_tests;
 /// The one constructor that turns a verified identity into a grant subject,
 /// re-exported so the `MIK-7334.CATALOGUE.1` prefix cells can drive it WITHOUT
 /// `router` itself becoming crate-visible. Same shape as

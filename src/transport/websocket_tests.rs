@@ -726,3 +726,15 @@ async fn ws_a_live_token_is_never_rerouted_to_a_second_call() {
     assert_eq!(progress_value(&got), Some(&json!(7)));
     assert!(b_rx.try_recv().is_err(), "the second call owns nothing");
 }
+
+/// MIK-8019.SAME.1: a null `method` is still a `method` on this transport too,
+/// so the four transports agree that the frame is not a response.
+#[test]
+fn a_null_method_frame_is_not_a_response() {
+    let text = r#"{"jsonrpc":"2.0","id":7,"method":null,"result":{}}"#;
+    let outcome = McpFrame::from_text(text);
+    assert!(
+        outcome.is_err(),
+        "a null-method frame is refused, not classified: {outcome:?}"
+    );
+}

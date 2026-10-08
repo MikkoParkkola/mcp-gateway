@@ -18,6 +18,7 @@ use super::authorization::{ToolTarget, authorize_tool_target};
 use super::direct_guards::refusal;
 use super::helpers::{bodiless_accepted, build_http_error_response};
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -475,6 +476,9 @@ async fn backend_handler_inner(
         Ok(route) => route,
         Err(response) => return response,
     };
+    // MIK-7996: the call's cost is recorded under this session after the
+    // backend answers; held until this handler returns.
+    let _session = state.meta_mcp.hold_session(route.session_id);
     if envelope.method.starts_with("notifications/") {
         return direct_caller::forward_notification(state, &name, &caller, &route, envelope).await;
     }
@@ -515,13 +519,19 @@ fn sign_and_record(
     auth: BackendAuthContext<'_>,
     (server, tool): (&str, &str),
     response: &mut JsonRpcResponse,
-    nonce: Option<&Option<String>>,
+    (nonce, stamps): (Option<&Option<String>>, GatewayStamps),
 ) {
     if let Some(nonce) = nonce.map(Option::as_deref) {
         state.meta_mcp.sign_direct_delivery(response, nonce);
     }
     #[cfg(feature = "firewall")]
-    stage_direct_delivery(state, auth, server, tool, response.result.as_ref());
+    stage_direct_delivery(
+        state,
+        auth,
+        (server, tool),
+        response.result.as_ref(),
+        stamps,
+    );
 }
 
 /// #1962: run a backend dispatch with the reservation armed, so a caller
@@ -543,17 +553,20 @@ fn settle_direct_idempotency(
     reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
     response: &JsonRpcResponse,
 ) {
+    // MIK-7636: a failure keeps the uninspected note across its replay.
+    use crate::gateway::meta_mcp::invoke::audit::stored_failure;
     let Some(reservation) = reservation else {
         return;
     };
     if response.delivery_refusal {
-        reservation
-            .fail(&crate::gateway::meta_mcp::invoke::dispatch_guards::firewall_refusal_body());
+        reservation.fail(&stored_failure(
+            crate::gateway::meta_mcp::invoke::dispatch_guards::firewall_refusal_body(),
+        ));
         return;
     }
     if let Some(error) = response.error.as_ref() {
         if let Ok(error) = serde_json::to_value(error) {
-            reservation.fail(&error);
+            reservation.fail(&stored_failure(error));
         }
         return;
     }
@@ -562,7 +575,12 @@ fn settle_direct_idempotency(
         // all the scope noted is this call's reading.
         let reading =
             crate::gateway::meta_mcp::invoke::cache_reads::reading(std::collections::BTreeSet::new);
-        reservation.complete_read(result, reading);
+        // What the gateway wrote so far (provenance, cost warnings) is
+        // stored with the answer, so a replay restores it (MIK-8025).
+        reservation.complete_read(
+            result,
+            (reading, crate::gateway::gateway_writes::recorded()),
+        );
     }
 }
 

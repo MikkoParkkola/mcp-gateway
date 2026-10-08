@@ -83,18 +83,22 @@ src/gateway/router/backend_handlers/direct_dispatch.rs	forward_plain	1	critical	
 src/gateway/router/backend_handlers/direct_dispatch.rs	finish_response	1	critical	d	finish_response	Firewall scan, list filtering, provenance stamp, settlement and signing of what the caller receives.
 src/gateway/router/backend_handlers/direct_preflight.rs	audit_unavailable	1	standard	borderline	audit_unavailable	The generic client answer when the mint audit cannot be written (CWE-209).
 src/gateway/router/backend_handlers/direct_dispatch.rs	answer_failure	1	standard	borderline	answer_failure	Settles the idempotency reservation for a dispatched failure.
+src/gateway/router/backend_handlers/direct_dispatch.rs	deliver_tail	1	critical	d	deliver_tail	Decides that a direct tools/call is signed when signing is on, after shaping, so the signature covers what is sent
 src/gateway/router/backend_handlers/direct_list.rs	normalize_tools_list_response	1	critical	borderline	normalize_tools_list_response	Drops unjudged entries and rebuilds the result from an allow-list (A3).
 src/gateway/router/backend_handlers.rs	resolve_passthrough_headers	1	critical	a	resolve_passthrough_headers	Fails closed when a required passthrough credential is missing or the transport cannot carry it.
 src/gateway/router/backend_handlers.rs	scan_direct_tools_list_response	1	critical	d	scan_direct_tools_list_response	Applies the response firewall to a direct tools/list result.
 src/gateway/router/backend_handlers.rs	cached_error_response	1	standard	borderline	cached_error_response	Keeps a cached firewall refusal a refusal on idempotent replay.
 src/gateway/router/backend_handlers.rs	charged_binding	1	standard	borderline	charged_binding	Charges each slot binding to the caller's principal (per-principal slot budget).
 src/gateway/router/backend_handlers/relay.rs	direct_control_identity	1	standard	borderline	direct_control_identity	Firewall per-caller key; falls back to a shared bucket.
+src/gateway/router/backend_handlers/relay.rs	direct_caller	1	standard	borderline	direct_caller	Per-caller key for every per-caller control on the direct route; falls back to the shared bucket
 src/gateway/router/backend_handlers.rs	direct_route_attestation_scope	1	standard	borderline	direct_route_attestation_scope	Sets the scope an attestation token must grant per method.
 src/gateway/router/backend_handlers.rs	dispatch_in_scope	1	standard	d	dispatch_in_scope	Refuses methods the peer's protocol era removed before they reach the wire.
 src/gateway/router/backend_handlers.rs	is_task_method	1	standard	borderline	is_task_method	Selects which methods get the task-owner refusal.
 src/gateway/router/backend_handlers.rs	passthrough_identity_key	1	standard	borderline	passthrough_identity_key	Session bucket key from the credential digest; a collision would mix callers.
+src/gateway/router/backend_handlers.rs	sign_and_record	1	critical	d	sign_and_record	Signs a direct delivery when a signing nonce was admitted, then stages it for relay detection
 src/gateway/router/backend_handlers/costs.rs	costs_handler	1	critical	a	costs_handler	/api/costs answers 403 unless the client is admin.
 src/gateway/router/backend_handlers/direct_audit.rs	record	1	critical	borderline	record	Withholds the answer with 503 when the audit write fails under FailClosed.
+src/gateway/router/backend_handlers/direct_audit.rs	audited_call_judged	1	critical	d	audited_call_judged	Replaces a direct answer with the audit-unavailable refusal when its delivery record fails, inside the read guard that judges it
 src/gateway/router/backend_handlers/direct_list.rs	drain	1	critical	c,d	drain	Drops withheld (blocked) tools and drops a result that arrives beside an error (#1441).
 src/gateway/router/backend_handlers/direct_list.rs	retain_invocable	1	critical	a	retain_invocable	Filters tools/list down to the tools the caller may invoke.
 src/gateway/router/backend_handlers/key_check.rs	key_refusal	1	critical	borderline	key_refusal	R2 refusal of undeclared argument keys; a schema control rather than plain authorization.
@@ -110,6 +114,8 @@ src/gateway/router/handlers.rs	meta_mcp_dispatch	1	critical	a,b,c,d	meta_mcp_dis
 src/gateway/router/handlers.rs	metrics_handler	1	critical	a,b	metrics_handler	Constant-time bearer comparison against metrics_token; 401 otherwise.
 src/gateway/router/handlers.rs	get_era_refusal	1	standard	d	get_era_refusal	Refuses the removed GET /mcp (405) or an unsupported 2026 version.
 src/gateway/router/handlers.rs	reaches_tasks_extension	1	standard	borderline	reaches_tasks_extension	Hand-maintained list that gates the tasks extension; a missing arm is unguarded.
+src/gateway/router/handlers.rs	catalogue_caller	1	standard	borderline	catalogue_caller	Keys a catalogue read's caller as its tools/call is keyed
+src/gateway/router/handlers/events.rs	api_key	1	critical	a	api_key	Selects the API key the live events re-check reads; None admits without a key check, so a wrong answer keeps a removed or expired key receiving events
 src/gateway/router/handlers/tasks.rs	session_owner_key	1	standard	borderline	session_owner_key	Task owner key; empty for unauthenticated callers.
 src/gateway/router/handlers/owner.rs	request_session_owner	1	critical	a,c	request_session_owner	Resolves the grant subject, refuses bad identity headers, applies the hardened refusal.
 src/gateway/router/handlers/owner.rs	owner_of	1	standard	borderline	owner_of	Session owner rule (subject plus held-credential digest) used by both routes.
@@ -127,6 +133,7 @@ src/gateway/router/handlers/tasks.rs	task_owner_key	1	critical	c	task_owner_key	
 src/gateway/router/hardened_elicitation.rs	declares_elicitation	1	critical	a	declares_elicitation	Decides whether an initialize declares elicitation, the condition the hardened refusal rests on
 src/gateway/router/hardened_elicitation.rs	direct_refusal	1	critical	a,d	direct_refusal	Hardened posture: refuses on the direct route any legacy request but a declaring initialize
 src/gateway/router/hardened_elicitation.rs	is_hardened	1	standard	borderline	is_hardened	Reads the hardened posture; a wrong answer silently disables the elicitation refusal
+src/gateway/router/hardened_elicitation.rs	classify_direct	1	critical	a,d	classify_direct	The direct route's one reading of the declared revision; a doubled header reads modern so the hardened refusal applies
 src/gateway/router/hardened_identity.rs	hardened_identity_refusal	1	critical	a	hardened_identity_refusal	Hardened posture: 403 without a per-caller identity.
 src/gateway/router/helpers.rs	read_body	1	standard	borderline	read_body	Maps the max_body_size limit to a 413 refusal.
 src/gateway/router/identity.rs	caller_grant_subject	1	critical	a,b	caller_grant_subject	Resolves the caller subject; refuses spoofed or malformed identity headers.
@@ -147,6 +154,7 @@ src/gateway/router/mod.rs	authenticate	1	standard	borderline	authenticate	Layer 
 src/gateway/router/mod.rs	build_auth_state	1	standard	borderline	build_auth_state	Builds the AuthState used by the auth middleware and webhook re-validation.
 src/gateway/router/mod.rs	create_router_with_accounts	1	standard	borderline	create_router_with_accounts	Installs the body limit and origin guard over the fully merged router.
 src/gateway/router/mod.rs	metrics_route	1	standard	borderline	metrics_route	Resolves the metrics scrape token; None admits nobody.
+src/gateway/router/mod.rs	bind_multiplexer	1	standard	borderline	bind_multiplexer	Installs the session-stream authorizer and read judge
 src/gateway/router/origin_guard.rs	fetch_site_allowed	1	critical	b,d	OriginPolicy::fetch_site_allowed	Admits only same-origin or none Sec-Fetch-Site.
 src/gateway/router/origin_guard.rs	host_allowed	1	critical	b	OriginPolicy::host_allowed	Host check against DNS rebinding.
 src/gateway/router/origin_guard.rs	origin_allowed	1	critical	b	OriginPolicy::origin_allowed	Origin allow-list and numeric-self-origin check.
@@ -179,9 +187,11 @@ src/gateway/server/identity_grants.rs	audit_startup	1	critical	a	audit_startup	R
 src/gateway/server/identity_grants.rs	start_identity_grant_audit	1	critical	a	start_identity_grant_audit	Decides which identity grants go live; fails closed when reconciliation or its audit cannot be recorded
 src/gateway/server/mod.rs	prepare_signing	1	critical	b,d	Gateway::prepare_signing	stdio first step: refuses a malformed chain nonce or signing envelope
 src/gateway/server/mod.rs	response_firewall	1	critical	d	Gateway::response_firewall	Builds the firewall both transports enforce with; anomaly blocking depends on it
+src/gateway/server/stdio_catalogue.rs	operator	1	standard	borderline	operator	The stdio operator as one keyed relay caller
 src/gateway/server/stdio_channel.rs	reply_id	1	critical	b	StdioClientChannel::reply_id	Treats a frame as a reply only without `method`, so a client request is never routed as one
 src/gateway/server/stdio_channel.rs	resolve	1	critical	b	StdioClientChannel::resolve	Sends a reply only to the pending one-shot entry for that id; consumes it
 src/gateway/server/stdio_delivery.rs	judge_and_commit	1	critical	d	Gateway::judge_and_commit	Routes every stdio answer through the response judge before it is recorded, settled and receipted.
+src/gateway/server/stdio_delivery.rs	deliver	1	standard	borderline	deliver	Records a stdio delivery; settles on the audit-unavailable refusal when the log refuses
 src/gateway/server/support.rs	accept	1	critical	a,b	PeerCertIdentityAcceptor::accept	Completes the handshake and hands auth the peer certificate's identity
 src/gateway/server/support.rs	client_identity_from_peer_chain	1	critical	a,b	client_identity_from_peer_chain	Selects the peer leaf, builds the authenticated CertIdentity, fails closed on malformed identity data
 src/gateway/server/support.rs	network_bind_refusal	1	critical	a,d	network_bind_refusal	The single definition of the unauthenticated network exposure: None means this configuration may serve
@@ -219,6 +229,7 @@ src/gateway/task_service/host.rs	stdio_nonce	1	standard	borderline	LiveHost::std
 src/gateway/task_service/record.rs	consistent_with	1	critical	b	UpstreamRecord::consistent_with	Drops a descriptor whose operation digest or handle does not match its record
 src/gateway/task_service/record.rs	admitted_with_targets	1	standard	borderline	PreparedTask::admitted_with_targets	Copies principal_digest from the binding; wrong value breaks owner scoping
 src/gateway/task_service/record.rs	backend_error	1	critical	borderline	CommittedTask::backend_error	Serves a stored error as the peer's only when the gateway established the peer wrote it (MIK-7887.RECEIPT.1).
+src/gateway/task_service/record.rs	legacy_targets	1	critical	d	legacy_targets	Refuses a descriptor on a row older than descriptors (forged or downgraded) and keeps only those bound to the row's admission
 src/gateway/task_service/service.rs	get	1	critical	c	TaskService::get	Read scoped to the owner; a foreign task looks the same as an absent one
 src/gateway/task_service/service.rs	owner	1	critical	c	TaskService::owner	Maps principal to owner digest; a principal admission cannot hash returns NotFound
 src/gateway/task_service/service.rs	owns_all	1	critical	c	TaskService::owns_all	All-or-nothing ownership check across listed ids, so no partial existence leak
@@ -239,6 +250,10 @@ src/gateway/task_service/store.rs	operation_digest_of	1	critical	borderline	Task
 src/gateway/task_service/store.rs	owned	1	critical	c	owned	Core owner filter: entry visible only if principal_digest equals owner, else NotFound
 src/gateway/task_service/store_disk.rs	prepare_dir	1	critical	d	prepare_dir	Refuses a store directory that is not private (mode/type) with UnsafeStore
 src/gateway/task_service/store_disk.rs	read_bounded	1	critical	d	read_bounded	Refuses an oversized persisted task record (disk trust boundary)
+src/gateway/task_service/store_disk.rs	visit_map	1	critical	d	Members::visit_map	Disk trust boundary: keeps the highest version a damaged record names, so load refuses a newer build's row, and the first readable key
+src/gateway/task_service/store_disk.rs	restore	1	critical	d	restore	Refuses a record whose version this build does not load, or whose task does not restore
+src/gateway/task_service/store_disk.rs	read	1	standard	borderline	Envelope::read	Builds the envelope load refuses on; a wrong builder would skip the downgrade refusal
+src/gateway/task_service/store_disk.rs	create_temp	1	standard	borderline	create_temp	Claims a private (0600/DACL) temp file for a task record write
 src/gateway/task_service/store.rs	reject_duplicate	1	critical	c	reject_duplicate	Refuses a record that would replace a live task id or duplicate an admission identity
 src/gateway/task_service/store.rs	upstream_of	1	critical	c	TaskStore::upstream_of	Owner-scoped descriptor read; inconsistent descriptors filtered out
 src/gateway/task_service/store_unix.rs	create_private_dir	1	standard	borderline	create_private_dir	Creates the store directory 0700; wrong mode exposes records
@@ -291,6 +306,7 @@ src/identity_propagation/token_exchange.rs	exchange_cache_key	1	standard	borderl
 src/identity_propagation/token_exchange.rs	mint_client_assertion	1	standard	borderline	TokenExchangeStrategy::mint_client_assertion	RFC 7523 client authentication assertion
 src/oauth/callback.rs	handle_callback	1	critical	b	handle_callback	OAuth state (CSRF) check; refuses a mismatch or a missing code
 src/oauth/callback.rs	start_callback_server	1	standard	borderline	start_callback_server	Binds loopback only; holds expected_state
+src/oauth/callback.rs	loopback_literal	1	critical	d	loopback_literal	Refuses a configured callback host that is not a loopback literal, so the listener never binds off loopback
 src/oauth/client/destination.rs	check_advertised_endpoints	1	critical	d	OAuthClient::check_advertised_endpoints	Refuses discovered token/registration endpoints the policy denies
 src/oauth/client/destination.rs	check_destination	1	critical	d	OAuthClient::check_destination	Refuses OAuth URLs whose literal host the destination policy denies
 src/oauth/client/destination.rs	hop	1	critical	d	hop	Redirect hop SSRF literal check plus hop budget
@@ -298,8 +314,15 @@ src/oauth/client/destination.rs	http_client	1	standard	borderline	http_client	In
 src/oauth/client/destination.rs	client_for	1	critical	b,d	OAuthClient::client_for	Refuses a cleartext http:// OAuth endpoint off this machine; uses the unproxied client only for configured loopback.
 src/oauth/client/destination.rs	finish	1	critical	b,d	finish	Installs the OAuth redirect policy: refuses a cleartext loopback hop through the environment proxy and an over-long chain.
 src/oauth/client/destination.rs	loopback_client	1	standard	borderline	loopback_client	Builds the unproxied loopback OAuth client; a wrong builder would skip the redirect policy.
-src/oauth/client/grants.rs	authorize	1	critical	b	OAuthClient::authorize	Issuer check enforced before redeeming the authorization code
+src/oauth/client/destination.rs	refresh_client_for	1	critical	b,d	OAuthClient::refresh_client_for	Refuses a cleartext token endpoint off this machine; the owned refresh client follows no redirect and pins the destination policy, a supplied client is used as configured
+src/oauth/client/destination.rs	loopback_cleartext	1	critical	b,d	OAuthClient::loopback_cleartext	Decides the cleartext loopback exception client_for and refresh_client_for rest on
+src/oauth/client/grants.rs	authorize_until	1	critical	b	OAuthClient::authorize_until	Issuer check enforced before redeeming the authorization code
+src/oauth/client/grants.rs	authorize	1	standard	borderline	OAuthClient::authorize	Forwards to authorize_until; a mistake would skip its issuer check
+src/oauth/client/grants.rs	authorize_shared	1	standard	borderline	OAuthClient::authorize_shared	Refuses a non-interactive start and a refused login gate before any login opens
+src/oauth/client/grants.rs	adopt_stored_login	1	critical	c	OAuthClient::adopt_stored_login	Accepts a stored credential only when it is unexpired and stored under this client's own key and resource
 src/oauth/client/grants.rs	build_authorize_url	1	standard	borderline	OAuthClient::build_authorize_url	Sets state, S256 challenge and resource
+src/oauth/client/grants.rs	refresh_token	1	critical	d	OAuthClient::refresh_token	Refuses to resend a spent refresh token and retires one an unsettled exchange may have consumed
+src/oauth/client/grants.rs	adopt_if_fresher	1	standard	borderline	OAuthClient::adopt_if_fresher	Adopts an unexpired stored credential through adopt_stored_login
 src/oauth/client/mod.rs	credential_key	1	critical	c	OAuthClient::credential_key	Credentials keyed by issuer; refuses before the issuer is known
 src/oauth/client/mod.rs	drop_credentials_from_other_issuer	1	critical	c	OAuthClient::drop_credentials_from_other_issuer	Drops token and registered client_id when the issuer changes
 src/oauth/client/mod.rs	get_token	1	critical	b	get_token	Reuses a cached credential only while it is unexpired
@@ -309,10 +332,24 @@ src/oauth/client/mod.rs	generate_pkce	1	standard	borderline	generate_pkce	PKCE v
 src/oauth/client/mod.rs	generate_state	1	standard	borderline	generate_state	CSRF state randomness
 src/oauth/client/mod.rs	initialize	1	standard	borderline	OAuthClient::initialize	Orchestrates destination and issuer checks before keeping metadata
 src/oauth/client/mod.rs	storage_key	1	standard	borderline	storage_key	Issuer-keyed credential storage
+src/oauth/client/refresh_flight.rs	is_spent	1	critical	d	Flight::is_spent	Decides whether a refresh token may be sent again
+src/oauth/client/refresh_flight.rs	spend	3	critical	d	spend	Marks a possibly consumed refresh token spent and compare-and-clears it from storage
+src/oauth/client/refresh_flight.rs	run	1	critical	d	Exchange::run	Decides a refresh token is possibly consumed (no settled answer, or a supplied client's refusal) and spends it
+src/oauth/client/refresh_flight.rs	send	1	critical	d	Exchange::send	Classifies the exchange: not sent only on the owned client (redirects off); through a supplied client a connect error is unsettled; a redirect answer is never followed
+src/oauth/client/refresh_flight.rs	refused_target	1	critical	d	refused_target	Refuses a redirect target by literal or by what its name resolves to (SSRF)
+src/oauth/client/refresh_flight.rs	retire_unsettled	1	critical	d	retire_unsettled	Retires a token whose exchange never settled before a restart; clears its marker only when storage no longer holds the token
+src/oauth/client/refresh_flight.rs	redirect_error	1	critical	d	Exchange::redirect_error	Keeps a refused redirect target typed as an SSRF refusal, so callers stop instead of falling through to a login or another grant
+src/oauth/client/refresh_flight.rs	names_an_oauth_error	1	critical	d	names_an_oauth_error	Decides an OAuth refusal from an unsettled outcome; a refusal keeps the token unless it came through a supplied client on a rotating server
+src/oauth/client/refresh_flight.rs	hold_across_processes	1	critical	d	hold_across_processes	Serializes refreshes and token saves across gateway processes; a lock it cannot take refuses the refresh before anything is sent
+src/oauth/client/refresh_flight.rs	spend	1	standard	borderline	Flight::spend	Records a possibly consumed token in the spent set is_spent reads; a miss would let it be resent
+src/oauth/client/refresh_flight.rs	redirect_target	1	standard	borderline	Exchange::redirect_target	Resolves the untrusted Location that redirect_error judges; a None would turn an SSRF refusal into a generic error
 src/oauth/metadata.rs	discover	1	critical	b	AuthorizationServerMetadata::discover	RFC 8414 issuer must match the discovery base
 src/oauth/storage.rs	is_expired	1	critical	d	TokenInfo::is_expired	Expiry decision (60s buffer) gating reuse of a cached token
 src/oauth/storage.rs	create_secret_tmp	1	standard	borderline	TokenStorage::create_secret_tmp	Creates a private (0600/DACL) temp file via create_new_private
 src/oauth/storage.rs	save	1	standard	borderline	TokenStorage::save	Atomic 0600 write of the token file
+src/oauth/storage.rs	load_refresh_state	1	critical	d	TokenStorage::load_refresh_state	A refresh state that cannot be read or parsed reads as rotating, so an unsettled exchange retires the token instead of resending it
+src/oauth/storage.rs	save_refresh_state	1	standard	borderline	TokenStorage::save_refresh_state	Atomic 0600 write of the refresh state
+src/oauth/storage.rs	unreadable	1	critical	d	RefreshState::unreadable	The fail-closed reading of a refresh state that cannot be read: rotating, so an unsettled token is retired rather than resent
 src/oauth/token_file.rs	read	1	critical	d	read	Refuses a token file whose mode lets other users read it
 src/personal_accounts/commit.rs	claim_forced_refresh	1	critical	b	claim_forced_refresh	Checks the live grant version; one forced refresh per claim
 src/personal_accounts/commit.rs	refresh_tokens	1	critical	d	refresh_tokens	Refuses version rollback; CAS refuses non-Connected (revoked) grants
@@ -489,6 +526,9 @@ src/transport/http/requests.rs	send_request_with_headers	1	critical	c	HttpTransp
 src/transport/http/mod.rs	with_destination	1	critical	d	HttpTransport::with_destination	Destination literal check and OAuth TLS check at construction.
 src/transport/http/sse_decoder.rs	oversized	1	critical	borderline	SseDecoder::oversized	Caps pending SSE bytes from a backend.
 src/transport/http/listen.rs	read_single	1	critical	d	read_single	Caps a listen's single JSON answer from an untrusted upstream at FRAME_CAP and classifies only a complete body
+src/transport/http/listen.rs	read_stream	1	critical	d	read_stream	Caps each listen frame from the untrusted backend and ends the stream on an oversized or unreadable frame
+src/transport/http/listen.rs	unsolicited_frame	1	critical	d	unsolicited_frame	Admits only the three notifications from an untrusted legacy stream; everything else is dropped
+src/transport/http/listen.rs	next_events	1	critical	d	next_events	Turns an oversized frame or a read error from the untrusted backend into the end of the stream
 src/transport/stdio.rs	capture_notification	1	critical	c	StdioTransport::capture_notification	Routes only notifications/progress to the call that registered the token; drops the rest
 src/transport/stdio_env.rs	configure_child_environment	1	critical	d	configure_child_environment	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics) and backend env, so no secret leakage
 src/transport/stdio.rs	drop	1	critical	c	ProgressRegistrationGuard::drop	Deregisters a progress token only for the registration's owner

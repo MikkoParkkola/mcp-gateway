@@ -17,6 +17,7 @@
 //! `version` and marker fields and nothing else, with the untouched record as
 //! the positive control that proves the seed was valid before the mutation.
 use super::*;
+use crate::gateway::task_service::record::Target;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 mod boundary;
@@ -54,6 +55,16 @@ async fn admitted(
     admission: &Arc<ExecutionAdmission>,
     key: &str,
 ) -> (Task, TaskBinding) {
+    admitted_with(store, admission, key, Vec::new()).await
+}
+
+/// [`admitted`] with `targets` recorded at creation.
+async fn admitted_with(
+    store: &TaskStore,
+    admission: &Arc<ExecutionAdmission>,
+    key: &str,
+    targets: Vec<Target>,
+) -> (Task, TaskBinding) {
     let lease = match admission.admit_task(task_request(ALICE, key)) {
         Ok(TaskAdmission::Owned(lease)) => lease,
         other => panic!("the fixture needs a real admitted binding, got {other:?}"),
@@ -61,11 +72,12 @@ async fn admitted(
     let binding = lease.binding().clone();
     let task = task();
     store
-        .create(PreparedTask::admitted(
+        .create(PreparedTask::admitted_with_targets(
             &task,
             &binding,
             lease.into_publication(),
             "fixture",
+            targets,
         ))
         .await
         .expect("the fixture's own creation must commit before anything is asserted about it");
@@ -409,12 +421,25 @@ async fn marker_05_the_loader_accepts_supported_versions_and_fails_closed_on_oth
         let before = files(&path);
 
         let reopened = TaskStore::open(&path, StoreLimits::default()).await;
-        if version == "below" || version == "unsupported" {
+        // A newer build's row is a downgrade, not damage: it still refuses.
+        if version == "unsupported" {
             assert!(
                 matches!(reopened, Err(StoreError::CorruptRecord)),
-                "{version} is outside the supported range and must fail closed"
+                "{version} is newer than this build and must fail closed"
             );
             assert_eq!(files(&path), before, "{version} must preserve every file");
+            continue;
+        }
+        // Below the range is damage (MIK-8023): skipped where it lies, its key
+        // kept, its task not served.
+        if version == "below" {
+            let reopened = reopened.expect("a damaged row no longer stops the store");
+            assert!(reopened.get(binding.principal_digest(), task.id()).is_err());
+            let bindings = reopened.restored_bindings();
+            assert_eq!(bindings.len(), 1, "{version} keeps its key");
+            assert_eq!(bindings[0].0.identity, binding.identity());
+            assert_eq!(files(&path), before, "{version} must preserve every file");
+            reopened.close().await.unwrap();
             continue;
         }
 

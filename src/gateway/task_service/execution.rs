@@ -67,6 +67,8 @@ pub(crate) enum BeginOutcome {
     InFlight,
     Capacity,
     Unavailable,
+    /// New keyed tasks are sealed (MIK-8052).
+    Sealed,
 }
 
 impl BeginOutcome {
@@ -94,6 +96,11 @@ impl BeginOutcome {
             ),
             Self::Capacity | Self::Unavailable => {
                 JsonRpcResponse::error(Some(id), -32603, "task store unavailable")
+            }
+            // The code the synchronous path gives a sealed call, so a client
+            // sees one refusal for it on either path.
+            Self::Sealed => {
+                JsonRpcResponse::error(Some(id), 409, crate::idempotency::admission::SEALED_MESSAGE)
             }
         }
     }
@@ -332,6 +339,28 @@ impl TaskExecutor {
             Ok(())
         });
         self.service.store.set_hook(Some(hook)).await;
+    }
+
+    /// Test-only twin of [`Self::barrier_on_publication`] at the store's
+    /// `Write` stage: the first step of every record write, before the payload
+    /// is written and before the readable row changes. A barrier held here
+    /// holds an owner between taking its handoff and committing its write.
+    #[cfg(test)]
+    pub(crate) async fn barrier_on_record_write(&self, barrier: Arc<dyn Fn() + Send + Sync>) {
+        let hook: super::store::CommitHook = Arc::new(move |stage| {
+            if matches!(stage, super::store::CommitStage::Write) {
+                barrier();
+            }
+            Ok(())
+        });
+        self.service.store.set_hook(Some(hook)).await;
+    }
+
+    /// Test-only: how many tasks are subscribed to the handoff release signal
+    /// right now, so a test can tell that an update has parked in its wait.
+    #[cfg(test)]
+    pub(crate) fn release_waiters_for_test(&self) -> usize {
+        self.handoffs.release_waiters()
     }
 
     /// Test-only: the recovery descriptor a dispatch made durable for `id`.

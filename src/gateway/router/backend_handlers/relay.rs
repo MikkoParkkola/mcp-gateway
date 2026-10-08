@@ -8,6 +8,7 @@ use axum::http::StatusCode;
 use serde_json::Value;
 
 use super::{AppState, BackendAuthContext, BackendRejection, backend_security_error_with_status};
+use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
 use crate::protocol::RequestId;
 use crate::security::firewall::{Firewall, RelayCaller};
 
@@ -117,16 +118,27 @@ pub(super) fn catalogue_refusal(
 pub(super) fn stage_direct_delivery(
     state: &AppState,
     auth: BackendAuthContext<'_>,
-    server: &str,
-    tool: &str,
+    (server, tool): (&str, &str),
     result: Option<&Value>,
+    stamps: GatewayStamps,
 ) {
     let (Some(fw), Some(result)) = (state.firewall.as_ref(), result) else {
         return;
     };
+    // No collector without relay detection: skip the copy (MIK-7832).
+    if !fw.relay_active() {
+        return;
+    }
     let (key, keyed) = direct_caller(auth, &format!("direct:{server}"));
     let who = crate::gateway::meta_mcp::invoke::relay::RelayKey::new(&key, keyed);
-    crate::gateway::meta_mcp::invoke::relay::stage_with(fw, who, (server, tool), result);
+    // The gateway's own stamps, its signature and its chain link are not
+    // backend text (MIK-8022, MIK-7939, MIK-8025); `stage_with` leaves out
+    // its value-layer notes (cost warnings, provenance).
+    let mut staged = result.clone();
+    crate::gateway::meta_mcp::invoke::relay::strip_gateway_stamps(&mut staged, stamps);
+    crate::gateway::gateway_writes::strip_noted(&mut staged);
+    crate::security::signature_chain::strip_chain(&mut staged);
+    crate::gateway::meta_mcp::invoke::relay::stage_with(fw, who, (server, tool), &staged);
 }
 
 /// [`stage_direct_delivery`] for a catalogue result, which no response gate
@@ -138,6 +150,7 @@ pub(super) fn stage_direct_catalogue(
     auth: BackendAuthContext<'_>,
     (server, method): (&str, &str),
     result: Option<&Value>,
+    stamps: GatewayStamps,
 ) {
     let Some(result) = result else {
         return;
@@ -147,12 +160,17 @@ pub(super) fn stage_direct_catalogue(
     if !state.firewall.as_ref().is_some_and(|fw| fw.relay_active()) {
         return;
     }
+    // The gateway's stamps are left out before the text is classified, not
+    // only before it is digested (MIK-8022).
+    let mut result = result.clone();
+    crate::gateway::meta_mcp::invoke::relay::strip_gateway_stamps(&mut result, stamps);
+    let result = &result;
     let caller_name = auth.client.map(|c| c.name.as_str());
     let recorded =
         state
             .meta_mcp
             .recorded_prompt((server, method), caller_name, "catalogue", result);
-    stage_direct_delivery(state, auth, server, method, Some(&recorded));
+    stage_direct_delivery(state, auth, (server, method), Some(&recorded), stamps);
 }
 
 /// Record the staged receipts when the answer that was written delivers a

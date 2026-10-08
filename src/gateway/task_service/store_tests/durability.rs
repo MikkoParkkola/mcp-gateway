@@ -616,17 +616,14 @@ fn store_04_the_record_reader_refuses_one_byte_past_its_cap() {
 /// Serialize one creation and one settlement under a generous cap and report
 /// the exact byte sizes the store writes for each.
 ///
-/// Measured rather than computed on purpose: a padding calculation would agree
+/// Measured rather than computed on purpose: a size calculation would agree
 /// with today's serialization and drift silently the day the record gains a
 /// field, which is the failure mode a boundary case exists to prevent.
 async fn measured_record_sizes(root: &std::path::Path) -> (usize, usize) {
     let path = root.join("measure");
     let store = open(&path).await;
     let task = task();
-    store
-        .create(PreparedTask::for_test(&task, OWNER, 1))
-        .await
-        .unwrap();
+    store.create(padded(&task, OWNER, 1)).await.unwrap();
     let record = path.join(format!("{}.json", task.id()));
     let created = usize::try_from(fs::metadata(&record).unwrap().len()).unwrap();
     store
@@ -639,6 +636,13 @@ async fn measured_record_sizes(root: &std::path::Path) -> (usize, usize) {
         created + 1 < settled,
         "the settled record must be more than one byte larger, or the under-cap \
          half of this case would be testing the same number twice"
+    );
+    // The row is padded with a target its fallback drops (MIK-7651), so one
+    // byte under the cap is refused by the size check, not the fallback room.
+    let (_, fallback) = created_and_fallback_of(&task, padded(&task, OWNER, 1)).await;
+    assert!(
+        widest(fallback) < created,
+        "the padding outgrows the fallback"
     );
     (created, settled)
 }
@@ -671,7 +675,7 @@ async fn store_04_a_record_of_exactly_the_cap_is_accepted_on_both_write_paths() 
         .unwrap();
     let task = task();
     store
-        .create(PreparedTask::for_test(&task, OWNER, 1))
+        .create(padded(&task, OWNER, 1))
         .await
         .expect("a creation of exactly the cap is within an inclusive maximum");
     store.close().await.unwrap();
@@ -684,10 +688,7 @@ async fn store_04_a_record_of_exactly_the_cap_is_accepted_on_both_write_paths() 
         .await
         .unwrap();
     let task = self::task();
-    store
-        .create(PreparedTask::for_test(&task, OWNER, 1))
-        .await
-        .unwrap();
+    store.create(padded(&task, OWNER, 1)).await.unwrap();
     let done = store
         .transition(OWNER, task.id(), 1, settlement(), at(1))
         .await
@@ -705,7 +706,7 @@ async fn store_04_a_record_of_exactly_the_cap_is_accepted_on_both_write_paths() 
         .unwrap();
     assert_eq!(
         store
-            .create(PreparedTask::for_test(&self::task(), OWNER, 1))
+            .create(padded(&self::task(), OWNER, 1))
             .await
             .unwrap_err(),
         StoreError::Capacity
@@ -717,10 +718,7 @@ async fn store_04_a_record_of_exactly_the_cap_is_accepted_on_both_write_paths() 
         .await
         .unwrap();
     let task = self::task();
-    store
-        .create(PreparedTask::for_test(&task, OWNER, 1))
-        .await
-        .unwrap();
+    store.create(padded(&task, OWNER, 1)).await.unwrap();
     assert_eq!(
         store
             .transition(OWNER, task.id(), 1, settlement(), at(1))

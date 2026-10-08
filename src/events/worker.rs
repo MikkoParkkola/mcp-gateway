@@ -36,11 +36,7 @@ impl EventsHub {
         loop {
             if swept.is_none_or(|at| at.elapsed() >= SWEEP_EVERY) {
                 swept = Some(Instant::now());
-                let policy = self.dead_policy();
-                let evicted = self
-                    .blocking(move |store| store.sweep_dead(Utc::now(), policy))
-                    .await;
-                services.audit_evictions(evicted.unwrap_or_default()).await;
+                self.sweep_dead_letters(services).await;
                 // Gone subscriptions take their rate and failure state along.
                 let held = self.store.live_subscription_ids(Utc::now());
                 self.runtime.rates.retain(&held);
@@ -114,8 +110,16 @@ impl EventsHub {
         wait
     }
 
-    /// One attempt of record `event_id`, end to end.
+    /// One attempt of record `event_id`, end to end. Its source verdicts
+    /// share one wait on a catalogue that does not answer (MIK-7921).
     async fn attempt(self: &Arc<Self>, services: &Services, event_id: &str) {
+        let failed = std::cell::Cell::new(false);
+        super::upstream_listener::FAILED_LOOKUP
+            .scope(failed, self.attempt_once(services, event_id))
+            .await;
+    }
+
+    async fn attempt_once(self: &Arc<Self>, services: &Services, event_id: &str) {
         let now = Utc::now();
         let claim_id = event_id.to_owned();
         let Some(Claim::Ready(claimed)) = self
@@ -139,8 +143,7 @@ impl EventsHub {
                 .unwrap_or_default()
                 .to_owned(),
         };
-        let grant = (!record.owner_scoped).then_some(record.backend.as_str());
-        if !services.admits_subscription(&sub, grant).await {
+        if !services.admits_subscription(&sub, grant(&record)).await {
             if !self
                 .recorded_or_retry(services, &ctx, "access_revoked")
                 .await
@@ -218,17 +221,16 @@ impl EventsHub {
     /// the subscription, so it is kept (MIK-7976).
     async fn source_verdict(&self, sub: &super::records::Subscription) -> Verdict {
         match self.source_offering(&sub.name) {
-            Some(source) => {
-                let refused = source
-                    .authorize(&sub.principal, &sub.name, &sub.arguments)
-                    .await
-                    .is_err_and(|e| e.code == -32012);
-                if refused {
-                    Verdict::Refuses
-                } else {
-                    Verdict::Admits
-                }
-            }
+            Some(source) => match source
+                .authorize(&sub.principal, &sub.name, &sub.arguments)
+                .await
+            {
+                Err(e) if e.code == -32012 => Verdict::Refuses,
+                // Not found now (a catalogue that could not read the type,
+                // MIK-8037): held like a type no source offers.
+                Err(e) if e.code == -32011 => Verdict::Unoffered,
+                _ => Verdict::Admits,
+            },
             None if sub.name.starts_with(super::backend_source::NAME_PREFIX) => Verdict::Refuses,
             None => Verdict::Unoffered,
         }
@@ -249,11 +251,7 @@ impl EventsHub {
             return true;
         };
         tracing::warn!(%error, status, subscription = %ctx.sub.id, "events: attempt record not written; retrying");
-        let retry = Settle::Retry {
-            next: Utc::now() + REFUSAL_RETRY,
-            status: "audit_unavailable",
-        };
-        self.settle(services, ctx.record, retry).await;
+        self.retry_unsent(services, ctx.record).await;
         false
     }
 
@@ -278,12 +276,7 @@ impl EventsHub {
             ..ctx.attempt(status)
         };
         if services.audit_attempt(&ended(SENDING)).await.is_err() {
-            let next = Utc::now() + REFUSAL_RETRY;
-            let retry = Settle::Retry {
-                next,
-                status: "audit_unavailable",
-            };
-            self.settle(services, record, retry).await;
+            self.retry_unsent(services, record).await;
             return;
         }
         // MIN.2 E1, before the checks below: its own audit wait can span a
@@ -299,6 +292,19 @@ impl EventsHub {
         // (MIK-7894): the verdict is read again after them, before the row
         // that signs, so only sync steps sit between it and the send.
         match self.source_verdict(sub).await {
+            // Access is read again after the verdict's own wait (MIK-7907):
+            // a grant lost meanwhile is refused like one lost before. It must
+            // not yield: a reload landing inside it would follow the verdict
+            // unseen. Its one await, `TokenStore::live_jti`, completes at
+            // once in the only store there is (`InMemoryTokenStore`); a store
+            // that waits needs the verdict read again after this check.
+            Verdict::Admits if !services.admits_subscription(sub, grant(record)).await => {
+                services.audit_outcome(&ended("access_revoked")).await;
+                self.revoke(sub).await;
+                self.settle(services, record, refusal_retry("access_revoked"))
+                    .await;
+                return;
+            }
             Verdict::Admits => {}
             Verdict::Refuses => {
                 services.audit_outcome(&ended("access_revoked")).await;
@@ -388,11 +394,7 @@ impl EventsHub {
                     // The log refused the tenant_read record under
                     // fail-closed: nothing was sent, so this is an audit
                     // outage to retry, never a transport failure.
-                    let retry = Settle::Retry {
-                        next: Utc::now() + REFUSAL_RETRY,
-                        status: "audit_unavailable",
-                    };
-                    self.settle(services, record, retry).await;
+                    self.retry_unsent(services, record).await;
                     return None;
                 }
                 return Some((frame, verdict));
@@ -453,6 +455,27 @@ impl EventsHub {
         .await
     }
 
+    /// Evict the dead letters past their retention or caps, and receipt each
+    /// eviction, in the receipt order a burial keeps (see `receipts`).
+    async fn sweep_dead_letters(&self, services: &Services) {
+        let policy = self.dead_policy();
+        let _ordered = self.receipts.lock().await;
+        let evicted = self
+            .blocking(move |store| store.sweep_dead(Utc::now(), policy))
+            .await;
+        services.audit_evictions(evicted.unwrap_or_default()).await;
+    }
+
+    /// Back to pending after a claim that sent nothing because the audit log
+    /// refused its record: an audit outage, not a send (MIK-7944).
+    async fn retry_unsent(&self, services: &Services, record: &OutboxRecord) {
+        let retry = Settle::Unsent {
+            next: Utc::now() + REFUSAL_RETRY,
+            status: "audit_unavailable",
+        };
+        self.settle(services, record, retry).await;
+    }
+
     /// Settle the claimed occurrence `record`; a later occurrence that has
     /// since taken its event id is left alone.
     async fn settle(&self, services: &Services, record: &OutboxRecord, outcome: Settle) {
@@ -461,18 +484,26 @@ impl EventsHub {
             record.created_at,
             self.dead_policy(),
         );
+        // Only a burial evicts: it holds the receipt order from its store
+        // call through its last receipt.
+        let _ordered = match outcome {
+            Settle::Dead { .. } => Some(self.receipts.lock().await),
+            _ => None,
+        };
         let settled = self
             .blocking(move |store| store.settle(&id, created_at, outcome, Utc::now(), policy))
             .await;
         let (evicted, buried) = settled.map_or((Vec::new(), false), |s| (s.evicted, s.buried));
-        services.audit_evictions(evicted).await;
-        // The burial's own receipt: a cancelled occurrence settles nothing, and
-        // one the caps evicted at once still happened.
+        #[cfg(test)]
+        self.before_receipts.pause().await;
+        // The burial's own receipt first: a cancelled occurrence settles
+        // nothing, and one the caps evicted at once still happened.
         if let Settle::Dead { reason, .. } = outcome
             && buried
         {
             self.dead_lettered(services, record, reason).await;
         }
+        services.audit_evictions(evicted).await;
     }
 
     /// The governance record of a dead letter (design 3.7).
@@ -555,10 +586,11 @@ impl EventsHub {
     }
 
     /// Whether claimed attempt `record.attempt` lies past the attempt limit
-    /// or the retry window.
+    /// (counted in sends) or the retry window.
     fn overdue(&self, record: &super::outbox::OutboxRecord, now: chrono::DateTime<Utc>) -> bool {
         overdue(
             record.attempt,
+            record.sends(),
             record.first_attempt_at.unwrap_or(now),
             now,
             self.retry_policy(),
@@ -576,7 +608,7 @@ impl EventsHub {
         let first = record.first_attempt_at.unwrap_or(now);
         judge(
             answer,
-            record.attempt,
+            record.sends(),
             first,
             now,
             policy,
@@ -645,15 +677,17 @@ fn window_end(first: chrono::DateTime<Utc>, window: Duration) -> chrono::DateTim
 }
 
 /// Whether attempt number `attempt` (1-based, already claimed) may not be
-/// sent: past the attempt limit, or a retry at or after the window's end.
-/// The first attempt is never overdue.
+/// sent: `sends` (the attempts that could have reached the callback) past
+/// the attempt limit, or a retry at or after the window's end. The first
+/// attempt is never overdue.
 fn overdue(
     attempt: u32,
+    sends: u32,
     first: chrono::DateTime<Utc>,
     now: chrono::DateTime<Utc>,
     policy: Retry,
 ) -> bool {
-    attempt > policy.max_attempts || (attempt > 1 && now >= window_end(first, policy.window))
+    sends > policy.max_attempts || (attempt > 1 && now >= window_end(first, policy.window))
 }
 
 /// The stored body as a JSON value, with the SHA-256 of what goes on the
@@ -699,6 +733,12 @@ enum Verdict {
 /// The status of an attempt held because no source offers its type: nothing
 /// was revoked, the type is only unavailable for now.
 const HELD: &str = "source_unavailable";
+
+/// The backend grant a delivery of `record` needs: none for an owner-scoped
+/// event, which was authorized where it was made.
+fn grant(record: &OutboxRecord) -> Option<&str> {
+    (!record.owner_scoped).then_some(record.backend.as_str())
+}
 
 /// Back to pending after a refusal before the POST, ending `status`: a
 /// revoked subscription's record goes with it, a held one waits.

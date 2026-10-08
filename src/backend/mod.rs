@@ -81,6 +81,9 @@ pub use runtime_launch::runtime_plan_for_backend;
 pub struct Backend {
     /// Backend name
     pub name: String,
+    /// `name` as the `backend` metric label, shared so that recording a
+    /// metric costs a reference count, not a copy of the name (MIK-8014.PERF.5).
+    metric_label: telemetry_metrics::SharedString,
     /// Configuration
     config: BackendConfig,
     /// Runtime plan compiled from the backend's configured runtime profile.
@@ -103,6 +106,10 @@ pub struct Backend {
     /// probe and shared with the detached re-probe task, which outlives the
     /// request that triggered it — hence `Arc`.
     era: Arc<crate::protocol::era::EraCache>,
+    /// Test-only: one re-probe pauses between finding its slot and discarding
+    /// the era, so a removal can land inside that window (MIK-7643).
+    #[cfg(test)]
+    after_reprobe_lookup: crate::test_pause::Slot,
     /// Consecutive health-probe answers this peer declined to serve
     /// (MIK-7217, OUTBOUND.2).
     ///
@@ -285,13 +292,44 @@ impl Backend {
     }
 
     /// Whether this backend's transports connect under its destination
-    /// policy. A stdio child reaches no network destination of its own.
+    /// policy. A stdio child reaches no network destination of its own; every
+    /// other transport does, an A2A agent included (MIK-8063).
     pub(crate) fn destination_bound(&self) -> bool {
-        matches!(
+        !matches!(
             self.config.transport,
-            crate::config::TransportConfig::Http { .. }
-                | crate::config::TransportConfig::WebSocket { .. }
+            crate::config::TransportConfig::Stdio { .. }
         )
+    }
+
+    /// Start the outbound A2A bridge (MIK-8063) under `destination`: the agent
+    /// becomes one tool behind the same funnel as every backend. Like the HTTP
+    /// arm, the configured address is checked before anything connects and
+    /// every request goes through the guarded client. An agent has no
+    /// server-initiated stream, so the caller sets no listener. The caller has
+    /// marked the backend connecting and passed `begin_connecting` first.
+    #[cfg(feature = "a2a")]
+    async fn start_a2a(
+        &self,
+        destination: crate::security::ssrf::DestinationPolicy,
+    ) -> crate::Result<Arc<crate::a2a::transport::A2aTransport>> {
+        let crate::config::TransportConfig::A2a {
+            a2a_url,
+            a2a_agent_card_path,
+        } = &self.config.transport
+        else {
+            return Err(crate::Error::Config(format!(
+                "backend '{}' is not an A2A backend",
+                self.name
+            )));
+        };
+        crate::a2a::transport::A2aTransport::start(
+            a2a_url,
+            a2a_agent_card_path.as_deref(),
+            &self.config.headers,
+            self.config.timeout,
+            destination,
+        )
+        .await
     }
 
     /// Start a WebSocket transport under `destination`, the policy the start
@@ -439,6 +477,10 @@ mod start_failure_slot_tests;
 #[cfg(test)]
 #[path = "era_stale_probe_tests.rs"]
 mod era_stale_probe_tests;
+
+#[cfg(test)]
+#[path = "era_retired_slot_tests.rs"]
+mod era_retired_slot_tests;
 
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]

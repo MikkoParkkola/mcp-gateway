@@ -181,9 +181,15 @@ backend" and "fails a capability file" first.**
 | 154 | A same-key retry after a lost round (a broken stream, a timeout, a reload stopping the backend mid-call, an HTTP 5xx, or a 400, 404, 407, 408, 429 or session-expiry answer) is served the uncertain-outcome notice instead of the original error; `BackendUnavailable` frees the key | A client that read a served error as "the work failed" treats the notice as "may have run" and checks before re-issuing under a new key |
 | 155 | A caller signed in through the key server (an `/auth/token` token or a delegated OIDC bearer) has a principal of the form `kst:<sha256 hex>` or `oidc:<sha256 hex>`, no longer 12 hex characters | Update any log or audit query that matched these callers' 12-hex principal |
 | 156 | A REST capability body field that is a pure placeholder (`"{cursor}"`) now sends an explicit `null` the property's schema admits (`type: [string, "null"]`); 3.x left the field out. A null the schema does not admit is still left out, and query and path parameters are unchanged | To keep the field out, leave the argument out instead of sending `null`; a static param or URL default for the same name still fills it, as before |
-| 157 | Reserved: a change in review | None |
+| 157 | `webhooks.base_path` may not overlap a gateway route | Move the receiver to a path outside `/mcp`, `/ui`, `/dashboard`, `/accounts/v1`, `/auth`, `/.well-known` and the probe paths |
 | 158 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
+| 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
+| 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`, except those on lines the change deletes (a removed backend's entry, or a field an edit drops), which the command names by line number. On a file with comments, a change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. A file without comments is rewritten as before. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
+| 162 | An A2A backend (`transport: a2a`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public | None for gateway operators. Library users: configure the agent as a `transport: a2a` backend, or use your own A2A client to poll or cancel tasks |
+| 163 | With gateway authentication off and agent authentication on, each agent owns its tasks apart, keyed on the `client_id` its token validates as (a renewed token for the same agent keeps them); every agent had shared one task owner | None. Tasks an agent created before the upgrade stay under the old shared owner, so the agent no longer finds them under its own |
+| 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept, a removed one released); restart to read a repaired task; probes (`/livez`, `/readyz`) are unaffected |
+| 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1616,17 +1622,15 @@ verify can report such a gap for records that never reached disk. To verify a co
 has no `.hwm`, run `audit verify --archive <path>`, which reports tail completeness as unchecked.
 On a signed log, `.hwm` is signed too.
 
-Limitation: this detects a partial deletion, not a total one. Anyone with write access to the
+On its own, `.hwm` detects a partial deletion, not a total one. Anyone with write access to the
 whole audit directory (a compromised gateway service account, a shared volume, a log-shipping
 agent's credentials, not only full host control) can delete every segment and the `.hwm`
-together. `audit verify` on the emptied path reports that nothing exists to read; once the
-gateway restarts and starts a fresh log, verify passes on it, and nothing in the directory
-shows an earlier log existed. A log stored only in that directory cannot prove it existed.
-Forward audit records off-host: `control_plane.export` writes a local NDJSON file, and the
-protection holds only once an agent running as another account ships that file to a store (a
-SIEM, for example) where the gateway account cannot delete or alter records already landed. To
-detect a wipe or rollback, keep a copy of `<log>.hwm` off the host and verify with
-`audit verify --anchor` (item 158).
+together, and a log stored only in that directory cannot prove it existed. An off-host anchor
+can: keep a copy of `<log>.hwm` off the host and verify with `audit verify --anchor` (item 158),
+which fails on a wiped or rolled-back log. To keep the records themselves, forward them off-host:
+`control_plane.export` writes a local NDJSON file, and the protection holds only once an agent
+running as another account ships that file to a store (a SIEM, for example) where the gateway
+account cannot delete or alter records already landed.
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
@@ -3411,9 +3415,11 @@ TTL has passed with no request is reaped at the next sweep, not a full TTL later
 When a session ends, by its owner's `DELETE /mcp` or by the reaper, the state kept under its id
 is reclaimed: routing profile, workflow state, cost bucket, last-tool entry, cached-token counter
 and spec-preview promotions. Before, these were never removed and grew with every session. The
-ended session's calls, tokens and cost stay in the operator's aggregate totals. A second pass
-two minutes after the end removes state that a call still in flight wrote under the ended id; a
-call that runs longer than that (a backend `timeout` above two minutes) can still leave an entry.
+ended session's calls, tokens and cost stay in the operator's aggregate totals. A call still in
+flight when the session ends, or one that starts after it (a task worker, an input-round resume, a
+call released from a confirmation), holds the session until it finishes; when it does, the state
+it wrote under the ended id is removed too, however long it ran. A second pass two minutes after
+the end stays as a backstop.
 
 **Action:** none. A client that relied on a session being replaced after 30 minutes should send
 `DELETE /mcp` instead.
@@ -4140,6 +4146,19 @@ path parameters are unchanged, because they cannot carry a JSON null.
 To keep the field out, leave the argument out instead of sending `null`. A static param or a URL
 default for the same name still fills it, as before.
 
+## 157. `webhooks.base_path` may not overlap a gateway route
+
+**Startup:** no notice, the start is refused with its own error, which names the setting and the path, and for an overlap also the route; refuses to start
+
+With the webhook receiver enabled, `webhooks.base_path` is mounted beside the gateway's own
+routes. A path on or under one of them, such as `/mcp/hooks`, put a webhook handler where the
+gateway's own handlers are expected, and a path over one, such as `/ui/api/backends`, made axum
+panic at startup. Config load and reload now refuse an enabled receiver's `base_path` that is
+equal to, under or over any route the gateway listener registers, and a path axum cannot mount
+as written (`/`, a trailing `/`, an empty, `.` or `..` segment, `{`, `}`, or a segment starting
+with `:` or `*`). The default `/webhooks` is unaffected, and a disabled receiver is not
+checked. Choose a path outside the gateway's own routes.
+
 ## 158. `audit verify --anchor` checks the log against an off-host anchor
 
 **Startup:** no notice
@@ -4189,6 +4208,141 @@ count:
 
 Library users: `CostTracker::evict_old_records` is removed. Nothing called it
 in the gateway, and there is nothing left to evict.
+
+## 160. The budget enforcer's day rows are bounded
+
+**Startup:** no notice
+
+With cost governance on, the budget enforcer kept a per-tool and a per-key day
+row for every name that ever spent and never removed one. Now:
+
+- A tool or key with a budget always keeps its own row, so budget checks are
+  unchanged.
+- Other names get their own row up to about 256 per map (calls racing on a
+  first insert can add a few more). Past that, or for a name
+  longer than 256 bytes, their spend is counted in `tool_overflow_usd` or
+  `key_overflow_usd`. It still counts toward the global daily budget.
+- Rows from an earlier day without a budget are removed on a later spend.
+
+`EnforcerSnapshot` and the saved `costs.json` (`PersistedCosts`) carry the two
+overflow totals; the admin cost stats show them as `tool_overflow_spend_usd`
+and `key_overflow_spend_usd`. A file saved by an earlier
+build loads with both at 0.
+
+Library users: code that builds `EnforcerSnapshot` or `PersistedCosts` with a
+struct literal adds the two fields.
+
+## 161. CLI config writes keep comments, or refuse
+
+**Startup:** no notice
+
+`mcp-gateway add`, `remove`, `setup wizard` and `cap discover --write-config`
+(including the `--shadow` adoption) used to re-serialise `gateway.yaml`
+whenever the change was not a single block-style backend, which dropped every
+comment in the file, including the credential warning `init` writes.
+
+They now edit the file as text, one backend at a time, and write it once.
+Comments on lines the change deletes go with them (a removed backend's entry,
+or a field an edit drops), and the command names those comment lines. When a
+change cannot be written as text (a flow-style `backends:` mapping, or a
+comment inside a changed value) and the file has comments, the command writes
+nothing, exits non-zero, and names the line numbers of the comments a rewrite
+would drop. It never prints their text, which could hold a quoted secret. A
+file without comments is rewritten as before.
+
+`--force` keeps the old behaviour only for a change that cannot be written as
+text: it names the same lines, then rewrites the file without them, for
+example `mcp-gateway remove old-server --force`.
+
+## 162. A2A backends start, and the A2A module is crate-private
+
+**Startup:** no notice
+
+A backend with `transport: a2a` and `a2a_url` failed at its first use in 3.x. It now starts and
+exposes the agent as one tool, `send_message`, which delegates to an A2A 1.0 agent over the
+JSON-RPC binding (the `a2a` Cargo feature, on by default):
+
+```yaml
+backends:
+  travel-agent:
+    transport: a2a
+    a2a_url: "https://travel-agent.internal"
+```
+
+An agent that offers only A2A 0.3 is refused at start, and the error names the versions its card
+offers.
+
+`mcp_gateway::a2a` was a public module in 3.x and is now crate-private. A program that used it to
+send messages to an agent can configure the agent as a backend, as above. A program that also
+polled or cancelled tasks itself (`get_task`, `cancel_task`), or continued a conversation by its
+`context_id`, needs its own A2A client: each `send_message` call to the backend starts a new
+conversation with the agent and answers with the task's final result.
+
+## 163. Agent tokens own their tasks apart when gateway authentication is off
+
+**Startup:** no notice
+
+With gateway authentication off and agent authentication on, every caller
+holding a valid agent token shared one task owner, so one agent could read,
+update, cancel or replay another agent's task and listen to its
+notifications. Each agent now owns its own tasks, keyed on the `client_id`
+its token validated as, so a renewed token for the same agent keeps them.
+With agent authentication off nothing changes: callers share the one auth-off
+pool, as before. (With it on, a request without an agent token is refused.)
+
+Tasks an agent created before the upgrade were stored under the shared owner,
+so they stay in that pool: the agent that created them no longer finds them
+under its own owner.
+
+## 164. A task row with an unreadable key refuses new keyed calls
+
+**Startup:** no notice
+
+A stored task row whose idempotency key cannot be read unambiguously (damage
+before or inside its `admission` block, or a second copy of it) used to release
+that key, so a client retry was admitted as new work and its backend ran again.
+Now, while any such row is in the task store:
+
+- Every NEW keyed call, task or synchronous, is refused with code 409 and a
+  message saying new keyed calls are paused until an operator repairs or
+  removes a record. It never names the file. Keys already held and unkeyed
+  calls work as before.
+- The log names each file at startup and on every expiry sweep, the
+  `mcp_task_store_skipped_records{class="sealed"}` gauge counts the rows, and
+  `/health` reads `degraded` (503). The admin view adds
+  `task_store.sealed_rows`, `task_store.sealed_files` (full paths) and
+  `task_store.action`.
+
+It clears without a restart, at the next expiry sweep. Removing the file
+releases its key, so a retry of that call runs again. Repairing the file keeps
+its key, so a retry never runs again: until the next restart that retry is
+refused, and after a restart a task retry finds its task.
+
+The one step: repair or remove the file; restart to read a repaired task.
+Until a restart a repaired task stays unreadable (a known gap).
+
+A record-named FIFO in the task store is now refused as unsafe at startup
+instead of hanging it.
+
+## 165. A refused config reload answers 409, not 500
+
+**Startup:** no notice
+
+A config reload that failed always answered `POST /ui/api/reload` with 500,
+so a monitor read an operator's refused file as a gateway crash. Now the status
+says whose fault it is:
+
+- 409 Conflict when the network-posture policy refuses the file: it would
+  leave the tools reachable without a credential, or send credentials over
+  plain HTTP. Fix the file (revert the `public_url`, close the tool paths, or
+  put TLS in front).
+- 503 Service Unavailable when shutdown stopped the reload.
+- 500 for anything else, such as a file that does not parse or a change that
+  needs a restart.
+
+The `gateway_reload_config` meta-tool answers that refusal with JSON-RPC
+-32600 (it was -32603) and keeps -32603 otherwise. The message text is
+unchanged on both.
 
 ## Upgrading from 3.5.x: a walkthrough
 

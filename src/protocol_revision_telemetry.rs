@@ -1120,10 +1120,10 @@ fn emit_tools_list_metrics(filters: ListFilters, scope: CacheScope) {
     #[cfg(feature = "metrics")]
     telemetry_metrics::counter!(
         "mcp_tools_list_cache_scope_shadow_total",
-        "principal" => filters.principal.to_string(),
-        "profile" => filters.profile.to_string(),
-        "session" => filters.session.to_string(),
-        "request" => filters.request.to_string(),
+        "principal" => if filters.principal { "true" } else { "false" },
+        "profile" => if filters.profile { "true" } else { "false" },
+        "session" => if filters.session { "true" } else { "false" },
+        "request" => if filters.request { "true" } else { "false" },
         "would_emit_cache_scope" => scope.as_str()
     )
     .increment(1);
@@ -1209,22 +1209,26 @@ pub fn global_shadow_count(filters: ListFilters) -> u64 {
         .shadow_count(filters)
 }
 
-fn emit_request_metrics(requested_revision: Option<&str>, client: &str, transport: Transport) {
+fn emit_request_metrics(
+    requested_revision: Option<&'static str>,
+    client: &'static str,
+    transport: Transport,
+) {
     let _ = (requested_revision, client, transport);
     #[cfg(feature = "metrics")]
     {
         if let Some(rev) = requested_revision {
             telemetry_metrics::counter!(
                 "mcp_protocol_revision_observations_total",
-                "requested_revision" => rev.to_string(),
-                "client" => client.to_string(),
+                "requested_revision" => rev,
+                "client" => client,
                 "transport" => transport.as_str()
             )
             .increment(1);
         } else {
             telemetry_metrics::counter!(
                 "mcp_protocol_revision_unattributed_observations_total",
-                "client" => client.to_string(),
+                "client" => client,
                 "transport" => transport.as_str()
             )
             .increment(1);

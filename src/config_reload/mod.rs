@@ -101,6 +101,44 @@ fn is_posture_refusal(error: &str) -> bool {
     error.starts_with(POSTURE_REFUSED_PREFIX)
 }
 
+/// How every network-posture reason starts (`gateway::server`'s serve refusal:
+/// a bind or a cleartext exposure). The restart-only refusals that share
+/// [`POSTURE_REFUSED_PREFIX`] (signing, posture and hardened fields, an
+/// account binding) say "restart" instead.
+const NETWORK_POSTURE_REASON: &str = "refusing to serve HTTP";
+
+/// Why a reload failed, for a caller that answers with a status (MIK-8058).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReloadFailure {
+    /// The network-posture policy refused the file: the operator's config,
+    /// not a server fault.
+    PostureRefused,
+    /// Shutdown began: the reload was stopped by the shutdown signal, or the
+    /// registry refused its backends.
+    ShuttingDown,
+    /// Anything else: an unreadable file, a failed apply, a change that needs
+    /// a restart.
+    Internal,
+}
+
+/// Classify a `reload_outcome` error. The error stays a `String` (a public
+/// shape), so the class is read from the shared prefix, the posture reason
+/// and the shutdown literals.
+pub(crate) fn reload_failure(error: &str) -> ReloadFailure {
+    let posture = error
+        .strip_prefix(POSTURE_REFUSED_PREFIX)
+        .is_some_and(|rest| rest.trim_start().starts_with(NETWORK_POSTURE_REASON));
+    if posture {
+        ReloadFailure::PostureRefused
+    } else if error.starts_with(SHUTDOWN_ABORTED_ERROR)
+        || error.starts_with(reload_context::STOPPED)
+    {
+        ReloadFailure::ShuttingDown
+    } else {
+        ReloadFailure::Internal
+    }
+}
+
 /// How long a config write waits for the reload lock before reporting busy.
 ///
 /// Long enough to sit out a normal reload — stopping and re-registering
@@ -360,6 +398,11 @@ pub async fn apply_patch(
 
 mod diff;
 mod reload_context;
+mod reload_warm_hook;
+// Linux-only, as the other real-watcher rows (inotify).
+#[cfg(all(test, target_os = "linux"))]
+mod reload_warm_hook_tests;
+pub(crate) use reload_warm_hook::{OnRegistered, RegisteredChange};
 mod watcher;
 mod write;
 use diff::pending_restart_fields;
@@ -379,6 +422,9 @@ pub use write::{
     ConfigMutation, ConfigWriteError, mutate_config_and_reload, write_config_and_reload,
     write_config_and_reload_outcome,
 };
+// Only the web UI writes in refusing mode.
+#[cfg(feature = "webui")]
+pub(crate) use write::{MutateError, mutate_config_and_reload_with};
 
 mod env_poll;
 // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
@@ -395,6 +441,8 @@ mod watch_chain;
 mod c4_enable_tests;
 #[cfg(test)]
 mod c9_file_ref_tests;
+#[cfg(test)]
+mod webhook_base_path_reload_tests;
 
 #[cfg(test)]
 mod grant_change_trigger_tests;

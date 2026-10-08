@@ -282,7 +282,8 @@ fn a_failed_reconcile_attempt_logs_a_warning_and_the_next_one_finishes() {
                 let hub = Arc::clone(&hub);
                 async move {
                     hub.reconcile_until_done(
-                        CatalogueScan::Complete,
+                        "test",
+                        Arc::new(|| CatalogueScan::Complete),
                         std::time::Duration::from_millis(20),
                     )
                     .await;

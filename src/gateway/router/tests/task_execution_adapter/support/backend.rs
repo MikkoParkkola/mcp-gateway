@@ -19,13 +19,14 @@ pub(crate) const TOOL: &str = "echo";
 
 /// What the mock answers a `tools/call` with.
 ///
-/// One variant, deliberately. A mock that could also answer a JSON-RPC error
-/// would be the obvious way to drive a `failed` task, and it would be the wrong
-/// way: the `failed` rows in `settlement.rs` need the error the GATEWAY
-/// produces — `Error::Forbidden`, the one variant
-/// `error_response_preserving_status` stamps its internal HTTP-status key onto —
-/// and a backend-authored error carries no such key, so the row that exists to
-/// see the key stripped would never have had one to strip.
+/// A result, a sequence of results, or a JSON-RPC error from the backend
+/// itself (`Failure`, `FirstCallFails`). A backend error is not how the
+/// `failed` rows in `settlement.rs` fail a task: they need the error the
+/// GATEWAY produces — `Error::Forbidden`, the one variant
+/// `error_response_preserving_status` stamps its internal HTTP-status key onto
+/// — and a backend-authored error carries no such key, so the row that exists
+/// to see the key stripped would never have had one to strip. A backend error
+/// also reaches the caller as a tool-error result, not as an `Err`.
 pub(crate) enum Answer {
     /// A successful tool result, carried verbatim.
     Result(Value),
@@ -33,6 +34,9 @@ pub(crate) enum Answer {
     Sequence(Vec<Value>),
     /// A JSON-RPC error from the backend itself, after the call was received.
     Failure,
+    /// [`Self::Failure`] carrying this message on the first call; every later
+    /// call answers a plain `ok` text, so only that first call delivers it.
+    FirstCallFails(String),
 }
 
 impl Answer {
@@ -192,6 +196,13 @@ impl MockBackend {
                     -32000,
                     "mock-backend-failed",
                 );
+            }
+            Answer::FirstCallFails(message) if call == 0 => {
+                return JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, message.clone());
+            }
+            Answer::FirstCallFails(_) => {
+                let ok = json!({ "content": [{ "type": "text", "text": "ok" }] });
+                return JsonRpcResponse::success(RequestId::Number(1), ok);
             }
         };
         JsonRpcResponse::success(RequestId::Number(1), value.clone())

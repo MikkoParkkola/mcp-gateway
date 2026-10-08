@@ -45,6 +45,15 @@ fn principal(secret: &str) -> String {
 
 /// A hub whose controls read `keys` from a live config the test can swap.
 fn hub(dir: &std::path::Path, keys: Vec<ApiKeyConfig>) -> (Arc<EventsHub>, Arc<LiveConfig>) {
+    hub_with(dir, keys, LiveCredentials::default())
+}
+
+/// [`hub`], with the given static credentials.
+fn hub_with(
+    dir: &std::path::Path,
+    keys: Vec<ApiKeyConfig>,
+    credentials: LiveCredentials,
+) -> (Arc<EventsHub>, Arc<LiveConfig>) {
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir).expect("hub");
     let live = Arc::new(LiveConfig::new(config(keys)));
     let services = Services {
@@ -55,7 +64,7 @@ fn hub(dir: &std::path::Path, keys: Vec<ApiKeyConfig>) -> (Arc<EventsHub>, Arc<L
         provenance: None,
         #[cfg(feature = "cost-governance")]
         budget: None,
-        credentials: LiveCredentials::default(),
+        credentials,
     };
     let _ = hub.runtime.services.set(Arc::new(services));
     (hub, live)
@@ -304,4 +313,107 @@ async fn a_non_admin_never_receives_an_operator_event() {
         hub.store.subscriptions().is_empty(),
         "the demoted admin's ended too"
     );
+}
+
+/// A key whose digest shares `secret`'s first 48 bits (its principal) and
+/// differs after them: the collision MIK-7973 refuses at load, built here
+/// directly so the check below cannot rely on that refusal.
+fn twin_of(secret: &str, name: &str, admin: bool) -> ApiKeyConfig {
+    let spec = api_key_digest_spec(secret.as_bytes());
+    let (head, tail) = spec.split_at("sha256:".len() + 12);
+    let flipped: String = tail
+        .chars()
+        .map(|c| if c == '0' { '1' } else { '0' })
+        .collect();
+    ApiKeyConfig {
+        key_sha256: Some(format!("{head}{flipped}")),
+        ..key(name, secret, admin)
+    }
+}
+
+/// `MIK-8062.PREFIX.1`: when two unexpired keys share a principal, the
+/// standing is ambiguous, so it fails closed: no standing for either name,
+/// whichever key is configured first.
+#[test]
+fn a_principal_two_live_keys_share_has_no_standing() {
+    // GIVEN: dev, and an admin key whose digest shares dev's first 48 bits
+    for twin_first in [false, true] {
+        let mut keys = vec![key("dev", "s-dev", false), twin_of("s-dev", "twin", true)];
+        if twin_first {
+            keys.reverse();
+        }
+        let dir = tempfile::tempdir().expect("dir");
+        let (hub, _live) = hub(dir.path(), keys);
+        // WHEN: the shared principal's standing is read
+        let standing = source(&hub).standing(&principal("s-dev"));
+        // THEN: it has none, so it is neither admin nor either key's holder
+        assert!(
+            standing.is_none(),
+            "twin first {twin_first}: an ambiguous principal resolved to {:?}",
+            standing.map(|s| (s.admin, s.key))
+        );
+    }
+}
+
+/// `MIK-8062.PREFIX.1`: a key whose principal is also the static bearer's is
+/// just as ambiguous, so it gets neither the bearer's admin standing nor the
+/// key's.
+#[test]
+fn a_principal_the_bearer_and_a_key_share_has_no_standing() {
+    let credentials = LiveCredentials {
+        bearer_principal: Some(principal("s-dev")),
+        ..LiveCredentials::default()
+    };
+    let dir = tempfile::tempdir().expect("dir");
+    let (hub, _live) = hub_with(dir.path(), vec![key("dev", "s-dev", false)], credentials);
+    let standing = source(&hub).standing(&principal("s-dev"));
+    assert!(
+        standing.is_none(),
+        "a key sharing the bearer's principal resolved to {:?}",
+        standing.map(|s| (s.admin, s.key))
+    );
+}
+
+/// `MIK-8062.PREFIX.2`: a principal only one unexpired key derives keeps
+/// that key's standing, also when an expired key shares the principal.
+#[test]
+fn a_principal_one_live_key_derives_keeps_its_standing() {
+    let mut twin = twin_of("s-dev", "twin", true);
+    twin.expires_at = Some(Utc::now() - chrono::Duration::hours(1));
+    for keys in [
+        vec![key("dev", "s-dev", false)],
+        vec![key("dev", "s-dev", false), twin.clone()],
+        vec![twin, key("dev", "s-dev", false)],
+    ] {
+        let dir = tempfile::tempdir().expect("dir");
+        let (hub, _live) = hub(dir.path(), keys);
+        let standing = source(&hub).standing(&principal("s-dev"));
+        let (admin, name) = standing
+            .map(|s| (s.admin, s.key))
+            .expect("dev has standing");
+        assert!(!admin);
+        assert_eq!(name.as_deref(), Some("dev"));
+    }
+}
+
+/// `MIK-8062.PREFIX.2`: the static bearer alone keeps its admin standing, also
+/// beside an expired key that shares its principal.
+#[test]
+fn the_bearer_alone_keeps_its_admin_standing() {
+    let mut expired = key("dev", "s-dev", false);
+    expired.expires_at = Some(Utc::now() - chrono::Duration::hours(1));
+    for keys in [vec![], vec![expired]] {
+        let credentials = LiveCredentials {
+            bearer_principal: Some(principal("s-dev")),
+            ..LiveCredentials::default()
+        };
+        let dir = tempfile::tempdir().expect("dir");
+        let (hub, _live) = hub_with(dir.path(), keys, credentials);
+        let standing = source(&hub).standing(&principal("s-dev"));
+        let (admin, name) = standing
+            .map(|s| (s.admin, s.key))
+            .expect("the bearer has standing");
+        assert!(admin, "the bearer is an admin");
+        assert!(name.is_none(), "the bearer holds no key");
+    }
 }

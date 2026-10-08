@@ -95,12 +95,15 @@ impl MetaMcp {
         if let (Some(idem_cache), Some(key), Some(fingerprint)) =
             (&self.idempotency_cache, idem_key, idem_fingerprint)
         {
+            // A replay restores the stored call's write record; everything
+            // noted after this mark is that record (MIK-7991).
+            let mark = super::gateway_writes::mark();
             match enforce(idem_cache, key, fingerprint)? {
                 // A dispatched call that failed is terminal: serving the stored
                 // error is what stops the retry re-running a side effect that
                 // may already have committed (ADR-012 consequence 1).
                 GuardOutcome::CachedError(error) => {
-                    audit::note_cached();
+                    audit::note_cached_failure(&error);
                     // A refusal keeps its provenance across the replay as well
                     // as across the bridge boundary. Served as a generic error
                     // it would skip the delivery-refusal projection and count
@@ -125,11 +128,21 @@ impl MetaMcp {
                 }
                 GuardOutcome::CachedResult(cached) => {
                     debug!(target: INVOKE_TARGET, server, tool, key, trace_id, "Idempotency cache hit");
-                    self.stage_relay_receipt(
-                        caller.relay_caller(session_id),
-                        (server, tool),
-                        &cached,
-                    );
+                    // A stored side-effect notice is the gateway's own text;
+                    // its first call delivered no read either (MIK-7991).
+                    // Reached when the sync admission's wall-clock entry has
+                    // expired before this one (whole-second truncation at
+                    // equal retention, or a forward clock step).
+                    if !super::side_effect_markers::is_gateway_notice(&cached) {
+                        self.stage_relay_receipt(
+                            caller.relay_caller(session_id),
+                            (server, tool),
+                            &super::gateway_writes::without(
+                                &cached,
+                                &super::gateway_writes::snapshot_since(mark),
+                            ),
+                        );
+                    }
                     if let Some(ref stats) = self.stats {
                         stats.record_cache_hit();
                     }
@@ -265,11 +278,18 @@ impl MetaMcp {
                     policy_epoch,
                 },
             )
-            && let Some((cached, read)) = cache.get_read(&cache_key)
+            && let Some((cached, read, writes)) = cache.get_read(&cache_key)
         {
             cache_reads::restore(read.as_ref());
             debug!(target: INVOKE_TARGET, server, tool, trace_id, "Cache hit");
-            self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &cached);
+            // MIK-7991: the hit serves what the storing call wrote; its
+            // receipt and the delivered answer's rebuild both leave it out.
+            self.stage_relay_receipt(
+                caller.relay_caller(session_id),
+                (server, tool),
+                &super::gateway_writes::without(&cached, &writes),
+            );
+            super::gateway_writes::restore(&writes);
             if let Some(ref stats) = self.stats {
                 stats.record_cache_hit();
             }
@@ -282,7 +302,7 @@ impl MetaMcp {
             // Terminal state on the response-cache-hit return: settle through
             // the reservation, or its `Drop` would remove what was just stored.
             if let Some(reservation) = idem_reservation.as_mut() {
-                reservation.complete_read(&cached, read);
+                reservation.complete_read(&cached, (read, writes));
             }
             let predictions =
                 self.record_and_predict(session_id, arm_key, tool_key, caller.scope());

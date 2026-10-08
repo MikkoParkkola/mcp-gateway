@@ -23,17 +23,20 @@ use dashmap::mapref::entry::Entry as MapEntry;
 use serde_json::Value;
 use tracing::debug;
 
-use crate::hashing::{canonical_json, sha256_hex_chunks};
+use crate::gateway::gateway_writes::WriteRecord;
+use crate::security::tenant_reads::ReadAttribution;
 use crate::{Error, Result};
 
 #[path = "idempotency/admission.rs"]
 pub(crate) mod admission;
 mod guard;
+mod key;
 // #1962: `disarm`, kept out of this file's size baseline.
 mod reservation_arm;
 pub use guard::{
     FIREWALL_REFUSAL_MARKER, GuardOutcome, cached_error_parts, enforce, spawn_cleanup_task,
 };
+pub use key::derive_key;
 
 // ── Public constants ──────────────────────────────────────────────────────────
 
@@ -50,6 +53,11 @@ pub use guard::{
 /// finds it. Revisit if an operator reports either half of the failure — a
 /// retry outside the window that duplicated a side effect, or memory pressure
 /// from entries held this long.
+///
+/// The full day, never shortened (MIK-7991): the direct route settles into
+/// this cache with no sync admission in front of it, so this is the whole
+/// window that route's retries are owed. It may not exceed the sync
+/// admission's retention (asserted beside it).
 pub const COMPLETED_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Timeout for in-flight markers (5 minutes).
@@ -148,6 +156,10 @@ impl IdempotencyState {
 #[derive(Debug, Default)]
 pub struct IdempotencyCache {
     entries: DashMap<String, Entry>,
+    /// Seconds the cache's clock runs ahead of the process clock (MIK-8070):
+    /// tests age entries forward, never by building a past `Instant`.
+    #[cfg(test)]
+    ahead: std::sync::atomic::AtomicU64,
 }
 
 /// The liveness token an in-flight entry is judged against.
@@ -187,7 +199,13 @@ struct Entry {
     owner: Weak<OwnerToken>,
     /// MIK-7116.MIN.2: what the dispatch behind a completed result read
     /// before any transform, kept in the same entry as the result.
-    read: Option<crate::security::tenant_reads::ReadAttribution>,
+    read: Option<ReadAttribution>,
+    /// MIK-7991: what the gateway wrote into a completed result on the call
+    /// that stored it, restored on a replay so its receipt leaves it out.
+    writes: WriteRecord,
+    /// Extra in-flight age from [`IdempotencyCache::age_in_flight`]; added,
+    /// never subtracted from an `Instant`, so it cannot underflow (MIK-8070).
+    aged: Duration,
 }
 
 impl Entry {
@@ -197,16 +215,20 @@ impl Entry {
             fingerprint: fingerprint.to_string(),
             owner: Weak::new(),
             read: None,
+            writes: WriteRecord::default(),
+            aged: Duration::ZERO,
         }
     }
 
     /// An in-flight entry published on behalf of a live reservation.
-    fn in_flight(fingerprint: &str, owner: &Arc<OwnerToken>) -> Self {
+    fn in_flight(fingerprint: &str, owner: &Arc<OwnerToken>, started: Instant) -> Self {
         Self {
-            state: IdempotencyState::InFlight(Instant::now()),
+            state: IdempotencyState::InFlight(started),
             fingerprint: fingerprint.to_string(),
             owner: Arc::downgrade(owner),
             read: None,
+            writes: WriteRecord::default(),
+            aged: Duration::ZERO,
         }
     }
 
@@ -286,11 +308,9 @@ pub(crate) enum AdmitOutcome {
     /// Another caller holds a live in-flight entry.
     InFlight,
     /// A completed entry exists — return the cached result, with the
-    /// reading kept beside it (MIK-7116.MIN.2), read under the same lock.
-    Completed(
-        Value,
-        Option<crate::security::tenant_reads::ReadAttribution>,
-    ),
+    /// reading (MIK-7116.MIN.2) and the gateway's write record (MIK-7991)
+    /// kept beside it, read under the same lock.
+    Completed(Value, Option<ReadAttribution>, WriteRecord),
     /// A failed entry exists — return the cached JSON-RPC error object.
     Failed(Value),
     /// The cache is at [`MAX_ENTRIES`] and this key is not tracked yet.
@@ -314,19 +334,21 @@ pub(crate) enum AdmitOutcome {
 /// dead". Aged *and* ownerless is stale; the timeout then "does what it was
 /// introduced for — reclaiming entries whose owner is gone — and nothing else".
 #[must_use]
-fn classify(entry: &Entry) -> CacheEntryStatus {
+fn classify(entry: &Entry, now: Instant) -> CacheEntryStatus {
+    let age = |at: &Instant| now.saturating_duration_since(*at);
     match &entry.state {
         IdempotencyState::InFlight(started)
-            if entry.owner_is_live() || started.elapsed() <= IN_FLIGHT_TIMEOUT =>
+            if entry.owner_is_live()
+                || age(started).saturating_add(entry.aged) <= IN_FLIGHT_TIMEOUT =>
         {
             CacheEntryStatus::LiveInFlight
         }
         IdempotencyState::InFlight(_) => CacheEntryStatus::StaleInFlight,
-        IdempotencyState::Completed(_, stored) if stored.elapsed() <= COMPLETED_TTL => {
+        IdempotencyState::Completed(_, stored) if age(stored) <= COMPLETED_TTL => {
             CacheEntryStatus::LiveCompleted
         }
         IdempotencyState::Completed(_, _) => CacheEntryStatus::ExpiredCompleted,
-        IdempotencyState::Failed(_, stored) if stored.elapsed() <= COMPLETED_TTL => {
+        IdempotencyState::Failed(_, stored) if age(stored) <= COMPLETED_TTL => {
             CacheEntryStatus::LiveFailed
         }
         IdempotencyState::Failed(_, _) => CacheEntryStatus::ExpiredFailed,
@@ -349,9 +371,18 @@ impl IdempotencyCache {
     /// Create a new, empty cache.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            entries: DashMap::new(),
-        }
+        Self::default()
+    }
+
+    /// Every entry is stamped and aged on this clock, so a test that moves it
+    /// forward ages all of them alike.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        let ahead = self.ahead.load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(test))]
+        let ahead = 0;
+        Instant::now() + Duration::from_secs(ahead)
     }
 
     /// Check the cache state for `key` and return what the caller should do.
@@ -373,7 +404,7 @@ impl IdempotencyCache {
             };
         };
 
-        let status = classify(entry.value());
+        let status = classify(entry.value(), self.now());
 
         let (decision, evict) = decide_check_plan(status);
         if evict {
@@ -419,13 +450,14 @@ impl IdempotencyCache {
         // the guard's scope deadlocks. The count can therefore grow by at most
         // the number of callers racing admission of distinct new keys.
         let at_capacity = self.entries.len() >= MAX_ENTRIES;
+        let now = self.now();
 
         match self.entries.entry(key.to_string()) {
             MapEntry::Occupied(mut occupied) => {
                 // Before the state: a live entry for another request must be
                 // refused whether it is in flight or already completed, and a
                 // stale one is replaced by this request anyway.
-                let (plan, evict) = decide_check_plan(classify(occupied.get()));
+                let (plan, evict) = decide_check_plan(classify(occupied.get(), now));
                 if !matches!(plan, CheckPlan::Proceed) && !occupied.get().matches(fingerprint) {
                     return AdmitOutcome::Mismatch;
                 }
@@ -435,7 +467,11 @@ impl IdempotencyCache {
                         let IdempotencyState::Completed(value, _) = &occupied.get().state else {
                             unreachable!("live completed status must hold a completed value");
                         };
-                        AdmitOutcome::Completed(value.clone(), occupied.get().read.clone())
+                        AdmitOutcome::Completed(
+                            value.clone(),
+                            occupied.get().read.clone(),
+                            occupied.get().writes.clone(),
+                        )
                     }
                     CheckPlan::Failed => {
                         let IdempotencyState::Failed(error, _) = &occupied.get().state else {
@@ -447,7 +483,7 @@ impl IdempotencyCache {
                         debug_assert!(evict, "an occupied entry only proceeds after eviction");
                         // Replacing in place keeps the entry count flat, so a
                         // stale entry never costs a caller its admission.
-                        occupied.insert(Entry::in_flight(fingerprint, owner));
+                        occupied.insert(Entry::in_flight(fingerprint, owner, now));
                         debug!(key, "Replaced stale idempotency entry");
                         AdmitOutcome::Proceed
                     }
@@ -457,7 +493,7 @@ impl IdempotencyCache {
                 if at_capacity {
                     return AdmitOutcome::AtCapacity;
                 }
-                vacant.insert(Entry::in_flight(fingerprint, owner));
+                vacant.insert(Entry::in_flight(fingerprint, owner, now));
                 AdmitOutcome::Proceed
             }
         }
@@ -467,7 +503,7 @@ impl IdempotencyCache {
     pub fn mark_in_flight(&self, key: &str) {
         self.entries.insert(
             key.to_string(),
-            Entry::new(IdempotencyState::InFlight(Instant::now()), ""),
+            Entry::new(IdempotencyState::InFlight(self.now()), ""),
         );
     }
 
@@ -506,7 +542,7 @@ impl IdempotencyCache {
     /// fingerprint matches every later request, so a result stored that way
     /// would answer any call reusing the key.
     pub(crate) fn mark_completed_bound(&self, key: &str, result: Value, fingerprint: &str) -> bool {
-        self.mark_completed_read(key, result, fingerprint, None)
+        self.mark_completed_read(key, result, fingerprint, (None, WriteRecord::default()))
     }
 
     /// [`Self::mark_completed_bound`] with the dispatch's reading kept in the
@@ -516,18 +552,16 @@ impl IdempotencyCache {
         key: &str,
         result: Value,
         fingerprint: &str,
-        read: Option<crate::security::tenant_reads::ReadAttribution>,
+        (read, writes): (Option<ReadAttribution>, WriteRecord),
     ) -> bool {
         if !crate::protocol::cacheable::is_final(&result) {
             self.entries.remove(key);
             debug!(key, "Refused to cache a non-final result");
             return false;
         }
-        let mut entry = Entry::new(
-            IdempotencyState::Completed(result, Instant::now()),
-            fingerprint,
-        );
+        let mut entry = Entry::new(IdempotencyState::Completed(result, self.now()), fingerprint);
         entry.read = read;
+        entry.writes = writes;
         self.entries.insert(key.to_string(), entry);
         true
     }
@@ -542,7 +576,7 @@ impl IdempotencyCache {
     pub(crate) fn mark_failed_bound(&self, key: &str, error: Value, fingerprint: &str) {
         self.entries.insert(
             key.to_string(),
-            Entry::new(IdempotencyState::Failed(error, Instant::now()), fingerprint),
+            Entry::new(IdempotencyState::Failed(error, self.now()), fingerprint),
         );
     }
 
@@ -562,8 +596,9 @@ impl IdempotencyCache {
     /// being narrowed.
     pub fn evict_expired(&self) {
         let before = self.entries.len();
+        let now = self.now();
         self.entries
-            .retain(|_, entry| !is_reclaimable(classify(entry)));
+            .retain(|_, entry| !is_reclaimable(classify(entry, now)));
         let count = before.saturating_sub(self.entries.len());
         if count > 0 {
             debug!(count, "Evicted stale idempotency entries");
@@ -576,7 +611,7 @@ impl IdempotencyCache {
     /// A test seam, and the only one: staleness is measured against the process
     /// clock, so the aged state the ADR-012 acceptance rows are stated against
     /// is otherwise reachable only by waiting out [`IN_FLIGHT_TIMEOUT`] in real
-    /// time. It moves the start instant and touches nothing else — in
+    /// time. It adds to the entry's age and touches nothing else — in
     /// particular not the owner handle — so it cannot change which rule those
     /// rows observe.
     #[doc(hidden)]
@@ -584,13 +619,10 @@ impl IdempotencyCache {
         let Some(mut entry) = self.entries.get_mut(key) else {
             return false;
         };
-        let IdempotencyState::InFlight(started) = &mut entry.state else {
+        if !matches!(entry.state, IdempotencyState::InFlight(_)) {
             return false;
-        };
-        let Some(aged) = started.checked_sub(by) else {
-            return false;
-        };
-        *started = aged;
+        }
+        entry.aged = entry.aged.saturating_add(by);
         true
     }
 
@@ -609,23 +641,6 @@ impl IdempotencyCache {
 
 #[cfg(kani)]
 mod verification;
-
-// ── Key generation ────────────────────────────────────────────────────────────
-
-/// Derive an idempotency key from `tool_name` and `arguments`.
-///
-/// The key is the hex-encoded SHA-256 digest of
-/// `"{tool_name}\0{canonical_json(arguments)}"`.
-/// Using a NUL separator prevents collisions between tool names that share a
-/// common prefix and arguments.
-///
-/// The resulting key is stable: identical `(tool_name, arguments)` pairs
-/// always produce the same key regardless of JSON key ordering.
-#[must_use]
-pub fn derive_key(tool_name: &str, arguments: &Value) -> String {
-    let canonical = canonical_json(arguments);
-    sha256_hex_chunks([tool_name.as_bytes(), &b"\0"[..], canonical.as_bytes()])
-}
 
 // ── Idempotency enforcement ───────────────────────────────────────────────────
 
@@ -704,14 +719,15 @@ impl IdempotencyReservation {
     /// key first and may still store a structured error result afterwards, which
     /// is the behaviour the invoke path already relied on.
     pub fn complete(&mut self, result: &Value) -> bool {
-        self.complete_read(result, None)
+        self.complete_read(result, (None, WriteRecord::default()))
     }
 
-    /// [`Self::complete`] with the dispatch's reading kept in the entry (MIN.2).
+    /// [`Self::complete`] with the dispatch's reading (MIN.2) and the
+    /// gateway's write record (MIK-7991) kept in the entry.
     pub(crate) fn complete_read(
         &mut self,
         result: &Value,
-        read: Option<crate::security::tenant_reads::ReadAttribution>,
+        read: (Option<ReadAttribution>, WriteRecord),
     ) -> bool {
         self.settled = true;
         self.cache

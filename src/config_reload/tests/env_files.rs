@@ -577,3 +577,42 @@ async fn envfile_6b_the_restart_report_names_the_key_and_carries_neither_value()
         "the serialized outcome leaked a value; got {serialized}"
     );
 }
+
+/// MIK-8014.PERF.6 — the input scanner parses its free-text key list once per
+/// published overlay. Its cache is correct only because every reload publishes
+/// a new overlay through `publish_overlay` and none is mutated in place, so
+/// this row drives the production reload, not `LiveEnv::set`: an exemption a
+/// reload revokes must reach the very next scan.
+#[tokio::test]
+async fn perf6_a_reload_that_revokes_a_skip_key_reaches_the_next_scan() {
+    use crate::security::firewall::input_scanner::InputScanner;
+
+    let home = tempfile::tempdir().unwrap();
+    let path = env_file(
+        home.path(),
+        "firewall.env",
+        "MCP_GATEWAY_FIREWALL_SKIP_KEYS=release_notes\n",
+    );
+    let cfg_dir = tempfile::tempdir().unwrap();
+    let cfg = config_naming_env_files(cfg_dir.path(), &[path.to_str().unwrap()]);
+    let startup = startup_through(&cfg, &RecordingHome::based_at(home.path()));
+    let ctx = reload_context_with_env(&cfg, &startup);
+    let scanner = InputScanner::with_env(Arc::clone(ctx.live_env()));
+    let args = serde_json::Map::from_iter([(
+        "release_notes".to_string(),
+        serde_json::Value::String("run `id`".into()),
+    )]);
+    assert!(scanner.scan_args(&args).is_empty(), "exempt at startup");
+    assert!(
+        scanner.scan_args(&args).is_empty(),
+        "still exempt, from the held list"
+    );
+
+    write_owner_only(&path, "MCP_GATEWAY_FIREWALL_SKIP_KEYS=changelog\n").unwrap();
+    ctx.reload_outcome().await.unwrap();
+
+    assert!(
+        !scanner.scan_args(&args).is_empty(),
+        "the reload revoked the exemption; the next scan must flag the command"
+    );
+}

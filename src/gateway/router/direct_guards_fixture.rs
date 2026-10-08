@@ -46,6 +46,17 @@ pub(crate) enum Answer {
     /// The first `tools/call` asks the client a question (`input_required`);
     /// every later call succeeds. Drives a bridged input round (T3c).
     AskOnce,
+    /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
+    /// `resultType`, `ttlMs` (5000) and `cacheScope` itself, and every other
+    /// answer a `ttlMs` of 3000 (MIK-8022).
+    ModernList,
+    /// A two-page `tools/list` whose pages carry these `ttlMs` hints.
+    Paged(Option<u64>, Option<u64>),
+    /// A two-page `tools/list` whose first page carries this `ttlMs` hint and
+    /// whose last page is unreadable (its `tools` is not an array).
+    Unreadable(Option<u64>),
+    /// Like `Ok`, claiming `cacheScope: "public"` for the call's answer.
+    PublicScope,
 }
 
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
@@ -59,20 +70,44 @@ struct CountingBackend {
 
 #[async_trait::async_trait]
 impl Transport for CountingBackend {
-    async fn request(
-        &self,
-        method: &str,
-        _params: Option<Value>,
-    ) -> crate::Result<JsonRpcResponse> {
+    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         let id = RequestId::Number(1);
         if method == "tools/list" {
-            return Ok(JsonRpcResponse::success(
-                id,
-                json!({"tools": [{"name": "read", "inputSchema": {
-                    "type": "object",
-                    "properties": {"cmd": {"type": "string"}}
-                }}]}),
-            ));
+            let mut result = json!({"tools": [{"name": "read", "inputSchema": {
+                "type": "object",
+                "properties": {"cmd": {"type": "string"}}
+            }}]});
+            match self.answer {
+                Answer::ModernList => {
+                    result["resultType"] = json!("complete");
+                    result["ttlMs"] = json!(5000);
+                    result["cacheScope"] = json!("private");
+                }
+                Answer::Paged(first, second) => {
+                    let later = params.as_ref().and_then(|p| p.get("cursor")).is_some();
+                    let hint = if later { second } else { first };
+                    if later {
+                        result["tools"] = json!([]);
+                    } else {
+                        result["nextCursor"] = json!("page-2");
+                    }
+                    if let Some(hint) = hint {
+                        result["ttlMs"] = json!(hint);
+                    }
+                }
+                Answer::Unreadable(hint) => {
+                    if params.as_ref().and_then(|p| p.get("cursor")).is_some() {
+                        result["tools"] = json!("not a list");
+                    } else {
+                        result["nextCursor"] = json!("page-2");
+                        if let Some(hint) = hint {
+                            result["ttlMs"] = json!(hint);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return Ok(JsonRpcResponse::success(id, result));
         }
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         if matches!(self.answer, Answer::AskOnce) {
@@ -98,9 +133,18 @@ impl Transport for CountingBackend {
             });
         }
         match &self.answer {
-            Answer::Ok => Ok(JsonRpcResponse::success(
+            Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) => Ok(JsonRpcResponse::success(
                 id,
                 json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+            )),
+            Answer::ModernList => Ok(JsonRpcResponse::success(
+                id,
+                json!({"content": [{"type": "text", "text": "ok"}], "isError": false, "ttlMs": 3000}),
+            )),
+            Answer::PublicScope => Ok(JsonRpcResponse::success(
+                id,
+                json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
+                       "cacheScope": "public"}),
             )),
             Answer::IsError => Ok(JsonRpcResponse::success(
                 id,
@@ -207,26 +251,65 @@ pub(crate) async fn fixture_firewalled_with(
     fx
 }
 
-const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
+pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 
 /// The fixture under `security.posture: hardened` (personal keys) with message
 /// signing armed, so the direct route signs every `tools/call` it serves.
 pub(crate) async fn fixture_hardened_signed(answer: Answer, require_nonce: bool) -> Fx {
     HARDENED.with(|h| h.set(true));
-    let fx = fixture_inner(answer, false, |mut meta| {
-        meta.enable_message_signing(
-            crate::security::message_signing::MessageSigner::new(
-                SIGNING_KEY.as_bytes().to_vec(),
-                None,
-                "hardened".into(),
-            ),
-            Duration::from_secs(300),
-            require_nonce,
-        );
-        meta
-    })
-    .await;
+    let fx = fixture_inner(answer, false, |meta| signing(meta, require_nonce)).await;
     HARDENED.with(|h| h.set(false));
+    fx
+}
+
+/// `meta` with message signing armed under [`SIGNING_KEY`].
+fn signing(mut meta: MetaMcp, require_nonce: bool) -> MetaMcp {
+    meta.enable_message_signing(
+        crate::security::message_signing::MessageSigner::new(
+            SIGNING_KEY.as_bytes().to_vec(),
+            None,
+            "hardened".into(),
+        ),
+        Duration::from_secs(300),
+        require_nonce,
+    );
+    meta
+}
+
+/// [`fixture_hardened_signed`] with relay detection on as in
+/// [`fixture_relayed`]: every direct `tools/call` is signed and staged.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_signed_relayed(answer: Answer) -> Fx {
+    HARDENED.with(|h| h.set(true));
+    RELAY.with(|r| r.set(true));
+    let fx = fixture_inner(answer, true, |meta| signing(meta, false)).await;
+    HARDENED.with(|h| h.set(false));
+    RELAY.with(|r| r.set(false));
+    fx
+}
+
+/// [`fixture_firewalled`] with relay detection on for `alpha:read` and
+/// `alpha:resources/read`, so the direct route stages receipts (MIK-8022).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_relayed(answer: Answer) -> Fx {
+    RELAY.with(|r| r.set(true));
+    let fx = fixture_inner(answer, true, |meta| meta).await;
+    RELAY.with(|r| r.set(false));
+    fx
+}
+
+/// A key whose name the response redactor reads as a GitHub token (a fake,
+/// split so no scanner reads the source as one), so text naming it (a
+/// per-key cost warning) is redacted on the way out.
+#[cfg(feature = "firewall")]
+pub(crate) const CREDENTIAL_KEY: &str = concat!("ghp_", "abcdefghijklmnopqrstuvwxyz1234567890");
+
+/// [`fixture`] under the default posture with `server.modern_protocol: false`,
+/// the rollback gate that turns the 2026-07-28 revision off.
+pub(crate) async fn fixture_modern_off(answer: Answer) -> Fx {
+    MODERN_OFF.with(|m| m.set(true));
+    let fx = fixture_inner(answer, false, |meta| meta).await;
+    MODERN_OFF.with(|m| m.set(false));
     fx
 }
 
@@ -245,6 +328,7 @@ pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
 // call, so the plain fixtures keep their signatures.
 thread_local! {
     static HARDENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(feature = "firewall")]
@@ -253,6 +337,7 @@ thread_local! {
         const { std::cell::Cell::new(None) };
     static CLIENT_BREAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ANOMALY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static RELAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The auth the fixture serves: four keys, plus a client breaker when asked.
@@ -291,9 +376,16 @@ async fn fixture_inner(
     build: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fx {
     let auth = fixture_auth();
-    let (mut state, store) = if HARDENED.with(std::cell::Cell::get) {
+    let hardened = HARDENED.with(std::cell::Cell::get);
+    let modern_off = MODERN_OFF.with(std::cell::Cell::get);
+    let (mut state, store) = if hardened || modern_off {
         let mut config = crate::config::Config::default();
-        config.security.posture = crate::security::SecurityPosture::Hardened;
+        if hardened {
+            config.security.posture = crate::security::SecurityPosture::Hardened;
+        }
+        if modern_off {
+            config.server.modern_protocol = false;
+        }
         test_router_app_state_with_auth_and_config(&auth, config).await
     } else {
         test_router_app_state_with_auth(&auth).await
@@ -354,6 +446,15 @@ async fn fixture_inner(
             anomaly_threshold: 0.7,
             anomaly_block_threshold: anomaly.then_some(0.9),
             anomaly_min_observations: 1,
+            collusion: if RELAY.with(std::cell::Cell::get) {
+                crate::security::firewall::CollusionConfig {
+                    action: crate::security::firewall::CollusionAction::Block,
+                    sources: vec!["alpha:read".into(), "alpha:resources/read".into()],
+                    ..crate::security::firewall::CollusionConfig::default()
+                }
+            } else {
+                crate::security::firewall::CollusionConfig::default()
+            },
             ..FirewallConfig::default()
         };
         state_mut.firewall = Some(Arc::new(Firewall::from_config(

@@ -40,12 +40,20 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ("src/cli/invoke.rs", "reads stdin, not a file"),
     ("src/commands/cap.rs", "capability YAML pinning; public"),
     (
+        "src/commands/config_write.rs",
+        "gateway.yaml before and after a CLI write, compared for comment line numbers; no text printed",
+    ),
+    (
         "src/commands/config_export/mod.rs",
         "third-party MCP client config JSON edited to add the gateway entry; no gateway secret",
     ),
     (
         "src/commands/dashboard_link.rs",
         "operator-named client cert, key and CA for one request (#1832); the mode-checked read is lib-internal, widening it was declined",
+    ),
+    (
+        "src/commands/doctor/hidden_keys.rs",
+        "gateway.yaml re-read only after Config::load's mode-checked read succeeded; opened as the loader opens it (O_NONBLOCK|O_NOCTTY, follows a symlink), regular files only, no size limit (as the guarded reader for config); prints key names, never values; a regular file swapped in since the first read can be read, key names only",
     ),
     (
         "src/commands/kubernetes.rs",

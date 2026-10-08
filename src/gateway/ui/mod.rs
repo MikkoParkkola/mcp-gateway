@@ -20,6 +20,7 @@ mod events;
 pub mod import;
 pub(crate) mod session;
 
+use crate::gateway::routes;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -62,12 +63,12 @@ fn is_admin(client: Option<&AuthenticatedClient>) -> bool {
 /// Build the authenticated `/ui/api/*` and `/dashboard` sub-router.
 pub fn api_router() -> Router<Arc<AppState>> {
     let router = Router::new()
-        .route("/ui/api/status", get(status))
-        .route("/ui/api/tools", get(tools))
-        .route("/ui/api/config", get(config))
-        .route("/ui/api/reload", post(reload))
-        .route("/ui/api/dashboard-link", post(session::dashboard_link))
-        .route("/dashboard", get(dashboard_handler))
+        .route(routes::UI_STATUS, get(status))
+        .route(routes::UI_TOOLS, get(tools))
+        .route(routes::UI_CONFIG, get(config))
+        .route(routes::UI_RELOAD, post(reload))
+        .route(routes::UI_DASHBOARD_LINK, post(session::dashboard_link))
+        .route(routes::DASHBOARD, get(dashboard_handler))
         .merge(capabilities::capabilities_router())
         .merge(control_plane::control_plane_router())
         .merge(backends::backends_router())
@@ -75,13 +76,13 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(import::import_router());
 
     #[cfg(feature = "cost-governance")]
-    let router = router.route("/ui/api/costs", get(costs));
+    let router = router.route(routes::UI_COSTS, get(costs));
     router
 }
 
 /// Build the unauthenticated `/ui` route (serves static HTML, no data).
 pub fn html_router() -> Router {
-    Router::new().route("/ui", get(index))
+    Router::new().route(routes::UI, get(index))
 }
 
 // ── Handlers ────────────────────────────────────────────────────────
@@ -581,7 +582,18 @@ async fn reload(
             })),
         )
             .into_response(),
-        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+        Err(error) => {
+            // Whose fault, not just that it failed (MIK-8058): a file the
+            // network posture refuses is the operator's config, a shutdown is
+            // the gateway unavailable.
+            use crate::config_reload::{ReloadFailure, reload_failure};
+            let status = match reload_failure(&error) {
+                ReloadFailure::PostureRefused => StatusCode::CONFLICT,
+                ReloadFailure::ShuttingDown => StatusCode::SERVICE_UNAVAILABLE,
+                ReloadFailure::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            flat_error(status, error).into_response()
+        }
     }
 }
 

@@ -73,6 +73,7 @@ impl Backend {
     ) -> Self {
         Self {
             name: name.to_string(),
+            metric_label: Arc::<str>::from(name).into(),
             config,
             runtime_plan,
             pool: {
@@ -85,6 +86,8 @@ impl Backend {
             },
             failsafe_config: failsafe_config.clone(),
             era: Arc::new(crate::protocol::era::EraCache::for_backend(name)),
+            #[cfg(test)]
+            after_reprobe_lookup: crate::test_pause::Slot::default(),
             unserved_consecutive: AtomicU64::new(0),
             unserved_total: AtomicU64::new(0),
             probe_in_flight: std::sync::atomic::AtomicBool::new(false),
@@ -217,7 +220,7 @@ impl Backend {
                 // first request already knows which dialect to speak. Runs
                 // under this slot's `start_lock`; see `Backend::resolve_era`
                 // for the lock order that imposes.
-                self.resolve_era_after_start(&transport).await;
+                self.resolve_era_after_start(&transport, &entry).await;
                 return Ok(transport);
             }
             // Lost the race: `reconcile_after_start` already closed the
@@ -283,11 +286,15 @@ impl Backend {
     /// second call would throw away a verdict the peer has already given and
     /// re-derive it — and the transport shapes requests from that cache while
     /// it is empty. Every other transport still resolves here, unchanged.
-    pub(super) async fn resolve_era_after_start(&self, transport: &Arc<dyn Transport>) {
+    pub(super) async fn resolve_era_after_start(
+        &self,
+        transport: &Arc<dyn Transport>,
+        entry: &PooledEntry,
+    ) {
         if matches!(self.config.transport, TransportConfig::Http { .. }) {
             return;
         }
-        self.resolve_era(transport).await;
+        self.resolve_era(transport, entry).await;
     }
 
     /// Start the backend's canonical (shared) transport.
@@ -449,7 +456,7 @@ impl Backend {
                 // `Backend::resolve_era` and `EraCache`. This path chooses when
                 // to ask, never what the answer means.
                 let peer: Arc<dyn Transport> = transport.clone();
-                self.resolve_era(&peer).await;
+                self.resolve_era(&peer, entry).await;
                 // Only a determined `Modern` skips the handshake. A legacy
                 // answer, an unrecognised error and silence all read as `None`
                 // or `Legacy` here, which is the fallback the RFC requires —
@@ -483,15 +490,11 @@ impl Backend {
                 transport
             }
             #[cfg(feature = "a2a")]
-            TransportConfig::A2a { a2a_url, .. } => {
-                // A2A backends are managed by A2aProvider, not the legacy
-                // Backend/Transport stack.  Reaching this branch means an A2A
-                // backend was incorrectly started through the legacy path.
-                return Err(crate::Error::Config(format!(
-                    "A2A backend '{name}' (url: {a2a_url}) must be started via A2aProvider, \
-                     not the legacy Backend::start() path",
-                    name = self.name,
-                )));
+            TransportConfig::A2a { .. } => {
+                built_under = self.mark_connecting();
+                self.begin_connecting(built_under)?;
+                listen = None;
+                self.start_a2a(built_under).await?
             }
         };
 

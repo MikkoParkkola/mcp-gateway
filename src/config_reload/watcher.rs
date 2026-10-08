@@ -55,6 +55,34 @@ pub(super) fn is_config_event_for(event: &Event, named_config_path: &std::path::
     is_config_event(event, &config_watch_paths(named_config_path.to_path_buf()))
 }
 
+/// The notify callback: wake the rewatch task and queue a reload, as `event`
+/// warrants. Runs on notify's thread, so it must not block or call `watch`.
+///
+/// An event on a path of the chain may have moved it: a link unlinked and
+/// re-created is an event on the named path itself. An access (open, read,
+/// close) cannot, and the reload's own read must not wake the task again. A
+/// write to any other file in a watched directory cannot either, and is not
+/// worth resolving the config's path for (MIK-8013). A rescan means events
+/// were lost, possibly an edit to the config itself, so it reloads too. A
+/// removal or rename that passes is noted first, since it may have ended a
+/// directory's watch (MIK-8024).
+pub(super) fn handle_watch_event(
+    event: &Event,
+    names: &watch_chain::ChainNames,
+    named_config_path: &std::path::Path,
+    wake: &tokio::sync::watch::Sender<()>,
+    reload: &tokio::sync::mpsc::Sender<ReloadTrigger>,
+) {
+    if matches!(event.kind, EventKind::Access(_)) || !names.concerns(event) {
+        return;
+    }
+    names.note_gone(event);
+    wake.send_replace(());
+    if event.need_rescan() || is_config_event_for(event, named_config_path) {
+        let _ = reload.try_send(ReloadTrigger::ConfigFile);
+    }
+}
+
 // ============================================================================
 // File watcher
 // ============================================================================
@@ -116,6 +144,31 @@ impl ConfigWatcher {
         identity_grants: Option<Arc<IdentityGrantSink>>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<Self> {
+        Self::start_with_hook(
+            config_path,
+            live_config,
+            registry,
+            initial_config,
+            env,
+            identity_grants,
+            shutdown_rx,
+            None,
+        )
+    }
+
+    /// [`Self::start`], with a hook told which backends each applied reload
+    /// registered (`MIK-8054`: the server warm-starts them).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn start_with_hook(
+        config_path: PathBuf,
+        live_config: Arc<LiveConfig>,
+        registry: Arc<BackendRegistry>,
+        initial_config: &Config,
+        env: Arc<LiveEnv>,
+        identity_grants: Option<Arc<IdentityGrantSink>>,
+        shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+        on_registered: Option<super::OnRegistered>,
+    ) -> Result<Self> {
         // Pair first, so a refusal is returned before any watcher or task
         // exists; the reload task's own context then pairs as a no-op.
         {
@@ -160,6 +213,7 @@ impl ConfigWatcher {
             cache_ttl,
             env,
             identity_grants,
+            on_registered,
             event_rx,
             shutdown_rx,
             Arc::clone(&env_reloads),
@@ -185,22 +239,19 @@ impl ConfigWatcher {
     ) -> Result<Arc<watch_chain::ChainWatch>> {
         let named_config_path = config_path.to_path_buf();
         let closure_config_path = named_config_path.clone();
+        let names = Arc::new(watch_chain::ChainNames::default());
+        let closure_names = Arc::clone(&names);
 
         let watcher = RecommendedWatcher::new(
             move |result: std::result::Result<Event, notify::Error>| {
                 let Ok(event) = result else { return };
-
-                // Every event that changes a directory may have moved the
-                // chain: a link unlinked and re-created is an event on the
-                // named path itself. An access (open, read, close) cannot, and
-                // the reload's own read must not wake the task again. The task decides;
-                // this thread must not block or call `watch`.
-                if !matches!(event.kind, EventKind::Access(_)) {
-                    wake_tx.send_replace(());
-                }
-                if is_config_event_for(&event, &closure_config_path) {
-                    let _ = event_tx.try_send(ReloadTrigger::ConfigFile);
-                }
+                handle_watch_event(
+                    &event,
+                    &closure_names,
+                    &closure_config_path,
+                    &wake_tx,
+                    &event_tx,
+                );
             },
             NotifyConfig::default().with_poll_interval(Duration::from_secs(2)),
         )
@@ -209,7 +260,7 @@ impl ConfigWatcher {
         })?;
 
         let wanted = watch_chain::startup_dirs(&named_config_path);
-        let chain = watch_chain::ChainWatch::new(watcher);
+        let chain = watch_chain::ChainWatch::with_names(watcher, names);
         chain.reconcile(&wanted);
         let in_ledger = chain.watched_now();
         if let Some(missing) = wanted.iter().find(|dir| !in_ledger.contains(*dir)) {
@@ -231,6 +282,7 @@ impl ConfigWatcher {
         cache_ttl: Duration,
         env: Arc<LiveEnv>,
         identity_grants: Option<Arc<IdentityGrantSink>>,
+        on_registered: Option<super::OnRegistered>,
         mut event_rx: tokio::sync::mpsc::Receiver<ReloadTrigger>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         env_reloads: Arc<env_poll::EnvReloadCounts>,
@@ -257,9 +309,15 @@ impl ConfigWatcher {
                 failsafe_cfg,
                 cache_ttl,
             ) {
-                Ok(ctx) => ctx
-                    .with_env(env)
-                    .with_identity_grant_sink_opt(identity_grants),
+                Ok(ctx) => {
+                    let ctx = ctx
+                        .with_env(env)
+                        .with_identity_grant_sink_opt(identity_grants);
+                    match on_registered {
+                        Some(hook) => ctx.with_on_registered(hook),
+                        None => ctx,
+                    }
+                }
                 Err(error) => {
                     tracing::error!(%error, "Config watcher not started");
                     return;

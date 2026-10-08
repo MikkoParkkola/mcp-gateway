@@ -12,6 +12,7 @@ use std::fmt::Write as _;
 use crate::Result;
 use crate::backend::BackendRegistry;
 use crate::config::{Config, EnvOverlay, LiveEnv, ResolvedEnvFiles};
+use crate::config_persistence::CommentLoss;
 use crate::security::{posture, ssrf::DestinationPolicy};
 
 use super::{
@@ -172,6 +173,8 @@ pub struct ReloadContext {
     /// The capability backend whose listing the env overlay can change: a key
     /// set or removed in an env file turns a keyed capability on or off.
     pub(super) capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
+    /// Told which backends each applied reload registered (`MIK-8054`).
+    pub(super) on_registered: Option<super::reload_warm_hook::OnRegistered>,
 }
 
 /// The refusal a reload returns when the gateway's shutdown ended its wait.
@@ -236,6 +239,7 @@ impl ReloadContext {
             spawn: spawn_load_thread,
             stop: tokio_util::sync::CancellationToken::new(),
             capabilities: None,
+            on_registered: None,
         })
     }
 
@@ -307,16 +311,6 @@ impl ReloadContext {
             Some(sink) => self.with_identity_grant_sink(sink),
             None => self,
         }
-    }
-
-    /// Attach the environment startup published.
-    ///
-    /// Consuming builder rather than a constructor argument: every existing
-    /// call site keeps working, and the one that has a `LiveEnv` says so.
-    #[must_use]
-    pub fn with_env(mut self, env: Arc<LiveEnv>) -> Self {
-        self.env = env;
-        self
     }
 
     /// The env-file paths a reload re-reads.
@@ -486,19 +480,37 @@ impl ReloadContext {
     where
         F: FnOnce(&mut Config) -> std::result::Result<T, E>,
     {
+        self.mutate_locked(path, wait, CommentLoss::Rewrite, mutate)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// [`Self::mutate_and_reload_outcome_within`] in `mode` for a write that
+    /// would drop comments.
+    pub(crate) async fn mutate_locked<T, E, F>(
+        &self,
+        path: &std::path::Path,
+        wait: Duration,
+        mode: CommentLoss,
+        mutate: F,
+    ) -> std::result::Result<ConfigMutation<T, E>, super::write::MutateError>
+    where
+        F: FnOnce(&mut Config) -> std::result::Result<T, E>,
+    {
         let _reload_guard = self.lock_reload_within(wait).await?;
-        let mut config =
-            crate::config_persistence::load_existing_or_default(path).map_err(|e| {
-                ConfigWriteError::Failed(format!("Failed to load {}: {e}", path.display()))
-            })?;
+        let mut config = crate::config_persistence::load_existing_or_default(path)
+            .map_err(|e| super::write::load_failure(path, &e, mode))?;
         let value = match mutate(&mut config) {
             Ok(value) => value,
             Err(rejection) => return Ok(ConfigMutation::Rejected(rejection)),
         };
-        crate::config_persistence::write_config(path, &config)?;
-        let outcome = self.reload_outcome_locked().await.map_err(|e| {
-            ConfigWriteError::Failed(format!("Config written but reload failed: {e}"))
-        })?;
+        // A write that changes nothing still reloads: a retry after a failed
+        // reload finds its value on disk and must not leave the runtime stale.
+        crate::config_persistence::write_config_with(path, &config, mode)?;
+        let outcome = self
+            .reload_outcome_locked()
+            .await
+            .map_err(|e| super::write::reload_failure(&e, mode))?;
         Ok(ConfigMutation::Applied(value, Some(outcome)))
     }
 
@@ -719,6 +731,8 @@ impl ReloadContext {
         // old overlay would resolve an `env:` reference the reload just changed.
         self.live_config.set(new_config);
         self.publish_overlay(overlay);
+        // Still under `lock_reload`, against the config just published.
+        self.report_registered(&patch.registered_change(), &self.live_config.get());
 
         Ok(with_pending_restart(
             outcome,

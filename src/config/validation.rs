@@ -54,6 +54,7 @@ impl Config {
         self.validate_backend_runtime_profiles()?;
         self.validate_stop_when_idle_ownership()?;
         self.validate_max_frame_bytes()?;
+        self.webhooks.validate()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
         flagged_tools::validate_flagged_tool_pins(&self.backends)?;
@@ -241,14 +242,15 @@ impl Config {
             idp.validate().map_err(|e| {
                 Error::ConfigValidation(format!("backend '{name}' identity_propagation: {e}"))
             })?;
-            // Only HTTP transports can carry the per-request credential header;
-            // stdio/websocket would silently drop it (their transport ignores
-            // extra headers), so a propagation-configured non-HTTP backend must
-            // fail closed at load rather than dispatch without the credential
-            // (MIK-6734 review).
-            if !matches!(backend.transport, TransportConfig::Http { .. }) {
+            // Only a transport with a per-request header channel can carry the
+            // credential (HTTP, and the A2A bridge, MIK-8063); stdio/websocket
+            // would silently drop it, so a propagation-configured backend on
+            // one must fail closed at load rather than dispatch without the
+            // credential (MIK-6734 review).
+            if !backend.transport.carries_identity_headers() {
                 return Err(Error::ConfigValidation(format!(
-                    "backend '{name}' identity_propagation requires an http transport; \
+                    "backend '{name}' identity_propagation requires an http transport (or an a2a \
+                     backend); \
                      stdio/websocket cannot carry the credential header (IDP.2)"
                 )));
             }

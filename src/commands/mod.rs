@@ -11,6 +11,7 @@ mod add_remove;
 mod cap;
 #[cfg(feature = "config-export")]
 mod config_export;
+pub mod config_write;
 #[cfg(feature = "webui")]
 mod dashboard_link;
 #[cfg(feature = "discovery")]
@@ -206,7 +207,6 @@ fn build_init_config(with_examples: bool, profile: InitProfile, starter: &str) -
             "meta_mcp:\n",
             "  enabled: true\n",
             "  cache_tools: true\n",
-            "  cache_ttl: 300s\n",
             "{examples_section}",
             "{starter}",
         ),
