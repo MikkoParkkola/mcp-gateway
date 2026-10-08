@@ -44,6 +44,12 @@ fn cause_index(cause: &str) -> usize {
 /// hanging the call or the readiness check (Revision 3).
 pub const AUDIT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// How long a test waits for the log to recover after a heal: each probe is
+/// bounded at [`AUDIT_PROBE_TIMEOUT`], so this allows at least 14 probes on a
+/// loaded runner (MIK-8171).
+#[cfg(test)]
+pub(crate) const HEAL_BOUND_FOR_TEST: Duration = Duration::from_secs(30);
+
 impl TransparencyLogger {
     /// Set what a failed append does (D1-f). The server picks `FailClosed`
     /// when auth is on.
@@ -75,6 +81,23 @@ impl TransparencyLogger {
     #[cfg(test)]
     pub(crate) fn set_append_failure_for_test(&self, on: bool) {
         self.fail_appends.store(on, Ordering::Release);
+    }
+
+    /// Clear the injected failure, then wait until a probe admits a call. On
+    /// a loaded runner the first probe can overrun [`AUDIT_PROBE_TIMEOUT`]
+    /// and answer stalled until its write lands, so one probe proves nothing
+    /// (MIK-8171). Panics past [`HEAL_BOUND_FOR_TEST`].
+    #[cfg(test)]
+    pub(crate) async fn heal_for_test(self: &std::sync::Arc<Self>) {
+        self.set_append_failure_for_test(false);
+        let deadline = tokio::time::Instant::now() + HEAL_BOUND_FOR_TEST;
+        while self.admit().await.is_err() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the audit log did not recover within {HEAL_BOUND_FOR_TEST:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Count a failed append, and under `FailClosed` mark the logger degraded;

@@ -20,6 +20,7 @@ use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext, anonymous_caller};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::TransparencyLogger;
 use crate::security::audit::AuditFailurePolicy;
+use crate::security::transparency_log::HEAL_BOUND_FOR_TEST;
 use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
@@ -115,6 +116,19 @@ fn caller() -> MetaMcpCallerContext<'static> {
     }
 }
 
+/// [`invoke`] until it answers without an error or [`HEAL_BOUND_FOR_TEST`]
+/// passes; the last answer.
+async fn invoke_until_ok(fx: &Fixture, id: i64) -> JsonRpcResponse {
+    let deadline = tokio::time::Instant::now() + HEAL_BOUND_FOR_TEST;
+    loop {
+        let answer = invoke(fx, id).await;
+        if answer.error.is_none() || tokio::time::Instant::now() >= deadline {
+            return answer;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 async fn invoke(fx: &Fixture, id: i64) -> JsonRpcResponse {
     fx.state
         .meta_mcp
@@ -187,7 +201,10 @@ async fn append_failure_refuses_call_and_unreadies() {
     );
 
     fx.log.set_append_failure_for_test(false);
-    let third = invoke(&fx, 3).await;
+    // Call 3's own probe may overrun its bound on a loaded runner; it is then
+    // refused before dispatch, so a retry within a stated bound changes no
+    // count below (MIK-8171).
+    let third = invoke_until_ok(&fx, 3).await;
     assert!(third.error.is_none(), "call 3: {:?}", third.error);
     assert_eq!(fx.calls.load(Ordering::SeqCst), 2, "call 3 ran");
     assert_eq!(readyz(&fx).await, StatusCode::OK, "healed");
@@ -243,12 +260,47 @@ async fn readyz_alone_recovers_after_storage_heals() {
         "the cause is named"
     );
     fx.log.set_append_failure_for_test(false);
+    // One probe may overrun its bound on a loaded runner and answer
+    // "stalled" until its write lands (MIK-8171): recovery is asserted
+    // within a stated bound, not on the first probe.
+    let (status, body) = readyz_until_ok(&fx).await;
     assert_eq!(
-        readyz(&fx).await,
+        status,
         StatusCode::OK,
-        "readiness probe recovered it"
+        "readiness probe recovered it: {body}"
     );
     assert!(!fx.log.is_degraded());
+}
+
+/// MIK-8171: the first probe after the heal overruns its bound, as on a
+/// loaded runner. `/readyz` answers 503 "stalled", then recovers by itself
+/// once the write lands, with no call traffic.
+#[tokio::test]
+async fn readyz_recovers_after_a_probe_overruns_its_bound() {
+    let fx = fixture(AuditFailurePolicy::FailClosed).await;
+    fx.log.set_append_failure_for_test(true);
+    let _ = invoke(&fx, 1).await;
+    fx.log.set_append_failure_for_test(false);
+    let gate = fx.log.stall_next_write_for_test(Duration::from_millis(100));
+    let (status, body) = readyz_body(&fx).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "premise: {body}");
+    assert!(body.contains("stalled"), "the overrun is named: {body}");
+    gate.release();
+    let (status, body) = readyz_until_ok(&fx).await;
+    assert_eq!(status, StatusCode::OK, "recovered by itself: {body}");
+}
+
+/// `/readyz` until it answers 200 or [`HEAL_BOUND_FOR_TEST`] passes; the last
+/// answer. Each probe is bounded at its own `AUDIT_PROBE_TIMEOUT`.
+async fn readyz_until_ok(fx: &Fixture) -> (StatusCode, String) {
+    let deadline = tokio::time::Instant::now() + HEAL_BOUND_FOR_TEST;
+    loop {
+        let (status, body) = readyz_body(fx).await;
+        if status == StatusCode::OK || tokio::time::Instant::now() >= deadline {
+            return (status, body);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 // ── F20: a stalled audit disk ───────────────────────────────────────────────
