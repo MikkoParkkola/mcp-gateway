@@ -544,8 +544,9 @@ async fn an_ordinary_start_racing_shutdown_leaves_no_child_behind() {
     std::fs::write(
         &server,
         format!(
-            r#"echo $$ > "{}"
-i=0; while [ ! -e "{}" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done
+            r#"echo $$ > "{pid}"
+i=0; while [ ! -e "{release}" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done
+[ -e "{release}" ] || exit 1
 while IFS= read -r request; do
     case "$request" in
         *'"method":"initialize"'*)
@@ -554,8 +555,8 @@ while IFS= read -r request; do
     esac
 done
 "#,
-            pidfile.display(),
-            dir.path().join("release").display()
+            pid = pidfile.display(),
+            release = dir.path().join("release").display()
         ),
     )
     .expect("write server");
@@ -571,6 +572,7 @@ done
     };
 
     // The child blocks on a release file written once stop() has set its latch.
+    // A gate that times out ends the child: it never reaches the handshake.
     let deadline = std::time::Instant::now() + Duration::from_millis(2500);
     while !std::fs::read_to_string(&pidfile).is_ok_and(|pid| !pid.trim().is_empty())
         && std::time::Instant::now() < deadline

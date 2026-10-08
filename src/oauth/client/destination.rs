@@ -38,7 +38,7 @@ pub(crate) fn http_client(destination: DestinationPolicy) -> Result<Client> {
 
 /// Which client a refresh-token request goes through (MIK-8018).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RefreshRoute {
+pub(crate) enum RefreshRoute {
     /// The client was built here for the destination policy: a refresh uses
     /// the same route with redirects off.
     Owned,
