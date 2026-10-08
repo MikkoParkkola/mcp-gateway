@@ -434,9 +434,9 @@ pub(crate) type DirectCaller<'a> = (
 /// What a direct-route continuation binds its caller to: the meta route's
 /// rule (`principal_source`), from the same idempotency-guard inputs the
 /// direct route keys the caller's calls on (`direct_route_idempotency`).
-fn direct_source<'a>(
-    (identity, guard, client): DirectCaller<'a>,
-) -> crate::protocol::mrtr::PrincipalSource<'a> {
+fn direct_source(
+    (identity, guard, client): DirectCaller<'_>,
+) -> crate::protocol::mrtr::PrincipalSource<'_> {
     if identity.is_some() {
         return crate::protocol::mrtr::PrincipalSource::Credential(identity);
     }
