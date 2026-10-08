@@ -42,6 +42,15 @@ fn stored(dir: &std::path::Path) -> Option<TokenInfo> {
         .load(PROVIDER, PROVIDER)
 }
 
+/// Expire the stored record as it is, keeping whatever refresh token it holds
+/// (none, if a refresh cleared it).
+fn expire(dir: &std::path::Path) {
+    let storage = TokenStorage::new(dir.to_path_buf()).unwrap();
+    let mut token = storage.load(PROVIDER, PROVIDER).expect("a stored record");
+    token.expires_at = Some(0);
+    storage.save(PROVIDER, PROVIDER, &token).unwrap();
+}
+
 async fn fetch(executor: &CapabilityExecutor, server: &TokenServer) -> crate::Result<String> {
     let auth = oauth_auth(PROVIDER, &format!("{}/token", server.base));
     executor.fetch_credential(&auth, &context()).await
@@ -298,6 +307,36 @@ async fn a_first_capability_refresh_left_in_flight_is_not_resent() {
     assert_eq!(
         server.requests(),
         0,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+}
+
+/// ROT3.2: a provider seen not to rotate (a settled refresh kept the sent
+/// token) keeps its refresh token after a refresh whose answer was lost, and
+/// the next call refreshes with it instead of asking for a new authorization.
+#[tokio::test]
+async fn a_non_rotating_providers_token_survives_an_uncertain_refresh() {
+    let server =
+        TokenServer::start(&[Answer::Keep, Answer::KeepThenBrokenBody, Answer::Keep]).await;
+    let dir = tempfile::tempdir().unwrap();
+    store_expired(dir.path(), "r1");
+    fetch(&executor(dir.path()), &server)
+        .await
+        .expect("a settled refresh that keeps r1");
+    expire(dir.path());
+
+    assert!(
+        fetch(&executor(dir.path()), &server).await.is_err(),
+        "the answer was lost"
+    );
+    expire(dir.path());
+    fetch(&executor(dir.path()), &server)
+        .await
+        .expect("the kept token refreshes");
+    assert_eq!(
+        server.uses("r1"),
+        3,
         "sent: {:?}",
         server.sent.lock().unwrap()
     );
