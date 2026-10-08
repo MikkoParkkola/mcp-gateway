@@ -371,7 +371,11 @@ async fn post_as(
     if let Some(method) = body.get("method").and_then(Value::as_str) {
         builder = builder.header("mcp-method", method);
     }
-    if let Some(name) = body.pointer("/params/name").and_then(Value::as_str) {
+    // `Mcp-Name` mirrors the tool name, or the task id on a `tasks/*` method.
+    let named = body
+        .pointer("/params/name")
+        .or_else(|| body.pointer("/params/taskId"));
+    if let Some(name) = named.and_then(Value::as_str) {
         builder = builder.header("mcp-name", name);
     }
     let mut request = builder
@@ -620,4 +624,119 @@ async fn a2a_8_an_api_key_caller_keeps_its_round_through_gateway_invoke() {
         2,
         "the replay never reached the agent"
     );
+}
+
+/// MIK-8063 through MCP tasks: a task-augmented `gateway_invoke` whose agent
+/// asks shows `input_required` on `tasks/get`; `tasks/update` with the answer
+/// resumes the SAME agent task and the task completes with the agent's answer.
+#[tokio::test]
+async fn a2a_8_an_input_round_through_an_mcp_task() {
+    use super::common;
+    let (base, log) = stub::serve(asking_then("sunny via a task")).await;
+    let mut alice = common::api_key("key-alice", 0, None);
+    alice.name = "alice".into();
+    let fixture = common::Fixture {
+        auth: common::auth_with(vec![alice], None),
+        ..common::Fixture::default()
+    };
+    let (state, _store) = common::state(fixture).await;
+    assert!(
+        state
+            .backends
+            .register(std::sync::Arc::new(backend(&base, None, &[])))
+    );
+    let frame = |id: i64, method: &str, params: Value, key: Option<&str>| {
+        let mut params = params;
+        params["_meta"] = json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {
+                "elicitation": {}, "extensions": {"io.modelcontextprotocol/tasks": {}}},
+            "io.modelcontextprotocol/clientInfo": {"name": "a2a-rows", "version": "1"},
+        });
+        if let Some(key) = key {
+            params["_meta"][mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+        }
+        json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+    };
+    let get = |id: &str| frame(9_000, "tasks/get", json!({"taskId": id}), None);
+
+    let created = post_as(
+        &state,
+        "/mcp",
+        &frame(
+            1,
+            "tools/call",
+            json!({"name": "gateway_invoke", "task": {}, "arguments": {
+                "server": "agent", "tool": TOOL, "arguments": {"message": "weather?"}}}),
+            Some("task-ask"),
+        ),
+        Some("key-alice"),
+        None,
+    )
+    .await;
+    let task = created["result"]["taskId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a task handle: {created}"))
+        .to_owned();
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let waiting = loop {
+        let seen = post_as(&state, "/mcp", &get(&task), Some("key-alice"), None).await;
+        if seen["result"]["status"] == "input_required" {
+            break seen;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "never asked: {seen}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert!(
+        waiting
+            .pointer(&format!("/result/inputRequests/{ASK_KEY}"))
+            .is_some(),
+        "the task shows the agent's question: {waiting}"
+    );
+
+    let accept = json!({ ASK_KEY: {"action": "accept", "content": {"reply": "Helsinki"}} });
+    let acked = post_as(
+        &state,
+        "/mcp",
+        &frame(
+            2,
+            "tasks/update",
+            json!({"taskId": task, "inputResponses": accept}),
+            None,
+        ),
+        Some("key-alice"),
+        None,
+    )
+    .await;
+    assert!(
+        acked.get("error").is_none(),
+        "the answer is accepted: {acked}"
+    );
+
+    let settled = loop {
+        let seen = post_as(&state, "/mcp", &get(&task), Some("key-alice"), None).await;
+        if matches!(
+            seen["result"]["status"].as_str(),
+            Some("completed" | "failed" | "cancelled")
+        ) {
+            break seen;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "never settled: {seen}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(settled["result"]["status"], "completed", "{settled}");
+    assert!(
+        settled.to_string().contains("sunny via a task"),
+        "{settled}"
+    );
+    let sends = stub::sends(&log);
+    assert_eq!(sends.len(), 2, "{settled}");
+    assert_eq!(sends[1].body["params"]["message"]["taskId"], "task-2");
 }
