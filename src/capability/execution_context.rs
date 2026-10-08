@@ -97,11 +97,12 @@ pub struct CapabilityExecutionContext {
     /// starts a child. `None` for callers that bypass the backend. Not part of
     /// the cache identity.
     pub(crate) mcp_generation: Option<u64>,
-    /// The digest of the credential this request validated
-    /// (`AuthenticatedClient::principal`), set only when `caller_provenance` is
-    /// `Credential`. An MCP child is keyed on it when nothing above names the
-    /// caller. Crate-visible: an embedder must not assert it.
-    // ci-allow-secret-debug: a digest of the validated secret, never the secret; the response cache keys on the same value.
+    /// The owner key of the credential this request validated,
+    /// `credential:<principal>` (`meta_mcp::support::credential_owner`), set only
+    /// when the request authenticated. An MCP child, and its cached answers,
+    /// are keyed on it when nothing above names the caller (MIK-7825).
+    /// Crate-visible: an embedder must not assert it.
+    // ci-allow-secret-debug: a truncated digest of the validated secret, never the secret; task owners record the same string.
     pub(crate) credential_principal: Option<String>,
 }
 

@@ -175,3 +175,28 @@ async fn a_caller_with_no_credential_digest_is_still_refused() {
         assert!(err.contains("identified caller"), "{err}");
     }
 }
+
+/// T8: a live call carries the bare principal and the background task it
+/// starts carries the recorded owner; both name one key, so one child.
+#[test]
+fn a_live_call_and_its_task_name_one_credential_owner() {
+    use crate::gateway::meta_mcp::support::credential_owner;
+    let live = credential_owner(&caller(Some("5e1f0a2b3c4d"), Authentication::Authenticated));
+    let task = credential_owner(&caller(
+        Some("credential:5e1f0a2b3c4d"),
+        Authentication::Authenticated,
+    ));
+    assert_eq!(live.as_deref(), Some("credential:5e1f0a2b3c4d"));
+    assert_eq!(live, task);
+    let auth_off = caller(
+        Some("local:auth-disabled:tasks:v1"),
+        Authentication::Anonymous,
+    );
+    assert_eq!(
+        credential_owner(&auth_off),
+        None,
+        "auth off names no caller"
+    );
+    let empty = caller(Some(""), Authentication::Authenticated);
+    assert_eq!(credential_owner(&empty), None);
+}
