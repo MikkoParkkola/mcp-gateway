@@ -26,8 +26,8 @@ pub(super) type Started = tokio::sync::Mutex<HashSet<(SourceKind, String)>>;
 impl EventsHub {
     /// The source that offers event type `name`.
     pub(super) fn source_offering(&self, name: &str) -> Option<Arc<dyn EventSource>> {
-        // ponytail: scans every source's descriptors; sources are few and the
-        // callers are subscribe and removal, not the delivery path.
+        // ponytail: scans every source's descriptors per call, delivery
+        // included; sources are few. Index by name if that changes.
         self.sources.read().iter().find(|s| s.offers(name)).cloned()
     }
 
