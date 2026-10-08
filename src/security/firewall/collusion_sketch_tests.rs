@@ -73,3 +73,19 @@ fn a_sketch_expires_with_the_window() {
         "an expired sketch excused"
     );
 }
+
+/// A sketch of a handful of fingerprints keeps the same bound: tiny tables
+/// would collide far above it.
+#[test]
+fn a_small_sketch_keeps_the_rate() {
+    let mut checks = 0_usize;
+    let mut held = 0_usize;
+    for seed in 0..200 {
+        let sketch = Sketch::of(&values(1_000 + seed, 4));
+        for stranger in values(5_000 + seed, 500) {
+            checks += 1;
+            held += usize::from(sketch.holds(stranger));
+        }
+    }
+    assert!(held * 400 < checks, "{held} of {checks} strangers held");
+}

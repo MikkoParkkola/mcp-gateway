@@ -127,3 +127,24 @@ fn a_sketch_is_never_evidence() {
     deliver(&fw, "alice", "read", &long_answer());
     assert!(!relays(&fw, "bob", P), "a sketch was used as evidence");
 }
+
+/// `MIK-8066` (E1''): a plan step is sketched only once kept to the plan's
+/// answer. One staged after its plan already holds the 1 MiB bound is cut
+/// at staging, and nothing there says what the answer delivered, so it gets
+/// no sketch: alice, whose step carried P that the answer may have left
+/// out, relaying carol's P is still a relay.
+#[test]
+fn a_plan_step_cut_at_staging_excuses_nothing() {
+    let fw = firewall();
+    deliver(&fw, "carol", "read", P);
+    let staged = std::cell::Cell::new(super::super::DELIVERED_SET_CAP);
+    let step = json!({"content": [{"type": "text", "text": long_answer()}]});
+    let digest = fw
+        .receipt_digest("alpha", "read", &step, Some(&staged))
+        .expect("relay detection is on");
+    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &digest);
+    assert!(
+        relays(&fw, "alice", P),
+        "a step cut at staging excused text its answer never delivered"
+    );
+}

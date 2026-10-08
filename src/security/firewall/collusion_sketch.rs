@@ -20,6 +20,9 @@ use std::time::{Duration, Instant};
 /// [`PROBES`] probes, so a caller's at most [`MAX_SKETCHES`] live
 /// sketches for one source excuse a stray fingerprint under 1% of the time.
 const BITS_PER_FINGERPRINT: usize = 15;
+/// The smallest filter, in 64-bit words: a few fingerprints in a tiny table
+/// would collide far above the stated rate.
+const MIN_WORDS: usize = 16;
 /// Bit positions probed per fingerprint.
 const PROBES: u32 = 10;
 
@@ -31,7 +34,9 @@ pub(crate) struct Sketch {
 impl Sketch {
     /// The sketch of `fps`.
     pub(crate) fn of(fps: &[u64]) -> Self {
-        let words = (fps.len() * BITS_PER_FINGERPRINT).div_ceil(64).max(1);
+        let words = (fps.len() * BITS_PER_FINGERPRINT)
+            .div_ceil(64)
+            .max(MIN_WORDS);
         let mut bits = vec![0_u64; words].into_boxed_slice();
         let len = bits.len() * 64;
         for &fp in fps {
