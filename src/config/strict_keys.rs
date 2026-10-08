@@ -110,8 +110,6 @@ const KNOWN_BACKEND_KEYS: &[&str] = &[
     "http_url",
     "streamable_http",
     "ws_url",
-    // The one-key spelling the loader resolves to `http_url` or `ws_url`.
-    "url",
 ];
 
 /// `TransportConfig::A2a` fields, which exist only with the `a2a` feature.
@@ -297,15 +295,10 @@ fn unread_backend_keys(raw: &str, ignored: &mut IgnoredKeys) -> BackendFindings 
             .keys()
             .filter_map(serde_yaml::Value::as_str)
             .collect();
-        // `url` selects what its scheme stands for, as the loader resolves it.
-        let by_url = fields
-            .get("url")
-            .and_then(serde_yaml::Value::as_str)
-            .and_then(super::backend_transport::transport_key_for);
         let selected = TRANSPORTS
             .iter()
             .filter(|(selector, ..)| is_backend_key(selector))
-            .find(|(selector, ..)| keys.contains(selector) || by_url == Some(*selector));
+            .find(|(selector, ..)| keys.contains(selector));
         for key in keys {
             let path = format!("backends.{name}.{key}");
             if !is_backend_key(key) {
@@ -515,8 +508,6 @@ mod tests {
         if cfg!(feature = "a2a") {
             listed.extend(A2A_BACKEND_KEYS.iter().map(|k| (*k).to_owned()));
         }
-        // `url` never reaches the struct: the loader resolves it first.
-        listed.remove("url");
         assert_eq!(
             serialized, listed,
             "KNOWN_BACKEND_KEYS drifted from BackendConfig"
@@ -656,7 +647,9 @@ mod tests {
             .map(|(_, why)| *why);
         let quote = why.map(|why| retired_warning("meta_mcp.cache_tools", why));
         assert!(
-            quote.is_some_and(|quote| include_str!("../../docs/UPGRADING-4.0.md").contains(&quote)),
+            quote
+                .as_deref()
+                .is_some_and(|quote| include_str!("../../docs/UPGRADING-4.0.md").contains(quote)),
             "UPGRADING must quote the cache_tools warning: {quote:?}"
         );
     }
