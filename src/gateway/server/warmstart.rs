@@ -673,6 +673,12 @@ async fn warm_start_until_cached(
 
     if let Some(tools) = outcome {
         info!(backend = %name, tools, "Warm-started + tools cached");
+        // Registration announced the backend before its cache was filled, so a
+        // client that relisted then saw nothing: tell it again now that the
+        // tools are there (`MIK-8054`).
+        if tools > 0 {
+            backends.announce_change(name);
+        }
     }
 }
 
