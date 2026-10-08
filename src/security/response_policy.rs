@@ -49,3 +49,23 @@ pub(crate) enum ResponseMutationPolicy {
     Immutable,
     PreserveInputRequired,
 }
+
+/// The members of an interim answer the client is asked (`inputRequests`) and
+/// hands back (`requestState`): a finding in either refuses, never rewrites.
+pub(crate) const INTERIM_MEMBERS: [&str; 2] = ["inputRequests", "requestState"];
+
+impl ResponseMutationPolicy {
+    /// The policy for a result part: an interim answer keeps its question and
+    /// handle whole, anything else is redacted in place.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    pub(crate) fn for_result(result: &serde_json::Value) -> Self {
+        if INTERIM_MEMBERS
+            .iter()
+            .any(|member| result.get(member).is_some())
+        {
+            Self::PreserveInputRequired
+        } else {
+            Self::Redact
+        }
+    }
+}

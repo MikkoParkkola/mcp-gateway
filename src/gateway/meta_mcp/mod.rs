@@ -1032,7 +1032,7 @@ impl MetaMcp {
     /// escaped copy hides a quoted key or a split injection phrase from them.
     /// A Block (or no admitting target) refuses the call; otherwise credentials
     /// are redacted in place. The discovery arm then marks its response
-    /// (`JsonRpcResponse::discovery_inspected`, set after the meta-tool match,
+    /// (`JsonRpcResponse::egress_scanned`, set after the meta-tool match,
     /// never on a direct-name route), and the router, delivery and task passes
     /// skip only a marked response: the mark, not the tool name, proves this
     /// pass ran. Every Ok path of the three discovery handlers must call this.
@@ -2336,7 +2336,7 @@ impl MetaMcp {
         let (declared, chain) = (caller.input_capabilities, (source, upstream));
         let mut response =
             response_security::shape_meta_result(id, tool_name, result, shape, declared, chain);
-        response.discovery_inspected = inspected && response.error.is_none();
+        response.egress_scanned = inspected && response.error.is_none();
         response
     }
 }

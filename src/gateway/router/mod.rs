@@ -50,8 +50,6 @@ mod meta_refusal_audit;
 pub(crate) use identity::grant_subject_from_verified_identity;
 pub(crate) mod helpers;
 mod origin_guard;
-#[cfg(feature = "firewall")]
-mod response_pass;
 mod watch_poll;
 pub(crate) use watch_poll::GatewayWatchHost;
 

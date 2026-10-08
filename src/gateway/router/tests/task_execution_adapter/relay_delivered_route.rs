@@ -354,11 +354,11 @@ fn text_ok() -> Value {
 #[tokio::test]
 async fn the_suites_firewall_delivers_a_minted_continuation() {
     use crate::gateway::meta_mcp::response_security::{
-        DeliveryInspection, ResponseDeliveryContext,
+        ResponseDeliveryContext,
     };
     use crate::security::firewall::response_tests::minted_value::mint_credential_shaped;
     use crate::security::response_policy::{
-        ResponseCorrelation, ResponseMutationPolicy, ResponsePolicyTarget,
+        ResponseCorrelation, ResponsePolicyTarget,
     };
 
     let mock = MockBackend::answering(Answer::Sequence(vec![text_ok()]));
@@ -383,7 +383,6 @@ async fn the_suites_firewall_delivers_a_minted_continuation() {
             external_tool: TOOL,
             subject: None,
         },
-        mutation: ResponseMutationPolicy::PreserveInputRequired,
         signing: None,
         chain_source: crate::protocol::ChainSource::default(),
         chain_nonce: None,
@@ -393,7 +392,7 @@ async fn the_suites_firewall_delivers_a_minted_continuation() {
     let delivered =
         state
             .meta_mcp
-            .finalize_content(response, &context, DeliveryInspection::Required);
+            .finalize_content(response, &context);
     assert!(
         delivered.error.is_none(),
         "the minted handle was refused: {delivered:?}"

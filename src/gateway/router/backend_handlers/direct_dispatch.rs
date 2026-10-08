@@ -235,13 +235,15 @@ pub(super) async fn admit<'a>(
             crate::gateway::meta_mcp::invoke::audit::note_cached();
             // A replay is a delivery too: it renews this caller's own copy,
             // shaped for this request's era (MIK-8022).
-            let response = JsonRpcResponse::success(id.clone(), cached);
+            let mut response = JsonRpcResponse::success(id.clone(), cached);
+            replay_scan(state, (&admitted.call, envelope), client, &mut response);
             let auth = (admitted.auth, admitted.call.tool);
             return Err(deliver_tail(scope, envelope, preflight, auth, response));
         }
         Some(crate::idempotency::GuardOutcome::CachedError(error)) => {
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
-            let response = super::cached_error_response(Some(id.clone()), &error);
+            let mut response = super::cached_error_response(Some(id.clone()), &error);
+            replay_scan(state, (&admitted.call, envelope), client, &mut response);
             return Err(build_http_response(&response, StatusCode::OK));
         }
         Some(crate::idempotency::GuardOutcome::Proceed(reservation)) => {
@@ -392,18 +394,18 @@ fn finish_response(
     // Upstream transport IDs are private gateway correlation state;
     // direct-route clients must receive the ID they supplied.
     response.id = Some(id.clone());
-    // MIK-8139: a backend error gets a result's screening, on every method,
-    // before the reservation settles, so a replay serves the screened answer.
+    // The egress scan, every method and part, before the list stamps, client
+    // accounting and the reservation settle: a replay serves what it left.
+    // Redaction comes before the trust stamp: the firewall may remove a
+    // `$defs` entry a surviving `$ref` points at.
     let target = screen_target(&admitted.call, method);
-    state
-        .meta_mcp
-        .screen_backend_response(&target, &mut response);
+    super::super::direct_guards::scan_direct_egress(
+        state,
+        (&target, method),
+        client,
+        &mut response,
+    );
     if method == "tools/list" {
-        // Redaction FIRST, then the trust stamp. The firewall may remove a
-        // `$defs` entry a surviving `$ref` points at, so a verdict computed
-        // before it can say `within` about a document the client never
-        // receives.
-        super::scan_direct_tools_list_response(state, name, client, &mut response);
         if response.error.is_none() {
             super::record_client_success(state, client);
         }
@@ -490,6 +492,20 @@ fn deliver_tail(
 /// The policy target an answer of `method` is screened under (MIK-8139):
 /// the named tool for `tools/call`, otherwise the method itself, as the
 /// result scans target it.
+/// A replay is scanned like a fresh answer: the idempotency cache is shared
+/// across routes, and the meta route settles before its delivery scan, so an
+/// entry's provenance proves nothing (design round 2).
+fn replay_scan(
+    state: &AppState,
+    (call, envelope): (&BackendCall<'_>, &Envelope),
+    client: Option<&crate::gateway::auth::AuthenticatedClient>,
+    response: &mut JsonRpcResponse,
+) {
+    let method = envelope.method.as_str();
+    let target = screen_target(call, method);
+    super::super::direct_guards::scan_direct_egress(state, (&target, method), client, response);
+}
+
 fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> BackendCall<'a> {
     BackendCall {
         server: call.server,

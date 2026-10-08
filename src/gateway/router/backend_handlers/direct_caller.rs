@@ -431,9 +431,21 @@ pub(super) async fn forward_notification(
         }
         Err(e) => {
             super::record_client_failure(state, caller.client.as_ref());
-            tracing::error!(backend = %name, error = %e, "Backend notification failed");
-            let response =
+            // The code only: the error's text can be the backend's.
+            tracing::error!(backend = %name, code = e.to_rpc_code(), "Backend notification failed");
+            let mut response =
                 crate::protocol::JsonRpcResponse::error(None, e.to_rpc_code(), e.to_string());
+            let call = crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall {
+                server: name,
+                tool: &envelope.method,
+                session_id: None,
+                api_key_name: None,
+                trace_id: &envelope.method,
+                caller_key: None,
+            };
+            let screen = (&call, envelope.method.as_str());
+            let client = caller.client.as_ref();
+            super::super::direct_guards::scan_direct_egress(state, screen, client, &mut response);
             super::super::helpers::build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

@@ -681,56 +681,6 @@ fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>)
     }
 }
 
-/// Scan a `tools/list` response through the same firewall response scanner used
-/// for `tools/call` (OWASP ASI01 tool-poisoning defense).
-///
-/// Backend-supplied tool `description`/metadata strings are scanned for prompt
-/// injection and have embedded credentials redacted in place before the tool
-/// list reaches the client; a blocking verdict refuses the list. Gated on the
-/// same firewall config as the `tools/call` path, so behavior is unchanged
-/// when the feature/config is off.
-#[cfg(feature = "firewall")]
-fn scan_direct_tools_list_response(
-    state: &AppState,
-    backend_name: &str,
-    client: Option<&AuthenticatedClient>,
-    response: &mut JsonRpcResponse,
-) {
-    use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
-
-    // The router's one pass, shared with `tools/call`: a Block (or no
-    // admitting target) replaces the list with the refusal, never a redacted
-    // success (#2349). No later pass inspects a direct response.
-    let caller = client.map_or("anonymous", |c| c.name.as_str());
-    let session_id = format!("direct:{backend_name}");
-    let targets = [ResponsePolicyTarget {
-        server: backend_name.to_owned(),
-        tool: "tools/list".to_owned(),
-    }];
-    let correlation = ResponseCorrelation {
-        session_id: &session_id,
-        caller,
-        external_server: backend_name,
-        external_tool: "tools/list",
-        subject: None,
-    };
-    let _ = super::response_pass::inspect_tools_call_response(
-        state.firewall.as_deref(),
-        response,
-        &targets,
-        &correlation,
-    );
-}
-
-#[cfg(not(feature = "firewall"))]
-fn scan_direct_tools_list_response(
-    _state: &AppState,
-    _backend_name: &str,
-    _client: Option<&AuthenticatedClient>,
-    _response: &mut JsonRpcResponse,
-) {
-}
-
 mod costs;
 mod direct_audit;
 mod direct_caller;

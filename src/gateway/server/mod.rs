@@ -3077,13 +3077,10 @@ impl Gateway {
                     external_tool: &external_tool,
                     subject: None,
                 },
-                mutation:
-                    crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
                 signing: signing_context.as_ref(),
                 chain_source,
                 chain_nonce: chain_nonce.as_deref(),
             },
-            super::meta_mcp::response_security::DeliveryInspection::Required,
         );
         // MIK-7887.RECEIPT.4: the receipt describes the delivered answer, with
         // the stamps its era got; the judge can only replace the answer.

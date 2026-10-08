@@ -33,24 +33,30 @@ pub(super) async fn key_refusal(
 ) -> Option<BackendRejection> {
     let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
     let arguments = params.get("arguments").unwrap_or(&Value::Null);
+    let call = crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall {
+        server: &backend.name,
+        tool,
+        session_id: None,
+        api_key_name: None,
+        trace_id: tool,
+        caller_key: None,
+    };
     let checked = backend.undeclared_key_refusal(identity_key, headers, tool, arguments);
     match checked.await {
         Ok(None) => None,
         Ok(Some(text)) => {
             let result = json!({ "content": [{ "type": "text", "text": text }], "isError": true });
-            let response = JsonRpcResponse::success(id.clone(), result);
+            let mut response = JsonRpcResponse::success(id.clone(), result);
+            // The text names the listing's keys: screened like any answer.
+            let screen = (&call, "tools/call");
+            super::super::direct_guards::scan_direct_egress(
+                failed.state,
+                screen,
+                failed.client,
+                &mut response,
+            );
             Some(build_http_response(&response, StatusCode::OK))
         }
-        Err(e) => {
-            let call = crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall {
-                server: &backend.name,
-                tool,
-                session_id: None,
-                api_key_name: None,
-                trace_id: tool,
-                caller_key: None,
-            };
-            Some(failed.clone().answer(None, e, &call).await)
-        }
+        Err(e) => Some(failed.clone().answer(None, e, &call).await),
     }
 }

@@ -503,17 +503,9 @@ impl MetaMcp {
         // inspection, context integrity, the configured firewall). An
         // annotation alone is not a refusal, preserving the operator's observe
         // mode, but content a screen rewrote is never persisted.
-        let call = super::invoke::dispatch_guards::BackendCall {
-            server,
-            tool,
-            session_id: None,
-            api_key_name,
-            trace_id,
-            caller_key: None,
-        };
         let mut error = error;
-        let clean = self.screen_backend_error(&call, &mut error)
-            == super::invoke::dispatch_guards::ErrorScreen::Clean;
+        let screened = self.scan_backend_error((server, tool, trace_id), api_key_name, &mut error);
+        let clean = screened == super::invoke::egress::EgressOutcome::Delivered;
         if clean {
             (error, crate::gateway::task_service::ErrorAuthor::Peer)
         } else {

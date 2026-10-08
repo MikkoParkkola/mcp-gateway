@@ -71,11 +71,12 @@ pub struct JsonRpcResponse {
     /// or serialized; it excludes both client strikes and success resets.
     #[serde(skip)]
     pub(crate) delivery_refusal: bool,
-    /// Server-owned: a discovery handler inspected this result's canonical
-    /// value before it was serialised (MIK-7407.RESPONSE.3), so no later pass
-    /// scans the served copy. Never on the wire, so no caller can set it.
+    /// Server-owned: the egress scan screened this frame (or a discovery
+    /// handler did, on its canonical value before serialisation,
+    /// `MIK-7407.RESPONSE.3`), so no later exit scans it again. Never on the
+    /// wire, so no caller can set it.
     #[serde(skip)]
-    pub(crate) discovery_inspected: bool,
+    pub(crate) egress_scanned: bool,
     /// Server-owned chain eligibility; never on the wire, `NotEligible` by default.
     #[serde(skip)]
     pub(crate) chain_source: super::ChainSource,
@@ -97,7 +98,7 @@ impl JsonRpcResponse {
             error,
             confirmation_refusal: false,
             delivery_refusal: false,
-            discovery_inspected: false,
+            egress_scanned: false,
             chain_source: super::ChainSource::NotEligible,
             chain_upstream: None,
         }
@@ -174,6 +175,8 @@ impl JsonRpcResponse {
     pub(crate) fn delivery_refusal_error(id: Option<RequestId>, code: i32, message: &str) -> Self {
         let mut response = Self::error(id, code, message);
         response.delivery_refusal = true;
+        // The gateway's own refusal carries no backend text to screen.
+        response.egress_scanned = true;
         response
     }
 

@@ -19,7 +19,7 @@ use super::super::AppState;
 use super::super::helpers::build_http_response;
 use super::{record_client_failure, settle_direct_failure};
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::meta_mcp::invoke::dispatch_guards::ErrorScreen;
+use crate::gateway::meta_mcp::invoke::egress::EgressOutcome;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::ManagedLease;
 use crate::personal_accounts::refusal::{marked, refusal_text, upstream_rejection};
@@ -73,10 +73,13 @@ impl DirectFailure<'_> {
         // non-2xx JSON-RPC refusal), so it gets a result's screening; the
         // screened answer is what the reservation settles with.
         let mut response = response;
-        let screen = self
-            .state
-            .meta_mcp
-            .screen_backend_response(call, &mut response);
+        // An error frame: its method selects nothing, the target is `call`.
+        let screen = super::super::direct_guards::scan_direct_egress(
+            self.state,
+            (call, call.tool),
+            self.client,
+            &mut response,
+        );
         // A reconnect refusal settles the key with `response`, not the refusal
         // body returned below. That entry is never replayed: a fenced account
         // is refused at mint, before the idempotency guard, and the guard's
@@ -85,10 +88,10 @@ impl DirectFailure<'_> {
         settle_direct_failure(reservation, &error, &response);
         // The account refusal re-reads the failure's text, so it answers only
         // a failure the screen left as it was.
-        if screen == ErrorScreen::Blocked {
+        if screen == EgressOutcome::Refused {
             return build_http_response(&response, StatusCode::OK);
         }
-        if screen == ErrorScreen::Clean && marked(&error).is_some() {
+        if screen == EgressOutcome::Delivered && marked(&error).is_some() {
             let text = refusal_text(&error);
             return self
                 .state

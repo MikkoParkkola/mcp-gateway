@@ -534,7 +534,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
         "the retry reached the backend and completed: {response:?}"
     );
     assert!(
-        !response.discovery_inspected,
+        !response.egress_scanned,
         "a retry routed to its origin backend is never marked inspected"
     );
     assert_eq!(
@@ -559,7 +559,6 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
                     external_tool: "gateway_list_tools",
                     subject: None,
                 },
-                mutation: crate::security::response_policy::ResponseMutationPolicy::Redact,
                 signing: None,
                 chain_source: ChainSource::NotEligible,
                 chain_nonce: None,

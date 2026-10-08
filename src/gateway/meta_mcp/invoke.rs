@@ -85,6 +85,7 @@ mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
 pub(crate) mod audit;
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
+pub(crate) mod egress;
 mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
