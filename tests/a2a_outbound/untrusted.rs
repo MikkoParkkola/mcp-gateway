@@ -115,3 +115,74 @@ async fn mik_8112_an_injected_a2a_answer_is_refused_under_a_block_rule() {
         "the planted instruction never reaches the caller: {refused}"
     );
 }
+
+/// MIK-8140 route parity: an A2A answer delivered through an MCP task (a
+/// task-augmented `gateway_invoke`, read back with `tasks/get`) carries the
+/// same findings and remote-tool-output provenance as the synchronous call.
+#[tokio::test]
+async fn mik_8140_a_task_delivered_answer_carries_the_same_provenance() {
+    let (base, _log) = stub::serve(Agent::answering(stub::completed_task(
+        json!([{"text": INJECTED}]),
+    )))
+    .await;
+    let mut alice = common::api_key("key-alice", 0, None);
+    alice.name = "alice".into();
+    let fixture = common::Fixture {
+        auth: common::auth_with(vec![alice], None),
+        ..common::Fixture::default()
+    };
+    let (state, _store) = common::state(fixture).await;
+    assert!(state.backends.register(Arc::new(backend(&base, None, &[]))));
+    let frame = |id: i64, method: &str, mut params: Value| {
+        params["_meta"] = json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {
+                "extensions": {"io.modelcontextprotocol/tasks": {}}},
+            "io.modelcontextprotocol/clientInfo": {"name": "a2a-rows", "version": "1"},
+        });
+        if method == "tools/call" {
+            params["_meta"][mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META] =
+                json!(format!("prov-{id}"));
+        }
+        json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+    };
+    let created = post_as(
+        &state,
+        "/mcp",
+        &frame(
+            1,
+            "tools/call",
+            json!({"name": "gateway_invoke", "task": {}, "arguments": {
+                "server": "agent", "tool": TOOL, "arguments": {"message": "weather?"}}}),
+        ),
+        Some("key-alice"),
+        None,
+    )
+    .await;
+    let task = created["result"]["taskId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a task handle: {created}"))
+        .to_owned();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let settled = loop {
+        let get = frame(2, "tasks/get", json!({"taskId": task}));
+        let seen = post_as(&state, "/mcp", &get, Some("key-alice"), None).await;
+        if matches!(
+            seen["result"]["status"].as_str(),
+            Some("completed" | "failed" | "cancelled")
+        ) {
+            break seen;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "never settled: {seen}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(settled["result"]["status"], "completed", "{settled}");
+    // Read wherever the task carries the tool result: as structured JSON or
+    // as the JSON text `gateway_invoke` wraps it in.
+    let text = settled.to_string();
+    assert!(text.contains("_security_findings"), "findings: {settled}");
+    assert!(text.contains("remote_tool_output"), "provenance: {settled}");
+}
