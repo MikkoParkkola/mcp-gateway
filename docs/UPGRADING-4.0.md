@@ -191,6 +191,8 @@ backend" and "fails a capability file" first.**
 | 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept, a removed one released); restart to read a repaired task; probes (`/livez`, `/readyz`) are unaffected |
 | 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
 | 166 | A running gateway's web UI backend edits (add, edit, delete) load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still undo that writer's change | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
+| 167 | On a multi-user gateway, an API-key or admin-bearer caller with no other identity gets its own `mcp` capability child, named by its credential, instead of a refusal. An `mcp` capability's cached answer is read back only by the caller whose child produced it | None. Callers who share one API key share one child |
+| 168 | Once its shutdown steps return, an HTTP gateway (`serve`, or no subcommand) waits at most 10 more seconds for disk work still running, then exits and logs at ERROR that it gave up waiting; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running after 10 seconds points at the storage to check |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4381,6 +4383,37 @@ command is saving, and check the config after one that overlapped; run a refused
 
 Editors such as vim do not take the lock; avoid editing the file by hand while a CLI command
 or the web UI is saving it.
+
+## 167. API-key callers get their own `mcp` capability child on a multi-user gateway
+
+**Startup:** no notice
+
+An `mcp` capability runs one child process per caller. On a multi-user
+gateway, a caller named by no identity-propagation binding, OIDC identity or
+grant subject was refused ("needs an identified caller"), which refused every
+API-key and admin-bearer caller. Such a caller now gets its own child, named by
+its validated credential, and a background task it starts reaches the same
+child. A single-user gateway still runs one shared child for every caller
+without an identity.
+
+An `mcp` capability with `cache:` set also keys its cached answers on that same
+per-caller name, so one caller is never served another caller's cached answer.
+
+## 168. An HTTP gateway exits within 10 seconds of finishing its shutdown
+
+**Startup:** no notice
+
+After an HTTP gateway's shutdown steps return (draining requests and closing
+the task store, under `server.shutdown_timeout`), the gateway now waits at
+most 10 more seconds for disk work still running (a task-store or
+audit write) and then exits. Before, it waited for that work without limit, so
+a write stuck on a stalled NFS or FUSE mount kept the process alive forever and
+an orchestrator had to kill it. `serve --stdio` already exited this way.
+
+Work that finishes within the 10 seconds completes as before. When the wait
+runs the full 10 seconds, one ERROR line says the gateway exited with blocking
+work still running. That is a timeout, not a diagnosis: check the storage
+behind the task store and the audit log.
 
 ## Upgrading from 3.5.x: a walkthrough
 
