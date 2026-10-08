@@ -493,3 +493,35 @@ async fn egress_a_key_refusal_meets_the_content_checks() {
     }
     report(&failures);
 }
+
+/// #3527 final review (a backend replaying another exchange's envelope): a
+/// valid envelope stolen from another exchange, returned as an interim
+/// `tools/call` answer's state, frees no slot when the answer is refused. The
+/// gateway writes its own envelope over an interim answer's state, so the
+/// release only ever reads the one it minted for this call.
+#[tokio::test]
+async fn egress_a_stolen_envelope_frees_no_other_slot() {
+    let backend = Arc::new(Planted::with_text(
+        "tools/call",
+        Part::InterimStolenState,
+        String::new(),
+    ));
+    let fx = fixture_firewalled_on(Arc::clone(&backend) as _, None).await;
+    let continuation = fx.state.meta_mcp.continuation();
+    let now = crate::protocol::continuation::now_unix_secs();
+    let other = continuation
+        .begin_exchange("other".into(), None, "fp".into(), "digest".into(), now)
+        .await
+        .expect("an unrelated exchange holds a slot");
+    let stolen = continuation.keyring().mint(&other).expect("its envelope");
+    backend.set_text(stolen);
+    let (uri, sent, params) = request(Route::Meta, "tools/call", Part::InterimQuestion);
+    let body = post_as(&fx, (uri, sent), &params, Some("alice")).await;
+    assert!(!body.contains(&secret()), "{body}");
+    let routing = continuation.in_flight().route(&other.hold_key, now).await;
+    assert_eq!(
+        routing,
+        crate::protocol::continuation::Routing::Here,
+        "the other exchange lost its slot: {body}"
+    );
+}

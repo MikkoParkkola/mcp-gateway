@@ -49,6 +49,10 @@ pub(crate) enum Part {
     Progress,
     /// A backend-defined notification streamed before the answer.
     CustomNote,
+    /// An interim answer whose question carries the credential and whose
+    /// `requestState` is the planted text (an envelope stolen from another
+    /// exchange). Not in [`Part::ALL`].
+    InterimStolenState,
     /// A parameter name in the tool's input schema: a call with an undeclared
     /// key is refused with a text listing the declared names. Not in
     /// [`Part::ALL`]: the call never reaches the backend.
@@ -145,7 +149,9 @@ fn notification(method: &str, params: Value) -> JsonRpcNotification {
 pub(crate) struct Planted {
     pub(crate) method: &'static str,
     pub(crate) part: Part,
-    pub(crate) text: String,
+    /// Settable after construction: a cell can plant what only the built
+    /// gateway can make (an envelope from its keyring).
+    pub(crate) text: std::sync::Mutex<String>,
     pub(crate) calls: Arc<AtomicUsize>,
 }
 
@@ -160,13 +166,23 @@ impl Planted {
         Self {
             method,
             part,
-            text,
+            text: std::sync::Mutex::new(text),
             calls: Arc::new(AtomicUsize::new(0)),
         }
     }
 
+    /// The planted text.
+    pub(crate) fn text(&self) -> String {
+        self.text.lock().expect("planted text").clone()
+    }
+
+    /// Plant `text` instead, from now on.
+    pub(crate) fn set_text(&self, text: String) {
+        *self.text.lock().expect("planted text") = text;
+    }
+
     fn answer(&self, params: Option<&Value>) -> JsonRpcResponse {
-        let (id, method, s) = (RequestId::Number(1), self.method, self.text.clone());
+        let (id, method, s) = (RequestId::Number(1), self.method, self.text());
         let clean = || shaped(method, "ok");
         let backend_error = |message: &str, data: Option<Value>| JsonRpcError {
             code: -32001,
@@ -212,6 +228,7 @@ impl Planted {
                 JsonRpcResponse::success(id, clean())
             }
             Part::SchemaKey => JsonRpcResponse::success(id, clean()),
+            Part::InterimStolenState => JsonRpcResponse::success(id, interim(&secret(), &s)),
             Part::CustomNote => {
                 crate::transport::notification_sink::publish(vec![notification(
                     "notifications/backend_note",
@@ -228,7 +245,7 @@ impl crate::transport::Transport for Planted {
     async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         if self.part == Part::SchemaKey && method == "tools/list" {
             let mut list = shaped(method, "ok");
-            list["tools"][0]["inputSchema"]["properties"][self.text.as_str()] =
+            list["tools"][0]["inputSchema"]["properties"][self.text().as_str()] =
                 json!({"type": "string"});
             return Ok(JsonRpcResponse::success(RequestId::Number(1), list));
         }
