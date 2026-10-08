@@ -186,3 +186,38 @@ async fn row_10_completing_the_earliest_hold_never_hides_a_later_expiry() {
         "and is reclaimed once it expires"
     );
 }
+
+#[tokio::test]
+async fn row_11_holds_inserted_out_of_deadline_order_expire_in_order() {
+    let table = InFlight::new("gw-1", 4);
+    for deadline in [T + 30, T + 10, T + 20] {
+        table.hold("backend", deadline, T).await.expect("capacity");
+    }
+    assert_eq!(table.len(T + 15).await, 2);
+    assert_eq!(table.len(T + 25).await, 1);
+    assert_eq!(table.len(T + 31).await, 0);
+}
+
+#[tokio::test]
+async fn row_12_a_reader_at_the_earliest_deadline_neither_walks_nor_evicts() {
+    let table = InFlight::new("gw-1", 4);
+    table.hold("backend", T + 10, T).await.expect("capacity");
+    let before = table.walks.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(table.len(T + 10).await, 1, "live at its own deadline");
+    let walked = table.walks.load(std::sync::atomic::Ordering::SeqCst) - before;
+    assert_eq!(walked, 0, "nothing can be expired at the earliest deadline");
+}
+
+#[tokio::test]
+async fn row_13_a_walk_resets_the_bound_to_the_earliest_survivor() {
+    let table = InFlight::new("gw-1", 4);
+    table.hold("backend", T + 5, T).await.expect("capacity");
+    table.hold("backend", T + 50, T).await.expect("capacity");
+    assert_eq!(table.len(T + 6).await, 1, "the first hold is reclaimed");
+    let before = table.walks.load(std::sync::atomic::Ordering::SeqCst);
+    for _ in 0..10 {
+        assert_eq!(table.len(T + 40).await, 1);
+    }
+    let walked = table.walks.load(std::sync::atomic::Ordering::SeqCst) - before;
+    assert_eq!(walked, 0, "a stale bound would walk on every read");
+}
