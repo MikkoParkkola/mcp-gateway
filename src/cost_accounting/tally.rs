@@ -181,10 +181,19 @@ pub(crate) fn sweep_due(next: &AtomicU64, now: u64) -> bool {
             .is_ok()
 }
 
-/// `usd` as whole micro-USD, truncated: the unit every total is kept in.
+/// `usd` as whole micro-USD, the unit every total is kept in. A positive cost
+/// rounds up, so a budget never counts a call for less than its price
+/// (MIK-8081). A product within float noise of a whole micro-USD is that
+/// whole: 0.07 is 70000, not 70001. Zero, negative and NaN read as 0.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub(crate) fn micro(usd: f64) -> u64 {
-    (usd * 1_000_000.0) as u64
+    let exact = usd * 1_000_000.0;
+    let whole = exact.round();
+    if (exact - whole).abs() <= whole * 1e-9 {
+        whole as u64
+    } else {
+        exact.ceil() as u64
+    }
 }
 
 #[allow(clippy::cast_precision_loss)]
