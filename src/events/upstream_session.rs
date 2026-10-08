@@ -210,24 +210,8 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         // first, even when no URI is watched (§3).
         let _ = backend.read_resource_snapshot(false).await;
     }
-    let first = requested(shared);
-    let opened = tokio::select! {
-        () = shared.stop.cancelled() => return Outcome::Stopped,
-        opened = tokio::time::timeout(OPEN_LIMIT, open(&target.handle, modern, first.clone(), watched_by(shared))) => {
-            opened.unwrap_or(Err(Refused::Expired))
-        }
-    };
-    match opened {
-        Ok(stream) => {
-            state.opened = Instant::now();
-            state.current = Some((stream, first));
-        }
-        Err(Refused::Unsupported) => return Outcome::Unsupported,
-        Err(Refused::Expired) => return failed(),
-        Err(Refused::Failed(error)) => {
-            debug!(backend = %shared.name, %error, "upstream listener: stream refused");
-            return failed();
-        }
+    if let Err(ended) = open_first(shared, &mut state, &target, modern).await {
+        return ended;
     }
     state.handle = Some(target.handle.clone());
     let synced = tokio::select! {
@@ -371,25 +355,6 @@ async fn recv_pending(pending: &mut Option<Pending>) -> Option<UpstreamNote> {
     match pending {
         Some(p) => p.stream.rx.recv().await,
         None => std::future::pending().await,
-    }
-}
-
-/// Open the era's channel; the upgraded `Arc` lives only for this call.
-async fn open(
-    handle: &Weak<dyn UpstreamListen>,
-    modern: bool,
-    requested: Requested,
-    watched: Watched,
-) -> Result<FrameStream, Refused> {
-    let Some(transport) = handle.upgrade() else {
-        return Err(Refused::Failed(crate::Error::Transport(
-            "transport gone".to_owned(),
-        )));
-    };
-    if modern {
-        transport.listen(requested).await
-    } else {
-        transport.unsolicited(watched).await
     }
 }
 
@@ -774,6 +739,10 @@ impl<'a> State<'a> {
         false
     }
 }
+
+#[path = "upstream_session_open.rs"]
+mod opening;
+use opening::{open, open_first};
 
 #[path = "upstream_session_refill.rs"]
 mod refill;

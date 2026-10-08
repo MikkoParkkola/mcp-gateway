@@ -243,11 +243,14 @@ struct Listen {
     first: bool,
 }
 
+/// A filter over legacy `resources/updated` URIs.
+type UriFilter = std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 /// Which legacy `resources/updated` URIs the session still watches (D5):
 /// an update for any other is ignored before it can take a tap slot, so a
 /// subscription that outlived its watcher never displaces a wanted notice.
 #[derive(Clone, Default)]
-pub(crate) struct Watched(Option<std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>>);
+pub(crate) struct Watched(Option<UriFilter>);
 
 impl Watched {
     pub(crate) fn by(admits: impl Fn(&str) -> bool + Send + Sync + 'static) -> Self {

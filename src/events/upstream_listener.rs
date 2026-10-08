@@ -113,6 +113,9 @@ fn take_ended(map: &mut HashMap<String, Arc<Shared>>, backend: &str) -> Need {
     }
 }
 
+/// A backend's ledger and the `Backend` it was made for.
+type LedgerSlot = (Weak<Backend>, Arc<Mutex<Ledger>>);
+
 /// The per-backend listeners of one hub.
 pub(crate) struct UpstreamListeners {
     registry: Arc<BackendRegistry>,
@@ -123,7 +126,7 @@ pub(crate) struct UpstreamListeners {
     /// Per backend, kept while the registry holds the same `Backend`: a
     /// backend removed from (or replaced in) the config, or a restart, is
     /// the only thing that drops a ledger (D5 release points).
-    ledgers: Mutex<HashMap<String, (Weak<Backend>, Arc<Mutex<Ledger>>)>>,
+    ledgers: Mutex<HashMap<String, LedgerSlot>>,
     stop: CancellationToken,
     /// Tasks `start` has spawned: a task started wrongly for a refused
     /// backend cancels itself at once, so its entry alone cannot show it.

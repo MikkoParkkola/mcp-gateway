@@ -60,7 +60,7 @@ async fn a_replacement_past_its_ack_deadline_backs_off() {
     state.pending = Some(Pending {
         stream: stream(),
         requested: Requested::default(),
-        since: Instant::now() - ACK_DEADLINE * 2,
+        since: Instant::now().checked_sub(ACK_DEADLINE * 2).expect("past"),
     });
     state.maintain(&backend, &Weak::new(), &handle, true).await;
     assert!(state.pending.is_none());
@@ -74,7 +74,7 @@ async fn an_unacknowledged_first_listen_backs_off_once() {
     let (shared, (backend, handle)) = (shared(), offline());
     let mut state = State::new(&shared, Era::Modern);
     state.current = Some((stream(), Requested::default()));
-    state.opened = Instant::now() - ACK_DEADLINE * 2;
+    state.opened = Instant::now().checked_sub(ACK_DEADLINE * 2).expect("past");
     for _ in 0..3 {
         state.maintain(&backend, &Weak::new(), &handle, true).await;
     }
