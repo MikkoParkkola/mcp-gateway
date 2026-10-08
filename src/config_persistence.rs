@@ -95,6 +95,15 @@ pub(crate) mod lock;
 /// config lock: long enough to outlast a gateway's write and reload.
 pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(30);
 
+/// Tell a CLI user, once, why their command is not finishing yet.
+fn say_waiting(config: &Path, lock: &Path) {
+    eprintln!(
+        "Waiting for {} (another writer holds {})...",
+        config.display(),
+        lock.display()
+    );
+}
+
 /// A lock that was not taken, as a message ready to print.
 fn not_locked(path: &Path, e: lock::NotLocked) -> String {
     match e {
@@ -187,11 +196,7 @@ pub fn write_config_preserving<T>(
     edit: impl FnOnce(&mut Config) -> Result<T, String>,
 ) -> Result<(T, Option<String>), String> {
     let _held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
-        eprintln!(
-            "Waiting for {} (another writer holds {})...",
-            path.display(),
-            lock.display()
-        );
+        say_waiting(path, lock);
     })
     .map_err(|e| not_locked(path, e))?;
     let mut config = load_existing_or_default(path)
@@ -307,8 +312,10 @@ const SCRATCH_ATTEMPTS: u64 = 8;
 /// Returns an error when `path` already exists, the lock cannot be taken, or
 /// the file cannot be created.
 pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
-    let _held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |_| {})
-        .map_err(|e| not_locked(path, e))?;
+    let _held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
+        say_waiting(path, lock);
+    })
+    .map_err(|e| not_locked(path, e))?;
     match std::fs::symlink_metadata(path) {
         Ok(_) => return Err(format!("{} already exists", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

@@ -381,16 +381,22 @@ fn the_preserving_writer_reports_each_outcome() {
         write_config_preserving(&path, CommentLoss::Refuse, set(two.clone())),
         Ok(((), None))
     );
-    // Under Rewrite, a refusal is overridden and returned beside the value.
-    write(&path, flow).expect("write");
-    let (_, forced) =
-        write_config_preserving(&path, CommentLoss::Rewrite, set(two)).expect("rewritten");
-    assert!(forced.is_some_and(|r| r.contains("line 1")));
     assert!(
         std::fs::read_to_string(&path)
             .expect("read")
             .contains("# kept by hand")
     );
+    // Under Rewrite, a refusal is overridden and returned beside the value:
+    // the file is rewritten in full, so the comment is gone and both
+    // backends are there.
+    write(&path, flow).expect("write");
+    let (_, forced) =
+        write_config_preserving(&path, CommentLoss::Rewrite, set(two)).expect("rewritten");
+    assert!(forced.is_some_and(|r| r.contains("line 1")));
+    let rewritten = std::fs::read_to_string(&path).expect("read");
+    assert!(!rewritten.contains("# kept by hand"), "{rewritten}");
+    let loaded = Config::load_literal(Some(&path)).expect("loads");
+    assert!(loaded.backends.contains_key("a") && loaded.backends.contains_key("b"));
 }
 
 /// MIK-8042: `write_config_text` creates, never replaces. Its existence check
