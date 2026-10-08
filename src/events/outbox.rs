@@ -188,3 +188,12 @@ pub(crate) struct Evicted {
     pub subscription_id: String,
     pub reason: String,
 }
+
+/// The host of callback `url`, as a record is stamped with it; empty when
+/// the URL has none.
+pub(crate) fn callback_host_of(url: &str) -> String {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_default()
+}

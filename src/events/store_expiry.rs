@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 
 use super::super::{State, Store};
 use super::dead_size;
-use crate::events::outbox::{DeadLetter, DeadReason, OutboxRecord, OutboxState};
+use crate::events::outbox::{DeadLetter, DeadReason, OutboxRecord, OutboxState, callback_host_of};
 use crate::events::records::{load_records, remove_record, write_record};
 
 /// The most expired-row records one `due` call settles: the worker holds the
@@ -92,9 +92,16 @@ impl Store {
         keys.truncate(EXPIRY_BATCH);
         let mut buried = Vec::new();
         for (_, id) in keys {
-            let Some(record) = state.outbox.get(&id).cloned() else {
+            let Some(mut record) = state.outbox.get(&id).cloned() else {
                 continue;
             };
+            // A record written before fan-out stamped its host takes it from
+            // its row now: the row may be gone when the burial is receipted.
+            if record.callback_host.is_empty()
+                && let Some(sub) = state.subs.get(&record.subscription_id)
+            {
+                record.callback_host = callback_host_of(&sub.url);
+            }
             let bury = record.needs_burial_at_expiry();
             if bury && let Err(error) = self.entomb(state, record.clone(), DeadReason::Expired, now)
             {

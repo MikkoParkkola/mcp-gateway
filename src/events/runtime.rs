@@ -147,8 +147,7 @@ impl EventsHub {
         let host = if record.callback_host.is_empty() {
             self.store
                 .get(&record.subscription_id)
-                .and_then(|s| url::Url::parse(&s.url).ok())
-                .and_then(|u| u.host_str().map(str::to_owned))
+                .map(|s| super::outbox::callback_host_of(&s.url))
                 .unwrap_or_default()
         } else {
             record.callback_host.clone()

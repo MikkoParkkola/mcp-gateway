@@ -172,10 +172,7 @@ impl EventsHub {
             // Asks no backend grant at delivery: owner and operator events
             // are authorized by their source, not by a backend's grant.
             owner_scoped: event.scope.grant_backend().is_none(),
-            callback_host: url::Url::parse(&sub.url)
-                .ok()
-                .and_then(|u| u.host_str().map(str::to_owned))
-                .unwrap_or_default(),
+            callback_host: super::outbox::callback_host_of(&sub.url),
             tenants,
             attribution,
             attribution_keys,
