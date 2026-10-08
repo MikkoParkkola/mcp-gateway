@@ -22,12 +22,14 @@ struct Probe {
     last: AtomicUsize,
     refuse_start: std::sync::atomic::AtomicBool,
     deny: std::sync::atomic::AtomicBool,
+    /// Another kind than the default `RestWatch`.
+    kind: Option<SourceKind>,
 }
 
 #[async_trait::async_trait]
 impl EventSource for Probe {
     fn kind(&self) -> SourceKind {
-        SourceKind::RestWatch
+        self.kind.unwrap_or(SourceKind::RestWatch)
     }
     fn descriptors(&self) -> Vec<EventDescriptor> {
         vec![EventDescriptor {
@@ -36,7 +38,7 @@ impl EventSource for Probe {
             input_schema: json!({"type": "object", "properties": {"k": {"type": "string"}}}),
             payload_schema: json!({"type": "object"}),
             scope: Visibility::Owner,
-            kind: SourceKind::RestWatch,
+            kind: self.kind(),
         }]
     }
     fn matches(&self, _principal: &str, _arguments: &Value, _event: &SourceEvent) -> bool {
@@ -276,6 +278,40 @@ async fn a_refused_replay_is_attempted_once_per_key() {
     hub.register_source(again.clone());
     hub.replay_starts().await;
     assert_eq!(again.first.load(Ordering::SeqCst), 1, "once for the key");
+}
+
+/// MIK-8053: the worker's sweep retries a start only for watch keys, whose
+/// start is local. Another kind's start may reach a backend, so a refused one
+/// is not retried every sweep.
+#[tokio::test]
+async fn a_sweep_does_not_retry_another_kinds_refused_start() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let other = || Probe {
+        kind: Some(SourceKind::TaskSettled),
+        ..Probe::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.register_source(Arc::new(other()));
+    seed_verified(&hub, &config, "p1");
+    subscribe(&hub, "p1").await;
+    drop(hub);
+    let hub = EventsHub::open(&config, dir.path()).expect("reopened");
+    let again = Arc::new(other());
+    again.refuse_start.store(true, Ordering::SeqCst);
+    hub.register_source(again.clone());
+    hub.replay_starts().await;
+    assert_eq!(
+        again.first.load(Ordering::SeqCst),
+        1,
+        "premise: refused once"
+    );
+    hub.sweep(&services()).await;
+    assert_eq!(
+        again.first.load(Ordering::SeqCst),
+        1,
+        "not retried by the sweep"
+    );
 }
 
 /// Replacing a source stops what the old one started and starts the new.

@@ -193,6 +193,30 @@ pub(super) fn caller_cache_principal(
     }
 }
 
+/// The owner key an authenticated caller's MCP child is named by when nothing
+/// else names it (MIK-7825): `credential:<principal>`, the string a task records
+/// as its owner (`handlers::tasks::session_owner_key`). A live request carries
+/// the bare principal (hex, or a fixed label: never a colon); a background
+/// task's rebuilt caller carries that recorded owner, already prefixed. Both
+/// map to one key, so a call and the task it starts reach one child.
+///
+/// `None` unless the request authenticated: with authentication off the
+/// principal is a gateway constant, not a caller.
+pub(super) fn credential_owner(caller: &super::MetaMcpCallerContext<'_>) -> Option<String> {
+    if caller.authentication != Authentication::Authenticated {
+        return None;
+    }
+    let principal = caller
+        .credential_principal
+        .filter(|text| !text.is_empty())?;
+    let prefix = crate::gateway::auth::CREDENTIAL_OWNER_PREFIX;
+    Some(if principal.starts_with(prefix) {
+        principal.to_owned()
+    } else {
+        format!("{prefix}{principal}")
+    })
+}
+
 /// The proven subject a caller with no credential owns its keyed calls by
 /// (MIK-7688): an OAuth agent (its client id) or a client certificate (its
 /// SAN URI, else its CN), as the router's `caller_key` encodes them. Never a
