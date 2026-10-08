@@ -196,6 +196,7 @@ backend" and "fails a capability file" first.**
 | 169 | On the per-backend route `POST /mcp/{name}`, a backend's `requestState` is sealed into a gateway continuation, as on `/mcp`; a retry must send that continuation back once. Callers with an API key and no verified identity now keep multi-round tool calls on both routes, bound to their key | None. A client that already echoes `requestState` as received keeps working. A client that wrote its own `requestState`, reused one, or sent it from another key gets -32602. Holders of one shared key count as one caller |
 | 170 | `cap search` and `cap registry-list` take `-C` for `--capabilities`, as every other command does; `-c` there now means the global `--config`. A debug build panicked on both commands, and a release build read `-c` as `--capabilities` | Scripts that passed `-c <dir>` to these two commands: use `-C <dir>` or `--capabilities <dir>` |
 | 171 | With agent authentication on, a listen or GET /mcp stream opened with an agent token is checked again at every delivery and ends, with no closing message, once the token expires, the agent leaves the registry or its key changes. A GET /mcp stream also checks each queued notification when it writes it, for every credential kind. With gateway authentication on, a valid agent token can listen on a public `/mcp`. `AuthState` gains `agent_auth` | Clients: re-subscribe with a fresh token when a stream ends. Library users building `AuthState` with a struct literal set `agent_auth` to the `AgentAuthState` the router's agent middleware uses (or `AgentAuthState::new(false, ...)` without agent auth) |
+| 172 | The per-backend route `POST /mcp/{name}` refuses what `/mcp` refuses under every security posture, with the same code and status: a malformed request, a contradicted or doubled protocol header, an unsupported revision, or a 2026-07-28 request missing its required `_meta`. Before, only `hardened` checked these; elsewhere the route forwarded them to the backend | None for a client whose requests `/mcp` accepts. A client that sent such a request to `/mcp/{name}` gets the refusal `/mcp` gives it and fixes the request |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4481,6 +4482,23 @@ authentication on. Now:
 Library users: `AuthState` has a new public field, `agent_auth`. Code that
 builds `AuthState` with a struct literal sets it to the same `AgentAuthState`
 the router's agent middleware uses, so delivery checks the same registry.
+
+## 172. The per-backend route refuses what `/mcp` refuses
+
+**Startup:** no notice
+
+`POST /mcp/{name}` ran the `/mcp` request checks only under the `hardened`
+posture. Under every other posture it forwarded a request `/mcp` would refuse:
+a malformed one, a contradicted or doubled protocol header, an unsupported
+revision, or a 2026-07-28 request missing its required `_meta`. The checks now
+run under every posture, before the backend is looked up, and give the same
+JSON-RPC code and HTTP status `/mcp` gives. A request naming a backend that
+does not exist gets that refusal too, so the answer no longer tells a caller
+which backends exist.
+
+A client whose requests `/mcp` accepts sees no change. Only `hardened` still
+refuses a plain legacy request on this route that is not an `initialize`
+declaring elicitation, as before.
 
 ## Upgrading from 3.5.x: a walkthrough
 
