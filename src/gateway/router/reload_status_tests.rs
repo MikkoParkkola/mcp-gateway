@@ -103,6 +103,22 @@ async fn a_reload_cut_short_by_shutdown_is_service_unavailable() {
     assert!(text.contains("shutting down"), "{body}");
 }
 
+/// STATUS.2: a reload stopped by the gateway's own shutdown signal is the
+/// gateway unavailable too, not an internal fault.
+#[tokio::test]
+async fn a_reload_stopped_by_the_shutdown_signal_is_service_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    let stop = tokio_util::sync::CancellationToken::new();
+    stop.cancel();
+    let ctx = context(&dir, "{}\n", Arc::new(BackendRegistry::new())).with_stop(stop);
+
+    let (status, body) = reload_as_admin(ctx).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    let text = body["error"].as_str().unwrap_or_default();
+    assert!(text.contains("shutting down"), "{body}");
+}
+
 /// STATUS.2: any other failure, here a file that does not parse, stays 500.
 #[tokio::test]
 async fn any_other_reload_failure_stays_an_internal_error() {
