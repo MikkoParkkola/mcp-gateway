@@ -189,6 +189,7 @@ backend" and "fails a capability file" first.**
 | 162 | An A2A backend (`transport: a2a`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public | None for gateway operators. Library users: configure the agent as a `transport: a2a` backend, or use your own A2A client to poll or cancel tasks |
 | 163 | Reserved: #3489 | None |
 | 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept, a removed one released); restart to read a repaired task; probes (`/livez`, `/readyz`) are unaffected |
+| 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4306,6 +4307,26 @@ Until a restart a repaired task stays unreadable (a known gap).
 
 A record-named FIFO in the task store is now refused as unsafe at startup
 instead of hanging it.
+
+## 165. A refused config reload answers 409, not 500
+
+**Startup:** no notice
+
+A config reload that failed always answered `POST /ui/api/reload` with 500,
+so a monitor read an operator's refused file as a gateway crash. Now the status
+says whose fault it is:
+
+- 409 Conflict when the network-posture policy refuses the file: it would
+  leave the tools reachable without a credential, or send credentials over
+  plain HTTP. Fix the file (revert the `public_url`, close the tool paths, or
+  put TLS in front).
+- 503 Service Unavailable when shutdown stopped the reload.
+- 500 for anything else, such as a file that does not parse or a change that
+  needs a restart.
+
+The `gateway_reload_config` meta-tool answers that refusal with JSON-RPC
+-32600 (it was -32603) and keeps -32603 otherwise. The message text is
+unchanged on both.
 
 ## Upgrading from 3.5.x: a walkthrough
 
