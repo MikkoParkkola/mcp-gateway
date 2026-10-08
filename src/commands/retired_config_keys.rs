@@ -42,8 +42,10 @@ pub(crate) fn drop_cache_tools(text: &str) -> (Option<String>, Retired) {
         .unwrap_or_default();
     // Presence is read as the loader reads it (a repeated key is accepted);
     // an edit still needs the strict parse in `only_cache_tools_went`.
-    let sets_key = serde_yaml::from_str::<figment::value::Value>(text)
-        .is_ok_and(|doc| doc.find_ref("meta_mcp.cache_tools").is_some());
+    let sets_key = serde_yaml::from_str::<figment::value::Dict>(text).is_ok_and(|doc| {
+        doc.get("meta_mcp")
+            .is_some_and(|meta| meta.find_ref("cache_tools").is_some())
+    });
     if !sets_key {
         return (None, Retired::Absent);
     }
@@ -110,6 +112,7 @@ mod tests {
             "meta_mcp:\n  cache_tools: false\n",
             "meta_mcp:\n  enabled: true\n  enabled: true\n  cache_tools: false\n",
             "meta_mcp: {enabled: true, enabled: true, \"cache_tools\": false}\n",
+            "!cfg {meta_mcp: {enabled: true, cache_tools: false}}\n",
         ] {
             assert_eq!(drop_cache_tools(text), (None, Retired::Left), "{text}");
         }
