@@ -51,11 +51,15 @@ fn a_cli_write_waits_for_the_config_lock() {
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, START).expect("write");
+    // An owner-only sidecar, as the gateway creates it: on Windows the CLI
+    // refuses a sidecar whose ACL lets anyone else in.
+    let sidecar = home.path().join(".gateway.yaml.lock");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&sidecar, "").expect("sidecar");
     let lock = std::fs::File::options()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(home.path().join(".gateway.yaml.lock"))
+        .open(&sidecar)
         .expect("open the lock sidecar");
     lock.lock().expect("the test holds the config lock");
 

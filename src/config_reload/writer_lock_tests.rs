@@ -58,7 +58,7 @@ async fn a_gateway_write_waits_for_the_lock_and_reports_busy() {
         Duration::from_secs(60),
     )
     .expect("the registry pairs with the config");
-    let held = ExclusiveFileLock::acquire(&lock).expect("the test holds the lock");
+    let held = ExclusiveFileLock::try_acquire(&lock).expect("the test holds the lock");
 
     let result = ctx
         .mutate_and_reload_outcome_within(&path, Duration::from_millis(300), add_b)
@@ -77,7 +77,7 @@ async fn a_gateway_write_waits_for_the_lock_and_reports_busy() {
 #[tokio::test]
 async fn a_write_without_a_gateway_also_waits_for_the_lock() {
     let (_dir, path, lock) = config();
-    let held = ExclusiveFileLock::acquire(&lock).expect("the test holds the lock");
+    let held = ExclusiveFileLock::try_acquire(&lock).expect("the test holds the lock");
 
     let result = mutate_config_and_reload_with(&path, None, CommentLoss::Refuse, add_b).await;
 
