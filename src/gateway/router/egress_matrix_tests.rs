@@ -336,7 +336,7 @@ async fn egress_a_cross_route_replay_is_scanned() {
     let mut failures = Vec::new();
     for part in [Part::ResultText, Part::ErrorMessage] {
         let backend = Arc::new(Planted::new("tools/call", part));
-        let fx = fixture_firewalled_on(backend, Some(FirewallAction::Warn)).await;
+        let fx = fixture_firewalled_on(backend.clone(), Some(FirewallAction::Warn)).await;
         let idem = json!({ IDEMPOTENCY_KEY_META: "egress-replay" });
         for route in [Route::Meta, Route::Direct] {
             let (uri, sent, mut params) = request(route, "tools/call", part);
@@ -345,6 +345,11 @@ async fn egress_a_cross_route_replay_is_scanned() {
             if body.contains(&leak) {
                 failures.push(format!("{part:?} {route:?}: credential delivered: {body}"));
             }
+        }
+        // Else the direct call met a fresh, scanned answer, not the replay.
+        let calls = backend.calls.load(std::sync::atomic::Ordering::SeqCst);
+        if calls != 1 {
+            failures.push(format!("{part:?}: {calls} dispatches, so nothing replayed"));
         }
     }
     report(&failures);
