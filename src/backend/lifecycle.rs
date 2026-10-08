@@ -333,6 +333,13 @@ impl Backend {
         hold_at(gate).await;
     }
 
+    /// Wait at a test's publish gate, when one is set.
+    #[cfg(test)]
+    async fn hold_after_publish(&self) {
+        let gate = self.publish_gate.lock().clone();
+        hold_at(gate).await;
+    }
+
     /// The same marking for a transport built under `built_under` before it
     /// connects. A pairing that stamped a policy in between would leave the
     /// connection about to be made unpinned, so the start is refused instead.
@@ -526,10 +533,7 @@ impl Backend {
             return Err(Error::BackendUnavailable(self.name.clone()));
         }
         #[cfg(test)]
-        {
-            let gate = self.publish_gate.lock().clone();
-            hold_at(gate).await;
-        }
+        self.hold_after_publish().await;
 
         // Note: Tools are fetched lazily on first get_tools() call
         // We can't pre-cache here because get_tools() -> ensure_started() -> start()
