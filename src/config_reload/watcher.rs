@@ -144,6 +144,31 @@ impl ConfigWatcher {
         identity_grants: Option<Arc<IdentityGrantSink>>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<Self> {
+        Self::start_with_hook(
+            config_path,
+            live_config,
+            registry,
+            initial_config,
+            env,
+            identity_grants,
+            shutdown_rx,
+            None,
+        )
+    }
+
+    /// [`Self::start`], with a hook told which backends each applied reload
+    /// registered (`MIK-8054`: the server warm-starts them).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn start_with_hook(
+        config_path: PathBuf,
+        live_config: Arc<LiveConfig>,
+        registry: Arc<BackendRegistry>,
+        initial_config: &Config,
+        env: Arc<LiveEnv>,
+        identity_grants: Option<Arc<IdentityGrantSink>>,
+        shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+        on_registered: Option<super::OnRegistered>,
+    ) -> Result<Self> {
         // Pair first, so a refusal is returned before any watcher or task
         // exists; the reload task's own context then pairs as a no-op.
         {
@@ -188,6 +213,7 @@ impl ConfigWatcher {
             cache_ttl,
             env,
             identity_grants,
+            on_registered,
             event_rx,
             shutdown_rx,
             Arc::clone(&env_reloads),
@@ -256,6 +282,7 @@ impl ConfigWatcher {
         cache_ttl: Duration,
         env: Arc<LiveEnv>,
         identity_grants: Option<Arc<IdentityGrantSink>>,
+        on_registered: Option<super::OnRegistered>,
         mut event_rx: tokio::sync::mpsc::Receiver<ReloadTrigger>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         env_reloads: Arc<env_poll::EnvReloadCounts>,
@@ -282,9 +309,15 @@ impl ConfigWatcher {
                 failsafe_cfg,
                 cache_ttl,
             ) {
-                Ok(ctx) => ctx
-                    .with_env(env)
-                    .with_identity_grant_sink_opt(identity_grants),
+                Ok(ctx) => {
+                    let ctx = ctx
+                        .with_env(env)
+                        .with_identity_grant_sink_opt(identity_grants);
+                    match on_registered {
+                        Some(hook) => ctx.with_on_registered(hook),
+                        None => ctx,
+                    }
+                }
                 Err(error) => {
                     tracing::error!(%error, "Config watcher not started");
                     return;

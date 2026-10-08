@@ -360,6 +360,8 @@ pub async fn apply_patch(
 
 mod diff;
 mod reload_context;
+mod reload_warm_hook;
+pub(crate) use reload_warm_hook::{OnRegistered, RegisteredChange};
 mod watcher;
 mod write;
 use diff::pending_restart_fields;

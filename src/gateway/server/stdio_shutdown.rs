@@ -14,7 +14,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tracing::warn;
 
-use super::{Gateway, StdioTelemetry, stdio_tasks, task_runtime, warmstart::WarmStartTasks};
+use super::{Gateway, StdioTelemetry, stdio_tasks, task_runtime, warmstart::WarmerGuard};
 
 /// The teardown window after the stdio drain window.
 pub(super) const STDIO_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -115,7 +115,7 @@ impl Gateway {
     pub(super) async fn stdio_teardown(
         &self,
         deadline: Instant,
-        warm_start_tasks: WarmStartTasks,
+        warm_start_tasks: WarmerGuard,
         task_store: Option<(
             Arc<stdio_tasks::StdioTasks>,
             crate::gateway::task_service::execution::ExpirySweep,
