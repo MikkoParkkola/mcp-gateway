@@ -28,8 +28,9 @@ pub fn comment_loss(force: bool) -> CommentLoss {
     }
 }
 
-/// How [`write_config_preserving`] starts a comment-loss refusal.
-const REFUSAL: &str = "Not saved:";
+/// How [`write_config_preserving`] starts a comment-loss refusal. A lock
+/// refusal also starts "Not saved:", and `--force` must not override that one.
+const REFUSAL: &str = "Not saved: this edit cannot be written into";
 
 /// Write `config` to `path`; the error is a message ready to print.
 ///
@@ -42,7 +43,7 @@ pub fn write(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), Stri
     if let Err(refusal) = write_config_preserving(path, config) {
         // `--force` overrides only the comment check; a validation or I/O
         // failure is reported as itself, never as a comment warning.
-        if mode == CommentLoss::Refuse || !refusal.starts_with(REFUSAL) {
+        if mode == CommentLoss::Refuse || !is_comment_refusal(&refusal) {
             return Err(refusal);
         }
         write_config(path, config)
@@ -64,6 +65,13 @@ pub fn write(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), Stri
         );
     }
     Ok(())
+}
+
+/// Whether `refusal` is the comment check, the only refusal `--force`
+/// overrides. A busy or untakeable lock, a validation or an I/O failure is
+/// reported as itself.
+fn is_comment_refusal(refusal: &str) -> bool {
+    refusal.starts_with(REFUSAL)
 }
 
 /// The lines of `before` whose comment `after` no longer has, as `line N`.
@@ -107,6 +115,24 @@ mod tests {
     /// An I/O failure under `--force` comes back as that failure, not as a
     /// comment warning over a rewrite (a directory where the file goes makes
     /// the rename fail on every platform).
+    /// A lock refusal under `--force` is reported as itself: `--force`
+    /// overrides only the comment check, never another writer's lock (a
+    /// directory where the lock file goes makes the lock fail at once).
+    #[test]
+    fn a_lock_refusal_under_force_is_not_overridden() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        std::fs::write(&path, "backends: {}\n").expect("write");
+        std::fs::create_dir(dir.path().join(".gateway.yaml.lock")).expect("dir in the way");
+        let config = mcp_gateway::config::Config::default();
+        let error = super::write(&path, &config, super::CommentLoss::Rewrite).expect_err("fails");
+        assert!(error.starts_with("Not saved: cannot lock"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "backends: {}\n"
+        );
+    }
+
     #[test]
     fn an_io_failure_under_force_is_reported_as_itself() {
         let dir = tempfile::tempdir().expect("tempdir");

@@ -190,7 +190,7 @@ backend" and "fails a capability file" first.**
 | 163 | Reserved: #3489 | None |
 | 164 | Reserved: #3490 | None |
 | 165 | Reserved: #3479 | None |
-| 166 | A running gateway's web UI and admin edits load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still undo that writer's change | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
+| 166 | A running gateway's web UI backend edits (add, edit, delete) load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still undo that writer's change | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4288,7 +4288,7 @@ runs, or two gateways on one config) could lose a change: each loaded the file, 
 and wrote it, and the later write erased the earlier one while both reported success.
 
 A running gateway now holds one lock from loading the file through writing it and reloading
-what it wrote, for every web UI and admin edit. The lock is a hidden file,
+what it wrote, for every web UI backend add, edit and delete. The lock is a hidden file,
 `.gateway.yaml.lock`, next to the config. It stays there by design: deleting it would let two
 writers lock different files. If your config lives in a git repository, add it to
 `.gitignore`.
