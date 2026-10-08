@@ -5,30 +5,51 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use tracing::warn;
+
 /// The npm cache variable: the one cache the start-path repair may clear.
 pub(super) const CACHE_ENV: &str = "npm_config_cache";
+
+/// Yarn Berry's switch that, on by default, makes it ignore `cacheFolder`.
+const BERRY_GLOBAL_CACHE: &str = "YARN_ENABLE_GLOBAL_CACHE";
 
 /// A per-backend package cache, so backends sharing a command cannot tear one
 /// tree. Each runner reads its own variable; `npm_config_cache` alone does
 /// nothing for bunx or yarn (#2258).
+///
+/// A variable the operator already set, in any spelling that runner reads,
+/// is left alone. A cache path no runner could use as written is assigned to
+/// none of them (MIK-8147): the runner keeps its default cache.
 #[must_use]
 pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     backend_name: &str,
     command: &str,
     mut backend_env: HashMap<String, String, S>,
 ) -> HashMap<String, String, S> {
-    let vars = cache_vars_for(command);
-    if vars.is_empty() {
+    // Decided on the operator's own environment, before anything is added.
+    let unclaimed: Vec<&str> = cache_vars_for(command)
+        .iter()
+        .copied()
+        .filter(|var| !operator_names(&backend_env, var))
+        .collect();
+    if unclaimed.is_empty() {
         return backend_env;
     }
-    let dir = cache_dir(backend_name).to_string_lossy().into_owned();
-    for var in vars {
-        // An operator-set value wins, in any spelling: npm reads its
-        // environment case-insensitively, so a `NPM_CONFIG_CACHE` beside an
-        // injected `npm_config_cache` would leave the child two caches.
-        if !backend_env.keys().any(|key| key.eq_ignore_ascii_case(var)) {
-            backend_env.insert((*var).to_string(), dir.clone());
-        }
+    let Some(dir) = usable_cache_dir(backend_name) else {
+        warn!(
+            backend = backend_name,
+            "package cache path is not one a package manager can use as written \
+             (not UTF-8, relative, holding `..`, or holding `${{`); the backend keeps its runner's default cache"
+        );
+        return backend_env;
+    };
+    let berry = unclaimed.contains(&"YARN_CACHE_FOLDER")
+        && !operator_names(&backend_env, BERRY_GLOBAL_CACHE);
+    for var in unclaimed {
+        backend_env.insert(var.to_owned(), dir.clone());
+    }
+    if berry {
+        backend_env.insert(BERRY_GLOBAL_CACHE.to_owned(), "false".to_owned());
     }
     backend_env
 }
@@ -42,7 +63,8 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
 /// returning the path rather than only writing it into the environment — the
 /// repair deletes what it is handed, and a directory the gateway did not create
 /// is not the gateway's to delete, however much a caller's `npm_config_cache`
-/// looks like one [#1759].
+/// looks like one [#1759]. `None` too when the path is one npm could not use
+/// as written: nothing was handed to the child, so nothing is the gateway's.
 ///
 /// Only npm's cache is answered for: the repair was reviewed against npm's
 /// install failures, and the other runners' trees are left to their own tools.
@@ -52,27 +74,120 @@ pub(crate) fn assigned_package_cache_dir<S: std::hash::BuildHasher>(
     command: &str,
     backend_env: &HashMap<String, String, S>,
 ) -> Option<PathBuf> {
-    // npm reads its environment case-insensitively, so `NPM_CONFIG_CACHE` in a
-    // backend's `env:` is the operator naming a cache too.
-    if !cache_vars_for(command).contains(&CACHE_ENV)
-        || backend_env
-            .keys()
-            .any(|key| key.eq_ignore_ascii_case(CACHE_ENV))
+    if !cache_vars_for(command).contains(&CACHE_ENV) || operator_names(backend_env, CACHE_ENV) {
+        return None;
+    }
+    usable_cache_dir(backend_name).map(PathBuf::from)
+}
+
+/// The backend's cache directory as a runner will read it, or `None` when no
+/// runner could use it as written. npm (through Node) and pnpm (through
+/// Rust's `env::var`) read their environment as UTF-8, so a path that is not
+/// UTF-8 names another directory to them, or none. npm expands `${VAR}` in a
+/// config value. A `..` is read as text by npm and through symlinks by the
+/// filesystem. And a relative path resolves against the child's `cwd`, not
+/// the gateway's (`gateway_data_dir` is absolute since MIK-7964 unless the
+/// working directory is unreadable).
+fn usable_cache_dir(backend_name: &str) -> Option<String> {
+    usable(cache_dir(backend_name))
+}
+
+/// `dir` as a runner will read it, or `None` when no runner could use it as
+/// written (see `usable_cache_dir`).
+pub(super) fn usable(dir: PathBuf) -> Option<String> {
+    // A `..` is resolved as text by npm but through any symlink before it by
+    // the filesystem the repair deletes on: two different trees.
+    if !dir.is_absolute()
+        || dir
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
     {
         return None;
     }
-    // A relative data directory resolves against the gateway's working
-    // directory here and against the child's `cwd` there, so the path the
-    // repair would remove need not be the cache the child used.
-    // `gateway_data_dir` is absolute since MIK-7964 unless the working
-    // directory is unreadable; the check stays because a delete keeps its own
-    // precondition.
-    absolute(cache_dir(backend_name))
+    dir.into_os_string()
+        .into_string()
+        .ok()
+        .filter(|dir| !dir.contains("${"))
 }
 
-/// The directory, when it names one place whatever the working directory.
-pub(super) fn absolute(dir: PathBuf) -> Option<PathBuf> {
-    dir.is_absolute().then_some(dir)
+/// Whether the operator's environment already sets `var`, in a spelling the
+/// runner that reads `var` reads (MIK-8147). Per variable, never per prefix:
+/// a key one runner ignores must not cancel another runner's cache.
+fn operator_names<S: std::hash::BuildHasher>(
+    backend_env: &HashMap<String, String, S>,
+    var: &str,
+) -> bool {
+    backend_env.keys().any(|key| names_setting(key, var))
+}
+
+/// Whether environment key `key` sets what `var` sets, for `var`'s runner.
+fn names_setting(key: &str, var: &str) -> bool {
+    // Windows keeps one entry per case-insensitive name: a case variant IS the
+    // same variable there, and an injected one would replace it.
+    if cfg!(windows) && key.eq_ignore_ascii_case(var) {
+        return true;
+    }
+    if var.starts_with("npm_config_") {
+        npm_setting(key).is_some_and(|setting| npm_setting(var) == Some(setting))
+    } else if var.starts_with("pnpm_config_") {
+        // pnpm reads `PNPM_CONFIG_<SUFFIX>` and `pnpm_config_<suffix>` only
+        // (pnpm `config/src/env_overlay/string_reader.rs` `read_env`).
+        key == var || key == var.to_ascii_uppercase()
+    } else if var.starts_with("YARN_") {
+        yarn_setting(key).is_some_and(|setting| yarn_setting(var) == Some(setting))
+    } else {
+        // Bun reads its variable verbatim.
+        key == var
+    }
+}
+
+/// The setting npm reads from an environment key, folded as npm folds it: the
+/// `npm_config_` prefix in any case, then every non-leading `_` read as `-`,
+/// lowercased (`@npmcli/config` `loadEnv`). `npm_config_strict_ssl` and
+/// `NPM_CONFIG_STRICT-SSL` are one setting; a key outside the prefix is none.
+/// Lowercasing is ASCII only, where npm's is Unicode: enough here, whose
+/// settings are ASCII, since a key that folds differently cannot name one.
+/// The rule MIK-8097 found for forwarded settings.
+fn npm_setting(key: &str) -> Option<String> {
+    const PREFIX: &str = "npm_config_";
+    let rest = key
+        .get(..PREFIX.len())
+        .filter(|head| head.eq_ignore_ascii_case(PREFIX))
+        .map(|_| &key[PREFIX.len()..])?;
+    if rest.starts_with("//") {
+        return Some(rest.to_owned());
+    }
+    Some(
+        rest.char_indices()
+            .map(|(at, c)| {
+                if at > 0 && c == '_' {
+                    '-'
+                } else {
+                    c.to_ascii_lowercase()
+                }
+            })
+            .collect(),
+    )
+}
+
+/// The setting yarn reads from an environment key: the `yarn_` prefix in any
+/// case, then the words between separators (`_`, `-`, `.`, space; Berry's
+/// camel-casing splits on all four), lowercased. Yarn 1
+/// reads `yarn_cache-folder` as `cache-folder`; Berry camel-cases the
+/// lowercased remainder, so `YARN_CACHE__FOLDER` is `cacheFolder`. A key
+/// either generation reads as a setting names it.
+fn yarn_setting(key: &str) -> Option<String> {
+    const PREFIX: &str = "yarn_";
+    let rest = key
+        .get(..PREFIX.len())
+        .filter(|head| head.eq_ignore_ascii_case(PREFIX))
+        .map(|_| &key[PREFIX.len()..])?;
+    let words: Vec<String> = rest
+        .split(['_', '-', '.', ' '])
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    Some(words.join("-"))
 }
 
 /// One backend's cache directory: the single source of the path, so the one
