@@ -2113,7 +2113,11 @@ impl Gateway {
         let cost = meta_mcp_for_shutdown
             .budget_enforcer
             .clone()
-            .map(|enforcer| (enforcer, cost_saver, data_dir.clone()));
+            .map(|enforcer| (enforcer, data_dir.clone()));
+        // It ends on the shutdown broadcast; a write in flight finishes or
+        // is abandoned on its own thread.
+        #[cfg(feature = "cost-governance")]
+        drop(cost_saver);
         #[cfg(not(feature = "cost-governance"))]
         let cost = None;
         let (ranker, tracker) = (ranker_for_shutdown, tracker_for_shutdown);

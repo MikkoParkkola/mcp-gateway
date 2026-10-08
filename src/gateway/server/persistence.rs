@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "cost-governance")]
+use std::sync::PoisonError;
 
 use tracing::{info, warn};
 
@@ -95,14 +97,18 @@ pub(super) const COST_SAVE_INTERVAL: std::time::Duration = std::time::Duration::
 /// Save today's spend to `<data_dir>/costs.json`.
 #[cfg(feature = "cost-governance")]
 pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) {
-    // One `costs.json` write at a time, the snapshot taken under the lock: a
-    // periodic save left running when its saver was stopped can never land
-    // after the final save, which waits its turn (bounded by its deadline)
-    // and writes the newest spend (MIK-8157).
-    static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _turn = WRITING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let turn = COST_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+    write_costs(enforcer, data_dir, &turn);
+}
+
+/// One `costs.json` write at a time, each snapshotting the spend under the
+/// lock: whichever write lands last holds the newest spend, so no save has to
+/// wait for another to stop first (MIK-8157).
+#[cfg(feature = "cost-governance")]
+static COST_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(feature = "cost-governance")]
+fn write_costs(enforcer: &BudgetEnforcer, data_dir: &Path, _turn: &std::sync::MutexGuard<'_, ()>) {
     let persisted = super::support::build_persisted_costs(&enforcer.snapshot());
     save_with_logging(
         &data_dir.join("costs.json"),
@@ -110,6 +116,21 @@ pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) {
         "Failed to save cost governance data",
         "Saved cost governance data",
     );
+}
+
+/// The periodic save: skipped while an earlier write still holds the file
+/// (stuck on a stalled mount), so stuck writes never pile up.
+#[cfg(feature = "cost-governance")]
+fn save_costs_unless_busy(enforcer: &BudgetEnforcer, data_dir: &Path) {
+    match COST_WRITE.try_lock() {
+        Ok(turn) => write_costs(enforcer, data_dir, &turn),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            write_costs(enforcer, data_dir, &poisoned.into_inner());
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            warn!("periodic cost save skipped: the previous costs.json write has not finished");
+        }
+    }
 }
 
 /// Save today's spend every `every` until `shutdown` fires, or until the
@@ -140,15 +161,11 @@ pub(super) fn spawn_cost_saver(
                 // pool, the runtime's drop (MIK-8157).
                 _ = interval.tick() => {
                     let (enforcer, data_dir) = (Arc::clone(&enforcer), data_dir.clone());
-                    let (done, finished) = tokio::sync::oneshot::channel();
                     let spawned = std::thread::Builder::new()
                         .name("cost save".to_owned())
-                        .spawn(move || {
-                            save_costs(&enforcer, &data_dir);
-                            let _ = done.send(());
-                        });
-                    if spawned.is_ok() {
-                        drop(finished.await);
+                        .spawn(move || save_costs_unless_busy(&enforcer, &data_dir));
+                    if let Err(error) = spawned {
+                        warn!(%error, "periodic cost save could not start a thread; skipped");
                     }
                 }
                 () = &mut stopped => break,
@@ -224,22 +241,17 @@ pub(super) async fn run_shutdown_saves(deadline: tokio::time::Instant, saves: Ve
     }
 }
 
-/// What the final cost save needs: the enforcer, the periodic saver to stop
-/// first, and the data directory. Uninhabited without cost governance.
+/// What the final cost save needs: the enforcer and the data directory.
+/// Uninhabited without cost governance.
 #[cfg(feature = "cost-governance")]
-pub(super) type CostShutdown = (
-    Arc<BudgetEnforcer>,
-    Option<tokio::task::JoinHandle<()>>,
-    PathBuf,
-);
+pub(super) type CostShutdown = (Arc<BudgetEnforcer>, PathBuf);
 #[cfg(not(feature = "cost-governance"))]
 pub(super) type CostShutdown = std::convert::Infallible;
 
 /// The HTTP shutdown's saves of search ranking, transition tracking and, with
-/// cost governance on, today's spend, under [`SHUTDOWN_SAVES_TIMEOUT`]. The
-/// periodic cost saver is stopped first so an older save cannot land after the
-/// final one; if it does not stop in time the final cost save is skipped
-/// rather than raced, as stdio does.
+/// cost governance on, today's spend, all together under
+/// [`SHUTDOWN_SAVES_TIMEOUT`]. The periodic saver needs no stopping first:
+/// cost writes take turns and each snapshots the spend as it writes.
 pub(super) async fn save_state_on_shutdown(
     ranker: Arc<crate::ranking::SearchRanker>,
     ranker_path: PathBuf,
@@ -274,21 +286,11 @@ pub(super) async fn save_state_on_shutdown(
         ),
     ];
     #[cfg(feature = "cost-governance")]
-    if let Some((enforcer, saver, data_dir)) = cost {
-        let stopped = match saver {
-            Some(saver) => super::stdio_shutdown::bounded_step(deadline, "cost saver stop", saver)
-                .await
-                .is_some(),
-            None => true,
-        };
-        if stopped {
-            saves.push((
-                "final cost save",
-                Box::new(move || save_costs(&enforcer, &data_dir)),
-            ));
-        } else {
-            warn!("final cost snapshot skipped: the periodic saver is still running");
-        }
+    if let Some((enforcer, data_dir)) = cost {
+        saves.push((
+            "final cost save",
+            Box::new(move || save_costs(&enforcer, &data_dir)),
+        ));
     }
     #[cfg(not(feature = "cost-governance"))]
     let _ = cost;
