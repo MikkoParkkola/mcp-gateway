@@ -34,7 +34,7 @@ fn a_sketch_holds_its_own_and_rarely_a_stranger() {
 }
 
 /// A holder keeps at most four sketches per source: a fifth evicts the
-/// oldest, counted, and the oldest no longer excuses.
+/// oldest, which no longer excuses.
 #[test]
 fn a_fifth_sketch_evicts_the_oldest() {
     let mut store = SketchStore::default();
