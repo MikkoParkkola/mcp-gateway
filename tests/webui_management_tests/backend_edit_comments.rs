@@ -360,7 +360,11 @@ async fn delete_keeps_every_comment_outside_the_entry() {
                 description: d\n  # why b\n  b:\n    command: y\n";
     let (router, path, _keep) = served(yaml, Route::File).await;
     let (status, body) = send_json(&router, Method::DELETE, "/ui/api/backends/a", None).await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    // MIK-8051: the comment inside `a` (line 6) went with it, and the
+    // response says so; DEL-NOTE.1.
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let note = body["note"].as_str().unwrap_or_default();
+    assert!(note.contains("line 6"), "{body}");
     let after = read(&path);
     for kept in ["# lead", "# why a", "# why b"] {
         assert!(after.contains(kept), "{kept:?} lost:\n{after}");
@@ -368,4 +372,37 @@ async fn delete_keeps_every_comment_outside_the_entry() {
     assert!(!after.contains("# inside a"), "{after}");
     let config = Config::load_literal(Some(&path)).expect("loads");
     assert!(!config.backends.contains_key("a") && config.backends.contains_key("b"));
+}
+
+/// MIK-8051 DEL-NOTE.2: the note names lines only; a quoted secret after a
+/// `#` inside the removed entry never reaches the response.
+#[tokio::test]
+async fn a_delete_note_never_carries_comment_text() {
+    let yaml = "backends:\n  a:\n    command: x  # token-s3cr3t-value\n  b:\n    command: y\n";
+    let (router, _path, _keep) = served(yaml, Route::File).await;
+    let (status, body) = send_json(&router, Method::DELETE, "/ui/api/backends/a", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let text = body.to_string();
+    assert!(text.contains("line 3"), "{text}");
+    assert!(!text.contains("s3cr3t"), "comment text leaked: {text}");
+}
+
+/// MIK-8051 DEL-NOTE.3: a delete that drops no comment keeps today's 204.
+#[tokio::test]
+async fn a_delete_without_comments_keeps_no_content() {
+    let yaml = "# lead\nbackends:\n  a:\n    command: x\n  b:\n    command: y\n";
+    let (router, _path, _keep) = served(yaml, Route::File).await;
+    let (status, body) = send_json(&router, Method::DELETE, "/ui/api/backends/a", None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+}
+
+/// MIK-8051 DEL-NOTE.4: one helper names dropped comment lines for the CLI
+/// and the web UI; the binary keeps no second copy of the compare.
+#[test]
+fn the_dropped_comment_compare_has_one_home() {
+    let cli = include_str!("../../src/commands/config_write.rs");
+    assert!(
+        !cli.contains("fn dropped_comments"),
+        "the CLI still carries its own copy of the dropped-comment compare"
+    );
 }
