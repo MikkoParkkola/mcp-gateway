@@ -298,7 +298,7 @@ async fn forward_sanitized(
         Ok(response) => finish_response(scope, envelope, preflight, (&mut admitted, response)),
         // Settled as terminal unless raised before dispatch
         // (ADR-012 consequence 1; see `settle_direct_failure`).
-        Err(e) => answer_failure(admitted, e).await,
+        Err(e) => answer_failure(admitted, e, envelope.method.as_str()).await,
     }
 }
 
@@ -394,9 +394,10 @@ fn finish_response(
     response.id = Some(id.clone());
     // MIK-8139: a backend error gets a result's screening, on every method,
     // before the reservation settles, so a replay serves the screened answer.
+    let target = screen_target(&admitted.call, method);
     state
         .meta_mcp
-        .screen_backend_response(&admitted.call, &mut response);
+        .screen_backend_response(&target, &mut response);
     if method == "tools/list" {
         // Redaction FIRST, then the trust stamp. The firewall may remove a
         // `$defs` entry a surviving `$ref` points at, so a verdict computed
@@ -486,14 +487,34 @@ fn deliver_tail(
 
 /// Answer a dispatch that failed, settling the reservation (`answer` consumes
 /// the failure context, so this takes the admission by value).
-async fn answer_failure(admitted: Admitted<'_>, e: crate::Error) -> Rejection {
+/// The policy target an answer of `method` is screened under (MIK-8139):
+/// the named tool for `tools/call`, otherwise the method itself, as the
+/// result scans target it.
+fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> BackendCall<'a> {
+    BackendCall {
+        server: call.server,
+        tool: if method == "tools/call" {
+            call.tool
+        } else {
+            method
+        },
+        session_id: call.session_id,
+        api_key_name: call.api_key_name,
+        trace_id: call.trace_id,
+        caller_key: call.caller_key,
+    }
+}
+
+async fn answer_failure(admitted: Admitted<'_>, e: crate::Error, method: &str) -> Rejection {
     let Admitted {
         failed,
         call,
         mut idem_reservation,
         ..
     } = admitted;
-    failed.answer(idem_reservation.as_mut(), e, &call).await
+    failed
+        .answer(idem_reservation.as_mut(), e, &screen_target(&call, method))
+        .await
 }
 
 /// The terminal arm: dispatch, then answer. Settled, never dropped: an
@@ -511,6 +532,6 @@ pub(super) async fn dispatch(
     match forward_plain(scope, envelope, stages, &mut admitted).await {
         Err(refusal) => refusal,
         Ok(Ok(response)) => finish_response(scope, envelope, stages.0, (&mut admitted, response)),
-        Ok(Err(e)) => answer_failure(admitted, e).await,
+        Ok(Err(e)) => answer_failure(admitted, e, envelope.method.as_str()).await,
     }
 }
