@@ -789,3 +789,24 @@ async fn short_fields_delivered_reordered_keep_the_delivered_run() {
         "the receipt kept the step's order, not the delivered one"
     );
 }
+
+/// Diagnostic probe for MIK-8124 (throwaway only): the flaky scenario run
+/// many times in one process. Map and set iteration order changes per
+/// instance; the fingerprint key does not.
+#[tokio::test]
+async fn probe_mik8124_in_process_rate() {
+    const RUNS: usize = 200;
+    let mut fails = 0;
+    for _ in 0..RUNS {
+        let (meta, firewall) = relay_meta();
+        let copy = filler("rep", 25);
+        let step = json!({"a": vec![copy.as_str(); 800], "body": format!("{PROSE} {SECRET}")});
+        let answer = plan_answer(&json!({"a": copy, "body": PROSE}));
+        deliver_step(&meta, &step, &answer).await;
+        carol_holds(&firewall, "a", PROSE);
+        if refused(&firewall, "alice", PROSE) {
+            fails += 1;
+        }
+    }
+    assert_eq!(fails, 0, "PROBE MIK-8124: {fails}/{RUNS} in-process runs refused alice");
+}
