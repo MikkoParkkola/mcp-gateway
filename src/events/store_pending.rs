@@ -333,10 +333,12 @@ impl Store {
         let buried = self.expire_pending(&mut state, now);
         // Expiry burials keep the dead-letter caps as every burial does; a
         // failed eviction is retried by the next sweep.
-        let evicted: Vec<Evicted> = {
-            let _ = policy;
-            Vec::new()
-        };
+        let mut evicted = Vec::new();
+        if !buried.is_empty()
+            && let Err(error) = self.evict_dead(&mut state, now, policy, &mut evicted)
+        {
+            tracing::warn!(%error, "events store: eviction after an expiry burial failed");
+        }
         let mut first: HashMap<&str, &OutboxRecord> = HashMap::new();
         let mut next: Option<DateTime<Utc>> = None;
         for record in state.outbox.values() {
