@@ -494,7 +494,7 @@ mod tests {
     /// pass rewrote, JSON or not, is read as rewritten text.
     #[test]
     fn only_a_block_that_is_not_the_gateways_print_is_rewritten() {
-        use super::super::audit::rewritten_text;
+        use super::super::super::audit::rewritten_text;
         let wrap = |text: &str| json!({"content": [{"type": "text", "text": text}]});
         let printed = serde_json::to_string_pretty(&json!({"a": "x\ny"})).unwrap();
         assert_eq!(rewritten_text(&wrap(&printed)), None);
