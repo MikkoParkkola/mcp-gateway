@@ -339,7 +339,14 @@ async fn the_held_listing_counts_the_queued_records() {
 #[tokio::test]
 async fn a_held_refresh_whose_row_goes_at_the_commit_is_checked_afresh() {
     let (_dir, hub, _registry) = restarted(json!({"ref": "main"}), &narrower()).await;
-    let id = hub.store.subscriptions().remove(0).id;
+    // The held row, not the seeded opt-in row beside it.
+    let id = hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .find(|s| s.name == TYPE)
+        .expect("the held row")
+        .id;
     let (reached, release) = hub.before_admit.arm();
     let refreshing = tokio::spawn({
         let hub = Arc::clone(&hub);
