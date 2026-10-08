@@ -446,8 +446,20 @@ def extract_config() -> list[Entry]:
             w.out.setdefault(key, Entry(key, rel(sk), line_of(code, m.end() + t.start()), "retired: loads with a warning"))
     for e in annotation_rows(code, sk):
         w.out.setdefault(e.id, e)
+    # Keys the loader resolves before any struct reads them: no field declares
+    # them, so they are anchored to the resolver.
+    for key, path, anchor in LOADER_KEYS:
+        src = SRC / path
+        text = src.read_text(encoding="utf-8")
+        at = text.find(anchor)
+        if at < 0:
+            raise SystemExit(f"{rel(src)}: loader key {key} lost its anchor {anchor!r}")
+        w.out.setdefault(key, Entry(key, rel(src), line_of(text, at), "resolved by the loader"))
     return sorted(w.out.values(), key=lambda e: e.id)
 
+
+# (key, file under src, text that marks where the loader resolves it)
+LOADER_KEYS = (("backends.<name>.url", "config/config_file.rs", "fn resolve_backend_urls"),)
 
 QUOTED = r"""(?:'[^']*'|"[^"]*")"""
 # A pure disjunction of prefix tests is the only shape `annotation_rows` can read.

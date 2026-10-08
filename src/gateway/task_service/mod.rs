@@ -145,6 +145,7 @@ pub(crate) async fn open_runtime_with_recovery(
 ) -> Result<(Arc<TaskService>, Arc<TaskExecutor>), ServiceError> {
     let service = Arc::new(TaskService::open(store_dir, limits, admission).await?);
     let executor = TaskExecutor::new(Arc::clone(&service), subscriptions, max_workers);
+    let _ = executor.managed.set(Arc::from(managed));
     before_recovery(&service, &executor);
     #[cfg(debug_assertions)]
     execution::pause_hook::install_from_env(&executor);

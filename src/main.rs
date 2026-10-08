@@ -308,7 +308,12 @@ async fn run(cli: Cli) -> ExitCode {
             dry_run,
             quiet,
             data_dir,
-        }) => commands::run_upgrade_command(dry_run, quiet, data_dir.as_deref()),
+        }) => commands::run_upgrade_with_config(
+            dry_run,
+            quiet,
+            data_dir.as_deref(),
+            cli.config.as_deref(),
+        ),
         Some(Command::Audit(audit_cmd)) => run_audit_command(audit_cmd, cli.config.as_deref()),
         #[cfg(feature = "runtime-substrate")]
         Some(Command::Runtime(rt_cmd)) => run_runtime_command(rt_cmd),
