@@ -7,7 +7,7 @@
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::admission::{services, settled_task};
 use super::support::*;
@@ -16,14 +16,19 @@ use super::support::*;
 /// ids the re-read handed to import.
 async fn reread_open(store: &super::super::store::TaskStore, name: &str) -> (usize, Vec<String>) {
     store.seal_for_test(name);
-    let imported = Mutex::new(Vec::new());
-    let sealed = store
-        .reread_sealed(|_, task_id| {
-            imported.lock().unwrap().push(task_id);
-            true
-        })
+    let imported = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&imported);
+    let (sealed, _) = store
+        .reread_sealed(
+            move |_, task_id| {
+                sink.lock().unwrap().push(task_id);
+                true
+            },
+            |_| None,
+        )
         .await;
-    (sealed, imported.into_inner().unwrap())
+    let imported = imported.lock().unwrap().clone();
+    (sealed, imported)
 }
 
 fn private(path: &Path) {
