@@ -88,6 +88,22 @@ async fn a_mapped_steps_notes_sit_under_its_property_in_the_output() {
     );
 }
 
+/// `value` placed at `under` inside an otherwise empty result: a numeric
+/// segment is an array index, any other an object key.
+fn nested(value: Value, under: &[String]) -> Value {
+    under.iter().rev().fold(value, |whole, segment| {
+        if let Ok(index) = segment.parse::<usize>() {
+            let mut items = vec![json!({}); index + 1];
+            items[index] = whole;
+            Value::Array(items)
+        } else {
+            let mut map = serde_json::Map::new();
+            map.insert(segment.clone(), whole);
+            Value::Object(map)
+        }
+    })
+}
+
 /// `MIK-7993` impl F3-F5: notes are carried as the engine reads its
 /// mappings. A wildcard reaches each element it walks; a repeated step name
 /// means its last result; `inputs` is the caller's namespace, never a step's.
@@ -124,22 +140,7 @@ async fn a_carry_follows_the_engines_reading_of_its_mappings() {
                 let at = mark();
                 note(Layer::Value, path, &value);
                 let record = take_since(at).rebased(&under);
-                let mut whole = value.clone();
-                for segment in under.iter().rev() {
-                    whole = match segment.parse::<usize>() {
-                        Ok(index) => {
-                            let mut items = vec![json!({}); index + 1];
-                            items[index] = whole;
-                            Value::Array(items)
-                        }
-                        Err(_) => {
-                            let mut map = serde_json::Map::new();
-                            map.insert(segment.clone(), whole);
-                            Value::Object(map)
-                        }
-                    };
-                }
-                invoker.steps.lock().push((record, whole));
+                invoker.steps.lock().push((record, nested(value, &under)));
             }
             invoker.carry_writes(output.as_ref(), &completed);
             let stored = serde_json::to_value(recorded()).expect("serializes");
