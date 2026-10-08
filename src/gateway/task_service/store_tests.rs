@@ -28,6 +28,7 @@ mod durability;
 mod fallback_room;
 mod input_round;
 mod qualification;
+mod sealed;
 mod skipped;
 mod support;
 mod targets;

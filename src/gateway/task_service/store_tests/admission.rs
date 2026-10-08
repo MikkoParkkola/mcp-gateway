@@ -32,11 +32,11 @@ static OPERATION: LazyLock<Value> =
     LazyLock::new(|| json!({"backend": "orders", "tool": "create"}));
 static REPRESENTATION: LazyLock<Value> = LazyLock::new(|| json!({"full": false}));
 
-fn services() -> Arc<ExecutionAdmission> {
+pub(super) fn services() -> Arc<ExecutionAdmission> {
     ExecutionAdmission::new(Arc::new(|| 1_000))
 }
 
-fn task_request<'a>(principal: &'a str, key: &'a str) -> Request<'a> {
+pub(super) fn task_request<'a>(principal: &'a str, key: &'a str) -> Request<'a> {
     Request {
         principal,
         key,
@@ -100,7 +100,7 @@ fn failing_sync_once() -> CommitHook {
 /// binding admission retained. The record's owner is the binding's principal
 /// digest: the store suite's `OWNER` constant does not apply to a record that
 /// admission authorized.
-async fn settled_task(
+pub(super) async fn settled_task(
     store: &TaskStore,
     admission: &Arc<ExecutionAdmission>,
     key: &str,
