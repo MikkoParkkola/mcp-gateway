@@ -390,3 +390,20 @@ fn the_preserving_writer_reports_each_outcome() {
             .contains("# kept by hand")
     );
 }
+
+/// MIK-8042: `write_config_text` creates, never replaces. Its existence check
+/// and its write are one locked step, so `init` cannot overwrite a config
+/// another writer created after `init` looked.
+#[test]
+fn writing_config_text_refuses_an_existing_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, "server:\n  port: 2\n").expect("write");
+    let error = write_config_text(&path, "server:\n  port: 1\n").expect_err("refused");
+    assert!(error.contains("already exists"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read"),
+        "server:\n  port: 2\n"
+    );
+    assert!(dir.path().join(".gateway.yaml.lock").is_file());
+}

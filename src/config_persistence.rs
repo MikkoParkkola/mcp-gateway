@@ -290,16 +290,30 @@ const SCRATCH_ATTEMPTS: u64 = 8;
 /// This path is deliberately not platform-gated. An earlier version wrote in
 /// place on Windows, so the one platform without a crash-safe write was also
 /// the one no test covered.
-/// Write pre-rendered config text through the same secure path as [`write_config`].
+/// Create a config file from pre-rendered text, through the same secure path
+/// as [`write_config`].
 ///
 /// Exposed for `init`, which renders a starter config as text rather than
 /// serialising a `Config`. It must not use `std::fs::write`: the starter config
 /// carries a generated admin credential.
 ///
+/// Create-only, under the config lock ([`lock`]): a file that already exists
+/// at `path` is refused, never replaced. The existence check and the write
+/// are one locked step, so a config another writer creates meanwhile is not
+/// overwritten.
+///
 /// # Errors
 ///
-/// Returns an error when the file cannot be created or replaced.
+/// Returns an error when `path` already exists, the lock cannot be taken, or
+/// the file cannot be created.
 pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
+    let _held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |_| {})
+        .map_err(|e| not_locked(path, e))?;
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => return Err(format!("{} already exists", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("Cannot inspect {}: {error}", path.display())),
+    }
     write_yaml(path, yaml)
 }
 
