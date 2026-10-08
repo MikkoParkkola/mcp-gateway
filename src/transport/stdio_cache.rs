@@ -13,6 +13,9 @@ pub(super) const CACHE_ENV: &str = "npm_config_cache";
 /// Yarn Berry's switch that, on by default, makes it ignore `cacheFolder`.
 const BERRY_GLOBAL_CACHE: &str = "YARN_ENABLE_GLOBAL_CACHE";
 
+/// The variable both yarn generations read for the cache folder.
+const YARN_CACHE: &str = "YARN_CACHE_FOLDER";
+
 /// A per-backend package cache, so backends sharing a command cannot tear one
 /// tree. Each runner reads its own variable; `npm_config_cache` alone does
 /// nothing for bunx or yarn (#2258).
@@ -26,25 +29,31 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     command: &str,
     mut backend_env: HashMap<String, String, S>,
 ) -> HashMap<String, String, S> {
-    let (vars, dir) = match assignment(backend_name, command, &backend_env) {
-        Assignment::None => return backend_env,
+    // Decided on the operator's own environment, before anything is added.
+    // Berry ignores a cache folder while its global cache is on, whoever set
+    // the folder; an operator who set the switch keeps it.
+    let yarn = cache_vars_for(command).contains(&YARN_CACHE);
+    let operator_folder = yarn && operator_names(&backend_env, YARN_CACHE);
+    let berry_switch_free = yarn && !operator_names(&backend_env, BERRY_GLOBAL_CACHE);
+    let assigned_folder = match assignment(backend_name, command, &backend_env) {
+        Assignment::None => false,
         Assignment::Unusable => {
             warn!(
                 backend = backend_name,
                 "package cache path is not one a package manager can use as written \
                  (not UTF-8, relative, holding `..`, or holding `${{`); the backend keeps its runner's default cache"
             );
-            return backend_env;
+            false
         }
-        Assignment::To { vars, dir } => (vars, dir),
+        Assignment::To { vars, dir } => {
+            let folder = vars.contains(&YARN_CACHE);
+            for var in vars {
+                backend_env.insert(var.to_owned(), dir.clone());
+            }
+            folder
+        }
     };
-    // Decided on the operator's own environment, before anything is added.
-    let berry =
-        vars.contains(&"YARN_CACHE_FOLDER") && !operator_names(&backend_env, BERRY_GLOBAL_CACHE);
-    for var in vars {
-        backend_env.insert(var.to_owned(), dir.clone());
-    }
-    if berry {
+    if berry_switch_free && (operator_folder || assigned_folder) {
         backend_env.insert(BERRY_GLOBAL_CACHE.to_owned(), "false".to_owned());
     }
     backend_env

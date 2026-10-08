@@ -153,6 +153,12 @@ fn the_operator_names_a_setting_only_in_a_spelling_its_runner_reads() {
             "YARN_CACHE_FOLDER",
             false,
         ),
+        (
+            "yarn dlx pkg",
+            "YARN_CACHE FOLDER",
+            "YARN_CACHE_FOLDER",
+            false,
+        ),
     ];
     for (command, key, var, injected) in rows {
         let operator = HashMap::from([(key.to_owned(), "/operator/cache".to_owned())]);
@@ -348,6 +354,7 @@ fn a_yarn_backend_turns_off_berrys_global_cache() {
         "YARN_ENABLE_GLOBAL_CACHE",
         "yarn_enable-global-cache",
         "YARN_ENABLE-GLOBAL-CACHE",
+        "YARN_ENABLE GLOBAL CACHE",
     ] {
         let operator = HashMap::from([(key.to_owned(), "true".to_owned())]);
         let env = isolated_package_manager_env("thing", "yarn dlx pkg", operator);
@@ -357,6 +364,16 @@ fn a_yarn_backend_turns_off_berrys_global_cache() {
             "{key}: the operator's choice is overridden: {env:?}"
         );
     }
+    // An operator's own folder is ignored by Berry too while the global cache
+    // is on, so the switch is still turned off.
+    let operator = HashMap::from([("YARN_CACHE_FOLDER".to_owned(), "/mine".to_owned())]);
+    let env = isolated_package_manager_env("thing", "yarn dlx pkg", operator);
+    assert_eq!(env["YARN_CACHE_FOLDER"], "/mine");
+    assert_eq!(
+        env.get("YARN_ENABLE_GLOBAL_CACHE").map(String::as_str),
+        Some("false"),
+        "{env:?}"
+    );
     let other = isolated_package_manager_env("thing", "npx -y pkg", HashMap::new());
     assert!(!other.contains_key("YARN_ENABLE_GLOBAL_CACHE"), "{other:?}");
 }
