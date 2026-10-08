@@ -25,7 +25,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::transport::notification_sink::DeliveryHandle;
 
-use super::{PendingRequestGuard, Transport};
+use super::{PendingRequestGuard, Transport, write_claim::WriteClaim};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
     RequestId, Selectable, checked_selection, initialize_params, is_version_mismatch_error,
@@ -585,9 +585,9 @@ impl StdioTransport {
     }
 
     /// Write one frame to stdin, cancel-safely: see [`tree::write_frame`].
-    async fn write_message(&self, message: &str) -> Result<()> {
+    async fn write_message(&self, message: &str, claim: Option<&WriteClaim>) -> Result<()> {
         debug!(message_len = message.len(), "Writing to stdin");
-        tree::write_frame(&self.writer, &self.shutdown, message).await?;
+        tree::write_frame(&self.writer, &self.shutdown, message, claim).await?;
         tokio::task::yield_now().await;
         debug!("Write complete and flushed");
         Ok(())
@@ -671,17 +671,15 @@ impl Transport for StdioTransport {
         let message = serde_json::to_string(&request)?;
         let (tx, rx) = oneshot::channel();
         self.pending.insert(id.to_string(), tx);
-        // Removing the entry is the guard's job on every path: on success the
-        // reader task has already routed the response and the removal is a
-        // no-op, and on an error, an internal timeout or CANCELLATION (an
-        // outer timeout or task abort dropping this future mid-await) the
-        // guard's Drop is the only thing that removes it — without it a
-        // stranded entry would leak here for the transport's lifetime.
+        // The guard removes the entry on every path, CANCELLATION included (an
+        // outer timeout or task abort dropping this future mid-await); a
+        // stranded entry would leak for the transport's lifetime.
         let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
-
-        // Both guards drop after this value is produced, which is where the
-        // pending entry and the progress registration are retired.
-        match self.write_message(&message).await {
+        // Declared after `_cleanup`, so it drops first and still finds the
+        // entry of a request nobody answered.
+        let claim = WriteClaim::new();
+        let mut cancel = tree::CancelUnanswered::arm(self, &request, &claim);
+        let outcome = match self.write_message(&message, Some(&claim)).await {
             Err(e) => Err(e),
             // Wait for response with timeout
             Ok(()) => match tokio::time::timeout(self.request_timeout, rx).await {
@@ -689,7 +687,9 @@ impl Transport for StdioTransport {
                 Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
                 Err(_) => Err(Error::BackendTimeout("Request timed out".to_string())),
             },
-        }
+        };
+        cancel.disarm();
+        outcome
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
@@ -700,7 +700,7 @@ impl Transport for StdioTransport {
         };
 
         let message = serde_json::to_string(&notification)?;
-        self.write_message(&message).await
+        self.write_message(&message, None).await
     }
 
     fn is_connected(&self) -> bool {
