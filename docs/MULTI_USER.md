@@ -113,8 +113,9 @@ from the gateway's protected-resource metadata
 `auth.enabled: true`, `key_server.enabled: true` and
 `key_server.delegated_bearer: true`, every `key_server.oidc[].issuer` is listed
 there in `authorization_servers`, in configured order. Without all three the
-list is empty and left out, because the gateway then accepts no provider token
-on the MCP routes. With `agent_auth.enabled: true` the list is empty too: agent
+endpoint answers `404`, because the gateway then accepts no provider token on
+the MCP routes and there is no sign-in server to name; a client uses the API
+key it was given. With `agent_auth.enabled: true` it answers `404` too: agent
 auth refuses every bearer that is not a registered agent's token. These
 settings apply on restart, so the list follows the
 running gateway, not a reloaded file. An issuer that is not an http(s) URL, or
