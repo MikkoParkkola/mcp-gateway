@@ -17,6 +17,11 @@ use tracing::{debug, error, info, warn};
 use super::CapabilityBackend;
 use crate::Result;
 
+/// Told the capability backend's name whenever its catalogue may have changed:
+/// once its startup scan completes, and after every successful reload (F24,
+/// `MIK-8127`). The listener decides whether anything visible moved.
+pub type CatalogueChanged = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// File watcher for hot-reloading capabilities
 pub struct CapabilityWatcher {
     /// The underlying watcher
@@ -33,12 +38,13 @@ impl CapabilityWatcher {
     ///
     /// Returns an error if the file watcher cannot be created.
     ///
-    /// `changes` hears the backend's name after every successful reload, so
-    /// listeners get `tools/list_changed` (F24).
+    /// `changes` hears the backend's name once its startup scan completes and
+    /// after every successful reload, so listeners get `tools/list_changed`
+    /// when the catalogue they see changed (F24).
     pub fn start(
         backend: Arc<CapabilityBackend>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-        changes: Option<crate::backend::tools_nudge::NudgeFeed>,
+        changes: Option<CatalogueChanged>,
     ) -> Result<Self> {
         let directories = backend.watched_directories();
         debug!(directories = ?directories, "Starting capability watcher");
@@ -121,13 +127,16 @@ impl CapabilityWatcher {
         backend: Arc<CapabilityBackend>,
         mut event_rx: mpsc::Receiver<()>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-        changes: Option<crate::backend::tools_nudge::NudgeFeed>,
+        changes: Option<CatalogueChanged>,
     ) {
         tokio::spawn(async move {
             // Debounce: wait 500ms after last event before reloading
             const DEBOUNCE_MS: u64 = 500;
             let mut last_event: Option<Instant> = None;
             let mut pending_reload = false;
+            // The startup scan runs in the background; its result is the
+            // baseline every later reload is compared with.
+            let mut scan_reported = changes.is_none();
 
             let mut interval = tokio::time::interval(Duration::from_millis(100));
 
@@ -138,6 +147,12 @@ impl CapabilityWatcher {
                         pending_reload = true;
                     }
                     _ = interval.tick() => {
+                        if !scan_reported && backend.initial_scan_complete() {
+                            scan_reported = true;
+                            if let Some(changes) = &changes {
+                                changes(&backend.name);
+                            }
+                        }
                         // Check if we should trigger reload
                         if pending_reload
                             && let Some(last) = last_event
@@ -169,11 +184,7 @@ impl CapabilityWatcher {
                                                 "Hot-reload complete"
                                             );
                                             if let Some(changes) = &changes {
-                                                let _ = changes.send(
-                                                    crate::backend::tools_nudge::ToolsNudge::Catalogue {
-                                                        name: backend.name.clone(),
-                                                    },
-                                                );
+                                                changes(&backend.name);
                                             }
                                         }
                                         Err(e) => {

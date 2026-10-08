@@ -86,15 +86,16 @@ impl super::Backend {
     }
 
     /// The list the shared slot holds now, as discovery would serve it
-    /// (descriptor-blocked names removed), or `None` when nothing is stored.
-    /// One read of the slot: checking presence and then reading would let an
-    /// invalidation land in between.
+    /// (descriptor-blocked names removed), or `None` when nothing is stored;
+    /// and whether this instance ever stored one. One read of the slot:
+    /// reading the two separately would let a store or an invalidation land
+    /// in between.
     #[must_use]
-    pub(crate) fn stored_tools_snapshot(&self) -> Option<Arc<Vec<Tool>>> {
-        let stored = self
+    pub(crate) fn stored_tools_snapshot(&self) -> (Option<Arc<Vec<Tool>>>, bool) {
+        let (stored, populated) = self
             .shared_entry()
             .tools_cache
-            .with_cached(|tools| tools.cloned());
-        stored.map(|tools| self.without_blocked(tools))
+            .with_cached_and_populated(|tools, populated| (tools.cloned(), populated));
+        (stored.map(|tools| self.without_blocked(tools)), populated)
     }
 }

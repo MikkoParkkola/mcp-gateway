@@ -36,8 +36,13 @@ pub(super) fn fingerprint(tools: &[Tool]) -> u64 {
 pub(super) enum Seen {
     /// No registry backend holds this name.
     Unregistered,
-    /// The registered instance, and its stored list's fingerprint if any.
-    Registered { instance: u64, stored: Option<u64> },
+    /// The registered instance, its stored list's fingerprint if any, and
+    /// whether it ever stored one.
+    Registered {
+        instance: u64,
+        stored: Option<u64>,
+        populated: bool,
+    },
 }
 
 /// Where an instance stands before its tools are known.
@@ -78,6 +83,7 @@ impl Announced {
             Seen::Registered {
                 instance: current,
                 stored,
+                populated,
             } => {
                 // A replaced instance's late nudge: its successor's own follow.
                 if current != instance {
@@ -90,7 +96,7 @@ impl Announced {
                 if phase.0 != current {
                     *phase = (current, Phase::Undecided);
                 }
-                if stored.is_some() {
+                if stored.is_some() || populated {
                     phase.1 = Phase::Populated;
                 } else if kind == NudgeKind::Resolved && phase.1 == Phase::Undecided {
                     phase.1 = Phase::Resolved;
@@ -115,11 +121,12 @@ impl Announced {
     }
 
     /// Whether listeners must hear about capability catalogue `name`, whose
-    /// tools now have `visible` as their fingerprint. The first report has
-    /// nothing to compare with and is announced: it is the startup scan's
-    /// result, or a reload whose predecessor this drain never saw.
+    /// tools now have `visible` as their fingerprint. Before its first report
+    /// listeners were shown nothing from it, so an empty first report (an
+    /// empty startup scan) is no change.
     pub(super) fn catalogue(&mut self, name: &str, visible: u64) -> bool {
-        self.catalogues.insert(name.to_string(), visible) != Some(visible)
+        let before = self.catalogues.insert(name.to_string(), visible);
+        before.unwrap_or_else(|| fingerprint(&[])) != visible
     }
 }
 
@@ -143,9 +150,11 @@ pub(super) fn spawn_drain(
                     kind,
                 } => {
                     let seen = state.backends.get(&name).map_or(Seen::Unregistered, |b| {
+                        let (stored, populated) = b.stored_tools_snapshot();
                         Seen::Registered {
                             instance: b.instance(),
-                            stored: b.stored_tools_snapshot().map(|tools| fingerprint(&tools)),
+                            stored: stored.map(|tools| fingerprint(&tools)),
+                            populated,
                         }
                     });
                     if !announced.lock().backend(&name, instance, kind, &seen) {

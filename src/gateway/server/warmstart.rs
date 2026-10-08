@@ -634,15 +634,6 @@ async fn warm_start_until_cached(
     // Set when an attempt came back with no tools, so the NEXT attempt knows to
     // discard the cached emptiness and actually re-ask.
     let saw_empty_list = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    // A second attempt means the first ended without a list: this instance
-    // shows nothing for now, decided rather than pending (`MIK-8127`). Once it
-    // stores a list the drain ignores this, so repeating it costs nothing.
-    let attempted = std::sync::atomic::AtomicBool::new(false);
-    let settled = || {
-        if let Some(backend) = instance.upgrade() {
-            backend.nudge_tools(NudgeKind::Resolved);
-        }
-    };
 
     let outcome = retry_warm_start_attempts(
         name,
@@ -655,12 +646,11 @@ async fn warm_start_until_cached(
             })
         },
         || {
-            if attempted.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                settled();
-            }
             let dormant_yields = Arc::clone(&dormant_yields);
             let saw_empty_list = Arc::clone(&saw_empty_list);
+            let settle = SettleOnExit(instance.clone());
             async move {
+            let _settle = settle;
             // Resolved per attempt, never captured: a config reload can replace
             // the instance under us, and a task holding the old `Arc` would keep
             // reviving a discarded object while the live one stayed empty.
@@ -724,9 +714,23 @@ async fn warm_start_until_cached(
     )
     .await;
 
-    match outcome {
-        Some(tools) => info!(backend = %name, tools, "Warm-started + tools cached"),
-        None => settled(),
+    if let Some(tools) = outcome {
+        info!(backend = %name, tools, "Warm-started + tools cached");
+    }
+}
+
+/// Sends `Resolved` for its instance when an attempt ends, however it ends:
+/// returned, failed, or dropped by the attempt timeout. An attempt that stored
+/// a list has already nudged `Changed` ahead of this, and the drain then
+/// ignores it; one that did not leaves the instance showing nothing, which
+/// listeners told of its predecessor's tools must hear now (`MIK-8127`).
+struct SettleOnExit(Weak<Backend>);
+
+impl Drop for SettleOnExit {
+    fn drop(&mut self) {
+        if let Some(backend) = self.0.upgrade() {
+            backend.nudge_tools(NudgeKind::Resolved);
+        }
     }
 }
 

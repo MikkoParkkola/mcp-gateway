@@ -306,11 +306,15 @@ impl MetaMcp {
         })?;
 
         match backend.reload().await {
-            Ok(total) => Ok(json!({
-                "status": "ok",
-                "backend": backend.name,
-                "total_capabilities": total,
-            })),
+            Ok(total) => {
+                // Listeners hear of it only if what they see changed (`MIK-8127`).
+                self.backends.nudge_catalogue(&backend.name);
+                Ok(json!({
+                    "status": "ok",
+                    "backend": backend.name,
+                    "total_capabilities": total,
+                }))
+            }
             Err(e) => Err(Error::json_rpc(-32603, format!("{e}"))),
         }
     }

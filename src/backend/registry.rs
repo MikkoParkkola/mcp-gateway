@@ -405,6 +405,18 @@ impl BackendRegistry {
         }
     }
 
+    /// The capability watcher's report, routed to the change feed set now.
+    pub(crate) fn catalogue_hook(&self) -> crate::capability::CatalogueChanged {
+        let feed = self.change_feed.get().cloned();
+        Arc::new(move |name: &str| {
+            if let Some(feed) = &feed {
+                let _ = feed.send(super::tools_nudge::ToolsNudge::Catalogue {
+                    name: name.to_string(),
+                });
+            }
+        })
+    }
+
     /// Report that the capability catalogue `name` was reloaded. A no-op until
     /// a feed is set.
     pub(crate) fn nudge_catalogue(&self, name: &str) {

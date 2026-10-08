@@ -21,6 +21,7 @@ fn held(instance: u64, tools: Option<&[Tool]>) -> Seen {
     Seen::Registered {
         instance,
         stored: tools.map(fingerprint),
+        populated: tools.is_some(),
     }
 }
 
@@ -96,6 +97,20 @@ fn a_replacement_that_cannot_list_yet_announces_the_loss_then_the_return() {
 }
 
 #[test]
+fn a_list_stored_then_dropped_before_the_drain_looked_counts_as_nothing() {
+    // The drain missed the store; the slot's memory that it stored one is
+    // what keeps a failed refill from waiting forever as undecided.
+    let mut told = Announced::default();
+    assert!(told.backend(A, 1, Changed, &held(1, Some(&[tool("x", "one")]))));
+    let dropped = Seen::Registered {
+        instance: 2,
+        stored: None,
+        populated: true,
+    };
+    assert!(told.backend(A, 2, Changed, &dropped));
+}
+
+#[test]
 fn a_late_nudge_from_a_replaced_instance_is_ignored() {
     let mut told = Announced::default();
     assert!(told.backend(A, 1, Changed, &held(1, Some(&[tool("x", "one")]))));
@@ -131,10 +146,13 @@ fn a_name_reused_after_removal_starts_clean() {
 }
 
 #[test]
-fn a_catalogue_announces_its_first_report_and_then_only_changes() {
+fn a_catalogue_announces_only_changes_from_nothing_onwards() {
     let mut told = Announced::default();
-    let (one, two) = (fingerprint(&[tool("c", "one")]), fingerprint(&[]));
+    let (one, none) = (fingerprint(&[tool("c", "one")]), fingerprint(&[]));
+    assert!(!told.catalogue("caps", none), "an empty startup scan");
     assert!(told.catalogue("caps", one));
-    assert!(!told.catalogue("caps", one));
-    assert!(told.catalogue("caps", two));
+    assert!(!told.catalogue("caps", one), "an unchanged reload");
+    assert!(told.catalogue("caps", none));
+    let mut fresh = Announced::default();
+    assert!(fresh.catalogue("caps", one), "a startup scan with tools");
 }

@@ -299,6 +299,39 @@ mod tests {
 
     const LONG_TTL: Duration = Duration::from_secs(300);
 
+    /// `MIK-8127`: the observer hears every accepted store, from either
+    /// writer, and never a fill an invalidation voided.
+    #[tokio::test]
+    async fn the_store_observer_hears_each_accepted_store_once() {
+        let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
+        let heard = Arc::new(AtomicU32::new(0));
+        let count = Arc::clone(&heard);
+        cache.observe_stores(Arc::new(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+        }));
+        let filled = cache.get_or_fetch_shared(LONG_TTL, || async { Ok(vec![1u8]) });
+        filled.await.expect("fill");
+        assert_eq!(heard.load(Ordering::SeqCst), 1, "a fill");
+        cache.replace(vec![2u8], || {});
+        assert_eq!(heard.load(Ordering::SeqCst), 2, "a replace");
+        cache.invalidate_if(|_| true);
+        let voided = cache.get_or_fetch_shared(LONG_TTL, || async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok(vec![3u8])
+        });
+        let revoke = async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            cache.invalidate_if(|_| true);
+        };
+        let (voided, ()) = tokio::join!(voided, revoke);
+        voided.expect("the voided fill still answers its caller");
+        assert_eq!(
+            heard.load(Ordering::SeqCst),
+            2,
+            "a voided fill stores nothing"
+        );
+    }
+
     #[tokio::test]
     async fn an_empty_result_is_cached_like_any_other() {
         // The behaviour that made a retry meaningless, pinned so the fix below
