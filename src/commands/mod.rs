@@ -771,6 +771,13 @@ mod admin_credential_tests {
         );
     }
 
+    /// MIK-8064: `init` writes no `meta_mcp.cache_tools`, which nothing reads.
+    #[test]
+    fn init_writes_no_cache_tools() {
+        let config = build_init_config(true, InitProfile::Local, "");
+        assert!(!config.contains("cache_tools"), "{config}");
+    }
+
     /// D1-T12. The starter config turns auth on, and D1-a refuses auth
     /// without the audit log, so the template must enable the log (D1-e) for
     /// a fresh install to load at all.
