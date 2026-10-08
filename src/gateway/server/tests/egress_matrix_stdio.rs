@@ -15,10 +15,21 @@ use crate::backend::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, FailsafeConfig};
 use crate::gateway::egress_fixture::{BACKEND_METHODS, NAME, Part, Planted, URI, secret};
 use crate::gateway::meta_mcp::MetaMcp;
-use crate::security::firewall::{Firewall, FirewallConfig};
+use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
 
-/// The stdio gateway over one planted backend, `alpha`.
-async fn stdio_on(backend: Arc<Planted>) -> Arc<MetaMcp> {
+/// How a cell's gateway screens what it delivers (the HTTP twin's `Setup`).
+#[derive(Clone, Copy, Debug)]
+enum Setup {
+    /// The firewall with no rule.
+    Default,
+    /// The firewall with a Warn rule on `read`.
+    Warn,
+    /// No firewall; response inspection in action mode is the only screen.
+    InspectionOnly,
+}
+
+/// The stdio gateway over one planted backend, `alpha`, and its firewall.
+async fn stdio_on(backend: Arc<Planted>, setup: Setup) -> (Arc<MetaMcp>, Option<Arc<Firewall>>) {
     let registry = Arc::new(BackendRegistry::new());
     let alpha = Arc::new(Backend::new(
         "alpha",
@@ -29,45 +40,81 @@ async fn stdio_on(backend: Arc<Planted>) -> Arc<MetaMcp> {
     alpha.set_transport_for_test(backend as Arc<dyn crate::transport::Transport>);
     alpha.get_tools_shared().await.expect("warm the tool cache");
     assert!(registry.register(alpha));
-    let firewall = Firewall::from_config(
+    let rules = match setup {
+        Setup::Warn => vec![FirewallRule {
+            tool_match: NAME.to_string(),
+            action: FirewallAction::Warn,
+            reason: None,
+            scan: Vec::new(),
+        }],
+        _ => Vec::new(),
+    };
+    let mut meta = MetaMcp::new(registry);
+    if matches!(setup, Setup::InspectionOnly) {
+        meta.enable_response_inspection_action_mode();
+        return (Arc::new(meta), None);
+    }
+    let firewall = Arc::new(Firewall::from_config(
         FirewallConfig {
             enabled: true,
             scan_responses: true,
             scan_requests: false,
             credential_redaction: true,
+            rules,
             ..FirewallConfig::default()
         },
         None,
-    );
-    let mut meta = MetaMcp::new(registry);
-    meta.set_firewall(Some(Arc::new(firewall)));
-    Arc::new(meta)
+    ));
+    meta.set_firewall(Some(Arc::clone(&firewall)));
+    (Arc::new(meta), Some(firewall))
 }
 
-/// The stdio request for `method`, naming the backend's one tool, prompt or
-/// resource.
-fn params(method: &str, part: Part) -> Value {
-    let mut params = match method {
-        "tools/call" => json!({"name": "gateway_invoke", "arguments": {
-            "server": "alpha", "tool": NAME, "arguments": {}
-        }}),
-        "prompts/get" => json!({"name": format!("alpha/{NAME}")}),
-        "resources/read" => json!({"uri": URI}),
-        _ => json!({}),
+/// The stdio method and params that reach `method`'s answer. A backend's tool
+/// descriptions reach a stdio client through `gateway_list_tools`, not
+/// `tools/list` (which lists the gateway's own tools).
+fn params(method: &'static str, part: Part) -> (&'static str, Value) {
+    let (sent, mut params) = match method {
+        "tools/call" => (
+            method,
+            json!({"name": "gateway_invoke", "arguments": {
+                "server": "alpha", "tool": NAME, "arguments": {}
+            }}),
+        ),
+        "tools/list" => (
+            "tools/call",
+            json!({"name": "gateway_list_tools",
+            "arguments": {"server": "alpha"}}),
+        ),
+        "prompts/get" => (method, json!({"name": format!("alpha/{NAME}")})),
+        "resources/read" => (method, json!({"uri": URI})),
+        _ => (method, json!({})),
     };
     if part.is_notification() {
         params["_meta"] = json!({"progressToken": "p1"});
     }
-    params
+    (sent, params)
 }
 
-/// One stdio request inside the notification scope the stdio server opens;
-/// every frame the client is written (notifications, then the answer) as
-/// one text, and how often the backend answered.
-async fn cell(method: &'static str, part: Part, text: String) -> (String, usize) {
+/// What one cell observed: every frame the client was written
+/// (notifications, then the answer) as one text, the backend's answers, and
+/// the firewall's inspections.
+struct Seen {
+    body: String,
+    calls: usize,
+    inspections: usize,
+}
+
+/// One stdio request inside the notification scope the stdio server opens.
+async fn cell(setup: Setup, method: &'static str, part: Part, text: String) -> Seen {
     let backend = Arc::new(Planted::with_text(method, part, text));
     let calls = Arc::clone(&backend.calls);
-    let meta = stdio_on(backend).await;
+    let (meta, firewall) = stdio_on(backend, setup).await;
+    let count = || {
+        firewall
+            .as_ref()
+            .map_or(0, |f| f.response_inspection_counts().inspections)
+    };
+    let before = count();
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
@@ -78,8 +125,8 @@ async fn cell(method: &'static str, part: Part, text: String) -> (String, usize)
         None,
     );
     let (writer, mut queue) = tokio::sync::mpsc::channel(super::super::STDOUT_QUEUE_DEPTH);
-    let request =
-        json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params(method, part)});
+    let (sent, params) = params(method, part);
+    let request = json!({"jsonrpc": "2.0", "id": 7, "method": sent, "params": params});
     let (answer, _) = Box::pin(super::super::Gateway::dispatch_streaming_notifications(
         Box::pin(super::super::Gateway::dispatch_single(
             &meta,
@@ -102,16 +149,28 @@ async fn cell(method: &'static str, part: Part, text: String) -> (String, usize)
     if let Some(answer) = answer {
         seen.push_str(&answer.to_string());
     }
-    (seen, calls.load(Ordering::SeqCst))
+    Seen {
+        body: seen,
+        calls: calls.load(Ordering::SeqCst),
+        inspections: count() - before,
+    }
 }
 
 fn refused(body: &str) -> bool {
     body.contains("Response blocked by security firewall") || body.contains("\"code\":-32600")
 }
 
+fn report(failures: &[String]) {
+    assert!(
+        failures.is_empty(),
+        "{} cells failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
 /// The matrix over stdio: no planted credential arrives, an interim
-/// question carrying one is refused (MIK-8155), every cell reached its
-/// backend.
+/// question carrying one is refused, every cell reached its backend.
 #[tokio::test]
 async fn egress_no_planted_credential_reaches_a_stdio_client() {
     let leak = secret();
@@ -119,24 +178,87 @@ async fn egress_no_planted_credential_reaches_a_stdio_client() {
     for method in BACKEND_METHODS {
         for part in Part::ALL.into_iter().filter(|p| p.applies_to(method)) {
             let at = format!("stdio {method} {part:?}");
-            let (seen, calls) = Box::pin(cell(method, part, leak.clone())).await;
-            if calls == 0 {
-                failures.push(format!("{at}: never reached the backend: {seen}"));
+            let seen = Box::pin(cell(Setup::Default, method, part, leak.clone())).await;
+            if seen.calls == 0 {
+                failures.push(format!("{at}: never reached the backend: {}", seen.body));
             }
-            if seen.contains(&leak) {
-                failures.push(format!("{at}: credential delivered: {seen}"));
+            if seen.body.contains(&leak) {
+                failures.push(format!("{at}: credential delivered: {}", seen.body));
             }
-            if part == Part::InterimQuestion && !refused(&seen) {
-                failures.push(format!("{at}: question rewritten, not refused: {seen}"));
+            if part == Part::InterimQuestion && !refused(&seen.body) {
+                failures.push(format!("{at}: question not refused: {}", seen.body));
             }
         }
     }
+    report(&failures);
+}
+
+/// MIK-8155 over stdio: a Warn rule redacts a completed answer and still
+/// refuses an interim question carrying a credential.
+#[tokio::test]
+async fn egress_warn_redacts_an_answer_and_refuses_a_question_on_stdio() {
+    let leak = secret();
+    let seen = Box::pin(cell(
+        Setup::Warn,
+        "tools/call",
+        Part::ResultText,
+        leak.clone(),
+    ))
+    .await;
     assert!(
-        failures.is_empty(),
-        "{} cells failed:\n{}",
-        failures.len(),
-        failures.join("\n")
+        !seen.body.contains(&leak) && seen.body.contains("[REDACTED:credential]"),
+        "answer not redacted and delivered: {}",
+        seen.body
     );
+    let seen = Box::pin(cell(
+        Setup::Warn,
+        "tools/call",
+        Part::InterimQuestion,
+        leak.clone(),
+    ))
+    .await;
+    assert!(
+        !seen.body.contains(&leak) && refused(&seen.body),
+        "question not refused: {}",
+        seen.body
+    );
+}
+
+/// MIK-8146 CATSCAN.1, MIK-8139 over stdio: with no firewall, the content
+/// inspection alone withholds a credential in any method's answer or error.
+#[tokio::test]
+async fn egress_content_inspection_screens_every_answer_on_stdio() {
+    let leak = secret();
+    let mut failures = Vec::new();
+    for method in BACKEND_METHODS {
+        for part in [Part::ResultText, Part::ErrorMessage, Part::ErrorData] {
+            let seen = Box::pin(cell(Setup::InspectionOnly, method, part, leak.clone())).await;
+            if seen.calls == 0 {
+                failures.push(format!(
+                    "stdio {method} {part:?}: never reached: {}",
+                    seen.body
+                ));
+            }
+            if seen.body.contains(&leak) {
+                failures.push(format!("stdio {method} {part:?}: delivered: {}", seen.body));
+            }
+        }
+    }
+    report(&failures);
+}
+
+/// `NFR.WORKLOAD.1` over stdio: one firewall inspection per answer.
+#[tokio::test]
+async fn egress_every_stdio_answer_is_inspected_once() {
+    let mut failures = Vec::new();
+    for method in BACKEND_METHODS {
+        let text = "harmless".to_string();
+        let seen = Box::pin(cell(Setup::Default, method, Part::ResultText, text)).await;
+        if seen.inspections != 1 {
+            failures.push(format!("stdio {method}: {} inspections", seen.inspections));
+        }
+    }
+    report(&failures);
 }
 
 /// Controls: harmless text at the same places reaches the stdio client.
@@ -149,18 +271,16 @@ async fn egress_harmless_text_reaches_a_stdio_client() {
                 continue;
             }
             let text = format!("harmless-{}", method.replace('/', "-"));
-            let (seen, _) = Box::pin(cell(method, part, text.clone())).await;
-            if !seen.contains(&text) {
-                failures.push(format!("stdio {method} {part:?}: not delivered: {seen}"));
+            let seen = Box::pin(cell(Setup::Default, method, part, text.clone())).await;
+            if !seen.body.contains(&text) {
+                failures.push(format!(
+                    "stdio {method} {part:?}: not delivered: {}",
+                    seen.body
+                ));
             }
         }
     }
-    assert!(
-        failures.is_empty(),
-        "{} cells failed:\n{}",
-        failures.len(),
-        failures.join("\n")
-    );
+    report(&failures);
 }
 
 /// Every catalogue method the stdio server dispatches is a matrix row.

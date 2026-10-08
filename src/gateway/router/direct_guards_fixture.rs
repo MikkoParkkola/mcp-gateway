@@ -290,14 +290,39 @@ pub(crate) async fn fixture_firewalled_with(
     fx
 }
 
-/// [`fixture_firewalled`] with `transport` answering for both backends in
-/// place of the scripted one (the egress matrix's planted backend).
+/// [`fixture_firewalled_with`] with `transport` answering for both backends
+/// in place of the scripted one (the egress matrix's planted backend).
 #[cfg(feature = "firewall")]
-pub(crate) async fn fixture_firewalled_on(transport: Arc<dyn Transport>) -> Fx {
+pub(crate) async fn fixture_firewalled_on(
+    transport: Arc<dyn Transport>,
+    rule: Option<crate::security::firewall::FirewallAction>,
+) -> Fx {
     TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    FIREWALL_RULE.with(|r| r.set(rule));
     let fx = fixture_inner(Answer::Ok, true, |meta| meta).await;
+    FIREWALL_RULE.with(|r| r.set(None));
     TRANSPORT.with(|t| *t.borrow_mut() = None);
     fx
+}
+
+/// `transport` behind no firewall, with response inspection in action mode:
+/// only the content inspection can withhold what it answers.
+pub(crate) async fn fixture_inspecting_on(transport: Arc<dyn Transport>) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    let fx = fixture_inner(Answer::Ok, false, |mut meta| {
+        meta.enable_response_inspection_action_mode();
+        meta
+    })
+    .await;
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
+/// The firewall the last firewalled fixture on this thread gave its Meta-MCP
+/// (the router holds its own, on `state.firewall`).
+#[cfg(feature = "firewall")]
+pub(crate) fn meta_firewall() -> Option<Arc<crate::security::firewall::Firewall>> {
+    META_FIREWALL.with(|f| f.borrow().clone())
 }
 
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
@@ -390,6 +415,8 @@ thread_local! {
     static CLIENT_BREAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ANOMALY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static RELAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static META_FIREWALL: std::cell::RefCell<Option<Arc<crate::security::firewall::Firewall>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// The auth the fixture serves: four keys, plus a client breaker when asked.
@@ -513,7 +540,9 @@ async fn fixture_inner(
             config.clone(),
             tracker.clone(),
         )));
-        meta.set_firewall(Some(Arc::new(Firewall::from_config(config, tracker))));
+        let meta_firewall = Arc::new(Firewall::from_config(config, tracker));
+        META_FIREWALL.with(|f| *f.borrow_mut() = Some(Arc::clone(&meta_firewall)));
+        meta.set_firewall(Some(meta_firewall));
     }
     state_mut.meta_mcp = Arc::new(build(meta));
     let router = create_router(Arc::clone(&state));

@@ -13,9 +13,12 @@ use axum::body::to_bytes;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::direct_guards_fixture::{Fx, fixture_firewalled_on};
+use super::direct_guards_fixture::{
+    Fx, fixture_firewalled_on, fixture_inspecting_on, meta_firewall,
+};
 use crate::gateway::egress_fixture::{BACKEND_METHODS, NAME, Part, Planted, URI, secret};
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
+use crate::security::firewall::FirewallAction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Route {
@@ -27,18 +30,27 @@ enum Route {
 
 const ROUTES: [Route; 2] = [Route::Meta, Route::Direct];
 
-/// The request `route` sends for `method`, naming the backend's one
-/// tool, prompt or resource.
-fn request(route: Route, method: &str, part: Part) -> (&'static str, Value) {
-    let mut params = match (route, method) {
-        (Route::Meta, "tools/call") => json!({"name": "gateway_invoke", "arguments": {
-            "server": "alpha", "tool": NAME, "arguments": {}
-        }}),
-        (Route::Direct, "tools/call") => json!({"name": NAME, "arguments": {}}),
-        (Route::Meta, "prompts/get") => json!({"name": format!("alpha/{NAME}")}),
-        (Route::Direct, "prompts/get") => json!({"name": NAME}),
-        (_, "resources/read") => json!({"uri": URI}),
-        _ => json!({}),
+/// The request `route` sends to reach `method`'s answer: the URI, the method
+/// sent and its params. On `/mcp` a backend's tool descriptions reach the
+/// client through `gateway_list_tools`, not `tools/list` (which lists the
+/// gateway's own tools).
+fn request(route: Route, method: &'static str, part: Part) -> (&'static str, &'static str, Value) {
+    let (sent, mut params) = match (route, method) {
+        (Route::Meta, "tools/call") => (
+            "tools/call",
+            json!({"name": "gateway_invoke",
+            "arguments": {"server": "alpha", "tool": NAME, "arguments": {}}}),
+        ),
+        (Route::Meta, "tools/list") => (
+            "tools/call",
+            json!({"name": "gateway_list_tools",
+            "arguments": {"server": "alpha"}}),
+        ),
+        (Route::Direct, "tools/call") => (method, json!({"name": NAME, "arguments": {}})),
+        (Route::Meta, "prompts/get") => (method, json!({"name": format!("alpha/{NAME}")})),
+        (Route::Direct, "prompts/get") => (method, json!({"name": NAME})),
+        (_, "resources/read") => (method, json!({"uri": URI})),
+        _ => (method, json!({})),
     };
     if part.is_notification() {
         params["_meta"] = json!({"progressToken": "p1"});
@@ -47,7 +59,7 @@ fn request(route: Route, method: &str, part: Part) -> (&'static str, Value) {
         Route::Meta => "/mcp",
         Route::Direct => "/mcp/alpha",
     };
-    (uri, params)
+    (uri, sent, params)
 }
 
 /// POST one request accepting a streamed answer; the whole body as text, so
@@ -68,15 +80,50 @@ async fn post(fx: &Fx, uri: &str, method: &str, params: &Value) -> String {
     String::from_utf8_lossy(&body).into_owned()
 }
 
+/// How a cell's gateway screens what it delivers.
+#[derive(Clone, Copy, Debug)]
+enum Setup {
+    /// The firewall with no rule: a credential is high severity, so blocked.
+    Default,
+    /// The firewall with a Warn rule on `read`: a credential is redacted and
+    /// delivered, except where a rewrite is not allowed.
+    Warn,
+    /// No firewall; response inspection in action mode is the only screen.
+    InspectionOnly,
+}
+
+/// What one cell observed.
+struct Seen {
+    body: String,
+    calls: usize,
+    /// Firewall inspections, router and Meta-MCP instances together.
+    inspections: usize,
+}
+
 /// One cell: `text` planted at `part` of `method`'s answer, sent on `route`.
-/// Returns what the client read and how often the backend answered.
-async fn cell(route: Route, method: &'static str, part: Part, text: String) -> (String, usize) {
+async fn cell(setup: Setup, route: Route, method: &'static str, part: Part, text: String) -> Seen {
     let backend = Arc::new(Planted::with_text(method, part, text));
     let calls = Arc::clone(&backend.calls);
-    let fx = fixture_firewalled_on(backend).await;
-    let (uri, params) = request(route, method, part);
-    let body = post(&fx, uri, method, &params).await;
-    (body, calls.load(Ordering::SeqCst))
+    let fx = match setup {
+        Setup::Default => fixture_firewalled_on(backend, None).await,
+        Setup::Warn => fixture_firewalled_on(backend, Some(FirewallAction::Warn)).await,
+        Setup::InspectionOnly => fixture_inspecting_on(backend).await,
+    };
+    let firewalls = [fx.state.firewall.clone(), meta_firewall()];
+    let count = || -> usize {
+        let counts = firewalls.iter().flatten();
+        counts
+            .map(|f| f.response_inspection_counts().inspections)
+            .sum()
+    };
+    let before = count();
+    let (uri, sent, params) = request(route, method, part);
+    let body = post(&fx, uri, sent, &params).await;
+    Seen {
+        body,
+        calls: calls.load(Ordering::SeqCst),
+        inspections: count() - before,
+    }
 }
 
 /// Whether the client was refused delivery, as the firewall refuses.
@@ -84,9 +131,18 @@ fn refused(body: &str) -> bool {
     body.contains("Response blocked by security firewall") || body.contains("\"code\":-32600")
 }
 
+fn report(failures: &[String]) {
+    assert!(
+        failures.is_empty(),
+        "{} cells failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
 /// The matrix: the credential never arrives, an interim question carrying
-/// one is refused on every route rather than rewritten (MIK-8155), and every
-/// cell reached its backend (a cell that never dispatched proves nothing).
+/// one is refused rather than rewritten, and every cell reached its backend
+/// (a cell that never dispatched proves nothing).
 #[tokio::test]
 async fn egress_no_planted_credential_reaches_an_http_client() {
     let leak = secret();
@@ -95,25 +151,95 @@ async fn egress_no_planted_credential_reaches_an_http_client() {
         for part in Part::ALL.into_iter().filter(|p| p.applies_to(method)) {
             for route in ROUTES {
                 let at = format!("{route:?} {method} {part:?}");
-                let (body, calls) = cell(route, method, part, leak.clone()).await;
-                if calls == 0 {
-                    failures.push(format!("{at}: never reached the backend: {body}"));
+                let seen = cell(Setup::Default, route, method, part, leak.clone()).await;
+                if seen.calls == 0 {
+                    failures.push(format!("{at}: never reached the backend: {}", seen.body));
                 }
-                if body.contains(&leak) {
-                    failures.push(format!("{at}: credential delivered: {body}"));
+                if seen.body.contains(&leak) {
+                    failures.push(format!("{at}: credential delivered: {}", seen.body));
                 }
-                if part == Part::InterimQuestion && !refused(&body) {
-                    failures.push(format!("{at}: question rewritten, not refused: {body}"));
+                if part == Part::InterimQuestion && !refused(&seen.body) {
+                    failures.push(format!("{at}: question not refused: {}", seen.body));
                 }
             }
         }
     }
-    assert!(
-        failures.is_empty(),
-        "{} cells failed:\n{}",
-        failures.len(),
-        failures.join("\n")
-    );
+    report(&failures);
+}
+
+/// MIK-8155: under a Warn rule a completed answer is redacted and delivered,
+/// while an interim question carrying a credential is still refused, never
+/// rewritten, on every route: one policy per frame part.
+#[tokio::test]
+async fn egress_warn_redacts_an_answer_and_refuses_a_question() {
+    let leak = secret();
+    let mut failures = Vec::new();
+    for route in ROUTES {
+        let seen = cell(
+            Setup::Warn,
+            route,
+            "tools/call",
+            Part::ResultText,
+            leak.clone(),
+        )
+        .await;
+        if seen.body.contains(&leak) || !seen.body.contains("[REDACTED:credential]") {
+            failures.push(format!(
+                "{route:?} answer not redacted and delivered: {}",
+                seen.body
+            ));
+        }
+        let part = Part::InterimQuestion;
+        let seen = cell(Setup::Warn, route, "tools/call", part, leak.clone()).await;
+        if seen.body.contains(&leak) || !refused(&seen.body) {
+            failures.push(format!("{route:?} question not refused: {}", seen.body));
+        }
+    }
+    report(&failures);
+}
+
+/// MIK-8146 CATSCAN.1, MIK-8139: the content inspection screens every
+/// method's answer and error, not only a tool result. No firewall here, so
+/// only the inspection can withhold the planted credential.
+#[tokio::test]
+async fn egress_content_inspection_screens_every_answer() {
+    let leak = secret();
+    let mut failures = Vec::new();
+    for method in BACKEND_METHODS {
+        for part in [Part::ResultText, Part::ErrorMessage, Part::ErrorData] {
+            for route in ROUTES {
+                let at = format!("{route:?} {method} {part:?}");
+                let seen = cell(Setup::InspectionOnly, route, method, part, leak.clone()).await;
+                if seen.calls == 0 {
+                    failures.push(format!("{at}: never reached the backend: {}", seen.body));
+                }
+                if seen.body.contains(&leak) {
+                    failures.push(format!("{at}: credential delivered: {}", seen.body));
+                }
+            }
+        }
+    }
+    report(&failures);
+}
+
+/// `NFR.WORKLOAD.1`: every answer is inspected by the firewall exactly once,
+/// whichever method and route delivers it.
+#[tokio::test]
+async fn egress_every_answer_is_inspected_once() {
+    let mut failures = Vec::new();
+    for method in BACKEND_METHODS {
+        for route in ROUTES {
+            let text = "harmless".to_string();
+            let seen = cell(Setup::Default, route, method, Part::ResultText, text).await;
+            if seen.inspections != 1 {
+                failures.push(format!(
+                    "{route:?} {method}: {} inspections",
+                    seen.inspections
+                ));
+            }
+        }
+    }
+    report(&failures);
 }
 
 /// Controls: harmless text at the same places is delivered, so the matrix
@@ -128,21 +254,18 @@ async fn egress_harmless_text_is_delivered_unchanged() {
                 if part.is_notification() && (route == Route::Direct || method != "tools/call") {
                     continue;
                 }
-                let at = format!("{route:?} {method} {part:?}");
                 let text = format!("harmless-{}", method.replace('/', "-"));
-                let (body, _) = cell(route, method, part, text.clone()).await;
-                if !body.contains(&text) {
-                    failures.push(format!("{at}: not delivered: {body}"));
+                let seen = cell(Setup::Default, route, method, part, text.clone()).await;
+                if !seen.body.contains(&text) {
+                    failures.push(format!(
+                        "{route:?} {method} {part:?}: not delivered: {}",
+                        seen.body
+                    ));
                 }
             }
         }
     }
-    assert!(
-        failures.is_empty(),
-        "{} cells failed:\n{}",
-        failures.len(),
-        failures.join("\n")
-    );
+    report(&failures);
 }
 
 /// A meta-route answer cached under an idempotency key and replayed to the
@@ -150,19 +273,21 @@ async fn egress_harmless_text_is_delivered_unchanged() {
 #[tokio::test]
 async fn egress_a_cross_route_replay_is_scanned() {
     let leak = secret();
+    let mut failures = Vec::new();
     for part in [Part::ResultText, Part::ErrorMessage] {
         let backend = Arc::new(Planted::new("tools/call", part));
-        let fx = fixture_firewalled_on(backend).await;
+        let fx = fixture_firewalled_on(backend, Some(FirewallAction::Warn)).await;
         let idem = json!({ IDEMPOTENCY_KEY_META: "egress-replay" });
-        let (uri, mut params) = request(Route::Meta, "tools/call", part);
-        params["_meta"] = idem.clone();
-        let first = post(&fx, uri, "tools/call", &params).await;
-        let (uri, mut params) = request(Route::Direct, "tools/call", part);
-        params["_meta"] = idem;
-        let replay = post(&fx, uri, "tools/call", &params).await;
-        assert!(!first.contains(&leak), "{part:?} meta: {first}");
-        assert!(!replay.contains(&leak), "{part:?} direct replay: {replay}");
+        for route in [Route::Meta, Route::Direct] {
+            let (uri, sent, mut params) = request(route, "tools/call", part);
+            params["_meta"] = idem.clone();
+            let body = post(&fx, uri, sent, &params).await;
+            if body.contains(&leak) {
+                failures.push(format!("{part:?} {route:?}: credential delivered: {body}"));
+            }
+        }
     }
+    report(&failures);
 }
 
 /// Completeness of the method axis: every method the `POST /mcp` dispatcher
