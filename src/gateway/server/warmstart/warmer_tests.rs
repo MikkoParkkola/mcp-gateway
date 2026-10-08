@@ -188,3 +188,19 @@ async fn nothing_is_admitted_after_the_shutdown_broadcast() {
         "warm after the broadcast scheduled {booted:?}"
     );
 }
+
+#[tokio::test]
+async fn boot_warm_is_refused_after_the_shutdown_broadcast() {
+    // A fresh guard, so nothing earlier has sealed it: `warm` reads the
+    // broadcast itself rather than inheriting a seal set by `apply`.
+    let backends = registry(&["a"]);
+    let (shutdown, _) = tokio::sync::broadcast::channel(1);
+    let guard = WarmerGuard::new(&backends, WarmStartMode::Http, Some(&shutdown));
+    shutdown.send(()).expect("a live receiver");
+    let booted = guard.warm(vec!["a".to_string()]);
+    assert!(
+        booted.is_empty(),
+        "warm after the broadcast scheduled {booted:?}"
+    );
+    assert!(guard.abort_handles().is_empty());
+}

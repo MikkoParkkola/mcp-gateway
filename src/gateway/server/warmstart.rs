@@ -431,18 +431,29 @@ impl ReloadWarmer {
     /// Warm `names` now, replacing any earlier warmer per name. Returns the
     /// names scheduled.
     fn warm_locked(&self, inner: &mut WarmerInner, names: Vec<String>) -> Vec<String> {
+        // Each task's receiver is taken BEFORE the check: a broadcast sent
+        // earlier is seen by `closed`, and one sent later reaches the task. The
+        // other order leaves a window where neither does.
+        let receivers: Vec<_> = names
+            .iter()
+            .map(|_| {
+                self.shutdown
+                    .as_ref()
+                    .map(tokio::sync::broadcast::Sender::subscribe)
+            })
+            .collect();
         if inner.closed() {
             return Vec::new();
         }
         let mut scheduled = Vec::new();
-        for name in names {
+        for (name, shutdown) in names.into_iter().zip(receivers) {
             let Some(instance) = self.backends.get(&name) else {
                 if matches!(self.mode, WarmStartMode::Http) {
                     warn!(backend = %name, "Backend not found for warm-start");
                 }
                 continue;
             };
-            let task = self.spawn(name.clone(), Arc::downgrade(&instance));
+            let task = self.spawn(name.clone(), Arc::downgrade(&instance), shutdown);
             if let Some(old) = inner.tasks.insert(name.clone(), task) {
                 old.abort();
             }
@@ -483,16 +494,18 @@ impl ReloadWarmer {
         }
     }
 
-    fn spawn(&self, name: String, instance: Weak<Backend>) -> tokio::task::JoinHandle<()> {
+    /// `shutdown` is this task's own receiver, taken by the caller before its
+    /// admission check; stdio mode has no channel at all and is cancelled by
+    /// aborting these handles instead.
+    fn spawn(
+        &self,
+        name: String,
+        instance: Weak<Backend>,
+        mut shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
+    ) -> tokio::task::JoinHandle<()> {
         let backends = Arc::clone(&self.backends);
         let policy = Arc::clone(&self.policy);
         let mode = self.mode;
-        // Each task needs its own receiver; stdio mode has no channel at all and
-        // is cancelled by aborting these handles instead.
-        let mut shutdown = self
-            .shutdown
-            .as_ref()
-            .map(tokio::sync::broadcast::Sender::subscribe);
         tokio::spawn(async move {
             let work = warm_start_until_cached(&backends, &name, &policy, mode, &instance);
             match shutdown.as_mut() {
