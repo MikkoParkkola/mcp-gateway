@@ -23,35 +23,44 @@ pub(crate) enum Retired {
 /// flow-style mapping, a value spread over several lines, or the only key
 /// under `meta_mcp` leaves the text as it was.
 pub(crate) fn drop_cache_tools(text: &str) -> (Option<String>, Retired) {
-    if !parse(text).is_some_and(|doc| doc["meta_mcp"].get("cache_tools").is_some()) {
-        return (None, Retired::Absent);
-    }
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    let removed = lines
+    let candidates: Vec<usize> = lines
         .iter()
         .position(|l| {
             l.strip_prefix("meta_mcp:")
                 .is_some_and(|rest| matches!(rest.trim_start().chars().next(), None | Some('#')))
         })
-        .and_then(|header| {
-            // A lookalike line inside a block scalar fails the parse check,
-            // so every candidate in the block is tried in turn.
+        .map(|header| {
             (header + 1..lines.len())
                 .take_while(|&i| {
                     let line = lines[i].trim_end();
                     line.is_empty() || line.starts_with([' ', '\t']) || line.starts_with('#')
                 })
                 .filter(|&i| lines[i].trim_start().starts_with("cache_tools:"))
-                .find_map(|at| {
-                    let after: String = lines
-                        .iter()
-                        .enumerate()
-                        .filter(|&(i, _)| i != at)
-                        .map(|(_, line)| *line)
-                        .collect();
-                    only_cache_tools_went(text, &after).then_some((after, at + 1))
-                })
-        });
+                .collect()
+        })
+        .unwrap_or_default();
+    match parse(text) {
+        // The loader is laxer than this strict parse (a repeated key, say):
+        // such a file is never edited, but a likely key is still named.
+        None if candidates.is_empty() => return (None, Retired::Absent),
+        None => return (None, Retired::Left),
+        Some(doc) if doc["meta_mcp"].get("cache_tools").is_none() => {
+            return (None, Retired::Absent);
+        }
+        Some(_) => {}
+    }
+    // A lookalike line inside a block scalar fails the parse check, so every
+    // candidate is tried in turn.
+    let removed = candidates.into_iter().find_map(|at| {
+        let after: String = lines
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| i != at)
+            .map(|(_, line)| *line)
+            .collect();
+        only_cache_tools_went(text, &after).then_some((after, at + 1))
+    });
     match removed {
         Some((after, line)) => (Some(after), Retired::Removed(line)),
         None => (None, Retired::Left),
@@ -102,6 +111,7 @@ mod tests {
         for text in [
             "meta_mcp: {cache_tools: false, enabled: true}\n",
             "meta_mcp:\n  cache_tools: false\n",
+            "meta_mcp:\n  enabled: true\n  enabled: true\n  cache_tools: false\n",
         ] {
             assert_eq!(drop_cache_tools(text), (None, Retired::Left), "{text}");
         }
