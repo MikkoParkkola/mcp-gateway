@@ -246,6 +246,21 @@ async fn direct_route_refused_while_degraded() {
 /// must be able to recover it once storage heals.
 #[tokio::test]
 async fn readyz_alone_recovers_after_storage_heals() {
+    readyz_recovery_round().await;
+}
+
+/// MIK-8171 AC3: the recovery holds 20 times in a row, each on a fresh
+/// fixture, under whatever load the suite puts on the runner.
+#[tokio::test]
+async fn readyz_alone_recovers_twenty_times_in_a_row() {
+    for _ in 0..20 {
+        readyz_recovery_round().await;
+    }
+}
+
+/// One round of [`readyz_alone_recovers_after_storage_heals`]: degrade, see
+/// `/readyz` unready, heal, and see it recover with no call traffic.
+async fn readyz_recovery_round() {
     let fx = fixture(AuditFailurePolicy::FailClosed).await;
     fx.log.set_append_failure_for_test(true);
     let _ = invoke(&fx, 1).await;
