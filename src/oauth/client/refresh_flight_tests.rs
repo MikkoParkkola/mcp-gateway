@@ -473,6 +473,26 @@ async fn an_uncertain_refresh_keeps_a_non_rotating_servers_token() {
     assert_eq!(server.uses("r1"), 3);
 }
 
+/// ROT3.3b: a settled answer that leaves the refresh token out keeps the one
+/// sent (RFC 6749 section 6), so it shows the server does not rotate too.
+#[tokio::test]
+async fn an_answer_without_a_refresh_token_counts_as_keeping_it() {
+    let server =
+        TokenServer::start(&[Answer::Omit, Answer::KeepThenBrokenBody, Answer::Keep]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let late = client(dir.path(), &server);
+    hold(&late, &token("a1", Some("r1"), true));
+    headless(&late)
+        .await
+        .expect("a settled refresh without a refresh token");
+    expire(&late);
+
+    assert!(headless(&late).await.is_err(), "the answer was lost");
+    expire(&late);
+    headless(&late).await.expect("the kept token refreshes");
+    assert_eq!(server.uses("r1"), 3);
+}
+
 /// ROT3.1b: a server not yet seen either way counts as rotating. Its first
 /// refresh lost its answer, so the token may be consumed: it is not sent
 /// again, and the next call asks for a login.
