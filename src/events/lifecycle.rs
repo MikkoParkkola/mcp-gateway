@@ -128,16 +128,11 @@ impl EventsHub {
     /// state is rebuilt from the store, and a source registered later joins
     /// the same way. A refusal leaves the key unstarted for the next replay.
     pub(crate) async fn replay_starts(&self) {
-        self.replay_starts_of(|_| true).await;
-    }
-
-    /// [`Self::replay_starts`] for the keys of the source kinds `of` admits.
-    pub(super) async fn replay_starts_of(&self, of: impl Fn(SourceKind) -> bool) {
         let mut started = self.lifecycle.lock().await;
         // One attempt per key per replay, even when several rows hold it.
         let mut tried = HashSet::new();
         for (key, principal, name, arguments) in self.live_keys() {
-            if !of(key.0) || started.contains(&key) || !tried.insert(key.clone()) {
+            if started.contains(&key) || !tried.insert(key.clone()) {
                 continue;
             }
             let Some(source) = self.source_of_kind(key.0) else {
