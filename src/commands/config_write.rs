@@ -93,7 +93,7 @@ pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<U
         rewrite.text = text;
     }
     if mode == RewriteMode::Apply
-        && (!rewrite.changed.is_empty() || matches!(retired, Retired::Removed(_)))
+        && (!rewrite.changed.is_empty() || matches!(retired, Retired::Removed { .. }))
     {
         write_config_text(path, &rewrite.text)?;
     }

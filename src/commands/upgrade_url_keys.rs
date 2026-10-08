@@ -61,18 +61,21 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
     let at = path.display();
     let mut out = Vec::new();
     match rewrite.retired {
-        Retired::Removed(line) => {
+        Retired::Removed { line, block } => {
             let verb = match mode {
                 RewriteMode::Apply => "removed",
                 RewriteMode::DryRun => "upgrade would remove",
             };
+            let block = block
+                .map(|h| format!(" and the `meta_mcp:` (line {h}) it was alone under"))
+                .unwrap_or_default();
             out.push(format!(
-                "{at}: {verb} `meta_mcp.cache_tools` (line {line}); nothing ever read it."
+                "{at}: {verb} `meta_mcp.cache_tools` (line {line}){block}; nothing ever read it."
             ));
         }
         Retired::Left => out.push(format!(
             "{at}: kept `meta_mcp.cache_tools`: upgrade removes it only as its own line under a \
-             `meta_mcp:` block that holds other keys. Nothing reads it; delete it by hand."
+             block-style `meta_mcp:`. Nothing reads it; delete it by hand."
         )),
         Retired::Absent => {}
     }

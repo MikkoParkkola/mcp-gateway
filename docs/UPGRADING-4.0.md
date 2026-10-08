@@ -4496,9 +4496,11 @@ on reload:
   `` `meta_mcp.cache_tools` is ignored since 4.0: nothing ever read it, so tool lists were cached the same way whatever it said; `meta_mcp.cache_ttl` sets how long they are kept. Delete it, or run `mcp-gateway upgrade`, which removes it or says why it cannot. ``
 
 `mcp-gateway upgrade` deletes the key line in the same pass that rewrites backend URL keys,
-keeping every other line and comment, and names the line it removed. When the key cannot go
-alone (written as `meta_mcp: {...}`, or the only key under `meta_mcp`), upgrade leaves the
-file as it is and says to delete the key by hand. `mcp-gateway init` no longer writes the key. To change how long tool lists are cached, set `meta_mcp.cache_ttl`.
+keeping every other line and comment, and names the line it removed. When it was the only key
+under `meta_mcp`, the then-empty `meta_mcp:` line goes too: an empty block and no block load the
+same defaults. When the key cannot go alone (written as `meta_mcp: {...}`, or under a
+`meta_mcp:` line that carries a comment), upgrade leaves the file as it is and says to delete
+the key by hand. `mcp-gateway init` no longer writes the key. To change how long tool lists are cached, set `meta_mcp.cache_ttl`.
 
 ## Upgrading from 3.5.x: a walkthrough
 
