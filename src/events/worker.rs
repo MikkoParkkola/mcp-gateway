@@ -336,17 +336,9 @@ impl EventsHub {
         #[cfg(test)]
         self.before_send.pause().await;
         // MIK-7907 WINDOW.1: admitted under the live config's gate, with no
-        // await inside, so a reload that has returned is always seen. A
-        // backend name no source offers any more is not admitted, as in
-        // `source_verdict`. Not admitted: unsent and held, keeping the send
-        // allowance; the next attempt reads a fresh verdict.
-        let admitted = services
-            .live
-            .admit(|| match self.source_offering(&record.name) {
-                Some(source) => source.admits_now(&record.name),
-                None => !record.name.starts_with(super::backend_source::NAME_PREFIX),
-            });
-        if !admitted {
+        // await inside, so a reload that has returned is always seen. Not
+        // admitted: unsent and held; the next attempt reads a fresh verdict.
+        if !services.live.admit(|| self.admits_now(&record.name)) {
             services.audit_outcome(&ended(HELD)).await;
             let held = Settle::Unsent {
                 next: Utc::now() + REFUSAL_RETRY,

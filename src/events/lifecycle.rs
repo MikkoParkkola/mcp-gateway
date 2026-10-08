@@ -31,6 +31,16 @@ impl EventsHub {
         self.sources.read().iter().find(|s| s.offers(name)).cloned()
     }
 
+    /// May an event of type `name` be sent now (MIK-7907)? Its source
+    /// answers; a backend name no source offers any more is not admitted,
+    /// as in `source_verdict`.
+    pub(super) fn admits_now(&self, name: &str) -> bool {
+        match self.source_offering(name) {
+            Some(source) => source.admits_now(name),
+            None => !name.starts_with(super::backend_source::NAME_PREFIX),
+        }
+    }
+
     /// Start `(name, arguments)` for `principal` unless it is already
     /// started. The caller holds the lifecycle lock (`started`) and commits
     /// the subscription before releasing it. `Ok(true)` when this call
