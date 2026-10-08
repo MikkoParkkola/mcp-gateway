@@ -256,3 +256,30 @@ async fn t09_an_absent_backends_row_never_starts_at_startup() {
     assert!(hub.lifecycle.lock().await.is_empty(), "no key for x");
     assert!(hub.store.subscriptions().is_empty(), "x's row withdrawn");
 }
+
+/// T07, second half (R1a review HIGH): a delivery status written between a
+/// withdraw's judgement and its delete is the same subscription, so it
+/// still goes rather than being skipped with no retry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn t07_a_row_touched_during_a_withdraw_still_goes() {
+    let (hub, _dir) = hub();
+    hub.install_backend_source(Arc::new(|| vec!["x".to_owned()]));
+    admit_kind(&hub, "tools_changed");
+    let (reached, release) = hub.before_withdraw.arm();
+    let pass = tokio::task::spawn_blocking({
+        let hub = Arc::clone(&hub);
+        move || hub.withdraw(&["backend.x.tools_changed".to_owned()])
+    });
+    crate::test_pause::within("the withdraw judging", reached.notified()).await;
+    hub.store
+        .suspend("sub_x_tools_changed")
+        .expect("status written");
+    release.notify_one();
+    crate::test_pause::within("the withdraw", pass)
+        .await
+        .expect("join");
+    assert!(
+        hub.store.subscriptions().is_empty(),
+        "the touched row is withdrawn"
+    );
+}

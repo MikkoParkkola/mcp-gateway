@@ -26,17 +26,19 @@ impl EventsHub {
         let Some(source) = self.source(SourceKind::BackendNotification) else {
             return;
         };
-        let gone: Vec<String> = self
+        // The judged rows themselves go to the delete, never a second
+        // snapshot by name: a row re-made meanwhile is not one of them.
+        let gone: Vec<_> = self
             .store
             .subscriptions()
             .into_iter()
-            .map(|sub| sub.name)
-            .filter(|name| {
-                parse_name(name).is_some_and(|(of, _)| of == backend) && !source.admits_now(name)
+            .filter(|sub| {
+                parse_name(&sub.name).is_some_and(|(of, _)| of == backend)
+                    && !source.admits_now(&sub.name)
             })
             .collect();
         if !gone.is_empty() {
-            self.withdraw(&gone);
+            self.withdraw_rows(&gone);
         }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;

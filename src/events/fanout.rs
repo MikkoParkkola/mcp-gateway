@@ -238,23 +238,32 @@ impl EventsHub {
     /// Delete every subscription to an event type a reload removed; their
     /// pending records go with them (design §9). Synchronous, inside the
     /// reload, so a later reload that restores the type cannot interleave.
-    ///
-    /// Only the rows judged are deleted: a row re-made under the same id
-    /// since (a new generation, design r3 G3) is left to the cause that made
-    /// it. `false` when a subscription could not be removed.
+    /// `false` when a subscription could not be removed.
     pub(crate) fn withdraw(&self, names: &[String]) -> bool {
+        let judged: Vec<Subscription> = self
+            .store
+            .subscriptions()
+            .into_iter()
+            .filter(|sub| names.contains(&sub.name))
+            .collect();
+        self.withdraw_rows(&judged)
+    }
+
+    /// Delete each judged row. A row written since (a delivery status, a
+    /// hold stamp) is the same subscription and still goes; a row re-made
+    /// under the same id (a new grant) is left to the cause that made it
+    /// (design r3 G3). `false` when a subscription could not be removed.
+    pub(crate) fn withdraw_rows(&self, judged: &[Subscription]) -> bool {
         let tail = super::tail_policy(&self.config);
         let now = Utc::now();
-        let mut all_removed = true;
-        let judged = self.store.subscriptions();
         #[cfg(test)]
         self.before_withdraw.pause_blocking();
+        let mut all_removed = true;
         for sub in judged {
-            let generation = sub.generation;
-            if names.contains(&sub.name)
-                && let Err(error) = self
-                    .store
-                    .remove_where(&sub.id, now, tail, |row| row.generation == generation)
+            let granted_at = sub.granted_at;
+            if let Err(error) = self
+                .store
+                .remove_where(&sub.id, now, tail, |row| row.granted_at == granted_at)
             {
                 tracing::warn!(%error, "events: withdrawn subscription not removed");
                 all_removed = false;
