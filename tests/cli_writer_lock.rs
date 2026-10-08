@@ -77,6 +77,9 @@ fn spawn_waiting_add(
         }
         line.clear();
     }
+    // Reap it before failing, so a broken run leaves no stray process.
+    let _ = child.kill();
+    let _ = child.wait();
     panic!("the CLI did not wait for the config lock; stderr={seen:?}");
 }
 
