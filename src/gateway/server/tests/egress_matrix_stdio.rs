@@ -137,6 +137,7 @@ async fn cell(setup: Setup, method: &'static str, part: Part, text: String) -> S
         )),
         &writer,
         &reads,
+        Some(meta.notification_screen("stdio", "stdio-egress")),
     ))
     .await;
     drop(writer);

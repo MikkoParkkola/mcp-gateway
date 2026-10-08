@@ -259,3 +259,76 @@ impl MetaMcp {
         self.scan_backend_error((server, tool, tool), None, &mut error) == EgressOutcome::Delivered
     }
 }
+
+/// The screen a notification sink carries (MIK-8161): each notification a
+/// backend streams during a call meets the egress scan's content checks and
+/// firewall on its params before it is queued for the client.
+struct NotificationEgress {
+    meta: std::sync::Arc<MetaMcp>,
+    caller: String,
+    session_id: String,
+}
+
+impl crate::transport::notification_sink::NotificationScreen for NotificationEgress {
+    fn admit(&self, notification: &mut crate::protocol::JsonRpcNotification) -> bool {
+        let method = notification.method.clone();
+        let Some(params) = notification.params.as_mut() else {
+            return true;
+        };
+        let targets = [ResponsePolicyTarget {
+            server: "gateway".to_owned(),
+            tool: method.clone(),
+        }];
+        let correlation = ResponseCorrelation {
+            session_id: &self.session_id,
+            caller: &self.caller,
+            external_server: "gateway",
+            external_tool: &method,
+            subject: None,
+        };
+        let at = Egress {
+            method: &method,
+            targets: &targets,
+            correlation: &correlation,
+            api_key_name: None,
+        };
+        self.meta.scan_notification(params, &at) != EgressOutcome::Refused
+    }
+}
+
+impl MetaMcp {
+    /// The notification screen for one client's scope: `caller` and
+    /// `session_id` label its verdicts.
+    pub(crate) fn notification_screen(
+        self: &std::sync::Arc<Self>,
+        caller: &str,
+        session_id: &str,
+    ) -> std::sync::Arc<dyn crate::transport::notification_sink::NotificationScreen> {
+        std::sync::Arc::new(NotificationEgress {
+            meta: std::sync::Arc::clone(self),
+            caller: caller.to_owned(),
+            session_id: session_id.to_owned(),
+        })
+    }
+
+    /// A notification's params: content checks, then the firewall under
+    /// `Redact`; a redaction stays in place, a refusal withholds it.
+    fn scan_notification(&self, params: &mut Value, at: &Egress<'_>) -> EgressOutcome {
+        if self.content_refuses(at, params) {
+            return EgressOutcome::Refused;
+        }
+        #[cfg(feature = "firewall")]
+        if let Some(firewall) = &self.firewall {
+            use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
+            let verdict = firewall.check_response_artifact(
+                params,
+                at.targets,
+                at.correlation,
+                ResponseArtifactKind::Notification,
+                ResponseMutationPolicy::Redact,
+            );
+            return firewall_outcome(verdict);
+        }
+        EgressOutcome::Delivered
+    }
+}

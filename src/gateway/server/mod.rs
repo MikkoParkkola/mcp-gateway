@@ -2566,6 +2566,7 @@ impl Gateway {
                         )),
                         &writer,
                         &reads,
+                        Some(meta_mcp.notification_screen("stdio", session_id)),
                     )
                     .await;
                     Self::persist_stdio_protocol_telemetry(&telemetry);
@@ -2657,6 +2658,7 @@ impl Gateway {
                         )),
                         &writer,
                         &reads,
+                        Some(meta_mcp.notification_screen("stdio", session_id)),
                     )
                     .await;
                     Self::persist_stdio_protocol_telemetry(&telemetry);

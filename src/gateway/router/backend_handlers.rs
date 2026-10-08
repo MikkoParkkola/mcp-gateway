@@ -379,7 +379,8 @@ async fn dispatch_in_scope(
             format!("{method} was removed in protocol revision 2026-07-28"),
         ));
     }
-    let (response, _discarded) = crate::transport::notification_sink::collect(async {
+    // Collected and discarded unread: nothing reaches a client, so no screen.
+    let (response, _discarded) = crate::transport::notification_sink::collect(None, async {
         if propagated_headers.is_empty() && identity_key.is_none() {
             backend.request(method, params).await
         } else {

@@ -468,6 +468,8 @@ pub(super) async fn meta_mcp_handler(
     let guard = super::helpers::read_guard(&state);
     let audit = offers_event_stream.then(|| state.meta_mcp.rejection_audit());
     let guard_for_scope = guard.clone();
+    // MIK-8161: a backend's mid-call notifications meet the egress scan too.
+    let screen = Some(state.meta_mcp.notification_screen("http", ""));
     let dispatch = crate::gateway::meta_mcp::grant_audit::slot_http(
         logger.clone(),
         // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
@@ -492,14 +494,14 @@ pub(super) async fn meta_mcp_handler(
             guard, audit, logger,
         ));
         let (scoped, rx) =
-            crate::transport::notification_sink::scope_judged(dispatch, Arc::clone(&judge));
+            crate::transport::notification_sink::scope_judged(screen, dispatch, Arc::clone(&judge));
         stream_reply(crate::gateway::streaming::first_event_wins_stream(scoped, rx, judge).await)
     } else {
         // Still scoped, and still drained alongside: `publish` sheds on a full
         // sink, and a client that did not offer a stream must not make a
         // backend's notifications count against that depth.
         let (response, _notifications) =
-            crate::transport::notification_sink::collect(dispatch).await;
+            crate::transport::notification_sink::collect(screen, dispatch).await;
         // The answer's read record, written after every late replacer.
         judged_reply(response, logger.as_ref()).await
     }
