@@ -79,13 +79,7 @@ impl DirectRouteGuards {
     /// an interim answer's continuation is bound to (MIK-8078).
     pub(crate) async fn after_dispatch(
         state: &AppState,
-        ((call, challenge), (identity, sent)): (
-            (&BackendCall<'_>, Option<&str>),
-            (
-                Option<&crate::key_server::oidc::VerifiedIdentity>,
-                Option<&serde_json::Value>,
-            ),
-        ),
+        ((call, challenge), (identity, sent)): ((&BackendCall<'_>, Option<&str>), Seal<'_>),
         client: Option<&AuthenticatedClient>,
         admission: &Admission,
         forward: Result<JsonRpcResponse>,
@@ -150,6 +144,13 @@ impl DirectRouteGuards {
         Ok(response)
     }
 }
+
+/// What an interim answer's continuation is bound to (MIK-8078): the caller's
+/// verified identity and the params as the client sent them.
+pub(crate) type Seal<'a> = (
+    Option<&'a crate::key_server::oidc::VerifiedIdentity>,
+    Option<&'a serde_json::Value>,
+);
 
 /// The JSON-RPC error a direct-route refusal answers with (HTTP 200). A
 /// firewall refusal carries the delivery-refusal projection, as on meta.

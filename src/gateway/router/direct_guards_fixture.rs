@@ -64,6 +64,27 @@ pub(crate) enum Answer {
     PublicScope,
 }
 
+/// The question an `Ask*` answer opens with.
+fn question(answer: Answer) -> Value {
+    let mut asked = json!({
+        "resultType": "input_required",
+        "inputRequests": {
+            "k1": {
+                "method": "elicitation/create",
+                "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
+            }
+        },
+        "requestState": "backend-state-1"
+    });
+    if matches!(answer, Answer::AskNoState) {
+        asked.as_object_mut().unwrap().remove("requestState");
+    }
+    if matches!(answer, Answer::AskMalformed) {
+        asked["inputRequests"] = json!("surprise");
+    }
+    asked
+}
+
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
 /// and counting every `tools/call`. `tools/list` names the one tool the rows
 /// call, `read`, so the direct route's listing check (F13) admits it; a
@@ -126,23 +147,7 @@ impl Transport for CountingBackend {
             Answer::AskOnce | Answer::AskNoState | Answer::AskMalformed
         ) {
             return Ok(if n == 0 {
-                let mut asked = json!({
-                    "resultType": "input_required",
-                    "inputRequests": {
-                        "k1": {
-                            "method": "elicitation/create",
-                            "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
-                        }
-                    },
-                    "requestState": "backend-state-1"
-                });
-                if matches!(self.answer, Answer::AskNoState) {
-                    asked.as_object_mut().unwrap().remove("requestState");
-                }
-                if matches!(self.answer, Answer::AskMalformed) {
-                    asked["inputRequests"] = json!("surprise");
-                }
-                JsonRpcResponse::success(id, asked)
+                JsonRpcResponse::success(id, question(self.answer))
             } else {
                 JsonRpcResponse::success(
                     id,
@@ -392,8 +397,7 @@ async fn fixture_inner(
     } else {
         test_router_app_state_with_auth(&auth).await
     };
-    let calls = Arc::new(AtomicUsize::new(0));
-    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {
         let backend = Arc::new(Backend::new(
