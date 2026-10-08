@@ -60,10 +60,20 @@ while IFS= read -r line; do
 done
 "#;
 
-/// A path as `sh` reads it: forward slashes, since a Windows backslash is an
-/// escape to the shell (and to a quoted YAML scalar).
+/// A temporary home whose path holds a space and an apostrophe, so a path
+/// left unquoted (or unescaped in YAML) in the peer script or its `command:`
+/// line breaks and the row fails.
+fn spaced_home() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("home o'space ")
+        .tempdir()
+        .expect("temporary home")
+}
+
+/// A path as `sh` reads it: double-quoted so a space cannot split it, with
+/// forward slashes because a Windows backslash is a shell escape.
 fn sh_path(path: &std::path::Path) -> String {
-    path.display().to_string().replace('\\', "/")
+    format!("\"{}\"", path.display().to_string().replace('\\', "/"))
 }
 
 fn register_command_backend(state: &Arc<AppState>, home: &std::path::Path) -> std::path::PathBuf {
@@ -162,7 +172,7 @@ fn progress_of(frames: &[Value]) -> Vec<(Value, Value)> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_callers_sharing_a_progress_token_each_receive_only_their_own_progress() {
-    let home = tempfile::tempdir().expect("temporary home");
+    let home = spaced_home();
     let (state, _store_dir) = common::state(Fixture::default()).await;
     let log = register_command_backend(&state, home.path());
 
@@ -219,7 +229,7 @@ async fn two_callers_sharing_a_progress_token_each_receive_only_their_own_progre
 /// exactly its own progress.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_task_call_sharing_a_progress_token_cannot_reach_a_direct_caller() {
-    let home = tempfile::tempdir().expect("temporary home");
+    let home = spaced_home();
     let (state, _store_dir) = common::state(Fixture::default()).await;
     let log = register_command_backend(&state, home.path());
 

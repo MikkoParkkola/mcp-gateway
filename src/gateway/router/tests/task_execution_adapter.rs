@@ -62,6 +62,9 @@ mod relay_delivered_route;
 /// MIK-7887.RECEIPT.2: a redacted plan answer keeps each step's delivered text.
 #[cfg(feature = "firewall")]
 mod relay_plan_route;
+/// MIK-8113: seams between plan steps at the POST route.
+#[cfg(feature = "firewall")]
+mod relay_plan_seam_route;
 /// MIK-7934.PLANRCPT.1: a task plan redacted at settlement keeps step receipts.
 #[cfg(feature = "firewall")]
 mod relay_plan_task;
@@ -107,6 +110,9 @@ mod settlement;
 #[cfg(feature = "firewall")]
 mod settlement_record;
 mod signing_joint;
+/// `MIK-7993.STORE.1`/`.2`: a task row records the members the gateway wrote.
+#[cfg(feature = "firewall")]
+mod stored_gateway_writes;
 mod stored_result_policy;
 /// MIK-7974: a task keeps its request's meta-tool surface for its hints.
 mod surface_hints;

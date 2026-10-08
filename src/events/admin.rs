@@ -48,20 +48,36 @@ impl ReplayRefusal {
     }
 }
 
-/// Whether `reason` names a dead-letter reason (the listing's filter).
+/// Whether `reason` names a dead-letter reason (the listing's filter): any
+/// reason a dead letter can be written with, so none is left unfilterable.
 pub(crate) fn is_dead_reason(reason: &str) -> bool {
-    [
-        DeadReason::Gone,
-        DeadReason::TooLarge,
-        DeadReason::Exhausted,
-        DeadReason::FirewallBlocked,
-        DeadReason::Budget,
-    ]
-    .iter()
-    .any(|r| r.as_str() == reason)
+    serde_json::from_value::<DeadReason>(serde_json::Value::from(reason)).is_ok()
 }
 
 impl EventsHub {
+    /// The held webhook subscriptions per type (MIK-8057): how many, the
+    /// earliest and latest expiry among them, and the records still queued
+    /// for them. No subscriber, URL or secret.
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "served by the web UI router")
+    )]
+    pub(crate) fn list_held(&self) -> Vec<Value> {
+        self.store
+            .held_listing()
+            .into_iter()
+            .map(|t| {
+                json!({
+                    "type": t.name,
+                    "count": t.count,
+                    "earliestExpiry": t.earliest_expiry,
+                    "latestExpiry": t.latest_expiry,
+                    "pendingRecords": t.pending_records,
+                })
+            })
+            .collect()
+    }
+
     /// The dead letters as the admin listing shows them: ids, reasons, times
     /// and sizes, never a body, a secret or a callback URL.
     pub(crate) fn list_dead_letters(
@@ -148,6 +164,7 @@ impl EventsHub {
             last_status: None,
             dead_as: None,
             firewall: Some(verdict.to_owned()),
+            replayed: true,
             ..dead.record.clone()
         };
         let (caps, dead_at) = (self.outbox_caps(), dead.dead_at);

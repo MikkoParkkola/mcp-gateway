@@ -385,6 +385,7 @@ async fn c2_a_cancel_behind_a_non_terminal_move_is_retried_at_the_current_revisi
             event: TaskTransition::StatusMessage(Some("moved".into())),
             targets: None,
             author: crate::gateway::task_service::ErrorAuthor::Gateway,
+            writes: crate::gateway::gateway_writes::WriteRecord::default(),
         })
         .await
         .unwrap_or_else(|_| panic!("a status message commits on the working row"));
@@ -440,6 +441,7 @@ impl crate::gateway::task_service::CommitObserver for MoveOnRetry {
                 event,
                 targets: None,
                 author: crate::gateway::task_service::ErrorAuthor::Gateway,
+                writes: crate::gateway::gateway_writes::WriteRecord::default(),
             })
             .await
             .unwrap_or_else(|_| panic!("the record moves under the retry"));
@@ -480,6 +482,7 @@ async fn cancel_that_loses_twice(
             event: TaskTransition::StatusMessage(Some("moved".into())),
             targets: None,
             author: crate::gateway::task_service::ErrorAuthor::Gateway,
+            writes: crate::gateway::gateway_writes::WriteRecord::default(),
         })
         .await
         .unwrap_or_else(|_| panic!("a status message commits on the working row"));

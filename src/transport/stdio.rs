@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use process_wrap::tokio::ChildWrapper;
 use serde_json::Value;
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
@@ -60,7 +60,9 @@ pub struct StdioTransport {
     /// Request timeout for initialize and JSON-RPC calls
     request_timeout: std::time::Duration,
     /// Writer handle
-    writer: Mutex<Option<tokio::process::ChildStdin>>,
+    writer: Arc<Mutex<Option<tokio::process::ChildStdin>>>,
+    /// Cancelled by `close()`, renewed by `start()`: ends a write stuck on a reader.
+    shutdown: parking_lot::Mutex<tokio_util::sync::CancellationToken>,
     /// Negotiated protocol version (config override or auto-negotiated)
     protocol_version: RwLock<Option<String>>,
     /// Where to deliver a notification for each call that supplied a progress
@@ -177,10 +179,15 @@ impl StdioTransport {
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stderr".to_string()))?;
 
-        *self.writer.lock().await = Some(stdin);
+        let mut writer = self.writer.lock().await;
+        // Renewed under the stdin lock, so a write never pairs new stdin with
+        // the token a previous `close()` cancelled.
+        *self.shutdown.lock() = tokio_util::sync::CancellationToken::new();
+        *writer = Some(stdin);
+        drop(writer);
         *self.child.lock().await = Some(child);
-        let (eof_tx, eof_rx) = tokio::sync::watch::channel(false);
-        self.start.begin(eof_rx);
+        let eof_tx = Arc::new(tokio::sync::watch::channel(false).0);
+        self.start.begin(Arc::clone(&eof_tx));
 
         // Spawn reader task.
         //
@@ -199,6 +206,7 @@ impl StdioTransport {
         let transport = Arc::downgrade(self);
         let max_frame = self.max_frame_bytes.load(Ordering::Relaxed);
         let stdout_reader = tokio::spawn(async move {
+            let latch = early_exit::TripOnDrop(eof_tx);
             debug!("Reader task started");
             let mut reader = BufReader::new(stdout);
             let mut frame = Vec::new();
@@ -234,7 +242,9 @@ impl StdioTransport {
                 }
             }
 
-            let _ = eof_tx.send(true);
+            // Before the clear: a request that registers after it sees the
+            // latch, and one that registered before it is dropped by it.
+            drop(latch);
             if let Some(transport) = transport.upgrade() {
                 transport.connected.store(false, Ordering::Relaxed);
                 // The stream is over: wake every waiting call now (its receiver
@@ -553,34 +563,6 @@ impl StdioTransport {
         Ok(())
     }
 
-    /// Write a message to stdin
-    async fn write_message(&self, message: &str) -> Result<()> {
-        debug!(message_len = message.len(), "Writing to stdin");
-        let mut writer = self.writer.lock().await;
-        if let Some(ref mut stdin) = *writer {
-            stdin
-                .write_all(message.as_bytes())
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            stdin
-                .write_all(b"\n")
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            stdin
-                .flush()
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            // Drop the lock before yielding to allow concurrent reads
-            drop(writer);
-            // Yield to give the runtime a chance to process the I/O
-            tokio::task::yield_now().await;
-            debug!("Write complete and flushed");
-            Ok(())
-        } else {
-            Err(Error::TransportConnect("Not connected".to_string()))
-        }
-    }
-
     /// Get next request ID
     #[allow(clippy::cast_possible_wrap)] // request IDs won't exceed i64::MAX
     fn next_id(&self) -> RequestId {
@@ -667,17 +649,8 @@ impl Transport for StdioTransport {
         // stranded entry would leak here for the transport's lifetime.
         let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
 
-        // Both guards drop after this value is produced, which is where the
-        // pending entry and the progress registration are retired.
-        match self.write_message(&message).await {
-            Err(e) => Err(e),
-            // Wait for response with timeout
-            Ok(()) => match tokio::time::timeout(self.request_timeout, rx).await {
-                Ok(Ok(response)) => Ok(response),
-                Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
-                Err(_) => Err(Error::BackendTimeout("Request timed out".to_string())),
-            },
-        }
+        // Both guards drop after this value: the pending entry and progress go.
+        self.exchange(&message, rx).await
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
@@ -717,13 +690,15 @@ impl Transport for StdioTransport {
     async fn close(&self) -> Result<()> {
         self.connected.store(false, Ordering::Relaxed);
 
-        // Close stdin
-        *self.writer.lock().await = None;
-
-        // Kill child process
+        // A write stuck on a peer that stopped reading holds stdin; the kill ends it.
+        if let Ok(mut writer) = self.writer.try_lock() {
+            *writer = None;
+        }
         if let Some(ref mut child) = *self.child.lock().await {
             let _ = Box::into_pin(child.kill()).await;
         }
+        self.shutdown.lock().cancel();
+        tree::clear_writer(&self.writer).await;
 
         Ok(())
     }
@@ -744,6 +719,8 @@ mod progress;
 #[path = "stdio_start_failure.rs"]
 mod start_failure;
 use progress::{progress_token_string, request_progress_token};
+#[path = "stdio_write.rs"]
+mod write;
 
 #[cfg(test)]
 #[path = "stdio_tests.rs"]
@@ -773,3 +750,12 @@ mod start_refusal_tests;
 #[cfg(test)]
 #[path = "stdio_spawn_classification_tests.rs"]
 mod spawn_classification_tests;
+
+// Unix-only: the fake backend is a `sh` script.
+#[cfg(all(test, unix))]
+#[path = "stdio_eof_request_tests.rs"]
+mod eof_request_tests;
+
+#[cfg(test)]
+#[path = "stdio_cache_abs_tests.rs"]
+mod cache_abs_tests;
