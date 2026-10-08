@@ -135,11 +135,21 @@ pub(super) fn spawn_cost_saver(
         tokio::pin!(stopped);
         loop {
             tokio::select! {
-                // Off the runtime's threads: a write stuck on a stalled
-                // mount must not block one (MIK-8157).
+                // On a detached thread: a write stuck on a stalled mount
+                // blocks neither a runtime thread nor, being off the blocking
+                // pool, the runtime's drop (MIK-8157).
                 _ = interval.tick() => {
                     let (enforcer, data_dir) = (Arc::clone(&enforcer), data_dir.clone());
-                    drop(tokio::task::spawn_blocking(move || save_costs(&enforcer, &data_dir)).await);
+                    let (done, finished) = tokio::sync::oneshot::channel();
+                    let spawned = std::thread::Builder::new()
+                        .name("cost save".to_owned())
+                        .spawn(move || {
+                            save_costs(&enforcer, &data_dir);
+                            let _ = done.send(());
+                        });
+                    if spawned.is_ok() {
+                        drop(finished.await);
+                    }
                 }
                 () = &mut stopped => break,
             }
@@ -189,13 +199,28 @@ pub(super) const SHUTDOWN_SAVES_TIMEOUT: std::time::Duration = std::time::Durati
 /// One state save run at shutdown: its name, for the log, and the write.
 pub(super) type ShutdownSave = (&'static str, Box<dyn FnOnce() + Send>);
 
-/// Run `saves` in order under one `deadline`, each on its own detached thread
-/// (MIK-8157). A write stuck on a stalled mount is abandoned at the deadline
-/// and logged by name, so it can neither hold the shutdown nor, being off the
-/// blocking pool, the runtime's drop after it.
+/// Run `saves` together under one `deadline`, each on its own detached thread
+/// (MIK-8157), so one write stuck on a stalled mount takes no time from the
+/// others. A save still running at the deadline is abandoned and logged by
+/// name; being off the blocking pool, it holds neither the shutdown nor the
+/// runtime's drop after it.
 pub(super) async fn run_shutdown_saves(deadline: tokio::time::Instant, saves: Vec<ShutdownSave>) {
+    let mut running = Vec::new();
     for (step, save) in saves {
-        super::stdio_shutdown::bounded_blocking(deadline, step, save).await;
+        let (done, finished) = tokio::sync::oneshot::channel();
+        let spawned = std::thread::Builder::new()
+            .name(format!("shutdown: {step}"))
+            .spawn(move || {
+                save();
+                let _ = done.send(());
+            });
+        match spawned {
+            Ok(_) => running.push((step, finished)),
+            Err(error) => warn!(step, %error, "shutdown save could not start a thread; skipped"),
+        }
+    }
+    for (step, finished) in running {
+        super::stdio_shutdown::bounded_step(deadline, step, finished).await;
     }
 }
 
@@ -414,23 +439,24 @@ mod tests {
     }
 
     /// `MIK-8157.SAVE.1` and `.2`: a shutdown save stuck on a stalled mount is
-    /// abandoned at the deadline, so the shutdown returns; a save that
-    /// finishes inside the bound completes.
+    /// abandoned at the deadline, so the shutdown returns; another save that
+    /// finishes inside the bound completes, whatever its place in the list.
     #[tokio::test]
     async fn a_stuck_shutdown_save_is_abandoned_at_the_deadline() {
         let (release, stuck) = std::sync::mpsc::channel::<()>();
         let (finished, done) = std::sync::mpsc::channel();
+        // The stuck save first: the quick one still runs, in the same window.
         let saves: Vec<ShutdownSave> = vec![
-            (
-                "quick save",
-                Box::new(move || {
-                    let _ = finished.send(());
-                }),
-            ),
             (
                 "stuck save",
                 Box::new(move || {
                     let _ = stuck.recv();
+                }),
+            ),
+            (
+                "quick save",
+                Box::new(move || {
+                    let _ = finished.send(());
                 }),
             ),
         ];
