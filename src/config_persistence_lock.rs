@@ -58,7 +58,7 @@ pub(crate) enum NotLocked {
 /// A failure names `config` first: that is the file the user selected, and
 /// the sidecar is a detail of how it is locked.
 fn try_once(config: &Path, lock: &Path) -> Result<Option<ExclusiveFileLock>, NotLocked> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     keep_private(lock).map_err(|error| {
         NotLocked::Failed(format!(
             "cannot lock {} (lock file {}): {error}",
@@ -108,7 +108,8 @@ fn keep_private(lock: &Path) -> io::Result<()> {
     };
     let meta = file.metadata()?;
     let me = rustix::process::geteuid().as_raw();
-    if !meta.is_file() || meta.mode() & 0o077 == 0 {
+    let shared = meta.mode() & 0o077 != 0;
+    if !meta.is_file() || !shared {
         return Ok(());
     }
     if meta.uid() != me && me != 0 {
@@ -118,6 +119,35 @@ fn keep_private(lock: &Path) -> io::Result<()> {
         ));
     }
     file.set_permissions(std::fs::Permissions::from_mode(0o600))
+}
+
+/// Windows: refuse an existing sidecar other accounts can open, saying how to
+/// repair it.
+///
+/// The gateway creates the sidecar owner-only; one copied in, restored or
+/// checked out by git inherits its directory's ACL, which `try_acquire`
+/// refuses with only the rule it broke. This refusal carries the repair
+/// (an owner-only DACL, the same command the gateway prints for a secret
+/// file), so the user is never left with an error they cannot act on. An
+/// open that fails (a holder sharing less, a link) is left to `try_acquire`.
+#[cfg(windows)]
+fn keep_private(lock: &Path) -> io::Result<()> {
+    let Ok(file) = crate::private_fs::open_file_read(lock) else {
+        return Ok(());
+    };
+    let found = crate::private_fs::privacy_refusals(&file);
+    if found.is_empty() {
+        return Ok(());
+    }
+    let repair = crate::private_fs::windows_remediation(
+        &lock.display().to_string(),
+        &found,
+        crate::config::Protects::Secrecy,
+    );
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!("other accounts can open it{}", repair.trim_end()),
+    ))
 }
 
 /// Take the lock for `config`, waiting until `deadline` while another writer
@@ -177,6 +207,28 @@ mod tests {
         assert_eq!(
             lock_path(Path::new("gateway.yaml")),
             Path::new(".gateway.yaml.lock")
+        );
+    }
+
+    /// MIK-8132: a sidecar with an inherited ACL (copied in, or checked out
+    /// by git) is refused with the repair to run, never with only the rule it
+    /// broke.
+    #[cfg(windows)]
+    #[test]
+    fn a_shared_sidecar_is_refused_with_its_repair() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = dir.path().join("gateway.yaml");
+        let lock = lock_path(&config);
+        std::fs::write(&lock, "").expect("sidecar with an inherited ACL");
+
+        let refused = super::lock_config_blocking(&config, std::time::Instant::now(), |_| {});
+
+        let Err(super::NotLocked::Failed(message)) = refused else {
+            panic!("a shared sidecar must refuse the lock");
+        };
+        assert!(
+            message.contains("To repair it") && message.contains(".gateway.yaml.lock"),
+            "{message}"
         );
     }
 

@@ -8,9 +8,8 @@ use std::time::{Duration, Instant};
 use crate::config::Config;
 use crate::config_persistence::CommentLoss;
 use crate::config_persistence::lock::lock_config;
-use crate::config_reload::{
-    ConfigMutation, ConfigWriteError, MutateError, RELOAD_LOCK_WAIT, ReloadOutcome,
-};
+use crate::config_reload::write::MutateError;
+use crate::config_reload::{ConfigMutation, ConfigWriteError, RELOAD_LOCK_WAIT, ReloadOutcome};
 
 use super::ReloadContext;
 
