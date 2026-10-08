@@ -47,7 +47,7 @@ impl Run {
                     "capability no longer read-only; the subscription resumes if it is again"
                 }
                 Some(_) => {
-                    "capability moved to another credential class; subscribe again to follow it"
+                    "capability moved to another credential class; unsubscribe, then subscribe again to follow it"
                 }
             },
             key: None,
