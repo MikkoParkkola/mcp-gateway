@@ -210,12 +210,14 @@ async fn a_direct_signature_stays_out_of_the_receipt() {
     let signature = &first["result"]["_signature"];
     assert!(signature.is_object(), "base: no gateway signature: {first}");
     let text = leaf_run(signature);
-    let (status, sent) = signed_read(&fx, "k-budget", Some(&text)).await;
-    assert_eq!(status, 200, "the signature was receipted: {sent}");
-    assert!(sent.get("error").is_none(), "{sent}");
+    // The control first: B's probe is a `read`, whose answer gives B its
+    // own copy of the backend's text, which would then excuse B.
     let (status, relay) = signed_read(&fx, "k-budget", Some(PROSE)).await;
     assert_eq!(status, 403, "the backend's text was not receipted: {relay}");
     assert_eq!(relay["error"]["code"], -32002, "{relay}");
+    let (status, sent) = signed_read(&fx, "k-budget", Some(&text)).await;
+    assert_eq!(status, 200, "the signature was receipted: {sent}");
+    assert!(sent.get("error").is_none(), "{sent}");
 }
 
 /// `MIK-8011.DIRECT.3` control: a backend's own `_cost_warnings` member, on an
