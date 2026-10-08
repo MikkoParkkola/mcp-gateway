@@ -40,10 +40,12 @@
 
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 
 use super::agents::{AgentDefinition, AgentRegistry};
 use super::scopes::Scope;
+
+/// Clock skew tolerated on `exp`, in seconds.
+const LEEWAY_SECS: u64 = 30;
 
 /// Claims extracted from a validated agent JWT.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,22 +117,30 @@ pub fn validate_agent_token(
     token: &str,
     registry: &AgentRegistry,
 ) -> Result<ValidatedToken, JwtError> {
+    validate_agent_token_at(token, registry, registry.now())
+}
+
+/// [`validate_agent_token`] judged at `now` (Unix seconds) as well as by the
+/// library's own clock: a token is refused once `exp + 30 < now`, the leeway
+/// rule jsonwebtoken applies. In production `now` is the wall clock read just
+/// before the library reads it, so the two checks agree up to a clock step
+/// landing between the reads; a test that moves the registry's clock moves
+/// only this check.
+pub(crate) fn validate_agent_token_at(
+    token: &str,
+    registry: &AgentRegistry,
+    now: u64,
+) -> Result<ValidatedToken, JwtError> {
     // 1. Decode header (no verification) to get algorithm and sub.
     let header = jsonwebtoken::decode_header(token)?;
 
     // Reject unsupported algorithms up-front.
     let alg = match header.alg {
         Algorithm::HS256 => Algorithm::HS256,
-        Algorithm::RS256 => {
-            // PQC deprecation warning (issue #116): RS256 (RSA-2048) is broken by
-            // Shor's algorithm on a CRQC.  Operators should migrate to HS256.
-            // See module-level documentation for the migration path.
-            warn!(
-                "RS256 agent token accepted — RSA-2048 is not post-quantum safe. \
-                 Migrate this agent to HS256 (see issue #116)."
-            );
-            Algorithm::RS256
-        }
+        // No warning here: delivery re-runs this per notification, so the
+        // RS256 deprecation warning (issue #116) is the middleware's, once
+        // per accepted request.
+        Algorithm::RS256 => Algorithm::RS256,
         other => return Err(JwtError::UnsupportedAlgorithm(other)),
     };
 
@@ -145,7 +155,7 @@ pub fn validate_agent_token(
 
     // 4. Build validation config.
     let mut validation = Validation::new(alg);
-    validation.leeway = 30;
+    validation.leeway = LEEWAY_SECS;
 
     // Issuer check — set_issuer enables iss validation; if not configured, skip.
     if let Some(ref expected_iss) = agent.issuer {
@@ -161,6 +171,11 @@ pub fn validate_agent_token(
     // 5. Verify signature + exp.
     let token_data = jsonwebtoken::decode::<AgentClaims>(token, &decoding_key, &validation)?;
     let claims = token_data.claims;
+    if claims.exp.saturating_add(LEEWAY_SECS) < now {
+        return Err(JwtError::JwtVerification(
+            jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::ExpiredSignature),
+        ));
+    }
 
     // 6. Manual audience check.
     //
@@ -559,6 +574,59 @@ mod tests {
         assert!(
             matches!(result, Err(JwtError::MissingKey { .. })),
             "Expected MissingKey, got: {result:?}"
+        );
+    }
+
+    // MIK-7798 R7 (G4): the injected clock refuses exactly where the library's
+    // leeway does: `exp + 30` is still accepted, `exp + 31` is not.
+    #[test]
+    fn a_token_is_accepted_through_exp_plus_leeway_and_refused_after() {
+        let reg = AgentRegistry::new();
+        reg.register(make_hs256_agent("boundary", "boundary-secret"));
+        let token = hs256_token("boundary", "boundary-secret", 3600);
+        let exp = validate_agent_token(&token, &reg)
+            .expect("the token is live on the real clock")
+            .claims
+            .exp;
+
+        assert!(
+            validate_agent_token_at(&token, &reg, exp + 30).is_ok(),
+            "exp + 30 is inside the leeway"
+        );
+        let late = validate_agent_token_at(&token, &reg, exp + 31);
+        assert!(
+            matches!(
+                &late,
+                Err(JwtError::JwtVerification(e))
+                    if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::ExpiredSignature)
+            ),
+            "exp + 31 is past it: {late:?}"
+        );
+    }
+
+    // MIK-7798 R13 (H6): the validator is silent about RS256. Delivery re-runs
+    // it for every notification, so a warning here repeats per frame; the
+    // operator's warning belongs to ingress, once per accepted request.
+    #[test]
+    fn validating_an_rs256_token_logs_no_warning() {
+        let reg = AgentRegistry::new();
+        let header = base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            r#"{"alg":"RS256","typ":"JWT"}"#,
+        );
+        let payload = base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            r#"{"sub":"rs256-agent","exp":4102444800}"#,
+        );
+        let crafted = format!("{header}.{payload}.fakesig");
+
+        let records = crate::test_log_capture::records(|| {
+            let _ = validate_agent_token(&crafted, &reg);
+        });
+        let warnings: Vec<_> = records.iter().filter(|r| r["level"] == "WARN").collect();
+        assert!(
+            warnings.is_empty(),
+            "the validator must not warn per validation: {warnings:?}"
         );
     }
 
