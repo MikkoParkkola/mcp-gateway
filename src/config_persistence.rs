@@ -91,6 +91,9 @@ mod splice;
 #[path = "config_persistence_lock.rs"]
 pub(crate) mod lock;
 
+#[path = "config_persistence_comments.rs"]
+pub(crate) mod comments;
+
 /// How long a synchronous writer (the CLI) waits for another writer's
 /// config lock: long enough to outlast a gateway's write and reload.
 pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(30);

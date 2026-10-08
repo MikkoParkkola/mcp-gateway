@@ -135,6 +135,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "src/gateway/task_service/execution/pause_hook.rs",
         "debug-build test hook writing a task id marker (#2298); compiled out of release",
     ),
+    (
+        "src/gateway/ui/backends.rs",
+        "gateway.yaml before and after a web UI delete, compared for comment line numbers; no text returned",
+    ),
     ("src/gateway/ui/capabilities.rs", "capability YAML; public"),
     (
         "src/identity_grants/journal.rs",
