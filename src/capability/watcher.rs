@@ -17,6 +17,11 @@ use tracing::{debug, error, info, warn};
 use super::CapabilityBackend;
 use crate::Result;
 
+/// Told the capability backend's name whenever its catalogue may have changed:
+/// once its startup scan completes, and after every successful reload (F24,
+/// `MIK-8127`). The listener decides whether anything visible moved.
+pub type CatalogueChanged = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// File watcher for hot-reloading capabilities
 pub struct CapabilityWatcher {
     /// The underlying watcher
@@ -33,13 +38,23 @@ impl CapabilityWatcher {
     ///
     /// Returns an error if the file watcher cannot be created.
     ///
-    /// `changes` hears the backend's name after every successful reload, so
-    /// listeners get `tools/list_changed` (F24).
+    /// `changes` hears the backend's name once its startup scan completes and
+    /// after every successful reload, so listeners get `tools/list_changed`
+    /// when the catalogue they see changed (F24).
     pub fn start(
         backend: Arc<CapabilityBackend>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-        changes: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        changes: Option<CatalogueChanged>,
     ) -> Result<Self> {
+        if let Some(changes) = &changes {
+            // Before any early return: without a file watcher the catalogue
+            // can still change (a manual reload), so its baseline is needed.
+            Self::report_startup_scan(
+                Arc::clone(&backend),
+                shutdown_rx.resubscribe(),
+                Arc::clone(changes),
+            );
+        }
         let directories = backend.watched_directories();
         debug!(directories = ?directories, "Starting capability watcher");
 
@@ -117,11 +132,36 @@ impl CapabilityWatcher {
     }
 
     /// Spawn the background reload task with debouncing
+    /// Report the catalogue once its startup scan completes: that result is
+    /// the baseline every later reload is compared with (`MIK-8127`).
+    fn report_startup_scan(
+        backend: Arc<CapabilityBackend>,
+        mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+        changes: CatalogueChanged,
+    ) {
+        tokio::spawn(async move {
+            // ponytail: polled at the reload task's own 100 ms tick, since the
+            // scan has no completion signal; add one if this ever matters.
+            let mut tick = tokio::time::interval(Duration::from_millis(100));
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx.recv() => return,
+                    _ = tick.tick() => {
+                        if backend.initial_scan_complete() {
+                            changes(&backend.name);
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     fn spawn_reload_task(
         backend: Arc<CapabilityBackend>,
         mut event_rx: mpsc::Receiver<()>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-        changes: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        changes: Option<CatalogueChanged>,
     ) {
         tokio::spawn(async move {
             // Debounce: wait 500ms after last event before reloading
@@ -169,7 +209,7 @@ impl CapabilityWatcher {
                                                 "Hot-reload complete"
                                             );
                                             if let Some(changes) = &changes {
-                                                let _ = changes.send(backend.name.clone());
+                                                changes(&backend.name);
                                             }
                                         }
                                         Err(e) => {

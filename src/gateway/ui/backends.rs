@@ -249,7 +249,8 @@ async fn add_backend(
         Err(e) => return unwritten(e),
     };
 
-    // The reload registered it, and registration announces (F24).
+    // The reload registered it; listeners hear of it once its tools are
+    // listed, through the change drain (F24, `MIK-8127`).
 
     (
         StatusCode::CREATED,
@@ -314,7 +315,8 @@ async fn remove_backend(
         Err(e) => return unwritten(e),
     };
 
-    // The reload removed it, and removal announces (F24).
+    // The reload removed it; listeners hear of it if it had tools they could
+    // see, through the change drain (F24, `MIK-8127`).
 
     // A removed entry takes its own comments with it (MIK-8051): name the
     // lines, never their text (a `#` inside a quoted value can be a secret).
@@ -353,10 +355,10 @@ async fn revive_backend(
     // saying "revived" there would misreport it to the operator.
     let outcome = backend.force_restart().await;
     let rebuilt = matches!(outcome, Ok(crate::backend::RestartOutcome::Rebuilt));
+    // No announcement: a restart keeps the stored tool list, so what discovery
+    // shows is unchanged; a list the new transport stores later is announced by
+    // the change drain if it differs (`MIK-8127`).
     let status = if rebuilt { "revived" } else { "not_revived" };
-    if rebuilt {
-        state.announce_tools_changed(&name).await;
-    }
 
     (
         StatusCode::OK,
