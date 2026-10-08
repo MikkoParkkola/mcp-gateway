@@ -68,6 +68,17 @@ fn request(route: Route, method: &'static str, part: Part) -> (&'static str, &'s
 /// POST one request accepting a streamed answer; the whole body as text, so
 /// a notification frame is read as surely as the answer.
 async fn post(fx: &Fx, uri: &str, method: &str, params: &Value) -> String {
+    post_as(fx, (uri, method), params, None).await
+}
+
+/// [`post`] carrying `subject`'s verified identity, the caller a sealed
+/// question is bound to.
+async fn post_as(
+    fx: &Fx,
+    (uri, method): (&str, &str),
+    params: &Value,
+    subject: Option<&str>,
+) -> String {
     let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
@@ -86,11 +97,22 @@ async fn post(fx: &Fx, uri: &str, method: &str, params: &Value) -> String {
             builder = builder.header("mcp-name", name);
         }
     }
-    let request = builder
+    let mut request = builder
         .body(axum::body::Body::from(
             json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string(),
         ))
         .unwrap();
+    if let Some(subject) = subject {
+        request
+            .extensions_mut()
+            .insert(crate::key_server::oidc::VerifiedIdentity {
+                subject: subject.to_string(),
+                email: format!("{subject}@example.invalid"),
+                name: None,
+                groups: vec![],
+                issuer: "https://a.example.invalid".to_string(),
+            });
+    }
     let response = fx.router.clone().oneshot(request).await.unwrap();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     String::from_utf8_lossy(&body).into_owned()
@@ -395,4 +417,34 @@ async fn egress_a_notification_verdict_names_the_authenticated_caller() {
     for verdict in verdicts {
         assert_eq!(verdict["caller"], "k-std", "{verdict}");
     }
+}
+
+/// MIK-8131 FW.1, FW.3: a sealed question the delivery refuses gives its
+/// in-flight slot back, on both routes, and only its own: an unrelated
+/// exchange opened first keeps its slot.
+#[tokio::test]
+async fn egress_a_refused_question_frees_only_its_own_slot() {
+    let mut failures = Vec::new();
+    for route in ROUTES {
+        let backend = Arc::new(Planted::new("tools/call", Part::InterimQuestion));
+        let fx = fixture_firewalled_on(backend, None).await;
+        let continuation = fx.state.meta_mcp.continuation();
+        let now = crate::protocol::continuation::now_unix_secs();
+        let other = continuation
+            .begin_exchange("other".into(), None, "fp".into(), "digest".into(), now)
+            .await;
+        assert!(other.is_some(), "an unrelated exchange holds a slot");
+        let (uri, sent, params) = request(route, "tools/call", Part::InterimQuestion);
+        let body = post_as(&fx, (uri, sent), &params, Some("alice")).await;
+        if !refused(&body) {
+            failures.push(format!("{route:?}: question not refused: {body}"));
+        }
+        let held = continuation.in_flight().len(now).await;
+        if held != 1 {
+            failures.push(format!(
+                "{route:?}: {held} slots held, want the unrelated one"
+            ));
+        }
+    }
+    report(&failures);
 }
