@@ -4382,6 +4382,7 @@ command is saving, and check the config after one that overlapped; run a refused
 
 Editors such as vim do not take the lock; avoid editing the file by hand while a CLI command
 or the web UI is saving it.
+
 ## 167. API-key callers get their own `mcp` capability child on a multi-user gateway
 
 **Startup:** no notice
