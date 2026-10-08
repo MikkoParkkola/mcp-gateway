@@ -16,8 +16,8 @@ use super::config_write::CommentLoss;
 use mcp_gateway::{
     config::TransportConfig,
     gateway::ui::backend_ops::{
-        self, BackendUpdate, add_backend, get_backend, list_backends, parse_env_vars,
-        remove_backend, resolve_backend, update_backend,
+        self, add_backend, get_backend, list_backends, parse_env_vars, remove_backend,
+        resolve_backend,
     },
     gateway::ui::backends::RegistryEntryJson,
     registry::server_registry,
@@ -259,28 +259,13 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-// ── update (used by HTTP handler, not yet wired to a CLI verb) ────────────────
-
-/// Run a programmatic partial update on a backend (no `ExitCode` wrapper).
-///
-/// Exposed here so the CLI layer has a thin wrapper if needed later. It
-/// blocks the calling thread on the config lock (up to `CLI_LOCK_WAIT`), so
-/// it is for the CLI only: an HTTP handler edits through the reload module's
-/// async `mutate_config_and_reload_with` instead.
-#[allow(dead_code)]
-pub fn run_update_backend(name: &str, update: BackendUpdate, config: &Path) -> Result<(), String> {
-    // No `--force` reaches here: an edit that would drop comments is refused.
-    super::config_write::write(config, CommentLoss::Refuse, |gateway_config| {
-        update_backend(gateway_config, name, update)
-    })
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use mcp_gateway::config::{Config, TransportConfig};
+    use mcp_gateway::gateway::ui::backend_ops::{BackendUpdate, update_backend};
     use tempfile::TempDir;
 
     fn temp_config() -> (TempDir, std::path::PathBuf) {
@@ -433,6 +418,15 @@ mod tests {
     }
 
     // ── run_update_backend ────────────────────────────────────────────────────
+
+    /// `update_backend` through the CLI's comment-keeping writer. Test-only:
+    /// no CLI verb updates a backend, and the web UI's PATCH goes through the
+    /// async reload API, never this blocking writer.
+    fn run_update_backend(name: &str, update: BackendUpdate, config: &Path) -> Result<(), String> {
+        super::super::config_write::write(config, CommentLoss::Refuse, |gateway_config| {
+            update_backend(gateway_config, name, update)
+        })
+    }
 
     #[tokio::test]
     async fn update_existing_backend_succeeds() {
