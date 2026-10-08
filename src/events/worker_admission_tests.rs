@@ -226,7 +226,9 @@ async fn a_backend_source_admits_by_presence_and_eligibility() {
     let present = source.authorize("p", "backend.e.tools_changed", &none);
     assert!(present.await.is_ok(), "present");
     let removed = source.authorize("p", "backend.gone.tools_changed", &none);
-    assert!(removed.await.is_err(), "removed");
+    // -32012 is the refusal that ends the subscription, not one that holds it.
+    let code = removed.await.map_err(|e| e.code);
+    assert_eq!(code, Err(-32012), "removed: refused");
 }
 
 /// A source whose admission blocks, inside the live config's gate, until the
