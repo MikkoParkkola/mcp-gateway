@@ -399,6 +399,8 @@ mod c4_enable_tests;
 #[cfg(test)]
 mod c9_file_ref_tests;
 #[cfg(test)]
+mod reload_pause;
+#[cfg(test)]
 mod webhook_base_path_reload_tests;
 #[cfg(test)]
 mod writer_lock_tests;

@@ -470,6 +470,8 @@ impl ReloadContext {
     /// The reload transaction itself. The caller must already hold the reload
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
+        #[cfg(test)]
+        super::reload_pause::pause_here(&self.config_path).await;
         let evaluated = self.load_off_worker().await?;
         // First: a posture change also changes what the posture forces (signing
         // among it), and the posture is the cause the operator must act on.
