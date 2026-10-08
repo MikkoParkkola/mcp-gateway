@@ -292,11 +292,25 @@ pub(crate) async fn fixture_signed_relayed(answer: Answer) -> Fx {
 /// `alpha:resources/read`, so the direct route stages receipts (MIK-8022).
 #[cfg(feature = "firewall")]
 pub(crate) async fn fixture_relayed(answer: Answer) -> Fx {
+    fixture_relayed_built(answer, |meta| meta).await
+}
+
+/// [`fixture_relayed`], arming the Meta-MCP with `build` (cost governance).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_relayed_built(
+    answer: Answer,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
     RELAY.with(|r| r.set(true));
-    let fx = fixture_inner(answer, true, |meta| meta).await;
+    let fx = fixture_inner(answer, true, build).await;
     RELAY.with(|r| r.set(false));
     fx
 }
+
+/// A key whose name the response redactor reads as a GitHub token (a fake,
+/// split so no scanner reads the source as one), so text naming it (a
+/// per-key cost warning) is redacted on the way out.
+pub(crate) const CREDENTIAL_KEY: &str = concat!("ghp_", "abcdefghijklmnopqrstuvwxyz1234567890");
 
 /// [`fixture`] under the default posture with `server.modern_protocol: false`,
 /// the rollback gate that turns the 2026-07-28 revision off.
@@ -342,6 +356,7 @@ fn fixture_auth() -> AuthConfig {
         api_keys: vec![
             key("k-std"),
             key("k-budget"),
+            key(CREDENTIAL_KEY),
             ApiKeyConfig {
                 rate_limit: 1,
                 ..key("k-rl")

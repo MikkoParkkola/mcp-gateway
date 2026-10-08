@@ -217,3 +217,72 @@ async fn a_direct_signature_stays_out_of_the_receipt() {
     assert_eq!(status, 403, "the backend's text was not receipted: {relay}");
     assert_eq!(relay["error"]["code"], -32002, "{relay}");
 }
+
+/// `MIK-8011.DIRECT.3` control: a backend's own `_cost_warnings` member, on an
+/// answer the gateway gave no warning, is backend text and stays receipted.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_backend_cost_warnings_member_stays_in_the_receipt() {
+    let fx = fixture(Setup::default()).await;
+    fx.answer_read(Read::Raw(json!({
+        "content": [{"type": "text", "text": "ok"}],
+        "isError": false,
+        "_cost_warnings": [PROSE],
+    })));
+    let body = fx.read(Some("a")).await;
+    assert!(
+        body.contains("orchard"),
+        "base: the member is delivered: {body}"
+    );
+    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
+}
+
+/// `read` costs 9000 against the credential-named key's 10000 budget, so its
+/// read gets one per-key warning naming the key (82 chars once redacted).
+#[cfg(feature = "cost-governance")]
+fn warn_credential_key(meta: MetaMcp) -> MetaMcp {
+    use crate::cost_accounting::config::CostGovernanceConfig;
+    use crate::cost_accounting::enforcer::BudgetEnforcer;
+    use crate::cost_accounting::registry::CostRegistry;
+    use crate::gateway::router::direct_guards_fixture::CREDENTIAL_KEY;
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    cfg.tool_costs.insert("read".to_string(), 9000.0);
+    cfg.budgets
+        .per_key
+        .insert(CREDENTIAL_KEY.to_string(), 10_000.0);
+    let registry = Arc::new(CostRegistry::new(&cfg));
+    let enforcer = Arc::new(BudgetEnforcer::new(cfg, Arc::clone(&registry)));
+    meta.with_cost_governance(enforcer, registry)
+}
+
+/// MIK-8011 (design RED.3): the response scan redacts the warning in place;
+/// the note binds the text the caller got, so the redacted warning is still
+/// left out of the receipt and the backend's text stays in.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_redacted_direct_cost_warning_stays_out_of_the_receipt() {
+    use crate::gateway::router::direct_guards_fixture::{
+        Answer, CREDENTIAL_KEY, fixture_relayed_built, post_direct,
+    };
+    let fx = fixture_relayed_built(Answer::Text(PROSE), warn_credential_key).await;
+    let (_, first) = post_direct(&fx, "alpha", CREDENTIAL_KEY, "read", json!({}), None, None).await;
+    let warnings = &first["result"]["_cost_warnings"];
+    let delivered = warnings.to_string();
+    assert!(
+        delivered.contains("[REDACTED:credential]") && !delivered.contains(CREDENTIAL_KEY),
+        "base: the scan redacted the warning: {first}"
+    );
+    let text = leaf_run(warnings);
+    let args = json!({ "cmd": text });
+    let (_, sent) = post_direct(&fx, "alpha", "k-std", "read", args, None, None).await;
+    assert!(
+        sent.get("error").is_none(),
+        "the warning was receipted: {sent}"
+    );
+    let args = json!({ "cmd": PROSE });
+    let (_, relay) = post_direct(&fx, "alpha", "k-std", "read", args, None, None).await;
+    assert_eq!(relay["error"]["code"], -32002, "{relay}");
+}
