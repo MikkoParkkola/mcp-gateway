@@ -380,7 +380,7 @@ impl OAuthClient {
                 let backend = self.backend_name.as_str();
                 let path = self.storage.refresh_state_path(&key, &self.resource_url);
                 let path = path.display();
-                warn!(backend = %backend, path = %path, %error, "Could not repair the refresh state after a login; remove this file so the next login can");
+                warn!(backend = %backend, path = %path, %error, "Could not repair the refresh state after a login; remove this path (a file or a directory) so the next login rebuilds it");
             }
         }
         Ok(())
