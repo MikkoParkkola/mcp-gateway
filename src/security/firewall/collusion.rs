@@ -160,10 +160,42 @@ struct Holder {
     /// The *sensitive* deliveries: what a relay witness reads. Kept apart so
     /// a plain re-delivery cannot extend sensitive evidence.
     sensitive: Option<Copies>,
-    /// The `allowed_flows` entries whose source glob matched this source (one
-    /// bit per entry): a copy delivered here may leave through an egress
-    /// matching the same entry without being a relay.
-    flows: u64,
+    /// The `allowed_flows` entries this copy may leave through without being
+    /// a relay.
+    flows: Flows,
+}
+
+/// Which `allowed_flows` entries (one bit per entry) let a held copy leave
+/// through an egress without being a relay.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum Flows {
+    /// An ordinary source: the entries whose source glob matched it; an
+    /// egress matching any of them is allowed.
+    Any(u64),
+    /// A seam between plan steps (`MIK-8113`): one mask per contributing
+    /// source; an egress is allowed only when it matches an entry of every
+    /// one, so the joined text never leaves by a flow some contributor's text
+    /// may not take. Never empty.
+    Each(Box<[u64]>),
+}
+
+impl Flows {
+    /// Whether an egress matching the entries in `egress` may carry this copy.
+    fn allows(&self, egress: u64) -> bool {
+        match self {
+            Self::Any(mask) => mask & egress != 0,
+            Self::Each(masks) => !masks.is_empty() && masks.iter().all(|m| m & egress != 0),
+        }
+    }
+
+    /// A repeat delivery of the same pair: an ordinary source's entries
+    /// accumulate; a seam's identity fixes its contributors, so its masks
+    /// are the same and kept.
+    fn merge(&mut self, more: Self) {
+        if let (Self::Any(held), Self::Any(more)) = (&mut *self, more) {
+            *held |= more;
+        }
+    }
 }
 
 enum Holders {
@@ -295,12 +327,7 @@ impl CollusionDetector {
         reason = "the key is per process; a method keeps callers from hashing with any other"
     )]
     pub(crate) fn kgram_hashes(&self, text: &str) -> Vec<u64> {
-        let visible: String = text
-            .chars()
-            .filter(|&c| !crate::security::sanitize::is_unsafe_control(c))
-            .collect();
-        let nfc = ComposingNormalizerBorrowed::new_nfc().normalize(&visible);
-        let norm = nfc.split_whitespace().collect::<Vec<_>>().join(" ");
+        let norm = self.normalized(text);
         let bounds: Vec<usize> = norm
             .char_indices()
             .map(|(i, _)| i)
@@ -313,6 +340,21 @@ impl CollusionDetector {
         (0..=chars - K)
             .map(|i| key().hash_one(&norm[bounds[i]..bounds[i + K]]))
             .collect()
+    }
+
+    /// `text` as every k-gram reads it: unsafe controls dropped, NFC,
+    /// whitespace collapsed.
+    #[expect(
+        clippy::unused_self,
+        reason = "one normalization for every reader, the seam pass included"
+    )]
+    fn normalized(&self, text: &str) -> String {
+        let visible: String = text
+            .chars()
+            .filter(|&c| !crate::security::sanitize::is_unsafe_control(c))
+            .collect();
+        let nfc = ComposingNormalizerBorrowed::new_nfc().normalize(&visible);
+        nfc.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
     /// Records a result delivered to `principal` from `source`.
@@ -360,6 +402,32 @@ impl CollusionDetector {
         source: &str,
         principal: &str,
         (sensitive, flows): (bool, u64),
+        fps: Vec<u64>,
+        now: Instant,
+    ) {
+        self.record_held_at(source, principal, (sensitive, Flows::Any(flows)), fps, now);
+    }
+
+    /// [`Self::record_fingerprints_at`] for a seam between plan steps under
+    /// its composite `source` (`MIK-8113`): `masks` holds one `allowed_flows`
+    /// mask per contributing source, and an egress must match every one.
+    pub(crate) fn record_seam_at(
+        &self,
+        source: &str,
+        principal: &str,
+        (sensitive, masks): (bool, Vec<u64>),
+        fps: Vec<u64>,
+        now: Instant,
+    ) {
+        let flows = Flows::Each(masks.into_boxed_slice());
+        self.record_held_at(source, principal, (sensitive, flows), fps, now);
+    }
+
+    fn record_held_at(
+        &self,
+        source: &str,
+        principal: &str,
+        (sensitive, flows): (bool, Flows),
         mut fps: Vec<u64>,
         now: Instant,
     ) {
@@ -378,7 +446,7 @@ impl CollusionDetector {
             principal: self.digest(principal),
             copies: Copies::one(at),
             sensitive: sensitive.then(|| Copies::one(at)),
-            flows,
+            flows: flows.clone(),
         };
         let window = self.params.window;
         let mut state = self.state.lock();
@@ -422,7 +490,7 @@ impl CollusionDetector {
                     (Some(held), Some(more)) => held.add(&more, window),
                     (held, more) => *held = held.or(more),
                 }
-                t.flows |= new.flows;
+                t.flows.merge(new.flows);
             }
             None => tuples.push(new),
         }
@@ -491,7 +559,7 @@ impl CollusionDetector {
             let sensitive =
                 |t: &&Holder| t.sensitive.is_some_and(|copies| copies.held(now, window));
             if let Some(t) = tuples.iter().filter(sensitive).find(|t| {
-                t.principal != sender && !excused(t.source) && t.flows & egress_flows == 0
+                t.principal != sender && !excused(t.source) && !t.flows.allows(egress_flows)
             }) {
                 matches += 1;
                 first.get_or_insert((t.source, t.principal));
@@ -528,6 +596,13 @@ impl CollusionDetector {
         self.source_truncated.load(Ordering::Relaxed)
     }
 }
+
+#[path = "collusion_seam.rs"]
+mod seam;
+#[cfg(test)]
+#[path = "collusion_seam_tests.rs"]
+mod seam_tests;
+pub(crate) use seam::SeamFingerprint;
 
 #[cfg(test)]
 #[path = "collusion_tests.rs"]
