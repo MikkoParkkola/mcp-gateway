@@ -135,7 +135,16 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
         .redeemable_by(
             &crate::protocol::mrtr::principal_fingerprint(Some(&NAMED_CALLER))
                 .expect("a named caller has a fingerprint"),
-            &crate::protocol::mrtr::original_request_digest("booking", "book_flight", &json!({})),
+            // The target binds the backend object that asked (MIK-8168): the
+            // name, length-prefixed, and that object's instance.
+            &crate::protocol::mrtr::original_request_digest(
+                &format!(
+                    "7:booking:{}",
+                    meta.backends.get("booking").expect("registered").instance()
+                ),
+                "book_flight",
+                &json!({}),
+            ),
         )
         .expect("the envelope must be bound to this caller and this request");
 }

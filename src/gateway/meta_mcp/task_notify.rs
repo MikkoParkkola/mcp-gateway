@@ -10,6 +10,16 @@
 //! grant decisions it makes are flushed in a grant-decision slot, relay
 //! receipts are collected and recorded only if the frame is delivered, and the
 //! frame is written to the transparency log as it will be sent.
+//!
+//! A full frame carries the task as it is when the frame is built, not as it
+//! was when the notification was published (MIK-7858). The broadcast names no
+//! revision, so a notification that waited behind a later transition is sent
+//! with the later state, whole: status and content come from one read of the
+//! store, never mixed. A reader who cannot have the stored task (a
+//! status-only stream, a refused output, or a task no longer stored) gets the
+//! notification as published instead, so its status can be older than one an
+//! earlier full frame showed. `tasks/get` is the authority for the current
+//! state; a frame is a prompt to read it.
 
 use serde_json::{Value, json};
 

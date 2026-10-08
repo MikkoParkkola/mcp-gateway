@@ -4,7 +4,6 @@
 //! §3, §5, §8, §9): open the era's channel, keep it matching the counted
 //! interest, coalesce what arrives, and emit through the hub only.
 
-use std::collections::BTreeSet;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
@@ -17,11 +16,11 @@ use super::fanout::SourceEvent;
 use super::types::{SourceKind, Visibility};
 use super::upstream::Kind;
 use super::upstream_listener::Shared;
-use super::upstream_need::{Coalescer, Verdict, WINDOW};
+use super::upstream_need::{Coalescer, Verdict};
 use crate::backend::{Backend, BackendRegistry};
 use crate::protocol::era::Era;
 use crate::transport::upstream_tap::{
-    FrameStream, KindSet, NoteKind, Refused, Requested, UpstreamListen, UpstreamNote,
+    FrameStream, KindSet, NoteKind, Refused, Requested, UpstreamListen, UpstreamNote, Watched,
 };
 
 /// How often the loop looks at timers; also bounds coalescing latency.
@@ -29,6 +28,8 @@ const TICK: Duration = Duration::from_millis(250);
 /// A modern listen must be acknowledged within this (§3).
 /// Opening a channel may not outlast this.
 const OPEN_LIMIT: Duration = Duration::from_secs(30);
+/// The legacy unsubscribe walk on stop may not outlast this (D5).
+const RELEASE_LIMIT: Duration = Duration::from_secs(5);
 /// A modern listen must be acknowledged within this (§3).
 const ACK_DEADLINE: Duration = Duration::from_secs(10);
 /// The catalogue is re-read one backend cache TTL after each read (§7,
@@ -46,6 +47,15 @@ fn snapshot_interval(cache_ttl: Duration) -> Duration {
 const SNAPSHOT_RETRY: Duration = Duration::from_secs(5);
 /// A stream that stayed open this long resets the backoff (§9).
 const STABLE: Duration = Duration::from_secs(60);
+/// A modern stream this old is replaced make-before-break, ahead of the
+/// hourly cut of its POST (`STREAM_TIMEOUT`, 3600 s, in `http/listen.rs`).
+pub(super) const RECYCLE: Duration = Duration::from_secs(55 * 60);
+// The replacement must open and be acknowledged before the old stream's cut.
+// A block, not a bare `assert!` expression: Kani's toolchain rejects that form
+// under `-D warnings` (semicolon-in-expressions-from-non-local-macros).
+const _: () = {
+    assert!(OPEN_LIMIT.as_secs() + ACK_DEADLINE.as_secs() < 3600 - RECYCLE.as_secs());
+};
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
 const BACKOFF_CAP: Duration = Duration::from_secs(300);
 /// A tools refill that did not fill is retried once after this: the backend's
@@ -156,6 +166,11 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         let delay = match session(&shared, &backend, &hub).await {
             Outcome::Stopped => return,
             Outcome::Unsupported => BACKOFF_CAP,
+            // A stream cut at its hourly end (a legacy GET) reconnects at once.
+            Outcome::Ended { lasted, .. } if lasted >= shared.recycle => {
+                failures = 0;
+                Duration::ZERO
+            }
             Outcome::Ended { acked, lasted } => {
                 failures = if acked || lasted >= STABLE {
                     0
@@ -179,6 +194,7 @@ fn requested(shared: &Shared) -> Requested {
 
 /// One connection's life.
 async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<EventsHub>) -> Outcome {
+    shared.refresh_ledger();
     let _lease = backend.listen_lease();
     let target = match backend.listen_target().await {
         Ok(target) => target,
@@ -188,7 +204,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         }
     };
     let started = Instant::now();
-    let modern = target.era == Some(Era::Modern);
+    let modern = target.era == Era::Modern;
     let mut state = State::new(shared, if modern { Era::Modern } else { Era::Legacy });
     // The first catalogue read doubles as the legacy HTTP session's first
     // request on the shared bucket (§3).
@@ -198,26 +214,18 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         // first, even when no URI is watched (§3).
         let _ = backend.read_resource_snapshot(false).await;
     }
-    let first = requested(shared);
-    let opened = tokio::select! {
-        () = shared.stop.cancelled() => return Outcome::Stopped,
-        opened = tokio::time::timeout(OPEN_LIMIT, open(&target.handle, modern, first.clone())) => {
-            opened.unwrap_or(Err(Refused::Expired))
-        }
-    };
-    match opened {
-        Ok(stream) => {
-            state.opened = Instant::now();
-            state.current = Some((stream, first));
-        }
-        Err(Refused::Unsupported) => return Outcome::Unsupported,
-        Err(Refused::Expired) => return failed(),
-        Err(Refused::Failed(error)) => {
-            debug!(backend = %shared.name, %error, "upstream listener: stream refused");
-            return failed();
-        }
+    if let Err(ended) = open_first(shared, &mut state, &target, modern).await {
+        return ended;
     }
-    state.sync_legacy(backend).await;
+    state.handle = Some(target.handle.clone());
+    let synced = tokio::select! {
+        () = shared.stop.cancelled() => false,
+        () = state.sync_legacy(backend, &target.handle) => true,
+    };
+    if !synced {
+        state.release(backend).await;
+        return Outcome::Stopped;
+    }
     let mut tick = tokio::time::interval(TICK);
     let mut wake = shared.wake.subscribe();
     // The tools refill a notice starts. Polled as one arm of the loop's select,
@@ -233,6 +241,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             note = recv(&mut state.current) => Ev::Current(note),
             note = recv_pending(&mut state.pending) => Ev::Pending(note),
             filled = refilled(&mut refill) => Ev::Refilled(filled),
+            opened = replacement_opened(&mut state.opening) => Ev::Opened(opened),
             _ = wake.changed() => Ev::Wake,
             _ = tick.tick() => Ev::Tick,
         };
@@ -248,7 +257,8 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             Ev::Pending(Some(note)) => {
                 state.note(note, true);
             }
-            Ev::Pending(None) => state.pending = None,
+            Ev::Pending(None) => state.pending_ended(),
+            Ev::Opened((opened, requested)) => state.on_opened(opened, requested),
             Ev::Refilled(filled) => {
                 // The refill ended (filled or timed out): the hub may hear now.
                 refill = None;
@@ -271,6 +281,8 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             state.release(backend).await;
             return Outcome::Stopped;
         }
+        // Kept only to release keys (D5 cleanup), and nothing is left.
+        shared.cancel_if_idle();
         let tick = on_tick(backend.connected_streamable(), || shared.is_ineligible());
         if (state.flush(hub) || tick == OnTick::EndIneligible) && end_ineligible(shared, hub).await
         {
@@ -301,43 +313,6 @@ fn on_tick(live: Option<bool>, refused: impl FnOnce() -> bool) -> OnTick {
     }
 }
 
-/// The refill a due notice starts, unpolled. A notice arrived: drop the cached
-/// list and refill it before the hub hears, so the subscriber's re-read is
-/// fresh and nothing sees an emptied cache. At most once per tick however many
-/// notices came; a notice during a refill waits for the next one. A silent
-/// retry keeps the cache: the failed refill already emptied it, so what is
-/// there now was read after the notice, and invalidating again could void a
-/// reader's fill into a new cooldown (MIK-8007).
-fn start_due_refill(state: &mut State<'_>, backend: &Arc<Backend>) -> Option<Refill> {
-    if !state.take_due_refill() {
-        return None;
-    }
-    if state.refill_announces {
-        backend.invalidate_tools();
-    }
-    Some(start_refill(backend, &state.shared.name))
-}
-
-/// The tools refill a notice starts. The shared fetch, so a reader of the list
-/// meanwhile waits on this one. Each request is bounded by the backend's own
-/// `timeout`, the whole refill by `OPEN_LIMIT`. A refill that did not fill still
-/// announces the change: the notice said the list changed, and the
-/// subscriber's own re-read fetches it (MIK-7951).
-fn start_refill(backend: &Arc<Backend>, name: &str) -> Refill {
-    let (backend, name) = (Arc::clone(backend), name.to_owned());
-    Box::pin(async move {
-        let filled = matches!(
-            tokio::time::timeout(OPEN_LIMIT, backend.get_tools_shared()).await,
-            Ok(Ok(_))
-        );
-        if !filled {
-            warn!(backend = %name, "upstream listener: tools refill did not complete; announcing the change anyway");
-            backend.nudge_tools(crate::backend::tools_nudge::NudgeKind::Changed);
-        }
-        filled
-    })
-}
-
 fn failed() -> Outcome {
     Outcome::Ended {
         acked: false,
@@ -353,47 +328,21 @@ enum Ev {
     Current(Option<UpstreamNote>),
     Pending(Option<UpstreamNote>),
     Refilled(bool),
+    Opened((Result<FrameStream, Refused>, Requested)),
     Wake,
     Tick,
 }
 
-/// An in-flight tools refill; `true` when it filled the list.
-type Refill = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
+/// A replacement listen being opened (D2): polled as one arm of the loop's
+/// select, so the current stream keeps draining while it opens.
+type Opening = std::pin::Pin<
+    Box<dyn std::future::Future<Output = (Result<FrameStream, Refused>, Requested)> + Send>,
+>;
 
-/// End the session, first letting an in-flight refill finish and any tools
-/// change it produced reach the hub, as when the refill ran inline and the
-/// end was only seen after it. A stop still ends at once. Unlike a loop
-/// iteration, nothing is maintained before this flush: the session is over.
-async fn finish_refill(
-    state: &mut State<'_>,
-    shared: &Shared,
-    backend: &Backend,
-    hub: &Weak<EventsHub>,
-    refill: Option<Refill>,
-    started: Instant,
-) -> Outcome {
-    if let Some(refill) = refill {
-        tokio::select! {
-            () = shared.stop.cancelled() => {
-                state.release(backend).await;
-                return Outcome::Stopped;
-            }
-            filled = refill => state.refill_ended(filled),
-        }
-    }
-    // Also a refill that finished this iteration, its change not yet
-    // announced when the transport was found replaced, and every notice
-    // still inside its coalescing window: the session's state goes with it
-    // (MIK-7898).
-    if state.flush_at(hub, Instant::now() + WINDOW) {
-        end_ineligible(shared, hub).await;
-    }
-    state.ended(started)
-}
-
-/// Resolves when the in-flight refill ends; never, when there is none.
-async fn refilled(refill: &mut Option<Refill>) -> bool {
-    match refill {
+async fn replacement_opened(
+    opening: &mut Option<Opening>,
+) -> (Result<FrameStream, Refused>, Requested) {
+    match opening {
         Some(future) => future.await,
         None => std::future::pending().await,
     }
@@ -413,24 +362,6 @@ async fn recv_pending(pending: &mut Option<Pending>) -> Option<UpstreamNote> {
     }
 }
 
-/// Open the era's channel; the upgraded `Arc` lives only for this call.
-async fn open(
-    handle: &Weak<dyn UpstreamListen>,
-    modern: bool,
-    requested: Requested,
-) -> Result<FrameStream, Refused> {
-    let Some(transport) = handle.upgrade() else {
-        return Err(Refused::Failed(crate::Error::Transport(
-            "transport gone".to_owned(),
-        )));
-    };
-    if modern {
-        transport.listen(requested).await
-    } else {
-        transport.unsolicited().await
-    }
-}
-
 /// A replacement listen waiting for its acknowledgement (make before break).
 struct Pending {
     stream: FrameStream,
@@ -444,6 +375,7 @@ struct State<'a> {
     era: Era,
     current: Option<(FrameStream, Requested)>,
     pending: Option<Pending>,
+    opening: Option<Opening>,
     acked: Option<Instant>,
     /// What the current stream's acknowledgement honoured; a notice outside
     /// it is not delivered (MIK-7898). `None` before an acknowledgement and
@@ -453,8 +385,6 @@ struct State<'a> {
     unsupported: bool,
     opened: Instant,
     coalescer: Coalescer,
-    /// Legacy: the URIs `resources/subscribe` was sent for.
-    subscribed: BTreeSet<String>,
     resource_interest_unsupported: bool,
     reread: bool,
     /// A backend tools notice waits to be handed to the hub (§14).
@@ -466,6 +396,14 @@ struct State<'a> {
     snapshot_retry_at: Instant,
     /// A modern replacement listen is not retried before this.
     retry_open_at: Instant,
+    /// Listens that ended, or failed to open, unacknowledged since the last
+    /// acknowledgement (MIK-7898 SESS.2a).
+    open_failures: u32,
+    /// The session's transport, which the legacy release walk names as the
+    /// holder of its calls (D5).
+    handle: Option<Weak<dyn UpstreamListen>>,
+    /// The last URI a legacy pass reached; the next resumes after it.
+    legacy_cursor: Option<String>,
 }
 
 impl<'a> State<'a> {
@@ -476,12 +414,12 @@ impl<'a> State<'a> {
             era,
             current: None,
             pending: None,
+            opening: None,
             acked: None,
             honoured: None,
             unsupported: false,
             opened: now,
             coalescer: Coalescer::default(),
-            subscribed: BTreeSet::new(),
             resource_interest_unsupported: false,
             reread: false,
             tools_pending: false,
@@ -492,6 +430,9 @@ impl<'a> State<'a> {
             snapshot_due: now,
             snapshot_retry_at: now,
             retry_open_at: now,
+            open_failures: 0,
+            handle: None,
+            legacy_cursor: None,
         }
     }
 
@@ -642,14 +583,54 @@ impl<'a> State<'a> {
                 "backend honoured less of the upstream listen than asked; the rest stays silent"
             );
         }
-        if from_pending {
+        if from_pending && let Some(p) = self.pending.take() {
             // Make before break: the replacement is live, the old one goes.
-            if let Some(p) = self.pending.take() {
-                self.current = Some((p.stream, p.requested));
+            // Closed first, so no new frame lands on it; what it had already
+            // queued was asked for under the old acknowledgement, which still
+            // stands here, so it is routed before the new one replaces it.
+            if let Some((mut old, _)) = self.current.take() {
+                old.rx.close();
+                while let Ok(note) = old.rx.try_recv() {
+                    if !note.ends() {
+                        self.note(note, false);
+                    }
+                }
             }
+            self.current = Some((p.stream, p.requested));
+            self.opened = Instant::now();
         }
         self.honoured = Some((kinds, uris.to_vec()));
         self.acked = Some(Instant::now());
+        self.open_failures = 0;
+    }
+
+    /// A replacement open finished: it waits for its acknowledgement, or
+    /// the next open backs off.
+    fn on_opened(&mut self, opened: Result<FrameStream, Refused>, requested: Requested) {
+        self.opening = None;
+        match opened {
+            Ok(stream) => {
+                self.pending = Some(Pending {
+                    stream,
+                    requested,
+                    since: Instant::now(),
+                });
+            }
+            Err(_) => self.unacked(),
+        }
+    }
+
+    /// The replacement listen closed before its acknowledgement.
+    fn pending_ended(&mut self) {
+        self.pending = None;
+        self.unacked();
+    }
+
+    /// A listen ended or failed unacknowledged: the next open waits one
+    /// backoff step longer than the last (1 s doubling to 300 s, jittered).
+    fn unacked(&mut self) {
+        self.retry_open_at = Instant::now() + backoff(self.open_failures);
+        self.open_failures = self.open_failures.saturating_add(1);
     }
 
     /// Keep the channel matching the counted interest and the snapshot
@@ -669,76 +650,44 @@ impl<'a> State<'a> {
                 .is_some_and(|p| p.since.elapsed() > ACK_DEADLINE)
             {
                 self.pending = None;
-                self.retry_open_at = now + Duration::from_secs(5);
+                self.unacked();
             }
-            if self.acked.is_none() && self.opened.elapsed() > ACK_DEADLINE {
+            if self.acked.is_none()
+                && self.current.is_some()
+                && self.opened.elapsed() > ACK_DEADLINE
+            {
                 self.current = None;
+                self.unacked();
             }
             let want = requested(self.shared);
             let have = self.current.as_ref().map(|(_, r)| r.clone());
-            if self.pending.is_none() && have.as_ref() != Some(&want) && now >= self.retry_open_at {
-                let opened = tokio::time::timeout(OPEN_LIMIT, open(handle, true, want.clone()))
+            // An acknowledged stream this old is replaced with the same
+            // filter, before the hourly cut of its POST (D2).
+            let aged = self.acked.is_some() && self.opened.elapsed() >= self.shared.recycle;
+            if self.pending.is_none()
+                && self.opening.is_none()
+                && (have.as_ref() != Some(&want) || aged)
+                && now >= self.retry_open_at
+            {
+                let handle = handle.clone();
+                self.opening = Some(Box::pin(async move {
+                    let opened = tokio::time::timeout(
+                        OPEN_LIMIT,
+                        open(&handle, true, want.clone(), Watched::default()),
+                    )
                     .await
                     .unwrap_or(Err(Refused::Expired));
-                match opened {
-                    Ok(stream) => {
-                        self.pending = Some(Pending {
-                            stream,
-                            requested: want,
-                            since: Instant::now(),
-                        });
-                    }
-                    Err(_) => self.retry_open_at = Instant::now() + Duration::from_secs(5),
-                }
+                    (opened, want)
+                }));
             }
         } else {
-            self.sync_legacy(backend).await;
+            self.sync_legacy(backend, handle).await;
         }
         let watching = !requested(self.shared).uris.is_empty();
         let unread = watching && !self.shared.snapshot.lock().is_known();
         if (self.reread || unread || now >= self.snapshot_due) && now >= self.snapshot_retry_at {
             let fresh = self.reread;
             self.read_snapshot(backend, hub, fresh).await;
-        }
-    }
-
-    /// Legacy: one `resources/subscribe` or `unsubscribe` per URI change.
-    async fn sync_legacy(&mut self, backend: &Backend) {
-        if self.era == Era::Modern || self.resource_interest_unsupported {
-            return;
-        }
-        let want: BTreeSet<String> = requested(self.shared).uris.into_iter().collect();
-        for uri in want.difference(&self.subscribed.clone()) {
-            match backend.legacy_resource_interest(uri, true).await {
-                Ok(true) => {
-                    self.subscribed.insert(uri.clone());
-                }
-                Ok(false) => {
-                    self.resource_interest_unsupported = true;
-                    return;
-                }
-                Err(_) => return,
-            }
-        }
-        for uri in self.subscribed.clone().difference(&want) {
-            if backend.legacy_resource_interest(uri, false).await.is_ok() {
-                self.subscribed.remove(uri);
-            }
-        }
-    }
-
-    /// Best effort on stop: a legacy peer keeps `resources/subscribe` state
-    /// until told otherwise, so release what this connection subscribed.
-    async fn release(&mut self, backend: &Backend) {
-        if self.era == Era::Modern {
-            return;
-        }
-        for uri in std::mem::take(&mut self.subscribed) {
-            let _ = tokio::time::timeout(
-                Duration::from_secs(3),
-                backend.legacy_resource_interest(&uri, false),
-            )
-            .await;
         }
     }
 
@@ -794,6 +743,18 @@ impl<'a> State<'a> {
         false
     }
 }
+
+#[path = "upstream_session_open.rs"]
+mod opening;
+use opening::{open, open_first};
+
+#[path = "upstream_session_refill.rs"]
+mod refill;
+use refill::{Refill, finish_refill, refilled, start_due_refill};
+
+#[path = "upstream_session_legacy.rs"]
+mod legacy;
+use legacy::watched_by;
 
 #[cfg(test)]
 #[path = "upstream_session_tests.rs"]

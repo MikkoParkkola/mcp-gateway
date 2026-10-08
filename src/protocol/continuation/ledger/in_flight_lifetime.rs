@@ -143,3 +143,23 @@ async fn row_09_hold_at_capacity_still_refuses_when_the_occupants_are_live() {
     }
     assert!(table.hold("backend", T, T).await.is_none());
 }
+
+/// `MIK-8168`: a paused chain's step digest goes with its hold when the chain
+/// is abandoned. Expiry is the abandonment path (a client that stops calling
+/// makes no call; a reload keeps the shared table). Asserted on the map itself,
+/// after a reader that is not `step_digest`, so only the reclaim can clear it.
+#[tokio::test]
+async fn an_expired_hold_drops_its_step_digest() {
+    let (table, key) = held_until_t(4).await;
+    table
+        .steps
+        .lock()
+        .insert(key.clone(), "step-digest".to_string());
+    assert_eq!(table.len(T).await, 1);
+    assert_eq!(table.steps.lock().len(), 1, "a live hold keeps its digest");
+    assert_eq!(table.len(T + 1).await, 0);
+    assert!(
+        table.steps.lock().is_empty(),
+        "an abandoned chain's digest stayed"
+    );
+}

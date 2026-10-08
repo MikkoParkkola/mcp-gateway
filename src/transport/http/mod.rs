@@ -281,6 +281,12 @@ pub struct HttpTransport {
     request_id: AtomicU64,
     /// Ends every listen body task when the transport closes (MIK-7630 I5).
     listen_cancel: tokio_util::sync::CancellationToken,
+    /// A stream open saw its session expire (404) and could not yet
+    /// re-handshake: the next stream open or shared-bucket request does so
+    /// first (MIK-7898 SESS.1).
+    reinit_needed: AtomicBool,
+    /// Serializes that re-handshake, so concurrent callers share one.
+    reinit_lock: TokioMutex<()>,
     /// Redirect hops this client has followed, ever (MIK-7272.SUB.4).
     ///
     /// Incremented by the redirect policy closure on the `Follow` arm, which
@@ -430,6 +436,8 @@ impl HttpTransport {
             single_tenant_hint: AtomicBool::new(false),
             request_id: AtomicU64::new(1),
             listen_cancel: tokio_util::sync::CancellationToken::new(),
+            reinit_needed: AtomicBool::new(false),
+            reinit_lock: TokioMutex::new(()),
             redirects_followed,
             connected: AtomicBool::new(false),
             timeout,
