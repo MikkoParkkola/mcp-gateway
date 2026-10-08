@@ -286,40 +286,37 @@ impl Shared {
             tracing::error!(record = %name, "repaired task record duplicates a served task or key; it stays sealed");
             return;
         }
+        // Durable first, visible last: the row is written (a live one settled
+        // through the bounded settle, any other written again through the
+        // commit every write takes, so it is durable on every platform), then
+        // its key imported, and only then published. A refused import leaves
+        // nothing visible; a key imported a moment before its row is published
+        // reads as a reserved row's does (MIK-8023).
         let recovered = interrupted_of(&id, &task, &record).and_then(|live| recover(&live));
         let was_live = recovered.is_some();
-        let published = match recovered {
-            Some(event) => self.settle_with_fallback(
+        let written = match recovered {
+            Some(event) => self.settle_durable(
                 &task,
                 &record,
                 (event, None, ErrorAuthor::Gateway),
                 Utc::now(),
             ),
-            // Written again through the commit every write takes (temp file,
-            // sync, rename, directory sync), so it is durable before it is
-            // served on every platform.
-            None => super::serialize(&record)
-                .and_then(|bytes| {
-                    if bytes.len() > self.limits.record_bytes {
-                        return Err(StoreError::Capacity);
-                    }
-                    self.commit(name, &bytes)
-                })
-                .map(|()| self.publish(task, record)),
+            None => super::serialize(&record).and_then(|bytes| {
+                if bytes.len() > self.limits.record_bytes {
+                    return Err(StoreError::Capacity);
+                }
+                self.commit(name, &bytes).map(|()| Some((task, record)))
+            }),
         };
-        let Ok(committed) = published else {
+        let Ok(Some((task, record))) = written else {
             tracing::error!(record = %name, "repaired task record could not be made durable; it stays sealed");
             return;
         };
-        if !self.state().entries.contains_key(&id) {
-            tracing::error!(record = %name, "repaired task record was not published; it stays sealed");
-            return;
-        }
-        if !import(binding_of(&admission), id.clone()) {
-            self.state().entries.remove(&id);
+        if !import(binding_of(&admission), id) {
             tracing::error!(record = %name, "repaired task record's key is refused by admission; it stays sealed");
             return;
         }
+        let committed = self.publish(task, record);
         tracing::warn!(record = %name, recovered = was_live, "sealed task record served again");
         self.state().sealed.remove(name);
         if was_live {
