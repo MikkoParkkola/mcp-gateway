@@ -15,7 +15,7 @@ use crate::capability::executor::CapabilityExecutor;
 use crate::capability::{CapabilityDefinition, CapabilityExecutionContext, parse_capability};
 use crate::identity_grants::GrantSubject;
 
-fn python() -> String {
+pub(super) fn python() -> String {
     let name = if cfg!(windows) { "python" } else { "python3" };
     let path = std::env::var_os("PATH");
     let pathext = std::env::var_os("PATHEXT");
@@ -25,7 +25,7 @@ fn python() -> String {
         .to_string()
 }
 
-fn capability_yaml() -> String {
+pub(super) fn capability_yaml() -> String {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cap_exec/fake_mcp.py")
         .display()
@@ -116,18 +116,18 @@ providers:
     )
 }
 
-fn capability() -> CapabilityDefinition {
+pub(super) fn capability() -> CapabilityDefinition {
     parse_capability(&capability_yaml()).expect("probe parses")
 }
 
-fn caller(subject: &str) -> CapabilityExecutionContext {
+pub(super) fn caller(subject: &str) -> CapabilityExecutionContext {
     CapabilityExecutionContext {
         caller_identity: Some(GrantSubject::new("test", subject, None)),
         ..CapabilityExecutionContext::default()
     }
 }
 
-async fn call(
+pub(super) async fn call(
     executor: &CapabilityExecutor,
     cap: &CapabilityDefinition,
     params: Value,

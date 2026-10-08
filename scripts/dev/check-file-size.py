@@ -28,7 +28,7 @@ from pathlib import Path
 CEILING = 800
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = Path(__file__).with_name("file-size-baseline.txt")
-SCANNED = ("src", "tests")
+SCANNED = ("src", "tests", "crates")
 
 DECLARATION = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*;\s*$")
 # Built-in attributes that carry no code. A macro attribute above a `mod` could

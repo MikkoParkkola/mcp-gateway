@@ -348,7 +348,6 @@ impl CapabilityExecutor {
     ///
     /// Inner and outer share `{revision, profile, epoch}` plus the already-
     /// resolved outer `cache_binding`. The binding is copied, not re-hashed.
-    #[allow(clippy::unused_self)]
     pub(super) fn build_cache_key(
         &self,
         capability: &super::super::CapabilityDefinition,
@@ -361,6 +360,24 @@ impl CapabilityExecutor {
             context.caller_identity.as_ref(),
         ) {
             (CapabilityExposure::Personal, None) => return None,
+            // An MCP answer came from one caller's child, so it is keyed on
+            // that child's name: only that caller reads it back (MIK-7825).
+            // Single-user names every unnamed caller one child, as the run does.
+            _ if matches!(
+                super::process::spawned_process(capability),
+                Some(crate::capability::definition::ProcessConfig::Mcp(_))
+            ) =>
+            {
+                format!(
+                    "2:{}",
+                    super::mcp::principal(
+                        capability,
+                        context,
+                        self.multi_user.load(std::sync::atomic::Ordering::Acquire)
+                    )
+                    .ok()?
+                )
+            }
             (_, Some(identity)) => {
                 format!(
                     "1:{}:{}|{}:{}",
