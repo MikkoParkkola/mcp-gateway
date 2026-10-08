@@ -48,11 +48,11 @@ fn pieces(text: &str) -> Value {
 
 /// Whether `who` forwarding `text`'s pieces is reported as a relay.
 fn reported(fw: &Firewall, who: &str, text: &str) -> bool {
-    reported_args(fw, who, pieces(text))
+    reported_args(fw, who, &pieces(text))
 }
 
 /// Whether `who` sending `arguments` is reported as a relay.
-fn reported_args(fw: &Firewall, who: &str, arguments: Value) -> bool {
+fn reported_args(fw: &Firewall, who: &str, arguments: &Value) -> bool {
     let params = json!({
         "name": "send",
         "arguments": arguments,
@@ -130,7 +130,7 @@ fn a_callers_own_copy_at_another_offset_is_never_a_relay() {
             // forward's positions line up with A's and not with B's, so a
             // selection by position would keep windows A holds and B lacks.
             let padded = format!("{}{text}", "~".repeat(i % 16));
-            reported(&fw, &b, &text) || reported_args(&fw, &b, json!({"text": padded}))
+            reported(&fw, &b, &text) || reported_args(&fw, &b, &json!({"text": padded}))
         })
         .collect();
     assert!(
