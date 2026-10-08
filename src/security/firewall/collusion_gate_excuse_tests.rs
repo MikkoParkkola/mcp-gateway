@@ -97,3 +97,33 @@ fn a_cut_copy_from_another_source_excuses_nothing() {
         "a cut copy from another source excused carol's text"
     );
 }
+
+/// `MIK-8066.EXCUSE.1`: a receipt cut by its fingerprint count, not its
+/// text, still excuses its holder: alice's answer is short enough to keep
+/// whole, but its fingerprints past the per-delivery cap are dropped, with
+/// P at the end.
+#[test]
+fn a_holder_whose_fingerprints_were_truncated_is_excused() {
+    let fw = firewall();
+    deliver(&fw, "carol", "read", P);
+    let answer = format!("{} {P}", filler(3, 5_500));
+    deliver(&fw, "alice", "read", &answer);
+    assert!(
+        relays(&fw, "bob", P),
+        "control: bob without a copy is a relay"
+    );
+    assert!(
+        !relays(&fw, "alice", P),
+        "alice was refused for text whose fingerprints were truncated"
+    );
+}
+
+/// `MIK-8066.EXCUSE.1`: a sketch only ever excuses its holder; it is never
+/// evidence. Only alice was delivered P, inside a cut answer: bob relaying
+/// it is not a finding (nothing recorded it as held).
+#[test]
+fn a_sketch_is_never_evidence() {
+    let fw = firewall();
+    deliver(&fw, "alice", "read", &long_answer());
+    assert!(!relays(&fw, "bob", P), "a sketch was used as evidence");
+}

@@ -232,6 +232,9 @@ struct State {
     next_seq: u64,
     /// Pool records held across every entry (`MIK-8123`).
     pool: usize,
+    /// What cut deliveries carried, by (source, caller): excuse only
+    /// (`MIK-8066.EXCUSE.1`).
+    sketches: sketch::SketchStore,
 }
 
 impl State {
@@ -243,6 +246,7 @@ impl State {
             self.order.remove(&(seen, seq));
             self.remove(fp);
         }
+        self.sketches.sweep(now, window);
     }
 
     /// Remove `fp`'s entry, releasing its pool records: every removal goes
@@ -432,6 +436,24 @@ impl CollusionDetector {
         );
     }
 
+    /// Keep `sketch`, what `principal` received from `source` in a delivery
+    /// whose receipt was cut, as excuse only (`MIK-8066.EXCUSE.1`).
+    pub(crate) fn record_sketch_at(
+        &self,
+        source: &str,
+        principal: &str,
+        sketch: std::sync::Arc<sketch::Sketch>,
+        now: Instant,
+    ) {
+        if self.params.action == RelayAction::Off {
+            return;
+        }
+        let pair = (self.digest(source), self.digest(principal));
+        let mut state = self.state.lock();
+        state.sweep(now, self.params.window);
+        state.sketches.insert(pair, sketch, now);
+    }
+
     /// [`Self::record_delivery_flows_at`] for fingerprints already taken, in
     /// the order they are kept when over [`MAX_SOURCE_FINGERPRINTS`].
     pub(crate) fn record_fingerprints_at(
@@ -475,11 +497,15 @@ impl CollusionDetector {
         if self.params.action == RelayAction::Off {
             return;
         }
+        // `MIK-8066.EXCUSE.1`: what truncation drops is still the caller's
+        // own copy, so it is sketched before it goes.
+        let mut cut = None;
         if fps.len() > MAX_SOURCE_FINGERPRINTS {
             self.source_truncated.fetch_add(
                 count(fps.len() - MAX_SOURCE_FINGERPRINTS),
                 Ordering::Relaxed,
             );
+            cut = Some(std::sync::Arc::new(sketch::Sketch::of(&fps)));
             fps.truncate(MAX_SOURCE_FINGERPRINTS);
         }
         let holder = |at| Holder {
@@ -492,6 +518,10 @@ impl CollusionDetector {
         let window = self.params.window;
         let mut state = self.state.lock();
         state.sweep(now, window);
+        if let Some(cut) = cut {
+            let pair = (self.digest(source), self.digest(principal));
+            state.sketches.insert(pair, cut, now);
+        }
         for fp in fps {
             // Calls can reach the lock out of time order; an entry's age only
             // ever moves forward.
@@ -586,11 +616,14 @@ impl CollusionDetector {
                 continue;
             };
             let tuples = &tracked.records;
+            // The sender's own copy from that source: a held tuple, or a
+            // cut delivery's sketch (`MIK-8066.EXCUSE.1`).
             let excused = |source| {
                 tuples
                     .iter()
                     .filter(live)
                     .any(|t| t.source == source && t.principal == sender)
+                    || state.sketches.holds((source, sender), fp, now, window)
             };
             let sensitive =
                 |t: &&Holder| t.sensitive.is_some_and(|copies| copies.held(now, window));
@@ -625,6 +658,11 @@ impl CollusionDetector {
         self.state.lock().entries.len()
     }
 
+    /// Sketches dropped by their per-holder or byte cap (`MIK-8066`).
+    pub(crate) fn sketches_evicted(&self) -> u64 {
+        self.state.lock().sketches.evicted
+    }
+
     pub(crate) fn evicted(&self) -> u64 {
         self.evicted.load(Ordering::Relaxed)
     }
@@ -645,6 +683,8 @@ mod seam;
 #[cfg(test)]
 #[path = "collusion_seam_tests.rs"]
 mod seam_tests;
+#[path = "collusion_sketch.rs"]
+pub(super) mod sketch;
 pub(crate) use seam::SeamFingerprint;
 
 #[cfg(test)]
