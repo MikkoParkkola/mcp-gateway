@@ -166,3 +166,68 @@ fn what_overflowed_expires_with_its_own_delivery() {
         "plain deliveries extended what overflowed"
     );
 }
+
+/// `MIK-8123`: pool records are released when their fingerprint leaves the
+/// window, so the pool never fills from expired text.
+#[test]
+fn pool_records_return_when_the_window_passes() {
+    let d = detector();
+    let now = Instant::now();
+    let text = passage();
+    for i in 0..20 {
+        d.record_delivery_at(&source(i), CAROL, true, &text, now);
+    }
+    assert!(d.pool_in_use() > 0, "premise: records past the inline ones");
+    let later = now + Duration::from_secs(700);
+    assert!(d.check_egress_at(BOB, EGRESS, &text, later).is_none());
+    assert_eq!(d.pool_in_use(), 0, "expired records kept their pool slots");
+}
+
+/// `MIK-8123`: with the pool full a sensitive record past the inline ones
+/// becomes its caller's overflow, still evidence; the pool never grows.
+#[test]
+fn a_full_pool_keeps_sensitive_text_judged() {
+    let mut d = detector();
+    d.set_pool_capacity(0);
+    let now = Instant::now();
+    let text = passage();
+    overflowed(&d, &text, now);
+    assert_eq!(d.pool_in_use(), 0, "the pool grew past its capacity");
+    assert!(d.capped() > 0, "records past the cap are counted");
+    assert!(
+        d.check_egress_flows_at(BOB, (EGRESS, 1), &text, now)
+            .is_some(),
+        "a full pool silenced sensitive text"
+    );
+}
+
+/// `MIK-8123`: `Common` counts every caller seen, records kept or not:
+/// with the pool full, five callers whose records did not all fit still
+/// make the text common. Positive control: four callers keep it judged.
+#[test]
+fn callers_whose_records_were_dropped_still_count_toward_common() {
+    let now = Instant::now();
+    let text = passage();
+    let with_callers = |n: usize| {
+        let mut d = detector();
+        d.set_pool_capacity(0);
+        for i in 0..8 {
+            d.record_delivery_at(&source(i), CAROL, true, &text, now);
+        }
+        for i in 1..n {
+            d.record_delivery_at(&source(50 + i), &format!("caller-{i}"), false, &text, now);
+        }
+        d.check_egress_at(BOB, EGRESS, &text, now).is_some()
+    };
+    assert!(with_callers(4), "control: four callers keep it judged");
+    assert!(!with_callers(5), "dropped records hid callers from common");
+}
+
+/// `MIK-8123`: the pool's memory bound. A holder record is at most 160
+/// bytes on 64-bit targets, so the pool holds at most 10 MiB of records.
+#[test]
+fn the_pool_is_bounded_in_bytes() {
+    let record = std::mem::size_of::<super::Holder>();
+    assert!(record <= 160, "a holder record grew to {record} bytes");
+    assert!(super::holders::EXTRA_RECORD_POOL * 160 <= 10 * 1024 * 1024);
+}

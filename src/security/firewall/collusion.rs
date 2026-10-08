@@ -74,11 +74,13 @@ pub(super) const K: usize = 48;
 /// never depends on the text around it, so two texts sharing a k-gram keep it
 /// in both or in neither, and the same-source excuse is exact (MIK-8083).
 const SAMPLE: u64 = 4;
-/// Tuples one fingerprint may hold before it is `Saturated`.
-const MAX_TUPLES: usize = 8;
-/// The most distinct principals one tracked fingerprint can reach: a 9th
-/// tuple saturates it, so a larger `common_principals` is never met.
-pub(super) const MAX_COMMON_PRINCIPALS: usize = MAX_TUPLES + 1;
+/// The source a finding names when its witness is a caller's overflow: no
+/// source survives for a record past the cap (`MIK-8123`).
+const OVERFLOW_SOURCE: u64 = 0;
+
+/// The largest `common_principals` a configuration may set: the boilerplate
+/// guard stays meaningful only for text a handful of callers share.
+pub(super) const MAX_COMMON_PRINCIPALS: usize = 9;
 /// Fingerprints kept per delivered result; the rest are counted, not stored.
 /// Twice one form's share: a split delivery records its newline-joined and
 /// its run-together forms, which share almost no k-grams, and both are
@@ -201,13 +203,19 @@ impl Flows {
 }
 
 enum Holders {
-    Tracked(Vec<Holder>),
-    /// A 9th holder arrived. Evicting one could erase a same-source excuse
-    /// and turn an excused copy into a finding, so none is evicted and the
-    /// fingerprint never counts toward a finding again.
-    Saturated,
+    /// Still judged (`MIK-8123`: never switched off by fan-out).
+    Tracked(holders::Tracked),
     /// Held by `common_principals` distinct principals: boilerplate.
     Common,
+}
+
+impl Entry {
+    fn pool_records(&self) -> usize {
+        match &self.holders {
+            Holders::Tracked(t) => t.pool_records(),
+            Holders::Common => 0,
+        }
+    }
 }
 
 struct Entry {
@@ -222,6 +230,8 @@ struct State {
     /// Oldest-first index of `entries`, for expiry and the cap.
     order: BTreeMap<(Instant, u64), u64>,
     next_seq: u64,
+    /// Pool records held across every entry (`MIK-8123`).
+    pool: usize,
 }
 
 impl State {
@@ -231,8 +241,22 @@ impl State {
                 break;
             }
             self.order.remove(&(seen, seq));
-            self.entries.remove(&fp);
+            self.remove(fp);
         }
+    }
+
+    /// Remove `fp`'s entry, releasing its pool records: every removal goes
+    /// through here, so the pool count never leaks.
+    fn remove(&mut self, fp: u64) -> Option<Entry> {
+        let entry = self.entries.remove(&fp)?;
+        self.pool -= entry.pool_records();
+        Some(entry)
+    }
+
+    /// Insert `entry` for `fp`, taking its pool records.
+    fn insert(&mut self, fp: u64, entry: Entry) {
+        self.pool += entry.pool_records();
+        self.entries.insert(fp, entry);
     }
 
     fn stamp(&mut self, now: Instant, fp: u64) -> (Instant, u64) {
@@ -262,8 +286,12 @@ pub(crate) struct CollusionDetector {
     sample: u64,
     state: Mutex<State>,
     evicted: AtomicU64,
-    saturated: AtomicU64,
+    /// Records that did not fit a caller's cap or the pool: plain ones
+    /// dropped, sensitive ones kept as overflow (`MIK-8123`).
+    capped: AtomicU64,
     source_truncated: AtomicU64,
+    /// Pool records allowed across every fingerprint.
+    pool_capacity: usize,
 }
 
 /// `SipHash` with a per-process random key: fingerprints and id digests are
@@ -284,8 +312,9 @@ impl CollusionDetector {
             sample: SAMPLE,
             state: Mutex::new(State::default()),
             evicted: AtomicU64::new(0),
-            saturated: AtomicU64::new(0),
+            capped: AtomicU64::new(0),
             source_truncated: AtomicU64::new(0),
+            pool_capacity: holders::EXTRA_RECORD_POOL,
         }
     }
 
@@ -317,6 +346,18 @@ impl CollusionDetector {
     #[cfg(test)]
     pub(crate) fn keep_every_kgram(&mut self) {
         self.sample = 1;
+    }
+
+    /// Allow `n` pool records in all (tests only).
+    #[cfg(test)]
+    fn set_pool_capacity(&mut self, n: usize) {
+        self.pool_capacity = n;
+    }
+
+    /// Pool records held now (tests only).
+    #[cfg(test)]
+    fn pool_in_use(&self) -> usize {
+        self.state.lock().pool
     }
 
     /// Every `K`-char k-gram hash of `text`, normalised as
@@ -455,53 +496,44 @@ impl CollusionDetector {
             // Calls can reach the lock out of time order; an entry's age only
             // ever moves forward.
             let mut touched = now;
-            let holders = if let Some(entry) = state.entries.remove(&fp) {
+            let holders = if let Some(entry) = state.remove(fp) {
                 state.order.remove(&entry.order);
                 touched = touched.max(entry.order.0);
-                self.add(entry.holders, holder(now), now)
+                entry.holders
             } else {
                 if state.entries.len() >= self.params.max_fingerprints
                     && let Some((_, oldest)) = state.order.pop_first()
                 {
-                    state.entries.remove(&oldest);
+                    state.remove(oldest);
                     self.evicted.fetch_add(1, Ordering::Relaxed);
                 }
-                self.add(Holders::Tracked(Vec::new()), holder(now), now)
+                Holders::Tracked(holders::Tracked::default())
             };
+            let room = self.pool_capacity.saturating_sub(state.pool);
+            let holders = self.add(holders, holder(now), now, room);
             let order = state.stamp(touched, fp);
-            state.entries.insert(fp, Entry { holders, order });
+            state.insert(fp, Entry { holders, order });
         }
     }
 
-    fn add(&self, holders: Holders, new: Holder, now: Instant) -> Holders {
-        let Holders::Tracked(mut tuples) = holders else {
+    /// `new` added to `holders`; `room` is how many pool records this
+    /// fingerprint may hold in all (`MIK-8123`).
+    fn add(&self, holders: Holders, new: Holder, now: Instant, room: usize) -> Holders {
+        let Holders::Tracked(mut tracked) = holders else {
             return holders;
         };
         let window = self.params.window;
-        tuples.retain(|t| now.saturating_duration_since(t.copies.latest()) <= window);
-        match tuples
-            .iter_mut()
-            .find(|t| t.source == new.source && t.principal == new.principal)
-        {
-            Some(t) => {
-                // Kept by their own times, whatever order calls arrive in.
-                t.copies.add(&new.copies, window);
-                match (&mut t.sensitive, new.sensitive) {
-                    (Some(held), Some(more)) => held.add(&more, window),
-                    (held, more) => *held = held.or(more),
-                }
-                t.flows.merge(new.flows);
+        tracked.expire(now, window);
+        match tracked.add(new, now, window, room) {
+            holders::Added::Kept => {}
+            holders::Added::PlainDropped | holders::Added::Overflowed => {
+                self.capped.fetch_add(1, Ordering::Relaxed);
             }
-            None => tuples.push(new),
         }
-        let principals: HashSet<u64> = tuples.iter().map(|t| t.principal).collect();
-        if principals.len() >= self.params.common_principals {
+        if tracked.callers() >= self.params.common_principals {
             Holders::Common
-        } else if tuples.len() > MAX_TUPLES {
-            self.saturated.fetch_add(1, Ordering::Relaxed);
-            Holders::Saturated
         } else {
-            Holders::Tracked(tuples)
+            Holders::Tracked(tracked)
         }
     }
 
@@ -509,7 +541,8 @@ impl CollusionDetector {
     ///
     /// A fingerprint counts when, inside the window, some other principal got
     /// it as sensitive from a source T that `principal` never got it from,
-    /// and it is neither `Common` nor `Saturated`.
+    /// and it is not `Common`; or some other caller's sensitive record past
+    /// its cap is held (`MIK-8123`).
     pub(crate) fn check_egress_at(
         &self,
         principal: &str,
@@ -544,12 +577,13 @@ impl CollusionDetector {
         let mut first = None;
         for fp in fps {
             let Some(Entry {
-                holders: Holders::Tracked(tuples),
+                holders: Holders::Tracked(tracked),
                 ..
             }) = state.entries.get(&fp)
             else {
                 continue;
             };
+            let tuples = &tracked.records;
             let excused = |source| {
                 tuples
                     .iter()
@@ -563,6 +597,11 @@ impl CollusionDetector {
             }) {
                 matches += 1;
                 first.get_or_insert((t.source, t.principal));
+            } else if let Some(receiver) = tracked.overflow_witness(sender, now, window) {
+                // `MIK-8123`: a sensitive record past the cap has no source
+                // left to excuse it or flow to allow it.
+                matches += 1;
+                first.get_or_insert((OVERFLOW_SOURCE, receiver));
             }
         }
         let (source, receiver) = first?;
@@ -588,8 +627,8 @@ impl CollusionDetector {
         self.evicted.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn saturated(&self) -> u64 {
-        self.saturated.load(Ordering::Relaxed)
+    pub(crate) fn capped(&self) -> u64 {
+        self.capped.load(Ordering::Relaxed)
     }
 
     pub(crate) fn source_truncated(&self) -> u64 {
@@ -597,6 +636,8 @@ impl CollusionDetector {
     }
 }
 
+#[path = "collusion_holders.rs"]
+mod holders;
 #[path = "collusion_seam.rs"]
 mod seam;
 #[cfg(test)]
@@ -605,8 +646,8 @@ mod seam_tests;
 pub(crate) use seam::SeamFingerprint;
 
 #[cfg(test)]
-#[path = "collusion_tests.rs"]
-mod tests;
-#[cfg(test)]
 #[path = "collusion_holders_tests.rs"]
 mod holders_tests;
+#[cfg(test)]
+#[path = "collusion_tests.rs"]
+mod tests;
