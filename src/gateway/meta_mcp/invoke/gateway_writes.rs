@@ -93,6 +93,10 @@ const NOTED_PATHS: &[&[&str]] = &[
     // MIK-7994: the continuation envelope the gateway mints into an interim
     // answer.
     &["requestState"],
+    // MIK-8025: what the modern shaper writes.
+    &["resultType"],
+    &["cacheScope"],
+    &["ttlMs"],
 ];
 
 /// A note as the sync admission stores it beside a delivery. `seq` is not
@@ -426,8 +430,8 @@ mod tests {
         .await;
     }
 
-    /// MIK-7991 r4 (R9): a record as the sync admission stores it keeps all
-    /// ten noted paths on both layers through a round trip; a stored path
+    /// MIK-7991 r4 (R9): a record as the sync admission stores it keeps every
+    /// noted path on both layers through a round trip; a stored path
     /// this build does not note drops only that entry; restored, the record
     /// lands after the replay's mark and strips what it wrote.
     #[tokio::test]
@@ -436,7 +440,8 @@ mod tests {
             "recovery": {"hint": "retry"}, "_signature": {"sig": "s"}, "taskId": "t-9",
             "trace_id": "t-1", "predicted_next": ["b"], "_meta": {"provenance": {"p": 1}},
             "_security_findings": ["f"], "_cost_warnings": ["w"],
-            "_cost_suggestion": {"message": "m"}, "requestState": "rs-1", "text": "backend",
+            "_cost_suggestion": {"message": "m"}, "requestState": "rs-1", "resultType": "complete",
+            "cacheScope": "private", "ttlMs": 5000, "text": "backend",
         });
         let stored = scope(async {
             for layer in [Layer::Value, Layer::Answer] {
