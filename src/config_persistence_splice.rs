@@ -207,7 +207,7 @@ fn remove_entry(original: &str, name: &str) -> Option<String> {
 /// only where a token starts, so the one in `it's` or `say "hi` does not, and
 /// `\"` or `''` inside a quoted scalar does not end it. A misread here only
 /// matters with a `#` left in the value, which [`edit_block`] refuses.
-fn inline_comment(line: &str) -> Option<&str> {
+pub(super) fn inline_comment(line: &str) -> Option<&str> {
     let mut quote = None;
     let mut prev = ' ';
     // Only blanks since the start, a `:`, or a flow indicator.

@@ -171,6 +171,21 @@ pub(crate) fn write_config_with(
     write_spliced(path, config, mode, Splice::One)
 }
 
+/// The comment lines (as `line N`) that [`write_config_with`] writing
+/// `config` to `path` would drop, from the same single read and the same
+/// one-backend splice the write makes. Call it inside the locked edit, so
+/// the answer is about this write and not one another writer made since.
+/// Empty when the write would not splice: a file with comments is then
+/// refused, and one without has none to drop.
+pub(crate) fn comments_a_write_drops(path: &Path, config: &Config) -> Vec<String> {
+    let Ok((before, text)) = Config::load_literal_with_text(path) else {
+        return Vec::new();
+    };
+    splice::with_backends_edited(&text, &before, config, Splice::One)
+        .map(|after| comments::dropped_comment_lines(&text, &after))
+        .unwrap_or_default()
+}
+
 /// Edit the config at `path` for a CLI command, keeping the file's comments.
 ///
 /// One transaction under the cross-process config lock ([`lock`]): the file
