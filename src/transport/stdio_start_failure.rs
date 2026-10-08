@@ -103,9 +103,12 @@ impl StdioTransport {
         self.assigned_cache.as_deref()
     }
 
-    /// The cache directory the child is given, whoever chose it.
+    /// The cache directory the child is given, whoever chose it. An assigned
+    /// cache is set from the path itself at spawn, so it is the one reported.
     pub(crate) fn package_cache_dir(&self) -> Option<PathBuf> {
-        self.env.get(CACHE_ENV).map(PathBuf::from)
+        self.assigned_cache
+            .clone()
+            .or_else(|| self.env.get(CACHE_ENV).map(PathBuf::from))
     }
 
     /// How the child exited, if a failed start saw it exit.

@@ -141,6 +141,13 @@ impl StdioTransport {
         // values explicitly assigned to this backend. In particular, secrets
         // loaded into the gateway process must not be inherited implicitly.
         configure_child_environment(&mut cmd, &self.env);
+        // The assigned cache goes in as the path itself, not its string form:
+        // a data directory that is not valid UTF-8 would otherwise hand the
+        // child a lossy copy, a different directory from the one the repair
+        // inspects (MIK-7990).
+        if let Some(dir) = &self.assigned_cache {
+            cmd.env(cache::CACHE_ENV, dir);
+        }
 
         if let Some(ref cwd) = self.cwd {
             cmd.current_dir(cwd);
