@@ -244,6 +244,7 @@ struct Receipt {
 
 /// What a staged receipt records.
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 enum Kind {
     /// A result as delivered (or a plan step's, kept to the plan's answer).
     Delivered,
