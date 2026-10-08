@@ -107,6 +107,10 @@ const NOTED_PATHS: &[&[&str]] = &[
     // MIK-7994: the continuation envelope the gateway mints into an interim
     // answer.
     &["requestState"],
+    // MIK-8025: what the modern shaper writes.
+    &["resultType"],
+    &["cacheScope"],
+    &["ttlMs"],
     // MIK-7993 (r4 M1): the response-contract annotations the gateway adds.
     CONTRACT_VIOLATION,
     CONTRACT_REASON,
@@ -490,6 +494,15 @@ pub(super) fn owns(layer: Layer, path: &[&str], value: &Value) -> bool {
 #[cfg(feature = "firewall")]
 pub(super) fn strip(value: &mut Value, layer: Layer) {
     let _ = GATEWAY_WRITES.try_with(|writes| remove_owned(value, &writes.borrow().list, layer));
+}
+
+/// Remove from `value` the answer-layer members the gateway wrote on this
+/// call, for a route that stages its own delivered copy (the direct route,
+/// whose result is both answer and tool value); the value layer is left to
+/// `receipt_with`, which strips it on every stage.
+#[cfg(feature = "firewall")]
+pub(crate) fn strip_noted(value: &mut Value) {
+    strip(value, Layer::Answer);
 }
 
 /// `value` without what `record` wrote, for a cache or replay hit's receipt:

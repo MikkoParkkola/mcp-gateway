@@ -227,6 +227,32 @@ fn rotation_keeps_the_stored_secret_as_previous() {
     assert_eq!(stored.previous_until, Some(stored.granted_at + grace()));
 }
 
+/// The rotation grace protects a live rotation only: an expired row's old
+/// secret ends with the row and is never dual-signed for its successor.
+#[test]
+fn an_expired_rows_secret_is_not_carried_into_a_new_grace() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let mut first = sub("p", "https://h/1", now);
+    first.expires_at = Some(now + chrono::Duration::seconds(1));
+    store
+        .admit(first.clone(), true, CAPS, grace(), now, TAIL)
+        .expect("io")
+        .expect("first");
+    let later = now + chrono::Duration::seconds(5);
+    let mut renewed = sub("p", "https://h/1", later);
+    renewed.secret = "whsec_second".into();
+    store
+        .admit(renewed, true, CAPS, grace(), later, TAIL)
+        .expect("io")
+        .expect("renewed");
+    let stored = store.get(&first.id).expect("row");
+    assert_eq!(stored.secret, "whsec_second");
+    assert_eq!(stored.previous_secret, None, "the expired secret is gone");
+    assert_eq!(stored.previous_until, None);
+}
+
 #[test]
 fn unsubscribing_an_expired_row_does_not_restart_its_tail() {
     let dir = tempfile::tempdir().expect("dir");

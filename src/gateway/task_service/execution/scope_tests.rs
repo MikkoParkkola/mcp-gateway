@@ -28,3 +28,24 @@ fn a_retry_that_finds_a_completed_task_delivers_its_result_private() {
     assert_eq!(wire["result"]["status"], "completed", "{wire}");
     assert_eq!(wire["result"]["result"]["cacheScope"], "private", "{wire}");
 }
+
+/// `MIK-8052` (operator rule, ideal UX): a sealed task start tells the caller
+/// what happened and that it clears, and never a server path.
+#[test]
+fn a_sealed_start_says_what_happened_without_a_path() {
+    let response = BeginOutcome::Sealed.into_response(RequestId::Number(1));
+    let error = response.error.expect("a refusal");
+    // The code the synchronous path and the upgrade notes give a sealed call.
+    assert_eq!(error.code, 409, "{}", error.message);
+    assert!(error.message.contains("paused"), "{}", error.message);
+    assert!(
+        error.message.contains("resume on their own"),
+        "{}",
+        error.message
+    );
+    assert!(
+        !error.message.contains(".json"),
+        "no file is named: {}",
+        error.message
+    );
+}

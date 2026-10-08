@@ -43,6 +43,8 @@ pub(crate) enum CreateOutcome {
     InFlight,
     Capacity,
     Unavailable,
+    /// New keyed tasks are sealed (MIK-8052).
+    Sealed,
 }
 
 /// Why a task-service operation could not be carried out.
@@ -68,6 +70,12 @@ pub enum ServiceError {
 pub struct TaskService {
     pub(crate) store: TaskStore,
     admission: Arc<ExecutionAdmission>,
+    /// This service's own share of the caller's admission seal: its stored
+    /// rows whose key nobody can read (MIK-8052). Moved by re-reads, released
+    /// once at shutdown; a share another holder placed is never touched.
+    /// `None` once released: a re-read that finishes after shutdown cannot
+    /// put a share back (seat-2 review).
+    sealed: parking_lot::Mutex<Option<usize>>,
 }
 
 impl TaskService {
@@ -87,16 +95,87 @@ impl TaskService {
         let store = TaskStore::open(path, limits)
             .await
             .map_err(|_| ServiceError::Unavailable)?;
+        // Sealed BEFORE the import, so no admission is ever answered without
+        // the seal; and apart from it, because the import returns early on an
+        // empty batch and a store whose only rows are sealed must still seal.
+        // A refused import puts the previous seal back: the caller's index is
+        // left exactly as it was found.
+        let sealed = store.skipped_records().sealed;
+        admission.adjust_sealed(0, sealed);
         if admission.import_tasks(&store.restored_bindings()).is_err() {
+            admission.adjust_sealed(sealed, 0);
             let _ = store.close().await;
             return Err(ServiceError::Unavailable);
         }
-        Ok(Self { store, admission })
+        Ok(Self {
+            store,
+            admission,
+            sealed: parking_lot::Mutex::new(Some(sealed)),
+        })
+    }
+
+    /// Read the sealed rows again and lower the seal only after any repaired
+    /// row's key is imported, so that key is never admitted as new in between
+    /// (MIK-8052). Runs on every expiry sweep; a store with nothing sealed
+    /// returns at once.
+    pub(crate) async fn reread_sealed(&self) {
+        // Imported under the share's lock, and only while this service still
+        // holds a share: once shutdown released it, custody is gone and no key
+        // is published on the caller's authority. Lock order is share, then
+        // admission, as in `move_seal` and `release_seal`.
+        let sealed = self
+            .store
+            .reread_sealed(|binding, id| {
+                let share = self.sealed.lock();
+                share.is_some() && self.admission.import_tasks(&[(binding, id)]).is_ok()
+            })
+            .await;
+        self.move_seal(sealed);
+    }
+
+    /// Move this service's share of the seal to `rows`, under its own lock so
+    /// two moves never interleave.
+    fn move_seal(&self, rows: usize) {
+        if let Some(mine) = self.sealed.lock().as_mut() {
+            self.admission.adjust_sealed(*mine, rows);
+            *mine = rows;
+        }
+    }
+
+    /// Release this service's share for good: once, and no move after it.
+    fn release_seal(&self) {
+        if let Some(mine) = self.sealed.lock().take() {
+            self.admission.adjust_sealed(mine, 0);
+        }
+    }
+
+    /// Seal `name` as the load would, and seal admission with it (MIK-8052).
+    #[cfg(test)]
+    pub(crate) fn seal_for_test(&self, name: &str) {
+        self.store.seal_for_test(name);
+        self.move_seal(self.store.skipped_records().sealed);
     }
 
     /// The rows the store skipped when it opened (MIK-8023).
     pub(crate) fn skipped_records(&self) -> super::store::SkippedRecords {
         self.store.skipped_records()
+    }
+
+    /// The admin `/health` view of the task store (MIK-8052): how many rows
+    /// are sealed, the exact file of each, and the one action that clears
+    /// them, so an operator never has to hunt.
+    pub(crate) fn health_view(&self) -> serde_json::Value {
+        let files: Vec<String> = self
+            .store
+            .sealed_files()
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect();
+        serde_json::json!({
+            "sealed_rows": files.len(),
+            "sealed_files": files,
+            "action": "repair or remove each file; new keyed calls resume at the next expiry sweep; restart to read a repaired task",
+        })
     }
 
     /// Admit, reserve a worker only for a new key, then prepare and commit.
@@ -161,6 +240,7 @@ impl TaskService {
                 }
             }
             Ok(TaskAdmission::InFlight) => Ok(CreateOutcome::InFlight),
+            Ok(TaskAdmission::Sealed) => Ok(CreateOutcome::Sealed),
             Err(Refusal::Mismatch) => Ok(CreateOutcome::Mismatch),
             Ok(TaskAdmission::Unavailable) | Err(_) => Ok(CreateOutcome::Unavailable),
         }
@@ -238,13 +318,19 @@ impl TaskService {
     }
 
     /// Join in-flight writers and release the directory lease without consuming
-    /// the `Arc` the executor still holds.
+    /// the `Arc` the executor still holds. The seal this store set goes back
+    /// with it: a caller that keeps its admission authority after a startup
+    /// that failed past the open (stdio serves on without a task store) must
+    /// not keep refusing every new keyed call (MIK-8052).
     pub(crate) async fn shutdown(&self) -> Result<(), ServiceError> {
-        self.store
+        let closed = self
+            .store
             .clone()
             .close()
             .await
-            .map_err(|_| ServiceError::Unavailable)
+            .map_err(|_| ServiceError::Unavailable);
+        self.release_seal();
+        closed
     }
 
     /// The admission authority, for read-only questions.

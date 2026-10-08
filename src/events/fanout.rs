@@ -254,9 +254,14 @@ impl EventsHub {
     /// withdrawn and nothing is sent (MIK-7772); backend types are complete
     /// from the start and are withdrawn whatever the scan did (MIK-7803). `false`, with the worker still held, when
     /// a removal failed: the caller retries.
+    /// It runs as the deferred startup pass does, after the grace period
+    /// (MIK-8027).
     #[cfg(test)]
     pub(crate) fn reconcile_catalogue(&self, scan: CatalogueScan) -> bool {
-        self.reconcile_catalogue_after(&|| scan)
+        self.reconcile_catalogue_after(&|| {
+            self.arm_webhook_withdrawals();
+            scan
+        })
     }
 
     /// [`Self::reconcile_catalogue`], with the scan given by `refresh`, run
@@ -292,6 +297,22 @@ impl EventsHub {
             );
             return self.release_worker();
         }
+        // The first startup pass leaves unoffered webhook types to the
+        // deferred pass: a reload the scan did not see may be about to offer
+        // them (MIK-8027). With webhooks off none can come back.
+        if webhooks_on && !self.webhook_withdrawals_armed() {
+            let held = self
+                .absent_names(super::webhook_source::NAME_PREFIX, &offered)
+                .len();
+            if held > 0 {
+                tracing::info!(
+                    held,
+                    "events: webhook subscriptions to unoffered types are held until the \
+                     deferred startup pass"
+                );
+            }
+            return self.release_worker();
+        }
         if !self.withdraw_unoffered_webhooks(&|_| false) {
             return false;
         }
@@ -302,9 +323,12 @@ impl EventsHub {
     /// blocking pool, waiting `retry` between attempts; each attempt refreshes
     /// and recomputes from the stored state. Every failed attempt is
     /// logged, a join error with its cause: a retry that fails silently
-    /// cannot be diagnosed (MIK-7891).
+    /// cannot be diagnosed (MIK-7891). `pass` names the startup pass in
+    /// those logs, so a stuck deferred withdraw reads apart from the first
+    /// pass (MIK-8027).
     pub(crate) async fn reconcile_until_done(
         self: &Arc<Self>,
+        pass: &'static str,
         refresh: Arc<dyn Fn() -> CatalogueScan + Send + Sync>,
         retry: std::time::Duration,
     ) {
@@ -315,12 +339,14 @@ impl EventsHub {
             {
                 Ok(true) => return,
                 Ok(false) => tracing::warn!(
+                    pass,
                     attempt,
                     retry_secs = retry.as_secs(),
                     "events: startup reconcile could not remove a stale subscription \
                      (cause in the preceding log line); the worker stays held, retrying"
                 ),
                 Err(error) => tracing::warn!(
+                    pass,
                     attempt,
                     %error,
                     "events: startup reconcile task failed; the worker stays held, retrying"
@@ -343,6 +369,9 @@ impl EventsHub {
             .into_iter()
             .filter(|name| !kept(name))
             .collect();
+        if !gone.is_empty() {
+            tracing::info!(types = ?gone, "events: withdrawing unoffered webhook event types");
+        }
         self.withdraw(&gone)
     }
 
@@ -388,9 +417,49 @@ impl EventsHub {
         true
     }
 
+    /// Under the catalogue gate the caller holds: re-register the webhook
+    /// routes of `capabilities` ([`super::reload::refresh_webhooks`]),
+    /// judging a restore against the retired shapes of the types stored
+    /// subscriptions still name (MIK-8038).
+    ///
+    /// # Errors
+    /// The event type the reload would narrow; nothing changes.
+    pub(crate) fn refresh_webhooks(
+        &self,
+        registry: &Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>,
+        capabilities: &[crate::capability::CapabilityDefinition],
+    ) -> Result<Vec<String>, String> {
+        let subscribed: std::collections::BTreeSet<String> = self
+            .store
+            .subscriptions()
+            .into_iter()
+            .map(|sub| sub.name)
+            .collect();
+        super::reload::refresh_webhooks(
+            registry,
+            capabilities,
+            &mut self.retired.lock(),
+            &subscribed,
+        )
+    }
+
     /// Serializes startup reconciliation with capability reloads.
     pub(crate) fn catalogue_lock(&self) -> parking_lot::MutexGuard<'_, ()> {
         self.catalogue_gate.lock()
+    }
+
+    /// From now on a webhook type the catalogue does not offer may be
+    /// withdrawn for that alone (MIK-8027). Called under the catalogue gate
+    /// by the deferred startup pass; never undone within a run.
+    pub(crate) fn arm_webhook_withdrawals(&self) {
+        self.webhook_withdrawals
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Whether [`Self::arm_webhook_withdrawals`] has run.
+    pub(crate) fn webhook_withdrawals_armed(&self) -> bool {
+        self.webhook_withdrawals
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Delete subscription `refused`, the snapshot the access check refused,

@@ -236,24 +236,35 @@ async fn a_startup_scan_that_cannot_read_a_directory_keeps_its_subscriptions() {
     let store = tempfile::tempdir().expect("store");
     std::fs::write(dir.path().join("a.yaml"), capability("alpha")).expect("write");
     seed_subscription(store.path(), "beta");
-    // Withdrawn by the same reconcile, just before its webhook decision.
-    seed_named(store.path(), "gone", "backend.gone.tools_changed");
+    seed_sentinel(store.path());
     let (caps, registry, meta) = wired(&[dir.path()], store.path()).await;
 
     // Beta's directory failed to load.
     caps.mark_initial_scan_failed();
     caps.mark_initial_scan_complete();
-    meta.reconcile_events_after_scan();
-    settled(|| !subscribed(store.path(), "gone")).await;
-    // The sentinel went under the reconcile's catalogue gate; taking the
-    // gate waits for the webhook decision that follows under the same hold.
-    drop(meta.events().expect("hub").catalogue_lock());
-    assert!(!subscribed(store.path(), "gone"), "the reconcile ran");
+    first_pass(&meta, store.path()).await;
     assert!(
         subscribed(store.path(), "beta"),
         "the unread directory's subscription is kept"
     );
     assert_eq!(routes(&registry), ["alpha.push"]);
+}
+
+/// Run the startup reconcile and wait for its first pass. The store must
+/// hold the `gone` sentinel ([`seed_sentinel`]): it is withdrawn under the
+/// reconcile's catalogue gate, and taking the gate then waits for the
+/// webhook decision that follows under the same hold.
+async fn first_pass(meta: &MetaMcp, store: &std::path::Path) {
+    meta.reconcile_events_after_scan();
+    settled(|| !subscribed(store, "gone")).await;
+    drop(meta.events().expect("hub").catalogue_lock());
+    assert!(!subscribed(store, "gone"), "the startup reconcile ran");
+}
+
+/// A subscription to a backend no registry has: every startup reconcile
+/// withdraws it, just before its webhook decision.
+fn seed_sentinel(store: &std::path::Path) {
+    seed_named(store, "gone", "backend.gone.tools_changed");
 }
 
 /// MIK-8028 `PARTIAL.2`: the next complete reload withdraws a type that is
@@ -270,6 +281,8 @@ async fn the_next_complete_reload_withdraws_a_type_still_absent() {
     }
     let (caps, _registry, meta) = wired(&[&d1, &d2], store.path()).await;
     caps.mark_initial_scan_complete();
+    // Past the startup grace period (MIK-8027), as a running gateway is.
+    meta.run_deferred_webhook_withdraw().await;
 
     std::fs::remove_dir_all(&d2).expect("make d2 unreadable");
     caps.reload().await.expect("partial reload");
@@ -332,3 +345,390 @@ async fn a_partial_reload_withdraws_a_route_a_read_capability_dropped() {
         "the unread directory's subscription is kept"
     );
 }
+
+/// MIK-8037 `WATCHGONE.3`: the watch catalogue reads completeness with its
+/// contents: incomplete until the startup scan completes, incomplete after a
+/// reload that could not read a directory (and without that directory's
+/// capabilities), complete once every directory loads again. `present` names
+/// every capability read, REST-served or not.
+#[tokio::test]
+async fn the_watch_catalogue_reports_a_partial_load() {
+    let root = tempfile::tempdir().expect("root");
+    let store = tempfile::tempdir().expect("store");
+    let (d1, d2) = (root.path().join("d1"), root.path().join("d2"));
+    for (dir, cap) in [(&d1, "alpha"), (&d2, "beta")] {
+        std::fs::create_dir_all(dir).expect("dir");
+        std::fs::write(dir.join(format!("{cap}.yaml")), capability(cap)).expect("write");
+    }
+    let (caps, _registry, meta) = wired(&[&d1, &d2], store.path()).await;
+    assert!(
+        !meta.watch_catalogue().complete,
+        "the scan is still running"
+    );
+    caps.mark_initial_scan_complete();
+    let whole = meta.watch_catalogue();
+    assert!(whole.complete, "every directory read");
+    assert!(whole.present.contains("alpha") && whole.present.contains("beta"));
+    std::fs::remove_dir_all(&d2).expect("make d2 unreadable");
+    caps.reload().await.expect("partial reload");
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(partial.present.contains("alpha") && !partial.present.contains("beta"));
+    std::fs::create_dir_all(&d2).expect("dir");
+    std::fs::write(d2.join("beta.yaml"), capability("beta")).expect("write");
+    caps.reload().await.expect("complete reload");
+    assert!(
+        meta.watch_catalogue().complete,
+        "every directory read again"
+    );
+}
+
+/// MIK-8037: every catalogue write moves the generation the watch source
+/// compares before it revokes: a reload, an unload and a registration.
+#[tokio::test]
+async fn every_catalogue_write_moves_the_generation() {
+    let root = tempfile::tempdir().expect("root");
+    let store = tempfile::tempdir().expect("store");
+    std::fs::write(root.path().join("alpha.yaml"), capability("alpha")).expect("write");
+    let (caps, _registry, _meta) = wired(&[root.path()], store.path()).await;
+    let start = caps.catalogue_generation();
+    caps.reload().await.expect("reload");
+    let reloaded = caps.catalogue_generation();
+    assert!(reloaded > start, "a reload");
+    assert!(caps.unload_capability("alpha"), "unloaded");
+    let unloaded = caps.catalogue_generation();
+    assert!(unloaded > reloaded, "an unload");
+    caps.load_from_directory(root.path().to_str().expect("utf8"))
+        .await
+        .expect("register");
+    assert!(caps.catalogue_generation() > unloaded, "a registration");
+}
+
+/// `capability(name)` with an account the gate cannot resolve: its directory
+/// reads, and the admission gate refuses it.
+fn refused(name: &str) -> String {
+    format!("{}auth:\n  account: missing\n", capability(name))
+}
+
+/// A backend whose `d1` holds `alpha`, and whose `d2` holds `beta` and the
+/// refused `gamma`, after a complete startup scan; and its watch view.
+async fn with_refused(root: &std::path::Path) -> (Arc<CapabilityBackend>, MetaMcp) {
+    let (d1, d2) = (root.join("d1"), root.join("d2"));
+    for dir in [&d1, &d2] {
+        std::fs::create_dir_all(dir).expect("dir");
+    }
+    std::fs::write(d1.join("alpha.yaml"), capability("alpha")).expect("write");
+    std::fs::write(d2.join("beta.yaml"), capability("beta")).expect("write");
+    std::fs::write(d2.join("gamma.yaml"), refused("gamma")).expect("write");
+    let accounts = Arc::new(crate::identity_propagation::AccountStrategyRegistry::default());
+    let executor = CapabilityExecutor::new().with_account_strategies(accounts);
+    let caps = Arc::new(CapabilityBackend::new("hooks", Arc::new(executor)));
+    caps.begin_initial_scan();
+    for dir in [&d1, &d2] {
+        let dir = dir.to_str().expect("utf8");
+        caps.load_from_directory(dir).await.expect("load");
+    }
+    caps.mark_initial_scan_complete();
+    assert!(!caps.has_capability("gamma"), "the gate refused it");
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_capabilities(Arc::clone(&caps));
+    (caps, meta)
+}
+
+/// MIK-8037 (review of #3406): a capability the startup load read but the
+/// account gate refused is read, not unread, so its absence is confirmed.
+#[tokio::test]
+async fn a_capability_refused_at_load_counts_as_read() {
+    let root = tempfile::tempdir().expect("root");
+    let (_caps, meta) = with_refused(root.path()).await;
+    assert!(meta.watch_catalogue().present.contains("gamma"), "read");
+}
+
+/// MIK-8037 (review of #3406): a partial reload counts as read what the gate
+/// refused in a directory it read, and only that: a capability refused
+/// earlier in the directory it could not read is unread again.
+#[tokio::test]
+async fn a_capability_refused_at_a_partial_reload_counts_as_read() {
+    let root = tempfile::tempdir().expect("root");
+    let (caps, meta) = with_refused(root.path()).await;
+    let d1 = root.path().join("d1");
+    std::fs::write(d1.join("delta.yaml"), refused("delta")).expect("write");
+    std::fs::remove_dir_all(root.path().join("d2")).expect("make d2 unreadable");
+    caps.reload().await.expect("partial reload");
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(partial.present.contains("delta"), "read, then refused");
+    assert!(!partial.present.contains("beta"), "unread");
+    assert!(
+        !partial.present.contains("gamma"),
+        "refused before, unread now"
+    );
+}
+
+/// MIK-8037 (review of #3406): an unload, a rug-pull quarantine's for one,
+/// is a confirmed removal: a partial catalogue counts the unloaded capability
+/// as read, so its subscriptions end rather than wait for a complete load.
+/// An unload of a name not loaded marks nothing.
+#[tokio::test]
+async fn an_unloaded_capability_counts_as_read_in_a_partial_catalogue() {
+    let root = tempfile::tempdir().expect("root");
+    let (caps, meta) = with_refused(root.path()).await;
+    std::fs::remove_dir_all(root.path().join("d2")).expect("make d2 unreadable");
+    caps.reload().await.expect("partial reload");
+    assert!(caps.unload_capability("alpha"), "unloaded");
+    assert!(
+        !caps.unload_capability("beta"),
+        "not loaded: nothing to unload"
+    );
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(partial.present.contains("alpha"), "removed, not unread");
+    assert!(!partial.present.contains("beta"), "still unread");
+}
+
+/// MIK-8037 (review of #3406): a rug-pull quarantine unloads a capability and
+/// the reload that follows cannot load its file back; when that reload is
+/// partial, the unload still counts as read.
+#[tokio::test]
+async fn an_unload_survives_a_partial_reload_that_cannot_restore_it() {
+    let root = tempfile::tempdir().expect("root");
+    let (caps, meta) = with_refused(root.path()).await;
+    let d1 = root.path().join("d1");
+    assert!(caps.unload_capability("alpha"), "unloaded");
+    std::fs::remove_file(d1.join("alpha.yaml")).expect("its file no longer loads");
+    std::fs::remove_dir_all(root.path().join("d2")).expect("make d2 unreadable");
+    caps.reload().await.expect("partial reload");
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(partial.present.contains("alpha"), "unloaded, not unread");
+}
+
+/// MIK-8037 (review of #3406): admitting a name again clears its unload mark,
+/// so once its own directory goes unread it is unread like any other.
+#[tokio::test]
+async fn an_admission_clears_the_unload_mark() {
+    let root = tempfile::tempdir().expect("root");
+    let (caps, meta) = with_refused(root.path()).await;
+    assert!(caps.unload_capability("alpha"), "unloaded");
+    caps.reload().await.expect("complete reload");
+    assert!(caps.has_capability("alpha"), "admitted again");
+    std::fs::remove_dir_all(root.path().join("d1")).expect("make d1 unreadable");
+    caps.reload().await.expect("partial reload");
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(!partial.present.contains("alpha"), "unread, not unloaded");
+}
+
+/// Alpha scanned, a beta subscription stored, and the startup reconcile's
+/// first pass over: where every grace-period row (MIK-8027) starts.
+async fn after_first_pass() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    Arc<CapabilityBackend>,
+    Registry,
+    MetaMcp,
+) {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = tempfile::tempdir().expect("store");
+    std::fs::write(dir.path().join("a.yaml"), capability("alpha")).expect("write");
+    seed_subscription(store.path(), "beta");
+    seed_sentinel(store.path());
+    let (caps, registry, meta) = wired(&[dir.path()], store.path()).await;
+    caps.mark_initial_scan_complete();
+    first_pass(&meta, store.path()).await;
+    (dir, store, caps, registry, meta)
+}
+
+/// A hot reload and its notice, as the capability watcher delivers them.
+async fn reload(caps: &CapabilityBackend, meta: &MetaMcp) {
+    caps.reload().await.expect("reload");
+    meta.events_capabilities_reloaded("hooks");
+}
+
+/// MIK-8027 `RESID.1`: a reload inside the grace period that offers beta
+/// keeps the subscription the startup pass found unoffered.
+#[tokio::test]
+async fn a_type_a_reload_offers_inside_the_grace_period_keeps_its_subscription() {
+    let (dir, store, caps, registry, meta) = after_first_pass().await;
+    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    reload(&caps, &meta).await;
+    meta.run_deferred_webhook_withdraw().await;
+    assert!(
+        subscribed(store.path(), "beta"),
+        "beta's subscription outlives the startup pass"
+    );
+    assert_eq!(routes(&registry), ["alpha.push", "beta.push"]);
+}
+
+/// MIK-8027 `RESID.3`: a type nothing offers again is still withdrawn, by
+/// the deferred pass.
+#[tokio::test]
+async fn a_type_nothing_offers_again_is_withdrawn_by_the_deferred_pass() {
+    let (_dir, store, _caps, _registry, meta) = after_first_pass().await;
+    meta.run_deferred_webhook_withdraw().await;
+    assert!(!subscribed(store.path(), "beta"));
+}
+
+/// The deferred pass withdraws nothing from a partial catalogue.
+#[tokio::test]
+async fn the_deferred_pass_withdraws_nothing_from_a_partial_catalogue() {
+    let root = tempfile::tempdir().expect("root");
+    let store = tempfile::tempdir().expect("store");
+    let (d1, d2) = (root.path().join("d1"), root.path().join("d2"));
+    std::fs::create_dir_all(&d1).expect("d1");
+    std::fs::create_dir_all(&d2).expect("d2");
+    std::fs::write(d1.join("a.yaml"), capability("alpha")).expect("write");
+    seed_subscription(store.path(), "beta");
+    seed_sentinel(store.path());
+    let (caps, _registry, meta) = wired(&[&d1, &d2], store.path()).await;
+    caps.mark_initial_scan_complete();
+    first_pass(&meta, store.path()).await;
+
+    std::fs::remove_dir_all(&d2).expect("make d2 unreadable");
+    reload(&caps, &meta).await;
+    meta.run_deferred_webhook_withdraw().await;
+    assert!(
+        subscribed(store.path(), "beta"),
+        "a partial catalogue proves nothing about beta"
+    );
+}
+
+/// An unrelated reload inside the grace period withdraws nothing it did
+/// not remove; a later reload that offers beta keeps beta's subscription.
+#[tokio::test]
+async fn an_unrelated_reload_inside_the_grace_period_keeps_an_unoffered_type() {
+    let (dir, store, caps, registry, meta) = after_first_pass().await;
+    let alpha = capability("alpha") + "# edited\n";
+    std::fs::write(dir.path().join("a.yaml"), alpha).expect("edit alpha");
+    reload(&caps, &meta).await;
+    assert!(
+        subscribed(store.path(), "beta"),
+        "an unrelated reload keeps beta"
+    );
+    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    reload(&caps, &meta).await;
+    meta.run_deferred_webhook_withdraw().await;
+    assert!(subscribed(store.path(), "beta"));
+    assert_eq!(routes(&registry), ["alpha.push", "beta.push"]);
+}
+
+/// A type kept through the grace period is withdrawn by the deferred pass
+/// when nothing has offered it: a deferral, never a retention.
+#[tokio::test]
+async fn a_type_still_unoffered_at_the_deadline_is_withdrawn_then() {
+    let (dir, store, caps, _registry, meta) = after_first_pass().await;
+    let alpha = capability("alpha") + "# edited\n";
+    std::fs::write(dir.path().join("a.yaml"), alpha).expect("edit alpha");
+    reload(&caps, &meta).await;
+    assert!(
+        subscribed(store.path(), "beta"),
+        "kept inside the grace period"
+    );
+    meta.run_deferred_webhook_withdraw().await;
+    assert!(
+        !subscribed(store.path(), "beta"),
+        "withdrawn at the deadline"
+    );
+}
+
+/// A reload whose notice has not arrived is applied by the deferred pass,
+/// which refreshes the routes before it decides.
+#[tokio::test]
+async fn an_unannounced_reload_is_applied_by_the_deferred_pass() {
+    let (dir, store, caps, registry, meta) = after_first_pass().await;
+    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    caps.reload().await.expect("reload, notice still queued");
+    meta.run_deferred_webhook_withdraw().await;
+    assert!(subscribed(store.path(), "beta"));
+    assert_eq!(routes(&registry), ["alpha.push", "beta.push"]);
+}
+
+/// A refresh of beta inside the grace period answers `-32011` and leaves
+/// beta's stored row as it was.
+#[tokio::test]
+async fn a_refresh_inside_the_grace_period_answers_not_found_and_keeps_the_row() {
+    let (_dir, store, _caps, _registry, meta) = after_first_pass().await;
+    let row = store.path().join("subs").join("sub_beta.json");
+    let before = std::fs::read(&row).ok();
+    assert!(before.is_some(), "beta's row outlives the startup pass");
+    let caller = crate::events::Caller {
+        principal: Some("p".to_owned()),
+        read_key: None,
+        credential: crate::events::Credential {
+            kind: crate::security::audit::CredentialKind::None,
+            principal: String::new(),
+            api_key: None,
+            expires_at: None,
+            binding: None,
+        },
+        visible_backends: std::collections::HashSet::new(),
+        admin: false,
+    };
+    let params = serde_json::json!({ "name": "webhook.beta.push.received" });
+    let refused = meta
+        .events()
+        .expect("hub")
+        .subscribe(&caller, Some(&params))
+        .await
+        .expect_err("beta is not offered");
+    assert_eq!(refused.code, -32011);
+    assert_eq!(
+        std::fs::read(&row).ok(),
+        before,
+        "the refresh wrote nothing"
+    );
+}
+
+/// A reload inside the grace period that removes a route the startup scan
+/// registered withdraws its subscription at once, as outside it.
+#[tokio::test]
+async fn a_route_a_reload_removes_inside_the_grace_period_is_withdrawn_at_once() {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = tempfile::tempdir().expect("store");
+    std::fs::write(dir.path().join("a.yaml"), capability("alpha")).expect("write");
+    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    seed_subscription(store.path(), "beta");
+    seed_sentinel(store.path());
+    let (caps, _registry, meta) = wired(&[dir.path()], store.path()).await;
+    caps.mark_initial_scan_complete();
+    first_pass(&meta, store.path()).await;
+    assert!(subscribed(store.path(), "beta"), "beta is offered");
+
+    std::fs::remove_file(dir.path().join("b.yaml")).expect("remove beta");
+    reload(&caps, &meta).await;
+    assert!(
+        !subscribed(store.path(), "beta"),
+        "the removal withdraws it"
+    );
+}
+
+/// A route the startup scan registered and an unannounced reload removed
+/// before the first pass is withdrawn by that pass, as a reload inside the
+/// grace period withdraws what it removes: a narrower restore must not
+/// inherit the subscription.
+#[tokio::test]
+async fn a_route_removed_before_the_first_pass_is_withdrawn_by_it() {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = tempfile::tempdir().expect("store");
+    std::fs::write(dir.path().join("a.yaml"), capability("alpha")).expect("write");
+    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    seed_subscription(store.path(), "alpha");
+    seed_subscription(store.path(), "beta");
+    seed_sentinel(store.path());
+    let (caps, registry, meta) = wired(&[dir.path()], store.path()).await;
+    caps.mark_initial_scan_complete();
+    std::fs::remove_file(dir.path().join("b.yaml")).expect("remove beta");
+    caps.reload()
+        .await
+        .expect("reload, its notice not yet handled");
+    first_pass(&meta, store.path()).await;
+    assert_eq!(routes(&registry), ["alpha.push"]);
+    assert!(
+        !subscribed(store.path(), "beta"),
+        "the first pass withdraws the type its refresh removed"
+    );
+    assert!(subscribed(store.path(), "alpha"), "and nothing else");
+}
+
+#[path = "events_hook_shape_tests.rs"]
+mod shape_tests;

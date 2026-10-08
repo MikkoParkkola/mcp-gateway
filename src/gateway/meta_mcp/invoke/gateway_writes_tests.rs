@@ -96,7 +96,8 @@ async fn a_stored_record_round_trips_every_noted_path() {
         "recovery": {"hint": "retry"}, "_signature": {"sig": "s"}, "taskId": "t-9",
         "trace_id": "t-1", "predicted_next": ["b"], "_meta": {"provenance": {"p": 1}},
         "_security_findings": ["f"], "_cost_warnings": ["w"],
-        "_cost_suggestion": {"message": "m"}, "requestState": "rs-1",
+        "_cost_suggestion": {"message": "m"}, "requestState": "rs-1", "resultType": "complete",
+        "cacheScope": "private", "ttlMs": 5000,
         "_contract_violation": true, "_contract_reason": "no_contract_declared",
         "text": "backend",
     });

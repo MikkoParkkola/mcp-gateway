@@ -1,10 +1,11 @@
 name: Rustdoc links
 
 # Builds the public API docs and fails on an intra-doc link that resolves to
-# nothing (MIK-8008). Its own workflow, not a ci.yml job: a `throwaway/` PR
-# must run this (it is how a planted broken link is shown red), while ci.yml
-# runs nothing but `Tests (throwaway)` on one
-# (scripts/ci/test_throwaway_routing.py). Every feature is built, so a
+# nothing (MIK-8008). Its own workflow, not a ci.yml job: ci.yml runs nothing
+# but `Tests (throwaway)` on a `throwaway/` PR. This job skips one too, unless
+# the head's name holds `rustdoc` (a planted broken link shown red, e.g.
+# throwaway/b23-rustdoc); scripts/ci/test_throwaway_routing.py checks both.
+# Every feature is built, so a
 # public item behind an opt-in feature is checked too; private-only items are
 # out of scope: no --document-private-items.
 on:
@@ -22,6 +23,7 @@ concurrency:
 jobs:
   rustdoc:
     name: Rustdoc intra-doc links (MIK-8008)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) || contains(github.head_ref, 'rustdoc') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
