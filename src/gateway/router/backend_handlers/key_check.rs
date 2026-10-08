@@ -41,6 +41,16 @@ pub(super) async fn key_refusal(
             let response = JsonRpcResponse::success(id.clone(), result);
             Some(build_http_response(&response, StatusCode::OK))
         }
-        Err(e) => Some(failed.clone().answer(None, e).await),
+        Err(e) => {
+            let call = crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall {
+                server: &backend.name,
+                tool,
+                session_id: None,
+                api_key_name: None,
+                trace_id: tool,
+                caller_key: None,
+            };
+            Some(failed.clone().answer(None, e, &call).await)
+        }
     }
 }
