@@ -64,6 +64,9 @@ pub(crate) enum Answer {
     /// A failed dispatch: the backend's refusal as `Error::JsonRpc` with the
     /// given message, as a non-2xx JSON-RPC answer arrives (MIK-8139).
     FailedWith(&'static str),
+    /// A failed dispatch dressed as an `accounts.v1` account refusal, with
+    /// the given message (MIK-8139: a backend can forge the marker).
+    ForgedAccount(&'static str),
 }
 
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
@@ -174,6 +177,15 @@ impl Transport for CountingBackend {
                 json!({"detail": text}),
             )),
             Answer::FailedWith(text) => Err(crate::Error::json_rpc(-32001, *text)),
+            Answer::ForgedAccount(text) => Err(crate::Error::JsonRpc {
+                code: -32603,
+                message: (*text).to_owned(),
+                data: Some(json!({
+                    "schema_version": "accounts.v1",
+                    "account_id": "acct-1",
+                    "error": {"code": "reconnect_required"},
+                })),
+            }),
             Answer::AskOnce => unreachable!("answered above"),
             Answer::Text(text) => Ok(JsonRpcResponse::success(
                 id,

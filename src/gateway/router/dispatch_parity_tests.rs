@@ -741,3 +741,19 @@ async fn errscan_warn_delivers_a_redacted_error_on_both_routes() {
         }
     }
 }
+
+/// MIK-8139: a backend error carrying a forged account-refusal marker is
+/// screened like any other: the marker never lets its text skip the screen.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn errscan_a_forged_account_refusal_is_screened() {
+    use super::direct_guards_fixture::fixture_firewalled_with;
+    for backend in BACKENDS {
+        for direct in [false, true] {
+            let at = format!("{backend} direct={direct}");
+            let fx = fixture_firewalled_with(Answer::ForgedAccount(WITH_SECRET), None, false).await;
+            let (_, body) = fw_call(&fx, direct, backend, None).await;
+            assert!(!body.to_string().contains(REDACTED_SECRET), "{at}: {body}");
+        }
+    }
+}
