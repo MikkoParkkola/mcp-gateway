@@ -64,6 +64,9 @@ pub(crate) fn assigned_package_cache_dir<S: std::hash::BuildHasher>(
     // A relative data directory resolves against the gateway's working
     // directory here and against the child's `cwd` there, so the path the
     // repair would remove need not be the cache the child used.
+    // `gateway_data_dir` is absolute since MIK-7964 unless the working
+    // directory is unreadable; the check stays because a delete keeps its own
+    // precondition.
     absolute(cache_dir(backend_name))
 }
 

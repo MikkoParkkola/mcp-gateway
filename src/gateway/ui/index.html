@@ -958,6 +958,12 @@ async function removeServer(name) {
       headers: authHeaders(),
     });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    // A removed entry's own comments go with it; a 200 names their lines
+    // (MIK-8051). Shown outside the form, like an add's notes.
+    const body = r.status === 200 ? await r.json().catch(() => ({})) : {};
+    const info = document.getElementById('add-server-note');
+    info.textContent = body.note ? 'Server removed. ' + body.note : '';
+    info.style.display = body.note ? '' : 'none';
     refreshDashboard();
   } catch (e) {
     alert('Failed to remove server: ' + e.message);

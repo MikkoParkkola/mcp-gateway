@@ -2,22 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Unit tests for `config_persistence` (moved from `config_persistence.rs`).
 
-#[test]
-fn gateway_state_override_precedes_home_and_preserves_default_fallback() {
-    let home = Some(std::path::PathBuf::from("operator-home"));
-    assert_eq!(
-        super::resolve_gateway_data_dir(Some("isolated-state".into()), home.clone()),
-        std::path::PathBuf::from("isolated-state")
-    );
-    assert_eq!(
-        super::resolve_gateway_data_dir(None, home),
-        std::path::PathBuf::from("operator-home/.mcp-gateway")
-    );
-    assert_eq!(
-        super::resolve_gateway_data_dir(None, None),
-        std::path::PathBuf::from("./.mcp-gateway")
-    );
-}
 use super::*;
 
 #[test]

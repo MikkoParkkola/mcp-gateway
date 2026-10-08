@@ -51,6 +51,9 @@ fn sub(id: &str, now: DateTime<Utc>) -> Subscription {
         failed_since: None,
         last_delivery_at: None,
         last_error: None,
+        payload_fields: Vec::new(),
+        unoffered_since: None,
+        held_until: None,
     }
 }
 
