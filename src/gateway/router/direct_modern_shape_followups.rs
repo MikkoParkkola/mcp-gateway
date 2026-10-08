@@ -7,7 +7,9 @@ use std::sync::atomic::Ordering;
 
 use serde_json::{Value, json};
 
-use super::super::direct_guards_fixture::{Answer, Fx, fixture, fixture_hardened_signed, send};
+use super::super::direct_guards_fixture::{
+    Answer, Fx, fixture, fixture_hardened_signed, send_with_headers,
+};
 use super::{BACKENDS, call_params, legacy, modern, post};
 use crate::protocol::mrtr::{CHAIN_NONCE_META, IDEMPOTENCY_KEY_META};
 
@@ -228,24 +230,29 @@ async fn a_malformed_modern_call_is_refused_only_under_hardened() {
             "{backend}: refused for the missing field: {body}"
         );
         assert_eq!(hardened.calls.load(Ordering::SeqCst), 0, "{backend}");
-        // The same refusal, status and body, as `/mcp` gives the same request.
+        // The same refusal, status and body, as `/mcp` gives the same request
+        // when the header mirrors the body's revision, so both routes reach
+        // the shape check (a body-only declaration is MIK-8162).
         let params = json!({ "_meta": malformed_meta() });
-        let (mcp_status, mcp) = send(
+        let mirrored = [("mcp-protocol-version", "2026-07-28")];
+        let (mcp_status, mcp) = send_with_headers(
             &hardened,
             "/mcp",
             super::KEY,
             "tools/list",
             params.clone(),
             None,
+            &mirrored,
         )
         .await;
-        let (direct_status, direct) = send(
+        let (direct_status, direct) = send_with_headers(
             &hardened,
             &format!("/mcp/{backend}"),
             super::KEY,
             "tools/list",
             params,
             None,
+            &mirrored,
         )
         .await;
         assert_eq!(mcp_status, axum::http::StatusCode::BAD_REQUEST, "{mcp}");
