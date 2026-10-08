@@ -114,18 +114,21 @@ impl TaskService {
         })
     }
 
-    /// Read the sealed rows again and lower the seal only after any repaired
-    /// row's key is imported, so that key is never admitted as new in between
-    /// (MIK-8052). Runs on every expiry sweep; a store with nothing sealed
-    /// returns at once. A repaired row that restores is served again, a live
-    /// one first settled as startup recovery would with no managed adapters
-    /// (MIK-8121). Returns the rows settled, for the caller to announce.
+    /// [`Self::reread_sealed_deferring`] with no managed adapters: the tests'
+    /// shorthand.
+    #[cfg(test)]
     pub(crate) async fn reread_sealed(&self) -> Vec<CommittedTask> {
         self.reread_sealed_deferring(Arc::from([])).await
     }
 
-    /// [`Self::reread_sealed`], deferring a live row whose backend is in
-    /// `managed`, exactly as startup recovery does.
+    /// Read the sealed rows again and lower the seal only after any repaired
+    /// row's key is imported, so that key is never admitted as new in between
+    /// (MIK-8052). Runs on every expiry sweep; a store with nothing sealed
+    /// returns at once. A repaired row that restores is served again, a live
+    /// one first settled as startup recovery would
+    /// (MIK-8121). Returns the rows settled, for the caller to announce.
+    /// A live row whose backend is in `managed` is deferred, exactly as
+    /// startup recovery does.
     pub(crate) async fn reread_sealed_deferring(
         &self,
         managed: Arc<[String]>,
