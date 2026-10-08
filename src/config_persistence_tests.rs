@@ -401,7 +401,8 @@ fn the_preserving_writer_reports_each_outcome() {
 
 /// MIK-8042: `write_config_text` creates, never replaces. Its existence check
 /// and its write are one locked step, so `init` cannot overwrite a config
-/// another writer created after `init` looked.
+/// another writer created after `init` looked. Refusing an existing file adds
+/// nothing next to it, not even the lock file (GH462).
 #[test]
 fn writing_config_text_refuses_an_existing_file() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -413,5 +414,9 @@ fn writing_config_text_refuses_an_existing_file() {
         std::fs::read_to_string(&path).expect("read"),
         "server:\n  port: 2\n"
     );
-    assert!(dir.path().join(".gateway.yaml.lock").is_file());
+    let entries: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("list")
+        .map(|e| e.expect("entry").file_name())
+        .collect();
+    assert_eq!(entries, ["gateway.yaml"], "a refusal left something behind");
 }
