@@ -146,3 +146,59 @@ async fn a_late_failure_records_the_ending_of_the_child_it_killed() {
         "the child the failure killed has an ending to report, not \"running\""
     );
 }
+
+// First run refuses `initialize` and stays alive; later runs answer it. Every
+// run logs each line it reads to its own file.
+const SECOND_TRY_CHILD: &str = r#"n=$(cat runs 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > runs
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "child$n.log"
+  case "$line" in *'"method":"initialize"'*)
+    id=${line#*'"id":'}; id=${id%%,*}
+    if [ "$n" = 1 ]; then
+      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"no"}}\n' "$id"
+    else
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"x","version":"0"}}}\n' "$id"
+    fi ;;
+  esac
+done
+"#;
+
+/// A start retried on the same transport after a failed `initialize` hands the
+/// new child exactly one `initialize`: nothing from the first attempt is
+/// written into the second child's stdin (MIK-8079 with #3242's retry).
+#[cfg(unix)]
+#[tokio::test]
+async fn a_retried_start_sends_the_new_child_exactly_one_initialize() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("child.sh"), SECOND_TRY_CHILD).unwrap();
+    let transport = StdioTransport::new(
+        "sh child.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(5),
+        None,
+    );
+    transport
+        .start()
+        .await
+        .expect_err("the first child refuses");
+    transport.start().await.expect("the second child answers");
+
+    let log = dir.path().join("child2.log");
+    let mut lines = String::new();
+    for _ in 0..50 {
+        lines = std::fs::read_to_string(&log).unwrap_or_default();
+        if lines.contains("notifications/initialized") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let initializes = lines
+        .lines()
+        .filter(|line| line.contains(r#""method":"initialize""#))
+        .count();
+    assert_eq!(initializes, 1, "the second child read:\n{lines}");
+    crate::transport::Transport::close(&*transport)
+        .await
+        .expect("close");
+}

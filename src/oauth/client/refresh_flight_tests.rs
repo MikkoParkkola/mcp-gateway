@@ -479,6 +479,7 @@ async fn a_token_marked_in_flight_on_a_rotating_server_is_not_sent() {
     let state = crate::oauth::storage::RefreshState {
         rotates: true,
         in_flight: Some(super::refresh_flight::fingerprint_hex("r1")),
+        damaged: false,
     };
     late.storage
         .save_refresh_state(&key, RESOURCE, &state)

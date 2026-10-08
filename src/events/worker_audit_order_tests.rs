@@ -10,6 +10,7 @@ use chrono::Utc;
 
 use super::{
     DeadReason, EventsHub, Settle, counting_callback, logged_services, offer, queued, queued_event,
+    queued_with,
 };
 
 /// The audit lines for `event_id`, in log order, as their `action`.
@@ -38,7 +39,7 @@ fn assert_burial_first(dir: &std::path::Path, event_id: &str) {
 fn pending(hub: &EventsHub, event_id: &str) -> crate::events::outbox::OutboxRecord {
     let later = Utc::now() + chrono::Duration::minutes(5);
     hub.store
-        .due(later, &std::collections::HashSet::new())
+        .due(later, &std::collections::HashSet::new(), hub.dead_policy())
         .expect("io")
         .ready
         .into_iter()
@@ -304,4 +305,40 @@ async fn a_failure_after_unsent_claims_is_judged_by_its_sends() {
         matches!(settle, Settle::Retry { .. }),
         "one send of two allowed: {settle:?}"
     );
+}
+
+/// MIK-8061: an expiry burial the byte cap evicts at once is receipted
+/// before its eviction, in the worker's own pass.
+#[tokio::test]
+async fn a_self_evicting_expiry_burial_is_receipted_before_its_eviction() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        dead_letter_max_bytes: 1,
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = Arc::new(logged_services(dir.path()));
+    queued_with(&hub, 9, "evt_exp", "webhook.c.r.received", |_, record| {
+        record.attempt = 1;
+    });
+    let now = Utc::now();
+    let mut row = hub.store.subscriptions().remove(0);
+    row.expires_at = Some(now - chrono::Duration::seconds(1));
+    let caps = crate::events::store::Caps {
+        per_principal: 10,
+        global: 10,
+    };
+    let tail = crate::events::store::TailPolicy {
+        ttl: Duration::from_secs(3600),
+        max: 10,
+        max_per_principal: 10,
+    };
+    hub.store
+        .admit(row, true, caps, chrono::Duration::zero(), now, tail)
+        .expect("io")
+        .expect("refreshed to an expiry in the past");
+    let slots = Arc::new(tokio::sync::Semaphore::new(1));
+    hub.dispatch(&services, &slots).await;
+    assert!(hub.store.dead_letter_by_id("evt_exp").is_none(), "evicted");
+    assert_burial_first(dir.path(), "evt_exp");
 }
