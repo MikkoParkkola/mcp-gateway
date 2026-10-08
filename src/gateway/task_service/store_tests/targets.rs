@@ -317,7 +317,11 @@ async fn a_peer_failure_on_a_row_with_calls_is_version_6() {
             OWNER,
             task.id(),
             1,
-            (peer_failure(), None),
+            (
+                peer_failure(),
+                None,
+                crate::gateway::gateway_writes::WriteRecord::default(),
+            ),
             ErrorAuthor::Peer,
             Utc::now(),
         )
@@ -348,7 +352,11 @@ async fn a_legacy_row_without_calls_records_no_peer_authorship() {
             OWNER,
             &id,
             1,
-            (peer_failure(), None),
+            (
+                peer_failure(),
+                None,
+                crate::gateway::gateway_writes::WriteRecord::default(),
+            ),
             ErrorAuthor::Peer,
             Utc::now(),
         )

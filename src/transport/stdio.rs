@@ -60,7 +60,9 @@ pub struct StdioTransport {
     /// Request timeout for initialize and JSON-RPC calls
     request_timeout: std::time::Duration,
     /// Writer handle
-    writer: Mutex<Option<tokio::process::ChildStdin>>,
+    writer: Arc<Mutex<Option<tokio::process::ChildStdin>>>,
+    /// Cancelled by `close()`, renewed by `start()`: ends a write stuck on a reader.
+    shutdown: parking_lot::Mutex<tokio_util::sync::CancellationToken>,
     /// Negotiated protocol version (config override or auto-negotiated)
     protocol_version: RwLock<Option<String>>,
     /// Where to deliver a notification for each call that supplied a progress
@@ -177,7 +179,12 @@ impl StdioTransport {
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stderr".to_string()))?;
 
-        *self.writer.lock().await = Some(stdin);
+        let mut writer = self.writer.lock().await;
+        // Renewed under the stdin lock, so a write never pairs new stdin with
+        // the token a previous `close()` cancelled.
+        *self.shutdown.lock() = tokio_util::sync::CancellationToken::new();
+        *writer = Some(stdin);
+        drop(writer);
         *self.child.lock().await = Some(child);
         let eof_tx = Arc::new(tokio::sync::watch::channel(false).0);
         self.start.begin(Arc::clone(&eof_tx));
@@ -632,7 +639,7 @@ impl Transport for StdioTransport {
             .map(|token| ProgressRegistrationGuard::register(self, &token));
 
         let message = serde_json::to_string(&request)?;
-        let (tx, mut rx) = oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         self.pending.insert(id.to_string(), tx);
         // Removing the entry is the guard's job on every path: on success the
         // reader task has already routed the response and the removal is a
@@ -642,56 +649,8 @@ impl Transport for StdioTransport {
         // stranded entry would leak here for the transport's lifetime.
         let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
 
-        // MIK-7871: stdout may have closed, and `pending` been cleared, before
-        // the insert above. The reader trips the latch before it clears, so
-        // either this sees it, or the clear drops the entry. Nothing is written
-        // yet, so the refusal is pre-send (MIK-7979).
-        let eof = self.start.eof_receiver();
-        if eof.as_ref().is_some_and(|eof| *eof.borrow()) {
-            return Err(Error::TransportConnect("stdout closed".to_string()));
-        }
-        let began = AtomicBool::new(false);
-        // One deadline for the write and the reply: a child that stopped
-        // reading stdin cannot hold the call past it.
-        let exchange = tokio::time::timeout(self.request_timeout, async {
-            self.write_frame(&message, &began).await?;
-            (&mut rx)
-                .await
-                .map_err(|_| Error::Transport("Response channel closed".to_string()))
-        });
-        let outcome = match eof {
-            None => Some(exchange.await),
-            Some(mut eof) => {
-                // Not `wait_for`: its future is not `Send`, and this one has
-                // to be. A dropped sender means this start's reader is gone.
-                let closed = async move {
-                    loop {
-                        // Separate statements: the borrow must end before
-                        // the await, or the read lock is held across it.
-                        if *eof.borrow_and_update() {
-                            break;
-                        }
-                        if eof.changed().await.is_err() {
-                            break;
-                        }
-                    }
-                };
-                early_exit::reply_or_eof(exchange, closed).await
-            }
-        };
         // Both guards drop after this value: the pending entry and progress go.
-        match outcome {
-            Some(Ok(reply)) => reply,
-            Some(Err(_)) => Err(write::unsent_or(
-                &began,
-                "Request timed out",
-                Error::BackendTimeout,
-            )),
-            // A reply routed while the write was still yielding is the answer.
-            None => rx
-                .try_recv()
-                .map_err(|_| write::unsent_or(&began, "stdout closed", Error::Transport)),
-        }
+        self.exchange(&message, rx).await
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
@@ -731,13 +690,15 @@ impl Transport for StdioTransport {
     async fn close(&self) -> Result<()> {
         self.connected.store(false, Ordering::Relaxed);
 
-        // Close stdin
-        *self.writer.lock().await = None;
-
-        // Kill child process
+        // A write stuck on a peer that stopped reading holds stdin; the kill ends it.
+        if let Ok(mut writer) = self.writer.try_lock() {
+            *writer = None;
+        }
         if let Some(ref mut child) = *self.child.lock().await {
             let _ = Box::into_pin(child.kill()).await;
         }
+        self.shutdown.lock().cancel();
+        tree::clear_writer(&self.writer).await;
 
         Ok(())
     }

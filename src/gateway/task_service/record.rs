@@ -204,6 +204,17 @@ pub(super) struct Record {
     pub(super) backend: String,
     pub(super) revision: u64,
     pub(super) model: TaskSnapshot,
+    /// MIK-7993: the members of the stored result the gateway wrote, so a
+    /// `tasks/get` receipt leaves exactly those out. Absent when none, so
+    /// such a row serializes as before. Declared last, after `admission`: a
+    /// row damaged or cut inside it reads as damaged after its key, which
+    /// keeps the key (MIK-8023) rather than sealing the store (MIK-8052).
+    /// Its decode never fails; a bad entry is dropped on its own.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::gateway::gateway_writes::WriteRecord::is_empty"
+    )]
+    pub(super) gateway_writes: crate::gateway::gateway_writes::WriteRecord,
 }
 
 impl Record {
@@ -265,6 +276,7 @@ impl PreparedTask {
                 backend: backend.into(),
                 revision: 1,
                 model: task.snapshot(),
+                gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
             },
             publication: Some(publication),
         }
@@ -303,6 +315,7 @@ impl PreparedTask {
                 backend: "fixture-backend".into(),
                 revision: 1,
                 model: task.snapshot(),
+                gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
             },
         }
     }
@@ -350,6 +363,9 @@ pub(crate) struct CommittedTask {
     /// The owner's digest as the record persisted it, read in the same piece
     /// as the rest of the snapshot (the events source carries it).
     pub(crate) owner_digest: String,
+    /// The members of the stored result the gateway wrote (MIK-7993): a read
+    /// restores them into its own record, so its receipt leaves them out.
+    pub(crate) gateway_writes: crate::gateway::gateway_writes::WriteRecord,
 }
 
 impl CommittedTask {
@@ -381,6 +397,7 @@ impl CommittedTask {
             output_free: record.output_free,
             error_author: record.error_author,
             owner_digest: record.admission.principal_digest.clone(),
+            gateway_writes: record.gateway_writes.clone(),
         }
     }
 

@@ -120,19 +120,11 @@ async fn eof_during_a_blocked_write_ends_the_call() {
     );
     // Part of the frame left, so the outcome is not known: no free retry.
     assert!(!err.is_pre_dispatch(), "{err:?}");
-    // The race dropped the write mid-frame, so stdin is retired.
-    stdin_retired(&t).await;
-    let _ = t.close().await;
-}
-
-/// The next write fails at once with "Not connected": stdin was retired
-/// rather than left holding half a frame.
-async fn stdin_retired(transport: &StdioTransport) {
-    let err = tokio::time::timeout(ROW_LIMIT, transport.notify("notifications/progress", None))
+    // The frame keeps going out whole (#3453); close() cancels it, bounded.
+    tokio::time::timeout(ROW_LIMIT, t.close())
         .await
-        .expect("a retired stdin fails at once, not behind a full pipe")
-        .expect_err("half a frame is on stdin");
-    assert!(err.to_string().contains("Not connected"), "{err}");
+        .expect("close ends the stuck whole-frame write")
+        .expect("close");
 }
 
 /// Larger than any pipe buffer, so its write cannot complete on a child that
@@ -141,19 +133,38 @@ fn big_params() -> Value {
     serde_json::json!({ "pad": "x".repeat(1 << 20) })
 }
 
-/// A write cut off mid-frame retires stdin: the next write fails instead of
-/// appending to half a frame.
+/// Whole-frame contract (#3453): a request cancelled while its frame waits on
+/// a full pipe still delivers that frame whole, and the next message follows
+/// it intact instead of being torn into it.
 #[tokio::test]
-async fn a_cancelled_write_retires_stdin() {
-    let (_w, t) = started("sleep 60").await;
+async fn a_cancelled_request_still_writes_its_whole_frame() {
+    let (w, t) = started("sleep 1\ncat > seen").await;
     let cut = tokio::time::timeout(
         Duration::from_millis(300),
         t.request("tools/list", Some(big_params())),
     )
     .await;
-    assert!(cut.is_err(), "the write cannot complete: {cut:?}");
-    stdin_retired(&t).await;
-    assert!(!t.is_connected());
+    assert!(cut.is_err(), "the child is not reading yet: {cut:?}");
+    t.notify("notifications/marker", None)
+        .await
+        .expect("the next write queues behind the whole frame");
+    let seen = w.path().join("seen");
+    let recorded = tokio::time::timeout(ROW_LIMIT, async {
+        loop {
+            let text = std::fs::read_to_string(&seen).unwrap_or_default();
+            if text.contains("notifications/marker") {
+                return text;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the child records both frames");
+    let frames: Vec<&str> = recorded.lines().collect();
+    assert_eq!(frames.len(), 2, "two whole frames, nothing torn");
+    for frame in frames {
+        serde_json::from_str::<Value>(frame).expect("each line is one whole frame");
+    }
     let _ = t.close().await;
 }
 
@@ -186,9 +197,11 @@ async fn a_write_the_child_never_reads_ends_at_the_request_timeout() {
         .expect("the request timeout bounds the write")
         .expect_err("nothing reads the request");
     assert!(matches!(err, Error::BackendTimeout(_)), "{err:?}");
-    // The deadline cut the write off mid-frame, so stdin is retired.
-    stdin_retired(&t).await;
-    let _ = t.close().await;
+    // The frame keeps going out whole (#3453); close() cancels it, bounded.
+    tokio::time::timeout(ROW_LIMIT, t.close())
+        .await
+        .expect("close ends the stuck whole-frame write")
+        .expect("close");
 }
 
 /// agy review on #3531: the latch trips even when the reader task panics, so
@@ -219,8 +232,8 @@ fn an_unanswered_call_is_pre_send_only_before_its_first_byte() {
 }
 
 /// gpt review on #3531: a request queued behind a blocked write never sends a
-/// byte, so whichever way it ends (its own deadline, or stdin retired by the
-/// first call's) it is pre-send and a keyed retry may run.
+/// byte (the first call's whole frame keeps stdin until `close`), so it ends
+/// at its own deadline as pre-send and a keyed retry may run.
 #[tokio::test]
 async fn a_request_queued_behind_a_blocked_write_ends_pre_send() {
     let (_w, t) = started_with_timeout("sleep 60", Duration::from_millis(500)).await;

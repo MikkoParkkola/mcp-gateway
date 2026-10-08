@@ -1,76 +1,90 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Writing one frame to a stdio child's stdin (split from `stdio.rs` for the
-//! file-size ceiling).
+//! Writing frames to a stdio child, and what a call that got no reply was
+//! (MIK-7871, MIK-7979). Included by `#[path]` from `stdio.rs`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tokio::io::AsyncWriteExt;
+use tokio::sync::oneshot;
 use tracing::debug;
 
-use super::StdioTransport;
+use super::{StdioTransport, tree};
+use crate::protocol::JsonRpcResponse;
 use crate::{Error, Result};
 
-/// The writer, held for one frame. Dropped before the frame is complete (a
-/// write error or a cancelled caller), it retires stdin: the next frame would
-/// otherwise be appended to half of this one, and later writes get
-/// "Not connected" instead.
-struct FrameWriter<'a> {
-    writer: tokio::sync::MutexGuard<'a, Option<tokio::process::ChildStdin>>,
-    connected: &'a AtomicBool,
-    complete: bool,
-}
-
-impl Drop for FrameWriter<'_> {
-    fn drop(&mut self) {
-        if !self.complete {
-            *self.writer = None;
-            self.connected.store(false, Ordering::Relaxed);
-        }
-    }
-}
-
 impl StdioTransport {
-    /// Write a message to stdin
+    /// Write one frame to stdin, cancel-safely: see [`tree::write_frame`].
     pub(super) async fn write_message(&self, message: &str) -> Result<()> {
         self.write_frame(message, &AtomicBool::new(false)).await
     }
 
-    /// [`Self::write_message`], recording in `began` the moment a byte may
-    /// leave: a call that fails before it sent nothing (MIK-7979).
+    /// [`Self::write_message`], recording in `began` the moment the frame is
+    /// committed to go out whole: a call that fails before it sent nothing.
     pub(super) async fn write_frame(&self, message: &str, began: &AtomicBool) -> Result<()> {
         debug!(message_len = message.len(), "Writing to stdin");
-        let mut frame = FrameWriter {
-            writer: self.writer.lock().await,
-            connected: &self.connected,
-            complete: false,
-        };
-        let Some(stdin) = frame.writer.as_mut() else {
-            // Nothing was written, so there is nothing to retire, and the
-            // failure is pre-send (MIK-7979).
-            frame.complete = true;
-            return Err(Error::TransportConnect("Not connected".to_string()));
-        };
-        began.store(true, Ordering::Relaxed);
-        stdin
-            .write_all(message.as_bytes())
-            .await
-            .map_err(|e| Error::Transport(e.to_string()))?;
-        stdin
-            .write_all(b"\n")
-            .await
-            .map_err(|e| Error::Transport(e.to_string()))?;
-        stdin
-            .flush()
-            .await
-            .map_err(|e| Error::Transport(e.to_string()))?;
-        frame.complete = true;
-        // Drop the lock before yielding to allow concurrent reads
-        drop(frame);
-        // Yield to give the runtime a chance to process the I/O
+        tree::write_frame(&self.writer, &self.shutdown, message, began).await?;
         tokio::task::yield_now().await;
         debug!("Write complete and flushed");
         Ok(())
+    }
+
+    /// One request's write and reply under one `request_timeout`, raced
+    /// against this start's stdout-closed latch: a request never waits on a
+    /// child whose stdout is gone (MIK-7871).
+    pub(super) async fn exchange(
+        &self,
+        message: &str,
+        mut rx: oneshot::Receiver<JsonRpcResponse>,
+    ) -> Result<JsonRpcResponse> {
+        // MIK-7871: stdout may have closed, and `pending` been cleared, before
+        // the caller registered this reply. The reader trips the latch before it clears, so
+        // either this sees it, or the clear drops the entry. Nothing is written
+        // yet, so the refusal is pre-send (MIK-7979).
+        let eof = self.start.eof_receiver();
+        if eof.as_ref().is_some_and(|eof| *eof.borrow()) {
+            return Err(Error::TransportConnect("stdout closed".to_string()));
+        }
+        let began = AtomicBool::new(false);
+        // One deadline for the write and the reply: a child that stopped
+        // reading stdin cannot hold the call past it.
+        let exchange = tokio::time::timeout(self.request_timeout, async {
+            self.write_frame(message, &began).await?;
+            (&mut rx)
+                .await
+                .map_err(|_| Error::Transport("Response channel closed".to_string()))
+        });
+        let outcome = match eof {
+            None => Some(exchange.await),
+            Some(mut eof) => {
+                // Not `wait_for`: its future is not `Send`, and this one has
+                // to be. A dropped sender means this start's reader is gone.
+                let closed = async move {
+                    loop {
+                        // Separate statements: the borrow must end before
+                        // the await, or the read lock is held across it.
+                        if *eof.borrow_and_update() {
+                            break;
+                        }
+                        if eof.changed().await.is_err() {
+                            break;
+                        }
+                    }
+                };
+                super::early_exit::reply_or_eof(exchange, closed).await
+            }
+        };
+        match outcome {
+            Some(Ok(reply)) => reply,
+            Some(Err(_)) => Err(unsent_or(
+                &began,
+                "Request timed out",
+                Error::BackendTimeout,
+            )),
+            // A reply routed while the write was still yielding is the answer.
+            None => rx
+                .try_recv()
+                .map_err(|_| unsent_or(&began, "stdout closed", Error::Transport)),
+        }
     }
 }
 
