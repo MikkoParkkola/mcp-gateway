@@ -310,6 +310,7 @@ async fn a_writer_waits_for_a_whole_config_reload_to_publish() {
 /// away, and the listener cancels a disconnected request's handler). The
 /// reload must still publish: the running gateway ends up on the file's
 /// config, never left on the old one while the file says otherwise.
+#[cfg(feature = "webui")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_dropped_write_still_publishes_its_reload() {
     let (_dir, path, _lock) = config();
