@@ -493,7 +493,7 @@ fn short_text_has_no_fingerprints() {
     // depends on its hash alone. The long text's ~350 distinct k-grams pin
     // the production rate: keeping all of them matches only under 4^-350
     // of keys.
-    let long: String = (0..100).map(|i| format!("{i:03} ")).collect();
+    let long: String = (100..200).map(|i: u32| i.to_string() + " ").collect();
     for text in [secret()[..48].to_string(), "\u{e9}".repeat(48), long] {
         assert_eq!(
             d.fingerprints(&text),
