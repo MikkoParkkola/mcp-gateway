@@ -44,6 +44,7 @@ impl DirectFailure<'_> {
         self,
         reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
         error: crate::Error,
+        call: &crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall<'_>,
     ) -> (StatusCode, Json<Value>) {
         let error = match self.managed {
             Some(managed) if is_upstream_unauthorized(&error) => {
@@ -55,7 +56,8 @@ impl DirectFailure<'_> {
         if !matches!(error, crate::Error::IdentitySlotsExhausted { .. }) {
             record_client_failure(self.state, self.client);
         }
-        error!(backend = %self.name, error = %error, "Backend request failed");
+        // The code only: the error's text can be the backend's, unscreened.
+        error!(backend = %self.name, code = error.to_rpc_code(), "Backend request failed");
         let (code, text) = (error.to_rpc_code(), refusal_text(&error));
         let response = match upstream_rejection(&error) {
             Some(rejection) => JsonRpcResponse::error_with_data(
@@ -66,6 +68,11 @@ impl DirectFailure<'_> {
             ),
             None => JsonRpcResponse::error(Some(self.id.clone()), code, text),
         };
+        // MIK-8139: a failed dispatch's text can be the backend's own (a
+        // non-2xx JSON-RPC refusal), so it gets a result's screening; the
+        // screened answer is what the reservation settles with.
+        let (response, status) = super::screen_direct_error(self.state, call, response);
+        let status = status.unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         // A reconnect refusal settles the key with `response`, not the refusal
         // body returned below. That entry is never replayed: a fenced account
         // is refused at mint, before the idempotency guard, and the guard's
@@ -80,6 +87,6 @@ impl DirectFailure<'_> {
                 .direct_refusal(Some(self.id), text, Some(error), self.identity)
                 .await;
         }
-        build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
+        build_http_response(&response, status)
     }
 }
