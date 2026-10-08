@@ -84,13 +84,37 @@ impl EventSource for BackendSource {
         out
     }
 
+    /// Read under the live config's admission gate (MIK-7907): a backend the
+    /// reload removed, or made ineligible for upstream events, sends nothing.
+    fn admits_now(&self, name: &str) -> bool {
+        let Some((backend, kind)) = parse_name(name) else {
+            return true;
+        };
+        if !(self.names)().iter().any(|n| n == backend) {
+            return false;
+        }
+        kind == Kind::ToolsChanged
+            || self
+                .upstream
+                .as_ref()
+                .is_none_or(|up| !(up.ineligible)().contains(backend))
+    }
+
     async fn authorize(
         &self,
         _principal: &str,
         name: &str,
         arguments: &Value,
     ) -> Result<(), RpcError> {
-        let (Some(up), Some((backend, kind))) = (&self.upstream, parse_name(name)) else {
+        let Some((backend, kind)) = parse_name(name) else {
+            return Ok(());
+        };
+        // A backend the config no longer has is refused, not held: the
+        // subscription cannot be delivered again (MIK-7907).
+        if !(self.names)().iter().any(|n| n == backend) {
+            return Err(RpcError::forbidden());
+        }
+        let Some(up) = &self.upstream else {
             return Ok(());
         };
         // Subscribe, fan-out and the worker all ask here, so a backend a

@@ -115,6 +115,15 @@ pub(super) async fn fixture_state(auth: &AuthConfig) -> (Arc<AppState>, tempfile
     test_router_app_state_with_auth(auth).await
 }
 
+/// [`fixture_state`] with `agent_auth` installed before anything shares it,
+/// so the listener registry and the request middleware hold one registry.
+pub(super) async fn agent_fixture_state(
+    auth: &AuthConfig,
+    agent_auth: crate::gateway::oauth::AgentAuthState,
+) -> (Arc<AppState>, tempfile::TempDir) {
+    super::super::meta_fixture::test_router_app_state_with_agent_auth(auth, agent_auth).await
+}
+
 /// Register a mock under `name`, with its transport already injected.
 pub(super) fn register(state: &Arc<AppState>, name: &str, mock: &Arc<MockBackend>) {
     let backend = Arc::new(Backend::new(
