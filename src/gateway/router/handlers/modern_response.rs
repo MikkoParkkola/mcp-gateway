@@ -57,7 +57,7 @@ pub(crate) fn shape_modern_response(
         && let Some(object) = result.as_object_mut()
     {
         use crate::gateway::gateway_writes::{Layer, note};
-        let supplied = !object.contains_key("resultType");
+        let supplies_type = !object.contains_key("resultType");
         // Required on every result in this revision, and supplied here only
         // when the result does not already carry one.
         //
@@ -97,7 +97,7 @@ pub(crate) fn shape_modern_response(
         // What the shaper wrote is the gateway's, so a receipt leaves it out
         // (MIK-8025): `resultType` only when it supplied one, the cache hints
         // whenever it wrote them. A backend's own `resultType` stays.
-        if supplied {
+        if supplies_type {
             note(Layer::Answer, &["resultType"], result);
         }
         if hinted {
