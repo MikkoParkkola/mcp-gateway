@@ -186,6 +186,16 @@ pub(super) struct RelayGate {
 }
 
 impl RelayGate {
+    /// See [`super::Firewall::keeping_every_kgram`].
+    #[cfg(test)]
+    pub(super) fn keep_every_kgram(&mut self) {
+        if let Some(detector) = self.detector.as_mut() {
+            Arc::get_mut(detector)
+                .expect("a gate just built shares its detector with no one")
+                .keep_every_kgram();
+        }
+    }
+
     pub(super) fn from_config(config: &CollusionConfig) -> Self {
         let compile = |patterns: &[String]| {
             patterns
@@ -249,8 +259,8 @@ fn detector_for(config: &CollusionConfig) -> Option<Arc<CollusionDetector>> {
 
 /// Result text kept per delivery: the first and last half of this, so an
 /// excerpt from either end still matches. Sized under the detector's
-/// 1,024-fingerprint keep limit (one fingerprint per ~8.5 chars, kept in
-/// text order): a larger cap would silently drop the tail's fingerprints.
+/// per-delivery keep limit (about one fingerprint per 4 chars and form, kept
+/// in text order): a larger cap would silently drop the tail's fingerprints.
 pub(super) const RECORD_CAP: usize = 6 * 1024;
 
 /// A context-integrity data class that makes a delivery sensitive.

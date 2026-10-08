@@ -167,4 +167,20 @@ async fn readyz_is_not_ready_until_every_capability_has_loaded() {
         "ready with a partial catalogue: {admin}"
     );
     assert_eq!(backend["loaded"], true, "{admin}");
+
+    // Stop the gateway the way an operator would, so a coverage build writes
+    // its profile on exit; `kill_on_drop` stays as the backstop.
+    #[cfg(unix)]
+    {
+        let pid = child.id().expect("the gateway is still running");
+        let signalled = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .expect("run kill");
+        assert!(signalled.success(), "SIGTERM was not delivered");
+        tokio::time::timeout(Duration::from_secs(60), child.wait())
+            .await
+            .expect("the gateway exits after SIGTERM")
+            .expect("wait on the gateway");
+    }
 }

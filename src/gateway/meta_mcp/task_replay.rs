@@ -119,6 +119,11 @@ impl MetaMcp {
         match stored.task.status() {
             TaskStatus::Completed => {
                 if let Some(result) = stored.backend_result() {
+                    // MIK-7993.STORE.1: the members the gateway wrote into the
+                    // stored result are its own text; restored into this
+                    // read's record, the receipt (and its rebuild from what
+                    // is delivered) leaves exactly those out.
+                    super::invoke::gateway_writes::restore(&stored.gateway_writes);
                     self.stage_relay_receipt(who, to, result);
                 }
             }

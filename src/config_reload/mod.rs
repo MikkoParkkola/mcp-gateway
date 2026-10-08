@@ -398,6 +398,11 @@ pub async fn apply_patch(
 
 mod diff;
 mod reload_context;
+mod reload_warm_hook;
+// Linux-only, as the other real-watcher rows (inotify).
+#[cfg(all(test, target_os = "linux"))]
+mod reload_warm_hook_tests;
+pub(crate) use reload_warm_hook::{OnRegistered, RegisteredChange};
 mod watcher;
 mod write;
 use diff::pending_restart_fields;
@@ -437,7 +442,11 @@ mod c4_enable_tests;
 #[cfg(test)]
 mod c9_file_ref_tests;
 #[cfg(test)]
+mod reload_pause;
+#[cfg(test)]
 mod webhook_base_path_reload_tests;
+#[cfg(test)]
+mod writer_lock_tests;
 
 #[cfg(test)]
 mod grant_change_trigger_tests;
