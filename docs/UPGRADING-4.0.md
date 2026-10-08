@@ -190,6 +190,7 @@ backend" and "fails a capability file" first.**
 | 163 | With gateway authentication off and agent authentication on, each agent owns its tasks apart, keyed on the `client_id` its token validates as (a renewed token for the same agent keeps them); every agent had shared one task owner | None. Tasks an agent created before the upgrade stay under the old shared owner, so the agent no longer finds them under its own |
 | 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept, a removed one released); restart to read a repaired task; probes (`/livez`, `/readyz`) are unaffected |
 | 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
+| 169 | Every frame a backend's text reaches a client in passes one screen (content inspection, context integrity, response firewall) on every route. Over HTTP `/mcp` an interim question the firewall would rewrite is refused (-32600), as over stdio, instead of delivered redacted; backend errors, `prompts/get` and `resources/read` bodies, catalogue listings and notifications streamed during a call can now arrive redacted or be refused | None by default. To allow flagged text in a prompt, resource or listing, add a firewall rule whose `tool_match` names the method (`prompts/get`, `resources/read`, ...) |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4343,6 +4344,43 @@ says whose fault it is:
 The `gateway_reload_config` meta-tool answers that refusal with JSON-RPC
 -32600 (it was -32603) and keeps -32603 otherwise. The message text is
 unchanged on both.
+
+## 169. Every frame a backend sends passes the response firewall
+
+**Startup:** no notice
+
+The response firewall used to read only a tool result, so some backend text
+reached clients unscreened, and one route judged an interim question
+differently from another. Now every frame a backend's text reaches a client
+in passes one screen (content inspection, context integrity and the response
+firewall), on `/mcp`, `/mcp/{name}`, stdio and the task routes.
+
+What you lose:
+
+- **An interim question carrying a finding is refused, not redacted.** Over
+  HTTP `/mcp`, a backend question (`inputRequests`) or its `requestState`
+  that the firewall would rewrite used to arrive with the finding redacted.
+  It now arrives as the firewall's refusal (JSON-RPC -32600, "Response blocked
+  by security firewall"), as it already did over stdio: a rewritten question
+  could ask the user something the backend never asked.
+- **Backend text that used to pass is now screened.** A backend's JSON-RPC
+  error message and `data`, a `prompts/get` or `resources/read` body, the
+  descriptions in `prompts/list`, `resources/list` and
+  `resources/templates/list`, and a notification a backend streams during a
+  call (a progress message or any other method) can now arrive redacted, or
+  be refused (a notification is dropped). Under the default policy a
+  credential in any of them blocks the frame.
+
+What you gain: a credential or injected instruction in any of those frames
+no longer reaches the model or the user, and one answer gets the same
+outcome on every route and transport.
+
+What you do: nothing by default. If a backend legitimately returns text the
+firewall flags in a prompt, resource or listing, add a firewall rule for it:
+the rule's `tool_match` names the method (`prompts/get`, `resources/read`,
+`prompts/list`, ...), not the prompt or resource name. Backend failure logs
+now carry the error code rather than the backend's text; read the backend's
+own log for the text.
 
 ## Upgrading from 3.5.x: a walkthrough
 
