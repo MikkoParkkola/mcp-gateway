@@ -7,7 +7,9 @@
 use std::path::Path;
 
 use mcp_gateway::config::Config;
-use mcp_gateway::config_persistence::{write_config, write_config_preserving};
+use mcp_gateway::config_persistence::{write_config, write_config_preserving, write_config_text};
+
+use super::backend_url_keys::{UrlRewrite, rewrite_url_aliases};
 
 /// What a CLI write does when it cannot keep the file's comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +67,28 @@ pub fn write(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), Stri
         );
     }
     Ok(())
+}
+
+/// Whether a rewrite saves the file or only reports what it would change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RewriteMode {
+    /// Save the rewritten file when a line changed.
+    Apply,
+    /// Report only (`upgrade --dry-run`).
+    DryRun,
+}
+
+/// Rewrite every backend's `http_url` or `ws_url` in the config at `path` as
+/// `url`, saving only when a line changed and `mode` applies. The error is a
+/// message ready to print.
+pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<UrlRewrite, String> {
+    let text = super::regular_file::read_regular_text(path)
+        .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    let rewrite = rewrite_url_aliases(&text, None);
+    if mode == RewriteMode::Apply && !rewrite.changed.is_empty() {
+        write_config_text(path, &rewrite.text)?;
+    }
+    Ok(rewrite)
 }
 
 /// Whether `refusal` is the comment check, the only refusal `--force`

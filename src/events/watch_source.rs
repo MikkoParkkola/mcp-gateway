@@ -24,7 +24,8 @@ use chrono::Utc;
 use serde_json::{Map, Value, json};
 
 use super::fanout::SourceEvent;
-use super::records::{ApiKeyRef, Subscription};
+use super::records::{ApiKeyRef, Subscription, WatchClass};
+use super::store::{Held, Judged};
 use super::types::{EventDescriptor, RpcError, SourceKind, Visibility};
 use super::{EventSource, EventsHub};
 
@@ -219,6 +220,11 @@ fn digest(projection: &BTreeMap<String, Value>) -> String {
     format!("sha256:{}", hex::encode(sha2::Sha256::digest(bytes)))
 }
 
+/// Whether `name` is a REST watch event type.
+fn is_watch(name: &str) -> bool {
+    name.starts_with(PREFIX) && name.ends_with(SUFFIX)
+}
+
 /// A poller's lifecycle key: the principal it runs for (none when shared),
 /// the event name and the arguments. Serialized with sorted keys and every
 /// integer kept, so arguments differing past 2^53 are two pollers.
@@ -377,18 +383,12 @@ impl EventSource for WatchSource {
             .find(|t| t.read_only && event_name(&t.capability) == name)
             .cloned()
         else {
-            // Only a confirmed absence revokes: an unread one, or one a
-            // catalogue write since the read may have undone, skips (MIK-8037).
-            return Err(
-                if unread(&catalogue, name)
-                    || self.host.catalogue_generation() != catalogue.generation
-                {
-                    RpcError::not_found()
-                } else {
-                    RpcError::forbidden()
-                },
-            );
+            // No catalogue read revokes a watch (MIK-8122): its poller holds
+            // it, and this occurrence is skipped.
+            return Err(RpcError::not_found());
         };
+        // Refused at subscribe; at fan-out any code but -32012 only skips the
+        // occurrence, so this never revokes (MIK-8122).
         if target.credential == CredentialUse::Account {
             return Err(RpcError {
                 code: -32014,
@@ -404,14 +404,10 @@ impl EventSource for WatchSource {
         // upgrade if many watch rows make fan-out measurable.
         let rows = Self::rows(&hub, principal, name, arguments);
         if rows.iter().any(|row| self.holder(row, &target).is_none()) {
-            // A reload since the read may be the denial's cause: skip, keep.
-            return Err(
-                if self.host.catalogue_generation() == catalogue.generation {
-                    RpcError::forbidden()
-                } else {
-                    RpcError::not_found()
-                },
-            );
+            // The key is judged against the capability's current definition,
+            // which a mid-write read can change: skip, keep (MIK-8122). A
+            // revoked credential is revoked at fan-out before this check.
+            return Err(RpcError::not_found());
         }
         Ok(())
     }
@@ -427,10 +423,32 @@ impl EventSource for WatchSource {
     /// principal otherwise, so one principal's credential never answers for
     /// another's subscription.
     fn lifecycle_key(&self, principal: &str, name: &str, arguments: &Value) -> String {
-        let shared = self
-            .target(name)
-            .is_some_and(|t| t.credential == CredentialUse::Free);
-        poll_key((!shared).then_some(principal), name, arguments)
+        let class = self.class_for(principal, name, arguments);
+        poll_key(
+            (class == WatchClass::Keyed).then_some(principal),
+            name,
+            arguments,
+        )
+    }
+
+    fn row_key(&self, sub: &Subscription) -> Option<String> {
+        if !is_watch(&sub.name) {
+            return None;
+        }
+        // A row with no recorded class has no key until a catalogue read
+        // names its class: a guess would key it under the wrong class for
+        // good (MIK-8151).
+        let class = sub.watch_class.or_else(|| self.watch_class(&sub.name))?;
+        let alone = (class == WatchClass::Keyed).then_some(sub.principal.as_str());
+        Some(poll_key(alone, &sub.name, &sub.arguments))
+    }
+
+    fn pin_rows(&self, store: &super::store::Store) {
+        self.pin_classes(store);
+    }
+
+    fn watch_class(&self, name: &str) -> Option<WatchClass> {
+        self.target(name).as_ref().and_then(class_of_target)
     }
 
     async fn on_first_subscriber(
@@ -440,9 +458,16 @@ impl EventSource for WatchSource {
         name: &str,
         arguments: &Value,
     ) -> Result<(), RpcError> {
-        let target = self.target(name).ok_or_else(RpcError::forbidden)?;
+        // The key carries its class (a keyed key names its principal), and a
+        // stored row's key is its own class's: a held watch restarts under
+        // its own class whatever the catalogue says now (MIK-8122).
+        let class = if key == poll_key(None, name, arguments) {
+            WatchClass::Free
+        } else {
+            WatchClass::Keyed
+        };
         let options = options(arguments)?;
-        let shared = target.credential == CredentialUse::Free;
+        let shared = class == WatchClass::Free;
         let mut pollers = self.pollers.lock();
         // An entry whose poller ended on its own is replaced, not joined.
         pollers.retain(|_, p| !p.stop.load(Ordering::Acquire));
@@ -570,7 +595,9 @@ impl Run {
         hub.store
             .subscriptions()
             .into_iter()
-            .filter(|s| s.live(now) && s.name == self.name && self.key_of(s) == self.key)
+            // Its own class only: a poller never holds, resumes or polls
+            // for a row admitted under another class (MIK-8122).
+            .filter(|s| s.live(now) && self.owns(s))
             .collect()
     }
 
@@ -589,54 +616,34 @@ impl Run {
     }
 
     /// The watched target and the catalogue generation it was read at, or
-    /// the step this poll ends with: `Polled` while the absence is unread or
-    /// a write may have undone it, `Stop` once it is confirmed and withdrawn.
-    async fn watched(&self, hub: &Arc<EventsHub>) -> Result<(Target, u64), Step> {
-        // The classification is re-read every poll (MIK-7216.IDEM.1). A
+    /// `Polled` when there is nothing to call this poll: the catalogue is
+    /// unread, or written since the read, or the capability is not watchable
+    /// under this poller's class. In that last case this poller's rows are
+    /// held, never withdrawn (MIK-8122); once the capability is watchable
+    /// again they resume in the same poll.
+    fn watched(&self, hub: &Arc<EventsHub>) -> Result<(Target, u64), Step> {
+        // The classification is re-read every poll (MIK-7216.IDEM.1): a
         // capability removed, reclassified as side-effecting, or moved to
         // another credential class (a shared poller never calls under one
-        // sharer's credential) takes its subscriptions with it; subscribers
-        // subscribe again under the new class.
+        // sharer's credential) is not called for.
         let watchable = |t: &Target| {
             t.read_only
                 && event_name(&t.capability) == self.name
                 && t.credential != CredentialUse::Account
                 && (t.credential == CredentialUse::Free) == (self.charge == Charge::Global)
         };
-        // A partial catalogue that could not read the capability ends
-        // nothing: the poll waits for the next complete one (MIK-8037).
-        let first = self.host.catalogue();
-        let found = first.targets.iter().find(|&t| watchable(t)).cloned();
-        let (target, generation) = if let Some(target) = found {
-            (target, first.generation)
-        } else if unread(&first, &self.name) {
+        let read = self.host.catalogue();
+        // A partial catalogue that could not read the capability decides
+        // nothing; nor does one a write may have undone (MIK-8037).
+        if let Some(target) = read.targets.iter().find(|&t| watchable(t)).cloned() {
+            self.judge_rows(hub, None);
+            return Ok((target, read.generation));
+        }
+        if unread(&read, &self.name) || self.host.catalogue_generation() != read.generation {
             return Err(Step::Polled);
-        } else {
-            // Confirmed under the lock a subscribe commits under: a
-            // capability watchable again by now keeps every subscription.
-            let mut started = hub.lifecycle.lock().await;
-            let again = self.host.catalogue();
-            if let Some(target) = again.targets.iter().find(|&t| watchable(t)).cloned() {
-                (target, again.generation)
-            } else if unread(&again, &self.name)
-                // A write since the read (a registration restoring it) may
-                // have undone the absence: decide on the next poll.
-                || self.host.catalogue_generation() != again.generation
-            {
-                return Err(Step::Polled);
-            } else {
-                let (gone, owner) = (vec![self.name.clone()], Arc::clone(hub));
-                let _ = tokio::task::spawn_blocking(move || owner.withdraw(&gone)).await;
-                // Retired before the lock goes, as in `retire`: a subscribe
-                // next must start a fresh poller, not join this one.
-                started.remove(&(SourceKind::RestWatch, self.key.clone()));
-                self.stop.store(true, Ordering::Release);
-                drop(started);
-                hub.reconcile_stops_in_background();
-                return Err(Step::Stop);
-            }
-        };
-        Ok((target, generation))
+        }
+        self.judge_rows(hub, Some(&self.why_not_watchable(&read)));
+        Err(Step::Polled)
     }
 
     async fn once(
@@ -644,7 +651,7 @@ impl Run {
         hub: &Arc<EventsHub>,
         last: &mut Option<(BTreeMap<String, Value>, String)>,
     ) -> Step {
-        let (target, generation) = match self.watched(hub).await {
+        let (target, generation) = match self.watched(hub) {
             Ok(found) => found,
             Err(step) => return step,
         };
@@ -655,6 +662,7 @@ impl Run {
         };
         let mut chosen = None;
         let mut denied = Vec::new();
+        let mut skipped = false;
         for row in rows {
             let passes = services
                 .admits_subscription(&row, Some(target.backend.as_str()))
@@ -663,19 +671,21 @@ impl Run {
                 .api_key
                 .clone()
                 .filter(|_| row.legacy_api_key_name.is_none());
-            let holder = api_key
-                .map(|api_key| Holder {
-                    principal: row.principal.clone(),
-                    api_key,
-                })
-                .filter(|h| passes && self.host.may_invoke(h, &target));
-            match holder {
-                Some(holder) => {
-                    if chosen.is_none() {
-                        chosen = Some(holder);
-                    }
-                }
-                None => denied.push(row),
+            // A refused credential, or no key to call with, revokes. A key
+            // the current capability definition refuses is about the
+            // catalogue, which a mid-write read can change: kept, skipped,
+            // and judged again next poll (MIK-8122).
+            let Some(holder) = api_key.filter(|_| passes).map(|api_key| Holder {
+                principal: row.principal.clone(),
+                api_key,
+            }) else {
+                denied.push(row);
+                continue;
+            };
+            if !self.host.may_invoke(&holder, &target) {
+                skipped = true;
+            } else if chosen.is_none() {
+                chosen = Some(holder);
             }
         }
         if !denied.is_empty() {
@@ -691,7 +701,12 @@ impl Run {
             }
         }
         let Some(holder) = chosen else {
-            return self.retire(hub).await;
+            // Kept rows keep the poller: it retires only with no live row.
+            return if skipped {
+                Step::Polled
+            } else {
+                self.retire(hub).await
+            };
         };
         let Ok(value) = self
             .host
@@ -757,6 +772,10 @@ impl EventsHub {
         self.register_source(Arc::new(WatchSource::new(self, host)));
     }
 }
+
+#[path = "watch_source_hold.rs"]
+mod hold;
+use hold::class_of_target;
 
 #[cfg(test)]
 #[path = "watch_source_tests.rs"]

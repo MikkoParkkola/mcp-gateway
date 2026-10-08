@@ -337,7 +337,7 @@ async fn forward_sanitized(
             ),
             caller.client.as_ref(),
         ),
-        envelope.params.as_ref(),
+        (envelope.params.as_ref(), route.backend.instance()),
     );
     let guards = (client, &mut admitted.sealed);
     let forward =
@@ -428,7 +428,7 @@ async fn forward_plain(
                 ),
                 caller.client.as_ref(),
             ),
-            envelope.params.as_ref(),
+            (envelope.params.as_ref(), route.backend.instance()),
         );
         let guards = (client, &mut admitted.sealed);
         let guarded =
@@ -587,7 +587,8 @@ async fn redeem_retry(
         ),
         scope.caller.client.as_ref(),
     );
-    let sent = (scope.name, envelope.params.as_ref());
+    let instance = Some(scope.route.backend.instance());
+    let sent = (scope.name, instance, envelope.params.as_ref());
     let redeemed = scope
         .state
         .meta_mcp

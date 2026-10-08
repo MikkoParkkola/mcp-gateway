@@ -209,6 +209,30 @@ impl Shared {
             }
             (entry.task.clone(), entry.record.clone())
         };
+        Ok(
+            match self.settle_durable(&task, &record, (event, targets, author, writes), at)? {
+                Some((task, record)) => self.publish(task, record),
+                None => CommittedTask::of(task, &record),
+            },
+        )
+    }
+
+    /// Write `task` settled by `event`, falling back to the bounded failure
+    /// when the outcome does not fit; durable, NOT yet published. `None` when
+    /// the transition changes nothing. Callers hold the ordering lock. Also
+    /// the recovery of a repaired row before its key is imported (MIK-8121).
+    pub(super) fn settle_durable(
+        &self,
+        task: &Task,
+        record: &Record,
+        (event, targets, author, writes): (
+            TaskTransition,
+            Option<Vec<Target>>,
+            ErrorAuthor,
+            WriteRecord,
+        ),
+        at: DateTime<Utc>,
+    ) -> Result<Option<(Task, Record)>, StoreError> {
         // Last resort: an output-free record. It discards the targets and the
         // recovery descriptor, and it is marked so delivery knows its only
         // content is the gateway's own error. Every live row was admitted
@@ -221,7 +245,7 @@ impl Shared {
             author,
             writes.clone(),
         );
-        match self.settle_attempt(&task, &record, attempt, at) {
+        match self.settle_attempt(task, record, attempt, at) {
             Err(StoreError::Capacity) => {}
             settled => return settled,
         }
@@ -238,7 +262,7 @@ impl Shared {
                 author,
                 WriteRecord::default(),
             );
-            match self.settle_attempt(&task, &record, attempt, at) {
+            match self.settle_attempt(task, record, attempt, at) {
                 Err(StoreError::Capacity) => {}
                 settled => {
                     if settled.is_ok() && !stripped.is_empty() {
@@ -254,8 +278,8 @@ impl Shared {
             }
         }
         self.settle_attempt(
-            &task,
-            &record,
+            task,
+            record,
             (
                 bounded(),
                 None,
@@ -279,16 +303,16 @@ impl Shared {
             WriteRecord,
         ),
         at: DateTime<Utc>,
-    ) -> Result<CommittedTask, StoreError> {
+    ) -> Result<Option<(Task, Record)>, StoreError> {
         let Some((task, record)) = settled(task, record, settlement, at)? else {
-            return Ok(CommittedTask::of(task.clone(), record));
+            return Ok(None);
         };
         let bytes = serialize(&record)?;
         if bytes.len() > self.limits.record_bytes {
             return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;
-        Ok(self.publish(task, record))
+        Ok(Some((task, record)))
     }
 }
 

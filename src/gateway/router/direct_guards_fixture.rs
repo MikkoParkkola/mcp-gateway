@@ -324,6 +324,32 @@ fn key(name: &str) -> ApiKeyConfig {
     }
 }
 
+/// Replace backend `name` with a fresh instance under the same name, as a
+/// live reload does (MIK-8168): same config, its own call counter, answering
+/// `Ok`. Returns the new backend's counter.
+pub(crate) fn replace_backend(fx: &Fx, name: &str) -> Arc<AtomicUsize> {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let backend = Arc::new(Backend::new(
+        name,
+        BackendConfig {
+            passthrough: name.ends_with("-pt"),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(Arc::new(CountingBackend {
+        calls: Arc::clone(&calls),
+        seen: Arc::default(),
+        answer: Answer::Ok,
+    }));
+    assert!(
+        fx.state.backends.register(backend),
+        "replacement registration"
+    );
+    calls
+}
+
 /// Build the fixture, arming the replaced `MetaMcp` with `arm` before it is
 /// installed (idempotency is enabled first, so `arm` can layer more on top).
 pub(crate) async fn fixture(answer: Answer, arm: impl FnOnce(&mut MetaMcp)) -> Fx {
