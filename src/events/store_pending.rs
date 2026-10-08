@@ -6,7 +6,6 @@
 //! the unsubscribe answer waits out one already claimed.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use chrono::{DateTime, Utc};
 
@@ -14,9 +13,7 @@ use super::{State, Store};
 use crate::events::outbox::{
     DeadLetter, DeadPolicy, DeadReason, Enqueued, Evicted, OutboxCaps, OutboxRecord, OutboxState,
 };
-use crate::events::records::{
-    Subscription, load_records, remove_record, remove_record_durable, write_record,
-};
+use crate::events::records::{Subscription, remove_record, remove_record_durable, write_record};
 
 /// How long a record whose settlement the disk refused waits to be tried
 /// again.
@@ -59,43 +56,10 @@ pub(crate) enum Settle {
 pub(crate) struct Due {
     pub ready: Vec<OutboxRecord>,
     pub next: Option<DateTime<Utc>>,
-}
-
-/// Load `dead/` and `outbox/` into `state`. A record left `in_flight` by a
-/// crash returns to `pending`, due now, with its id and bytes unchanged (F1).
-/// An outbox record whose dead letter is already written was settled before
-/// the crash: it is removed, never sent again.
-pub(super) fn load(
-    state: &mut State,
-    outbox_dir: &Path,
-    dead_dir: &Path,
-    now: DateTime<Utc>,
-) -> std::io::Result<()> {
-    for (_, dead) in load_records::<DeadLetter>(dead_dir) {
-        let size = dead_size(&dead);
-        state
-            .dead
-            .insert(dead.record.event_id.clone(), (dead, size));
-    }
-    for (_, mut record) in load_records::<OutboxRecord>(outbox_dir) {
-        // The same occurrence, not a later one re-admitted under the same id
-        // once the inbound dedupe window passed: its fan-out time matches.
-        let settled = state
-            .dead
-            .get(&record.event_id)
-            .is_some_and(|(dead, _)| dead.record.created_at == record.created_at);
-        if settled {
-            remove_record(outbox_dir, &OutboxRecord::file(&record.event_id))?;
-            continue;
-        }
-        if record.state == OutboxState::InFlight {
-            record.state = OutboxState::Pending;
-            record.next_attempt_at = now;
-            write_record(outbox_dir, &OutboxRecord::file(&record.event_id), &record)?.durable()?;
-        }
-        state.outbox.insert(record.event_id.clone(), record);
-    }
-    Ok(())
+    /// Records of expired rows buried by this call, for their receipts.
+    pub buried: Vec<OutboxRecord>,
+    /// Dead letters those burials evicted, receipted after them.
+    pub evicted: Vec<Evicted>,
 }
 
 fn dead_size(dead: &DeadLetter) -> u64 {
@@ -177,7 +141,13 @@ impl Store {
         record: OutboxRecord,
         caps: OutboxCaps,
     ) -> std::io::Result<Enqueued> {
-        if !state.subs.contains_key(&record.subscription_id) {
+        // An expired row kept for its burials takes no new record, so the
+        // worker can always settle it (MIK-8061).
+        if !state
+            .subs
+            .get(&record.subscription_id)
+            .is_some_and(|s| s.live(Utc::now()))
+        {
             return Ok(Enqueued::NoSubscription);
         }
         // The same occurrence offered twice keeps the record already
@@ -283,8 +253,11 @@ impl Store {
         // The occurrence's own fan-out stamp: should a crash leave this record
         // and its dead letter both on disk, `load` reads them as one settled
         // occurrence and keeps only the dead letter.
+        // Marked replayed here, whoever replays it: at its subscription's
+        // expiry it is buried, never dropped (MIK-8061).
         let record = OutboxRecord {
             created_at: stamp,
+            replayed: true,
             ..record
         };
         match state.subs.get(&record.subscription_id) {
@@ -335,27 +308,32 @@ impl Store {
 
     /// Due records, at most one per subscription not in `busy`, each the
     /// oldest due record of a subscription that may be attempted now.
-    /// Records whose subscription is gone or expired are cancelled here; a
+    /// Records whose subscription is gone are cancelled here, and those of an
+    /// expired one settled (`expire_pending`) under `policy`; a
     /// suspended subscription keeps its records.
-    pub(crate) fn due(&self, now: DateTime<Utc>, busy: &HashSet<String>) -> std::io::Result<Due> {
+    pub(crate) fn due(
+        &self,
+        now: DateTime<Utc>,
+        busy: &HashSet<String>,
+        policy: DeadPolicy,
+    ) -> std::io::Result<Due> {
         let mut state = self.state.lock();
+        // A record whose row is gone was left by an unsubscribe: dropped, as
+        // the unsubscribe meant (design 9).
         let orphans: Vec<String> = state
             .outbox
             .values()
-            .filter(|r| {
-                !state
-                    .subs
-                    .get(&r.subscription_id)
-                    .is_some_and(|s| s.live(now))
-            })
+            .filter(|r| !state.subs.contains_key(&r.subscription_id))
             .map(|r| r.event_id.clone())
             .collect();
         for id in orphans {
             remove_record(&self.outbox_dir, &OutboxRecord::file(&id))?;
             state.outbox.remove(&id);
         }
+        let (buried, evicted, more) = self.settle_expired(&mut state, now, policy);
         let mut first: HashMap<&str, &OutboxRecord> = HashMap::new();
-        let mut next: Option<DateTime<Utc>> = None;
+        // Expired records left past this batch are due at once.
+        let mut next: Option<DateTime<Utc>> = more.then_some(now);
         for record in state.outbox.values() {
             let open = state
                 .subs
@@ -380,7 +358,12 @@ impl Store {
         ready.sort_by(|a, b| {
             (a.next_attempt_at, &a.event_id).cmp(&(b.next_attempt_at, &b.event_id))
         });
-        Ok(Due { ready, next })
+        Ok(Due {
+            ready,
+            next,
+            buried,
+            evicted,
+        })
     }
 
     /// Whether subscription `id` has a pending record due at `now`, one on
@@ -767,6 +750,18 @@ impl Store {
             if !expired && count <= policy.max_records && bytes <= policy.max_bytes {
                 break;
             }
+            // An expiry burial not yet durable keeps its outbox copy: its dead
+            // letter is not evicted before the burial completes and is
+            // receipted (MIK-8061).
+            let unfinished = state.dead.get(&id).is_some_and(|(dead, _)| {
+                state
+                    .outbox
+                    .get(&id)
+                    .is_some_and(|r| r.created_at == dead.record.created_at)
+            });
+            if unfinished {
+                continue;
+            }
             // The dead letter is the marker that keeps an outbox copy left by
             // a failed unlink from being sent again: that copy goes first,
             // unless the outbox holds a later occurrence under the same id.
@@ -787,6 +782,10 @@ impl Store {
         Ok(())
     }
 }
+
+#[path = "store_expiry.rs"]
+mod expiry;
+pub(super) use expiry::load;
 
 #[cfg(test)]
 #[path = "store_pending_tests.rs"]

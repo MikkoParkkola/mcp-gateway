@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use process_wrap::tokio::ChildWrapper;
 use serde_json::Value;
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
@@ -60,7 +60,9 @@ pub struct StdioTransport {
     /// Request timeout for initialize and JSON-RPC calls
     request_timeout: std::time::Duration,
     /// Writer handle
-    writer: Mutex<Option<tokio::process::ChildStdin>>,
+    writer: Arc<Mutex<Option<tokio::process::ChildStdin>>>,
+    /// Cancelled by `close()`, renewed by `start()`: ends a write stuck on a reader.
+    shutdown: parking_lot::Mutex<tokio_util::sync::CancellationToken>,
     /// Negotiated protocol version (config override or auto-negotiated)
     protocol_version: RwLock<Option<String>>,
     /// Where to deliver a notification for each call that supplied a progress
@@ -177,7 +179,12 @@ impl StdioTransport {
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stderr".to_string()))?;
 
-        *self.writer.lock().await = Some(stdin);
+        let mut writer = self.writer.lock().await;
+        // Renewed under the stdin lock, so a write never pairs new stdin with
+        // the token a previous `close()` cancelled.
+        *self.shutdown.lock() = tokio_util::sync::CancellationToken::new();
+        *writer = Some(stdin);
+        drop(writer);
         *self.child.lock().await = Some(child);
         let (eof_tx, eof_rx) = tokio::sync::watch::channel(false);
         self.start.begin(eof_rx);
@@ -553,32 +560,13 @@ impl StdioTransport {
         Ok(())
     }
 
-    /// Write a message to stdin
+    /// Write one frame to stdin, cancel-safely: see [`tree::write_frame`].
     async fn write_message(&self, message: &str) -> Result<()> {
         debug!(message_len = message.len(), "Writing to stdin");
-        let mut writer = self.writer.lock().await;
-        if let Some(ref mut stdin) = *writer {
-            stdin
-                .write_all(message.as_bytes())
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            stdin
-                .write_all(b"\n")
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            stdin
-                .flush()
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            // Drop the lock before yielding to allow concurrent reads
-            drop(writer);
-            // Yield to give the runtime a chance to process the I/O
-            tokio::task::yield_now().await;
-            debug!("Write complete and flushed");
-            Ok(())
-        } else {
-            Err(Error::TransportConnect("Not connected".to_string()))
-        }
+        tree::write_frame(&self.writer, &self.shutdown, message).await?;
+        tokio::task::yield_now().await;
+        debug!("Write complete and flushed");
+        Ok(())
     }
 
     /// Get next request ID
@@ -717,13 +705,15 @@ impl Transport for StdioTransport {
     async fn close(&self) -> Result<()> {
         self.connected.store(false, Ordering::Relaxed);
 
-        // Close stdin
-        *self.writer.lock().await = None;
-
-        // Kill child process
+        // A write stuck on a peer that stopped reading holds stdin; the kill ends it.
+        if let Ok(mut writer) = self.writer.try_lock() {
+            *writer = None;
+        }
         if let Some(ref mut child) = *self.child.lock().await {
             let _ = Box::into_pin(child.kill()).await;
         }
+        self.shutdown.lock().cancel();
+        tree::clear_writer(&self.writer).await;
 
         Ok(())
     }
