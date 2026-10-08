@@ -110,3 +110,23 @@ fn a_null_data_part_is_an_answer_not_empty_content() {
     assert_eq!(result["content"], json!([{"type": "text", "text": "null"}]));
     assert!(result.get("structuredContent").is_none());
 }
+
+#[test]
+fn a_completed_tasks_status_message_is_part_of_the_answer() {
+    let result = reply_to_result(&reply(json!({"task": {"id": "t", "status": {
+        "state": "TASK_STATE_COMPLETED",
+        "message": {"messageId": "m", "role": "ROLE_AGENT", "parts": [{"text": "the answer"}]}},
+        "artifacts": [{"artifactId": "a", "parts": [{"text": "the artifact"}]}]}})));
+    let texts: Vec<&str> = result["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["text"].as_str())
+        .collect();
+    assert_eq!(texts, ["the artifact", "the answer"], "{result}");
+
+    let only_status = reply_to_result(&reply(json!({"task": {"id": "t", "status": {
+        "state": "TASK_STATE_COMPLETED",
+        "message": {"messageId": "m", "role": "ROLE_AGENT", "parts": [{"text": "just this"}]}}}})));
+    assert_eq!(only_status["content"][0]["text"], "just this");
+}

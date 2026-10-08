@@ -480,3 +480,24 @@ async fn a2a_7_a_propagated_credential_reaches_the_agent_per_request() {
         "the user's credential replaces the static one on its request only"
     );
 }
+
+/// A2A.4: the bridge states the protocol version; a configured `A2A-Version`
+/// never reaches the agent beside it.
+#[tokio::test]
+async fn a2a_4_a_configured_version_header_never_overrides_the_bridges() {
+    let (base, log) = stub::serve(Agent::answering(stub::completed_task(
+        json!([{"text": "one version"}]),
+    )))
+    .await;
+    let result = call(&backend(&base, None, &[("A2A-Version", "0.3")]), "hi")
+        .await
+        .expect("the call succeeds");
+    assert_eq!(texts(&result), ["one version"], "{result}");
+    let versions: Vec<String> = stub::sends(&log)[0]
+        .headers
+        .get_all("a2a-version")
+        .iter()
+        .filter_map(|v| v.to_str().ok().map(str::to_owned))
+        .collect();
+    assert_eq!(versions, ["1.0"], "exactly one version header");
+}

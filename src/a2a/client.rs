@@ -197,10 +197,18 @@ impl A2aClient {
                 .iter()
                 .any(|(extra, _)| extra.eq_ignore_ascii_case(name))
         };
-        for (name, value) in self.headers.iter().filter(|(name, _)| !overridden(name)) {
+        // The protocol version is the bridge's to state: a configured or
+        // per-request `A2A-Version` would put a second, conflicting one on
+        // the wire.
+        let version = |name: &str| name.eq_ignore_ascii_case(VERSION_HEADER);
+        for (name, value) in self
+            .headers
+            .iter()
+            .filter(|(name, _)| !overridden(name) && !version(name))
+        {
             request = request.header(name.as_str(), value.as_str());
         }
-        for (name, value) in extra_headers {
+        for (name, value) in extra_headers.iter().filter(|(name, _)| !version(name)) {
             request = request.header(name.as_str(), value.as_str());
         }
         request.header(VERSION_HEADER, PROTOCOL_VERSION)
@@ -232,7 +240,9 @@ async fn read_capped_json(mut response: reqwest::Response, what: &str) -> Result
 
 /// A JSON-RPC envelope as the agent's error or its `SendMessage` result.
 fn decode_reply(envelope: &Value) -> Result<Reply> {
-    if let Some(error) = envelope.get("error") {
+    // `"error": null` beside a result is a success some agents send; only an
+    // error object is the agent's error.
+    if let Some(error) = envelope.get("error").filter(|error| !error.is_null()) {
         let code = error
             .get("code")
             .and_then(Value::as_i64)

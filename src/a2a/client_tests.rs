@@ -143,3 +143,13 @@ async fn a_body_over_the_cap_is_refused_and_one_at_it_is_read() {
         json!({})
     );
 }
+
+#[test]
+fn a_null_error_beside_a_result_is_a_success() {
+    let reply = decode_reply(&json!({"jsonrpc": "2.0", "id": "1", "error": null,
+        "result": {"message": {"messageId": "m", "role": "ROLE_AGENT", "parts": [{"text": "ok"}]}}}));
+    assert!(
+        matches!(reply, Ok(Reply::Answer(_))),
+        "an error of null is no error"
+    );
+}
