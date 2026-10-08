@@ -49,7 +49,7 @@ fn gateway_firewall(state: &Arc<ContinuationState>) -> (Firewall, tempfile::Temp
 /// Mint envelopes until one holds a credential-shaped run after its head. A
 /// padded payload lengthens the ciphertext so a run turns up within a few
 /// hundred mints.
-fn mint_credential_shaped(keyring: &Keyring) -> String {
+pub(crate) fn mint_credential_shaped(keyring: &Keyring) -> String {
     mint_credential_shaped_at(keyring, now_unix_secs())
 }
 
