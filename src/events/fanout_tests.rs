@@ -112,14 +112,18 @@ fn subscription(name: &str) -> super::super::records::Subscription {
         failed_since: None,
         last_delivery_at: None,
         last_error: None,
+        payload_fields: Vec::new(),
+        unoffered_since: None,
+        held_until: None,
+        watch_class: None,
     }
 }
 
-/// MIK-7772: opening the hub withdraws nothing, because the catalogue is
-/// partial until the capability scan has run; reconciling afterwards deletes
-/// the subscriptions to webhook event types no source offers, and only those.
+/// MIK-7772 under MIK-8057: opening the hub changes nothing; reconciling
+/// afterwards holds the subscriptions to webhook event types no source
+/// offers, and deletes none.
 #[test]
-fn reconcile_withdraws_only_unoffered_webhook_subscriptions_and_only_when_asked() {
+fn reconcile_holds_unoffered_webhook_subscriptions() {
     let dir = tempfile::tempdir().expect("dir");
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
@@ -160,10 +164,18 @@ fn reconcile_withdraws_only_unoffered_webhook_subscriptions_and_only_when_asked(
         .into_iter()
         .map(|s| s.name)
         .collect();
+    assert_eq!(left.len(), 2, "nothing is deleted: {left:?}");
+    let held: Vec<String> = hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .filter(|s| hub.store.held(&s.id).is_some())
+        .map(|s| s.name)
+        .collect();
     assert_eq!(
-        left,
-        ["task.settled"],
-        "only the unoffered webhook type went"
+        held,
+        ["webhook.gone.route.received"],
+        "the webhook type is held"
     );
     assert!(
         hub.runtime
@@ -210,10 +222,10 @@ fn a_partial_scan_keeps_every_subscription() {
     );
 }
 
-/// With webhooks off no route can return, so even a partial scan withdraws
-/// the stored webhook subscriptions (MIK-7772).
+/// With webhooks off no route is offered: the stored webhook subscriptions
+/// are held and stamped, so they lapse; none is deleted (MIK-8057).
 #[test]
-fn webhooks_off_withdraws_even_after_a_partial_scan() {
+fn webhooks_off_holds_and_stamps_webhook_subscriptions() {
     let dir = tempfile::tempdir().expect("dir");
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
@@ -236,7 +248,10 @@ fn webhooks_off_withdraws_even_after_a_partial_scan() {
 
     assert!(hub.reconcile_catalogue(CatalogueScan::Partial));
 
-    assert!(hub.store.subscriptions().is_empty(), "withdrawn");
+    let rows = hub.store.subscriptions();
+    assert_eq!(rows.len(), 1, "held, not withdrawn");
+    assert!(hub.store.held(&rows[0].id).is_some());
+    assert!(rows[0].held_until.is_some(), "stamped, so it lapses");
 }
 
 /// MIK-7891: a startup reconcile that fails to remove a subscription says so

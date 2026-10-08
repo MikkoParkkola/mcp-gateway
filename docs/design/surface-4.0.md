@@ -89,7 +89,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `accounts` | 45 | `schema_version` | `adapters[].clock_skew_seconds`; `adapters[].max_lifetime_seconds`; `limits`; `limits.authority_bytes`; `limits.journeys_created_per_minute`; `limits.journeys_per_user`; `limits.journeys_total`; `limits.starts_per_minute_per_user`; `limits.store_entries` |  |  |
 | `agent_auth` | 10 |  |  |  |  |
 | `auth` | 17 |  | `client_circuit_breaker.failure_threshold`; `client_circuit_breaker.reset_timeout`; `client_circuit_breaker.success_threshold`; `dashboard_session`; `dashboard_session.absolute_timeout_secs`; `dashboard_session.idle_timeout_secs` |  | `api_keys[].key` |
-| `backends` | 44 | `<name>.oauth.token_refresh_buffer_secs`; `<name>.protocol_version`; `<name>.streamable_http` | `<name>.a2a_agent_card_path`; `<name>.max_frame_bytes` |  | `<name>.circuit_breaker`; `<name>.idle_timeout` |
+| `backends` | 43 | `<name>.oauth.token_refresh_buffer_secs`; `<name>.protocol_version`; `<name>.streamable_http` | `<name>.a2a_agent_card_path`; `<name>.max_frame_bytes` | `<name>.http_url`; `<name>.ws_url` | `<name>.circuit_breaker`; `<name>.idle_timeout` |
 | `cache` | 2 |  | `default_ttl`; `max_entries` |  |  |
 | `capabilities` | 12 |  | `files.downloads_quota_bytes`; `name` |  |  |
 | `code_mode` | 2 |  |  |  |  |
@@ -151,7 +151,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
-| `env` | 20 | `MCP_GATEWAY_CAPABILITIES` |  | `MCP_GATEWAY_KIND_CLUSTER`; `MCP_GATEWAY_KIND_KEEP`; `MCP_GATEWAY_KIND_NAMESPACE`; `MCP_GATEWAY_ROLLOUT_TIMEOUT`; `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE`; `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`; `MCP_GATEWAY_TEST_EVENTS_WITHDRAW_GRACE_MS`; `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`; `MCP_GATEWAY_TEST_HOME_DIR`; `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED` |  |
+| `env` | 19 | `MCP_GATEWAY_CAPABILITIES` |  | `MCP_GATEWAY_KIND_CLUSTER`; `MCP_GATEWAY_KIND_KEEP`; `MCP_GATEWAY_KIND_NAMESPACE`; `MCP_GATEWAY_ROLLOUT_TIMEOUT`; `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE`; `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`; `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`; `MCP_GATEWAY_TEST_HOME_DIR`; `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED` |  |
 
 ### routes
 
@@ -168,7 +168,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `/metrics` | 1 |  |  |  |  |
 | `/readyz` | 1 |  |  |  |  |
 | `/sse` |  |  |  | `/sse` |  |
-| `/ui` | 1 |  |  | `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools` |  |
+| `/ui` | 1 |  |  | `/ui/api/backends`; `/ui/api/backends/{name}`; `/ui/api/backends/{name}/revive`; `/ui/api/capabilities`; `/ui/api/capabilities/{name}`; `/ui/api/config`; `/ui/api/control-plane`; `/ui/api/control-plane/decisions`; `/ui/api/control-plane/export-status`; `/ui/api/control-plane/grants`; `/ui/api/control-plane/policies`; `/ui/api/costs`; `/ui/api/dashboard-link`; `/ui/api/events/dead-letters`; `/ui/api/events/dead-letters/replay`; `/ui/api/events/dead-letters/{id}/replay`; `/ui/api/events/held`; `/ui/api/import/openapi`; `/ui/api/import/openapi/preview`; `/ui/api/registry`; `/ui/api/registry/search`; `/ui/api/reload`; `/ui/api/status`; `/ui/api/tools` |  |
 | `config-driven` | 3 |  |  |  |  |
 
 ### lib
@@ -331,7 +331,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `backends.<name>.enabled` | KEEP | `true` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:18 |
 | `backends.<name>.env` | KEEP | `HashMap::new()` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:45 |
 | `backends.<name>.headers` | KEEP | `HashMap::new()` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:48 |
-| `backends.<name>.http_url` | KEEP | `String::new()` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:231 |
+| `backends.<name>.http_url` | INTERNAL | `String::new()` | older spelling of the backend `url` key (P2c1); still read | hidden alias: still read and validated; `mcp-gateway upgrade` rewrites it as `url`; `doctor` names it | src/config/backend_config.rs:231 |
 | `backends.<name>.identity_propagation` | KEEP | `None` | multi-user and provenance deployments (MULTI_USER.md) | - | src/config/backend_config.rs:92 |
 | `backends.<name>.identity_propagation.audience` | KEEP | — | multi-user and provenance deployments (MULTI_USER.md) | - | src/identity_propagation/mod.rs:235 |
 | `backends.<name>.identity_propagation.required` | KEEP | — | multi-user and provenance deployments (MULTI_USER.md) | - | src/identity_propagation/mod.rs:240 |
@@ -366,7 +366,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `backends.<name>.stop_when_idle_for` | KEEP | `None` | operator trades memory for cold starts per backend | - | src/config/backend_config.rs:35 |
 | `backends.<name>.streamable_http` | AUTO | `None` | already detected at connect (POST first, SSE on 4xx) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:231 |
 | `backends.<name>.timeout` | KEEP | `Duration::from_secs(30)` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:43 |
-| `backends.<name>.ws_url` | KEEP | `see impl Default` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:246 |
+| `backends.<name>.url` | KEEP | — | where to reach the backend; its scheme picks HTTP or WebSocket | - | src/config/config_file.rs:80 |
+| `backends.<name>.ws_url` | INTERNAL | `see impl Default` | older spelling of the backend `url` key (P2c1); still read | hidden alias: still read and validated; `mcp-gateway upgrade` rewrites it as `url`; `doctor` names it | src/config/backend_config.rs:246 |
 | `cache` | KEEP | `type default` | turn response caching off for side-effecting backends | - | src/config/mod.rs:109 |
 | `cache.default_ttl` | INTERNAL | `Duration::from_secs(DEFAULT_TTL_SECS)` | cache sizing with fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/cache.rs:24 |
 | `cache.enabled` | KEEP | `true` | turn response caching off for side-effecting backends | - | src/config/features/cache.rs:21 |
@@ -627,15 +628,15 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.firewall.budget.max_calls_per_window` | KEEP | `600` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/budget_guard.rs:54 |
 | `security.firewall.budget.window_secs` | KEEP | `60` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/budget_guard.rs:56 |
 | `security.firewall.collusion` | KEEP | `see impl Default` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/config.rs:108 |
-| `security.firewall.collusion.action` | KEEP | `CollusionAction::Off` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/collusion_gate.rs:61 |
-| `security.firewall.collusion.allowed_flows` | KEEP | `Vec::new()` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/collusion_gate.rs:73 |
-| `security.firewall.collusion.allowed_flows[].egress` | KEEP | — | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/collusion_gate.rs:53 |
-| `security.firewall.collusion.allowed_flows[].source` | KEEP | — | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/collusion_gate.rs:51 |
-| `security.firewall.collusion.common_principals` | INTERNAL | `params.common_principals` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/security/firewall/collusion_gate.rs:67 |
-| `security.firewall.collusion.min_matches` | INTERNAL | `params.min_matches` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/security/firewall/collusion_gate.rs:65 |
-| `security.firewall.collusion.non_egress` | KEEP | `Vec::new()` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/collusion_gate.rs:71 |
-| `security.firewall.collusion.sources` | KEEP | `Vec::new()` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/collusion_gate.rs:69 |
-| `security.firewall.collusion.window_secs` | INTERNAL | `params.window.as_secs()` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/security/firewall/collusion_gate.rs:63 |
+| `security.firewall.collusion.action` | KEEP | `CollusionAction::Off` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/collusion_gate.rs:67 |
+| `security.firewall.collusion.allowed_flows` | KEEP | `Vec::new()` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/collusion_gate.rs:79 |
+| `security.firewall.collusion.allowed_flows[].egress` | KEEP | — | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/collusion_gate.rs:59 |
+| `security.firewall.collusion.allowed_flows[].source` | KEEP | — | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/collusion_gate.rs:57 |
+| `security.firewall.collusion.common_principals` | INTERNAL | `params.common_principals` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/security/firewall/collusion_gate.rs:73 |
+| `security.firewall.collusion.min_matches` | INTERNAL | `params.min_matches` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/security/firewall/collusion_gate.rs:71 |
+| `security.firewall.collusion.non_egress` | KEEP | `Vec::new()` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/collusion_gate.rs:77 |
+| `security.firewall.collusion.sources` | KEEP | `Vec::new()` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/collusion_gate.rs:75 |
+| `security.firewall.collusion.window_secs` | INTERNAL | `params.window.as_secs()` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/security/firewall/collusion_gate.rs:69 |
 | `security.firewall.credential_redaction` | KEEP | `true` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:28 |
 | `security.firewall.enabled` | KEEP | `true` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:20 |
 | `security.firewall.memory_poisoning` | KEEP | `memory_scanner::MemoryPoisoningConfig::default()` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/config.rs:51 |
@@ -743,14 +744,14 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `streaming.session_ttl` | INTERNAL | `Duration::from_secs(DEFAULT_SESSION_TTL_SECS)` | stream plumbing with fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/streaming.rs:35 |
 | `tasks` | KEEP | `type default` | trusted recovery adapters are an operator trust decision | - | src/config/mod.rs:148 |
 | `tasks.default_ttl_ms` | INTERNAL | `DEFAULT_TTL_MS` | task-store capacity and cadence; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:37 |
-| `tasks.expiry_interval` | INTERNAL | `Duration::from_secs(60)` | task-store capacity and cadence; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:53 |
-| `tasks.logical_budget_bytes` | INTERNAL | `DEFAULT_LOGICAL_BUDGET_BYTES` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:49 |
+| `tasks.expiry_interval` | INTERNAL | `Duration::from_secs(60)` | task-store capacity and cadence; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:55 |
+| `tasks.logical_budget_bytes` | INTERNAL | `DEFAULT_LOGICAL_BUDGET_BYTES` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:51 |
 | `tasks.max_per_principal` | INTERNAL | `DEFAULT_MAX_PER_PRINCIPAL` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:43 |
-| `tasks.max_record_bytes` | INTERNAL | `DEFAULT_MAX_RECORD_BYTES` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:47 |
+| `tasks.max_record_bytes` | INTERNAL | `DEFAULT_MAX_RECORD_BYTES` | security bound, caller-input limit or switch an operator may rely on; undocumented | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:49 |
 | `tasks.max_records` | INTERNAL | `DEFAULT_MAX_RECORDS` | task-store capacity and cadence; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:41 |
 | `tasks.max_workers` | INTERNAL | `DEFAULT_MAX_WORKERS` | task-store capacity and cadence; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:45 |
 | `tasks.poll_interval_ms` | INTERNAL | `DEFAULT_POLL_INTERVAL_MS` | task-store capacity and cadence; fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/tasks.rs:39 |
-| `tasks.recovery_adapters` | KEEP | `Vec::new()` | trusted recovery adapters are an operator trust decision | - | src/config/features/tasks.rs:56 |
+| `tasks.recovery_adapters` | KEEP | `Vec::new()` | trusted recovery adapters are an operator trust decision | - | src/config/features/tasks.rs:58 |
 | `tasks.store_dir` | KEEP | `"~/.mcp-gateway/tasks".to_string()` | state location; deployments put it on a chosen volume (the Helm chart puts the audit log on its own persistent volume) | - | src/config/features/tasks.rs:35 |
 | `webhooks` | KEEP | `type default` | inbound webhook receiver (WEBHOOKS.md) | - | src/config/mod.rs:117 |
 | `webhooks.base_path` | KEEP | `DEFAULT_BASE_PATH.to_string()` | inbound webhook receiver (WEBHOOKS.md) | - | src/config/features/webhooks.rs:21 |
@@ -839,10 +840,10 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway cap pin <file>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:33 |
 | `mcp-gateway cap registry-list` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:160 |
 | `mcp-gateway cap registry-list --capabilities` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:160 |
-| `mcp-gateway cap registry-list -c` | KEEP | short alias of `--capabilities` | - | src/cli/subcommands.rs:160 |
+| `mcp-gateway cap registry-list -C` | KEEP | short alias of `--capabilities` | - | src/cli/subcommands.rs:160 |
 | `mcp-gateway cap search` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:148 |
 | `mcp-gateway cap search --capabilities` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:148 |
-| `mcp-gateway cap search -c` | KEEP | short alias of `--capabilities` | - | src/cli/subcommands.rs:148 |
+| `mcp-gateway cap search -C` | KEEP | short alias of `--capabilities` | - | src/cli/subcommands.rs:148 |
 | `mcp-gateway cap search <query>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:148 |
 | `mcp-gateway cap test` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:72 |
 | `mcp-gateway cap test --args` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:72 |
@@ -1163,7 +1164,6 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `MCP_GATEWAY_SERVER__PUBLIC_URL` | KEEP | documented overlay spelling of a KEEP `server` key | - | deploy/single-node/docker-compose.yaml:50 |
 | `MCP_GATEWAY_SKILLS_REGISTRY` | KEEP | env form of `skills --registry` | - | src/cli/skills.rs:97 |
 | `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/backend/era.rs:311 |
-| `MCP_GATEWAY_TEST_EVENTS_WITHDRAW_GRACE_MS` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/gateway/meta_mcp/events_hook.rs:367 |
 | `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/capability/backend/initial_scan.rs:109 |
 | `MCP_GATEWAY_TEST_HOME_DIR` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/home_dir.rs:23 |
 | `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/gateway/task_service/execution/pause_hook.rs:16 |
@@ -1176,15 +1176,15 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 |---|---|---|---|---|
 | `/.well-known/jwks.json` | KEEP | OAuth discovery documents clients fetch | - | src/gateway/routes.rs:29 |
 | `/.well-known/oauth-protected-resource` | KEEP | OAuth discovery documents clients fetch | - | src/gateway/routes.rs:30 |
-| `/accounts/v1` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:63 |
-| `/accounts/v1/assets/complete.js` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:72 |
-| `/accounts/v1/callback` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:70 |
-| `/accounts/v1/complete` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:71 |
-| `/accounts/v1/connections/{account_id}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:69 |
-| `/accounts/v1/journeys` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:66 |
-| `/accounts/v1/journeys/{id}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:67 |
-| `/accounts/v1/journeys/{id}/start` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:68 |
-| `/accounts/v1/{*rest}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:65 |
+| `/accounts/v1` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:64 |
+| `/accounts/v1/assets/complete.js` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:73 |
+| `/accounts/v1/callback` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:71 |
+| `/accounts/v1/complete` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:72 |
+| `/accounts/v1/connections/{account_id}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:70 |
+| `/accounts/v1/journeys` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:67 |
+| `/accounts/v1/journeys/{id}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:68 |
+| `/accounts/v1/journeys/{id}/start` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:69 |
+| `/accounts/v1/{*rest}` | KEEP | hosted consent journey users open in a browser; mounted only with `accounts.hosted` | - | src/gateway/routes.rs:66 |
 | `/api/costs` | KEEP | admin cost API for scripts (raw session ids) | - | src/gateway/routes.rs:25 |
 | `/auth/token` | KEEP | key-server token issue and revoke (MULTI_USER.md); mounted only with `key_server.enabled` | - | src/gateway/routes.rs:31 |
 | `/auth/token/{jti}` | KEEP | key-server token issue and revoke (MULTI_USER.md); mounted only with `key_server.enabled` | - | src/gateway/routes.rs:32 |
@@ -1216,8 +1216,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `/ui/api/events/dead-letters` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:56 |
 | `/ui/api/events/dead-letters/replay` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:57 |
 | `/ui/api/events/dead-letters/{id}/replay` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:58 |
-| `/ui/api/import/openapi` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:60 |
-| `/ui/api/import/openapi/preview` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:59 |
+| `/ui/api/events/held` | INTERNAL | private JSON API of the bundled web UI | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) | src/gateway/routes.rs:59 |
+| `/ui/api/import/openapi` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:61 |
+| `/ui/api/import/openapi/preview` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:60 |
 | `/ui/api/registry` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:54 |
 | `/ui/api/registry/search` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:55 |
 | `/ui/api/reload` | INTERNAL | private JSON API of the bundled web UI | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface | src/gateway/routes.rs:41 |

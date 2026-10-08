@@ -10,6 +10,7 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::Error;
+use crate::backend::tools_nudge::NudgeKind;
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::Config;
 use crate::config_reload::{OnRegistered, RegisteredChange};
@@ -392,9 +393,32 @@ pub(super) struct ReloadWarmer {
 
 #[derive(Default)]
 struct WarmerInner {
-    /// Set once shutdown begins; nothing is scheduled after it.
+    /// Set by `cancel`, by dropping the guard, or by the first admission after
+    /// the shutdown broadcast; nothing is scheduled once shutdown has begun.
     sealed: bool,
+    /// Taken when the warmer is built, before anything can be sent, so it holds
+    /// every shutdown broadcast. Read under this lock by every admission: a
+    /// reload past its last stop check can still call the hook after the
+    /// broadcast, and a task subscribed then would never hear it (`MIK-8128`).
+    shutdown_seen: Option<tokio::sync::broadcast::Receiver<()>>,
     tasks: HashMap<String, tokio::task::JoinHandle<()>>,
+}
+
+impl WarmerInner {
+    /// Whether admission is closed: sealed, or shutdown already broadcast.
+    fn closed(&mut self) -> bool {
+        if !self.sealed
+            && let Some(seen) = self.shutdown_seen.as_mut()
+            && !matches!(
+                seen.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            )
+        {
+            // A message, a lag or a closed channel all mean shutdown has begun.
+            self.sealed = true;
+        }
+        self.sealed
+    }
 }
 
 impl ReloadWarmer {
@@ -408,18 +432,29 @@ impl ReloadWarmer {
     /// Warm `names` now, replacing any earlier warmer per name. Returns the
     /// names scheduled.
     fn warm_locked(&self, inner: &mut WarmerInner, names: Vec<String>) -> Vec<String> {
-        if inner.sealed {
+        // Each task's receiver is taken BEFORE the check: a broadcast sent
+        // earlier is seen by `closed`, and one sent later reaches the task. The
+        // other order leaves a window where neither does.
+        let receivers: Vec<_> = names
+            .iter()
+            .map(|_| {
+                self.shutdown
+                    .as_ref()
+                    .map(tokio::sync::broadcast::Sender::subscribe)
+            })
+            .collect();
+        if inner.closed() {
             return Vec::new();
         }
         let mut scheduled = Vec::new();
-        for name in names {
+        for (name, shutdown) in names.into_iter().zip(receivers) {
             let Some(instance) = self.backends.get(&name) else {
                 if matches!(self.mode, WarmStartMode::Http) {
                     warn!(backend = %name, "Backend not found for warm-start");
                 }
                 continue;
             };
-            let task = self.spawn(name.clone(), Arc::downgrade(&instance));
+            let task = self.spawn(name.clone(), Arc::downgrade(&instance), shutdown);
             if let Some(old) = inner.tasks.insert(name.clone(), task) {
                 old.abort();
             }
@@ -433,7 +468,7 @@ impl ReloadWarmer {
     /// selects. An excluded replacement is left with no warmer at all.
     fn apply(&self, change: &RegisteredChange, config: &Config) -> Vec<String> {
         let mut inner = self.lock();
-        if inner.sealed {
+        if inner.closed() {
             return Vec::new();
         }
         for name in change.registered.iter().chain(&change.removed) {
@@ -460,16 +495,18 @@ impl ReloadWarmer {
         }
     }
 
-    fn spawn(&self, name: String, instance: Weak<Backend>) -> tokio::task::JoinHandle<()> {
+    /// `shutdown` is this task's own receiver, taken by the caller before its
+    /// admission check; stdio mode has no channel at all and is cancelled by
+    /// aborting these handles instead.
+    fn spawn(
+        &self,
+        name: String,
+        instance: Weak<Backend>,
+        mut shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
+    ) -> tokio::task::JoinHandle<()> {
         let backends = Arc::clone(&self.backends);
         let policy = Arc::clone(&self.policy);
         let mode = self.mode;
-        // Each task needs its own receiver; stdio mode has no channel at all and
-        // is cancelled by aborting these handles instead.
-        let mut shutdown = self
-            .shutdown
-            .as_ref()
-            .map(tokio::sync::broadcast::Sender::subscribe);
         tokio::spawn(async move {
             let work = warm_start_until_cached(&backends, &name, &policy, mode, &instance);
             match shutdown.as_mut() {
@@ -503,7 +540,10 @@ impl WarmerGuard {
             mode,
             shutdown: shutdown.cloned(),
             policy: Arc::new(WarmStartPolicy::default()),
-            inner: std::sync::Mutex::new(WarmerInner::default()),
+            inner: std::sync::Mutex::new(WarmerInner {
+                shutdown_seen: shutdown.map(tokio::sync::broadcast::Sender::subscribe),
+                ..WarmerInner::default()
+            }),
         }))
     }
 
@@ -518,9 +558,10 @@ impl WarmerGuard {
     pub(super) fn hook(&self) -> OnRegistered {
         let warmer = Arc::downgrade(&self.0);
         Arc::new(move |change: &RegisteredChange, config: &Config| {
-            if let Some(warmer) = warmer.upgrade() {
-                warmer.apply(change, config);
-            }
+            warmer
+                .upgrade()
+                .map(|warmer| warmer.apply(change, config))
+                .unwrap_or_default()
         })
     }
 
@@ -607,7 +648,9 @@ async fn warm_start_until_cached(
         || {
             let dormant_yields = Arc::clone(&dormant_yields);
             let saw_empty_list = Arc::clone(&saw_empty_list);
+            let settle = SettleOnExit(instance.clone());
             async move {
+            let _settle = settle;
             // Resolved per attempt, never captured: a config reload can replace
             // the instance under us, and a task holding the old `Arc` would keep
             // reviving a discarded object while the live one stayed empty.
@@ -673,6 +716,21 @@ async fn warm_start_until_cached(
 
     if let Some(tools) = outcome {
         info!(backend = %name, tools, "Warm-started + tools cached");
+    }
+}
+
+/// Sends `Resolved` for its instance when an attempt ends, however it ends:
+/// returned, failed, or dropped by the attempt timeout. An attempt that stored
+/// a list has already nudged `Changed` ahead of this, and the drain then
+/// ignores it; one that did not leaves the instance showing nothing, which
+/// listeners told of its predecessor's tools must hear now (`MIK-8127`).
+struct SettleOnExit(Weak<Backend>);
+
+impl Drop for SettleOnExit {
+    fn drop(&mut self) {
+        if let Some(backend) = self.0.upgrade() {
+            backend.nudge_tools(NudgeKind::Resolved);
+        }
     }
 }
 

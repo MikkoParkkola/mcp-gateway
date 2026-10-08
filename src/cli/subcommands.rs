@@ -151,7 +151,7 @@ pub enum CapCommand {
         query: String,
 
         /// Root directory containing capability definitions to index
-        #[arg(short = 'c', long, default_value = "capabilities")]
+        #[arg(short = 'C', long, default_value = "capabilities")]
         capabilities: PathBuf,
     },
 
@@ -159,7 +159,7 @@ pub enum CapCommand {
     #[command(about = "List all capabilities in the registry")]
     RegistryList {
         /// Root directory containing capability definitions to index
-        #[arg(short = 'c', long, default_value = "capabilities")]
+        #[arg(short = 'C', long, default_value = "capabilities")]
         capabilities: PathBuf,
     },
 

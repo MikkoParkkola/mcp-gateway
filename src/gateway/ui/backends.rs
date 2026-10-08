@@ -35,7 +35,7 @@ use super::{
 use crate::config::TransportConfig;
 use crate::config_persistence::CommentLoss;
 use crate::config_reload::{
-    ConfigMutation, ConfigWriteError, MutateError, mutate_config_and_reload_with,
+    ConfigMutation, ConfigWriteError, MutateError, mutate_config_and_reload_detached,
 };
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
@@ -218,22 +218,23 @@ async fn add_backend(
 
     // Load, check for duplicates, persist and reload - all inside one lock, so
     // a second request cannot build its change on the pre-edit config.
-    let mutation = mutate_config_and_reload_with(
-        config_path,
-        state.meta_mcp.reload_context().as_deref(),
+    let name = req.name.clone();
+    let mutation = mutate_config_and_reload_detached(
+        config_path.clone(),
+        state.meta_mcp.reload_context(),
         CommentLoss::Refuse,
-        |config| {
-            add_backend_config(config, &req.name, resolved)
+        move |config| {
+            add_backend_config(config, &name, resolved)
                 .map(|notes| {
                     // Whether it went in enabled: notes alone do not say, an
                     // OAuth login note comes with an enabled backend.
-                    let enabled = config.backends.get(&req.name).is_some_and(|b| b.enabled);
+                    let enabled = config.backends.get(&name).is_some_and(|b| b.enabled);
                     (notes, enabled)
                 })
                 .map_err(|_| {
                     (
                         StatusCode::CONFLICT,
-                        format!("Backend '{}' already exists", req.name),
+                        format!("Backend '{name}' already exists"),
                     )
                 })
         },
@@ -248,7 +249,8 @@ async fn add_backend(
         Err(e) => return unwritten(e),
     };
 
-    // The reload registered it, and registration announces (F24).
+    // The reload registered it; listeners hear of it once its tools are
+    // listed, through the change drain (F24, `MIK-8127`).
 
     (
         StatusCode::CREATED,
@@ -265,7 +267,9 @@ async fn add_backend(
 
 /// `DELETE /ui/api/backends/:name` — remove a backend.
 ///
-/// Returns 204 on success, 404 when the backend does not exist.
+/// Returns 204 on success, or 200 with `{"note": ...}` naming the comment
+/// lines that went with the removed entry (line numbers only); 404 when the
+/// backend does not exist.
 async fn remove_backend(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
@@ -280,28 +284,50 @@ async fn remove_backend(
         return config_path_unavailable().into_response();
     };
 
-    let mutation = mutate_config_and_reload_with(
-        config_path,
-        state.meta_mcp.reload_context().as_deref(),
+    // Worked out inside the edit, which runs under the config lock, from the
+    // text this removal splices: never another writer's change. The write
+    // runs detached (MIK-8120), so the note comes back as its value.
+    let removed = name.clone();
+    let path = config_path.clone();
+    let mutation = mutate_config_and_reload_detached(
+        config_path.clone(),
+        state.meta_mcp.reload_context(),
         CommentLoss::Refuse,
-        |config| {
-            remove_backend_config(config, &name)
-                .map_err(|_| (StatusCode::NOT_FOUND, format!("Backend '{name}' not found")))
+        move |config| {
+            remove_backend_config(config, &removed).map_err(|_| {
+                (
+                    StatusCode::NOT_FOUND,
+                    format!("Backend '{removed}' not found"),
+                )
+            })?;
+            Ok::<Vec<String>, (StatusCode, String)>(
+                crate::config_persistence::comments_a_write_drops(&path, config),
+            )
         },
     )
     .await;
 
-    match mutation {
-        Ok(ConfigMutation::Applied((), _)) => {}
+    let gone = match mutation {
+        Ok(ConfigMutation::Applied(gone, _)) => gone,
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
         Err(e) => return unwritten(e),
+    };
+
+    // The reload removed it; listeners hear of it if it had tools they could
+    // see, through the change drain (F24, `MIK-8127`).
+
+    // A removed entry takes its own comments with it (MIK-8051): name the
+    // lines, never their text (a `#` inside a quoted value can be a secret).
+    if gone.is_empty() {
+        return (StatusCode::NO_CONTENT, Json(json!({}))).into_response();
     }
-
-    // The reload removed it, and removal announces (F24).
-
-    (StatusCode::NO_CONTENT, Json(json!({}))).into_response()
+    let note = format!(
+        "Comments inside the removed entry went with it: {}",
+        gone.join("; ")
+    );
+    (StatusCode::OK, Json(json!({ "note": note }))).into_response()
 }
 
 /// `PATCH /ui/api/backends/:name` — partially update a backend.
@@ -329,10 +355,10 @@ async fn revive_backend(
     // saying "revived" there would misreport it to the operator.
     let outcome = backend.force_restart().await;
     let rebuilt = matches!(outcome, Ok(crate::backend::RestartOutcome::Rebuilt));
+    // No announcement: a restart keeps the stored tool list, so what discovery
+    // shows is unchanged; a list the new transport stores later is announced by
+    // the change drain if it differs (`MIK-8127`).
     let status = if rebuilt { "revived" } else { "not_revived" };
-    if rebuilt {
-        state.announce_tools_changed(&name).await;
-    }
 
     (
         StatusCode::OK,
@@ -395,11 +421,12 @@ async fn update_backend(
     // Everything from here reads the config and writes it back, so it all runs
     // inside one lock. Splitting the read from the write is what lets one edit
     // overwrite another.
-    let mutation = mutate_config_and_reload_with(
-        config_path,
-        state.meta_mcp.reload_context().as_deref(),
+    let updated = name.clone();
+    let mutation = mutate_config_and_reload_detached(
+        config_path.clone(),
+        state.meta_mcp.reload_context(),
         CommentLoss::Refuse,
-        |config| {
+        move |config| {
             if !config.backends.contains_key(&name) {
                 return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
             }
@@ -459,7 +486,7 @@ async fn update_backend(
         Err(e) => return unwritten(e),
     };
 
-    Json(json!({"status": "updated", "name": name, "reload": reload})).into_response()
+    Json(json!({"status": "updated", "name": updated, "reload": reload})).into_response()
 }
 
 /// The answer to a backend write that did not happen.

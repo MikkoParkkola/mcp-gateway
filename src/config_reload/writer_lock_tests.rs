@@ -20,7 +20,11 @@ fn config() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
     write_owner_only(&path, START).expect("write config");
-    let lock = dir.path().join(".gateway.yaml.lock");
+    // The writers lock the config's resolved spelling (MIK-8153), and
+    // `lock_attempts` counts by path, so the tests watch that spelling too.
+    let lock = crate::config_persistence::lock::lock_path(
+        &crate::identity_grants::journal::resolved(&path),
+    );
     (dir, path, lock)
 }
 
@@ -303,4 +307,52 @@ async fn a_writer_waits_for_a_whole_config_reload_to_publish() {
     let a =
         tokio::spawn(async move { ctx.write_and_reload_outcome(&a_path, &with_b).await.is_ok() });
     a_contender_waits_out_the_reload(&path, &lock, pause, a).await;
+}
+
+/// MIK-8120 (`MIK-WRITE-CANCEL.1`): the web UI's write is dropped after it
+/// wrote `gateway.yaml` and before its reload published (the client went
+/// away, and the listener cancels a disconnected request's handler). The
+/// reload must still publish: the running gateway ends up on the file's
+/// config, never left on the old one while the file says otherwise.
+#[cfg(feature = "webui")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_write_still_publishes_its_reload() {
+    let (_dir, path, _lock) = config();
+    let ctx = gateway(&path);
+    let pause = super::reload_pause::arm(&path);
+    let (a_ctx, a_path) = (Arc::clone(&ctx), path.clone());
+    let a = tokio::spawn(async move {
+        mutate_config_and_reload_detached(a_path, Some(a_ctx), CommentLoss::Refuse, add_b)
+            .await
+            .is_ok()
+    });
+    tokio::time::timeout(Duration::from_secs(10), pause.reached.notified())
+        .await
+        .expect("the write reached its reload");
+    a.abort();
+    let _ = a.await;
+    assert!(
+        std::fs::read_to_string(&path)
+            .expect("read")
+            .contains("\n  b:"),
+        "the write landed before the drop"
+    );
+
+    pause.release.notify_one();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !ctx.live_config.get().backends.contains_key("b") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the file has `b` but the running gateway never loaded it"
+        );
+        tokio::task::yield_now().await;
+    }
+    // Both locks were released when the detached write finished: the next
+    // write goes through instead of reporting Busy.
+    let next = mutate_config_and_reload_with(&path, Some(&*ctx), CommentLoss::Refuse, add_c).await;
+    assert!(
+        matches!(next, Ok(ConfigMutation::Applied(..))),
+        "the next write after the detached one: {}",
+        outcome(&next)
+    );
 }

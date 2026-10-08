@@ -59,7 +59,7 @@ impl UpstreamListen for StdioTransport {
             "jsonrpc": "2.0", "id": id, "method": "subscriptions/listen", "params": params,
         }))
         .map_err(crate::Error::from)?;
-        self.write_message(&message).await?;
+        self.write_message(message).await?;
         Ok(FrameStream::guarded(rx, guard))
     }
 
