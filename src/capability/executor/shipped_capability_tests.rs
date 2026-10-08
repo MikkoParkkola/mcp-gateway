@@ -78,7 +78,7 @@ fn project_with_design() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("design.fig");
     std::fs::write(&file, b"fig").unwrap();
-    let canonical = std::fs::canonicalize(&file).unwrap();
+    let canonical = super::super::cli::canonical(&file).unwrap();
     (dir, canonical)
 }
 
@@ -119,6 +119,28 @@ async fn a_symlinked_projects_root_reaches_the_server_canonical() {
     let executor = executor_with_projects(&link);
     let out = open(&executor, &openpencil(), "design.fig").await;
     assert_eq!(out["opened"], json!(file.display().to_string()));
+}
+
+/// MIK-7911: on Windows the root reaches the server in the plain drive form,
+/// as the confined path does, so a server that resolves only the file still
+/// finds it inside the root.
+#[cfg(windows)]
+#[test]
+fn the_root_reaches_a_windows_server_without_the_verbatim_prefix() {
+    let (dir, _) = project_with_design();
+    let cap = openpencil();
+    let Some(ProcessConfig::Mcp(config)) = cap.providers.process.get("primary") else {
+        panic!("not an mcp provider");
+    };
+    let files = crate::config::FileRoots {
+        projects: Some(dir.path().to_path_buf()),
+        ..crate::config::FileRoots::default()
+    };
+    let roots = super::bound_roots(config, &files);
+    assert!(!roots.is_empty(), "precondition: the root is bound");
+    for (name, root) in &roots {
+        assert!(!root.starts_with(r"\\?\"), "{name}={root}");
+    }
 }
 
 #[tokio::test]
@@ -178,7 +200,7 @@ providers:
         .execute_mcp(&cap, config, &json!({ "operation": "say" }), &caller())
         .await
         .unwrap();
-    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let root = super::super::cli::canonical(dir.path()).unwrap();
     assert_ne!(
         out["home"],
         json!(root.display().to_string()),

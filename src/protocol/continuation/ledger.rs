@@ -347,6 +347,15 @@ impl ContinuationState {
         }
     }
 
+    /// Test-only: a store whose in-flight table holds nothing, so every mint
+    /// is refused for want of a slot (MIK-8078).
+    #[cfg(test)]
+    pub(crate) fn full_for_test() -> Self {
+        let mut state = Self::new();
+        state.in_flight = InFlight::new(&state.replica, 0);
+        state
+    }
+
     /// Open an exchange on this replica and seal a continuation for it
     /// (MRTR.8).
     ///
