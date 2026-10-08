@@ -27,22 +27,43 @@ fn text(text: &str) -> Value {
 /// The `block` relay detector over every `mock` tool, one shared fingerprint
 /// enough to refuse, and `playbook` registered.
 async fn seam_state(mock: &Arc<MockBackend>, playbook: &str) -> (Arc<AppState>, tempfile::TempDir) {
+    seam_state_with(mock, playbook, &[], blocking(&[BACKEND])).await
+}
+
+/// `collusion` with the `block` action and one shared fingerprint enough to
+/// refuse, over every tool of each of `servers`.
+fn blocking(servers: &[&str]) -> CollusionConfig {
+    CollusionConfig {
+        action: CollusionAction::Block,
+        min_matches: 1,
+        sources: servers.iter().map(|s| format!("{s}:*")).collect(),
+        ..CollusionConfig::default()
+    }
+}
+
+/// [`seam_state`] with `collusion`, and `mock` also registered under each of
+/// `more` servers, which both principals may reach.
+async fn seam_state_with(
+    mock: &Arc<MockBackend>,
+    playbook: &str,
+    more: &[&str],
+    collusion: CollusionConfig,
+) -> (Arc<AppState>, tempfile::TempDir) {
     let relay = Arc::new(Firewall::from_config(
         FirewallConfig {
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                min_matches: 1,
-                sources: vec![format!("{BACKEND}:*")],
-                ..CollusionConfig::default()
-            },
+            collusion,
             ..FirewallConfig::default()
         },
         None,
     ));
     let definition: crate::playbook::PlaybookDefinition =
         serde_yaml::from_str(playbook).expect("playbook fixture must parse");
+    let mut auth = two_principal_auth();
+    for key in &mut auth.api_keys {
+        key.backends.extend(more.iter().map(ToString::to_string));
+    }
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
-        &two_principal_auth(),
+        &auth,
         None,
         None,
         |mut meta| {
@@ -55,17 +76,41 @@ async fn seam_state(mock: &Arc<MockBackend>, playbook: &str) -> (Arc<AppState>, 
     )
     .await;
     register(&state, BACKEND, mock);
+    for server in more {
+        register(&state, server, mock);
+    }
     (state, store)
 }
 
 /// A playbook of two steps against `mock` whose output maps `properties`.
 fn playbook(properties: &str) -> String {
+    playbook_on(&[BACKEND, BACKEND], properties)
+}
+
+/// A playbook of one step per server in `servers`, named `s1`, `s2`, ...
+/// in order, whose output maps `properties`.
+fn playbook_on(servers: &[&str], properties: &str) -> String {
+    let steps: String = servers
+        .iter()
+        .enumerate()
+        .map(|(i, server)| {
+            format!(
+                "  - name: s{}\n    server: {server}\n    tool: {TOOL}\n",
+                i + 1
+            )
+        })
+        .collect();
     format!(
-        "name: seam\ndescription: two steps\non_error: continue\ninputs: {{}}\nsteps:\n  \
-         - name: s1\n    server: {BACKEND}\n    tool: {TOOL}\n  \
-         - name: s2\n    server: {BACKEND}\n    tool: {TOOL}\n\
-         output:\n  type: object\n  properties:\n{properties}"
+        "name: seam\ndescription: plan steps\non_error: continue\ninputs: {{}}\nsteps:\n\
+         {steps}output:\n  type: object\n  properties:\n{properties}"
     )
+}
+
+/// One output property per step, `p1` from `s1` and so on, in step order.
+fn each_step(steps: usize) -> String {
+    (1..=steps)
+        .map(|i| format!("    p{i}:\n      path: $s{i}.content[0].text\n"))
+        .collect()
 }
 
 /// Run the `seam` playbook as `key-a` and return its `output`, parsed.
@@ -183,5 +228,183 @@ async fn a_caller_input_beside_a_steps_field_joins_no_seam() {
     assert!(
         !refused(&state, "key-b", 2, &pair).await,
         "a seam joined a step's field to the caller's input"
+    );
+}
+
+/// Sixteen chars each: three or four of them fill one k-gram window.
+const SHORT: [&str; 5] = [
+    "amber gate seven",
+    "brick lane north",
+    "cedar dock three",
+    "delta yard south",
+    "elder mill eight",
+];
+
+/// `MIK-8113` R2: nine steps from nine sources deliver the same short field
+/// side by side. Each seam fingerprint is held once for the delivery (its
+/// composite), so it stays judged: bob relaying the run is refused. Held
+/// once per step, nine holders would stop the detector judging it.
+#[tokio::test]
+async fn a_seam_across_nine_sources_stays_judged() {
+    let servers = ["mock", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9"];
+    let mock = backend(&[SHORT[0]; 9]);
+    let (state, _store) = seam_state_with(
+        &mock,
+        &playbook_on(&servers, &each_step(9)),
+        &servers[1..],
+        blocking(&servers),
+    )
+    .await;
+    let output = run_seam(&state, json!({})).await;
+    assert_eq!(output["p9"], SHORT[0], "base: all nine delivered: {output}");
+    let run = [SHORT[0]; 5].join("\n");
+    assert!(
+        !refused(&state, "key-a", 2, &run).await,
+        "the holder is excused"
+    );
+    assert!(
+        refused(&state, "key-b", 3, &run).await,
+        "a seam across nine sources was not judged"
+    );
+}
+
+/// `MIK-8113` R4: a seam is sensitive when any step it joins is. Step one's
+/// source is sensitive, step two's is not: bob relaying the pair is refused.
+#[tokio::test]
+async fn a_seam_beside_one_sensitive_step_is_sensitive() {
+    let mock = backend(&[FIELD_A, FIELD_B]);
+    let props =
+        "    a:\n      path: $s1.content[0].text\n    b:\n      path: $s2.content[0].text\n";
+    let (state, _store) = seam_state_with(
+        &mock,
+        &playbook_on(&[BACKEND, "plain"], props),
+        &["plain"],
+        blocking(&[BACKEND]),
+    )
+    .await;
+    let output = run_seam(&state, json!({})).await;
+    assert_eq!(output["b"], FIELD_B, "base: {output}");
+    assert!(
+        refused(&state, "key-b", 2, &format!("{FIELD_A}{FIELD_B}")).await,
+        "a seam beside a sensitive step was not sensitive"
+    );
+}
+
+/// A two-source seam (`mock` then `alt`) under `flows`: (source, egress)
+/// globs. Bob relays the pair through `mock`'s tool; whether he is refused.
+async fn seam_relay_refused(flows: &[(&str, &str)]) -> bool {
+    let mock = backend(&[FIELD_A, FIELD_B]);
+    let props =
+        "    a:\n      path: $s1.content[0].text\n    b:\n      path: $s2.content[0].text\n";
+    let mut collusion = blocking(&[BACKEND, "alt"]);
+    collusion.allowed_flows = flows
+        .iter()
+        .map(|(source, egress)| crate::security::firewall::AllowedFlow {
+            source: (*source).to_string(),
+            egress: (*egress).to_string(),
+        })
+        .collect();
+    let (state, _store) = seam_state_with(
+        &mock,
+        &playbook_on(&[BACKEND, "alt"], props),
+        &["alt"],
+        collusion,
+    )
+    .await;
+    let output = run_seam(&state, json!({})).await;
+    assert_eq!(output["b"], FIELD_B, "base: {output}");
+    refused(&state, "key-b", 2, &format!("{FIELD_A}{FIELD_B}")).await
+}
+
+/// `MIK-8113` R7 (control): each source may leave through `mock` by its own
+/// `allowed_flows` entry, so the seam may too.
+#[tokio::test]
+async fn a_seam_leaves_by_a_flow_every_step_allows() {
+    assert!(
+        !seam_relay_refused(&[("mock:*", "mock:*"), ("alt:*", "mock:*")]).await,
+        "a flow every contributing source allows was refused"
+    );
+}
+
+/// `MIK-8113` R7: only step one's source may leave through `mock`, so the
+/// seam, which holds step two's text too, may not.
+#[tokio::test]
+async fn a_seam_does_not_leave_by_a_flow_one_step_lacks() {
+    assert!(
+        seam_relay_refused(&[("mock:*", "mock:*")]).await,
+        "a seam left by a flow one contributing source lacks"
+    );
+}
+
+/// `MIK-8113` R5: padding whitespace and decomposed Hangul are normalized
+/// before any k-gram is read, so the seam is still matched.
+#[tokio::test]
+async fn a_seam_of_padded_and_decomposed_fields_is_matched() {
+    let hangul = "남쪽 계단식 밭 일번부터 육번 줄까지 이른 모과 수확";
+    let decomposed: String = icu_normalizer::DecomposingNormalizerBorrowed::new_nfd()
+        .normalize(hangul)
+        .into_owned();
+    assert_ne!(decomposed, hangul, "premise: the field is decomposed");
+    let padded = format!("  {FIELD_A}   ");
+    let mock = backend(&[padded.as_str(), decomposed.as_str()]);
+    let (state, _store) = seam_state(
+        &mock,
+        &playbook(
+            "    a:\n      path: $s1.content[0].text\n    b:\n      path: $s2.content[0].text\n",
+        ),
+    )
+    .await;
+    let output = run_seam(&state, json!({})).await;
+    assert_eq!(output["b"], decomposed.as_str(), "base: {output}");
+    assert!(
+        refused(&state, "key-b", 2, &format!("{FIELD_A}\n{hangul}")).await,
+        "a seam of normalized text was not matched"
+    );
+}
+
+/// `MIK-8113` R6: five sixteen-char fields from five steps. A k-gram spans
+/// three or four of them, so a run of four fields from the middle is
+/// matched, not only a pair beside one boundary.
+#[tokio::test]
+async fn a_seam_across_more_than_two_short_fields_is_matched() {
+    let mock = backend(&SHORT);
+    let (state, _store) = seam_state(&mock, &playbook_on(&[BACKEND; 5], &each_step(5))).await;
+    let output = run_seam(&state, json!({})).await;
+    assert_eq!(output["p5"], SHORT[4], "base: {output}");
+    assert!(
+        refused(&state, "key-b", 2, &SHORT[1..].join("\n")).await,
+        "a seam over four steps' fields was not matched"
+    );
+}
+
+/// `MIK-8113` R8: a short fallback between two steps' fields is text the
+/// caller received in between; the fields still form a seam around it.
+#[tokio::test]
+async fn a_short_template_between_two_fields_keeps_their_seam() {
+    let mock = backend(&[FIELD_A, FIELD_B]);
+    let props = "    a:\n      path: $s1.content[0].text\n    b:\n      path: $missing.x\n      \
+                 fallback: \", \"\n    c:\n      path: $s2.content[0].text\n";
+    let (state, _store) = seam_state(&mock, &playbook(props)).await;
+    let output = run_seam(&state, json!({})).await;
+    assert_eq!(output["b"], ", ", "base: the fallback filled b: {output}");
+    assert!(
+        refused(&state, "key-b", 2, &format!("{FIELD_A}\n, \n{FIELD_B}")).await,
+        "a short template broke the seam"
+    );
+}
+
+/// `MIK-8113` R9: step one's field delivered twice stays step one's, so the
+/// seam between step two's field and its second copy is matched.
+#[tokio::test]
+async fn a_duplicated_field_still_forms_a_seam() {
+    let mock = backend(&[FIELD_A, FIELD_B]);
+    let props = "    a:\n      path: $s1.content[0].text\n    b:\n      path: $s2.content[0].text\n    \
+                 c:\n      path: $s1.content[0].text\n";
+    let (state, _store) = seam_state(&mock, &playbook(props)).await;
+    let output = run_seam(&state, json!({})).await;
+    assert_eq!(output["c"], FIELD_A, "base: {output}");
+    assert!(
+        refused(&state, "key-b", 2, &format!("{FIELD_B}{FIELD_A}")).await,
+        "a duplicated field broke the seam"
     );
 }
