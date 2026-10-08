@@ -72,6 +72,7 @@ impl Store {
             if row.payload_fields != sub.payload_fields
                 || row.unoffered_since != sub.unoffered_since
                 || row.held_until != sub.held_until
+                || state.hold_unsynced.contains(&row.id)
             {
                 changed.push(row);
             }
@@ -86,10 +87,19 @@ impl Store {
         first_error.map_or(Ok(()), Err)
     }
 
+    /// In memory first, so the hold bounds the row on time even when the
+    /// write fails; a failed write is retried by the next refresh.
     fn persist_row(&self, state: &mut State, row: Subscription) -> std::io::Result<()> {
-        let placed = write_record(&self.subs_dir, &format!("{}.json", row.id), &row)?;
-        state.subs.insert(row.id.clone(), row);
-        placed.durable()
+        let id = row.id.clone();
+        let written = write_record(&self.subs_dir, &format!("{id}.json"), &row)
+            .and_then(crate::events::records::Placed::durable);
+        state.subs.insert(id.clone(), row);
+        if written.is_ok() {
+            state.hold_unsynced.remove(&id);
+        } else {
+            state.hold_unsynced.insert(id);
+        }
+        written
     }
 
     /// Why subscription `id` is held, if it is.

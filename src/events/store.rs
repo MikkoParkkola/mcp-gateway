@@ -97,6 +97,9 @@ struct State {
     /// (MIK-8057, MIK-8076): they take no record. Recomputed by every route
     /// refresh, never persisted.
     held: HashMap<String, Held>,
+    /// Rows whose hold stamp is in memory but whose write failed: written
+    /// again by the next route refresh.
+    hold_unsynced: HashSet<String>,
 }
 
 /// Per-pair facts over every subscription, built in one pass so tail
@@ -107,6 +110,14 @@ struct PairIndex {
 }
 
 impl State {
+    /// Remove row `id`, with its hold: no hold outlives its row, so the same
+    /// key subscribed again is judged afresh (MIK-8057).
+    fn drop_row(&mut self, id: &str) {
+        self.subs.remove(id);
+        self.held.remove(id);
+        self.hold_unsynced.remove(id);
+    }
+
     fn index(&self, now: DateTime<Utc>) -> PairIndex {
         let mut index = PairIndex {
             live: HashSet::new(),
@@ -261,7 +272,7 @@ impl Store {
             // key re-creates this id, and must not inherit them.
             self.cancel_pending(state, &id)?;
             remove_record(&self.subs_dir, &format!("{id}.json"))?;
-            state.subs.remove(&id);
+            state.drop_row(&id);
         }
         Ok(())
     }
@@ -474,7 +485,7 @@ impl Store {
         // this subscription once the removal returns (design §6.4).
         self.cancel_pending(&mut state, id)?;
         remove_record(&self.subs_dir, &format!("{id}.json"))?;
-        state.subs.remove(id);
+        state.drop_row(id);
         if !state.pair_live(&sub.principal, &sub.url, now) {
             let key = verified_file(&sub.principal, &sub.url);
             if let Some(mut record) = state.verified.get(&key).cloned() {

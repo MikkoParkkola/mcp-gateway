@@ -283,3 +283,23 @@ async fn a_refused_refresh_still_holds_what_the_live_routes_do_not_carry() {
         "the live routes do not carry ref: held"
     );
 }
+
+/// Review G6: a hold stamp whose write fails still bounds the row in
+/// memory, and the next refresh writes it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_stamp_write_still_bounds_the_row() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, hub, registry) = restarted(json!({}), &full()).await;
+    let id = id_of(&subscribe(&hub, json!({})).await.expect("refresh"));
+    let subs = dir.path().join("subs");
+    let mode = |m| std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(m));
+    mode(0o500).expect("read-only");
+    refresh(&hub, &registry, "");
+    mode(0o700).expect("writable");
+    let row = hub.store.get(&id).expect("row");
+    assert!(row.held_until.is_some(), "bounded in memory");
+    assert!(!stamped(dir.path()), "the write failed");
+    refresh(&hub, &registry, "");
+    assert!(stamped(dir.path()), "the next refresh wrote it");
+}
