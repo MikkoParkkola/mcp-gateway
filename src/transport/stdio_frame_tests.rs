@@ -297,6 +297,8 @@ async fn close_returns_while_a_write_is_stuck_on_a_peer_that_stopped_reading() {
 
 /// MIK-8079: `close()` returns even when a reader that escaped the process
 /// group (a daemonized descendant still holding stdin) keeps a write stuck.
+/// The pipe goes through fd 3: a background job's own stdin is `/dev/null`
+/// in a non-interactive shell, so `<&0` would not hand it the pipe.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
@@ -309,7 +311,7 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
         "while IFS= read -r line; do\n\
          case \"$line\" in\n\
          *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
-         *'notifications/initialized'*) setsid sleep 1000 <&0 >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
          esac\ndone\n",
         pid = pidfile.display()
     );
@@ -327,15 +329,47 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
         let transport = std::sync::Arc::clone(&transport);
         tokio::spawn(async move { transport.request("tools/call", Some(big)).await })
     };
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Wait until the escaped reader is running and has recorded its pid.
+    let mut escaped = String::new();
+    for _ in 0..100 {
+        escaped = std::fs::read_to_string(&pidfile).unwrap_or_default();
+        if !escaped.trim().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        !escaped.trim().is_empty(),
+        "precondition: the escaped reader started"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        transport.writer.try_lock().is_err(),
+        "precondition: the write holds stdin"
+    );
     let closed = tokio::time::timeout(std::time::Duration::from_secs(10), transport.close()).await;
-    let escaped = std::fs::read_to_string(&pidfile).unwrap_or_default();
+    let escaped_alive = std::process::Command::new("kill")
+        .args(["-0", escaped.trim()])
+        .status()
+        .is_ok_and(|s| s.success());
+    // Judged while the escaped reader still holds the pipe: killing it would
+    // end the write by itself.
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(5), stuck).await;
+    let released = transport.writer.try_lock().is_ok_and(|w| w.is_none());
     let _ = std::process::Command::new("kill")
         .args(["-9", escaped.trim()])
         .status();
-    stuck.abort();
     assert!(
         closed.is_ok(),
         "close() hung on a write an escaped reader keeps stuck"
+    );
+    assert!(
+        matches!(ended, Ok(Ok(Err(_)))),
+        "the stuck write outlived close(): {ended:?}"
+    );
+    assert!(released, "close() left stdin held by the stuck write");
+    assert!(
+        escaped_alive,
+        "precondition: the reader escaped the killed group"
     );
 }

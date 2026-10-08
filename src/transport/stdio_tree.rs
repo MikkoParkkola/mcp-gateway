@@ -42,6 +42,19 @@ pub(super) fn spawn_in_own_tree(cmd: Command) -> Result<Box<dyn ChildWrapper>> {
     })
 }
 
+/// How long `close()` waits for a write it could not stop to give up stdin.
+const CLOSE_WRITER_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Clear stdin at the end of `close()`, after the tree was killed. A write
+/// stuck on a reader outside the killed group (a daemonized descendant still
+/// holding the pipe) never ends, so the wait is bounded; `close()` is final for
+/// a transport, so leaving that stdin to its stuck write is safe (MIK-8079).
+pub(super) async fn clear_writer(writer: &tokio::sync::Mutex<Option<tokio::process::ChildStdin>>) {
+    if let Ok(mut writer) = tokio::time::timeout(CLOSE_WRITER_WAIT, writer.lock()).await {
+        *writer = None;
+    }
+}
+
 /// Default longest JSON-RPC frame a stdio peer may send (16 MiB). Without a
 /// bound, a peer that never sends a newline grows the gateway's buffer without
 /// limit. A backend raises or lowers it with `max_frame_bytes`.
