@@ -101,9 +101,10 @@ fn keep_private(lock: &Path) -> io::Result<()> {
         .open(lock)
     {
         Ok(file) => file,
-        // Missing: `try_acquire` creates it owner-only. Anything else (a
-        // link, a directory) is `try_acquire`'s to refuse.
-        Err(_) => return Ok(()),
+        // Missing: `try_acquire` creates it owner-only. Any other failure
+        // (a link, no access) refuses the write here.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
     };
     let meta = file.metadata()?;
     let me = rustix::process::geteuid().as_raw();
