@@ -560,6 +560,16 @@ def test_a_processing_instruction_does_not_hide_a_version():
     assert run(notes("\n- Fixed in 4.0.<?note?>1.\n"), "--check") == 1
 
 
+def test_every_paragraph_interrupting_tag_ends_a_title_paragraph():
+    for tag in ("base", "basefont", "caption", "col", "colgroup", "menuitem"):
+        text = f"# Notes\n\nKnown\n<{tag}>\nissues\n---\n\n- Open.\n"
+        assert run(text, "--release", "--tag", "v4.0.0") == 0, tag
+
+
+def test_a_processing_instruction_spanning_lines_does_not_hide_a_version():
+    assert run(notes("\n- Fixed in 4.0.<?note\n?>1.\n"), "--check") == 1
+
+
 def test_a_hyphen_range_to_a_later_release_fails_the_check():
     assert run(notes("\n- Seen in 4.0.0-4.0.1.\n"), "--check") == 1
 
