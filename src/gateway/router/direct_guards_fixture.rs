@@ -55,6 +55,9 @@ pub(crate) enum Answer {
     /// A two-page `tools/list` whose first page carries this `ttlMs` hint and
     /// whose last page is unreadable (its `tools` is not an array).
     Unreadable(Option<u64>),
+    /// A two-page `tools/list` whose first page carries this `ttlMs` hint and
+    /// whose last page a non-numeric one (MIK-8049).
+    NonNumeric(u64),
     /// Like `Ok`, claiming `cacheScope: "public"` for the call's answer.
     PublicScope,
 }
@@ -92,6 +95,15 @@ impl Transport for CountingBackend {
                         result["nextCursor"] = json!("page-2");
                     }
                     if let Some(hint) = hint {
+                        result["ttlMs"] = json!(hint);
+                    }
+                }
+                Answer::NonNumeric(hint) => {
+                    if params.as_ref().and_then(|p| p.get("cursor")).is_some() {
+                        result["tools"] = json!([]);
+                        result["ttlMs"] = json!("soon");
+                    } else {
+                        result["nextCursor"] = json!("page-2");
                         result["ttlMs"] = json!(hint);
                     }
                 }
@@ -133,10 +145,12 @@ impl Transport for CountingBackend {
             });
         }
         match &self.answer {
-            Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
-            )),
+            Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) | Answer::NonNumeric(_) => {
+                Ok(JsonRpcResponse::success(
+                    id,
+                    json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+                ))
+            }
             Answer::ModernList => Ok(JsonRpcResponse::success(
                 id,
                 json!({"content": [{"type": "text", "text": "ok"}], "isError": false, "ttlMs": 3000}),
