@@ -100,7 +100,8 @@ impl Transport for CountingBackend {
                 }
                 Answer::NonNumeric(hint) => {
                     if params.as_ref().and_then(|p| p.get("cursor")).is_some() {
-                        result["tools"] = json!([]);
+                        result["tools"] =
+                            json!([{"name": "later", "inputSchema": {"type": "object"}}]);
                         result["ttlMs"] = json!("soon");
                     } else {
                         result["nextCursor"] = json!("page-2");

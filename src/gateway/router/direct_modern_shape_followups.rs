@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 
 use serde_json::{Value, json};
 
-use super::super::direct_guards_fixture::{Answer, Fx, fixture, fixture_hardened_signed};
+use super::super::direct_guards_fixture::{Answer, Fx, fixture, fixture_hardened_signed, send};
 use super::{BACKENDS, call_params, legacy, modern, post};
 use crate::protocol::mrtr::{CHAIN_NONCE_META, IDEMPOTENCY_KEY_META};
 
@@ -65,6 +65,11 @@ async fn a_cached_error_replays_unchanged() {
             .await;
             let label = format!("{backend} modern={modern_era}");
             assert!(first["error"].is_object(), "{label}: an error: {first}");
+            assert_eq!(
+                (first["id"].clone(), again["id"].clone()),
+                (json!(1), json!(2)),
+                "{label}"
+            );
             assert_eq!(again["error"], first["error"], "{label}");
             assert!(again.get("result").is_none(), "{label}: {again}");
             assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{label}: re-dispatched");
@@ -114,10 +119,17 @@ async fn the_chain_covers_the_shaped_body_and_a_replay_adds_no_link() {
             json!({ IDEMPOTENCY_KEY_META: "chained", CHAIN_NONCE_META: "nonce-2" }),
         )
         .await;
+        assert_eq!(again["id"], 2, "{backend}: {again}");
         assert!(
             chain_of(&again["result"]).is_none(),
             "{backend}: a replay emitted a link: {again}"
         );
+        // The replay is the first answer, less only the first answer's link.
+        let mut unlinked = first["result"].clone();
+        if let Some(meta) = unlinked["_meta"].as_object_mut() {
+            meta.remove(crate::gateway::chain_test_support::CHAIN_KEY);
+        }
+        assert_eq!(again["result"], unlinked, "{backend}: {again}");
         assert_eq!(
             fx.calls.load(Ordering::SeqCst),
             1,
@@ -169,6 +181,7 @@ async fn each_replay_signature_answers_its_own_nonce() {
                 meta,
             )
             .await;
+            assert_eq!(body["id"], id, "{backend}: {body}");
             assert_eq!(
                 body["result"]["_signature"]["sig"],
                 resigned(&body, nonce),
@@ -207,8 +220,37 @@ async fn a_malformed_modern_call_is_refused_only_under_hardened() {
             meta,
         )
         .await;
-        assert!(body["error"].is_object(), "{backend}: not refused: {body}");
+        assert_eq!(body["error"]["code"], -32602, "{backend}: {body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("clientCapabilities")),
+            "{backend}: refused for the missing field: {body}"
+        );
         assert_eq!(hardened.calls.load(Ordering::SeqCst), 0, "{backend}");
+        // The same refusal, status and body, as `/mcp` gives the same request.
+        let params = json!({ "_meta": malformed_meta() });
+        let (mcp_status, mcp) = send(
+            &hardened,
+            "/mcp",
+            super::KEY,
+            "tools/list",
+            params.clone(),
+            None,
+        )
+        .await;
+        let (direct_status, direct) = send(
+            &hardened,
+            &format!("/mcp/{backend}"),
+            super::KEY,
+            "tools/list",
+            params,
+            None,
+        )
+        .await;
+        assert_eq!(mcp_status, axum::http::StatusCode::BAD_REQUEST, "{mcp}");
+        assert_eq!(direct_status, mcp_status, "{backend}: {direct}");
+        assert_eq!(direct["error"], mcp["error"], "{backend}");
 
         let open = fixture(Answer::Ok, |_| {}).await;
         let body = post(
@@ -242,4 +284,10 @@ async fn a_non_numeric_page_hint_is_ignored() {
     let fx = fixture(Answer::NonNumeric(7000), |_| {}).await;
     let body = modern(&fx, "alpha", "tools/list", json!({})).await;
     assert_eq!(body["result"]["ttlMs"], 7000, "{body}");
+    assert!(
+        body["result"]["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|t| t["name"] == "later")),
+        "the second page was read: {body}"
+    );
 }
