@@ -467,7 +467,11 @@ async fn an_operator_record_asks_no_backend_grant() {
     hub.offer(&services, &event, &sub).await;
     let due = hub
         .store
-        .due(Utc::now(), &std::collections::HashSet::new())
+        .due(
+            Utc::now(),
+            &std::collections::HashSet::new(),
+            hub.dead_policy(),
+        )
         .expect("io");
     assert_eq!(due.ready.len(), 1);
     assert!(due.ready[0].owner_scoped, "no backend grant is asked");
