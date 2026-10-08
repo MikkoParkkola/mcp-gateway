@@ -63,3 +63,41 @@ async fn t06_a_snapshot_left_by_the_last_uri_interest_does_not_answer() {
         "a stale snapshot does not refuse a new URI"
     );
 }
+
+/// T05, ledger-swap half (R1a review HIGH): once the running session takes
+/// the replacing instance's ledger, the old instance's snapshot is gone.
+#[tokio::test]
+async fn t05_a_ledger_swap_drops_the_old_snapshot() {
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(offline("b")));
+    let listeners = UpstreamListeners::new(
+        Arc::clone(&registry),
+        Weak::new(),
+        Arc::new(std::collections::BTreeSet::new),
+    );
+    listeners.add("b", &watched("file:///a")).expect("room");
+    read_only_a(&listeners);
+    assert!(registry.remove("b"));
+    assert!(registry.register(offline("b")));
+    let shared = listeners.backends.lock()["b"].clone();
+    shared.refresh_ledger();
+    assert!(
+        listeners.authorize_uri("b", "file:///new").await.is_ok(),
+        "the new instance is judged live after the swap"
+    );
+}
+
+/// T06, in-flight half (R1a review HIGH): a catalogue read begun before the
+/// last URI interest left cannot refill the cleared snapshot.
+#[test]
+fn t06_a_read_begun_before_a_clear_is_dropped() {
+    let mut snapshot = Snapshot::default();
+    let begun = snapshot.epoch();
+    snapshot.read(["file:///a".to_owned()].into(), true);
+    snapshot.clear();
+    assert!(
+        !snapshot.read_at(begun, ["file:///a".to_owned()].into(), true),
+        "the stale read is dropped"
+    );
+    assert!(!snapshot.is_known(), "the snapshot stays empty");
+}

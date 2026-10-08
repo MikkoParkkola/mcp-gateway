@@ -190,9 +190,37 @@ pub(crate) enum Verdict {
 #[derive(Debug, Default)]
 pub(crate) struct Snapshot {
     good: Option<(std::collections::HashSet<String>, bool)>,
+    /// Bumped by every clear, so a read begun before it cannot refill it.
+    epoch: u64,
 }
 
 impl Snapshot {
+    /// Forget the snapshot (its instance or its interest is gone).
+    pub(crate) fn clear(&mut self) {
+        self.good = None;
+        self.epoch += 1;
+    }
+
+    /// The epoch a read begins under; see [`Self::read_at`].
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// [`Self::read`] unless the snapshot was cleared since `epoch`; `false`
+    /// when the read is stale and was dropped.
+    pub(crate) fn read_at(
+        &mut self,
+        epoch: u64,
+        uris: std::collections::HashSet<String>,
+        complete: bool,
+    ) -> bool {
+        if epoch != self.epoch {
+            return false;
+        }
+        self.read(uris, complete);
+        true
+    }
+
     /// Record a successful read; `complete` is false when the page cap cut it.
     pub(crate) fn read(&mut self, uris: std::collections::HashSet<String>, complete: bool) {
         self.good = Some((uris, complete));

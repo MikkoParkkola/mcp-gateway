@@ -78,6 +78,9 @@ impl Shared {
         if !Arc::ptr_eq(&slot, &fresh) {
             fresh.lock().want_all(need.filter().1);
             *slot = fresh;
+            // The snapshot was read from the instance this ledger replaces:
+            // the new one is judged live until it is read (design r3 L4).
+            self.snapshot.lock().clear();
         }
     }
 
@@ -351,7 +354,7 @@ impl UpstreamListeners {
         // With no URI watched the snapshot is no longer read, so it stops
         // answering for a new URI (design r3 L4, MIK-7897 LIFE.3b).
         if no_uris {
-            *shared.snapshot.lock() = Snapshot::default();
+            shared.snapshot.lock().clear();
         }
         if shared.is_idle() {
             shared.stop.cancel();

@@ -482,6 +482,7 @@ impl<'a> State<'a> {
         if requested(self.shared).uris.is_empty() {
             return;
         }
+        let epoch = self.shared.snapshot.lock().epoch();
         match backend.read_resource_snapshot(fresh).await {
             Ok(mut read) => {
                 // A watched URI missing from a cached list is confirmed by a
@@ -497,7 +498,16 @@ impl<'a> State<'a> {
                     read = again;
                 }
                 let (complete, listed) = (read.complete, read.uris.clone());
-                self.shared.snapshot.lock().read(read.uris, read.complete);
+                // A clear while this read was out (the last URI interest left,
+                // the instance was replaced) drops it, revocations included.
+                if !self
+                    .shared
+                    .snapshot
+                    .lock()
+                    .read_at(epoch, read.uris, complete)
+                {
+                    return;
+                }
                 if complete && let Some(hub) = hub.upgrade() {
                     hub.revoke_absent_uris(&self.shared.name, &listed).await;
                 }
