@@ -173,6 +173,8 @@ pub struct ReloadContext {
     /// The capability backend whose listing the env overlay can change: a key
     /// set or removed in an env file turns a keyed capability on or off.
     pub(super) capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
+    /// Told which backends each applied reload registered (`MIK-8054`).
+    pub(super) on_registered: Option<super::reload_warm_hook::OnRegistered>,
 }
 
 /// The refusal a reload returns when the gateway's shutdown ended its wait.
@@ -237,6 +239,7 @@ impl ReloadContext {
             spawn: spawn_load_thread,
             stop: tokio_util::sync::CancellationToken::new(),
             capabilities: None,
+            on_registered: None,
         })
     }
 
@@ -308,16 +311,6 @@ impl ReloadContext {
             Some(sink) => self.with_identity_grant_sink(sink),
             None => self,
         }
-    }
-
-    /// Attach the environment startup published.
-    ///
-    /// Consuming builder rather than a constructor argument: every existing
-    /// call site keeps working, and the one that has a `LiveEnv` says so.
-    #[must_use]
-    pub fn with_env(mut self, env: Arc<LiveEnv>) -> Self {
-        self.env = env;
-        self
     }
 
     /// The env-file paths a reload re-reads.
@@ -738,6 +731,8 @@ impl ReloadContext {
         // old overlay would resolve an `env:` reference the reload just changed.
         self.live_config.set(new_config);
         self.publish_overlay(overlay);
+        // Still under `lock_reload`, against the config just published.
+        self.report_registered(&patch.registered_change(), &self.live_config.get());
 
         Ok(with_pending_restart(
             outcome,

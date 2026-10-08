@@ -18,6 +18,7 @@ fn a_retry_that_finds_a_completed_task_delivers_its_result_private() {
         output_free: false,
         error_author: None,
         owner_digest: String::new(),
+        gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
     };
 
     let response = BeginOutcome::Existing(stored).into_response(RequestId::Number(9));

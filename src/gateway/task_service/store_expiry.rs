@@ -298,7 +298,12 @@ impl Shared {
             Some(event) => self.settle_durable(
                 &task,
                 &record,
-                (event, None, ErrorAuthor::Gateway),
+                (
+                    event,
+                    None,
+                    ErrorAuthor::Gateway,
+                    crate::gateway::gateway_writes::WriteRecord::default(),
+                ),
                 Utc::now(),
             ),
             None => super::serialize(&record).and_then(|bytes| {
