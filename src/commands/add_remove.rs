@@ -278,8 +278,10 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
 
 /// Run a programmatic partial update on a backend (no `ExitCode` wrapper).
 ///
-/// Exposed here so the CLI layer has a thin wrapper if needed later.
-/// Will be called from HTTP handlers in Task 1.2.
+/// Exposed here so the CLI layer has a thin wrapper if needed later. It
+/// blocks the calling thread on the config lock (up to `CLI_LOCK_WAIT`), so
+/// it is for the CLI only: an HTTP handler edits through the reload module's
+/// async `mutate_config_and_reload_with` instead.
 #[allow(dead_code)]
 pub fn run_update_backend(name: &str, update: BackendUpdate, config: &Path) -> Result<(), String> {
     let mut gateway_config = backend_ops::load_config_or_default(config);
