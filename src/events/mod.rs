@@ -123,7 +123,10 @@ pub(crate) trait EventSource: Send + Sync {
     /// May an event of type `name` be sent now? Asked synchronously at the
     /// send boundary, under the live config's admission gate, so a reload
     /// that has returned is always seen (MIK-7907). The default admits.
-    #[allow(dead_code, reason = "red commit: the fix calls it at the send boundary")]
+    #[allow(
+        dead_code,
+        reason = "red commit: the fix calls it at the send boundary"
+    )]
     fn admits_now(&self, _name: &str) -> bool {
         true
     }
