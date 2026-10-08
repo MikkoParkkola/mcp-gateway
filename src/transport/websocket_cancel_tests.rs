@@ -180,7 +180,14 @@ async fn a_queued_request_that_timed_out_is_never_written() {
     let (tx, mut rx) = channel::<Outbound>(8);
     *transport.inner.outbound_tx.lock().await = Some(tx);
     let result = transport.request("tools/call", None).await;
-    assert!(result.is_err(), "precondition: it timed out: {result:?}");
+    assert!(
+        matches!(result, Err(crate::Error::BackendTimeout(_))),
+        "precondition: it timed out: {result:?}"
+    );
+    assert!(
+        transport.inner.pending.is_empty(),
+        "no pending entry is left"
+    );
     let (_, claim) = rx.try_recv().expect("the request was queued");
     assert!(
         !claim.expect("a claim").claim_write(),
