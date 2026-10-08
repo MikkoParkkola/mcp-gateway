@@ -330,17 +330,10 @@ impl Store {
             remove_record(&self.outbox_dir, &OutboxRecord::file(&id))?;
             state.outbox.remove(&id);
         }
-        let buried = self.expire_pending(&mut state, now);
-        // Expiry burials keep the dead-letter caps as every burial does; a
-        // failed eviction is retried by the next sweep.
-        let mut evicted = Vec::new();
-        if !buried.is_empty()
-            && let Err(error) = self.evict_dead(&mut state, now, policy, &mut evicted)
-        {
-            tracing::warn!(%error, "events store: eviction after an expiry burial failed");
-        }
+        let (buried, evicted, more) = self.settle_expired(&mut state, now, policy);
         let mut first: HashMap<&str, &OutboxRecord> = HashMap::new();
-        let mut next: Option<DateTime<Utc>> = None;
+        // Expired records left past this batch are due at once.
+        let mut next: Option<DateTime<Utc>> = more.then_some(now);
         for record in state.outbox.values() {
             let open = state
                 .subs

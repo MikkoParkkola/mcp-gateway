@@ -9,7 +9,9 @@ use chrono::{DateTime, Utc};
 
 use super::super::{State, Store};
 use super::dead_size;
-use crate::events::outbox::{DeadLetter, DeadReason, OutboxRecord, OutboxState, callback_host_of};
+use crate::events::outbox::{
+    DeadLetter, DeadPolicy, DeadReason, Evicted, OutboxRecord, OutboxState, callback_host_of,
+};
 use crate::events::records::{load_records, remove_record, write_record};
 
 /// The most expired-row records one `due` call settles: the worker holds the
@@ -51,6 +53,13 @@ pub(in crate::events::store) fn load(
             .is_some_and(|(dead, _)| dead.record.created_at == record.created_at);
         if settled {
             remove_record(outbox_dir, &OutboxRecord::file(&record.event_id))?;
+            // An expiry burial's receipt comes only after its copy is gone,
+            // so a copy left beside it means the receipt is still owed.
+            if let Some((dead, _)) = state.dead.get(&record.event_id)
+                && dead.reason == DeadReason::Expired.as_str()
+            {
+                state.recovered.push(dead.record.clone());
+            }
             continue;
         }
         if record.state == OutboxState::InFlight {
@@ -64,17 +73,39 @@ pub(in crate::events::store) fn load(
 }
 
 impl Store {
+    /// One tick's expiry settlement: receipts owed from `load` first, then
+    /// this batch's burials, with the dead-letter caps applied after them as
+    /// every burial applies them (a failed eviction is retried by the next
+    /// sweep). Answers the burials, the evictions, and whether more expired
+    /// records remain past this batch.
+    pub(super) fn settle_expired(
+        &self,
+        state: &mut State,
+        now: DateTime<Utc>,
+        policy: DeadPolicy,
+    ) -> (Vec<OutboxRecord>, Vec<Evicted>, bool) {
+        let (mut buried, more) = self.expire_pending(state, now);
+        buried.splice(0..0, std::mem::take(&mut state.recovered));
+        let mut evicted = Vec::new();
+        if !buried.is_empty()
+            && let Err(error) = self.evict_dead(state, now, policy, &mut evicted)
+        {
+            tracing::warn!(%error, "events store: eviction after an expiry burial failed");
+        }
+        (buried, evicted, more)
+    }
+
     /// Settle at most [`EXPIRY_BATCH`] records of expired rows (MIK-8061): a
     /// record that was replayed or tried is buried as `subscription_expired`,
     /// its outbox copy removed only once the dead letter is durable; one never
     /// tried is dropped; one in flight is left to settle. A row left with no
     /// record is removed, its tail stamped at its expiry. Answers the records
-    /// buried, for their receipts.
+    /// buried, for their receipts, and whether more remain past this batch.
     pub(super) fn expire_pending(
         &self,
         state: &mut State,
         now: DateTime<Utc>,
-    ) -> Vec<OutboxRecord> {
+    ) -> (Vec<OutboxRecord>, bool) {
         // The oldest batch by key first, then only those records cloned.
         let mut keys: Vec<(DateTime<Utc>, String)> = state
             .outbox
@@ -89,6 +120,7 @@ impl Store {
             .map(|r| (r.created_at, r.event_id.clone()))
             .collect();
         keys.sort();
+        let more = keys.len() > EXPIRY_BATCH;
         keys.truncate(EXPIRY_BATCH);
         let mut buried = Vec::new();
         for (_, id) in keys {
@@ -134,6 +166,6 @@ impl Store {
         {
             tracing::warn!(%error, "events store: a settled expired row was not removed; retried next tick");
         }
-        buried
+        (buried, more)
     }
 }

@@ -77,8 +77,10 @@ pub(crate) struct OutboxRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dead_as: Option<DeadReason>,
     /// Placed by an operator replay (MIK-8061): its dead letter is gone, so
-    /// if its subscription expires it is buried again, never dropped.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    /// if its subscription expires it is buried again, never dropped. Always
+    /// written; a record written before the field existed may be a replay,
+    /// so it reads as one and is kept rather than dropped.
+    #[serde(default = "may_be_a_replay")]
     pub replayed: bool,
 }
 
@@ -187,6 +189,12 @@ pub(crate) struct Evicted {
     pub event_id: String,
     pub subscription_id: String,
     pub reason: String,
+}
+
+/// `replayed` for a record written before the field: it may be a replay,
+/// so it is buried at expiry rather than dropped.
+const fn may_be_a_replay() -> bool {
+    true
 }
 
 /// The host of callback `url`, as a record is stamped with it; empty when

@@ -90,9 +90,10 @@ impl EventsHub {
         let Some(due) = due else {
             return IDLE;
         };
+        // A deadline already past (more expired records waiting) is now.
         let mut wait = due
             .next
-            .and_then(|at| (at - Utc::now()).to_std().ok())
+            .map(|at| (at - Utc::now()).to_std().unwrap_or(Duration::ZERO))
             .unwrap_or(IDLE)
             .min(IDLE);
         for record in due.ready {
