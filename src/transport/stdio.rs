@@ -18,14 +18,14 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use process_wrap::tokio::ChildWrapper;
 use serde_json::Value;
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
 
 use crate::transport::notification_sink::DeliveryHandle;
 
-use super::{PendingRequestGuard, Transport};
+use super::{PendingRequestGuard, Transport, write_claim::WriteClaim};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
     RequestId, Selectable, checked_selection, initialize_params, is_version_mismatch_error,
@@ -105,7 +105,9 @@ pub struct StdioTransport {
     /// Request timeout for initialize and JSON-RPC calls
     request_timeout: std::time::Duration,
     /// Writer handle
-    writer: Mutex<Option<tokio::process::ChildStdin>>,
+    writer: Arc<Mutex<Option<tokio::process::ChildStdin>>>,
+    /// Cancelled by `close()`, renewed by `start()`: ends a write stuck on a reader.
+    shutdown: parking_lot::Mutex<tokio_util::sync::CancellationToken>,
     /// Negotiated protocol version (config override or auto-negotiated)
     protocol_version: RwLock<Option<String>>,
     /// Where to deliver a notification for each call that supplied a progress
@@ -150,7 +152,8 @@ impl StdioTransport {
             env,
             cwd,
             request_timeout,
-            writer: Mutex::new(None),
+            writer: Arc::new(Mutex::new(None)),
+            shutdown: parking_lot::Mutex::new(tokio_util::sync::CancellationToken::new()),
             protocol_version: RwLock::new(protocol_version),
             progress_destinations: dashmap::DashMap::new(),
             start: early_exit::StartState::default(),
@@ -219,7 +222,12 @@ impl StdioTransport {
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stderr".to_string()))?;
 
-        *self.writer.lock().await = Some(stdin);
+        let mut writer = self.writer.lock().await;
+        // Renewed under the stdin lock, so a write never pairs new stdin with
+        // the token a previous `close()` cancelled.
+        *self.shutdown.lock() = tokio_util::sync::CancellationToken::new();
+        *writer = Some(stdin);
+        drop(writer);
         *self.child.lock().await = Some(child);
         let (eof_tx, eof_rx) = tokio::sync::watch::channel(false);
         self.start.begin(eof_rx);
@@ -576,32 +584,13 @@ impl StdioTransport {
         Ok(())
     }
 
-    /// Write a message to stdin
-    async fn write_message(&self, message: &str) -> Result<()> {
+    /// Write one frame to stdin, cancel-safely: see [`tree::write_frame`].
+    async fn write_message(&self, message: &str, claim: Option<&WriteClaim>) -> Result<()> {
         debug!(message_len = message.len(), "Writing to stdin");
-        let mut writer = self.writer.lock().await;
-        if let Some(ref mut stdin) = *writer {
-            stdin
-                .write_all(message.as_bytes())
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            stdin
-                .write_all(b"\n")
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            stdin
-                .flush()
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            // Drop the lock before yielding to allow concurrent reads
-            drop(writer);
-            // Yield to give the runtime a chance to process the I/O
-            tokio::task::yield_now().await;
-            debug!("Write complete and flushed");
-            Ok(())
-        } else {
-            Err(Error::TransportConnect("Not connected".to_string()))
-        }
+        tree::write_frame(&self.writer, &self.shutdown, message, claim).await?;
+        tokio::task::yield_now().await;
+        debug!("Write complete and flushed");
+        Ok(())
     }
 
     /// Get next request ID
@@ -682,17 +671,15 @@ impl Transport for StdioTransport {
         let message = serde_json::to_string(&request)?;
         let (tx, rx) = oneshot::channel();
         self.pending.insert(id.to_string(), tx);
-        // Removing the entry is the guard's job on every path: on success the
-        // reader task has already routed the response and the removal is a
-        // no-op, and on an error, an internal timeout or CANCELLATION (an
-        // outer timeout or task abort dropping this future mid-await) the
-        // guard's Drop is the only thing that removes it — without it a
-        // stranded entry would leak here for the transport's lifetime.
+        // The guard removes the entry on every path, CANCELLATION included (an
+        // outer timeout or task abort dropping this future mid-await); a
+        // stranded entry would leak for the transport's lifetime.
         let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
-
-        // Both guards drop after this value is produced, which is where the
-        // pending entry and the progress registration are retired.
-        match self.write_message(&message).await {
+        // Declared after `_cleanup`, so it drops first and still finds the
+        // entry of a request nobody answered.
+        let claim = WriteClaim::new();
+        let mut cancel = tree::CancelUnanswered::arm(self, &request, &claim);
+        let outcome = match self.write_message(&message, Some(&claim)).await {
             Err(e) => Err(e),
             // Wait for response with timeout
             Ok(()) => match tokio::time::timeout(self.request_timeout, rx).await {
@@ -700,7 +687,9 @@ impl Transport for StdioTransport {
                 Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
                 Err(_) => Err(Error::BackendTimeout("Request timed out".to_string())),
             },
-        }
+        };
+        cancel.disarm();
+        outcome
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
@@ -711,7 +700,7 @@ impl Transport for StdioTransport {
         };
 
         let message = serde_json::to_string(&notification)?;
-        self.write_message(&message).await
+        self.write_message(&message, None).await
     }
 
     fn is_connected(&self) -> bool {
@@ -740,13 +729,15 @@ impl Transport for StdioTransport {
     async fn close(&self) -> Result<()> {
         self.connected.store(false, Ordering::Relaxed);
 
-        // Close stdin
-        *self.writer.lock().await = None;
-
-        // Kill child process
+        // A write stuck on a peer that stopped reading holds stdin; the kill ends it.
+        if let Ok(mut writer) = self.writer.try_lock() {
+            *writer = None;
+        }
         if let Some(ref mut child) = *self.child.lock().await {
             let _ = Box::into_pin(child.kill()).await;
         }
+        self.shutdown.lock().cancel();
+        tree::clear_writer(&self.writer).await;
 
         Ok(())
     }
