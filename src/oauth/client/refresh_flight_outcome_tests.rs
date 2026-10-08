@@ -251,8 +251,8 @@ fn an_unreadable_refresh_state_reads_as_rotating() {
 /// the next start, and nothing is sent even when storage refuses to clear
 /// it: the token is spent in this process and both records are left as they
 /// were. This does not tell a conditional marker clear from an unconditional
-/// one (both writes share the refused directory); that needs a token-only
-/// write fault, which the MIK-7324 follow-up adds.
+/// one (both writes share the refused directory);
+/// `a_marker_survives_a_clear_that_fails` does.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_marked_token_that_cannot_be_cleared_is_not_sent() {
@@ -421,4 +421,33 @@ async fn an_unreadable_refresh_state_retires_the_token_it_cannot_rewrite() {
     );
     assert!(flight_of(&owned).is_spent("r1"));
     assert_eq!(stored(&owned).and_then(|t| t.refresh_token), None);
+}
+
+/// A token whose clear fails keeps its in-flight marker: a stored record that
+/// cannot be read may still hold the token, so the marker must survive for a
+/// later start to retire it. The sidecar stays writable here, so a marker
+/// cleared regardless of the clear would show.
+#[test]
+fn a_marker_survives_a_clear_that_fails() {
+    use super::super::refresh_flight::{Flight, fingerprint_hex, retire_unsettled};
+    let dir = tempfile::tempdir().unwrap();
+    let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+    let key = "flight-key";
+    std::fs::write(storage.token_path(key, RESOURCE), "not a token record").unwrap();
+    let state = RefreshState {
+        rotates: true,
+        in_flight: Some(fingerprint_hex("r1")),
+        damaged: false,
+    };
+    storage.save_refresh_state(key, RESOURCE, &state).unwrap();
+    let flight = Flight::of(&storage.token_path(key, RESOURCE));
+
+    retire_unsettled(&flight, &storage, (key, RESOURCE), BACKEND, "r1", state);
+
+    assert!(flight.is_spent("r1"), "spent in this process");
+    assert_eq!(
+        storage.load_refresh_state(key, RESOURCE).in_flight,
+        Some(fingerprint_hex("r1")),
+        "the marker stays until the token is known to be gone"
+    );
 }
