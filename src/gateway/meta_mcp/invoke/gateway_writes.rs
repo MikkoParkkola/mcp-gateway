@@ -365,20 +365,37 @@ pub(super) fn rebind(layer: Layer, before: &Value, after: &Value) {
 }
 
 /// Engine text the final pass rewrote stays engine text (`MIK-8043.SEAM.3`):
-/// each string of `before` noted as the gateway's own notes its counterpart
-/// in `after` too, matched by position.
+/// each string or key of `before` noted as the gateway's own notes its
+/// counterpart in `after` too, matched by position; a plan answer printed as
+/// JSON text is read through its print on both sides.
 #[cfg(feature = "firewall")]
 fn rebind_engine(before: &Value, after: &Value, engine: &mut Vec<u64>) {
     match (before, after) {
-        (Value::String(_), Value::String(_)) => {
+        (Value::String(b), Value::String(a)) => {
             if engine.contains(&digest(before)) {
                 engine.push(digest(after));
+            } else if let (Ok(b @ (Value::Object(_) | Value::Array(_))), Ok(a)) = (
+                serde_json::from_str::<Value>(b),
+                serde_json::from_str::<Value>(a),
+            ) {
+                rebind_engine(&b, &a, engine);
             }
         }
         (Value::Array(b), Value::Array(a)) => {
             b.iter()
                 .zip(a)
                 .for_each(|(b, a)| rebind_engine(b, a, engine));
+        }
+        // Same size: matched by position, so a key the pass renamed still
+        // pairs with its counterpart.
+        (Value::Object(b), Value::Object(a)) if b.len() == a.len() => {
+            for ((kb, vb), (ka, va)) in b.iter().zip(a) {
+                let key = Value::String(kb.clone());
+                if kb != ka && engine.contains(&digest(&key)) {
+                    engine.push(digest(&Value::String(ka.clone())));
+                }
+                rebind_engine(vb, va, engine);
+            }
         }
         (Value::Object(b), Value::Object(a)) => b
             .iter()

@@ -533,12 +533,20 @@ pub(super) fn add_seams(
                 .filter(|_| !engine(part.0))
                 .filter(|o| seen.get(part).is_some_and(|&n| n <= o.len()))
         };
+        // A part is credited to one receipt holding it, a sensitive one first.
+        let pick = |o: &Vec<usize>| {
+            o.iter()
+                .copied()
+                .min_by_key(|&r| (!digests[r].sensitive, r))
+                .unwrap_or(o[0])
+        };
+        let mut candidates: HashMap<u64, Vec<usize>> = HashMap::new();
         let mut run: Vec<((&str, bool), usize)> = Vec::new();
         for part in parts.iter().map(Some).chain([None]) {
             if let Some(p) = part
                 && let Some(o) = owned(p)
             {
-                run.push((*p, o[0]));
+                run.push((*p, pick(o)));
                 continue;
             }
             if run.iter().any(|(_, r)| *r != run[0].1) {
@@ -548,14 +556,22 @@ pub(super) fn add_seams(
                     .filter(|((_, key), _)| !key)
                     .map(|((t, _), r)| (*t, *r))
                     .collect();
-                for (r, fp) in seam_owners(&all, "\n", detector, &own)
-                    .into_iter()
-                    .chain(seam_owners(&values, "", detector, &own))
-                {
-                    added[r].push(fp);
-                }
+                seam_candidates(&all, "\n", detector, &mut candidates);
+                seam_candidates(&values, "", detector, &mut candidates);
             }
             run.clear();
+        }
+        // At most two holders per seam fingerprint in the whole delivery,
+        // sensitive receipts first, none when an owner already holds it.
+        for (fp, mut who) in candidates {
+            who.sort_unstable_by_key(|&r| (!digests[r].sensitive, r));
+            who.dedup();
+            if who.iter().any(|&r| own[r].contains(&fp)) {
+                continue;
+            }
+            for &r in who.iter().take(2) {
+                added[r].push(fp);
+            }
         }
     }
     for (digest, seams) in digests.iter_mut().zip(added) {
@@ -567,54 +583,39 @@ pub(super) fn add_seams(
 }
 
 /// The seam fingerprints of a run of `parts` (text, the receipt credited
-/// with it) joined by `sep`, each with the receipt it goes to: a fingerprint
-/// of the joined text whose k-gram crosses the boundary between two parts
-/// goes to the receipts of those two parts, at the first boundary it
-/// crosses, unless one of them already holds it in its own runs. So a seam
-/// fingerprint has at most two holders per delivery and never saturates.
-fn seam_owners(
+/// with it) joined by `sep`, gathered into `candidates` with the receipts of
+/// every part their k-gram touches: at each boundary, the run's fingerprints
+/// whose k-gram crosses it (a k-gram of the two windows joined that neither
+/// window holds alone) gain the receipts of the parts on both sides. Each
+/// boundary costs its windows only, never the whole run.
+fn seam_candidates(
     parts: &[(&str, usize)],
     sep: &str,
     detector: &CollusionDetector,
-    own: &[HashSet<u64>],
-) -> Vec<(usize, u64)> {
-    let mut out = Vec::new();
+    candidates: &mut HashMap<u64, Vec<usize>>,
+) {
     if parts.len() < 2 {
-        return out;
+        return;
     }
     let text: Vec<&str> = parts.iter().map(|(t, _)| *t).collect();
-    let fps = detector.fingerprints(&text.join(sep));
-    let mut done = HashSet::new();
+    let fps: HashSet<u64> = detector.fingerprints(&text.join(sep)).into_iter().collect();
     for b in 1..parts.len() {
         let (l, r) = (parts[b - 1].1, parts[b].1);
-        let (left, right) = (
-            window(&text[..b], sep, Side::Left),
-            window(&text[b..], sep, Side::Right),
-        );
+        let left = window(&text[..b], sep, Side::Left);
+        let right = window(&text[b..], sep, Side::Right);
         let lone: HashSet<u64> = detector
             .kgram_hashes(&left)
             .into_iter()
             .chain(detector.kgram_hashes(&right))
             .collect();
-        let cross: HashSet<u64> = detector
-            .kgram_hashes(&format!("{left}{sep}{right}"))
-            .into_iter()
-            .filter(|k| !lone.contains(k))
-            .collect();
-        for &fp in &fps {
-            if cross.contains(&fp)
-                && !own[l].contains(&fp)
-                && !own[r].contains(&fp)
-                && done.insert(fp)
-            {
-                out.push((l, fp));
-                if r != l {
-                    out.push((r, fp));
-                }
+        for k in detector.kgram_hashes(&format!("{left}{sep}{right}")) {
+            if fps.contains(&k) && !lone.contains(&k) {
+                let who = candidates.entry(k).or_default();
+                who.push(l);
+                who.push(r);
             }
         }
     }
-    out
 }
 
 /// Which end of a run a [`window`] is taken from.
@@ -625,32 +626,47 @@ enum Side {
 }
 
 /// The parts of a run nearest a boundary, joined by `sep`, up to about two
-/// k-grams of text: every k-gram that crosses the boundary lies within the
-/// left window, the separator and the right window.
+/// k-grams of visible text: every k-gram that crosses the boundary lies
+/// within the left window, the separator and the right window. Counted as
+/// k-gram hashing normalizes (whitespace collapses, unsafe controls drop),
+/// so padding a leaf with whitespace cannot push the context out.
 fn window(parts: &[&str], sep: &str, side: Side) -> String {
+    let visible = |c: char| !c.is_whitespace() && !crate::security::sanitize::is_unsafe_control(c);
     let reach = 2 * K;
     let mut taken: Vec<&str> = Vec::new();
-    let mut len = 0;
+    let mut seen = 0;
     let order: Vec<usize> = match side {
         Side::Left => (0..parts.len()).rev().collect(),
         Side::Right => (0..parts.len()).collect(),
     };
     for part in order.into_iter().map(|i| parts[i]) {
-        let chars = part.chars().count();
+        let mut count = 0;
         let cut = match side {
-            Side::Left => part
-                .char_indices()
-                .rev()
-                .nth(reach.saturating_sub(1))
-                .map_or(part, |(i, _)| &part[i..]),
-            Side::Right => part
-                .char_indices()
-                .nth(reach)
-                .map_or(part, |(i, _)| &part[..i]),
+            Side::Left => {
+                let start = part
+                    .char_indices()
+                    .rev()
+                    .find(|&(_, c)| {
+                        count += usize::from(visible(c));
+                        seen + count >= reach
+                    })
+                    .map_or(0, |(i, _)| i);
+                &part[start..]
+            }
+            Side::Right => {
+                let end = part
+                    .char_indices()
+                    .find(|&(_, c)| {
+                        count += usize::from(visible(c));
+                        seen + count >= reach
+                    })
+                    .map_or(part.len(), |(i, c)| i + c.len_utf8());
+                &part[..end]
+            }
         };
         taken.push(cut);
-        len += chars + sep.len();
-        if len >= reach {
+        seen += count;
+        if seen >= reach {
             break;
         }
     }

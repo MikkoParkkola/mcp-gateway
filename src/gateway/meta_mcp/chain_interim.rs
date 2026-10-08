@@ -114,6 +114,9 @@ where
         // Classified before the result is recorded, so a step that asked is
         // never pushed as an answer — the whole defect is one `Ok` treated as
         // two different things.
+        // MIK-8043.SEAM.3: a tool name between step results is the caller's
+        // text, not a backend's, so no seam joins it.
+        crate::gateway::meta_mcp::invoke::gateway_writes::note_engine_text(&json!(tool_ref));
         let Some(round) = classify_step_result(idx, &tool_ref, &result)? else {
             completed.push(json!({"step": idx, "tool": tool_ref, "result": result}));
             continue;
@@ -137,11 +140,6 @@ where
             "steps": completed.len(),
             "results": completed,
         }));
-    }
-    // MIK-8043.SEAM.3: the tool names between step results are the caller's
-    // text, not a backend's, so no seam joins them.
-    for entry in &completed {
-        crate::gateway::meta_mcp::invoke::gateway_writes::note_engine_text(&entry["tool"]);
     }
     Ok(json!({"steps": completed.len(), "results": completed}))
 }

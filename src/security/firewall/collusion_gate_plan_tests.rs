@@ -294,3 +294,44 @@ fn a_seam_fingerprint_has_at_most_two_holders() {
     );
     assert!(holders.values().all(|&n| n <= 2), "{holders:?}");
 }
+
+/// `MIK-8043.SEAM.3`: the two-holder bound holds across the delivery, not
+/// per run: nine runs that share one seam (the same tail beside the same
+/// head) still leave each seam fingerprint at most two holders.
+#[test]
+fn a_seam_shared_by_many_runs_keeps_two_holders() {
+    use std::collections::HashMap;
+    let (fw, _dir) = observing(|_| {});
+    let detector = CollusionDetector::new(RelayParams::default());
+    let head = "south terrace rows one to six";
+    let lefts: Vec<String> = (0..9)
+        .map(|i| format!("crew {i}, north slope rows seven to"))
+        .collect();
+    // Nine steps with one left each, and one step that staged the head nine
+    // times, so the head is owned in every run and no receipt holds the
+    // seam in a run of its own.
+    let mut digests: Vec<DeliveryDigest> = lefts
+        .iter()
+        .map(|l| DeliveryDigest::of_plan_step_leaves(&[l.as_str()], false).0)
+        .collect();
+    digests.push(DeliveryDigest::of_plan_step_leaves(&[head; 9], false).0);
+    let shown: Vec<&str> = lefts
+        .iter()
+        .flat_map(|l| [l.as_str(), head, "an engine note between the runs"])
+        .collect();
+    let delivered = Delivered::of_leaves(shown).expect("bounded");
+    let kept = fw.retain_plan(digests, &delivered, &|_| false);
+    let mut holders: HashMap<u64, usize> = HashMap::new();
+    for digest in &kept {
+        let fps: std::collections::HashSet<u64> =
+            digest.fingerprints(&detector).into_iter().collect();
+        for fp in fps {
+            *holders.entry(fp).or_default() += 1;
+        }
+    }
+    assert!(
+        !holders.is_empty(),
+        "premise: the runs have seam fingerprints"
+    );
+    assert!(holders.values().all(|&n| n <= 2), "{holders:?}");
+}

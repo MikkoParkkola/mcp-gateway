@@ -275,7 +275,8 @@ fn build_output(definition: &PlaybookDefinition, ctx: &PlaybookContext) -> (Valu
                 result.insert(prop_name.clone(), Value::Null);
             }
         } else {
-            if mapping.path.starts_with("$inputs") {
+            let source = mapping.path.split(['.', '[']).next();
+            if source == Some("$inputs") {
                 engine_text_props.push(prop_name.clone());
             }
             result.insert(prop_name.clone(), resolved);
