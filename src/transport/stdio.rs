@@ -561,7 +561,7 @@ impl StdioTransport {
     }
 
     /// Write one frame to stdin, cancel-safely: see [`tree::write_frame`].
-    async fn write_message(&self, message: &str) -> Result<()> {
+    async fn write_message(&self, message: String) -> Result<()> {
         debug!(message_len = message.len(), "Writing to stdin");
         tree::write_frame(&self.writer, &self.shutdown, message).await?;
         tokio::task::yield_now().await;
@@ -657,7 +657,7 @@ impl Transport for StdioTransport {
 
         // Both guards drop after this value is produced, which is where the
         // pending entry and the progress registration are retired.
-        match self.write_message(&message).await {
+        match self.write_message(message).await {
             Err(e) => Err(e),
             // Wait for response with timeout
             Ok(()) => match tokio::time::timeout(self.request_timeout, rx).await {
@@ -676,7 +676,7 @@ impl Transport for StdioTransport {
         };
 
         let message = serde_json::to_string(&notification)?;
-        self.write_message(&message).await
+        self.write_message(message).await
     }
 
     fn is_connected(&self) -> bool {
