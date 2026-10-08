@@ -305,44 +305,26 @@ fn rewritten_answer(text: &str) -> Value {
 /// whether it is a key (a `:` follows it).
 #[cfg(feature = "firewall")]
 fn line_literals(line: &str) -> Vec<(String, bool)> {
+    // The value a member line ends with is read first, from its end, so a
+    // damaged key before it cannot take it; the forward scan then reads only
+    // what lies before that value's opening quote. The two never overlap, so
+    // a line's literals never hold more text than the line.
+    let tail = line.trim_end().trim_end_matches(',');
+    let last = tail
+        .strip_suffix('"')
+        .and_then(|body| last_open_quote(body).map(|open| (open, &body[open + 1..])));
+    let scan = last.map_or(line, |(open, _)| &line[..open]);
     let mut out = Vec::new();
     let mut at = 0;
-    // A literal whose closing quote is gone: its index in `out` and start.
-    let mut unclosed = None;
-    while let Some(open) = line[at..].find('"') {
+    while let Some(open) = scan[at..].find('"') {
         let start = at + open + 1;
-        let close = closing_quote(&line[start..]).map(|c| start + c);
-        let (raw, next) = close.map_or((&line[start..], line.len()), |c| (&line[start..c], c + 1));
-        if close.is_none() {
-            unclosed = Some((out.len(), start));
-        }
-        out.push((unescape(raw), line[next..].trim_start().starts_with(':')));
+        let close = closing_quote(&scan[start..]).map(|c| start + c);
+        let (raw, next) = close.map_or((&scan[start..], scan.len()), |c| (&scan[start..c], c + 1));
+        out.push((unescape(raw), scan[next..].trim_start().starts_with(':')));
         at = next;
     }
-    let tail = line.trim_end().trim_end_matches(',');
-    if let Some(body) = tail.strip_suffix('"')
-        && let Some(open) = last_open_quote(body)
-    {
-        let last = unescape(&body[open + 1..]);
-        let mut read = out.clone();
-        match unclosed {
-            // Read from the same quote, it is that literal: keep one reading.
-            Some((i, start)) if open + 1 == start => read[i] = (last, false),
-            // The unclosed literal ran over the value: it keeps only what lies
-            // before the value's opening quote.
-            Some((i, start)) if open >= start => {
-                read[i] = (unescape(&line[start..open]), false);
-                read.push((last, false));
-            }
-            _ if read.iter().any(|(literal, _)| *literal == last) => {}
-            _ => read.push((last, false)),
-        }
-        // The forward literals are disjoint slices of the line, so they never
-        // exceed it; the end read is taken only while that stays true, so no
-        // print can be counted beyond its own size, however it was damaged.
-        if read.iter().map(|(t, _)| t.len()).sum::<usize>() <= line.len() {
-            out = read;
-        }
+    if let Some((_, value)) = last {
+        out.push((unescape(value), false));
     }
     out
 }
@@ -586,6 +568,11 @@ mod tests {
         assert!(
             literals.contains(&("south terrace rows".to_owned(), false)),
             "{literals:?}"
+        );
+        let quoted = line_literals(r#"    "te[REDACTED] "south \"terrace\" rows","#);
+        assert!(
+            quoted.contains(&("south \"terrace\" rows".to_owned(), false)),
+            "{quoted:?}"
         );
     }
 
