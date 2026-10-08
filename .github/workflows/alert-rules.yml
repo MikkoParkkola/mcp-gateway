@@ -1,9 +1,10 @@
 name: Alert rules
 
 # Runs the promtool cases in deploy/prometheus/ against the shipped alert
-# rules. Its own workflow, not a ci.yml job: a `throwaway/` PR must run this
-# (it is how a rule regression is shown red), while ci.yml runs nothing but
-# `Tests (throwaway)` on one (scripts/ci/test_throwaway_routing.py).
+# rules. Its own workflow, not a ci.yml job: ci.yml runs nothing but
+# `Tests (throwaway)` on a `throwaway/` PR. This job skips one too, unless the
+# head's name holds `promtool` (a rule regression shown red, e.g.
+# throwaway/promtool-red-1); scripts/ci/test_throwaway_routing.py checks both.
 on:
   pull_request:
   push:
@@ -19,6 +20,7 @@ concurrency:
 jobs:
   promtool:
     name: Alert rules (promtool)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) || contains(github.head_ref, 'promtool') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
