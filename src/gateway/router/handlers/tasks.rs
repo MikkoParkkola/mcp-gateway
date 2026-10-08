@@ -104,12 +104,16 @@ pub(super) fn route_task_owner(
 
 /// The owner of a validated agent's tasks on a gateway with auth off.
 ///
-/// Length-prefixed like `credential:`, so no `client_id` can spell another's
-/// owner, and prefixed apart from `oidc:`, `credential:`, `subject:` and
-/// `local:`. `client_id` is the agent registry's key, so two agents never share
-/// one owner.
+/// The `client_id` enters as its SHA-256 digest: a fixed 74-byte owner fits task
+/// admission's metadata bound whatever the id's length, and no `client_id` can
+/// spell another's owner. Prefixed apart from `oidc:`, `credential:`,
+/// `subject:` and `local:`. `client_id` is the agent registry's key, so two
+/// agents never share one owner.
 fn agent_task_owner(client_id: &str) -> String {
-    format!("agent-jwt:{}:{client_id}", client_id.len())
+    format!(
+        "agent-jwt:{}",
+        crate::hashing::sha256_hex(client_id.as_bytes())
+    )
 }
 
 /// Everything the task-intent decision reads about one `tools/call`.
