@@ -21,9 +21,9 @@ pub struct Walk {
 impl Walk {
     fn add(&mut self, id: String, alias_of: Option<String>, origin: String) {
         match self.origins.get(&id) {
-            Some(prev) if *prev != origin => self
-                .errors
-                .push(format!("collision: `{id}` comes from both {prev} and {origin}")),
+            Some(prev) if *prev != origin => self.errors.push(format!(
+                "collision: `{id}` comes from both {prev} and {origin}"
+            )),
             Some(_) => {}
             None => {
                 self.origins.insert(id.clone(), origin);
@@ -55,7 +55,12 @@ fn flag_forms(a: &Arg) -> (Option<String>, Option<char>, Vec<String>, Vec<char>)
     aliases.sort();
     let mut shorts = a.get_all_short_aliases().unwrap_or_default();
     shorts.sort_unstable();
-    (a.get_long().map(str::to_owned), a.get_short(), aliases, shorts)
+    (
+        a.get_long().map(str::to_owned),
+        a.get_short(),
+        aliases,
+        shorts,
+    )
 }
 
 fn visit(w: &mut Walk, b: &Command, u: &Command, path: &str, ancestors: &[&Command]) {
@@ -68,7 +73,10 @@ fn visit(w: &mut Walk, b: &Command, u: &Command, path: &str, ancestors: &[&Comma
             continue;
         }
         let inherited = arg.is_global_set()
-            && ancestors.iter().rev().find_map(|c| c.get_arguments().find(|a| a.get_id() == id))
+            && ancestors
+                .iter()
+                .rev()
+                .find_map(|c| c.get_arguments().find(|a| a.get_id() == id))
                 .is_some_and(|def| flag_forms(def) == flag_forms(arg));
         if !inherited {
             w.errors.push(format!(
@@ -77,7 +85,11 @@ fn visit(w: &mut Walk, b: &Command, u: &Command, path: &str, ancestors: &[&Comma
         }
     }
     if b.is_allow_external_subcommands_set() {
-        w.add(format!("{path} <external>"), None, format!("external {path}"));
+        w.add(
+            format!("{path} <external>"),
+            None,
+            format!("external {path}"),
+        );
     }
     let mut chain = ancestors.to_vec();
     chain.push(u);
@@ -89,21 +101,41 @@ fn visit(w: &mut Walk, b: &Command, u: &Command, path: &str, ancestors: &[&Comma
                 // Generated; its subtree is a clone of the whole tree.
                 w.add(sub.clone(), None, format!("command {sub}"));
             } else {
-                w.errors.push(format!("built subcommand `{sub}` has no unbuilt definition"));
+                w.errors.push(format!(
+                    "built subcommand `{sub}` has no unbuilt definition"
+                ));
             }
             continue;
         };
         w.add(sub.clone(), None, format!("command {sub}"));
         for alias in sc.get_all_aliases() {
-            w.add(format!("{path} {alias}"), Some(sub.clone()), format!("command alias {sub}"));
+            w.add(
+                format!("{path} {alias}"),
+                Some(sub.clone()),
+                format!("command alias {sub}"),
+            );
         }
-        let shorts = sc.get_short_flag().into_iter().chain(sc.get_all_short_flag_aliases());
+        let shorts = sc
+            .get_short_flag()
+            .into_iter()
+            .chain(sc.get_all_short_flag_aliases());
         for c in shorts {
-            w.add(format!("{path} -{c}"), Some(sub.clone()), format!("command flag {sub}"));
+            w.add(
+                format!("{path} -{c}"),
+                Some(sub.clone()),
+                format!("command flag {sub}"),
+            );
         }
-        let longs = sc.get_long_flag().into_iter().chain(sc.get_all_long_flag_aliases());
+        let longs = sc
+            .get_long_flag()
+            .into_iter()
+            .chain(sc.get_all_long_flag_aliases());
         for l in longs {
-            w.add(format!("{path} --{l}"), Some(sub.clone()), format!("command flag {sub}"));
+            w.add(
+                format!("{path} --{l}"),
+                Some(sub.clone()),
+                format!("command flag {sub}"),
+            );
         }
         visit(w, sc, us, &sub, &chain);
     }
@@ -128,13 +160,25 @@ fn emit_arg(w: &mut Walk, path: &str, a: &Arg) {
     if a.get_long().is_some()
         && let Some(s) = a.get_short()
     {
-        w.add(format!("{path} -{s}"), Some(canonical.clone()), origin.clone());
+        w.add(
+            format!("{path} -{s}"),
+            Some(canonical.clone()),
+            origin.clone(),
+        );
     }
     for l in a.get_all_aliases().unwrap_or_default() {
-        w.add(format!("{path} --{l}"), Some(canonical.clone()), origin.clone());
+        w.add(
+            format!("{path} --{l}"),
+            Some(canonical.clone()),
+            origin.clone(),
+        );
     }
     for s in a.get_all_short_aliases().unwrap_or_default() {
-        w.add(format!("{path} -{s}"), Some(canonical.clone()), origin.clone());
+        w.add(
+            format!("{path} -{s}"),
+            Some(canonical.clone()),
+            origin.clone(),
+        );
     }
 }
 
@@ -153,17 +197,35 @@ pub fn doc_rows(md: &str) -> BTreeMap<String, String> {
         if !inside || !line.trim_start().starts_with('|') {
             continue;
         }
-        let cells: Vec<String> = line.trim().trim_matches('|').split('|').map(|c| c.trim().to_owned()).collect();
+        let cells: Vec<String> = line
+            .trim()
+            .trim_matches('|')
+            .split('|')
+            .map(|c| c.trim().to_owned())
+            .collect();
         let Some(h) = &header else {
             header = Some(cells.iter().map(|c| c.to_lowercase()).collect());
             continue;
         };
-        if cells.iter().all(|c| c.chars().all(|ch| matches!(ch, '-' | ':' | ' '))) {
+        if cells
+            .iter()
+            .all(|c| c.chars().all(|ch| matches!(ch, '-' | ':' | ' ')))
+        {
             continue;
         }
-        let col = |name: &str| h.iter().position(|c| c == name).and_then(|i| cells.get(i)).cloned().unwrap_or_default();
+        let col = |name: &str| {
+            h.iter()
+                .position(|c| c == name)
+                .and_then(|i| cells.get(i))
+                .cloned()
+                .unwrap_or_default()
+        };
         let item = col("item");
-        let item = item.strip_prefix('`').and_then(|s| s.strip_suffix('`')).unwrap_or(&item).to_owned();
+        let item = item
+            .strip_prefix('`')
+            .and_then(|s| s.strip_suffix('`'))
+            .unwrap_or(&item)
+            .to_owned();
         rows.insert(item, col("class"));
     }
     rows
