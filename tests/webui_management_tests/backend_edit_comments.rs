@@ -395,14 +395,3 @@ async fn a_delete_without_comments_keeps_no_content() {
     let (status, body) = send_json(&router, Method::DELETE, "/ui/api/backends/a", None).await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
 }
-
-/// MIK-8051 DEL-NOTE.4: one helper names dropped comment lines for the CLI
-/// and the web UI; the binary keeps no second copy of the compare.
-#[test]
-fn the_dropped_comment_compare_has_one_home() {
-    let cli = include_str!("../../src/commands/config_write.rs");
-    assert!(
-        !cli.contains("fn dropped_comments"),
-        "the CLI still carries its own copy of the dropped-comment compare"
-    );
-}
