@@ -81,6 +81,10 @@ mod agent_listener_liveness;
 #[path = "agent_legacy_stream.rs"]
 mod agent_legacy_stream;
 
+// MIK-8055: an agent token owns its tasks on an auth-on public /mcp.
+#[path = "agent_auth_on_tasks.rs"]
+mod agent_auth_on_tasks;
+
 use helpers::{
     ReleasedOnDrop, SUBSCRIPTION_ID_META, TASK_NOTIFICATION, assert_only_its_own_task,
     assert_receives_nothing, expect_message, open_listen, task_notification,
