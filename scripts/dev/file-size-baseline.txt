@@ -3,7 +3,6 @@
 # may cross. Delete a row once the file drops under the ceiling.
 # 16 files, 10798 lines of excess.
 5364 src/gateway/server/mod.rs
-2668 src/gateway/meta_mcp/mod.rs
 2176 src/gateway/router/handlers.rs
 1603 src/protocol_revision_telemetry.rs
 1174 tests/mik_7212_mrtr7_stdio_acs.rs

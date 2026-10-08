@@ -625,10 +625,9 @@ async fn a_token_marked_in_flight_before_any_settled_refresh_is_not_sent() {
 
 /// RENEWREPLAY.3(d): the first rotation is seen while the storage directory
 /// refuses writes, so neither the rotation record nor the clear reaches disk.
-/// The sidecar then cannot be read, so the in-flight marker it holds is lost
-/// too (MIK-8145: with the marker readable, it would retire the token on its
-/// own). The spent set alone keeps a second client of this process from
-/// sending the possibly consumed token.
+/// A second client of this process does not send the possibly consumed token:
+/// the in-flight marker the first left retires it (the server is not yet known,
+/// so it may rotate, MIK-8145), with the in-process spent set as the backstop.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_token_spent_while_storage_refuses_writes_is_not_resent() {
@@ -660,17 +659,8 @@ async fn a_token_spent_while_storage_refuses_writes_is_not_resent() {
     server.release.notify_one();
     let first_result = task.await.unwrap();
     // Writable again: the second client could mark and send, and the disk
-    // still holds `r1` with a sidecar that never recorded the rotation and
-    // can no longer be read, so its marker is lost.
+    // still holds `r1` with a sidecar that never recorded the rotation.
     set_mode(0o700);
-    let key = first.credential_key().unwrap();
-    let sidecar = first.storage.refresh_state_path(&key, RESOURCE);
-    std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o000)).unwrap();
-    assert_eq!(
-        first.storage.load_refresh_state(&key, RESOURCE).in_flight,
-        None,
-        "premise: the marker is unreadable"
-    );
     let second_result = headless(&second).await;
 
     assert!(first_result.is_err(), "the rotation could not be recorded");

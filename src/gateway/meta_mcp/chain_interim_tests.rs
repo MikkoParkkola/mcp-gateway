@@ -729,3 +729,45 @@ async fn answers_without_a_request_state_are_refused_not_dropped() {
 
     assert!(refused.is_err(), "stray answers let the chain run fresh");
 }
+
+/// `MIK-7993` r5 (T7, T12): a step's gateway notes follow its value into the
+/// chain's `results`, at its place there. A resumed chain starts `results`
+/// empty, so a step's place is its position in this run, not its index in
+/// the chain.
+#[tokio::test]
+async fn a_steps_gateway_notes_follow_it_into_results() {
+    use crate::gateway::gateway_writes::{Layer, note, recorded};
+    for (start, place) in [(0_usize, "1"), (1, "0")] {
+        let chain = vec![json!({"tool": "srv:a"}), json!({"tool": "srv:b"})];
+        let stored = crate::gateway::meta_mcp::invoke::relay::collecting(async {
+            let run = |idx: usize, _tool: String, _arguments: Value| async move {
+                let value = json!({
+                    "text": format!("step {idx}"),
+                    "_cost_warnings": [format!("advice {idx}")],
+                });
+                // Only step 1's advice is the gateway's.
+                if idx == 1 {
+                    note(Layer::Value, &["_cost_warnings"], &value);
+                }
+                Ok(value)
+            };
+            let seal = |_: usize, _: &InputRequired| -> Result<String> { panic!("no step asks") };
+            drive_chain(&chain, start, run, seal)
+                .await
+                .expect("the chain completes");
+            serde_json::to_value(recorded()).expect("the record serializes")
+        })
+        .await;
+        let dests: Vec<&Value> = stored
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|entry| &entry["dest"])
+            .collect();
+        assert_eq!(
+            dests,
+            vec![&json!(["results", place, "result", "_cost_warnings"])],
+            "start {start}: {stored}"
+        );
+    }
+}

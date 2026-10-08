@@ -358,6 +358,7 @@ async fn the_commit_admits_only_a_detected_or_unneeded_transport() {
             (
                 &plain_caller(),
                 &url::Url::parse("https://p.example/cb").expect("url"),
+                Commit::Checked,
             ),
         )
         .await;
