@@ -281,3 +281,40 @@ fn a_composition_across_many_marks_keeps_seams_exact() {
         "a seam fingerprint no relay of the delivered text computes"
     );
 }
+
+/// Marks of another step that survive normalization unchanged keep that
+/// step: a field followed by forty such marks is a seam of both steps.
+#[test]
+fn surviving_marks_keep_their_own_step() {
+    let det = detector();
+    let marks = "\u{315}".repeat(40);
+    let parts = [
+        ("north slope rows seven to twelve", Some(0)),
+        (marks.as_str(), Some(1)),
+    ];
+    let seams = det.seam_fingerprints(&parts);
+    assert!(!seams.is_empty(), "marks of another step lost their step");
+    assert!(seams.iter().all(|(_, steps)| steps == &[0, 1]), "{seams:?}");
+}
+
+/// A Tibetan vowel sign whose decomposition opens with a mark reorders
+/// with the marks before it, so it is never a cut: every seam fingerprint
+/// is one a relay of the delivered text computes.
+#[test]
+fn a_starter_decomposing_to_marks_is_not_a_cut() {
+    let det = detector();
+    let parts = [
+        (FIELD_A, Some(0)),
+        ("south terrace rows one to six \u{F40}\u{F74}", Some(1)),
+        ("\u{F73}", Some(2)),
+    ];
+    let texts: Vec<&str> = parts.iter().map(|(t, _)| *t).collect();
+    let mut egress = det.fingerprints(&texts.join("\n"));
+    egress.extend(det.fingerprints(&texts.concat()));
+    let seams = seam_fps(&det, &parts);
+    assert!(!seams.is_empty(), "premise: a seam across the first two");
+    assert!(
+        seams.iter().all(|fp| egress.contains(fp)),
+        "a seam fingerprint no relay of the delivered text computes"
+    );
+}

@@ -17,6 +17,7 @@ use std::hash::BuildHasher;
 use icu_normalizer::ComposingNormalizerBorrowed;
 use icu_normalizer::properties::{
     CanonicalCombiningClassMapBorrowed, CanonicalCompositionBorrowed,
+    CanonicalDecompositionBorrowed, Decomposed,
 };
 
 use super::{CollusionDetector, K, key, winnow};
@@ -122,9 +123,13 @@ impl CollusionDetector {
         let nfc = ComposingNormalizerBorrowed::new_nfc();
         let ccc = CanonicalCombiningClassMapBorrowed::new();
         let comp = CanonicalCompositionBorrowed::new();
-        let mut stream: Vec<(char, Option<u32>)> = Vec::new();
-        let mut piece = String::new();
-        let mut owner = None;
+        let dec = CanonicalDecompositionBorrowed::new();
+        let len = parts
+            .iter()
+            .map(|(text, _)| text.len() + separator.len())
+            .sum();
+        let mut stream: Vec<(char, Option<u32>)> = Vec::with_capacity(len);
+        let mut piece = Piece::default();
         let chars = parts.iter().enumerate().flat_map(|(i, (text, step))| {
             let sep = if i > 0 { separator } else { "" };
             sep.chars().map(|c| (c, None)).chain(
@@ -134,31 +139,26 @@ impl CollusionDetector {
             )
         });
         for (c, step) in chars {
-            if !piece.is_empty() && ccc.get_u8(c) == 0 {
-                // An ASCII piece is already normalized, and no starter
-                // composes with an ASCII char.
-                let normal = if piece.is_ascii() {
-                    std::borrow::Cow::Borrowed(piece.as_str())
-                } else {
-                    nfc.normalize(&piece)
-                };
+            // A piece is cut at its cap whatever comes next, so a run of
+            // marks never reaches the normalizer longer than the cap.
+            if piece.text.len() >= MAX_PIECE {
+                piece.flush(&nfc, &mut stream);
+            }
+            // NFC never reaches back across a char whose full decomposition
+            // opens with a starter that does not compose with the char
+            // before it.
+            if !piece.text.is_empty() && ccc.get_u8(leading(&dec, c)) == 0 {
                 let joins = !c.is_ascii()
-                    && normal
-                        .chars()
-                        .next_back()
+                    && piece
+                        .last_normalized(&nfc)
                         .is_some_and(|last| comp.compose(last, c).is_some());
-                if !joins || piece.len() >= MAX_PIECE {
-                    stream.extend(normal.chars().map(|n| (n, owner)));
-                    drop(normal);
-                    piece.clear();
+                if !joins {
+                    piece.flush(&nfc, &mut stream);
                 }
             }
-            if piece.is_empty() {
-                owner = step;
-            }
-            piece.push(c);
+            piece.push(c, step);
         }
-        stream.extend(nfc.normalize(&piece).chars().map(|n| (n, owner)));
+        piece.flush(&nfc, &mut stream);
         // Whitespace collapsed as `split_whitespace().join(" ")`: trimmed, and
         // each inner run one unowned space.
         let mut norm = String::new();
@@ -203,5 +203,64 @@ fn slide(tags: &[Option<u32>], mut at: impl FnMut(usize, &HashMap<u32, usize>)) 
             }
         }
         at(i, &window);
+    }
+}
+
+/// The first char of `c`'s full canonical decomposition.
+fn leading(dec: &CanonicalDecompositionBorrowed<'_>, mut c: char) -> char {
+    loop {
+        match dec.decompose(c) {
+            Decomposed::Default => return c,
+            Decomposed::Singleton(s) => c = s,
+            Decomposed::Expansion(first, _) => c = first,
+        }
+    }
+}
+
+/// Text normalized together, with the step of each of its chars.
+#[derive(Default)]
+struct Piece {
+    text: String,
+    steps: Vec<(char, Option<u32>)>,
+}
+
+impl Piece {
+    fn push(&mut self, c: char, step: Option<u32>) {
+        self.text.push(c);
+        self.steps.push((c, step));
+    }
+
+    /// The last char of the piece normalized.
+    fn last_normalized(&self, nfc: &ComposingNormalizerBorrowed<'_>) -> Option<char> {
+        if self.text.is_ascii() {
+            self.text.chars().next_back()
+        } else {
+            nfc.normalize(&self.text).chars().next_back()
+        }
+    }
+
+    /// Append the piece normalized to `stream` and empty it. A char that
+    /// comes through normalization unchanged keeps its own step; a char
+    /// composition made takes the step of the char the piece opens with.
+    fn flush(
+        &mut self,
+        nfc: &ComposingNormalizerBorrowed<'_>,
+        stream: &mut Vec<(char, Option<u32>)>,
+    ) {
+        let first = self.steps.first().and_then(|(_, step)| *step);
+        if self.text.is_ascii() || self.steps.iter().all(|(_, s)| *s == first) {
+            stream.extend(nfc.normalize(&self.text).chars().map(|n| (n, first)));
+        } else {
+            let mut left = std::mem::take(&mut self.steps);
+            for n in nfc.normalize(&self.text).chars() {
+                let step = left
+                    .iter()
+                    .position(|(c, _)| *c == n)
+                    .map_or(first, |i| left.remove(i).1);
+                stream.push((n, step));
+            }
+        }
+        self.text.clear();
+        self.steps.clear();
     }
 }
