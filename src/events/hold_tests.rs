@@ -303,3 +303,32 @@ async fn a_failed_stamp_write_still_bounds_the_row() {
     refresh(&hub, &registry, "");
     assert!(stamped(dir.path()), "the next refresh wrote it");
 }
+
+/// Review A1 (design-8057 r4): the admin listing names each held type with
+/// its count, earliest and latest expiry, and the records still queued.
+#[tokio::test]
+async fn the_held_listing_counts_the_queued_records() {
+    let (_dir, hub, registry) = restarted(json!({}), &full()).await;
+    let id = id_of(&subscribe(&hub, json!({})).await.expect("refresh"));
+    let now = chrono::Utc::now().to_rfc3339();
+    let record = serde_json::from_value(json!({
+        "v": 1, "event_id": "evt_q", "subscription_id": id, "name": TYPE,
+        "backend": "beta", "body_b64": "e30=", "attempt": 0,
+        "next_attempt_at": now, "first_attempt_at": null, "created_at": now,
+        "state": "pending"
+    }))
+    .expect("record");
+    let caps = crate::events::outbox::OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    hub.store.enqueue(record, caps).expect("io");
+    refresh(&hub, &registry, "");
+    let listing = hub.list_held();
+    assert_eq!(listing.len(), 1, "{listing:?}");
+    let held = &listing[0];
+    assert_eq!(held["type"], TYPE);
+    assert_eq!(held["count"], 1);
+    assert_eq!(held["pendingRecords"], 1, "{held}");
+    assert!(held["earliestExpiry"].is_string() && held["latestExpiry"].is_string());
+}

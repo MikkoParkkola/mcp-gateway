@@ -304,7 +304,7 @@ impl EventsHub {
         let held = self.store.held_listing();
         if !held.is_empty() {
             let types: Vec<(&str, usize)> =
-                held.iter().map(|(t, n, ..)| (t.as_str(), *n)).collect();
+                held.iter().map(|t| (t.name.as_str(), t.count)).collect();
             tracing::info!(
                 ?types,
                 "events: webhook subscriptions held: their type is not offered or served now"

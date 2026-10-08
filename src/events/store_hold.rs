@@ -21,9 +21,16 @@ pub(crate) struct Held {
     pub key: Option<String>,
 }
 
-/// One held type in the admin listing: its name, its row count, and the
-/// earliest and latest end among them.
-pub(crate) type HeldType = (String, usize, Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+/// One held type in the admin listing (design-8057 r4): its rows held.
+#[derive(Debug, Default)]
+pub(crate) struct HeldType {
+    pub name: String,
+    pub count: usize,
+    pub earliest_expiry: Option<DateTime<Utc>>,
+    pub latest_expiry: Option<DateTime<Utc>>,
+    /// Records still queued for them, draining.
+    pub pending_records: usize,
+}
 
 /// What a route refresh decided for one stored subscription.
 #[derive(Debug, Default)]
@@ -127,32 +134,46 @@ impl Store {
     }
 
     /// Every held subscription's type, with its row count, earliest and
-    /// latest end, for the admin listing.
+    /// latest end, and the records still queued for those rows.
     pub(crate) fn held_listing(&self) -> Vec<HeldType> {
         let state = self.state.lock();
-        let mut types = std::collections::BTreeMap::<
-            String,
-            (usize, Option<DateTime<Utc>>, Option<DateTime<Utc>>),
-        >::new();
+        let mut types = std::collections::BTreeMap::<String, HeldType>::new();
         for id in state.held.keys() {
             let Some(sub) = state.subs.get(id) else {
                 continue;
             };
             let end = sub.effective_expiry();
-            let entry = types.entry(sub.name.clone()).or_default();
-            entry.0 += 1;
-            entry.1 = match (entry.1, end) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (a, b) => a.or(b),
-            };
-            entry.2 = match (entry.2, end) {
-                (Some(a), Some(b)) => Some(a.max(b)),
-                (a, b) => a.or(b),
-            };
+            let entry = types.entry(sub.name.clone()).or_insert_with(|| HeldType {
+                name: sub.name.clone(),
+                ..HeldType::default()
+            });
+            entry.count += 1;
+            entry.earliest_expiry = either(entry.earliest_expiry, end, std::cmp::min);
+            entry.latest_expiry = either(entry.latest_expiry, end, std::cmp::max);
         }
-        types
-            .into_iter()
-            .map(|(name, (n, lo, hi))| (name, n, lo, hi))
-            .collect()
+        for record in state.outbox.values() {
+            let held_type = state
+                .held
+                .contains_key(&record.subscription_id)
+                .then(|| state.subs.get(&record.subscription_id))
+                .flatten()
+                .and_then(|sub| types.get_mut(&sub.name));
+            if let Some(entry) = held_type {
+                entry.pending_records += 1;
+            }
+        }
+        types.into_values().collect()
+    }
+}
+
+/// `pick` of two ends when both are set, else whichever is.
+fn either(
+    a: Option<DateTime<Utc>>,
+    b: Option<DateTime<Utc>>,
+    pick: fn(DateTime<Utc>, DateTime<Utc>) -> DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(pick(a, b)),
+        (a, b) => a.or(b),
     }
 }
