@@ -76,6 +76,12 @@ pub(crate) struct OutboxRecord {
     /// buried again, never sent again. Written with the next claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dead_as: Option<DeadReason>,
+    /// Placed by an operator replay (MIK-8061): its dead letter is gone, so
+    /// if its subscription expires it is buried again, never dropped. Always
+    /// written; a record written before the field existed may be a replay,
+    /// so it reads as one and is kept rather than dropped.
+    #[serde(default = "may_be_a_replay")]
+    pub replayed: bool,
 }
 
 impl OutboxRecord {
@@ -83,6 +89,12 @@ impl OutboxRecord {
     /// limit and the backoff count.
     pub(crate) fn sends(&self) -> u32 {
         self.attempt.saturating_sub(self.unsent)
+    }
+
+    /// Whether this record outlives its subscription's expiry as a dead
+    /// letter: it was replayed or tried, or it is on the wire (MIK-8061).
+    pub(crate) fn needs_burial_at_expiry(&self) -> bool {
+        self.replayed || self.sends() > 0 || self.state == OutboxState::InFlight
     }
 
     /// The body bytes, or `None` for a record whose body does not decode.
@@ -118,6 +130,9 @@ pub(crate) enum DeadReason {
     Budget,
     /// The cross-tenant read verdict withheld it (MIN.2 E1).
     Tenant,
+    /// Its subscription expired with it replayed or tried (MIK-8061).
+    #[serde(rename = "subscription_expired")]
+    Expired,
 }
 
 impl DeadReason {
@@ -129,6 +144,7 @@ impl DeadReason {
             Self::FirewallBlocked => "firewall_blocked",
             Self::Budget => "budget",
             Self::Tenant => "tenant",
+            Self::Expired => "subscription_expired",
         }
     }
 }
@@ -173,4 +189,19 @@ pub(crate) struct Evicted {
     pub event_id: String,
     pub subscription_id: String,
     pub reason: String,
+}
+
+/// `replayed` for a record written before the field: it may be a replay,
+/// so it is buried at expiry rather than dropped.
+const fn may_be_a_replay() -> bool {
+    true
+}
+
+/// The host of callback `url`, as a record is stamped with it; empty when
+/// the URL has none.
+pub(crate) fn callback_host_of(url: &str) -> String {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_default()
 }

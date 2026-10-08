@@ -18,15 +18,17 @@ use crate::protocol::cacheable::LIST_TTL_MS;
 /// there was no handshake in which to say so.
 /// The methods whose results carry `ttlMs` and `cacheScope`.
 ///
-/// Five, from the `CacheableResult` interface. `server/discover` requires the
-/// fields too, but carries them in its own document (`discover_document`), so
-/// that a discovery answered on any route is valid without this shaping.
+/// Five from the `CacheableResult` interface, and `server/discover`, which
+/// requires the fields too. The gateway's own discovery document already
+/// carries them (`discover_document`), and shaping leaves them as written; a
+/// discover relayed to a backend gains them here (MIK-8047).
 pub(super) const CACHEABLE_METHODS: &[&str] = &[
     "tools/list",
     "prompts/list",
     "resources/list",
     "resources/read",
     "resources/templates/list",
+    "server/discover",
 ];
 
 // Unit-test adapter only: production must shape before security finalization
@@ -56,6 +58,8 @@ pub(crate) fn shape_modern_response(
     if let Some(ref mut result) = response.result
         && let Some(object) = result.as_object_mut()
     {
+        use crate::gateway::gateway_writes::{Layer, note};
+        let supplies_type = !object.contains_key("resultType");
         // Required on every result in this revision, and supplied here only
         // when the result does not already carry one.
         //
@@ -69,7 +73,8 @@ pub(crate) fn shape_modern_response(
             .entry("resultType")
             .or_insert_with(|| serde_json::Value::String("complete".to_string()));
 
-        if CACHEABLE_METHODS.contains(&method) {
+        let hinted = CACHEABLE_METHODS.contains(&method);
+        if hinted {
             // A relayed `resources/read` may carry its backend's own hint. The
             // gateway may shorten it, never lengthen it: raising a backend's
             // `ttlMs: 0` would let a client serve changing contents stale.
@@ -91,6 +96,16 @@ pub(crate) fn shape_modern_response(
                 crate::protocol::meta::server_info(),
             );
         }
+        // What the shaper wrote is the gateway's, so a receipt leaves it out
+        // (MIK-8025): `resultType` only when it supplied one, the cache hints
+        // whenever it wrote them. A backend's own `resultType` stays.
+        if supplies_type {
+            note(Layer::Answer, &["resultType"], result);
+        }
+        if hinted {
+            note(Layer::Answer, &["cacheScope"], result);
+            note(Layer::Answer, &["ttlMs"], result);
+        }
     }
     GatewayStamps::Modern
 }
@@ -104,6 +119,24 @@ mod tests {
         let mut response = JsonRpcResponse::success(RequestId::Number(1), result);
         shape_modern_response(&mut response, "resources/read");
         response.result.expect("a success keeps its result")["ttlMs"].clone()
+    }
+
+    /// MIK-8047 KEEP.1: the gateway's own discovery document already carries
+    /// the pair, and shaping it as a discover leaves the pair as it was.
+    #[test]
+    fn the_gateways_own_discovery_keeps_its_pair() {
+        let mut document = serde_json::json!({"resultType": "complete"});
+        crate::protocol::cacheable::write_cache_hints(
+            document.as_object_mut().expect("an object"),
+            "server/discover",
+            LIST_TTL_MS,
+        );
+        let mut response = JsonRpcResponse::success(RequestId::Number(1), document.clone());
+        shape_modern_response(&mut response, "server/discover");
+        let shaped = response.result.expect("a result");
+        for key in ["resultType", "ttlMs", "cacheScope"] {
+            assert_eq!(shaped[key], document[key], "{key}: {shaped}");
+        }
     }
 
     /// MIK-8009 review: a backend hint is kept when shorter, capped when

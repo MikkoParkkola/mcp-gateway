@@ -949,6 +949,7 @@ async fn meta_mcp_dispatch(
     let owner = tasks::route_task_owner(
         &state,
         verified_identity.as_ref(),
+        oauth_agent_identity.as_ref(),
         &tasks::task_owner_key(
             grant_subject.as_ref(),
             cert_identity.as_ref(),
@@ -961,10 +962,9 @@ async fn meta_mcp_dispatch(
     // caller would own every other one's tasks. `/mcp` is public in the shipped
     // presets: exactly where credentialled and unattributed callers meet.
     //
-    // Auth DISABLED is the other case and it is not a defect: there are no
-    // identities to keep apart, and `anonymous_client` documents one shared
-    // caller as the operator's own choice. Refusing there would take tasks away
-    // from every single-user gateway to protect a boundary nobody drew.
+    // Auth DISABLED is not a defect: a validated agent JWT owns its tasks apart
+    // (`route_task_owner`) and every other caller shares one pool, the
+    // operator's own choice (`anonymous_client`) that a refusal would break.
     let unattributed = owner.is_empty() && state.auth_config.enabled;
 
     // The refusal names nothing. An unattributed caller must not be able to
@@ -2150,8 +2150,8 @@ mod cacheable_field_tests {
         // still pass if a method were dropped from it.
         assert_eq!(
             CACHEABLE_METHODS.len(),
-            5,
-            "the criterion names five methods: {CACHEABLE_METHODS:?}"
+            6,
+            "five cacheable methods and discovery: {CACHEABLE_METHODS:?}"
         );
         for method in CACHEABLE_METHODS {
             let response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
@@ -2178,7 +2178,7 @@ mod cacheable_field_tests {
     #[tokio::test]
     async fn a_non_cacheable_method_gets_neither_field() {
         let response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
-        let built = build_modern_response(response, StatusCode::OK, "server/discover");
+        let built = build_modern_response(response, StatusCode::OK, "tools/call");
         let bytes = axum::body::to_bytes(built.into_body(), usize::MAX)
             .await
             .expect("the builder produces a complete in-memory body");
