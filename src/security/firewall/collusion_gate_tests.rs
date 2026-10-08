@@ -657,7 +657,7 @@ fn a_dropped_plan_receipt_increments_the_metric() {
     let text = "x".repeat(super::super::collusion_digest::DELIVERED_SET_CAP + 1);
     let answer = json!({"content": [{"type": "text", "text": text}]});
     assert!(
-        fw.delivered_for_plan(&answer).is_none(),
+        fw.delivered_for_plan(&answer, None).is_none(),
         "premise: over the bound"
     );
     assert!(rendered_count(series) > before, "dropped plan: not counted");
