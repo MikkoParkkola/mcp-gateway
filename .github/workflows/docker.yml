@@ -39,13 +39,17 @@ jobs:
   # its checks read. A PR into main builds unless it is docs-only (main requires
   # `build`; the gate reports success for a docs-only PR without building).
   # A same-repo `throwaway/` PR into the release line never builds: it carries
-  # red-first and mutation runs that need only Tests. A fork chooses its own
-  # branch name, so the throwaway clause also requires the head to be this repo.
+  # red-first and mutation runs that need only Tests, so `scope` and
+  # `build-gate` skip it at job level and take no runner (MIK-8067). A fork
+  # chooses its own branch name, so the clause also requires the head to be
+  # this repo. A throwaway PR is never merged, so its skipped `build` gates
+  # nothing.
   #
   # Any failure here leaves run_build unset, and `build-gate` then reports red,
   # so a broken decision can never read as a skipped, passing `build`.
   scope:
     name: Decide whether to build the image
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -509,8 +513,9 @@ jobs:
     needs: [scope, build]
     # Green only when `scope` itself succeeded and either decided not to build
     # or every leg built. A failed or cancelled `scope` is red here, never a
-    # skipped (and therefore passing) required check.
-    if: always()
+    # skipped (and therefore passing) required check. A throwaway PR skips it
+    # with `scope` (see there).
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

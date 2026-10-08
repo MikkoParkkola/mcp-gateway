@@ -38,7 +38,7 @@ def evaluate(expr: str, ctx: dict) -> bool:
             cur = cur.get(part) if isinstance(cur, dict) else None
         return cur
 
-    tokens = re.findall(r"startsWith|\(|\)|,|&&|\|\||==|!=|!|'[^']*'|[A-Za-z_][\w.\-]*", expr)
+    tokens = re.findall(r"startsWith|contains|\(|\)|,|&&|\|\||==|!=|!|'[^']*'|[A-Za-z_][\w.\-]*", expr)
     status = ctx.get("_status", {})
     pos = 0
 
@@ -65,6 +65,13 @@ def evaluate(expr: str, ctx: dict) -> bool:
             b = disj()
             assert take() == ")"
             return str(a or "").lower().startswith(str(b).lower())
+        if t == "contains":
+            assert take() == "("
+            a = disj()
+            assert take() == ","
+            b = disj()
+            assert take() == ")"
+            return str(b).lower() in str(a or "").lower()
         if t in ("cancelled", "always", "success", "failure") and peek() == "(":
             take()
             assert take() == ")"
@@ -201,10 +208,49 @@ def only_throwaway_tests(rc: list) -> None:
             rc.append(f"ci.yml: a throwaway PR (var={var}, jobs {outcome}) runs {ran}, expected only Tests (throwaway)")
 
 
+# Jobs a throwaway PR skips (MIK-8067): (workflow, job id, job name, opt-in).
+# A head whose name holds the opt-in word still runs the job, so a red proof
+# for that job keeps it. Names are required-check contexts and must not move.
+HEAVY = (
+    ("docker.yml", "scope", "Decide whether to build the image", None),
+    ("docker.yml", "build-gate", "build", None),
+    ("alert-rules.yml", "promtool", "Alert rules (promtool)", "promtool"),
+    ("rustdoc.yml", "rustdoc", "Rustdoc intra-doc links (MIK-8008)", "rustdoc"),
+)
+
+
+def heavy_jobs_skip_throwaway(rc: list) -> None:
+    """Image, alert-rule and rustdoc jobs skip a same-repo throwaway PR into
+    the release line, run for every other event, and run for a throwaway
+    head that names their opt-in word."""
+    for workflow, job_id, name, opt_in in HEAVY:
+        job = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())["jobs"].get(job_id)
+        if not job or job.get("name") != name:
+            rc.append(f"{workflow}: job {job_id} missing or renamed from {name!r}")
+            continue
+        cond = str(job.get("if", "true"))
+        if job_id == "build-gate" and "always()" not in cond:
+            # Without always(), a failed scope skips the required `build`,
+            # and a skipped required check reads as passing.
+            rc.append("docker.yml: build-gate lost always()")
+        for kind in ("throwaway", "fork", "branch", "into-main", "push"):
+            ctx = event(kind, None)
+            ctx["needs"] = {}
+            if evaluate(cond, ctx) == (kind == "throwaway"):
+                want = "skip" if kind == "throwaway" else "run"
+                rc.append(f"{workflow}: {job_id} does not {want} for a {kind} event")
+        if opt_in:
+            ctx = event("throwaway", None)
+            ctx["github"]["head_ref"] = f"throwaway/{opt_in}-red-1"
+            if not evaluate(cond, ctx):
+                rc.append(f"{workflow}: {job_id} skips a throwaway head naming {opt_in!r}")
+
+
 def main() -> int:
     rc: list[str] = []
     check("ci.yml", "Tests (throwaway)", rc)
     only_throwaway_tests(rc)
+    heavy_jobs_skip_throwaway(rc)
     check("mutants.yml", "Mutants (linux)", rc)
     for line in rc:
         print(f"routing: {line}", file=sys.stderr)
