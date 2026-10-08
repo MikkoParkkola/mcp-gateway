@@ -6,7 +6,7 @@
 
 pub(crate) mod audit;
 mod excerpt;
-mod minted_value;
+pub(crate) mod minted_value;
 
 use super::*;
 use crate::security::response_policy::{
