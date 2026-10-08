@@ -143,10 +143,12 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.write(
             "src/oauth/mod.rs",
             "pub fn existing() {}\n#[cfg(all(unix, test))]\nfn probe() {}\n"
-            "#[cfg(all(unix, not(test)))]\nfn live() {}\n",
+            "#[cfg(all(unix, not(test)))]\nfn live() {}\n"
+            "#[cfg(all(unix, any(test, debug_assertions)))]\nfn debug() {}\n"
+            "#[cfg(all(unix, not(all(test, windows))))]\nfn nested() {}\n",
         )
         self.repo.commit("add")
-        self.assertEqual(self.repo.missing(), ["live"])
+        self.assertEqual(self.repo.missing(), ["debug", "live", "nested"])
 
     def test_an_extern_function_is_seen(self) -> None:
         self.repo.write("src/oauth/mod.rs", 'pub fn existing() {}\npub extern "C" fn hook() {}\n')

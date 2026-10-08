@@ -62,12 +62,26 @@ def code(line: str) -> str:
 
 
 def test_only(text: str) -> bool:
-    """`#[cfg(test)]`, or a `cfg(all(...))` with `test` as an operand outside a `not(...)`."""
+    """`#[cfg(test)]`, or a `cfg(all(...))` with `test` as a direct operand.
+    A nested `any(test, ...)` or `not(...)` still builds outside tests."""
     if text.startswith("#[cfg(test)]"):
         return True
     if not text.startswith("#[cfg(all("):
         return False
-    return re.search(r"\btest\b", re.sub(r"not\([^()]*\)", "", text)) is not None
+    operands, depth, start = [], 0, len("#[cfg(all(")
+    for i in range(start, len(text)):
+        ch = text[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")" and depth == 0:
+            operands.append(text[start:i])
+            break
+        elif ch == ")":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            operands.append(text[start:i])
+            start = i + 1
+    return "test" in (o.strip() for o in operands)
 
 
 def bodyless(lines: list[str], line: int) -> bool:
