@@ -140,6 +140,9 @@ impl EventsHub {
     /// the same way. A refusal leaves the key unstarted for the next replay.
     pub(crate) async fn replay_starts(&self) {
         let mut started = self.lifecycle.lock().await;
+        for source in self.sources.read().iter() {
+            source.pin_rows(&self.store);
+        }
         // One attempt per key per replay, even when several rows hold it.
         let mut tried = HashSet::new();
         for (key, principal, name, arguments) in self.live_keys() {

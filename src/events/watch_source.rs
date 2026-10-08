@@ -220,6 +220,11 @@ fn digest(projection: &BTreeMap<String, Value>) -> String {
     format!("sha256:{}", hex::encode(sha2::Sha256::digest(bytes)))
 }
 
+/// Whether `name` is a REST watch event type.
+fn is_watch(name: &str) -> bool {
+    name.starts_with(PREFIX) && name.ends_with(SUFFIX)
+}
+
 /// A poller's lifecycle key: the principal it runs for (none when shared),
 /// the event name and the arguments. Serialized with sorted keys and every
 /// integer kept, so arguments differing past 2^53 are two pollers.
@@ -279,32 +284,6 @@ impl WatchSource {
             .targets()
             .into_iter()
             .find(|t| t.read_only && event_name(&t.capability) == name)
-    }
-
-    /// The class a stored row of `principal`, `name` and `arguments` was
-    /// admitted under, if one exists (MIK-8122).
-    fn stored_class(&self, principal: &str, name: &str, arguments: &Value) -> Option<WatchClass> {
-        let hub = self.hub.upgrade()?;
-        Self::rows(&hub, principal, name, arguments)
-            .first()
-            .map(|row| self.effective_class(row))
-    }
-
-    /// A row's class: recorded, else (a watch written before the class was
-    /// recorded) what the catalogue admits its capability under now, else
-    /// keyed, so one principal's credential never answers for another.
-    fn effective_class(&self, row: &Subscription) -> WatchClass {
-        row.watch_class
-            .or_else(|| self.watch_class(&row.name))
-            .unwrap_or(WatchClass::Keyed)
-    }
-
-    /// The class a key polls under: a stored row's class when one exists,
-    /// else the class the catalogue admits a new watch under, else keyed.
-    fn class_for(&self, principal: &str, name: &str, arguments: &Value) -> WatchClass {
-        self.stored_class(principal, name, arguments)
-            .or_else(|| self.watch_class(name))
-            .unwrap_or(WatchClass::Keyed)
     }
 
     /// Live rows of `principal` for `name` with these canonical `arguments`.
@@ -408,6 +387,8 @@ impl EventSource for WatchSource {
             // it, and this occurrence is skipped.
             return Err(RpcError::not_found());
         };
+        // Refused at subscribe; at fan-out any code but -32012 only skips the
+        // occurrence, so this never revokes (MIK-8122).
         if target.credential == CredentialUse::Account {
             return Err(RpcError {
                 code: -32014,
@@ -451,12 +432,15 @@ impl EventSource for WatchSource {
     }
 
     fn row_key(&self, sub: &Subscription) -> Option<String> {
-        let watch = sub.name.starts_with(PREFIX) && sub.name.ends_with(SUFFIX);
-        watch.then(|| {
+        is_watch(&sub.name).then(|| {
             let keyed = self.effective_class(sub) == WatchClass::Keyed;
             let alone = keyed.then_some(sub.principal.as_str());
             poll_key(alone, &sub.name, &sub.arguments)
         })
+    }
+
+    fn pin_rows(&self, store: &super::store::Store) {
+        self.pin_classes(store);
     }
 
     fn watch_class(&self, name: &str) -> Option<WatchClass> {
@@ -470,12 +454,14 @@ impl EventSource for WatchSource {
         name: &str,
         arguments: &Value,
     ) -> Result<(), RpcError> {
-        // A stored row's class governs, whatever the catalogue says now, so
-        // a held watch restarts under its own class (MIK-8122).
-        let class = self
-            .stored_class(principal, name, arguments)
-            .or_else(|| self.watch_class(name))
-            .ok_or_else(RpcError::not_found)?;
+        // The key carries its class (a keyed key names its principal), and a
+        // stored row's key is its own class's: a held watch restarts under
+        // its own class whatever the catalogue says now (MIK-8122).
+        let class = if key == poll_key(None, name, arguments) {
+            WatchClass::Free
+        } else {
+            WatchClass::Keyed
+        };
         let options = options(arguments)?;
         let shared = class == WatchClass::Free;
         let mut pollers = self.pollers.lock();

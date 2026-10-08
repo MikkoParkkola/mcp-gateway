@@ -103,8 +103,12 @@ impl EventsHub {
                 .filter(|s| self.store.held(&s.id).is_none())
                 // A keyed occurrence belongs to its key's holders alone (MIK-7811).
                 .filter(|s| {
+                    // A row's own key first: a held watch keeps its class's
+                    // key whatever the catalogue says now (MIK-8122).
                     event.lifecycle_key.as_deref().is_none_or(|key| {
-                        source.lifecycle_key(&s.principal, &s.name, &s.arguments) == key
+                        source.row_key(s).unwrap_or_else(|| {
+                            source.lifecycle_key(&s.principal, &s.name, &s.arguments)
+                        }) == key
                     })
                 })
                 .filter(|s| source.matches(&s.principal, &s.arguments, event))
