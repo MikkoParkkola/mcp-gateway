@@ -667,3 +667,21 @@ async fn a_replacement_directory_with_a_readable_copy_keeps_the_seal() {
         "a new keyed call was admitted while the seal holds"
     );
 }
+
+/// `MIK-8121`: a repaired row whose key admission refuses is taken back out
+/// before anyone can rely on it, and stays sealed for the next sweep.
+#[tokio::test]
+async fn a_refused_repair_is_withdrawn_and_stays_sealed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, rows, _admission, service) = sealed_service(dir.path(), &["k-refused"]).await;
+    let (id, original) = &rows[0];
+    std::fs::write(path.join(format!("{id}.json")), original).unwrap();
+    let (sealed, settled) = service.store.reread_sealed(|_, _| false, |_| None).await;
+    assert_eq!(sealed, 1, "a refused repair lifted the seal");
+    assert!(settled.is_empty());
+    assert!(
+        service.get("oidc:acme:alice", id).is_err(),
+        "a refused repair is still served"
+    );
+    service.close().await.unwrap();
+}

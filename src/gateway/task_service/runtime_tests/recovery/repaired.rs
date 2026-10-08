@@ -51,14 +51,22 @@ async fn a_repaired_row_is_readable_without_a_restart() {
     let operation = operation();
     let representation = representation();
     let admission = fresh_admission();
+    let heard = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
     let (restored, executor) = timeout(
         BUDGET,
-        open_runtime_with_admission(
+        crate::gateway::task_service::open_runtime_with_recovery(
             &dir,
             1,
             StoreLimits::default(),
             test_subscriptions(),
             Arc::clone(&admission),
+            &[],
+            |_, executor| {
+                let heard = Arc::clone(&heard);
+                executor.on_publication(Arc::new(move |id, _, _, _| {
+                    heard.lock().push(id.to_owned());
+                }));
+            },
         ),
     )
     .await
@@ -99,6 +107,14 @@ async fn a_repaired_row_is_readable_without_a_restart() {
         ) {
             problems.push(format!(
                 "{}: the repaired key no longer answers as its own",
+                row.key
+            ));
+        }
+    }
+    for row in seeded.iter().filter(|row| row.expected.is_some()) {
+        if !heard.lock().contains(&row.id) {
+            problems.push(format!(
+                "{}: settled on repair but never announced",
                 row.key
             ));
         }
