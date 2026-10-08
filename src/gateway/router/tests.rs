@@ -108,10 +108,12 @@ async fn test_task_runtime(
 /// The subscription registry a fixture shares between `AppState` and the
 /// executor's publication seam. Two registries would publish a task's
 /// notifications to a listener set no client is on. Re-validates against the
-/// fixture's own credentials, so it agrees with the request middleware.
+/// fixture's own credentials and agent registry, so it agrees with the
+/// request middleware.
 fn test_subscriptions(
     auth_config: &Arc<ResolvedAuthConfig>,
     key_server: Option<Arc<crate::key_server::KeyServer>>,
+    agent_auth: &AgentAuthState,
 ) -> Arc<crate::gateway::subscription_registry::SubscriptionRegistry> {
     let authorizer = crate::gateway::auth::AuthState {
         auth_config: Arc::clone(auth_config),
@@ -121,6 +123,7 @@ fn test_subscriptions(
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
+        agent_auth: agent_auth.clone(),
     };
     Arc::new(crate::gateway::subscription_registry::SubscriptionRegistry::new(64, authorizer))
 }
@@ -154,7 +157,7 @@ async fn test_router_app_state_with(
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None);
+    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
@@ -213,7 +216,7 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, temp
     let agent_auth = AgentAuthState::new(true, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None);
+    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
@@ -288,7 +291,7 @@ async fn test_router_app_state_with_meta(
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None);
+    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
@@ -378,7 +381,7 @@ async fn test_router_app_state_minting_without_route_audit(
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None);
+    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
@@ -469,7 +472,7 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None);
+    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
     let store_dir = tempfile::tempdir().expect("a private configured task-store directory");
     let (task_service, task_executor) = crate::gateway::task_service::open_runtime_with_admission(
         &store_dir.path().join("tasks"),

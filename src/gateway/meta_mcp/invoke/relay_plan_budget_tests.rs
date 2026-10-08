@@ -21,7 +21,7 @@ async fn a_plan_stages_a_bounded_total_before_capping_its_steps() {
     let ((), _staged) = meta
         .collecting_staged(async {
             for text in &steps {
-                plan_step(async {
+                plan_step(None, async {
                     let who = RelayKey::new("alice", true);
                     meta.stage_relay_receipt(who, ("alpha", "read"), &text_result(text));
                 })
@@ -46,7 +46,7 @@ async fn a_plan_past_its_staging_bound_drops_and_counts_receipts() {
     let ((), staged) = meta
         .collecting_staged(async {
             for _ in 0..30 {
-                plan_step(async {
+                plan_step(None, async {
                     let who = RelayKey::new("alice", true);
                     meta.stage_relay_receipt(who, ("alpha", "read"), &empties);
                 })
@@ -68,7 +68,7 @@ async fn a_plan_over_both_bounds_is_counted_once() {
     let ((), staged) = meta
         .collecting_staged(async {
             for _ in 0..30 {
-                plan_step(async {
+                plan_step(None, async {
                     let who = RelayKey::new("alice", true);
                     meta.stage_relay_receipt(who, ("alpha", "read"), &empties);
                 })
