@@ -332,3 +332,34 @@ impl MetaMcp {
         EgressOutcome::Delivered
     }
 }
+
+/// A frame cleared for a client writer. `build_http_response` takes only this,
+/// so every exit decides: a frame the egress scan saw, or one the gateway
+/// built with no backend text in it.
+#[must_use]
+pub(crate) struct Egressed(JsonRpcResponse);
+
+impl Egressed {
+    /// A frame the egress scan marked. One it never saw is refused rather
+    /// than written, so an exit that skips the scan fails closed.
+    pub(crate) fn of(frame: JsonRpcResponse) -> Self {
+        if frame.egress_scanned {
+            return Self(frame);
+        }
+        tracing::error!("a frame that skipped the egress scan reached a writer; refused");
+        Self(JsonRpcResponse::delivery_refusal_error(
+            frame.id, -32600, REFUSAL,
+        ))
+    }
+
+    /// A frame the gateway built carrying no backend text: a refusal before
+    /// dispatch, a parse or version error, a gateway notice.
+    pub(crate) fn gateway_own(frame: JsonRpcResponse) -> Self {
+        Self(frame)
+    }
+
+    /// The frame to write.
+    pub(crate) fn frame(&self) -> &JsonRpcResponse {
+        &self.0
+    }
+}

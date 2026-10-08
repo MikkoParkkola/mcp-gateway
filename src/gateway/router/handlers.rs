@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Axum request handlers for the MCP gateway.
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use std::sync::Arc;
 
 use axum::{
@@ -179,7 +180,7 @@ fn get_era_refusal(state: &AppState, headers: &HeaderMap) -> Option<axum::respon
     // refuses this same version, so it gets the POST path's answer instead.
     Some(
         build_http_response(
-            &unsupported_version_error(None, version, modern_enabled),
+            &Egressed::gateway_own(unsupported_version_error(None, version, modern_enabled)),
             StatusCode::BAD_REQUEST,
         )
         .into_response(),
@@ -363,7 +364,7 @@ pub(super) async fn mcp_delete_handler(
 /// Deprecated SSE endpoint handler - surfaces a clear error instead of silent 404
 pub(super) async fn sse_deprecated_handler() -> impl IntoResponse {
     build_http_response(
-        &JsonRpcResponse::error_with_data(
+        &Egressed::gateway_own(JsonRpcResponse::error_with_data(
             None,
             -32600,
             "SSE transport is deprecated. Use Streamable HTTP (POST /mcp) instead.",
@@ -371,7 +372,7 @@ pub(super) async fn sse_deprecated_handler() -> impl IntoResponse {
                 "migration": "In settings.json, change: \"type\": \"sse\" -> \"type\": \"http\" and \"url\": \"http://localhost:39400/sse\" -> \"url\": \"http://localhost:39400/mcp\"",
                 "spec": "https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http"
             }),
-        ),
+        )),
         StatusCode::GONE,
     )
 }

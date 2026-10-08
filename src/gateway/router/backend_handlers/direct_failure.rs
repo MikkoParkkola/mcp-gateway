@@ -10,6 +10,7 @@
 //! failure's JSON-RPC error and adds `{error_code, retry}` so the caller knows
 //! whether a retry presents a newer token.
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::Json;
 use axum::http::StatusCode;
 use serde_json::Value;
@@ -89,7 +90,7 @@ impl DirectFailure<'_> {
         // The account refusal re-reads the failure's text, so it answers only
         // a failure the screen left as it was.
         if screen == EgressOutcome::Refused {
-            return build_http_response(&response, StatusCode::OK);
+            return build_http_response(&Egressed::of(response), StatusCode::OK);
         }
         if screen == EgressOutcome::Delivered && marked(&error).is_some() {
             let text = refusal_text(&error);
@@ -99,6 +100,6 @@ impl DirectFailure<'_> {
                 .direct_refusal(Some(self.id), text, Some(error), self.identity)
                 .await;
         }
-        build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
+        build_http_response(&Egressed::of(response), StatusCode::INTERNAL_SERVER_ERROR)
     }
 }

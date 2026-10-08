@@ -9,6 +9,7 @@
 //! too), then the idempotency guard, then the signing nonce (after every
 //! refusal, so a refused call consumes none, MIK-7698).
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::http::StatusCode;
 use serde_json::Value;
 
@@ -209,7 +210,7 @@ pub(super) async fn admit<'a>(
         && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call, preflight.signing_scope)
     {
         return Err(build_http_response(
-            &refusal(Some(id.clone()), &e),
+            &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
             StatusCode::OK,
         ));
     }
@@ -244,7 +245,7 @@ pub(super) async fn admit<'a>(
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
             let mut response = super::cached_error_response(Some(id.clone()), &error);
             replay_scan(state, (&admitted.call, envelope), client, &mut response);
-            return Err(build_http_response(&response, StatusCode::OK));
+            return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
         }
         Some(crate::idempotency::GuardOutcome::Proceed(reservation)) => {
             admitted.idem_reservation = Some(reservation);
@@ -273,7 +274,10 @@ async fn forward_sanitized(
     let admission = match DirectRouteGuards::before_dispatch(&state.meta_mcp, call) {
         Ok(admission) => admission,
         Err(e) => {
-            return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
+            return build_http_response(
+                &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
+                StatusCode::OK,
+            );
         }
     };
     // Forward the sanitized params to the backend
@@ -341,7 +345,7 @@ async fn forward_plain(
             Ok(admission) => admission,
             Err(e) => {
                 return Err(build_http_response(
-                    &refusal(Some(id.clone()), &e),
+                    &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
                     StatusCode::OK,
                 ));
             }
@@ -484,7 +488,7 @@ fn deliver_tail(
             stamps,
         );
     }
-    build_http_response(&response, StatusCode::OK)
+    build_http_response(&Egressed::of(response), StatusCode::OK)
 }
 
 /// Answer a dispatch that failed, settling the reservation (`answer` consumes

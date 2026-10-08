@@ -3,6 +3,7 @@
 //! R2's undeclared-key check on the direct route (MIK-7570.SCHEMA.1), with
 //! F13's fetch of the caller's own catalogue when its slot is cold.
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
@@ -55,7 +56,7 @@ pub(super) async fn key_refusal(
                 failed.client,
                 &mut response,
             );
-            Some(build_http_response(&response, StatusCode::OK))
+            Some(build_http_response(&Egressed::of(response), StatusCode::OK))
         }
         Err(e) => Some(failed.clone().answer(None, e, &call).await),
     }

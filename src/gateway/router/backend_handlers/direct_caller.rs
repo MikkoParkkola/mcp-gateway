@@ -6,6 +6,7 @@
 //! passthrough, propagation or idempotency work. The order of every check and
 //! every early return is the order `backend_handler_inner` always had.
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::{Json, http::HeaderMap, http::StatusCode};
 use serde_json::Value;
 
@@ -229,7 +230,7 @@ pub(super) async fn read_envelope(
         Ok(parsed) => parsed,
         Err(response) => {
             return Err(super::super::helpers::build_http_response(
-                &response,
+                &Egressed::gateway_own(response),
                 StatusCode::BAD_REQUEST,
             ));
         }
@@ -446,7 +447,10 @@ pub(super) async fn forward_notification(
             let screen = (&call, envelope.method.as_str());
             let client = caller.client.as_ref();
             super::super::direct_guards::scan_direct_egress(state, screen, client, &mut response);
-            super::super::helpers::build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
+            super::super::helpers::build_http_response(
+                &Egressed::of(response),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
         }
     }
 }

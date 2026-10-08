@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Pure utility functions shared by router handlers.
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::{
     Json,
     http::{HeaderValue, StatusCode},
@@ -125,11 +126,8 @@ pub(super) fn build_error_response_with_data(
 }
 
 /// Build a JSON-RPC HTTP response body without attaching a session header.
-pub(super) fn build_http_response(
-    rpc: &JsonRpcResponse,
-    status: StatusCode,
-) -> (StatusCode, Json<Value>) {
-    let body = rpc.to_value_lossy();
+pub(super) fn build_http_response(rpc: &Egressed, status: StatusCode) -> (StatusCode, Json<Value>) {
+    let body = rpc.frame().to_value_lossy();
     (status, Json(body))
 }
 
@@ -140,7 +138,8 @@ pub(super) fn build_http_error_response(
     message: impl Into<String>,
     status: StatusCode,
 ) -> (StatusCode, Json<Value>) {
-    build_http_response(&JsonRpcResponse::error(id, code, message.into()), status)
+    let frame = JsonRpcResponse::error(id, code, message.into());
+    build_http_response(&Egressed::gateway_own(frame), status)
 }
 
 /// Build a bodiless `202 Accepted` with the session header. Streamable HTTP
