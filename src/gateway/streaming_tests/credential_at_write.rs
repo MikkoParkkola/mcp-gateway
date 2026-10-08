@@ -39,7 +39,10 @@ async fn open(
             &crate::gateway::session_id::SessionOwner::Anonymous,
             credential,
         )
-        .to_string();
+        // The raw id the session map is keyed on, as the GET /mcp handler
+        // passes it; `Display` prints only the fingerprint.
+        .expose_secret()
+        .to_owned();
     let sse = create_sse_response(
         Arc::clone(multiplexer),
         id.clone(),
