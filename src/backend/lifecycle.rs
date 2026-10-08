@@ -112,6 +112,8 @@ impl Backend {
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),
             #[cfg(test)]
+            era_decision_gate: parking_lot::Mutex::new(None),
+            #[cfg(test)]
             oauth_test_seam: parking_lot::Mutex::new(None),
         }
     }
@@ -325,11 +327,13 @@ impl Backend {
     /// Wait at a test's [`super::MarkWindowGate`], when one is set.
     #[cfg(test)]
     async fn hold_in_mark_window(&self) {
-        let gate = self.mark_window_gate.lock().clone();
-        if let Some(gate) = gate {
-            gate.reached.notify_one();
-            gate.release.notified().await;
-        }
+        hold_at(&self.mark_window_gate).await;
+    }
+
+    /// Wait at a test's era-decision gate, when one is set (MIK-8056).
+    #[cfg(test)]
+    async fn hold_at_era_decision(&self) {
+        hold_at(&self.era_decision_gate).await;
     }
 
     /// The same marking for a transport built under `built_under` before it
@@ -457,6 +461,8 @@ impl Backend {
                 // to ask, never what the answer means.
                 let peer: Arc<dyn Transport> = transport.clone();
                 self.resolve_era(&peer, entry).await;
+                #[cfg(test)]
+                self.hold_at_era_decision().await;
                 // Only a determined `Modern` skips the handshake. A legacy
                 // answer, an unrecognised error and silence all read as `None`
                 // or `Legacy` here, which is the fallback the RFC requires —
@@ -536,6 +542,17 @@ impl Backend {
 
 /// The configured transport was refused and the other one answered; say which
 /// value would skip the refused try.
+/// Wait at the test gate held in `slot`, when one is set: signal `reached`,
+/// then wait for `release`.
+#[cfg(test)]
+async fn hold_at(slot: &parking_lot::Mutex<Option<Arc<super::MarkWindowGate>>>) {
+    let gate = slot.lock().clone();
+    if let Some(gate) = gate {
+        gate.reached.notify_one();
+        gate.release.notified().await;
+    }
+}
+
 fn warn_if_configured_transport_refused(
     backend: &str,
     configured: Option<bool>,
