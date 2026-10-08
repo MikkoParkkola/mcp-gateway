@@ -282,17 +282,18 @@ async fn remove_backend(
         return config_path_unavailable().into_response();
     };
 
-    // Read inside the edit, which runs under the config lock: the text this
-    // removal actually changed, not one another writer replaced meanwhile.
-    let mut before = String::new();
+    // Worked out inside the edit, which runs under the config lock, from the
+    // text this removal splices: never another writer's change.
+    let mut gone = Vec::new();
     let mutation = mutate_config_and_reload_with(
         config_path,
         state.meta_mcp.reload_context().as_deref(),
         CommentLoss::Refuse,
         |config| {
-            before = std::fs::read_to_string(config_path).unwrap_or_default();
             remove_backend_config(config, &name)
-                .map_err(|_| (StatusCode::NOT_FOUND, format!("Backend '{name}' not found")))
+                .map_err(|_| (StatusCode::NOT_FOUND, format!("Backend '{name}' not found")))?;
+            gone = crate::config_persistence::comments_a_write_drops(config_path, config);
+            Ok::<(), (StatusCode, String)>(())
         },
     )
     .await;
@@ -309,8 +310,6 @@ async fn remove_backend(
 
     // A removed entry takes its own comments with it (MIK-8051): name the
     // lines, never their text (a `#` inside a quoted value can be a secret).
-    let after = std::fs::read_to_string(config_path).unwrap_or_default();
-    let gone = crate::config_persistence::comments::dropped_comment_lines(&before, &after);
     if gone.is_empty() {
         return (StatusCode::NO_CONTENT, Json(json!({}))).into_response();
     }
