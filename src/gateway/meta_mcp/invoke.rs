@@ -168,6 +168,9 @@ impl MetaMcp {
         // this strands the insert under the epoch this call was authorized
         // in. A second load at the write site is the 4.g race.
         let policy_epoch = self.policy_epoch.load(Ordering::Acquire);
+        // MIK-7991: this call's own gateway writes start here, apart from an
+        // earlier plan step's in the same delivery; stored with its answer.
+        let writes_mark = gateway_writes::mark();
 
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
@@ -206,7 +209,7 @@ impl MetaMcp {
         // suffix, so their keys are byte-identical to before.
         // G4: the arm keys on the caller, never on the "" every modern caller
         // shares; a keyless caller gets the control arm and is not counted.
-        let arm_key = caller.experiment_key(session_id);
+        let arm_key = caller.experiment_key();
         let projection_key_suffix =
             crate::projection::projection_key_suffix(self.projection_mode, arm_key);
 
@@ -410,6 +413,8 @@ impl MetaMcp {
         })?;
         #[cfg(feature = "cost-governance")]
         let cost_warnings = std::mem::take(&mut admission.warnings);
+        #[cfg(not(feature = "cost-governance"))]
+        let admission = dispatch_guards::Admission::default();
 
         let prompt_cache_key: Option<String> = derive_prompt_cache_key(args, session_id);
 
@@ -481,10 +486,10 @@ impl MetaMcp {
             caller.scope(),
             backend.clone(),
             &chain_slot,
+            &admission,
         ))
         .await;
-        // The spend is recorded: give the reservation back.
-        #[cfg(feature = "cost-governance")]
+        // The spend is settled; an unsettled reservation is given back here.
         drop(admission);
 
         // A raw-receipt chain refusal is the answer, not a tool failure (D3).
@@ -653,6 +658,7 @@ impl MetaMcp {
 
         #[cfg(feature = "cost-governance")]
         self.inject_cost_advice(&mut result, &cost_warnings, tool, caller, session_id);
+        let written = gateway_writes::snapshot_since(writes_mark);
 
         self.store_response(
             caller,
@@ -664,11 +670,11 @@ impl MetaMcp {
             &arguments,
             (&projection_key_suffix, &caller_principal),
             (&profile.name, policy_epoch),
-            &result,
+            (&result, &written),
         );
 
         if let Some(reservation) = idem_reservation.as_mut()
-            && reservation.complete_read(&result, self.dispatch_reading(args))
+            && reservation.complete_read(&result, (self.dispatch_reading(args), written))
         {
             debug!(
                 server,

@@ -168,7 +168,7 @@ where
     A: std::future::Future<Output = ()> + Send + 'static,
     B: std::future::Future<Output = ()> + Send + 'static,
 {
-    use crate::events::test_pause::within;
+    use crate::test_pause::within;
     let (reached, release) = hub.before_receipts.arm();
     let first = tokio::spawn(first);
     within("the first burial's pause", reached.notified()).await;

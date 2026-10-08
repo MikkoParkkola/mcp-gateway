@@ -79,14 +79,10 @@ A cleartext origin does not become secure by waiting.
 no reference to `OAuthClient` or `oauth`, so there is no sibling transport on
 which `allow_cleartext_credentials` still governs a gateway-minted bearer token.
 
-*The authorization server's own token endpoint is not covered.* Nothing checks
-the scheme of the `token_endpoint` an authorization server advertises in its
-metadata (`src/oauth/metadata.rs`), so an `https` AS that names an `http://`
-token endpoint would still put client credentials and the refresh token on a
-cleartext hop. That is a different hop, a different credential and a different
-layer from #90/#91, and this change neither creates nor worsens it. Recorded
-here as residual risk and escalated rather than fixed inside this change; the
-repair is a scheme check in the OAuth client's discovery and refresh path.
+*The authorization server's own token endpoint* is covered since: every OAuth request picks its
+client through `client_for`, or `refresh_client_for` for a refresh-token exchange, and each
+refuses a cleartext URL off this machine at send time, whatever the authorization server
+advertised (`src/oauth/client/destination.rs`).
 
 *A hot reload that corrects the URL does not re-warm the backend.* Raised by the
 second code-review leg and confirmed at source: `retry_warm_start_attempts`

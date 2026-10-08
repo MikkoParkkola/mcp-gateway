@@ -70,17 +70,22 @@ impl SyncLease {
     ) {
         let read = crate::security::tenant_reads::in_read_scope()
             .then(|| crate::security::tenant_reads::noted().unwrap_or_default());
-        self.complete_delivery_read(response, signing, read);
+        let writes = crate::gateway::gateway_writes::recorded();
+        self.complete_delivery_read(response, signing, (read, writes));
     }
 
     /// [`Self::complete_delivery`] for a caller past its read scope: `read` is
-    /// what the scope noted (`None` when no scope was open). The stdio route
-    /// settles after its judge, outside the scope (MIK-7920).
+    /// what the scope noted (`None` when no scope was open) and `writes` what
+    /// the gateway wrote into the response (MIK-7991). The stdio route settles
+    /// after its judge, outside the scope (MIK-7920).
     pub(crate) fn complete_delivery_read(
         self,
         response: &JsonRpcResponse,
         signing: Option<&super::signing::SigningInvocationContext>,
-        read: Option<crate::security::tenant_reads::ReadAttribution>,
+        (read, writes): (
+            Option<crate::security::tenant_reads::ReadAttribution>,
+            crate::gateway::gateway_writes::WriteRecord,
+        ),
     ) {
         let (lease, dispatches) = self.state.into_inner();
         let audit = self.audit.into_inner();
@@ -117,6 +122,7 @@ impl SyncLease {
             chain,
             audit,
             read,
+            writes,
         };
         lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null));
     }
@@ -138,6 +144,13 @@ struct StoredDelivery {
     /// restored into a replay's read scope; absent, a replay is unread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     read: Option<crate::security::tenant_reads::ReadAttribution>,
+    /// MIK-7991: the members the gateway wrote into `response`, restored
+    /// into a replay's record so its receipt leaves them out; absent, none.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::gateway::gateway_writes::WriteRecord::is_empty"
+    )]
+    writes: crate::gateway::gateway_writes::WriteRecord,
 }
 
 /// #2472: the first execution's invocation-record outcome and response hash,
@@ -223,6 +236,7 @@ enum StoredChain {
 fn stored_response(bytes: &[u8]) -> Option<(JsonRpcResponse, Option<ReplayAudit>)> {
     if let Ok(stored) = serde_json::from_slice::<StoredDelivery>(bytes) {
         crate::security::tenant_reads::note_restored(stored.read.as_ref());
+        crate::gateway::gateway_writes::restore(&stored.writes);
         let mut response: JsonRpcResponse = serde_json::from_value(stored.response).ok()?;
         if stored.chain == StoredChain::Backend {
             response.chain_source = crate::protocol::ChainSource::Replay;
@@ -508,7 +522,7 @@ impl MetaMcp {
         let owner_principal = caller.owner_principal();
         let retry = caller.retry;
         // The arm the dispatch will use, so a retry's representation names it.
-        let arm_key = caller.experiment_key(session);
+        let arm_key = caller.experiment_key();
         if let Some((server, tool, mut operation_arguments)) =
             self.check_target_policy(caller, tool_name, arguments, session)?
         {

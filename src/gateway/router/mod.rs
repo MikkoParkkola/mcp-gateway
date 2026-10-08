@@ -84,6 +84,8 @@ mod direct_guards_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
 #[cfg(test)]
+mod direct_modern_shape_tests;
+#[cfg(test)]
 mod direct_notification_credential_tests;
 #[cfg(test)]
 mod direct_notification_refusal_tests;
@@ -133,6 +135,8 @@ mod r2_input_keys_tests;
 mod replay_policy_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
+#[cfg(test)]
+mod session_fp_once_tests;
 /// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.
 #[cfg(all(test, feature = "metrics"))]
 mod signing_nonce_order_tests;

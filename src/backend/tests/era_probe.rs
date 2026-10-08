@@ -330,7 +330,7 @@ async fn row_9b_positive_evidence_off_the_probe_path_reclassifies_the_peer() {
         "supportedVersions": [crate::protocol::meta::MODERN_VERSIONS[0]],
     })));
     let transport = Arc::clone(&mock) as Arc<dyn Transport>;
-    backend.resolve_era(&transport).await;
+    backend.resolve_era_for_test(&transport).await;
 
     assert_eq!(
         backend.cached_era().await,

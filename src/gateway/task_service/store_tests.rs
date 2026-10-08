@@ -25,8 +25,10 @@ const FOREIGN_NAME: &str = "task-00000000-0000-4000-8000-000000000000";
 mod adapter_marker;
 mod admission;
 mod durability;
+mod fallback_room;
 mod input_round;
 mod qualification;
+mod skipped;
 mod support;
 mod targets;
 #[cfg(windows)]
@@ -199,8 +201,10 @@ async fn cancel_01_first_terminal_commit_wins_in_both_orders_and_after_reopen() 
 }
 
 #[tokio::test]
-async fn store_04_corrupt_rebound_or_unrestorable_records_refuse_without_reset() {
-    for corruption in ["syntax", "version", "duplicate", "rebound", "snapshot"] {
+async fn store_04_newer_rebound_or_duplicate_records_refuse_without_reset() {
+    // Unparseable and unrestorable rows are skipped instead (MIK-8023,
+    // store_tests/skipped.rs).
+    for corruption in ["version", "duplicate", "rebound"] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tasks");
         let store = open(&path).await;
@@ -217,9 +221,7 @@ async fn store_04_corrupt_rebound_or_unrestorable_records_refuse_without_reset()
         }
         store.close().await.unwrap();
         let record = path.join(format!("{}.json", task.id()));
-        if corruption == "syntax" {
-            fs::write(&record, b"{broken").unwrap();
-        } else if corruption == "rebound" {
+        if corruption == "rebound" {
             // Moving an intact record under another legal task name must not
             // rebind it to that name: the record carries its own identity.
             fs::rename(&record, path.join(format!("{FOREIGN_NAME}.json"))).unwrap();
@@ -227,10 +229,6 @@ async fn store_04_corrupt_rebound_or_unrestorable_records_refuse_without_reset()
             let mut value: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
             if corruption == "version" {
                 value["version"] = json!(999);
-            } else if corruption == "snapshot" {
-                // Settled before it was created: legal JSON the model refuses to
-                // restore. The store must propagate that refusal, not accept it.
-                value["model"]["task"]["lastUpdatedAt"] = json!("2026-09-06T00:00:00Z");
             } else {
                 value["admission"]["identityDigest"] = json!(format!("{:064x}", 2));
             }

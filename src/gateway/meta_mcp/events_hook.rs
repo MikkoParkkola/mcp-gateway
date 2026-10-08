@@ -59,27 +59,45 @@ impl MetaMcp {
                     }
                 }
             }
-            // A reload that arrived mid-scan was held: apply it before the
-            // catalogue is reconciled against the routes.
-            if let (Some(capabilities), Some(registry)) = (&capabilities, &registry)
-                && capabilities.take_held_reload()
-            {
-                apply_webhook_refresh(&hub, capabilities, registry);
-            }
-            // The loader's own outcome, read once the scan is over.
-            let scan = if capabilities
-                .as_ref()
-                .is_none_or(|c| c.initial_scan_loaded_every_directory())
-            {
-                crate::events::CatalogueScan::Complete
-            } else {
-                crate::events::CatalogueScan::Partial
-            };
-            // Disk work, off the async workers; a removal that failed is
-            // retried and logged, the worker held meanwhile.
-            hub.reconcile_until_done(scan, std::time::Duration::from_secs(5))
+            // The routes the scan registered may predate a reload that landed
+            // during it, announced or not (MIK-7944): refresh them from the
+            // catalogue as it is now, under the reconcile's own gate, and
+            // reconcile against that one snapshot. A partial snapshot, or a
+            // refresh refused for narrowing a live type, withdraws no webhook
+            // type. Disk work, off the async workers; a removal that failed is
+            // retried from the stored state, the worker held meanwhile.
+            let retry = std::time::Duration::from_secs(5);
+            let first = startup_pass(Pass::First, &hub, capabilities.clone(), registry.clone());
+            hub.reconcile_until_done(Pass::First.label(), first, retry)
+                .await;
+            // Unoffered webhook types wait out the grace period: a reload the
+            // scan did not see may still offer them (MIK-8027).
+            tokio::time::sleep(withdraw_grace()).await;
+            let deferred = startup_pass(Pass::Deferred, &hub, capabilities, registry);
+            hub.reconcile_until_done(Pass::Deferred.label(), deferred, retry)
                 .await;
         });
+    }
+
+    /// Tests only: run the deferred startup webhook withdraw now (MIK-8027)
+    /// and wait for it, instead of after the grace period.
+    #[cfg(test)]
+    pub(crate) async fn run_deferred_webhook_withdraw(&self) {
+        let Some(hub) = self.events().cloned() else {
+            return;
+        };
+        let pass = startup_pass(
+            Pass::Deferred,
+            &hub,
+            self.get_capabilities(),
+            self.get_webhook_registry(),
+        );
+        hub.reconcile_until_done(
+            Pass::Deferred.label(),
+            pass,
+            std::time::Duration::from_millis(10),
+        )
+        .await;
     }
 
     /// The events hub, when events are on for this transport.
@@ -249,22 +267,186 @@ impl MetaMcp {
 }
 
 /// Re-register the webhook routes of `capabilities`, unless the reload
-/// narrows a live event type (T52).
+/// narrows a live event type (T52), then delete the subscriptions to webhook
+/// types the catalogue no longer offers. A partial load keeps the types of
+/// the capabilities it could not read (MIK-8028); the next complete load
+/// withdraws what is still absent.
 fn apply_webhook_refresh(
     hub: &Arc<EventsHub>,
     capabilities: &crate::capability::CapabilityBackend,
     registry: &Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>,
 ) {
     let _gate = hub.catalogue_lock();
-    match crate::events::refresh_webhooks(registry, &capabilities.list_capabilities()) {
-        Ok(removed) => {
-            hub.withdraw(&removed);
+    let Some(refreshed) = refresh_from_snapshot(capabilities, registry) else {
+        return;
+    };
+    let kept = |name: &str| {
+        !refreshed.complete
+            && !refreshed
+                .present
+                .iter()
+                .any(|cap| name.starts_with(&format!("webhook.{cap}.")))
+    };
+    let withdrawn = if hub.webhook_withdrawals_armed() {
+        hub.withdraw_unoffered_webhooks(&kept)
+    } else {
+        // Inside the startup grace period (MIK-8027): only the types this
+        // reload removed from the routes. A type unoffered since startup is
+        // left to the deferred pass.
+        let gone: Vec<String> = refreshed
+            .removed
+            .iter()
+            .filter(|name| !kept(name))
+            .cloned()
+            .collect();
+        let withdrawn = hub.withdraw(&gone);
+        if withdrawn && !gone.is_empty() {
+            tracing::info!(
+                withdrawn = gone.len(),
+                "events: a reload inside the startup grace period withdrew the types it removed"
+            );
         }
-        Err(event) => tracing::error!(
-            %event,
-            "capability reload not applied to webhook routes: it removes a filter or \
-             mapped field of a live event type; the previous routes stay live"
-        ),
+        withdrawn
+    };
+    if !withdrawn {
+        tracing::warn!("events: a capability reload could not remove a withdrawn subscription");
+    }
+}
+
+/// Which startup reconcile pass runs.
+#[derive(Clone, Copy)]
+enum Pass {
+    /// Right after the scan: withdraws no webhook type the catalogue does
+    /// not offer.
+    First,
+    /// After the grace period: from now on an unoffered webhook type is
+    /// withdrawn (MIK-8027).
+    Deferred,
+}
+
+impl Pass {
+    /// The name its retry logs carry.
+    fn label(self) -> &'static str {
+        match self {
+            Self::First => "first",
+            Self::Deferred => "deferred",
+        }
+    }
+}
+
+/// One startup reconcile pass, as the refresh `reconcile_until_done` runs
+/// under the hub's catalogue gate.
+fn startup_pass(
+    pass: Pass,
+    hub: &Arc<EventsHub>,
+    capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
+    registry: Option<Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>>,
+) -> Arc<dyn Fn() -> crate::events::CatalogueScan + Send + Sync> {
+    let hub = Arc::clone(hub);
+    Arc::new(move || {
+        if matches!(pass, Pass::Deferred) {
+            hub.arm_webhook_withdrawals();
+        }
+        startup_refresh(&hub, capabilities.as_deref(), registry.as_ref())
+    })
+}
+
+/// How long the startup reconcile leaves unoffered webhook types alone
+/// (MIK-8027). It must outlast the capability watcher's 0.5 s debounce, its
+/// pin scan and a reload, which reads YAML files only: together milliseconds
+/// to a few seconds. Writes that keep arriving restart the debounce, so a
+/// reload can still land later: MIK-8057 tracks that defect.
+const WITHDRAW_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// [`WITHDRAW_GRACE`]. Debug builds take an override in milliseconds from
+/// `MCP_GATEWAY_TEST_EVENTS_WITHDRAW_GRACE_MS`, so a process test need not
+/// wait 30 s; release builds compile it out, and the release job greps for
+/// its name.
+#[cfg(debug_assertions)]
+fn withdraw_grace() -> std::time::Duration {
+    std::env::var("MCP_GATEWAY_TEST_EVENTS_WITHDRAW_GRACE_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map_or(WITHDRAW_GRACE, std::time::Duration::from_millis)
+}
+
+#[cfg(not(debug_assertions))]
+fn withdraw_grace() -> std::time::Duration {
+    WITHDRAW_GRACE
+}
+
+/// The startup reconcile's refresh, run under its catalogue gate: the routes
+/// follow the catalogue as it is now (MIK-7944), and only a whole catalogue
+/// whose refresh applied lets the reconcile withdraw webhook types.
+fn startup_refresh(
+    hub: &EventsHub,
+    capabilities: Option<&crate::capability::CapabilityBackend>,
+    registry: Option<&Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>>,
+) -> crate::events::CatalogueScan {
+    use crate::events::CatalogueScan::{Complete, Partial};
+    match (capabilities, registry) {
+        (Some(capabilities), Some(registry)) => {
+            // Covered by this refresh, held or not.
+            let _ = capabilities.take_held_reload();
+            match refresh_from_snapshot(capabilities, registry) {
+                Some(refreshed) if refreshed.complete => {
+                    // A route this refresh removed was registered by the
+                    // scan and taken away by a reload: withdrawn now, as a
+                    // reload inside the grace period withdraws what it
+                    // removes, so a narrower restore cannot inherit its
+                    // subscriptions (MIK-8027). A failure is left to the
+                    // deferred pass, which withdraws by state.
+                    if !hub.withdraw(&refreshed.removed) {
+                        tracing::warn!(
+                            "events: the startup refresh could not remove a withdrawn \
+                             subscription; the deferred pass retries it"
+                        );
+                    }
+                    Complete
+                }
+                _ => Partial,
+            }
+        }
+        (Some(capabilities), None) if !capabilities.initial_scan_loaded_every_directory() => {
+            Partial
+        }
+        _ => Complete,
+    }
+}
+
+/// One catalogue snapshot applied to the webhook routes.
+struct Refreshed {
+    /// Every directory loaded.
+    complete: bool,
+    /// The event types the refresh removed from the routes.
+    removed: Vec<String>,
+    /// The capabilities the snapshot holds.
+    present: Vec<String>,
+}
+
+/// Under the catalogue gate the caller holds: re-register the webhook routes
+/// from one snapshot of the catalogue and its completeness. `None` when the
+/// refresh is refused because it narrows a live event type (T52); the
+/// previous routes then stay live and nothing is withdrawn.
+fn refresh_from_snapshot(
+    capabilities: &crate::capability::CapabilityBackend,
+    registry: &Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>,
+) -> Option<Refreshed> {
+    let (catalogue, complete) = capabilities.catalogue_snapshot();
+    match crate::events::refresh_webhooks(registry, &catalogue) {
+        Ok(removed) => Some(Refreshed {
+            complete,
+            removed,
+            present: catalogue.into_iter().map(|cap| cap.name).collect(),
+        }),
+        Err(event) => {
+            tracing::error!(
+                %event,
+                "capability reload not applied to webhook routes: it removes a filter or \
+                 mapped field of a live event type; the previous routes stay live"
+            );
+            None
+        }
     }
 }
 

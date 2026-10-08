@@ -383,6 +383,18 @@ impl AnswerShape {
     }
 }
 
+/// Remove what `stamps` says the gateway stamped on a delivered result: a
+/// modern answer's `_meta` `serverInfo`, written by the shaper over the
+/// backend's. Every receipt copy, on either route, removes it here.
+#[cfg(feature = "firewall")]
+pub(crate) fn strip_gateway_stamps(value: &mut Value, stamps: GatewayStamps) {
+    if stamps == GatewayStamps::Modern
+        && let Some(meta) = value.get_mut("_meta").and_then(Value::as_object_mut)
+    {
+        meta.remove(crate::protocol::meta::KEY_SERVER_INFO);
+    }
+}
+
 /// The backend text of a finally delivered `result`: the gateway's chain
 /// removed, every scope clamped as the wire clamps it (top level and a task
 /// envelope's retained result), a modern answer's `serverInfo` stamp removed,
@@ -395,11 +407,7 @@ fn receipt_copy(result: &Value, stamps: GatewayStamps, shape: AnswerShape) -> Op
     // Clamped as the wire clamps it, so a backend's text in a scope, top
     // level or in a task envelope's retained result, is never digested.
     crate::protocol::cacheable::clamp_delivered_scope(&mut copy);
-    if stamps == GatewayStamps::Modern
-        && let Some(meta) = copy.get_mut("_meta").and_then(Value::as_object_mut)
-    {
-        meta.remove(crate::protocol::meta::KEY_SERVER_INFO);
-    }
+    strip_gateway_stamps(&mut copy, stamps);
     // MIK-7939: what the gateway itself wrote on this call is not backend
     // text, at either layer, and nothing else is removed for its name.
     super::super::gateway_writes::strip(&mut copy, Layer::Answer);

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Fixture and filesystem oracles; no replacement production behavior.
 use super::*;
+use crate::gateway::task_service::record::{TARGET_VERSION, Target};
 use chrono::{DateTime, Utc};
 use std::{
     collections::BTreeMap,
@@ -226,4 +227,88 @@ pub(super) async fn poison(store: &TaskStore, owner: &str, id: &str, revision: u
     );
     store.set_hook(None).await;
     assert!(!store.ready(), "the store is poisoned, not closed");
+}
+
+pub(super) fn record_file(path: &Path, id: &str) -> Value {
+    serde_json::from_slice(&fs::read(path.join(format!("{id}.json"))).unwrap()).unwrap()
+}
+
+pub(super) fn encoded_len(value: &Value) -> usize {
+    serde_json::to_vec(value).unwrap().len()
+}
+
+/// An outcome no record under `limit` can hold, so settling it takes the
+/// bounded fallback.
+pub(super) fn oversize(limit: usize) -> TaskTransition {
+    TaskTransition::Complete(json!({ "content": [{ "type": "text", "text": "q".repeat(limit) }] }))
+}
+
+/// A target the bounded fallback drops (MIK-7651): a live row carrying it is
+/// larger than its own widest fallback, so an exact-cap case lands on the size
+/// check it names rather than on the fallback-room check.
+pub(super) fn padding() -> Vec<Target> {
+    vec![Target {
+        server: "padding".repeat(64),
+        tool: "t".to_owned(),
+    }]
+}
+
+/// [`PreparedTask::for_test`] carrying [`padding`].
+pub(super) fn padded(task: &Task, owner: &str, identity: u64) -> PreparedTask {
+    let mut prepared = PreparedTask::for_test(task, owner, identity);
+    prepared.record.targets = padding();
+    prepared.record.version = prepared.record.version.max(TARGET_VERSION);
+    prepared
+}
+
+/// The bytes of `task`'s freshly created record, and of the bounded failure it
+/// settles as straight after, at its natural revision and settle instant. Both
+/// measured in a store with room for them.
+pub(super) async fn created_and_fallback(task: &Task) -> (usize, Value) {
+    created_and_fallback_of(task, PreparedTask::for_test(task, OWNER, 1)).await
+}
+
+/// [`created_and_fallback`] for a row `prepared` by the caller.
+pub(super) async fn created_and_fallback_of(task: &Task, prepared: PreparedTask) -> (usize, Value) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let room = StoreLimits {
+        record_bytes: 4 * 1024,
+        ..StoreLimits::default()
+    };
+    let store = TaskStore::open(&path, room).await.unwrap();
+    store.create(prepared).await.unwrap();
+    let created = fs::read(path.join(format!("{}.json", task.id())))
+        .unwrap()
+        .len();
+    let settled = store
+        .settle_bounded(
+            OWNER,
+            task.id(),
+            1,
+            (oversize(4 * 1024), Some(Vec::new())),
+            at(1),
+        )
+        .await
+        .unwrap();
+    assert!(
+        settled.output_free,
+        "the fixture outcome takes the fallback"
+    );
+    let fallback = record_file(&path, task.id());
+    store.close().await.unwrap();
+    (created, fallback)
+}
+
+/// `fallback` re-encoded at its widest: the largest revision and a settle
+/// instant printed with all nine fractional digits.
+pub(super) fn widest(mut fallback: Value) -> usize {
+    fallback["revision"] = json!(u64::MAX);
+    let updated = &mut fallback["model"]["task"]["lastUpdatedAt"];
+    assert!(
+        updated.is_string(),
+        "the record keeps its update instant: {fallback}"
+    );
+    *updated = json!("2026-09-07T00:00:01.999999999Z");
+    encoded_len(&fallback)
 }

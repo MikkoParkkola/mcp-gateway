@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
 
-use super::{CollusionDetector, RelayAction, RelayParams, W, winnow};
+use super::{CollusionDetector, MAX_SOURCE_FINGERPRINTS, RelayAction, RelayParams, W, winnow};
 
 const A: &str = "principal-a";
 const B: &str = "principal-b";
@@ -530,19 +530,20 @@ fn whitespace_and_nfc_normalized() {
 #[test]
 fn source_fingerprints_capped() {
     let d = detector();
-    let big = text(5, 12_000);
+    let big = text(5, 24_000);
+    let cap = MAX_SOURCE_FINGERPRINTS;
     assert!(
-        d.fingerprints(&big).len() > 1_024,
+        d.fingerprints(&big).len() > cap,
         "premise: oversized result"
     );
     d.record_delivery_at(T, A, true, &big, Instant::now());
-    assert_eq!(d.tracked_fingerprints(), 1_024);
+    assert_eq!(d.tracked_fingerprints(), cap);
     let first = d.fingerprints(&big);
     assert!(
-        first[..1_024].iter().all(|&fp| d.is_tracked(fp)),
-        "keeps the first 1,024"
+        first[..cap].iter().all(|&fp| d.is_tracked(fp)),
+        "keeps the first {cap}"
     );
-    let dropped = d.fingerprints(&big).len() - 1_024;
+    let dropped = d.fingerprints(&big).len() - cap;
     assert_eq!(d.source_truncated(), u64::try_from(dropped).unwrap());
 }
 
@@ -710,4 +711,90 @@ fn a_sensitive_copy_after_a_plain_one_is_a_witness() {
     d.record_delivery_at(T, A, true, &s, start + Duration::from_secs(1));
     let now = start + Duration::from_secs(2);
     assert!(d.check_egress_at(B, U, &s, now).is_some());
+}
+
+/// `RELAY-SPLIT-FP.2` (MIK-7773): a receipt runs only values together, as
+/// egress does, never a value into a long object key: an excuse may cover
+/// only what an egress of the same pieces would read.
+#[test]
+fn a_split_receipt_never_runs_a_value_into_a_key() {
+    use super::super::collusion_digest::{DeliveryDigest, delivery_parts};
+    let d = detector();
+    let flat = text(9, 40);
+    let key = text(11, 20);
+    assert!(
+        key.chars().count() >= super::K,
+        "premise: a key long enough to read"
+    );
+    let mut map = serde_json::Map::new();
+    for (i, piece) in flat.as_bytes().chunks(20).enumerate() {
+        let piece = String::from_utf8(piece.to_vec()).expect("ascii");
+        map.insert(format!("p{i:03}"), serde_json::Value::String(piece));
+    }
+    map.insert(key, serde_json::Value::String("v".into()));
+    let value = serde_json::Value::Object(map);
+    let (leaves, values) = delivery_parts(&value);
+    assert_eq!(values, leaves.len() - 1, "the key comes last");
+    let (digest, _) = DeliveryDigest::of_parts(&leaves, values, false);
+    let allowed: HashSet<u64> = [leaves.join("\n"), leaves[..values].concat()]
+        .iter()
+        .flat_map(|t| d.kgram_hashes(t))
+        .collect();
+    assert!(
+        d.fingerprints(&leaves.concat())
+            .iter()
+            .any(|fp| !allowed.contains(fp)),
+        "premise: running the key in adds fingerprints"
+    );
+    let recorded: HashSet<u64> = digest.fingerprints(&d).into_iter().collect();
+    assert!(recorded.iter().all(|fp| allowed.contains(fp)));
+    // The newline form keeps the key, as egress reads keys apart.
+    assert!(
+        d.fingerprints(&leaves.join("\n"))
+            .iter()
+            .all(|fp| recorded.contains(fp)),
+        "the newline form, key included, is recorded"
+    );
+}
+
+/// `RELAY-SPLIT-FP.2` (MIK-7773): a plan step's values that the final answer
+/// carries only as object keys are not run together in the kept receipt, as
+/// egress never runs keys together.
+#[test]
+fn a_kept_receipt_never_runs_together_values_delivered_as_keys() {
+    use super::super::collusion_digest::{Delivered, DeliveryDigest, delivery_parts};
+    let d = detector();
+    // Twenty words each: keys long enough for the walk to read.
+    let (a, b) = (text(13, 20), text(17, 20));
+    let mut map = serde_json::Map::new();
+    map.insert(a.clone(), "v".into());
+    map.insert(b.clone(), "w".into());
+    let answer = serde_json::Value::Object(map);
+    let (leaves, values) = delivery_parts(&answer);
+    let delivered = Delivered::of_parts(leaves, values).expect("bounded");
+    let allowed: HashSet<u64> = [&a, &b].iter().flat_map(|t| d.kgram_hashes(t)).collect();
+    assert!(
+        d.fingerprints(&format!("{a}{b}"))
+            .iter()
+            .any(|fp| !allowed.contains(fp)),
+        "premise: running the two together adds fingerprints"
+    );
+    // Staged as a delivery is and as a plan step is, cap deferred (MIK-7992).
+    for of in [DeliveryDigest::of_parts, DeliveryDigest::of_plan_step_parts] {
+        let (step, _) = of(&[a.as_str(), b.as_str()], 2, false);
+        let kept: HashSet<u64> = step
+            .retaining(&d, &delivered)
+            .fingerprints(&d)
+            .into_iter()
+            .collect();
+        assert!(
+            kept.iter().all(|fp| allowed.contains(fp)),
+            "only fingerprints of a key as delivered are kept"
+        );
+        let own: Vec<u64> = [&a, &b].iter().flat_map(|t| d.fingerprints(t)).collect();
+        assert!(
+            own.iter().all(|fp| kept.contains(fp)),
+            "each key's fps stay"
+        );
+    }
 }

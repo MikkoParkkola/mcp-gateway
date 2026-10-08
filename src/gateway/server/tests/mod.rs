@@ -14,6 +14,8 @@
 mod admission_allocations;
 mod alloc_meter;
 mod input_key_allocations;
+#[cfg(feature = "firewall")]
+mod judge_allocations;
 mod signing_nonce_allocations;
 mod signing_nonce_allocations_support;
 mod trust_card_list_allocations;
