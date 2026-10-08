@@ -65,6 +65,7 @@ fn emitted_document(payload: &Payload) -> Option<Value> {
                 confirmation_refusal: false,
                 delivery_refusal: false,
                 egress_scanned: false,
+                unsent_hold: None,
                 chain_source: crate::protocol::ChainSource::NotEligible,
                 chain_upstream: None,
             };
@@ -365,6 +366,7 @@ mod emitted_document_tests {
             confirmation_refusal: true,
             delivery_refusal: true,
             egress_scanned: true,
+            unsent_hold: None,
             chain_source: crate::protocol::ChainSource::NotEligible,
             chain_upstream: None,
         }

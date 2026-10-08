@@ -576,3 +576,27 @@ impl MetaMcp {
         self.content_refuses(&at, value)
     }
 }
+
+impl MetaMcp {
+    /// The question this gateway sealed into `response` (its envelope and its
+    /// in-flight slot), if any. Read before delivery, so a refusal there can
+    /// give the slot back (MIK-8131): an envelope that never leaves can never
+    /// be redeemed. Only an envelope this keyring opens is the gateway's.
+    pub(crate) fn sealed_question(&self, response: &JsonRpcResponse) -> Option<(String, String)> {
+        let envelope = response.result.as_ref()?.get("requestState")?.as_str()?;
+        let now = crate::protocol::continuation::now_unix_secs();
+        let payload = self.continuation.keyring().open(envelope, now).ok()?;
+        Some((envelope.to_owned(), payload.hold_key))
+    }
+}
+
+impl MetaMcp {
+    /// Give back the slot `finalize_content` found undelivered (MIK-8131):
+    /// its envelope never leaves, so nothing could redeem it.
+    pub(crate) async fn release_unsent_hold(&self, response: &mut JsonRpcResponse) {
+        if let Some(hold_key) = response.unsent_hold.take() {
+            let now = crate::protocol::continuation::now_unix_secs();
+            self.continuation.in_flight().complete(&hold_key, now).await;
+        }
+    }
+}

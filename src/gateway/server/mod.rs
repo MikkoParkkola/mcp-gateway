@@ -3067,7 +3067,7 @@ impl Gateway {
             super::meta_mcp::invoke::relay::GatewayStamps::Legacy
         };
         let chain_source = response.chain_source;
-        let response = meta_mcp.finalize_content(
+        let mut response = meta_mcp.finalize_content(
             response,
             &super::meta_mcp::response_security::ResponseDeliveryContext {
                 method: &method,
@@ -3084,6 +3084,7 @@ impl Gateway {
                 chain_nonce: chain_nonce.as_deref(),
             },
         );
+        meta_mcp.release_unsent_hold(&mut response).await; // MIK-8131
         // MIK-7887.RECEIPT.4: the receipt describes the delivered answer, with
         // the stamps its era got; the judge can only replace the answer.
         {
