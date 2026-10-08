@@ -93,9 +93,10 @@ struct State {
     outbox: HashMap<String, OutboxRecord>,
     /// Dead letters with their file size, keyed by event id.
     dead: HashMap<String, (DeadLetter, u64)>,
-    /// Expiry burials that `load` completed: their receipts were never
-    /// written, so the first `due` hands them to the worker.
-    recovered: Vec<OutboxRecord>,
+    /// Expiry burials whose dead letter is in place and receipted while
+    /// their outbox copy waits for a retry: the retry does not receipt them
+    /// again.
+    expiry_receipted: HashSet<String>,
 }
 
 /// Per-pair facts over every subscription, built in one pass so tail

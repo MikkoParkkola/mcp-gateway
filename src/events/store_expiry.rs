@@ -53,13 +53,6 @@ pub(in crate::events::store) fn load(
             .is_some_and(|(dead, _)| dead.record.created_at == record.created_at);
         if settled {
             remove_record(outbox_dir, &OutboxRecord::file(&record.event_id))?;
-            // An expiry burial's receipt comes only after its copy is gone,
-            // so a copy left beside it means the receipt is still owed.
-            if let Some((dead, _)) = state.dead.get(&record.event_id)
-                && dead.reason == DeadReason::Expired.as_str()
-            {
-                state.recovered.push(dead.record.clone());
-            }
             continue;
         }
         if record.state == OutboxState::InFlight {
@@ -73,8 +66,8 @@ pub(in crate::events::store) fn load(
 }
 
 impl Store {
-    /// One tick's expiry settlement: receipts owed from `load` first, then
-    /// this batch's burials, with the dead-letter caps applied after them as
+    /// One tick's expiry settlement: this batch's burials, with the
+    /// dead-letter caps applied after them as
     /// every burial applies them (a failed eviction is retried by the next
     /// sweep). Answers the burials, the evictions, and whether more expired
     /// records remain past this batch.
@@ -84,8 +77,7 @@ impl Store {
         now: DateTime<Utc>,
         policy: DeadPolicy,
     ) -> (Vec<OutboxRecord>, Vec<Evicted>, bool) {
-        let (mut buried, more) = self.expire_pending(state, now);
-        buried.splice(0..0, std::mem::take(&mut state.recovered));
+        let (buried, more) = self.expire_pending(state, now);
         let mut evicted = Vec::new();
         if !buried.is_empty()
             && let Err(error) = self.evict_dead(state, now, policy, &mut evicted)
@@ -123,6 +115,7 @@ impl Store {
         let more = keys.len() > EXPIRY_BATCH;
         keys.truncate(EXPIRY_BATCH);
         let mut buried = Vec::new();
+        let mut settled_any = false;
         for (_, id) in keys {
             let Some(mut record) = state.outbox.get(&id).cloned() else {
                 continue;
@@ -135,24 +128,31 @@ impl Store {
                 record.callback_host = callback_host_of(&sub.url);
             }
             let bury = record.needs_burial_at_expiry();
-            if bury && let Err(error) = self.entomb(state, record.clone(), DeadReason::Expired, now)
-            {
+            let placed = bury.then(|| self.entomb(state, record.clone(), DeadReason::Expired, now));
+            // Receipted once, as soon as its dead letter is in place, durable
+            // or not, as every burial is: a restart before the copy is gone
+            // then loses no receipt, and a retry adds none.
+            let in_place = bury
+                && state
+                    .dead
+                    .get(&id)
+                    .is_some_and(|(dead, _)| dead.record.created_at == record.created_at);
+            if in_place && state.expiry_receipted.insert(id.clone()) {
+                buried.push(record.clone());
+            }
+            if let Some(Err(error)) = placed {
                 // Not durable: the outbox copy stays and the next tick
                 // buries it again; a record is never in neither place.
                 tracing::warn!(%error, "events store: an expiry burial is not durable yet");
                 continue;
             }
-            // Receipted only once the copy is gone: a failed unlink leaves
-            // the copy, and the next tick buries and receipts it once. The
-            // burials already done keep their receipts.
             if let Err(error) = remove_record(&self.outbox_dir, &OutboxRecord::file(&id)) {
                 tracing::warn!(%error, "events store: an expired record's copy was not removed; retried next tick");
                 break;
             }
             state.outbox.remove(&id);
-            if bury {
-                buried.push(record);
-            }
+            state.expiry_receipted.remove(&id);
+            settled_any = true;
         }
         let settled: Vec<String> = state
             .subs
@@ -166,6 +166,8 @@ impl Store {
         {
             tracing::warn!(%error, "events store: a settled expired row was not removed; retried next tick");
         }
-        (buried, more)
+        // Due again at once only while batches make progress: a batch the
+        // disk refuses waits for the next tick, never spins.
+        (buried, more && settled_any)
     }
 }

@@ -383,32 +383,73 @@ fn expired_records_past_one_batch_are_due_at_once() {
     assert_eq!(due.next, None, "nothing left");
 }
 
-/// An expiry burial whose dead letter was placed but not synced keeps its
-/// copy and owes its receipt. A restart completes the burial at load and
-/// the first `due` hands that receipt over, once.
+/// An expiry burial whose dead letter is placed but not synced is receipted
+/// once, then: its copy stays for the next tick, which finishes the burial
+/// without a second receipt, and a restart before that tick loses none.
 #[test]
-fn an_expiry_burial_completed_at_load_is_still_receipted() {
-    let dir = tempfile::tempdir().expect("dir");
-    let now = Utc::now();
-    let store = open_with(dir.path(), now, &["s1"]);
-    let tried = OutboxRecord {
-        attempt: 1,
-        ..record("e1", "s1", now)
-    };
-    store.enqueue(tried, OUTBOX).expect("io");
-    store
-        .fail_next_dead_sync
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    let later = past_expiry(now);
-    let due = store.due(later, &HashSet::new(), ROOMY).expect("io");
-    assert!(due.buried.is_empty(), "not durable yet: no receipt");
-    drop(store);
-    let reopened = Store::open(dir.path(), later, TAIL).expect("reopen");
+fn an_unsynced_expiry_burial_is_receipted_once() {
     let ids = |due: super::super::Due| -> Vec<String> {
         due.buried.into_iter().map(|r| r.event_id).collect()
     };
-    let first = reopened.due(later, &HashSet::new(), ROOMY).expect("io");
-    assert_eq!(ids(first), ["e1"], "the owed receipt is handed over");
-    let second = reopened.due(later, &HashSet::new(), ROOMY).expect("io");
-    assert!(ids(second).is_empty(), "once");
+    for restart in [false, true] {
+        let dir = tempfile::tempdir().expect("dir");
+        let now = Utc::now();
+        let store = open_with(dir.path(), now, &["s1"]);
+        let tried = OutboxRecord {
+            attempt: 1,
+            ..record("e1", "s1", now)
+        };
+        store.enqueue(tried, OUTBOX).expect("io");
+        store
+            .fail_next_dead_sync
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let later = past_expiry(now);
+        let first = store.due(later, &HashSet::new(), ROOMY).expect("io");
+        assert_eq!(
+            ids(first),
+            ["e1"],
+            "receipted when in place (restart {restart})"
+        );
+        assert!(
+            store.has_due("s1", later),
+            "the copy stays (restart {restart})"
+        );
+        let store = if restart {
+            drop(store);
+            Store::open(dir.path(), later, TAIL).expect("reopen")
+        } else {
+            store
+        };
+        let second = store.due(later, &HashSet::new(), ROOMY).expect("io");
+        assert!(ids(second).is_empty(), "never twice (restart {restart})");
+        assert!(!store.has_due("s1", later), "finished (restart {restart})");
+    }
+}
+
+/// A backlog past one batch that the disk refuses to settle waits for the
+/// next tick: it is not due at once, so the worker never spins on it.
+#[cfg(unix)]
+#[test]
+fn a_backlog_the_disk_refuses_is_not_due_at_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let roomy = OutboxCaps {
+        global: 200,
+        per_subscription: 200,
+    };
+    for n in 0..65 {
+        let tried = OutboxRecord {
+            attempt: 1,
+            ..record(&format!("e{n}"), "s1", now)
+        };
+        store.enqueue(tried, roomy).expect("io");
+    }
+    let outbox = dir.path().join("outbox");
+    let mode = |m| std::fs::set_permissions(&outbox, std::fs::Permissions::from_mode(m));
+    mode(0o500).expect("read-only");
+    let due = store.due(past_expiry(now), &HashSet::new(), ROOMY);
+    mode(0o700).expect("writable");
+    assert_eq!(due.expect("io").next, None, "no progress: not due at once");
 }
