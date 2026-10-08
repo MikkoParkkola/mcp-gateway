@@ -325,7 +325,7 @@ impl TokenStorage {
             // NotFound too, and is damage (MIK-8091).
             Err(e)
                 if e.kind() == std::io::ErrorKind::NotFound
-                    && fs::symlink_metadata(&path).is_err() =>
+                    && matches!(fs::symlink_metadata(&path), Err(m) if m.kind() == std::io::ErrorKind::NotFound) =>
             {
                 return RefreshState::default();
             }
