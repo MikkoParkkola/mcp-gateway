@@ -240,7 +240,10 @@ fn keep_plan_receipts(
     receipts: &mut Vec<super::Receipt>,
     answer: &Value,
 ) {
-    let Some(delivered) = fw.delivered_for_plan(answer) else {
+    // MIK-8094: with the delivery's staged total, so a plan whose receipts
+    // were dropped at staging and are dropped again here counts once.
+    let staged = super::RELAY_STAGED.try_with(|s| fw.delivered_for_plan(answer, Some(s)));
+    let Some(delivered) = staged.unwrap_or_else(|_| fw.delivered_for_plan(answer, None)) else {
         receipts.retain(|r| !r.in_plan);
         return;
     };
@@ -266,7 +269,8 @@ fn keep_to_rewritten(
         return;
     };
     let read = Value::String(unescape(text));
-    match fw.delivered_for_plan(&read) {
+    let staged = super::RELAY_STAGED.try_with(|s| fw.delivered_for_plan(&read, Some(s)));
+    match staged.unwrap_or_else(|_| fw.delivered_for_plan(&read, None)) {
         Some(delivered) => {
             let digest = std::mem::take(&mut one.digest);
             one.digest = fw.retain_delivered(digest, &delivered);

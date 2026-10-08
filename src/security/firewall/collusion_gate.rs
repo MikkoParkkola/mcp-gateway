@@ -4,6 +4,7 @@
 //! its load checks, and the egress check and delivery recording the direct
 //! route calls (design `2026-09-28-asi10-verbatim-relay.md` §13.1).
 
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -430,19 +431,24 @@ impl Firewall {
         server: &str,
         tool: &str,
         result: &Value,
-        plan: Option<usize>,
+        plan: Option<&Cell<usize>>,
     ) -> Option<DeliveryDigest> {
-        match plan {
-            Some(staged) if staged >= PLAN_STAGED_CAP => {
-                self.relay_detector()?;
-                self.count_plan_drop();
-                None
-            }
-            Some(staged) if staged < DELIVERED_SET_CAP => {
-                self.digest_with(server, tool, result, DeliveryDigest::of_plan_step_parts)
-            }
-            _ => self.delivery_digest(server, tool, result),
+        let Some(staged) = plan else {
+            return self.delivery_digest(server, tool, result);
+        };
+        let total = staged.get();
+        if total >= PLAN_STAGED_CAP {
+            self.relay_detector()?;
+            self.count_plan_drop_once(staged);
+            return None;
         }
+        let digest = if total < DELIVERED_SET_CAP {
+            self.digest_with(server, tool, result, DeliveryDigest::of_plan_step_parts)?
+        } else {
+            self.delivery_digest(server, tool, result)?
+        };
+        staged.set(total + digest.staged_len());
+        Some(digest)
     }
 
     fn digest_with(
@@ -479,14 +485,30 @@ impl Firewall {
     /// The leaves of a plan's final answer that its step receipts are kept
     /// against (MIK-7887.RECEIPT.2). `None` with relay detection off, or over
     /// the bound, where the plan's receipts are dropped and counted.
-    pub(crate) fn delivered_for_plan<'v>(&self, answer: &'v Value) -> Option<Delivered<'v>> {
+    pub(crate) fn delivered_for_plan<'v>(
+        &self,
+        answer: &'v Value,
+        staged: Option<&Cell<usize>>,
+    ) -> Option<Delivered<'v>> {
         self.relay_detector()?;
         let (leaves, values) = delivery_parts(answer);
         let delivered = Delivered::of_parts(leaves, values);
         if delivered.is_none() {
-            self.count_plan_drop();
+            match staged {
+                Some(staged) => self.count_plan_drop_once(staged),
+                None => self.count_plan_drop(),
+            }
         }
         delivered
+    }
+
+    /// [`Self::count_plan_drop`] unless this delivery already counted one:
+    /// `staged` then holds `usize::MAX`, past every bound (`MIK-8094`).
+    fn count_plan_drop_once(&self, staged: &Cell<usize>) {
+        if staged.get() != usize::MAX {
+            self.count_plan_drop();
+            staged.set(usize::MAX);
+        }
     }
 
     fn count_plan_drop(&self) {
