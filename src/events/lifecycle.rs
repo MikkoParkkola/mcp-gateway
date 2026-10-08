@@ -145,6 +145,9 @@ impl EventsHub {
     /// [`Self::replay_starts`] for the keys of the source kinds `of` admits.
     pub(super) async fn replay_starts_of(&self, of: impl Fn(SourceKind) -> bool) {
         let mut started = self.lifecycle.lock().await;
+        for source in self.sources.read().iter() {
+            source.pin_rows(&self.store);
+        }
         // One attempt per key per replay, even when several rows hold it.
         let mut tried = HashSet::new();
         for (key, principal, name, arguments) in self.live_keys() {
