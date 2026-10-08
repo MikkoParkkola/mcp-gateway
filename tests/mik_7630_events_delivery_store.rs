@@ -338,3 +338,61 @@ async fn reload_rejects_incompatible_schema_changes_under_one_name() {
     }
     assert!(accepted, "an additive change is accepted");
 }
+
+/// Poll `events/list` until `done` holds for alice's view of the event.
+async fn descriptor_until(gw: &Gateway, done: impl Fn(&Value) -> bool) -> bool {
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    while tokio::time::Instant::now() < deadline {
+        if done(&descriptor(gw).await) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    false
+}
+
+/// MIK-8038 part 1 (A6): a subscribe held in its callback challenge while
+/// its route is removed and restored narrower is refused at its commit. Its
+/// `ref` filter is no longer a field the restored route maps, and committing
+/// it would leave a subscription that never matches.
+#[tokio::test]
+async fn a_subscribe_whose_route_narrows_during_its_challenge_is_refused() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let gw = start(root.path(), &rx, json!({})).await;
+    // Under the 10 s challenge timeout, long enough for two reloads (the
+    // watcher polls every 2 s and debounces 500 ms).
+    rx.reply(receiver::Reply::SlowEcho(Duration::from_secs(9)));
+    let file = root.path().join("caps/github.yaml");
+    let original = std::fs::read_to_string(&file).expect("fixture capability");
+    let params = delivery::params(&rx.url, &whsec(32), json!({"ref": "refs/heads/main"}));
+    let narrow = async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        std::fs::remove_file(&file).expect("remove the route");
+        assert!(
+            descriptor_until(&gw, Value::is_null).await,
+            "the route went"
+        );
+        std::fs::write(&file, without_ref(&original)).expect("restore it narrower");
+        assert!(
+            descriptor_until(&gw, |d| d.is_object()
+                && d["inputSchema"]["properties"].get("ref").is_none())
+            .await,
+            "the narrower route is live"
+        );
+    };
+    let (answer, ()) = tokio::join!(gw.rpc(Some(ALICE), "events/subscribe", params), narrow);
+    assert_eq!(
+        (&answer["error"]["code"], &answer["error"]["data"]["field"]),
+        (&json!(-32602), &json!("arguments")),
+        "the commit is refused for its arguments: {answer}"
+    );
+    assert!(
+        records(root.path(), "subs").is_empty(),
+        "nothing was stored"
+    );
+    assert!(
+        !rx.challenges().is_empty(),
+        "the subscribe passed its first check and was challenged, so the refusal came at commit"
+    );
+}

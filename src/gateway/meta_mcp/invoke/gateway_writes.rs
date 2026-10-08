@@ -274,6 +274,15 @@ pub(super) fn strip(value: &mut Value, layer: Layer) {
     let _ = GATEWAY_WRITES.try_with(|writes| remove_owned(value, &writes.borrow().list, layer));
 }
 
+/// Remove from `value` the answer-layer members the gateway wrote on this
+/// call, for a route that stages its own delivered copy (the direct route,
+/// whose result is both answer and tool value); the value layer is left to
+/// `receipt_with`, which strips it on every stage.
+#[cfg(feature = "firewall")]
+pub(crate) fn strip_noted(value: &mut Value) {
+    strip(value, Layer::Answer);
+}
+
 /// `value` without what `record` wrote, for a cache or replay hit's receipt:
 /// stripped by that entry's own record, never by another step's notes.
 /// Borrowed when there is nothing to remove, so a plain hit copies nothing.

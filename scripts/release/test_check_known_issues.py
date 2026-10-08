@@ -546,6 +546,45 @@ def test_an_atx_title_keeps_the_line_above_out():
     assert run(text, "--release", "--tag", "v4.0.0") == 0
 
 
+def test_a_version_inside_build_metadata_is_not_a_range_end():
+    for line in ("- Seen in 4.0.0+build-4.0.1.", "- Seen in 4.0.0+build-v5.1."):
+        assert run(notes(f"\n{line}\n"), "--check") == 0, line
+
+
+def test_a_title_paragraph_with_an_inline_tag_line_is_the_section():
+    text = "Known\n<span>issues</span>\nfor 4.0\n---\n\n- Open.\n"
+    assert run(text, "--release", "--tag", "v4.0.0") == 1
+
+
+def test_a_processing_instruction_does_not_hide_a_version():
+    assert run(notes("\n- Fixed in 4.0.<?note?>1.\n"), "--check") == 1
+
+
+def test_every_paragraph_interrupting_tag_ends_a_title_paragraph():
+    for tag in ("base", "basefont", "caption", "col", "colgroup", "menuitem"):
+        text = f"# Notes\n\nKnown\n<{tag}>\nissues\n---\n\n- Open.\n"
+        assert run(text, "--release", "--tag", "v4.0.0") == 0, tag
+
+
+def test_a_processing_instruction_spanning_lines_does_not_hide_a_version():
+    assert run(notes("\n- Fixed in 4.0.<?note\n?>1.\n"), "--check") == 1
+
+
+def test_a_pi_opener_in_a_code_span_does_not_swallow_a_split_version():
+    text = notes("\n- `<?note` Fixed in 4.0.<!--\n-->1.\n")
+    assert run(text.replace("The 4.0.1 numbers come later.", "Later."), "--check") == 1
+
+
+def test_a_slash_after_a_block_tag_name_is_not_a_tag_boundary():
+    text = "Known issues\n<base/foo>\nfor 4.0\n---\n\n- Fixed in 4.0.1.\n"
+    assert run(text, "--check") == 1
+
+
+def test_a_title_inside_an_unclosed_tag_still_starts_the_section():
+    text = "# Notes\n\n<base/foo\nKnown\nissues\nfor 4.0>\n---\n\n- Fixed in 4.0.1.\n"
+    assert run(text, "--check") == 1
+
+
 def test_a_hyphen_range_to_a_later_release_fails_the_check():
     assert run(notes("\n- Seen in 4.0.0-4.0.1.\n"), "--check") == 1
 
