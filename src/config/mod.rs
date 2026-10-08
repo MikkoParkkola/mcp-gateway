@@ -44,6 +44,7 @@ use crate::mtls::MtlsConfig;
 use crate::routing_profile::RoutingProfileConfig;
 use crate::security::{posture, verify_remote_server_provenance};
 use crate::{Error, Result};
+pub(crate) use backend_transport::transport_key_for;
 use config_file::ConfigFile;
 
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};

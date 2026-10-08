@@ -37,7 +37,8 @@ pub(super) fn with_backend_edited(
     let backends = root.get_mut(&key)?.as_mapping_mut()?;
     let edited = match (before.backends.get(name), config.backends.get(name)) {
         (None, Some(backend)) => {
-            let entry_value = serde_yaml::to_value(backend).ok()?;
+            let mut entry_value = serde_yaml::to_value(backend).ok()?;
+            super::url_spelling::spell_as_url(entry_value.as_mapping_mut()?);
             let mut entry = Mapping::new();
             entry.insert(name.into(), entry_value.clone());
             backends.insert(name.into(), entry_value);
@@ -58,9 +59,7 @@ pub(super) fn with_backend_edited(
             if raw.contains_key("url") {
                 // The file says `url`: edit it there, never `http_url` beside it.
                 for side in [&mut old, &mut new] {
-                    if let Some(at) = ["http_url", "ws_url"].iter().find_map(|k| side.remove(*k)) {
-                        side.insert(Value::from("url"), at);
-                    }
+                    super::url_spelling::spell_as_url(side);
                 }
             }
             // `want` is the file's own spelling of the entry with only the

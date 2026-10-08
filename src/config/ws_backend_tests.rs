@@ -251,11 +251,11 @@ fn load_refusal(backend_yaml: &str) -> String {
 }
 
 #[test]
-fn t8_ws_url_beside_http_url_is_refused_as_read_by_another_transport() {
+fn t8_ws_url_beside_http_url_is_refused_naming_both() {
+    // Two transport keys are refused before the strict-key check runs.
     let message = load_refusal("    http_url: \"https://h/mcp\"\n    ws_url: \"wss://h/mcp\"\n");
     assert!(
-        message
-            .contains("`backends.x.ws_url` is never read: `http_url` selects the http transport"),
+        message.contains("backend x has both http_url and ws_url; keep one"),
         "{message}"
     );
 }

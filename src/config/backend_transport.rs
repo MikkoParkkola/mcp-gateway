@@ -36,7 +36,7 @@ pub(super) const TRANSPORT_KEYS: &[&str] = &["command", "http_url", "ws_url", "a
 /// The transport key a backend `url` stands for, chosen by its scheme, or
 /// `None` for a scheme no transport reads. The loader and the strict-key
 /// check both ask here, so they cannot disagree.
-pub(super) fn transport_key_for(url: &str) -> Option<&'static str> {
+pub(crate) fn transport_key_for(url: &str) -> Option<&'static str> {
     let lower = url.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
         Some("http_url")
