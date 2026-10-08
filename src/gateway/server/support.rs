@@ -288,9 +288,13 @@ where
 
 /// Shutdown signal handler.
 ///
-/// Resolves on Ctrl+C (all platforms) or SIGTERM (Unix only), then broadcasts
-/// the shutdown signal to all subscriber tasks.
-pub(super) async fn shutdown_signal(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
+/// Resolves on Ctrl+C (all platforms) or SIGTERM (Unix only), or on an
+/// in-process test's trigger, then broadcasts the shutdown signal to all
+/// subscriber tasks.
+pub(super) async fn shutdown_signal(
+    shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    test_trigger: Option<tokio::sync::oneshot::Receiver<()>>,
+) {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
@@ -308,9 +312,20 @@ pub(super) async fn shutdown_signal(shutdown_tx: tokio::sync::broadcast::Sender<
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
+    let triggered = async {
+        match test_trigger {
+            // A dropped sender starts it too: the test is over either way.
+            Some(trigger) => {
+                trigger.await.ok();
+            }
+            None => std::future::pending::<()>().await,
+        }
+    };
+
     tokio::select! {
         () = ctrl_c => {},
         () = terminate => {},
+        () = triggered => {},
     }
 
     info!("Shutdown signal received");

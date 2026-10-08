@@ -2098,13 +2098,17 @@ impl Gateway {
             });
 
         // Plain HTTP or mTLS: one path, one shutdown bound (#2147).
+        #[cfg(test)]
+        let test_trigger = self.test_seams.take_shutdown_trigger();
+        #[cfg(not(test))]
+        let test_trigger = None;
         let std_listener = listener.into_std()?;
         listener::serve(
             app,
             std_listener,
             addr,
             &self.config,
-            shutdown_signal(shutdown_tx),
+            shutdown_signal(shutdown_tx, test_trigger),
         )
         .await?;
 
