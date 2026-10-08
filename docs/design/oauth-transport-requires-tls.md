@@ -84,23 +84,15 @@ client through `client_for`, or `refresh_client_for` for a refresh-token exchang
 refuses a cleartext URL off this machine at send time, whatever the authorization server
 advertised (`src/oauth/client/destination.rs`).
 
-*A hot reload that corrects the URL does not re-warm the backend.* Raised by the
-second code-review leg and confirmed at source: `retry_warm_start_attempts`
-resolves the backend from the registry on every attempt precisely so a config
-reload can replace the instance under it (`src/gateway/server/warmstart.rs`, the
-"Resolved per attempt, never captured" comment), so before this change the
-endless retry would have picked up a corrected `https://` backend by accident. A
-permanent classification ends that task, and a reload registers a replaced
-backend without spawning a new warm-start — warm-start tasks exist only from
-boot (`src/gateway/server/mod.rs:1369`, `:1578`). Not repaired here, because the
-gap is general rather than specific to this guard: every backend ADDED by hot
-reload already has no warm-start at all, and every other `TransportPermanent`
-site behaves the same way. Making warm-start wait for a registry replacement is
-a warm-start/config-reload design change larger than the ticket that would
-describe it. What this change removes is one accidental exception to a
-pre-existing rule, in exchange for the operator seeing the refusal at all.
-Accepted residual: for discovery, a corrected OAuth backend takes effect at the
-next gateway start.
+*A hot reload that corrects the URL re-warms the backend.* A permanent
+classification ends the boot warm-start task for the bad instance. Since
+MIK-8054, a reload that adds or replaces a backend schedules a warm-start for the
+new instance, through the same owner boot uses and under the same
+`meta_mcp.warm_start` selection (`src/gateway/server/warmstart.rs`,
+`ReloadWarmer`). Each warmer is bound to the instance it was scheduled for, so a
+corrected `https://` backend is warmed by its own task, not by an old one picking
+it up by accident. Its tools reach discovery once that warm-start completes, with
+no gateway restart.
 
 ## Not verified here
 

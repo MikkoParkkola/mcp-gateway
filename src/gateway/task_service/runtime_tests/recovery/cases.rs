@@ -342,3 +342,111 @@ async fn a_task_settled_during_recovery_is_published() {
         heard.lock()
     );
 }
+
+/// `MIK-8052`: a sealed row (its key unreadable) changes nothing for recovery.
+/// The interrupted row beside it is settled as before and its key still finds
+/// it; only a NEW key is refused while the seal holds, and the running expiry
+/// sweep lifts the seal once the file is gone.
+#[tokio::test]
+async fn recovery_beside_a_sealed_row_settles_and_keeps_keys() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("tasks");
+    let seeded = timeout(
+        BUDGET,
+        seed_store(
+            &dir,
+            rows()
+                .into_iter()
+                .filter(|(key, ..)| matches!(*key, "x6a-undispatched" | "x6b-dispatched"))
+                .collect(),
+        ),
+    )
+    .await
+    .expect("seeding completes");
+    let (row, damaged) = (&seeded[0], &seeded[1]);
+    let record = dir.join(format!("{}.json", damaged.id));
+    let text = std::fs::read_to_string(&record).unwrap();
+    std::fs::write(
+        &record,
+        text.replacen("\"dispatched\":", "\"dispatched\":@", 1),
+    )
+    .unwrap();
+
+    let operation = operation();
+    let representation = representation();
+    let admission = fresh_admission();
+    let (restored, executor) = timeout(
+        BUDGET,
+        open_runtime_with_admission(
+            &dir,
+            1,
+            StoreLimits::default(),
+            test_subscriptions(),
+            Arc::clone(&admission),
+        ),
+    )
+    .await
+    .expect("startup does not hang")
+    .expect("a sealed row never stops startup");
+    assert_eq!(restored.skipped_records().sealed, 1);
+    assert!(
+        restored.get(OWNER, &row.id).is_ok(),
+        "the interrupted row was recovered"
+    );
+    assert!(
+        matches!(
+            admission.admit(Request {
+                mode: Mode::Sync,
+                ..request(row.key, &operation, &representation)
+            }),
+            Err(Refusal::Mismatch)
+        ),
+        "the recovered key still answers as its own"
+    );
+    assert!(
+        matches!(
+            admission.admit(Request {
+                key: "unclaimed-key",
+                mode: Mode::Sync,
+                ..request(row.key, &operation, &representation)
+            }),
+            Ok(Admission::Sealed)
+        ),
+        "a new key is refused while the seal holds"
+    );
+
+    // The running expiry sweep is what lifts the seal: remove the file and
+    // wait, bounded, for a sweep to notice, with no direct re-read here.
+    let sweep = executor
+        .start_expiry(std::time::Duration::from_millis(50))
+        .expect("the sweep starts");
+    std::fs::remove_file(&record).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while restored.skipped_records().sealed != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the expiry sweep never re-read the sealed row"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        matches!(
+            admission.admit(Request {
+                key: "unclaimed-key",
+                mode: Mode::Sync,
+                ..request(row.key, &operation, &representation)
+            }),
+            Ok(Admission::Owned(_))
+        ),
+        "the seal lifted without a restart"
+    );
+    timeout(BUDGET, sweep.shutdown())
+        .await
+        .expect("the sweep stops")
+        .expect("the sweep ran clean");
+    timeout(BUDGET, restored.shutdown())
+        .await
+        .expect("shutdown does not hang")
+        .expect("custody is released");
+    drop(executor);
+}
