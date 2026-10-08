@@ -188,6 +188,15 @@ impl EventSource for BackendSource {
             .map_err(|_| RpcError::exhausted("upstream_uris", Some(MAX_URIS)))
     }
 
+    #[cfg(test)]
+    fn upstream_starts(&self) -> usize {
+        self.upstream.as_ref().map_or(0, |up| {
+            up.listeners
+                .starts
+                .load(std::sync::atomic::Ordering::SeqCst)
+        })
+    }
+
     async fn on_last_subscriber(&self, key: &str) {
         let Some(up) = &self.upstream else { return };
         let Ok(Value::Array(parts)) = serde_json::from_str::<Value>(key) else {
