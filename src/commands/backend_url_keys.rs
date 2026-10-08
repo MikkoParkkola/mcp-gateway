@@ -205,18 +205,15 @@ fn indent(line: &str) -> Option<usize> {
 /// first `:` that a space or the line end follows, so a name may hold `:`.
 fn key_of(line: &str) -> Option<(String, &str)> {
     let body = line.trim_start();
-    let (key, rest) = match body.chars().next() {
-        Some(quote @ ('"' | '\'')) => {
-            let inner = &body[1..];
-            let end = inner.find(quote)?;
-            (&inner[..end], inner[end + 1..].trim_start())
-        }
-        _ => {
-            let (at, _) = body.char_indices().find(|&(i, c)| {
-                c == ':' && body[i + 1..].chars().next().is_none_or(char::is_whitespace)
-            })?;
-            (body[..at].trim_end(), &body[at..])
-        }
+    let (key, rest) = if let Some(quote @ ('"' | '\'')) = body.chars().next() {
+        let inner = &body[1..];
+        let end = inner.find(quote)?;
+        (&inner[..end], inner[end + 1..].trim_start())
+    } else {
+        let (at, _) = body.char_indices().find(|&(i, c)| {
+            c == ':' && body[i + 1..].chars().next().is_none_or(char::is_whitespace)
+        })?;
+        (body[..at].trim_end(), &body[at..])
     };
     let rest = rest.strip_prefix(':')?;
     // A backend name may hold spaces; a list item is not a key.

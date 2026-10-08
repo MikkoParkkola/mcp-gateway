@@ -346,16 +346,16 @@ fn a_backend_name_holding_a_colon_is_rewritten() {
 #[test]
 fn a_mapping_key_is_read_as_yaml_reads_it() {
     let cases: &[(&str, Option<(&str, &str)>)] = &[
-        ("  fs:\n", Some(("fs", ""))),
-        ("  'a:b': x\n", Some(("a:b", "x"))),
-        ("  \"a\": {x: 1}\n", Some(("a", "{x: 1}"))),
-        ("  a: b: c\n", Some(("a", "b: c"))),
-        ("  - a: b\n", None),
-        ("  key:value\n", None),
-        ("  \"open: x\n", None),
+        ("  fs:", Some(("fs", ""))),
+        ("  'a:b': x", Some(("a:b", "x"))),
+        ("  \"a\": {x: 1}", Some(("a", "{x: 1}"))),
+        ("  a: b: c", Some(("a", "b: c"))),
+        ("  - a: b", None),
+        ("  key:value", None),
+        ("  \"open: x", None),
         // An escaped quote ends the scan early; the backend is then left to
         // the parsed-file report rather than misread.
-        ("  'it''s': x\n", None),
+        ("  'it''s': x", None),
     ];
     for (line, want) in cases {
         let got = key_of(line);

@@ -52,8 +52,8 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "operator-named client cert, key and CA for one request (#1832); the mode-checked read is lib-internal, widening it was declined",
     ),
     (
-        "src/commands/doctor/hidden_keys.rs",
-        "gateway.yaml re-read only after Config::load's mode-checked read succeeded; opened as the loader opens it (O_NONBLOCK|O_NOCTTY, follows a symlink), regular files only, no size limit (as the guarded reader for config); prints key names, never values; a regular file swapped in since the first read can be read, key names only",
+        "src/commands/regular_file.rs",
+        "gateway.yaml re-read by doctor (after Config::load's mode-checked read; prints key names, never values) and by upgrade (to rename backend url keys; prints line numbers and backend names, never values); opened as the loader opens it (O_NONBLOCK|O_NOCTTY, follows a symlink), regular files only, no size limit (as the guarded reader for config); the mode-checked read is lib-internal, widening it was declined",
     ),
     (
         "src/commands/kubernetes.rs",
