@@ -25,6 +25,15 @@ pub(super) fn spell_as_url(entry: &mut Mapping) {
     }
 }
 
+/// Spell both sides of an edit to a backend the file spells `url` the same
+/// way, so the edit lands on `url` and never adds `http_url` beside it.
+pub(super) fn follow_file_spelling(file: &Mapping, old: &mut Mapping, new: &mut Mapping) {
+    if file.contains_key("url") {
+        spell_as_url(old);
+        spell_as_url(new);
+    }
+}
+
 /// `config` rendered in full, with `url` for each backend that `existing`
 /// (the file's text, when there is one) does not have or spells `url`.
 pub(super) fn render(config: &Config, existing: Option<&str>) -> Result<String, String> {
