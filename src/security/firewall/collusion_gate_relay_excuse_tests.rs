@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8083: the same-source excuse holds whatever winnowing selects at the
-//! edges of a copy. Fingerprint selection near an edge depends on the text
-//! around the copy and on the process's hash seed, and the copy sits in
-//! different surroundings in each receipt and in the egress text; so each
-//! row runs over many distinct texts, and a defect that depends on the seed
-//! fails in nearly every run.
+//! MIK-8083: the same-source excuse holds wherever a copy sits. A copy sits
+//! in different surroundings in each receipt and in the egress text, and the
+//! process's hash seed varies; a selection that depended on surroundings (as
+//! window minima did) failed for about 1 text in 70. So each row runs over
+//! many distinct texts, and such a defect fails in nearly every run.
 
 use serde_json::{Value, json};
 
