@@ -76,6 +76,8 @@ mod callback_admin_denial_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod collusion_direct_tests;
 #[cfg(test)]
+mod continuation_instance_tests;
+#[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
 mod direct_continuation_gate_tests;

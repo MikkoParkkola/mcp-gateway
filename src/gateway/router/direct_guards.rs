@@ -101,7 +101,7 @@ impl DirectRouteGuards {
     /// the slot back unless the answer that leaves still carries it.
     pub(crate) async fn after_dispatch(
         state: &AppState,
-        ((call, challenge), (who, sent)): ((&BackendCall<'_>, Option<&str>), Seal<'_>),
+        ((call, challenge), (who, (sent, instance))): ((&BackendCall<'_>, Option<&str>), Seal<'_>),
         (client, sealed): (Option<&AuthenticatedClient>, &mut Option<(String, String)>),
         admission: &Admission,
         forward: Result<JsonRpcResponse>,
@@ -123,7 +123,7 @@ impl DirectRouteGuards {
         // the client receives.
         if let Some(result) = response.result.as_mut() {
             match meta
-                .seal_direct_interim(who, (call.server, sent), result)
+                .seal_direct_interim(who, (call.server, Some(instance), sent), result)
                 .await
             {
                 Ok(minted) => *sealed = minted,
@@ -186,7 +186,8 @@ pub(crate) struct AdmittedNonce {
 }
 
 /// What an interim answer's continuation is bound to (MIK-8078): the caller's
-/// verified identity and the params as the client sent them.
+/// verified identity, the params as the client sent them and the instance of
+/// the backend object the call went to (MIK-8168).
 pub(crate) type Seal<'a> = (
     (
         Option<&'a crate::key_server::oidc::VerifiedIdentity>,
@@ -196,7 +197,7 @@ pub(crate) type Seal<'a> = (
         ),
         Option<&'a crate::gateway::auth::AuthenticatedClient>,
     ),
-    Option<&'a serde_json::Value>,
+    (Option<&'a serde_json::Value>, u64),
 );
 
 /// The JSON-RPC error a direct-route refusal answers with (HTTP 200). A
