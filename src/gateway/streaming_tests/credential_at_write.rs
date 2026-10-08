@@ -33,11 +33,13 @@ async fn open(
     credential: Option<HeldCredential>,
 ) -> (String, axum::body::BodyDataStream) {
     use axum::response::IntoResponse as _;
-    let id = multiplexer.get_or_create_session_id_scoped(
-        None,
-        &crate::gateway::session_id::SessionOwner::Anonymous,
-        credential,
-    );
+    let id = multiplexer
+        .get_or_create_session_id_scoped(
+            None,
+            &crate::gateway::session_id::SessionOwner::Anonymous,
+            credential,
+        )
+        .to_string();
     let sse = create_sse_response(
         Arc::clone(multiplexer),
         id.clone(),
