@@ -120,6 +120,19 @@ pub(crate) struct StoredCredential<'a> {
     pub(crate) key: &'a str,
     pub(crate) resource_url: &'a str,
     pub(crate) label: &'a str,
+    pub(crate) rotation: Rotation,
+}
+
+/// Whether a credential's server is treated as rotating refresh tokens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Rotation {
+    /// Once a refresh answer is seen to replace the refresh token. Until
+    /// then, a refresh whose outcome is not known is retried (MCP backends).
+    Observed,
+    /// From the first refresh: a refresh that did not settle is never sent
+    /// again, and its token needs a new authorization (capability providers,
+    /// whose servers are not known in advance).
+    Assumed,
 }
 
 /// A client of a stored credential: the MCP backend's `OAuthClient` or a
@@ -174,6 +187,7 @@ pub(crate) async fn refresh_stored(
         key,
         resource_url,
         label,
+        rotation,
     } = at;
     let token_path = storage.token_path(key, resource_url);
     let flight = Flight::of(&token_path);
@@ -196,6 +210,9 @@ pub(crate) async fn refresh_stored(
         return Ok(Refreshed::LoginRequired);
     }
     let mut state = storage.load_refresh_state(key, resource_url);
+    if rotation == Rotation::Assumed {
+        state.rotates = true;
+    }
     let marker = fingerprint_hex(&sent);
     if state.rotates && state.in_flight.as_deref() == Some(marker.as_str()) {
         retire_unsettled(&flight, storage, (key, resource_url), label, &sent, state);

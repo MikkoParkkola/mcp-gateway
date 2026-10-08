@@ -622,7 +622,7 @@ use url::Url;
 mod grants;
 mod refresh_flight;
 pub(crate) use refresh_flight::{
-    RefreshCaller, RefreshRequest, Refreshed, StoredCredential, refresh_stored,
+    RefreshCaller, RefreshRequest, Refreshed, Rotation, StoredCredential, refresh_stored,
 };
 mod registration;
 mod renewal;

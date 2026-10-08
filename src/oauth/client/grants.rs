@@ -261,6 +261,7 @@ impl OAuthClient {
             key: &key,
             resource_url: &self.resource_url,
             label: &self.backend_name,
+            rotation: super::refresh_flight::Rotation::Observed,
         };
         match refresh_stored(self, at).await? {
             Refreshed::Adopted(access) => Ok(access),
