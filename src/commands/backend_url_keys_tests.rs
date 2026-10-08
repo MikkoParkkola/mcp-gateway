@@ -291,3 +291,22 @@ fn a_flow_style_backend_that_is_not_an_address_of_its_scheme_is_kept() {
     assert!(out.skipped.is_empty(), "{:?}", out.skipped);
     assert_eq!(out.kept, vec!["fs".to_string(), "odd".to_string()]);
 }
+
+#[test]
+fn a_flow_style_backend_is_reported_in_a_file_with_a_repeated_key() {
+    // The gateway loads a repeated key (the last one wins), so the report
+    // reads the file that way too; the edit is still proved strictly.
+    let text = "server: {port: 39400}\nserver: {port: 39400}\nbackends:\n  svc: {http_url: 'https://svc.example.test/mcp'}\n";
+    let out = rewrite_url_aliases(text, None);
+    assert_eq!(out.text, text);
+    assert_eq!(out.skipped, vec!["svc".to_string()]);
+}
+
+#[test]
+fn only_the_named_flow_style_backends_are_reported() {
+    let text = "backends:\n  a: { http_url: \"https://a.example.test/mcp\" }\n  b: { http_url: \"${B_URL}\" }\n  c: { http_url: \"https://c.example.test/mcp\" }\n";
+    let only: BTreeSet<String> = ["b".to_string(), "c".to_string()].into();
+    let out = rewrite_url_aliases(text, Some(&only));
+    assert_eq!(out.skipped, vec!["c".to_string()]);
+    assert_eq!(out.kept, vec!["b".to_string()]);
+}
