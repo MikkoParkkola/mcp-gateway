@@ -362,7 +362,7 @@ fn a_cli_write_refuses_a_config_that_no_longer_loads() {
 fn spliced(text: &str, edit: impl FnOnce(&mut Config)) -> String {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(&path, text).expect("write");
+    crate::gateway::test_helpers::write_owner_only(&path, text).expect("write");
     let (before, read) = Config::load_literal_with_text(&path).expect("load");
     assert_eq!(read, text, "the loader hands back the file's own bytes");
     let mut config = before.clone();
@@ -418,4 +418,48 @@ fn a_file_without_a_final_line_break_keeps_none() {
         c.backends.insert("a".into(), backend("command: z\n"));
     });
     assert_eq!(out, "backends:\n  a:\n    command: z");
+}
+
+/// `MIK-8029.EOL.1`: two edits in one entry leave the untouched line between
+/// them with its own ending.
+#[test]
+fn a_line_between_two_edits_keeps_its_ending() {
+    let text = "backends:\n  a:\n    description: one\n    enabled: true\r\n    command: x\n";
+    let out = spliced(text, |c| {
+        c.backends.insert(
+            "a".into(),
+            backend("description: two\nenabled: true\ncommand: y\n"),
+        );
+    });
+    assert_eq!(
+        out,
+        text.replace("one", "two")
+            .replace("command: x", "command: y")
+    );
+}
+
+/// `MIK-8029.EOL.4`: an addition to a file with no final line break breaks
+/// the old last line and leaves the new last line unbroken.
+#[test]
+fn an_addition_to_an_unbroken_last_line_breaks_it() {
+    let text = "backends:\n  a:\n    command: x";
+    let out = spliced(text, |c| {
+        c.backends.insert("b".into(), backend("command: y\n"));
+    });
+    assert!(
+        out.starts_with("backends:\n  a:\n    command: x\n"),
+        "{out:?}"
+    );
+    assert!(out.contains("  b:") && !out.ends_with('\n'), "{out:?}");
+}
+
+/// A lone `\r` ending the file belongs to its last line, which the edit
+/// leaves alone.
+#[test]
+fn a_lone_carriage_return_at_the_end_is_kept() {
+    let text = "backends:\n  a:\n    command: x\n# kept\r";
+    let out = spliced(text, |c| {
+        c.backends.insert("a".into(), backend("command: z\n"));
+    });
+    assert_eq!(out, "backends:\n  a:\n    command: z\n# kept\r");
 }
