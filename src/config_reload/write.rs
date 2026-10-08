@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Config-file writes that reload the live gateway afterwards.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "webui")]
+use std::path::PathBuf;
+#[cfg(feature = "webui")]
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -211,6 +214,7 @@ pub(super) fn reload_failure(e: &dyn std::fmt::Display, mode: CommentLoss) -> St
 /// still loads, edits, writes, reloads and publishes, then releases both
 /// locks. What it cannot outlive: the process itself (a shutdown mid-reload
 /// leaves the file for the next start to load).
+#[cfg(feature = "webui")]
 pub(crate) async fn mutate_config_and_reload_detached<T, E, F>(
     path: PathBuf,
     reload_context: Option<Arc<ReloadContext>>,
