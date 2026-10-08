@@ -306,7 +306,11 @@ fn the_windows_bootstrap_names_are_reserved() {
             .filter(|(k, _)| k.to_string_lossy().eq_ignore_ascii_case(name))
             .collect();
         assert_eq!(hits.len(), expected, "{name}: {env:?}");
-        assert!(hits.iter().all(|(_, v)| v != "x"), "{name}: {env:?}");
+        // Windows keeps the platform value; neither the allowlist nor the token wins.
+        assert!(
+            hits.iter().all(|(_, v)| v == "/operator/value"),
+            "{name}: {env:?}"
+        );
     }
 }
 

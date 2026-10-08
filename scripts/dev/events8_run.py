@@ -11,7 +11,7 @@
 Everything lives under --dir (default ~/events8-run). It never touches the
 live gateway: separate ports, separate HOME, separate store. Stdlib only.
 """
-import argparse, hashlib, hmac, json, os, re, secrets, shutil, signal, socket, stat, subprocess, sys, time
+import argparse, hashlib, hmac, json, os, re, secrets, signal, socket, stat, subprocess, sys, time
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -75,7 +75,8 @@ def open_run_dir(d):
 def owned_at(fd):
     """`owned`, judged through the directory handle fd."""
     try:
-        mfd = os.open("state.json", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
+        # O_NONBLOCK: a FIFO marker is refused by the type check, not waited on.
+        mfd = os.open("state.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
     except OSError:
         return False
     with os.fdopen(mfd) as marker:
@@ -102,13 +103,26 @@ def clear_owned(d):
         if not owned_at(fd):
             return False
         for name in os.listdir(fd):
-            if stat.S_ISDIR(os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode):
-                shutil.rmtree(name, dir_fd=fd)
-            else:
-                os.unlink(name, dir_fd=fd)
+            remove_at(fd, name)
         return True
     finally:
         os.close(fd)
+
+
+def remove_at(fd, name):
+    """Remove name under the directory handle fd, never following a symlink.
+
+    Hand-rolled rather than shutil.rmtree(dir_fd=), which needs Python 3.11."""
+    if stat.S_ISDIR(os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode):
+        sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        try:
+            for child in os.listdir(sub):
+                remove_at(sub, child)
+        finally:
+            os.close(sub)
+        os.rmdir(name, dir_fd=fd)
+    else:
+        os.unlink(name, dir_fd=fd)
 
 
 def digest(key):
@@ -180,7 +194,7 @@ def cmd_up(a):
                 sys.exit(f"port {port} is already in use; stop the previous run first")
     # Judged again, through the handle the removal uses: the directory may
     # have changed during the probes. A previous run's files only.
-    if d.exists() and any(d.iterdir()) and not clear_owned(d):
+    if d.is_symlink() or (d.exists() and any(d.iterdir()) and not clear_owned(d)):
         sys.exit(f"{d} is not an events8 run directory; pass an empty --dir")
     d.mkdir(parents=True, exist_ok=True)
     d.chmod(0o700)
@@ -359,11 +373,19 @@ def cmd_evidence(a):
     # Several subscribes may be filtered to the repo (ChatGPT retries): take the
     # one whose delivery the gateway audited, else the first, so a later complete
     # chain is not rejected for an earlier incomplete one.
+    def first_seen(r):
+        # When the gateway first audited this event: a retried older event was seen before the fire.
+        ev = find(r, "event_id")
+        times = [epoch(a) or 0 for a in audit if ev and has(a, "event_id", ev)]
+        return min(times) if times else -1
+
     # Only deliveries for THIS fire count: an earlier run's subscription,
-    # delivered before it, must not be picked over this one (MIK-7945).
+    # delivered before it or retrying an event seen before it, must not be
+    # picked over this one (MIK-7945).
     delivered = {r.get("subscription_id") for r in audit
                  if has(r, "action", "events.delivery_outcome") and has(r, "delivered", True)
-                 and (epoch(r) or 0) >= fire.get("ts", 1e18) - 1}
+                 and (epoch(r) or 0) >= fire.get("ts", 1e18) - 1
+                 and first_seen(r) >= fire.get("ts", 1e18) - 1}
     sub = step("events/subscribe answered with an id for this event and repo", shim,
                lambda r: subscribed(r) and r.get("result_id") in delivered) \
         if any(subscribed(r) and r.get("result_id") in delivered for r in shim) else \
@@ -373,12 +395,6 @@ def cmd_evidence(a):
     sub_id = (sub or {}).get("result_id")
     sub_param = wanted(sub or {}) or {}
     sub_args, sub_key = sub_param.get("arguments") or {}, sub_param.get("key")
-    def first_seen(r):
-        # When the gateway first audited this event: a retried older event was seen before the fire.
-        ev = find(r, "event_id")
-        times = [epoch(a) or 0 for a in audit if ev and has(a, "event_id", ev)]
-        return min(times) if times else -1
-
     step("signed inbound webhook accepted (fire.json)", [fire] if fire else [],
          lambda r: r.get("signed") and r.get("status") == 200 and (r.get("ts", 0) >= last - 1))
     step("signed delivery accepted 2xx for the same subscription (gateway audit)", audit,
