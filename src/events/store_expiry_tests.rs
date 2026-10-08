@@ -333,3 +333,82 @@ fn an_expiry_burial_carries_its_rows_callback_host() {
     assert_eq!(due.buried.len(), 1, "buried");
     assert_eq!(due.buried[0].callback_host, "h", "the row's host");
 }
+
+/// A record written before `replayed` existed may be a replay: it reads as
+/// one, so its expiry buries it rather than drops it. A new record always
+/// writes the field, so `false` round-trips.
+#[test]
+fn a_record_from_before_the_replayed_field_is_kept_at_expiry() {
+    let now = Utc::now();
+    let fresh = serde_json::to_value(record("e1", "s1", now)).expect("json");
+    assert_eq!(fresh["replayed"], false, "always written");
+    let mut legacy = fresh.clone();
+    legacy.as_object_mut().expect("object").remove("replayed");
+    let legacy: OutboxRecord = serde_json::from_value(legacy).expect("legacy");
+    assert!(
+        legacy.replayed,
+        "a record from before the field may be a replay"
+    );
+    let fresh: OutboxRecord = serde_json::from_value(fresh).expect("fresh");
+    assert!(!fresh.replayed, "false round-trips");
+}
+
+/// More expired records than one batch: the rest are due at once, not after
+/// an idle wait.
+#[test]
+fn expired_records_past_one_batch_are_due_at_once() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let roomy = OutboxCaps {
+        global: 200,
+        per_subscription: 200,
+    };
+    for n in 0..65 {
+        let tried = OutboxRecord {
+            attempt: 1,
+            ..record(&format!("e{n}"), "s1", now)
+        };
+        store.enqueue(tried, roomy).expect("io");
+    }
+    let later = past_expiry(now);
+    let due = store.due(later, &HashSet::new(), ROOMY).expect("io");
+    assert_eq!(due.buried.len(), 64, "one batch");
+    assert!(
+        due.next.is_some_and(|at| at <= later),
+        "the rest are due now"
+    );
+    let due = store.due(later, &HashSet::new(), ROOMY).expect("io");
+    assert_eq!(due.buried.len(), 1, "the last one");
+    assert_eq!(due.next, None, "nothing left");
+}
+
+/// An expiry burial whose dead letter was placed but not synced keeps its
+/// copy and owes its receipt. A restart completes the burial at load and
+/// the first `due` hands that receipt over, once.
+#[test]
+fn an_expiry_burial_completed_at_load_is_still_receipted() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let tried = OutboxRecord {
+        attempt: 1,
+        ..record("e1", "s1", now)
+    };
+    store.enqueue(tried, OUTBOX).expect("io");
+    store
+        .fail_next_dead_sync
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let later = past_expiry(now);
+    let due = store.due(later, &HashSet::new(), ROOMY).expect("io");
+    assert!(due.buried.is_empty(), "not durable yet: no receipt");
+    drop(store);
+    let reopened = Store::open(dir.path(), later, TAIL).expect("reopen");
+    let ids = |due: super::super::Due| -> Vec<String> {
+        due.buried.into_iter().map(|r| r.event_id).collect()
+    };
+    let first = reopened.due(later, &HashSet::new(), ROOMY).expect("io");
+    assert_eq!(ids(first), ["e1"], "the owed receipt is handed over");
+    let second = reopened.due(later, &HashSet::new(), ROOMY).expect("io");
+    assert!(ids(second).is_empty(), "once");
+}
