@@ -58,6 +58,10 @@ const SCOPE_TABLE: &[(&str, CacheScope)] = &[
     // Not a list: reachability of a URI is decided per caller, so the body is
     // too.
     ("resources/read", CacheScope::Private),
+    // Discovery: the gateway's own document lists the capabilities this
+    // caller is shown, and a relayed backend document may vary by credential
+    // just the same (MIK-8047).
+    ("server/discover", CacheScope::Private),
 ];
 
 /// The methods this gateway has assessed, and what each one warrants.

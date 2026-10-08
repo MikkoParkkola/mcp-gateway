@@ -18,15 +18,17 @@ use crate::protocol::cacheable::LIST_TTL_MS;
 /// there was no handshake in which to say so.
 /// The methods whose results carry `ttlMs` and `cacheScope`.
 ///
-/// Five, from the `CacheableResult` interface. `server/discover` requires the
-/// fields too, but carries them in its own document (`discover_document`), so
-/// that a discovery answered on any route is valid without this shaping.
+/// Five from the `CacheableResult` interface, and `server/discover`, which
+/// requires the fields too. The gateway's own discovery document already
+/// carries them (`discover_document`), and shaping leaves them as written; a
+/// discover relayed to a backend gains them here (MIK-8047).
 pub(super) const CACHEABLE_METHODS: &[&str] = &[
     "tools/list",
     "prompts/list",
     "resources/list",
     "resources/read",
     "resources/templates/list",
+    "server/discover",
 ];
 
 // Unit-test adapter only: production must shape before security finalization
