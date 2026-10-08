@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::create_router;
+use super::direct_guards_fixture::CREDENTIAL_KEY;
 use crate::backend::Backend;
 use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
 use crate::gateway::meta_mcp::MetaMcp;
@@ -210,6 +211,8 @@ struct Setup {
     tenants: bool,
     /// The firewall's audit log, for a row that reads its entries.
     audit_log: Option<std::path::PathBuf>,
+    /// Arms the Meta-MCP (cost governance, provenance stamping).
+    arm: fn(MetaMcp) -> MetaMcp,
 }
 
 impl Default for Setup {
@@ -225,6 +228,7 @@ impl Default for Setup {
             rules: "[{match: \"*\", action: allow}]",
             tenants: false,
             audit_log: None,
+            arm: std::convert::identity,
         }
     }
 }
@@ -247,7 +251,11 @@ fn key(secret: &[u8], name: &str) -> ApiKeyConfig {
 async fn fixture(setup: Setup) -> Fixture {
     let auth = AuthConfig {
         enabled: setup.auth,
-        api_keys: vec![key(b"a", "alice"), key(b"b", "bob")],
+        api_keys: vec![
+            key(b"a", "alice"),
+            key(b"b", "bob"),
+            key(b"c", CREDENTIAL_KEY),
+        ],
         public_paths: vec!["/health".to_string()],
         ..AuthConfig::default()
     };
@@ -300,7 +308,7 @@ async fn fixture(setup: Setup) -> Fixture {
     state_mut.firewall = Some(Arc::new(Firewall::from_config(config, None)));
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
-    state_mut.meta_mcp = Arc::new(meta);
+    state_mut.meta_mcp = Arc::new((setup.arm)(meta));
     Fixture {
         state,
         read,
@@ -766,6 +774,7 @@ mod catalogue;
 mod meta;
 mod relay_split;
 mod verdict;
+mod writes;
 
 /// Row 13: an allowlisted flow is not refused under `block`; the same content
 /// from a source outside the entry still is.
