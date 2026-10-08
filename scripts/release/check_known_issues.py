@@ -67,7 +67,7 @@ BLOCK_HTML = re.compile(
     r"dl|dt|dd|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|"
     r"header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|"
     r"optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|"
-    r"thead|title|tr|track|ul)(?:[\s/>]|$))",
+    r"thead|title|tr|track|ul)(?:[ \t]|/?>|$))",
     re.IGNORECASE,
 )
 # A tag read with quoted attribute values, so a quoted > does not end it. An
@@ -341,15 +341,17 @@ def later_releases(line):
 def problems(section, release):
     # A comment, processing instruction, CDATA section or tag may span lines
     # and split a version, so the section is also read with those removed
-    # across line breaks.
-    joined = re.sub(
+    # across line breaks: once with comments only, once with all three, as
+    # an opener inside a code span would otherwise swallow the rest.
+    text = "\n".join(section)
+    extra = []
+    for hidden in (
+        r"<!--.*?(?:-->|$)",
         r"<!--.*?(?:-->|$)|<\?.*?(?:\?>|$)|<!\[CDATA\[.*?(?:\]\]>|$)",
-        "",
-        "\n".join(section),
-        flags=re.S,
-    )
-    untagged = HIDDEN_MARKUP.sub("", QUOTED_TAG.sub("", joined))
-    extra = joined.splitlines() + untagged.splitlines()
+    ):
+        joined = re.sub(hidden, "", text, flags=re.S)
+        untagged = HIDDEN_MARKUP.sub("", QUOTED_TAG.sub("", joined))
+        extra += joined.splitlines() + untagged.splitlines()
     lines = section + [line for line in dict.fromkeys(extra) if line not in section]
     found = [
         f"Known issues names a later release ({', '.join(later)}): {line.strip()}"
