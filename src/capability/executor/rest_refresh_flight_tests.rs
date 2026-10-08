@@ -251,15 +251,22 @@ async fn a_capability_refresh_left_in_flight_is_not_resent() {
 }
 
 /// RESTFIRST.1: a capability token endpoint counts as rotating from its first
-/// refresh. One whose outcome is unknown is not sent again, even though the
-/// server was never seen to rotate.
+/// refresh. One that did not settle is not sent again, even though the server
+/// was never seen to rotate.
 #[tokio::test]
-async fn a_first_capability_refresh_with_an_unknown_outcome_is_not_resent() {
+async fn a_first_capability_refresh_that_did_not_settle_is_not_resent() {
     let server = TokenServer::start(&[Answer::RotateThen502]).await;
     let dir = tempfile::tempdir().unwrap();
     store_expired(dir.path(), "r1");
 
     let _ = fetch(&executor(dir.path()), &server).await;
+    // Retired in storage, not only refused by this process: a restart must
+    // not send it either.
+    assert_eq!(
+        stored(dir.path()).and_then(|t| t.refresh_token),
+        None,
+        "the possibly consumed refresh token is cleared from storage"
+    );
     let _ = fetch(&executor(dir.path()), &server).await;
     assert_eq!(
         server.uses("r1"),
