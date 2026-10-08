@@ -46,6 +46,7 @@ mod runtime_launch;
 mod status;
 mod stdio_start;
 mod stop;
+pub(crate) mod tools_nudge;
 
 impl Backend {
     /// This backend's signature chain policy (ASI07 inc3, design D1): the
@@ -81,10 +82,6 @@ pub use runtime_launch::runtime_plan_for_backend;
 pub struct Backend {
     /// Backend name
     pub name: String,
-    /// This object's identity in the process (MIK-8168): a reload that
-    /// replaces the backend under the same name gets a new one, so a
-    /// continuation the old object sealed cannot be answered to the new one.
-    instance: u64,
     /// `name` as the `backend` metric label, shared so that recording a
     /// metric costs a reference count, not a copy of the name (MIK-8014.PERF.5).
     metric_label: telemetry_metrics::SharedString,
@@ -252,6 +249,12 @@ pub struct Backend {
     #[cfg(test)]
     oauth_test_seam: parking_lot::Mutex<Option<OAuthTestSeam>>,
     pub(crate) budgets: ShutdownBudgets,
+    /// Unique for the life of the process (`MIK-8127`): names this instance in
+    /// the nudges it sends, so a replaced instance's late ones are ignored.
+    instance: u64,
+    /// Where this instance's nudges go, set when a registry with a change feed
+    /// holds it.
+    nudge_feed: std::sync::OnceLock<tools_nudge::NudgeFeed>,
 }
 
 /// Where a test backend's OAuth client keeps tokens, and who plays the
@@ -281,13 +284,6 @@ impl Backend {
     /// How long this backend's catalogue lists stay fresh (`meta_mcp.cache_ttl`).
     pub(crate) fn cache_ttl(&self) -> Duration {
         self.cache_ttl
-    }
-
-    /// This object's identity in the process (MIK-8168): what a continuation
-    /// binds, so a backend replaced under the same name cannot receive a round
-    /// the old one asked.
-    pub(crate) fn instance(&self) -> u64 {
-        self.instance
     }
 
     /// Whether a start began on this HTTP or WebSocket backend before any

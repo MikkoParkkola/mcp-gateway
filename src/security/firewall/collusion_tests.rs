@@ -337,12 +337,12 @@ fn dedup_per_pair() {
     for i in 0..20 {
         d.record_delivery_at(T, A, true, &s, now + Duration::from_millis(i));
     }
-    // Appending duplicates would saturate every fingerprint at the 9th.
+    // Appending duplicates would fill the caller's records.
     assert!(
         d.check_egress_at(B, U, &s, now + Duration::from_secs(1))
             .is_some()
     );
-    assert_eq!(d.saturated(), 0);
+    assert_eq!(d.capped(), 0);
 }
 
 #[test]
@@ -454,29 +454,30 @@ fn crowded(with_excuse: bool, fillers: usize, now: Instant) -> CollusionDetector
     d
 }
 
+/// `MIK-8123`: no record count switches a fingerprint off. With nine
+/// records B's same-source excuse still holds, and without it A's sensitive
+/// copy witnesses B's relay (before, a ninth record silenced both).
 #[test]
-fn saturated_fingerprint_never_flags() {
+fn many_holders_stay_exact() {
     let now = Instant::now();
     let s = secret();
-    // Controls at 8 tuples: the excuse holds, and without it the relay flags.
     assert!(
         crowded(true, 6, now)
             .check_egress_at(B, U, &s, now)
             .is_none()
     );
-    assert!(
-        crowded(false, 7, now)
-            .check_egress_at(B, U, &s, now)
-            .is_some()
-    );
-    // A 9th tuple saturates: evicting the oldest would drop B's excuse.
     let d = crowded(true, 7, now);
-    assert!(d.saturated() > 0);
-    assert!(d.check_egress_at(B, U, &s, now).is_none());
-    // Saturated never counts, even with no excuse to hide behind.
-    let bare = crowded(false, 8, now);
-    assert!(bare.saturated() > 0);
-    assert!(bare.check_egress_at(B, U, &s, now).is_none());
+    assert!(
+        d.check_egress_at(B, U, &s, now).is_none(),
+        "the excuse held"
+    );
+    assert_eq!(d.capped(), 0, "nine records fit");
+    assert!(
+        crowded(false, 8, now)
+            .check_egress_at(B, U, &s, now)
+            .is_some(),
+        "a ninth record silenced the witness"
+    );
 }
 
 // The primitive ────────────────────────────────────────────────────────────

@@ -14,7 +14,13 @@ use crate::Result;
 
 pub(crate) struct CachedMetadata<T> {
     state: RwLock<CachedMetadataState<T>>,
+    /// Told after every accepted store, whichever writer made it (`MIK-8127`):
+    /// set once, on a backend's shared tool slot only.
+    store_observer: std::sync::OnceLock<StoreObserver>,
 }
+
+/// What [`CachedMetadata::observe_stores`] runs after an accepted store.
+pub(crate) type StoreObserver = Arc<dyn Fn() + Send + Sync>;
 
 struct CachedMetadataState<T> {
     value: Option<Arc<T>>,
@@ -65,6 +71,19 @@ impl<T> CachedMetadata<T> {
     pub(crate) fn new() -> Self {
         Self {
             state: RwLock::new(CachedMetadataState::default()),
+            store_observer: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Run `observer` after every store this cache accepts from now on. The
+    /// first observer stays; a later one is ignored.
+    pub(crate) fn observe_stores(&self, observer: StoreObserver) {
+        let _ = self.store_observer.set(observer);
+    }
+
+    fn stored(&self) {
+        if let Some(observer) = self.store_observer.get() {
+            observer();
         }
     }
 
@@ -104,6 +123,8 @@ impl<T> CachedMetadata<T> {
             return;
         }
         Self::store_locked(&mut state, value, on_stored);
+        drop(state);
+        self.stored();
     }
 
     /// The one store both writers share, run under the caller's write guard
@@ -124,6 +145,8 @@ impl<T> CachedMetadata<T> {
         let mut state = self.state.write();
         Self::store_locked(&mut state, Arc::new(value), on_stored);
         state.generation = state.generation.wrapping_add(1);
+        drop(state);
+        self.stored();
     }
 
     /// Not `value.is_some()`: `invalidate_if` clears the value, so that would
@@ -275,6 +298,39 @@ mod tests {
     use std::time::Duration;
 
     const LONG_TTL: Duration = Duration::from_secs(300);
+
+    /// `MIK-8127`: the observer hears every accepted store, from either
+    /// writer, and never a fill an invalidation voided.
+    #[tokio::test]
+    async fn the_store_observer_hears_each_accepted_store_once() {
+        let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
+        let heard = Arc::new(AtomicU32::new(0));
+        let count = Arc::clone(&heard);
+        cache.observe_stores(Arc::new(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+        }));
+        let filled = cache.get_or_fetch_shared(LONG_TTL, || async { Ok(vec![1u8]) });
+        filled.await.expect("fill");
+        assert_eq!(heard.load(Ordering::SeqCst), 1, "a fill");
+        cache.replace(vec![2u8], || {});
+        assert_eq!(heard.load(Ordering::SeqCst), 2, "a replace");
+        cache.invalidate_if(|_| true);
+        let voided = cache.get_or_fetch_shared(LONG_TTL, || async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok(vec![3u8])
+        });
+        let revoke = async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            cache.invalidate_if(|_| true);
+        };
+        let (voided, ()) = tokio::join!(voided, revoke);
+        voided.expect("the voided fill still answers its caller");
+        assert_eq!(
+            heard.load(Ordering::SeqCst),
+            2,
+            "a voided fill stores nothing"
+        );
+    }
 
     #[tokio::test]
     async fn an_empty_result_is_cached_like_any_other() {
