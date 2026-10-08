@@ -246,3 +246,26 @@ fn a_record_of_a_gone_subscription_is_dropped_not_buried() {
     assert!(!reopened.has_due("s1", now), "dropped");
     assert_eq!(dead_reason(&reopened, "e1"), None, "never buried");
 }
+
+/// L19 (implementation review CRITICAL): unsubscribing an expired row kept
+/// for its burials keeps the tail the expiry began; it never restarts it, so
+/// a re-subscribe after the tail runs out is challenged again.
+#[test]
+fn unsubscribing_a_kept_expired_row_does_not_restart_its_tail() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let tried = OutboxRecord {
+        attempt: 1,
+        ..record("e1", "s1", now)
+    };
+    store.enqueue(tried, OUTBOX).expect("io");
+    let expiry = now + chrono::Duration::hours(1);
+    let late = expiry + chrono::Duration::minutes(30);
+    assert!(store.remove("s1", late, TAIL).expect("io"), "unsubscribed");
+    let after = expiry + chrono::Duration::minutes(61);
+    assert!(
+        !store.is_verified("p", "https://h/s1", after, TAIL),
+        "the tail began at the expiry, not at the unsubscribe"
+    );
+}

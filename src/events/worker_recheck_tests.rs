@@ -430,5 +430,14 @@ async fn a_subscription_expiring_during_the_second_verdict_is_not_sent() {
             !expire,
             "sent only while the subscription is live (expire {expire})"
         );
+        if expire {
+            assert!(
+                hub.store
+                    .subscriptions()
+                    .iter()
+                    .any(|s| hub.store.has_due(&s.id, chrono::Utc::now())),
+                "the claim settled unsent: pending again for the expiry pass"
+            );
+        }
     }
 }

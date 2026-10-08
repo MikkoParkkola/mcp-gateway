@@ -259,17 +259,20 @@ impl Store {
         Ok(())
     }
 
-    /// Remove the expired row `id`, which holds no record any more: its
-    /// pair's tail is stamped first, at its expiry, never at the removal.
-    fn remove_settled_row(
+    /// Remove the expired rows `ids`, which hold no record any more: their
+    /// pairs' tails are stamped first, once, at their expiry, never at the
+    /// removal.
+    fn remove_settled_rows(
         &self,
         state: &mut State,
-        id: &str,
+        ids: &[String],
         now: DateTime<Utc>,
     ) -> std::io::Result<()> {
         self.stamp_ended_tails(state, now)?;
-        remove_record(&self.subs_dir, &format!("{id}.json"))?;
-        state.subs.remove(id);
+        for id in ids {
+            remove_record(&self.subs_dir, &format!("{id}.json"))?;
+            state.subs.remove(id);
+        }
         Ok(())
     }
 
@@ -509,7 +512,9 @@ impl Store {
         self.cancel_pending(&mut state, id)?;
         remove_record(&self.subs_dir, &format!("{id}.json"))?;
         state.subs.remove(id);
-        if !state.pair_live(&sub.principal, &sub.url, now) {
+        // An expired row kept for its burials keeps the expiry stamp the
+        // sweep gave its pair: removing it never restarts the tail (MIK-8061).
+        if sub.live(now) && !state.pair_live(&sub.principal, &sub.url, now) {
             let key = verified_file(&sub.principal, &sub.url);
             if let Some(mut record) = state.verified.get(&key).cloned() {
                 record.last_subscription_ended_at = Some(now);

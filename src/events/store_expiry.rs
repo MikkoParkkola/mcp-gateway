@@ -75,7 +75,8 @@ impl Store {
         state: &mut State,
         now: DateTime<Utc>,
     ) -> std::io::Result<Vec<OutboxRecord>> {
-        let mut expiring: Vec<OutboxRecord> = state
+        // The oldest batch by key first, then only those records cloned.
+        let mut keys: Vec<(DateTime<Utc>, String)> = state
             .outbox
             .values()
             .filter(|r| r.state == OutboxState::Pending)
@@ -85,24 +86,34 @@ impl Store {
                     .get(&r.subscription_id)
                     .is_some_and(|s| !s.live(now))
             })
-            .cloned()
+            .map(|r| (r.created_at, r.event_id.clone()))
             .collect();
-        expiring.sort_by(|a, b| (a.created_at, &a.event_id).cmp(&(b.created_at, &b.event_id)));
-        expiring.truncate(EXPIRY_BATCH);
+        keys.sort();
+        keys.truncate(EXPIRY_BATCH);
         let mut buried = Vec::new();
-        for record in expiring {
-            let id = record.event_id.clone();
-            if record.needs_burial_at_expiry() {
-                if let Err(error) = self.entomb(state, record.clone(), DeadReason::Expired, now) {
-                    // Not durable: the outbox copy stays and the next tick
-                    // buries it again; a record is never in neither place.
-                    tracing::warn!(%error, "events store: an expiry burial is not durable yet");
-                    continue;
-                }
+        for (_, id) in keys {
+            let Some(record) = state.outbox.get(&id).cloned() else {
+                continue;
+            };
+            let bury = record.needs_burial_at_expiry();
+            if bury && let Err(error) = self.entomb(state, record.clone(), DeadReason::Expired, now)
+            {
+                // Not durable: the outbox copy stays and the next tick
+                // buries it again; a record is never in neither place.
+                tracing::warn!(%error, "events store: an expiry burial is not durable yet");
+                continue;
+            }
+            // Receipted only once the copy is gone: a failed unlink leaves
+            // the copy, and the next tick buries and receipts it once. The
+            // burials already done keep their receipts.
+            if let Err(error) = remove_record(&self.outbox_dir, &OutboxRecord::file(&id)) {
+                tracing::warn!(%error, "events store: an expired record's copy was not removed; retried next tick");
+                break;
+            }
+            state.outbox.remove(&id);
+            if bury {
                 buried.push(record);
             }
-            remove_record(&self.outbox_dir, &OutboxRecord::file(&id))?;
-            state.outbox.remove(&id);
         }
         let settled: Vec<String> = state
             .subs
@@ -111,8 +122,10 @@ impl Store {
             .filter(|s| !state.outbox.values().any(|r| r.subscription_id == s.id))
             .map(|s| s.id.clone())
             .collect();
-        for id in settled {
-            self.remove_settled_row(state, &id, now)?;
+        if !settled.is_empty()
+            && let Err(error) = self.remove_settled_rows(state, &settled, now)
+        {
+            tracing::warn!(%error, "events store: a settled expired row was not removed; retried next tick");
         }
         Ok(buried)
     }
