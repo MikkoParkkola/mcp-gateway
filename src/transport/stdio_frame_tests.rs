@@ -375,9 +375,6 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
     // end the write by itself.
     let ended = tokio::time::timeout(std::time::Duration::from_secs(5), stuck).await;
     let released = transport.writer.try_lock().is_ok_and(|w| w.is_none());
-    let _ = std::process::Command::new("kill")
-        .args(["-9", escaped.trim()])
-        .status();
     assert!(
         closed.is_ok(),
         "close() hung on a write an escaped reader keeps stuck"
@@ -450,9 +447,6 @@ async fn dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    let _ = std::process::Command::new("kill")
-        .args(["-9", escaped.trim()])
-        .status();
     assert!(held, "precondition: the write holds stdin");
     assert!(
         freed,
@@ -463,21 +457,25 @@ async fn dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader() {
 /// `MIK-8099.ROW.1`: a write queued behind the stdin lock while the shutdown
 /// token is renewed (what `close()` then `start()` do to it) takes the NEW
 /// token: the token is read under the stdin lock, so the old token's cancel
-/// does not end it. The frame is larger than a pipe, so it waits for the
-/// peer, and a write holding the cancelled token would end at once.
+/// does not end it. The write is polled to pending before the renewal, and
+/// the frame (larger than a pipe) cannot finish until the row lets the peer
+/// read, so a write holding the cancelled token would end first.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_write_queued_across_a_token_renewal_takes_the_new_token() {
     use std::collections::HashMap;
     let dir = tempfile::tempdir().unwrap();
+    let go = dir.path().join("go");
     let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
     let script = format!(
         "while IFS= read -r line; do\n\
          case \"$line\" in\n\
          *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
-         *'notifications/initialized'*) sleep 2; break ;;\n\
+         *'notifications/initialized'*) break ;;\n\
          esac\ndone\n\
-         cat >/dev/null\n"
+         while [ ! -f \"{go}\" ]; do sleep 0.05; done\n\
+         cat >/dev/null\n",
+        go = go.display()
     );
     std::fs::write(dir.path().join("late.sh"), script).unwrap();
     let transport = super::StdioTransport::new(
@@ -488,27 +486,26 @@ async fn a_write_queued_across_a_token_renewal_takes_the_new_token() {
         None,
     );
     transport.start().await.expect("start");
+    let frame = serde_json::json!({
+        "jsonrpc": "2.0", "method": "x", "params": { "blob": "a".repeat(256 * 1024) },
+    })
+    .to_string();
     let held = transport.writer.lock().await;
     let old = transport.shutdown.lock().clone();
-    let queued = {
-        let transport = std::sync::Arc::clone(&transport);
-        let frame = serde_json::json!({
-            "jsonrpc": "2.0", "method": "x", "params": { "blob": "a".repeat(256 * 1024) },
-        })
-        .to_string();
-        tokio::spawn(async move { transport.write_message(frame).await })
-    };
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    assert!(
-        !queued.is_finished(),
-        "precondition: the write waits on stdin"
-    );
+    let mut write = Box::pin(transport.write_message(frame));
+    let polled = tokio::time::timeout(std::time::Duration::from_millis(100), &mut write).await;
+    assert!(polled.is_err(), "precondition: the write waits on stdin");
     old.cancel();
     *transport.shutdown.lock() = tokio_util::sync::CancellationToken::new();
     drop(held);
-    let written = tokio::time::timeout(std::time::Duration::from_secs(10), queued).await;
+    let early = tokio::time::timeout(std::time::Duration::from_millis(300), &mut write).await;
+    std::fs::write(&go, b"").unwrap();
+    let written = match early {
+        Ok(done) => Ok(done),
+        Err(_) => tokio::time::timeout(std::time::Duration::from_secs(10), write).await,
+    };
     assert!(
-        matches!(written, Ok(Ok(Ok(())))),
-        "the old token's cancel ended a write queued after the renewal: {written:?}"
+        matches!(written, Ok(Ok(()))),
+        "the old token's cancel ended a write queued before the renewal: {written:?}"
     );
 }
