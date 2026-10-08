@@ -272,6 +272,8 @@ impl DeliveryDigest {
         sensitive: bool,
         sources: Option<Box<[String]>>,
     ) -> Self {
+        fps.sort_unstable();
+        fps.dedup();
         fps.truncate(RECORD_CAP);
         Self {
             retained: fps,

@@ -261,8 +261,11 @@ tokio::task_local! {
 }
 
 /// Run one plan step's dispatch: the receipts it stages are a plan's, under
-/// `label`, the step as the plan's answer names it (`MIK-8113`).
+/// `label`, the step as the plan's answer names it (`MIK-8113`). A plan run
+/// inside a step keeps the outer step's label: the outer answer names that
+/// step, and the inner plan's own labels mean nothing there.
 pub(crate) async fn plan_step<F: std::future::Future>(label: Option<u32>, step: F) -> F::Output {
+    let label = PLAN_STEP.try_with(|outer| *outer).unwrap_or(label);
     PLAN_STEP.scope(label, step).await
 }
 
