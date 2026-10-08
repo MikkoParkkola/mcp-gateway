@@ -101,6 +101,7 @@ fn split_create(outcome: CreateOutcome) -> (BeginOutcome, Option<OwnedSemaphoreP
         CreateOutcome::InFlight => (BeginOutcome::InFlight, None),
         CreateOutcome::Capacity => (BeginOutcome::Capacity, None),
         CreateOutcome::Unavailable => (BeginOutcome::Unavailable, None),
+        CreateOutcome::Sealed => (BeginOutcome::Sealed, None),
     }
 }
 
