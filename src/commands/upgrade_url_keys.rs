@@ -72,8 +72,9 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
     }
     if !rewrite.skipped.is_empty() {
         out.push(format!(
-            "{at}: not rewritten, change these to `url` by hand (written in flow style, or \
-             holding both `http_url` and `ws_url`): backends {}.",
+            "{at}: not rewritten, change these to `url` by hand (written in flow style, \
+             holding both `http_url` and `ws_url`, or beside text the rewrite could not edit \
+             safely): backends {}.",
             rewrite.skipped.join(", ")
         ));
     }

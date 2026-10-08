@@ -291,6 +291,36 @@ fn refuse_backend_url(dict: &Dict) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// The keys that each pick a backend's transport; `url` stands for one of them.
+const TRANSPORT_KEYS: &[&str] = &["command", "http_url", "ws_url", "a2a_url"];
+
+/// A backend reached by more than one transport key is refused. The file and
+/// environment layers merge key by key, and the transport enum takes the first
+/// key present, so before 4.0 an environment `__WS_URL` over a file
+/// `http_url` was dropped without a word. Keys only, never values.
+fn refuse_two_transports(figment: &Figment) -> Result<()> {
+    let Ok(figment::value::Value::Dict(_, backends)) = figment.find_value("backends") else {
+        return Ok(());
+    };
+    for (name, fields) in &backends {
+        let figment::value::Value::Dict(_, fields) = fields else {
+            continue;
+        };
+        let held: Vec<&str> = TRANSPORT_KEYS
+            .iter()
+            .copied()
+            .filter(|k| fields.contains_key(*k))
+            .collect();
+        if held.len() > 1 {
+            return Err(Error::Config(format!(
+                "backend {name} has both {}; keep one.",
+                held.join(" and ")
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Whether a load substitutes the environment into the config it returns.
 ///
 /// A config destined for a rewrite must stay [`Expansion::Literal`]: the write
@@ -586,6 +616,7 @@ impl Config {
             // `env:`.
             Expansion::Literal => Self::yaml(path),
         };
+        refuse_two_transports(&figment)?;
         let mut config: Self = figment
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;

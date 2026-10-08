@@ -71,9 +71,6 @@ impl Provider for ConfigFile {
     }
 }
 
-/// The keys that each pick a backend's transport; `url` stands for one of them.
-const TRANSPORT_KEYS: &[&str] = &["command", "http_url", "ws_url", "a2a_url"];
-
 /// Turn each backend's `url` into the key its scheme selects (`http_url` or
 /// `ws_url`), once, before anything reads the backend. A refusal names the
 /// keys and never the URL, which can carry a credential.
@@ -88,7 +85,10 @@ fn resolve_backend_urls(dict: &mut Dict) -> std::result::Result<(), String> {
         let Some(url) = fields.remove("url") else {
             continue;
         };
-        if let Some(other) = TRANSPORT_KEYS.iter().find(|k| fields.contains_key(**k)) {
+        if let Some(other) = super::TRANSPORT_KEYS
+            .iter()
+            .find(|k| fields.contains_key(**k))
+        {
             return Err(format!(
                 "backends.{name}.url and backends.{name}.{other} both choose how to reach the \
                  backend; keep `url` and delete `{other}`."
