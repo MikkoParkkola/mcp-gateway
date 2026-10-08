@@ -136,6 +136,31 @@ impl State {
         self.hold_unsynced.remove(id);
     }
 
+    /// Decided under the store lock that writes the row: a row held now
+    /// keeps its hold and the fields it was committed with, whatever the
+    /// commit was checked against and however its refresh began. `Ok(true)`
+    /// when this commit ends a stale hold.
+    fn carry_hold(
+        &self,
+        sub: &mut Subscription,
+        at: DateTime<Utc>,
+        hold: HoldCommit,
+    ) -> Result<bool, CapHit> {
+        let live = self.subs.get(&sub.id).filter(|s| s.live(at));
+        let held_live = live.is_some() && self.held.contains_key(&sub.id);
+        let keep = hold == HoldCommit::Keep || held_live;
+        match live {
+            Some(old) if keep => {
+                sub.payload_fields.clone_from(&old.payload_fields);
+                sub.unoffered_since = old.unoffered_since;
+                sub.held_until = old.held_until;
+            }
+            None if hold == HoldCommit::Keep => return Err(CapHit::HeldRowGone),
+            _ => {}
+        }
+        Ok(hold == HoldCommit::End && !held_live)
+    }
+
     fn index(&self, now: DateTime<Utc>) -> PairIndex {
         let mut index = PairIndex {
             live: HashSet::new(),
@@ -371,22 +396,10 @@ impl Store {
         let mut state = self.state.lock();
         let at = Utc::now().max(now);
         self.sweep(&mut state, at)?;
-        // Decided here, under the store lock that writes the row: a row held
-        // now keeps its hold and the fields it was committed with, whatever
-        // the commit was checked against and however its refresh began.
-        let live = state.subs.get(&sub.id).filter(|s| s.live(at));
-        let held_live = live.is_some() && state.held.contains_key(&sub.id);
-        let keep = hold == HoldCommit::Keep || held_live;
-        match live {
-            Some(old) if keep => {
-                sub.payload_fields.clone_from(&old.payload_fields);
-                sub.unoffered_since = old.unoffered_since;
-                sub.held_until = old.held_until;
-            }
-            None if hold == HoldCommit::Keep => return Ok(Err(CapHit::HeldRowGone)),
-            _ => {}
-        }
-        let ends_hold = hold == HoldCommit::End && !held_live;
+        let ends_hold = match state.carry_hold(&mut sub, at, hold) {
+            Ok(ends_hold) => ends_hold,
+            Err(hit) => return Ok(Err(hit)),
+        };
         // A tail over the cap in force is gone before it can vouch.
         self.trim_tails(&mut state, at, tail)?;
         // An expired row kept for its records' burials: a new row over it
