@@ -511,6 +511,7 @@ impl Drop for HttpTransport {
     }
 }
 
+mod cancel_guard;
 mod client;
 /// The guarded client, for the A2A transport (MIK-8063): the same redirect
 /// policy and pinned resolution as every HTTP backend.
