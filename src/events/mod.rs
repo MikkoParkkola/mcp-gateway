@@ -134,6 +134,18 @@ pub(crate) trait EventSource: Send + Sync {
     fn lifecycle_key(&self, _principal: &str, name: &str, arguments: &serde_json::Value) -> String {
         String::from_utf8(rpc::canonical(&serde_json::json!([name, arguments]))).unwrap_or_default()
     }
+    /// The lifecycle key of a stored row this source owns even while it does
+    /// not offer the row's type (a held REST watch, MIK-8122): the key comes
+    /// from the row, never from a catalogue read. `None` for rows it does not
+    /// own; their key comes from the offering source.
+    fn row_key(&self, _sub: &records::Subscription) -> Option<String> {
+        None
+    }
+    /// The sharing class a new REST watch of type `name` is admitted under;
+    /// `None` for any other source (MIK-8122).
+    fn watch_class(&self, _name: &str) -> Option<records::WatchClass> {
+        None
+    }
     /// The first live subscription for `key` appeared. A refusal fails that
     /// subscribe with the refusal's code.
     async fn on_first_subscriber(

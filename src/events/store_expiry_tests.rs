@@ -476,12 +476,14 @@ fn a_lapsed_hold_buries_its_records_and_starts_the_tail_at_its_bound() {
         ..record("e1", "s1", now)
     };
     store.enqueue(tried, OUTBOX).expect("io");
-    let held = |_: &Subscription| Judged {
-        held: Some(Held {
-            reason: "event type no longer offered",
-            key: None,
-        }),
-        backfill: None,
+    let held = |_: &Subscription| {
+        Some(Judged {
+            held: Some(Held {
+                reason: "event type no longer offered",
+                key: None,
+            }),
+            ..Judged::default()
+        })
     };
     let bound = now + chrono::Duration::hours(1);
     store

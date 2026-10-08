@@ -514,6 +514,7 @@ impl EventsHub {
             payload_fields: self.payload_fields(&descriptor.name),
             unoffered_since: None,
             held_until: None,
+            watch_class: None,
         };
         // At most two passes: a cached opt-in can vanish (tail eviction)
         // between the read above and the commit; the store then refuses
@@ -585,6 +586,7 @@ impl EventsHub {
             let checked = |attempt: &mut Subscription| -> Result<(), RpcError> {
                 hub.still_admits(attempt)?;
                 attempt.payload_fields = hub.payload_fields(&attempt.name);
+                attempt.watch_class = hub.watch_class(&attempt.name);
                 attempt.unoffered_since = None;
                 attempt.held_until = None;
                 Ok(())
