@@ -11,7 +11,7 @@
 //! ahead of the committed image. Losing the *answer* to a cancelled call is
 //! acceptable; losing the publish or the poison that follows a write is not.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -137,18 +137,19 @@ struct Entry {
 struct State {
     ready: bool,
     entries: BTreeMap<String, Entry>,
-    /// Rows skipped at load whose keys stay taken, and rows nothing could be
-    /// read from (MIK-8023). Their files stay; both still count against the
+    /// Rows skipped at load whose keys stay taken (MIK-8023), and the file
+    /// names of rows whose key could not be read, which seal new keyed
+    /// admissions (MIK-8052). Their files stay; both still count against the
     /// store's caps.
     reserved: Vec<(AdmissionRecord, String)>,
-    unreadable: usize,
+    sealed: BTreeSet<String>,
 }
 
 /// How many rows the last load skipped, by whether each kept its key.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SkippedRecords {
     pub(crate) reserved: usize,
-    pub(crate) unreadable: usize,
+    pub(crate) sealed: usize,
 }
 
 struct Shared {
@@ -159,6 +160,9 @@ struct Shared {
     order: Mutex<()>,
     state: Mutex<State>,
     lease: Mutex<Option<ExclusiveFileLock>>,
+    /// The store directory's identity at open, so a re-read can tell a removed
+    /// record from a directory that moved away or was replaced (MIK-8052).
+    dir_id: Option<platform::DirId>,
     #[cfg(test)]
     seams: input::TestSeams,
     temp: AtomicU64,
@@ -171,12 +175,13 @@ impl TaskStore {
     pub(super) async fn open(path: &Path, limits: StoreLimits) -> Result<Self, StoreError> {
         let dir = path.to_owned();
         let opened = dir.clone();
-        let (lease, loaded) = tokio::task::spawn_blocking(move || open_blocking(&opened, limits))
-            .await
-            .map_err(|_| StoreError::Storage)??;
+        let (lease, loaded, dir_id) =
+            tokio::task::spawn_blocking(move || open_blocking(&opened, limits))
+                .await
+                .map_err(|_| StoreError::Storage)??;
         for (class, count) in [
             ("reserved", loaded.reserved.len()),
-            ("unreadable", loaded.unreadable),
+            ("sealed", loaded.sealed.len()),
         ] {
             #[allow(clippy::cast_precision_loss)]
             telemetry_metrics::gauge!("mcp_task_store_skipped_records", "class" => class)
@@ -190,9 +195,10 @@ impl TaskStore {
                 ready: true,
                 entries: loaded.entries,
                 reserved: loaded.reserved,
-                unreadable: loaded.unreadable,
+                sealed: loaded.sealed,
             }),
             lease: Mutex::new(Some(lease)),
+            dir_id,
             #[cfg(test)]
             seams: input::TestSeams::default(),
             temp: AtomicU64::new(0),
@@ -431,6 +437,11 @@ impl Shared {
             }
             reject_duplicate(&state, task.id(), &record)?;
             admit(&state, self.limits, &record, bytes.len())?;
+        }
+        // Room for the bounded failure this task may have to settle as, or a
+        // too-large outcome would leave it working (MIK-7651).
+        if targets::fallback_bytes(&task, &record, self.now())? > self.limits.record_bytes {
+            return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;
         // Readable FIRST, discoverable second. Reversed, a retry could be told
@@ -674,7 +685,7 @@ fn admit(
     // A skipped row's file is still on disk and still reserves its allowance.
     fits(
         limits,
-        state.entries.len() + state.reserved.len() + state.unreadable,
+        state.entries.len() + state.reserved.len() + state.sealed.len(),
     )
 }
 

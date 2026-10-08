@@ -575,7 +575,12 @@ fn settle_direct_idempotency(
         // all the scope noted is this call's reading.
         let reading =
             crate::gateway::meta_mcp::invoke::cache_reads::reading(std::collections::BTreeSet::new);
-        reservation.complete_read(result, reading);
+        // What the gateway wrote so far (provenance, cost warnings) is
+        // stored with the answer, so a replay restores it (MIK-8025).
+        reservation.complete_read(
+            result,
+            (reading, crate::gateway::gateway_writes::recorded()),
+        );
     }
 }
 

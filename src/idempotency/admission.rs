@@ -22,6 +22,15 @@ pub(crate) const RESULT_LIMIT: usize = 512 * 1_024;
 pub(crate) const TOTAL_RESULT_LIMIT: usize = 128 * 1_024 * 1_024;
 pub(crate) const RETENTION_SECS: u64 = 24 * 60 * 60;
 
+// MIK-7991: the invoke-path idempotency entry completes before this one and
+// may not outlive it, so a keyed re-issue is normally answered here first.
+// This clock counts whole wall-clock seconds, so its truncation or a forward
+// wall-clock step can still expire this entry first; that path's replay arm
+// keeps its own guard for that case.
+const _: () = {
+    assert!(super::COMPLETED_TTL.as_secs() <= RETENTION_SECS);
+};
+
 type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,7 +62,17 @@ pub(crate) enum Admission {
     InFlight,
     Replay(Arc<[u8]>),
     Unavailable,
+    /// A stored task row's key is unreadable, so no new identity is admitted
+    /// until an operator repairs or removes it (MIK-8052).
+    Sealed,
 }
+
+/// What a caller is told while new keyed calls are sealed (MIK-8052): what
+/// happened and that it clears, but never a server path (that is in the log
+/// and the admin `/health` view).
+pub(crate) const SEALED_MESSAGE: &str = "New calls with an idempotency key are paused: the \
+    gateway's task store holds a record it cannot read. They resume on their own once an \
+    operator repairs or removes it; the gateway log and the admin /health view name the file.";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Settlement {
@@ -84,6 +103,10 @@ struct State {
     metadata_bytes: usize,
     result_bytes: usize,
     generation: u64,
+    /// Stored task rows whose key could not be read (MIK-8052). While any
+    /// exists, a NEW identity is refused: it could be one of those rows' retry.
+    /// Identities already held answer as before.
+    sealed: usize,
 }
 
 struct Entry {
@@ -215,6 +238,23 @@ impl ExecutionAdmission {
         })
     }
 
+    /// Move one holder's share of the seal on NEW identities from `from` to
+    /// `to` rows (MIK-8052). A holder is a task service: its share is how many
+    /// of its stored rows hold a key nobody can read. It moves only its own
+    /// share, at open, after each re-read (always after any repaired row's
+    /// binding is imported, so a key never falls between the two) and at
+    /// shutdown; a seal another holder placed is never touched.
+    pub(crate) fn adjust_sealed(&self, from: usize, to: usize) {
+        let mut state = self.state.lock();
+        state.sealed = state.sealed.saturating_sub(from).saturating_add(to);
+    }
+
+    /// The seal count, for tests.
+    #[cfg(test)]
+    pub(crate) fn sealed_for_test(&self) -> usize {
+        self.state.lock().sealed
+    }
+
     /// Call only after current authorization, with a stable verified principal
     /// and sanitized operation/representation descriptors. No backend work occurs
     /// here. A Task lease is only a reservation, never a durable acknowledgement.
@@ -272,6 +312,9 @@ impl ExecutionAdmission {
                 } => Admission::Replay(Arc::clone(bytes)),
                 Status::Completed { bytes: None, .. } => Admission::Unavailable,
             });
+        }
+        if state.sealed > 0 {
+            return Ok(Admission::Sealed);
         }
         now.checked_add(RETENTION_SECS)
             .ok_or(Refusal::ExpiryOverflow)?;

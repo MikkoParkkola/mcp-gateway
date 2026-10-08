@@ -36,6 +36,9 @@ fn subs_on_disk(root: &Path) -> usize {
     })
 }
 
+/// Debug builds' override of the startup webhook withdraw's grace period.
+const GRACE_ENV: &str = "MCP_GATEWAY_TEST_EVENTS_WITHDRAW_GRACE_MS";
+
 /// A subscription with one retry pending, the gateway stopped, then started
 /// again with `change` applied to its directory and config.
 async fn restart_after(
@@ -49,7 +52,9 @@ async fn restart_after(
         &json!({"retry_base": "30s", "retry_max_attempts": 5, "retry_window": "15m"}),
     );
     let (k, v) = rx.trust_env();
-    let mut gw = Gateway::start_with_env(&root, cfg, &[(k, &v)]).await;
+    // The startup webhook withdraw waits out no grace period (MIK-8027).
+    let env = [(k, v.as_str()), (GRACE_ENV, "0")];
+    let mut gw = Gateway::start_with_env(&root, cfg, &env).await;
     gw.event_names(Some(ALICE), Some(gateway::EVENT)).await;
     rx.event_default(EventReply::Status(503));
     subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;

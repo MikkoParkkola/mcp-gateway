@@ -4,7 +4,7 @@
 //! `2026-09-28-asi10-verbatim-relay.md` §13.3: the egress check on what a
 //! backend receives, and the per-call receipts committed at delivery.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use serde_json::Value;
 
@@ -239,6 +239,7 @@ struct Receipt {
 tokio::task_local! {
     /// The receipts of the delivery this task owns (§13.3 "Recording").
     static RELAY_RECEIPTS: RefCell<Vec<Receipt>>;
+    static RELAY_STAGED: Cell<usize>; // What it staged so far (MIK-7992).
     /// Set while one step of a plan dispatches.
     static PLAN_STEP: ();
 }
@@ -255,7 +256,7 @@ pub(crate) async fn collecting<F: std::future::Future>(delivery: F) -> F::Output
     RELAY_RECEIPTS
         .scope(
             RefCell::new(Vec::new()),
-            super::gateway_writes::scope(delivery),
+            RELAY_STAGED.scope(Cell::new(0), super::gateway_writes::scope(delivery)),
         )
         .await
 }
@@ -480,7 +481,8 @@ impl MetaMcp {
     ) -> (F::Output, StagedReceipts) {
         let (output, receipts) = RELAY_RECEIPTS
             .scope(RefCell::new(Vec::new()), async {
-                let output = super::gateway_writes::scope(delivery).await;
+                let writes = super::gateway_writes::scope(delivery);
+                let output = RELAY_STAGED.scope(Cell::new(0), writes).await;
                 let staged = RELAY_RECEIPTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
                 (output, staged)
             })
@@ -610,7 +612,11 @@ impl MetaMcp {
         };
         if let Some(target) = target {
             let value = unwrapped.as_ref().unwrap_or(result);
-            self.stage_relay_receipt(caller.relay_caller(session_id), target, value);
+            // MIK-7991: the stored record was restored on decode; the replay
+            // wrote nothing else, so the delivery's record is exactly it.
+            let record = super::gateway_writes::recorded();
+            let value = super::gateway_writes::without(value, &record);
+            self.stage_relay_receipt(caller.relay_caller(session_id), target, &value);
         }
     }
 }
@@ -657,20 +663,20 @@ fn receipt_with(
     (server, tool): (&str, &str),
     value: &Value,
 ) -> Option<Receipt> {
-    RELAY_RECEIPTS.try_with(|_| ()).ok()?;
-    // MIK-7994: capped without the members the gateway wrote on this call. A
-    // plan step's receipt is only retained later, never rebuilt, so text the
-    // cap drops here for the gateway's members is gone for good.
+    RELAY_STAGED.try_with(|_| ()).ok()?;
+    // MIK-7994: without this call's gateway members; plan receipts are never rebuilt.
     let mut value = value.clone();
     super::gateway_writes::strip(&mut value, super::gateway_writes::Layer::Value);
-    let digest = fw.delivery_digest(server, tool, &value)?;
+    let in_plan = PLAN_STEP.try_with(|()| ()).is_ok();
+    let digest =
+        RELAY_STAGED.with(|s| fw.receipt_digest(server, tool, &value, in_plan.then_some(s)))?;
     Some(Receipt {
         key: who.key.to_owned(),
         keyed: who.keyed,
         server: server.to_owned(),
         tool: tool.to_owned(),
         digest,
-        in_plan: PLAN_STEP.try_with(|()| ()).is_ok(),
+        in_plan,
         pending_retain: false,
     })
 }

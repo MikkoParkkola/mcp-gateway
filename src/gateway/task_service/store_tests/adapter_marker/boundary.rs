@@ -10,7 +10,7 @@ async fn marker_07_repeated_marker_at_exact_record_cap_preserves_durable_state()
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tasks");
     let store = open(&path).await;
-    let (task, binding) = admitted(&store, &services(), "exact-marker-cap").await;
+    let (task, binding) = admitted_with(&store, &services(), "exact-marker-cap", padding()).await;
     let owner = binding.principal_digest().to_owned();
     store.mark_dispatched(&owner, task.id(), 1).await.unwrap();
     let before = fs::read(path.join(format!("{}.json", task.id()))).unwrap();
@@ -20,6 +20,8 @@ async fn marker_07_repeated_marker_at_exact_record_cap_preserves_durable_state()
     // Reopen an actual committed record at its exact inclusive maximum. The
     // loader and marker writer must agree; a legal loaded record cannot become
     // unwritable merely because the marker is already present.
+    // The row carries a target its fallback drops, so the loader's fallback
+    // room (MIK-7651) fits under this cap and the size check is what is pinned.
     let store = TaskStore::open(
         &path,
         StoreLimits {
@@ -54,6 +56,8 @@ fn upstream_for(binding: &TaskBinding, handle: &str) -> UpstreamRecord {
 }
 
 /// Reopen the closed directory with the record cap set to the row's exact size.
+/// The row must carry [`padding`], or the loader refuses it for fallback room
+/// (MIK-7651) before the size check under test is reached.
 async fn reopened_at_exact_cap(path: &Path, id: &str) -> TaskStore {
     let size = fs::read(path.join(format!("{id}.json"))).unwrap().len();
     TaskStore::open(
@@ -195,7 +199,7 @@ async fn upstream_02_a_descriptor_that_overflows_the_record_cap_is_refused_unwri
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tasks");
     let store = open(&path).await;
-    let (task, binding) = admitted(&store, &services(), "up-cap").await;
+    let (task, binding) = admitted_with(&store, &services(), "up-cap", padding()).await;
     let owner = binding.principal_digest().to_owned();
     store.close().await.unwrap();
 

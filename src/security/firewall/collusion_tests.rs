@@ -766,7 +766,6 @@ fn a_kept_receipt_never_runs_together_values_delivered_as_keys() {
     let d = detector();
     // Twenty words each: keys long enough for the walk to read.
     let (a, b) = (text(13, 20), text(17, 20));
-    let (step, _) = DeliveryDigest::of_parts(&[a.as_str(), b.as_str()], 2, false);
     let mut map = serde_json::Map::new();
     map.insert(a.clone(), "v".into());
     map.insert(b.clone(), "w".into());
@@ -780,20 +779,22 @@ fn a_kept_receipt_never_runs_together_values_delivered_as_keys() {
             .any(|fp| !allowed.contains(fp)),
         "premise: running the two together adds fingerprints"
     );
-    let kept: HashSet<u64> = step
-        .retaining(&d, &delivered)
-        .fingerprints(&d)
-        .into_iter()
-        .collect();
-    assert!(
-        kept.iter().all(|fp| allowed.contains(fp)),
-        "only fingerprints of a key as delivered are kept"
-    );
-    assert!(
-        [&a, &b]
-            .iter()
-            .flat_map(|t| d.fingerprints(t))
-            .all(|fp| kept.contains(&fp)),
-        "each key's own fingerprints stay"
-    );
+    // Staged as a delivery is and as a plan step is, cap deferred (MIK-7992).
+    for of in [DeliveryDigest::of_parts, DeliveryDigest::of_plan_step_parts] {
+        let (step, _) = of(&[a.as_str(), b.as_str()], 2, false);
+        let kept: HashSet<u64> = step
+            .retaining(&d, &delivered)
+            .fingerprints(&d)
+            .into_iter()
+            .collect();
+        assert!(
+            kept.iter().all(|fp| allowed.contains(fp)),
+            "only fingerprints of a key as delivered are kept"
+        );
+        let own: Vec<u64> = [&a, &b].iter().flat_map(|t| d.fingerprints(t)).collect();
+        assert!(
+            own.iter().all(|fp| kept.contains(fp)),
+            "each key's fps stay"
+        );
+    }
 }
