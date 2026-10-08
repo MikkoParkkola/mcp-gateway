@@ -40,15 +40,12 @@ pub(crate) fn drop_cache_tools(text: &str) -> (Option<String>, Retired) {
                 .collect()
         })
         .unwrap_or_default();
-    match parse(text) {
-        // The loader is laxer than this strict parse (a repeated key, say):
-        // such a file is never edited, but a likely key is still named.
-        None if candidates.is_empty() => return (None, Retired::Absent),
-        None => return (None, Retired::Left),
-        Some(doc) if doc["meta_mcp"].get("cache_tools").is_none() => {
-            return (None, Retired::Absent);
-        }
-        Some(_) => {}
+    // Presence is read as the loader reads it (a repeated key is accepted);
+    // an edit still needs the strict parse in `only_cache_tools_went`.
+    let sets_key = serde_yaml::from_str::<figment::value::Value>(text)
+        .is_ok_and(|doc| doc.find_ref("meta_mcp.cache_tools").is_some());
+    if !sets_key {
+        return (None, Retired::Absent);
     }
     // A lookalike line inside a block scalar fails the parse check, so every
     // candidate is tried in turn.
@@ -112,6 +109,7 @@ mod tests {
             "meta_mcp: {cache_tools: false, enabled: true}\n",
             "meta_mcp:\n  cache_tools: false\n",
             "meta_mcp:\n  enabled: true\n  enabled: true\n  cache_tools: false\n",
+            "meta_mcp: {enabled: true, enabled: true, \"cache_tools\": false}\n",
         ] {
             assert_eq!(drop_cache_tools(text), (None, Retired::Left), "{text}");
         }
