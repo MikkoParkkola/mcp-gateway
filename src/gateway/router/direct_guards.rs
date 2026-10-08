@@ -106,6 +106,7 @@ impl DirectRouteGuards {
         {
             return Ok(refusal(response.id.clone(), &e));
         }
+        let mut warned = false;
         if let Some(result) = response.result.take() {
             match meta.gate_payload(call, result) {
                 Ok((mut result, effect)) => {
@@ -113,6 +114,7 @@ impl DirectRouteGuards {
                         && let Some(obj) = result.as_object_mut()
                     {
                         obj.insert("_cost_warnings".to_string(), serde_json::json!(warnings));
+                        warned = true;
                     }
                     response.result = Some(result);
                     // A3 and inc3 D4: a gated-through backend answer, with
@@ -132,6 +134,12 @@ impl DirectRouteGuards {
         }
         if response_blocked(state, call, client, &mut response) {
             response = refusal(response.id.clone(), &Error::ResponseFirewallRefused);
+        } else if warned && let Some(result) = response.result.as_ref() {
+            // The warnings are the gateway's, as the scan left them (a
+            // redaction stays bound to the text the caller gets): noted, so
+            // the receipt leaves them out and a replay restores the note.
+            use crate::gateway::gateway_writes::{Layer, note};
+            note(Layer::Value, &["_cost_warnings"], result);
         }
         // Success only on an answered result, as on meta (`handlers.rs`): a
         // gate refusal must not reset a breaker the caller had tripped.
