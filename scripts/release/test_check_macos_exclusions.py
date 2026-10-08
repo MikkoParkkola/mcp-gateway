@@ -85,6 +85,17 @@ class CheckMacosExclusions(unittest.TestCase):
             ],
         )
 
+    def test_a_test_gated_module_in_a_production_file_is_seen(self) -> None:
+        rust = '#[cfg(all(test, target_os = "linux"))]\nmod e2e_tests;\n'
+        self.assertEqual(
+            self.tree(rust, path="src/reload/mod.rs"),
+            ["not run on macOS and not listed: src/reload/mod.rs e2e_tests"],
+        )
+
+    def test_an_equals_skip_is_seen(self) -> None:
+        found = self.tree("fn nothing() {}\n", skips=" -- --skip=burst")
+        self.assertEqual(found, ["not run on macOS and not listed: .github/workflows/ci.yml burst"])
+
     def test_linux_only_production_code_is_not_a_test(self) -> None:
         rust = '#[cfg(target_os = "linux")]\nfn read_proc() {}\n#[cfg(target_os = "linux")]\nmod inotify;\n'
         self.assertEqual(self.tree(rust, path="src/watch.rs"), [])

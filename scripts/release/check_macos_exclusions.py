@@ -29,6 +29,7 @@ OFF_MACOS = re.compile(
 )
 TEST_ATTR = re.compile(r"#\[(tokio::)?test\b")
 ITEM = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(fn|mod)\s+(\w+)")
+TEST_CFG = re.compile(r"#\[cfg\((?:all\()?test\b")
 TEST_FILE = re.compile(r"(^|/)tests?(/|\.rs$)|_tests?\.rs$|_tests/")
 
 
@@ -55,8 +56,11 @@ def excluded(root: Path) -> set[tuple[str, str]]:
             if not item:
                 continue
             kind, name = item.groups()
+            # A module is a test module in a test file, or when its own gate
+            # says `test` (`cfg(all(test, ...))` in a production mod.rs).
+            test_gated = any(TEST_CFG.search(a) for a in block)
             if (kind == "fn" and any(TEST_ATTR.match(a) for a in block)) or (
-                kind == "mod" and TEST_FILE.search(rel)
+                kind == "mod" and (TEST_FILE.search(rel) or test_gated)
             ):
                 found.add((rel, name))
     return found
@@ -78,7 +82,7 @@ def skipped(root: Path) -> set[tuple[str, str]]:
     text = (root / WORKFLOW).read_text()
     job = text.split("\n  macos-check:\n", 1)[1]
     job = re.split(r"\n  [A-Za-z0-9_-]+:\n", job, maxsplit=1)[0]
-    return {(WORKFLOW, name) for name in re.findall(r"--skip (\S+)", job)}
+    return {(WORKFLOW, name) for name in re.findall(r"--skip[= ](\S+)", job)}
 
 
 def problems(root: Path) -> list[str]:
