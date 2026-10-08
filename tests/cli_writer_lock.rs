@@ -91,3 +91,27 @@ fn a_cli_write_waits_for_the_config_lock() {
         "{written}"
     );
 }
+
+/// R7: `init` into a directory that does not exist yet creates it, takes the
+/// config lock there (the sidecar stays: it is never deleted), and writes.
+#[test]
+fn init_into_a_missing_directory_takes_the_config_lock() {
+    let home = tempfile::tempdir().expect("home");
+    let config = home.path().join("new").join("dir").join("gateway.yaml");
+    let output = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
+        .current_dir(home.path())
+        .args(["init", "--output", config.to_str().expect("utf-8 path")])
+        .output()
+        .expect("run mcp-gateway init");
+    assert!(
+        output.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(config.is_file(), "init wrote no config");
+    let sidecar = config.with_file_name(".gateway.yaml.lock");
+    assert!(
+        sidecar.is_file(),
+        "init must write under the config lock, whose sidecar stays next to the file"
+    );
+}

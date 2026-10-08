@@ -132,3 +132,28 @@ fn public_config_writers_take_a_mode_not_a_bool() {
         "write_config_preserving must take the CommentLoss mode: {preserving}"
     );
 }
+
+/// R8: a symlink planted where the sidecar goes is refused, never followed:
+/// the sidecar sits in a user-chosen directory, and following a link would
+/// lock (and on first use create) a file somewhere else.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlinked_lock_sidecar_refuses_the_write() {
+    let (dir, path, lock) = config();
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::write(&elsewhere, "untouched").expect("link target");
+    std::os::unix::fs::symlink(&elsewhere, &lock).expect("plant the symlink");
+
+    let result = mutate_config_and_reload_with(&path, None, CommentLoss::Refuse, add_b).await;
+
+    assert!(
+        matches!(&result, Err(MutateError::Write(ConfigWriteError::Failed(m))) if m.contains("lock")),
+        "a symlinked sidecar must refuse the write, naming the lock: {}",
+        outcome(&result)
+    );
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), START);
+    assert_eq!(
+        std::fs::read_to_string(&elsewhere).expect("read"),
+        "untouched"
+    );
+}
