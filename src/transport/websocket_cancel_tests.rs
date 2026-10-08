@@ -132,7 +132,7 @@ async fn the_writer_skips_a_request_abandoned_in_the_queue() {
     use crate::transport::websocket_test_server::{Behaviour, WsPeer};
     use crate::transport::write_claim::WriteClaim;
 
-    let peer = WsPeer::start(Behaviour::SilentRequests).await;
+    let peer = WsPeer::start(Behaviour::Normal).await;
     let transport = WebSocketTransport::new(&peer.url, HashMap::new(), ARRIVAL, None);
     tokio::time::timeout(ARRIVAL, transport.connect())
         .await
