@@ -129,6 +129,7 @@ impl A2aTransport {
 
     /// Cancel the task of every question expired at `now`.
     fn sweep(&self, now: std::time::Instant) {
+        let _hold = self.canceller.hold();
         for pending in self.parked.drain_expired(now) {
             self.cancel(pending);
         }
@@ -246,6 +247,9 @@ impl A2aTransport {
         extra_headers: &[(String, String)],
         identity: Option<&str>,
     ) -> Result<JsonRpcResponse> {
+        // Counted before the task leaves the map, so a `close` racing this
+        // retry waits for the guard below instead of settling at zero.
+        let _hold = self.canceller.hold();
         let pending = match self.parked.take(token, identity, std::time::Instant::now()) {
             Ok(pending) => pending,
             Err((_, expired)) => {

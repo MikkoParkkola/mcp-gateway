@@ -188,7 +188,7 @@ const CANCEL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One unit of cancel work `close` waits for: a live [`CancelGuard`] or a
 /// queued or running cancel.
-struct Busy(Arc<watch::Sender<usize>>);
+pub(crate) struct Busy(Arc<watch::Sender<usize>>);
 
 impl Busy {
     fn new(work: &Arc<watch::Sender<usize>>) -> Self {
@@ -221,6 +221,12 @@ impl Canceller {
             permits: Arc::new(Semaphore::new(MAX_CANCELS)),
             work: Arc::new(watch::channel(0).0),
         }
+    }
+
+    /// Count work for `close` to wait on while a task changes owner: taken
+    /// before a task leaves [`Parked`], held until its guard or cancel exists.
+    pub(crate) fn hold(&self) -> Busy {
+        Busy::new(&self.work)
     }
 
     /// Queue one `CancelTask` without waiting for it, never retried. A

@@ -739,4 +739,11 @@ async fn a2a_8_an_input_round_through_an_mcp_task() {
     let sends = stub::sends(&log);
     assert_eq!(sends.len(), 2, "{settled}");
     assert_eq!(sends[1].body["params"]["message"]["taskId"], "task-2");
+    assert!(
+        sends[1].body["params"]["message"]
+            .to_string()
+            .contains("Helsinki"),
+        "the caller's answer reached the agent: {}",
+        sends[1].body
+    );
 }
