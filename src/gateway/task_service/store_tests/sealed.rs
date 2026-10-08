@@ -702,3 +702,35 @@ async fn a_refused_repair_is_withdrawn_and_stays_sealed() {
     );
     service.close().await.unwrap();
 }
+
+/// `MIK-8121`: a repaired row is written durably before it is served. When
+/// that write fails, the row stays sealed and cannot be read.
+#[tokio::test]
+async fn a_repaired_row_whose_write_fails_stays_sealed() {
+    use super::super::store::CommitStage;
+    let dir = tempfile::tempdir().unwrap();
+    let (path, rows, _admission, service) = sealed_service(dir.path(), &["k-unwritten"]).await;
+    let (id, original) = &rows[0];
+    std::fs::write(path.join(format!("{id}.json")), original).unwrap();
+    service
+        .store
+        .set_hook(Some(Arc::new(|stage| {
+            if stage == CommitStage::Write {
+                return Err(std::io::Error::other("the write is refused"));
+            }
+            Ok(())
+        })))
+        .await;
+    service.reread_sealed().await;
+    assert_eq!(
+        service.skipped_records().sealed,
+        1,
+        "a repaired row was served without being written"
+    );
+    assert!(
+        service.get("oidc:acme:alice", id).is_err(),
+        "a repaired row whose write failed is readable"
+    );
+    service.store.set_hook(None).await;
+    service.close().await.unwrap();
+}
