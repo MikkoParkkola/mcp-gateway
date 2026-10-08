@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8080 W1: on Windows the Job is ended by its handle even after the
 //! leader exited, so a descendant left in the Job dies, and `finish` (whose
-//! JobObject wait blocks until the Job is empty) returns the leader's status.
+//! `JobObject` wait blocks until the Job is empty) returns the leader's status.
 //!
 //! The descendant is checked through a process handle (`Get-Process` plus its
 //! start time), so a reused pid cannot pass for it.
