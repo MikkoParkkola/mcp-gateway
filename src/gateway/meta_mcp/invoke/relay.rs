@@ -708,6 +708,8 @@ mod catalogue;
 mod delivered;
 #[path = "relay_seams.rs"]
 mod seams;
+#[cfg(test)]
+pub(crate) use seams::noting_plan_members;
 pub(crate) use seams::{note_plan_member, pointer_token};
 
 pub(crate) use catalogue::{CatalogueCaller, as_caller};

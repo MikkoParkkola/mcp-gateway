@@ -41,6 +41,18 @@ pub(crate) fn pointer_token(key: &str) -> String {
     key.replace('~', "~0").replace('/', "~1")
 }
 
+/// Run `delivery` with a record of plan members and return what it noted
+/// (tests only).
+#[cfg(test)]
+pub(crate) async fn noting_plan_members<F: Future>(delivery: F) -> (F::Output, Vec<(String, u32)>) {
+    PLAN_MEMBERS
+        .scope(RefCell::new(Vec::new()), async {
+            let out = delivery.await;
+            (out, PLAN_MEMBERS.with(|m| m.borrow().clone()))
+        })
+        .await
+}
+
 #[cfg(feature = "firewall")]
 pub(super) use with_firewall::add_seams;
 

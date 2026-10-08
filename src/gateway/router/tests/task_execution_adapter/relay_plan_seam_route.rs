@@ -411,45 +411,6 @@ async fn a_duplicated_field_still_forms_a_seam() {
     );
 }
 
-/// `MIK-8113` (chain): a `gateway_execute` chain's results are each their
-/// step's, by the execution index the chain writes beside them. Only short
-/// text the chain wrote lies between the two steps' fields, so the fields
-/// form a seam: bob relaying them together is refused.
-#[tokio::test]
-async fn a_chains_two_results_form_a_seam() {
-    let mock = backend(&[FIELD_A, FIELD_B]);
-    let (state, _store) = seam_state(&mock, &playbook("    a:\n      path: $s1.x\n")).await;
-    let step = json!({"tool": format!("{BACKEND}:{TOOL}"), "arguments": {}});
-    let read = post(
-        &state,
-        "key-a",
-        modern(
-            1,
-            "tools/call",
-            json!({"name": "gateway_execute", "arguments": {"chain": [step, step]}}),
-            false,
-        ),
-    )
-    .await;
-    assert!(read.get("error").is_none(), "base: delivered: {read}");
-    // As the caller reads it: the answer's string leaves in walk order.
-    let block = read["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_default();
-    let answer: Value = serde_json::from_str(block).unwrap_or_else(|_| panic!("base: {read}"));
-    let mut leaves = Vec::new();
-    string_leaves(&answer, &mut leaves);
-    let received = leaves.join("\n");
-    assert!(
-        received.contains(FIELD_A) && received.contains(FIELD_B),
-        "base: both fields delivered: {read}"
-    );
-    assert!(
-        refused(&state, "key-b", 2, &received).await,
-        "a seam between a chain's results was not receipted: {received:?}"
-    );
-}
-
 /// `MIK-8113` (cap order): step one delivers a short field between two large
 /// ones, more than one receipt's recording cap together. Which leaves the
 /// step produced is read before that cap cuts its middle, so the short
@@ -542,14 +503,4 @@ async fn a_redacted_field_is_no_steps_text() {
         !refused(&state, "key-b", 2, &format!("{delivered}{FIELD_B}")).await,
         "a redacted field was credited to its step"
     );
-}
-
-/// `value`'s string leaves in the order a delivery walk reads them.
-fn string_leaves<'v>(value: &'v Value, out: &mut Vec<&'v str>) {
-    match value {
-        Value::String(s) => out.push(s),
-        Value::Array(items) => items.iter().for_each(|v| string_leaves(v, out)),
-        Value::Object(map) => map.values().for_each(|v| string_leaves(v, out)),
-        _ => {}
-    }
 }

@@ -195,3 +195,30 @@ fn chain_step_result(idx: usize, tool_ref: &str, result: Value) -> Result<Value>
         format!("Chain step {idx} ({tool_ref}) failed: {detail}"),
     ))
 }
+
+#[cfg(test)]
+mod member_tests {
+    use serde_json::json;
+
+    /// `MIK-8113` (chain provenance): each result is its step's by the
+    /// execution index written beside it, not its place in the array, so a
+    /// chain resumed at step 3 labels its first result 3.
+    #[tokio::test]
+    async fn a_resumed_chains_results_keep_their_execution_index() {
+        let answer = json!({"steps": 2, "results": [
+            {"step": 3, "tool": "mock:echo", "result": {}},
+            {"step": 4, "tool": "mock:echo", "result": {}},
+        ]});
+        let ((), noted) = crate::gateway::meta_mcp::invoke::relay::noting_plan_members(async {
+            super::note_chain_members(&answer);
+        })
+        .await;
+        assert_eq!(
+            noted,
+            vec![
+                ("/results/0/result".to_string(), 3),
+                ("/results/1/result".to_string(), 4),
+            ]
+        );
+    }
+}
