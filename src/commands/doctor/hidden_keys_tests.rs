@@ -241,3 +241,44 @@ fn a_fifo_at_the_config_path_returns_at_once_with_no_row() {
         .expect("doctor blocked on a FIFO");
     assert!(no_row, "a FIFO produced a row");
 }
+
+/// `check_hidden_keys` on `path`, which must answer within `limit`.
+#[cfg(unix)]
+fn answers_within(path: &std::path::Path, limit: std::time::Duration) -> Option<CheckResult> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let probe = path.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tx.send(check_hidden_keys(&probe));
+    });
+    rx.recv_timeout(limit)
+        .unwrap_or_else(|_| panic!("doctor kept reading {}", path.display()))
+}
+
+#[cfg(unix)]
+#[test]
+fn a_config_linked_to_an_endless_device_is_refused_at_once() {
+    // The device opens without blocking; only the regular-file check on the
+    // opened handle stops an endless read.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink("/dev/zero", &link).expect("symlink");
+    let row = answers_within(&link, std::time::Duration::from_millis(500));
+    assert!(row.is_none(), "a device produced a row");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_config_linked_to_a_fifo_returns_at_once_with_no_row() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fifo = dir.path().join("pipe");
+    let status = std::process::Command::new("mkfifo")
+        .args(["-m", "600"])
+        .arg(&fifo)
+        .status()
+        .expect("run mkfifo(1)");
+    assert!(status.success(), "mkfifo(1) failed");
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&fifo, &link).expect("symlink");
+    let row = answers_within(&link, std::time::Duration::from_secs(5));
+    assert!(row.is_none(), "a FIFO produced a row");
+}
