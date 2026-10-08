@@ -56,8 +56,9 @@ async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDi
         FirewallConfig {
             collusion: CollusionConfig {
                 action: CollusionAction::Block,
-                // One shared fingerprint: a 63-char run guarantees one, so a
-                // relay of the URL or the advice is refused if receipted.
+                // One shared fingerprint. Sampling keeps one k-gram in four,
+                // so a run of n k-grams keeps none with odds (3/4)^n: the
+                // probes below are long enough to make a miss negligible.
                 min_matches: 1,
                 sources: vec![format!("{BACKEND}:*")],
                 ..CollusionConfig::default()
@@ -137,9 +138,9 @@ fn note() -> String {
         .join("\n")
 }
 
-/// A database URL longer than a k-gram, so a receipt that kept it would
-/// match a relay of it.
-const DSN: &str = "postgres://ledger:pw@db.local/orchard-archive-of-the-north-slope-pear-rows";
+/// A database URL of 80 k-grams, so a receipt that kept it would match a
+/// relay of it under all but about 1e-10 of hash keys (MIK-8083).
+const DSN: &str = "postgres://ledger:pw@db.local/orchard-archive-of-the-north-slope-pear-rows-and-the-south-terrace-quince-rows-kept-by-the-estate";
 
 /// The gateway's recovery advice for a tool error it reads as a parameter
 /// problem: the gateway's text, longer than a k-gram.
@@ -216,5 +217,46 @@ async fn a_rewritten_tool_error_keeps_the_gateways_advice_out_of_its_receipt() {
     assert!(
         advice.get("error").is_none(),
         "the gateway's advice is not backend text, so no receipt holds it: {advice}"
+    );
+}
+
+/// Two short text blocks, each one char under a k-gram, so every
+/// fingerprint across them spans the two backend leaves, and the about 48
+/// k-grams across them all go unsampled under about 1e-6 of keys (MIK-8083).
+const FIELD_X: &str = "north slope rows seven to twelve, late pears ok";
+const FIELD_Y: &str = "south terrace rows one to six, early quinces ok";
+
+/// `MIK-8043.JOIN.4`: a rewritten wrapper is read member by member, so two
+/// short backend fields the caller got intact keep the receipt across them.
+/// The third block's URL is redacted with its closing quote, so the wrapper
+/// no longer parses; bob relaying the two fields is refused, alice is not.
+#[tokio::test]
+async fn a_rewritten_wrapper_keeps_its_fields_receipted_across_them() {
+    let answer = json!({"content": [
+        {"type": "text", "text": FIELD_X},
+        {"type": "text", "text": FIELD_Y},
+        {"type": "text", "text": DSN},
+    ], "isError": false});
+    let mock = MockBackend::answering(Answer::Sequence(vec![answer, text("ok"), text("ok")]));
+    let (state, _store) = plan_state(&mock).await;
+
+    let read = post(&state, "key-a", sync_invoke(1, json!({}))).await;
+    let block = read["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        block.contains("REDACTED") && serde_json::from_str::<Value>(block).is_err(),
+        "base: the redaction broke the wrapper's JSON: {read}"
+    );
+    let parts = json!({"parts": ["text", FIELD_X, "text", FIELD_Y]});
+    let control = post(&state, "key-a", sync_invoke(2, parts.clone())).await;
+    assert!(
+        control.get("error").is_none(),
+        "control: the holder's own relay is excused: {control}"
+    );
+    let relayed = post(&state, "key-b", sync_invoke(3, parts)).await;
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "the receipt lost the run across the two fields: {relayed}"
     );
 }

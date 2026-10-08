@@ -28,7 +28,7 @@
 #![allow(clippy::large_stack_arrays)]
 
 #[cfg(feature = "a2a")]
-pub mod a2a;
+pub(crate) mod a2a;
 pub mod attestation;
 pub mod autotag;
 pub mod backend;
