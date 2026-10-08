@@ -110,6 +110,7 @@ mod tests {
         for text in [
             "meta_mcp: {cache_tools: false, enabled: true}\n",
             "meta_mcp:\n  cache_tools: false\n",
+            "meta_mcp:  # keep this note\n  cache_tools: false\nbackends: {}\n",
             "meta_mcp:\n  enabled: true\n  enabled: true\n  cache_tools: false\n",
             "meta_mcp: {enabled: true, enabled: true, \"cache_tools\": false}\n",
             "!cfg {meta_mcp: {enabled: true, cache_tools: false}}\n",
@@ -135,6 +136,14 @@ mod tests {
             "meta_mcp:\n  note: |\n    cache_tools: x\n  enabled: true\n"
         );
         assert_eq!(line, 5);
+    }
+
+    #[test]
+    fn a_key_alone_under_meta_mcp_goes_with_its_empty_block() {
+        let text = "# mine\nmeta_mcp:\n  cache_tools: false  # off\nbackends: {}\n";
+        let (after, line) = removed(text);
+        assert_eq!(after, "# mine\nbackends: {}\n");
+        assert_eq!(line, 3);
     }
 
     #[test]

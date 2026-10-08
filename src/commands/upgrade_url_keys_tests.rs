@@ -237,3 +237,23 @@ fn upgrade_names_a_cache_tools_key_it_cannot_remove() {
         "{applied:?}"
     );
 }
+
+/// MIK-8064 AC2: a `cache_tools` alone under `meta_mcp` goes with the
+/// then-empty `meta_mcp:` line, which loads exactly as no block at all.
+#[test]
+fn upgrade_removes_a_meta_mcp_block_that_held_only_cache_tools() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let text = "# mine\nmeta_mcp:\n  cache_tools: false\nbackends: {}\n";
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, text).expect("write config");
+
+    let (applied, written) = report(&path, RewriteMode::Apply);
+    assert_eq!(written, "# mine\nbackends: {}\n");
+    assert!(
+        applied
+            .iter()
+            .any(|l| l.contains("removed `meta_mcp.cache_tools` (line 3)")
+                && l.contains("`meta_mcp:` (line 2)")),
+        "{applied:?}"
+    );
+}
