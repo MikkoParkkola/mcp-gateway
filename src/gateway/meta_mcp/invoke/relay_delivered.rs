@@ -324,17 +324,24 @@ fn line_literals(line: &str) -> Vec<(String, bool)> {
         && let Some(open) = last_open_quote(body)
     {
         let last = unescape(&body[open + 1..]);
+        let mut read = out.clone();
         match unclosed {
-            // The unclosed literal ran over the value: it keeps only what lies
-            // before the value's opening quote, so no text is read twice.
             // Read from the same quote, it is that literal: keep one reading.
-            Some((i, start)) if open + 1 == start => out[i] = (last, false),
+            Some((i, start)) if open + 1 == start => read[i] = (last, false),
+            // The unclosed literal ran over the value: it keeps only what lies
+            // before the value's opening quote.
             Some((i, start)) if open >= start => {
-                out[i] = (unescape(&line[start..open]), false);
-                out.push((last, false));
+                read[i] = (unescape(&line[start..open]), false);
+                read.push((last, false));
             }
-            _ if out.iter().any(|(literal, _)| *literal == last) => {}
-            _ => out.push((last, false)),
+            _ if read.iter().any(|(literal, _)| *literal == last) => {}
+            _ => read.push((last, false)),
+        }
+        // The forward literals are disjoint slices of the line, so they never
+        // exceed it; the end read is taken only while that stays true, so no
+        // print can be counted beyond its own size, however it was damaged.
+        if read.iter().map(|(t, _)| t.len()).sum::<usize>() <= line.len() {
+            out = read;
         }
     }
     out
