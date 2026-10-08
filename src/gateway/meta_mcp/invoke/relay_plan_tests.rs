@@ -13,6 +13,8 @@ use crate::security::firewall::{Firewall, RelayCaller};
 
 #[path = "relay_plan_budget_tests.rs"]
 mod budget;
+#[path = "relay_plan_seam_tests.rs"]
+mod seam;
 
 /// Text a redaction removes from step A, long enough to be matched alone.
 const SECRET: &str = "Account recovery phrase for the vineyard terminal: amber kettle \
