@@ -7,46 +7,15 @@
 use super::*;
 
 /// `MIK-8121.READ.1` and `.READ.2`: repair a sealed in-flight row, a sealed
-/// abandoned input round and a sealed settled row while the sweep runs. Both are then readable by their owner,
-/// the in-flight one settled exactly as startup recovery would settle it, and
-/// each key still answers as its own row.
+/// abandoned input round and a sealed settled row while the sweep runs. All
+/// are then readable by their owner, the live ones settled exactly as startup
+/// recovery would settle them and announced, and each key still answers as
+/// its own row.
 #[tokio::test]
 async fn a_repaired_row_is_readable_without_a_restart() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("tasks");
-    let seeded = timeout(
-        BUDGET,
-        seed_store(
-            &dir,
-            rows()
-                .into_iter()
-                .filter(|(key, ..)| {
-                    matches!(
-                        *key,
-                        "x6b-dispatched" | "x6d-input-required" | "x6e-terminal"
-                    )
-                })
-                .collect(),
-        ),
-    )
-    .await
-    .expect("seeding completes");
-    let originals: Vec<(std::path::PathBuf, Vec<u8>)> = seeded
-        .iter()
-        .map(|row| {
-            let record = dir.join(format!("{}.json", row.id));
-            let original = std::fs::read(&record).unwrap();
-            let text = String::from_utf8(original.clone()).unwrap();
-            let damaged = text.replacen("\"dispatched\":", "\"dispatched\":@", 1);
-            assert_ne!(
-                damaged, text,
-                "{}: the fixture must damage the row",
-                row.key
-            );
-            std::fs::write(&record, damaged).unwrap();
-            (record, original)
-        })
-        .collect();
+    let (seeded, originals) = sealed_rows(&dir).await;
 
     let operation = operation();
     let representation = representation();
@@ -135,4 +104,44 @@ async fn a_repaired_row_is_readable_without_a_restart() {
         .expect("shutdown does not hang")
         .expect("custody is released");
     drop(executor);
+}
+
+/// Seed an in-flight row, an abandoned input round and a settled row, then
+/// damage each so its key cannot be read. Returns the rows and, per row, its
+/// record path and original bytes for the repair.
+async fn sealed_rows(dir: &std::path::Path) -> (Vec<Seeded>, Vec<(std::path::PathBuf, Vec<u8>)>) {
+    let seeded = timeout(
+        BUDGET,
+        seed_store(
+            dir,
+            rows()
+                .into_iter()
+                .filter(|(key, ..)| {
+                    matches!(
+                        *key,
+                        "x6b-dispatched" | "x6d-input-required" | "x6e-terminal"
+                    )
+                })
+                .collect(),
+        ),
+    )
+    .await
+    .expect("seeding completes");
+    let originals = seeded
+        .iter()
+        .map(|row| {
+            let record = dir.join(format!("{}.json", row.id));
+            let original = std::fs::read(&record).unwrap();
+            let text = String::from_utf8(original.clone()).unwrap();
+            let damaged = text.replacen("\"dispatched\":", "\"dispatched\":@", 1);
+            assert_ne!(
+                damaged, text,
+                "{}: the fixture must damage the row",
+                row.key
+            );
+            std::fs::write(&record, damaged).unwrap();
+            (record, original)
+        })
+        .collect();
+    (seeded, originals)
 }
