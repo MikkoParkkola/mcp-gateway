@@ -493,3 +493,56 @@ async fn a1_a3_an_api_key_caller_keeps_its_round_on_the_meta_route() {
         assert_eq!(dispatched(&fx), 2, "{backend}");
     }
 }
+
+/// A4: callers the idempotency guard tells apart behind one shared key (here
+/// by their grant subject) are told apart by the continuation too: one cannot
+/// redeem the other's round. Mutant: the binding built from the key alone.
+#[tokio::test]
+async fn a4_a_shared_key_still_separates_callers_the_guard_separates() {
+    let fx = fixture(Answer::AskOnce, |_| {}).await;
+    let declared = crate::protocol::meta::classify_request(
+        Some(&json!({"_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}}
+        }})),
+        Some("2026-07-28"),
+    )
+    .declared_capabilities();
+    let subject = |name: &str| crate::identity_grants::GrantSubject {
+        authority: "mtls".to_string(),
+        subject: name.to_string(),
+        label: None,
+    };
+    let (alice, bob) = (Some(subject("alice")), Some(subject("bob")));
+    let caller = |grant: &Option<crate::identity_grants::GrantSubject>,
+                  retry: &'static crate::protocol::mrtr::RetryFields| {
+        crate::gateway::meta_mcp::MetaMcpCallerContext {
+            credential_principal: Some("shared-key-principal"),
+            authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
+            grant_subject: grant.clone(),
+            input_capabilities: declared,
+            retry,
+            ..crate::gateway::meta_mcp::anonymous_caller()
+        }
+    };
+    let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
+    let fresh: &'static _ = Box::leak(Box::default());
+    let meta = &fx.state.meta_mcp;
+    let asked = meta
+        .invoke_tool_for_test(&args, None, &caller(&alice, fresh))
+        .await
+        .expect("alice is asked");
+    let retry: &'static _ = Box::leak(Box::new(crate::protocol::mrtr::RetryFields::from_params(
+        Some(
+            &json!({"requestState": state_of(&json!({"result": asked})), "inputResponses": answers()}),
+        ),
+    )));
+    let stolen = meta
+        .invoke_tool_for_test(&args, None, &caller(&bob, retry))
+        .await;
+    let refused = stolen.expect_err("bob redeemed alice's continuation");
+    assert_eq!(refused.to_rpc_code(), -32602, "{refused}");
+    meta.invoke_tool_for_test(&args, None, &caller(&alice, retry))
+        .await
+        .expect("alice resumes her own round");
+}
