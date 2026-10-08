@@ -140,25 +140,14 @@ async fn a_listener_whose_token_is_revoked_is_closed_at_next_delivery() {
     );
     state.announce_tools_changed("alpha").await;
 
-    // MIK-7766: the server ends the subscription with the listen request's
-    // own response, which carries the subscription id and the server's name
-    // (MIK-7878) and nothing else.
-    match stream.next(super::helpers::ARRIVES_WITHIN).await {
-        StreamEvent::Message(m) => std::assert_eq!(
-            m,
-            json!({"jsonrpc": "2.0", "id": 3,
-                   "result": {"resultType": "complete", "_meta": {
-                       "io.modelcontextprotocol/subscriptionId": 3,
-                       "io.modelcontextprotocol/serverInfo":
-                           {"name": "mcp-gateway", "version": env!("CARGO_PKG_VERSION")}}}}),
-            "a revoked token is told only that its subscription ended"
-        ),
-        StreamEvent::Closed => panic!("closed without the graceful end"),
-        StreamEvent::Silent => panic!("a revoked listener must be closed, not kept holding a slot"),
-    }
+    // MIK-7798 G5: a credential that stopped authenticating is told nothing
+    // more, not even the graceful end (MIK-7766's listen response); the
+    // stream closes.
     match stream.next(super::helpers::ARRIVES_WITHIN).await {
         StreamEvent::Closed => {}
-        StreamEvent::Message(m) => panic!("a revoked token was still told: {m}"),
+        StreamEvent::Message(m) => {
+            panic!("a revoked token is told nothing, not even that its subscription ended: {m}")
+        }
         StreamEvent::Silent => panic!("a revoked listener must be closed, not kept holding a slot"),
     }
 }

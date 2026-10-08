@@ -46,6 +46,7 @@ mod runtime_launch;
 mod status;
 mod stdio_start;
 mod stop;
+pub(crate) mod tools_nudge;
 
 impl Backend {
     /// This backend's signature chain policy (ASI07 inc3, design D1): the
@@ -252,6 +253,12 @@ pub struct Backend {
     #[cfg(test)]
     oauth_test_seam: parking_lot::Mutex<Option<OAuthTestSeam>>,
     pub(crate) budgets: ShutdownBudgets,
+    /// Unique for the life of the process (`MIK-8127`): names this instance in
+    /// the nudges it sends, so a replaced instance's late ones are ignored.
+    instance: u64,
+    /// Where this instance's nudges go, set when a registry with a change feed
+    /// holds it.
+    nudge_feed: std::sync::OnceLock<tools_nudge::NudgeFeed>,
 }
 
 /// Where a test backend's OAuth client keeps tokens, and who plays the

@@ -80,7 +80,7 @@ pub(crate) use schema_validator::{
     advertised_output_schema, published_output, rewrap_published_output, unwrap_published_output,
 };
 pub use validator::{Issue, IssueSeverity, validate_capabilities, validate_capability_definition};
-pub use watcher::CapabilityWatcher;
+pub use watcher::{CapabilityWatcher, CatalogueChanged};
 
 use crate::Result;
 use std::collections::HashMap;

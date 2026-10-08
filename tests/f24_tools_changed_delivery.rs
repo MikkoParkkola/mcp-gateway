@@ -148,6 +148,13 @@ fn write_config(gateway: &HttpGateway, config: &Value) {
     .expect("rewrite config");
 }
 
+fn drop_backend(config: &mut Value, name: &str) {
+    config["backends"]
+        .as_object_mut()
+        .expect("map")
+        .remove(name);
+}
+
 #[tokio::test]
 async fn every_tool_set_change_reaches_both_eras_once() {
     let alpha = BackendFixture::start(json!({"content": []})).await;
@@ -177,38 +184,49 @@ async fn every_tool_set_change_reaches_both_eras_once() {
     let mut modern = modern_listen(&gateway).await;
     let mut legacy = legacy_stream(&gateway).await;
 
-    let mut expect_once = async |action: &str| {
+    // MIK-8127: one announcement per change of the tool set discovery shows,
+    // never per backend event, so a step that leaves it unchanged expects none.
+    let mut expect = async |action: &str, expected: usize| {
         let (m, l) = (
             modern.count_list_changed().await,
             legacy.count_list_changed().await,
         );
         assert_eq!(
             (m, l),
-            (1, 1),
+            (expected, expected),
             "{action}: tools/list_changed must reach the 2026 listener and the 2025 \
-             stream exactly once each; logs: {}",
+             stream {expected} time(s) each; logs: {}",
             gateway.logs()
         );
     };
 
     config["backends"]["beta"] = json!({ "http_url": beta.url, "streamable_http": true });
     write_config(&gateway, &config);
-    expect_once("config reload adds a backend").await;
+    expect("config reload adds a backend", 1).await;
 
     config["backends"]["beta"]["description"] = json!("modified");
     write_config(&gateway, &config);
-    expect_once("config reload modifies a backend").await;
+    // The backend's own description is not part of any tool, and its
+    // replacement lists the same tool, so discovery shows the same set.
+    expect("config reload modifies a backend", 0).await;
 
-    config["backends"]
-        .as_object_mut()
-        .expect("map")
-        .remove("beta");
+    drop_backend(&mut config, "beta");
     write_config(&gateway, &config);
-    expect_once("config reload removes a backend").await;
+    expect("config reload removes a backend", 1).await;
+
+    // A backend that never lists a tool adds nothing discovery shows, and
+    // removing it takes nothing away.
+    config["backends"]["delta"] =
+        json!({ "http_url": "http://127.0.0.1:1/mcp", "streamable_http": true });
+    write_config(&gateway, &config);
+    expect("config reload adds a backend that never lists tools", 0).await;
+    drop_backend(&mut config, "delta");
+    write_config(&gateway, &config);
+    expect("config reload removes a backend that never listed tools", 0).await;
 
     std::fs::write(caps.path().join("caps").join("f24_probe.yaml"), CAPABILITY)
         .expect("capability");
-    expect_once("a capability file appears").await;
+    expect("a capability file appears", 1).await;
 
     // The admin UI writes the config and reloads; the reload is what announces,
     // so a second, direct announce would reach each listener twice.
@@ -225,7 +243,7 @@ async fn every_tool_set_change_reaches_both_eras_once() {
         "UI add: {}",
         gateway.logs()
     );
-    expect_once("the admin UI adds a backend").await;
+    expect("the admin UI adds a backend", 1).await;
 
     let removed = ui(
         &gateway,
@@ -240,7 +258,7 @@ async fn every_tool_set_change_reaches_both_eras_once() {
         "UI remove: {}",
         gateway.logs()
     );
-    expect_once("the admin UI removes a backend").await;
+    expect("the admin UI removes a backend", 1).await;
 
     let revived = ui(
         &gateway,
@@ -255,7 +273,8 @@ async fn every_tool_set_change_reaches_both_eras_once() {
         "UI revive: {}",
         gateway.logs()
     );
-    expect_once("the admin UI revives a backend").await;
+    // The rebuilt backend lists the same tool: nothing changed for discovery.
+    expect("the admin UI revives a backend", 0).await;
 }
 
 /// A client that presents the admin bearer on every request.
