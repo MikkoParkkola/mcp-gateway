@@ -406,6 +406,8 @@ async fn r15_a_completed_answer_does_not_carry_the_backends_state() {
         let fx = fixture(Answer::DoneWithState, |_| {}).await;
         let (_, body) =
             post_meta_invoke(&fx, "k-std", backend, "read", json!({}), None, None).await;
+        assert!(body.get("error").is_none(), "meta {backend}: {body}");
+        assert!(body.to_string().contains("ok"), "meta {backend}: {body}");
         assert!(
             !body.to_string().contains(BACKEND_STATE),
             "meta {backend}: {body}"
