@@ -335,7 +335,18 @@ def test_annotation_keys_are_config_rows() -> None:
     assert [e.id for e in rows(both, inv.SRC / "config/strict_keys.rs")][0].startswith("is_annotation: unrecognised"), both
     one_site = code.replace("} else if is_annotation(key) {", "} else if false {", 1)
     assert one_site != code
-    assert [e.id for e in rows(one_site, inv.SRC / "config/strict_keys.rs")][0].startswith("is_annotation: 1 call sites")
+    sk = inv.SRC / "config/strict_keys.rs"
+    # Review d2: a removed, negated, narrowed or literal-substituted branch all fail closed.
+    for mutated in (
+        one_site,
+        code.replace("} else if is_annotation(key) {", "} else if !is_annotation(key) {", 1),
+        code.replace("} else if is_annotation(key) {", "} else if is_annotation(key) && key.len() > 9 {", 1),
+        code.replace("} else if is_annotation(key) {", '} else if "is_annotation(key) {".is_empty() {', 1),
+        code.replace("            && is_annotation(leaf)\n", "            && is_annotation(leaf)\n            && leaf.len() > 9\n", 1),
+    ):
+        assert mutated != code
+        got = [e.id for e in rows(mutated, sk)]
+        assert got and got[0].startswith("is_annotation: 1 accepting branches"), got
 
 
 def test_generated_flag_settings_are_read() -> None:

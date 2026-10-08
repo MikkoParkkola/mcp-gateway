@@ -453,7 +453,11 @@ QUOTED = r"""(?:'[^']*'|"[^"]*")"""
 # A pure disjunction of prefix tests is the only shape `annotation_rows` can read.
 ANNOTATION_BODY = re.compile(rf"\s*key\.starts_with\({QUOTED}\)(?:\s*\|\|\s*key\.starts_with\({QUOTED}\))*\s*")
 # The two loaders that let an annotation key through: top-level keys and backend
-# keys (strict_keys.rs). A call site removed is annotated configs rejected there.
+# keys (strict_keys.rs). Each is pinned by shape: the bare test as the whole
+# condition tail, its body recording the key as an annotation. A removed,
+# negated or narrowed branch stops matching. Threat model (MIK-8077): a careless
+# edit, not an adversary; this is the stop line for further spellings.
+ANNOTATION_BRANCH = re.compile(r"(?:&&|\bif)\s+is_annotation\(\w+\)\s*\{\s*ignored\.insert\(path,\s*Ignored::Annotation\);")
 ANNOTATION_CALL_SITES = 2
 
 
@@ -463,16 +467,17 @@ def annotation_rows(code: str, path: Path) -> list[Entry]:
     Fails closed: a body that is not a plain `starts_with` disjunction, or a
     changed number of production call sites, yields a row no doc can hold.
     """
-    code, _ = prod_scan_text(code)
+    code, mask = prod_scan_text(code)
     m = re.search(r"fn is_annotation\b[^{]*\{(.*?)\n\}", code, re.S)
     if m is None:
         return []
     line = line_of(code, m.start())
     if not ANNOTATION_BODY.fullmatch(m.group(1)):
         return [Entry("is_annotation: unrecognised body, re-read the annotation rows", rel(path), line)]
-    calls = len(re.findall(r"(?<!fn )\bis_annotation\(", code))
+    # Matched on the mask, so a string literal cannot stand in for a branch.
+    calls = len(ANNOTATION_BRANCH.findall(mask))
     if calls != ANNOTATION_CALL_SITES:
-        return [Entry(f"is_annotation: {calls} call sites, expected {ANNOTATION_CALL_SITES}", rel(path), line)]
+        return [Entry(f"is_annotation: {calls} accepting branches, expected {ANNOTATION_CALL_SITES}", rel(path), line)]
     prefixes = re.findall(r"starts_with\((?:'([^']*)'|\"([^\"]*)\")\)", m.group(1))
     return [Entry(f"{a or b}*", rel(path), line, "annotation: any mapping level, never read") for a, b in prefixes]
 
