@@ -232,6 +232,29 @@ mod tests {
         );
     }
 
+    /// MIK-8153: a config named through a symlink and through its target is
+    /// one config, so both spellings meet one lock.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_and_its_target_share_one_lock() {
+        let real = tempfile::tempdir().expect("real dir");
+        let other = tempfile::tempdir().expect("link dir");
+        let target = real.path().join("gateway.yaml");
+        std::fs::write(&target, "backends: {}\n").expect("config");
+        let link = other.path().join("gateway.yaml");
+        std::os::unix::fs::symlink(&target, &link).expect("link");
+
+        let now = std::time::Instant::now;
+        let held = super::lock_config_blocking(&target, now(), |_| {}).expect("lock via target");
+        let second = super::lock_config_blocking(&link, now(), |_| {});
+
+        assert!(
+            matches!(second, Err(super::NotLocked::Busy)),
+            "the link spelling must meet the target's lock"
+        );
+        drop(held);
+    }
+
     /// A sidecar other accounts can open (a `0644` one checked out by git,
     /// say) is one they can lock, stalling every config write. One this
     /// user owns is made owner-only before it is locked.
