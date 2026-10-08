@@ -216,3 +216,53 @@ async fn a_backend_replaced_by_hot_reload_is_warmed_again() {
         "a hot-replaced backend's tools never reached the cache without a discovery call"
     );
 }
+
+/// `MIK-8054` wiring (HTTP): an edit the config watcher picks up warms the
+/// backend it adds. Linux-only, as the other real-watcher rows (inotify).
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn http_a_backend_added_by_a_watched_edit_is_warmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let boot = mock("boot_tool").await;
+    let path = write_config(dir.path(), &http_backend("boot", &boot));
+    let mut config = Config::load(Some(&path)).expect("the fixture config loads");
+    config.server.host = "127.0.0.1".to_string();
+    // Port 0: the gateway reports the port it bound (MIK-7984).
+    config.server.port = 0;
+    let mut gateway = Gateway::new_with_path(config, Some(path))
+        .await
+        .expect("valid config")
+        .with_data_dir(dir.path().to_path_buf());
+    let registry = Arc::clone(&gateway.backends);
+    let bound = gateway.bound_port_for_test();
+    let server = tokio::spawn(async move { drop(Box::pin(gateway.run()).await) });
+    tokio::time::timeout(Duration::from_secs(60), bound)
+        .await
+        .expect("the gateway bound within 60 s")
+        .expect("the gateway bound");
+    let warmed = |name: &'static str| {
+        let registry = Arc::clone(&registry);
+        async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+            while tokio::time::Instant::now() < deadline {
+                if registry.get(name).is_some_and(|b| b.cached_tools_known()) {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            false
+        }
+    };
+    let control = warmed("boot").await;
+    let url = mock("added_tool").await;
+    let both = format!(
+        "{}{}",
+        http_backend("boot", &boot),
+        http_backend("added", &url)
+    );
+    write_config(dir.path(), &both);
+    let added = warmed("added").await;
+    server.abort();
+    assert!(control, "boot warm-start control");
+    assert!(added, "a backend added by a watched edit was not warmed");
+}
