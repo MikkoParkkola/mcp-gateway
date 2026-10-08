@@ -88,16 +88,8 @@ impl MetaMcp {
                 &crate::protocol::mrtr::NO_RETRY
             });
 
-            // Labelled by its execution index, as the chain's answer names it
-            // (`results[i].step`), so a resumed chain's results keep their
-            // steps (MIK-8113).
-            let label = u32::try_from(idx).ok();
-            match plan_step(
-                label,
-                self.invoke_tool(&invoke_args, session_id, &step_caller),
-            )
-            .await
-            {
+            let dispatch = self.invoke_tool(&invoke_args, session_id, &step_caller);
+            match plan_step(chain_label(idx), dispatch).await {
                 // A tool error in the success channel is still an error.
                 Ok(result) => chain_step_result(idx, &tool_ref, result),
                 // A refusal stays a refusal. Flattening it into -32603 told
@@ -156,12 +148,17 @@ impl MetaMcp {
                 .map_err(|error| Error::json_rpc(-32603, error.to_string()))
         };
 
-        let answer =
-            super::super::chain_interim::drive_chain(&chain, start_step, &mut run_step, seal_stop)
-                .await?;
-        note_chain_members(&answer);
-        Ok(answer)
+        super::super::chain_interim::drive_chain(&chain, start_step, &mut run_step, seal_stop)
+            .await
+            .inspect(note_chain_members)
     }
+}
+
+/// A chain step's plan label: its execution index, as the chain's answer
+/// names it (`results[i].step`), so a resumed chain's results keep their
+/// steps (MIK-8113).
+fn chain_label(idx: usize) -> Option<u32> {
+    u32::try_from(idx).ok()
 }
 
 /// MIK-8113: each result of a chain's answer is its step's, by the execution

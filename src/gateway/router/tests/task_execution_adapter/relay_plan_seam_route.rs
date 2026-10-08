@@ -446,7 +446,7 @@ async fn a_chains_two_results_form_a_seam() {
     );
     assert!(
         refused(&state, "key-b", 2, &received).await,
-        "a seam between a chain's results was not receipted"
+        "a seam between a chain's results was not receipted: {received:?}"
     );
 }
 
