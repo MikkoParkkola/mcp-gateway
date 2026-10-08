@@ -68,6 +68,12 @@ pub(crate) enum Answer {
     AskSecond,
     /// The backend cannot be reached: nothing was sent (`TransportConnect`).
     Unreachable,
+    /// Like `AskOnce`, asking an elicitation and a sampling in one round
+    /// (MIK-8089).
+    AskMixed,
+    /// Like `AskOnce`, a valid question beside a non-string state, which
+    /// `InputRequired::from_result` declines (MIK-8089).
+    AskBadState,
     /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
     /// `resultType`, `ttlMs` (5000) and `cacheScope` itself, and every other
     /// answer a `ttlMs` of 3000 (MIK-8022).
@@ -122,6 +128,15 @@ fn question(answer: Answer) -> Value {
         asked["inputRequests"]["k1"]["params"]["message"] = json!(text);
         asked["content"] = json!([{"type": "text", "text": text}]);
     }
+    if matches!(answer, Answer::AskBadState) {
+        asked["requestState"] = json!(7);
+    }
+    if matches!(answer, Answer::AskMixed) {
+        asked["inputRequests"]["k2"] = json!({
+            "method": "sampling/createMessage",
+            "params": {"messages": [], "maxTokens": 8}
+        });
+    }
     asked
 }
 
@@ -173,7 +188,9 @@ fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRpcResponse> 
         | Answer::AskWith(_)
         | Answer::AskBadMeta
         | Answer::AskAndError
-        | Answer::AskSecond => {
+        | Answer::AskSecond
+        | Answer::AskMixed
+        | Answer::AskBadState => {
             unreachable!("answered above")
         }
         Answer::Text(text) => Ok(JsonRpcResponse::success(
@@ -273,6 +290,8 @@ impl Transport for CountingBackend {
                 | Answer::AskBadMeta
                 | Answer::AskAndError
                 | Answer::AskSecond
+                | Answer::AskMixed
+                | Answer::AskBadState
         ) {
             let asks_now = n == usize::from(matches!(self.answer, Answer::AskSecond));
             return Ok(if asks_now {
