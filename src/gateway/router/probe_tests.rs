@@ -451,11 +451,11 @@ async fn health_is_degraded_while_a_task_row_is_sealed() {
         action.contains("repair or remove") && action.contains("next expiry sweep"),
         "the clearing action is not stated: {admin}"
     );
-    // A repaired task reads only after a restart; the operator is told so
-    // rather than left waiting for a sweep that will not make it readable.
+    // `MIK-8121.READ.3`: a repaired task reads after the next sweep, so no
+    // restart is asked of the operator.
     assert!(
-        action.contains("restart to read a repaired task"),
-        "the restart step is not stated: {admin}"
+        !action.contains("restart"),
+        "the action still asks for a restart: {admin}"
     );
 
     // No such file: the re-read clears it.

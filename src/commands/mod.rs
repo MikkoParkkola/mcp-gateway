@@ -8,6 +8,7 @@
 mod accounts;
 #[cfg(feature = "webui")]
 mod add_remove;
+mod backend_url_keys;
 mod cap;
 #[cfg(feature = "config-export")]
 mod config_export;
@@ -26,6 +27,7 @@ mod kubernetes;
 pub mod paths;
 mod protocol_import;
 mod ranking;
+mod regular_file;
 mod setup;
 mod skills;
 mod stats;
@@ -56,7 +58,7 @@ pub use skills::{
 };
 pub use stats::{default_stats_url, run_stats_command};
 pub use trust::run_trust_command;
-pub use upgrade::{check_upgrade, data_dir as upgrade_data_dir, run_upgrade_command};
+pub use upgrade::{check_upgrade, data_dir as upgrade_data_dir, run_upgrade_with_config};
 
 use std::process::ExitCode;
 
