@@ -502,6 +502,21 @@ impl Firewall {
         delivered
     }
 
+    /// What `answer` delivers, read as `delivered_for_plan` reads it; when it is
+    /// over the bound, what `fallback` (the same text read as one leaf)
+    /// delivers instead, so a fuller reading never loses a receipt the plainer
+    /// one keeps (`MIK-8043.JOIN.4`). A drop is counted only when both fail.
+    pub(crate) fn delivered_preferring<'v>(
+        &self,
+        answer: &'v Value,
+        fallback: &'v Value,
+        staged: Option<&Cell<usize>>,
+    ) -> Option<Delivered<'v>> {
+        self.relay_detector()?;
+        let (leaves, values) = delivery_parts(answer);
+        Delivered::of_parts(leaves, values).or_else(|| self.delivered_for_plan(fallback, staged))
+    }
+
     /// [`Self::count_plan_drop`] unless this delivery already counted one:
     /// `staged` then holds `usize::MAX`, past every bound (`MIK-8094`).
     fn count_plan_drop_once(&self, staged: &Cell<usize>) {

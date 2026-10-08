@@ -261,3 +261,27 @@ fn a_kept_receipt_holds_no_more_than_its_step_staged() {
         "copies past the step's size kept"
     );
 }
+
+/// `MIK-8043.JOIN.4`: a rewritten wrapper of many short fields whose fields
+/// together are over the bound is still read as its whole text, as before the
+/// fields were read; no drop is counted while that reading fits.
+#[test]
+fn a_reading_over_the_bound_falls_back_to_the_whole_text() {
+    let (fw, _dir) = observing(|_| {});
+    let fields: Vec<serde_json::Value> = (0..40_000).map(|i| json!(format!("f{i:04}"))).collect();
+    let answer = serde_json::Value::Array(fields.clone());
+    let flat = json!(
+        fields
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    assert!(
+        fw.delivered_for_plan(&answer, None).is_none(),
+        "premise: field by field is over the bound"
+    );
+    let drops = fw.relay_plan_drops();
+    assert!(fw.delivered_preferring(&answer, &flat, None).is_some());
+    assert_eq!(fw.relay_plan_drops(), drops, "no drop while the text fits");
+}

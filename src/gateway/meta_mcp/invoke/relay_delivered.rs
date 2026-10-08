@@ -268,9 +268,12 @@ fn keep_to_rewritten(
     let [one] = receipts.as_mut_slice() else {
         return;
     };
+    // Field by field when that fits the bound, else the whole text as one
+    // leaf, as before the fields were read (MIK-8043.JOIN.4).
     let read = rewritten_answer(text);
-    let staged = super::RELAY_STAGED.try_with(|s| fw.delivered_for_plan(&read, Some(s)));
-    match staged.unwrap_or_else(|_| fw.delivered_for_plan(&read, None)) {
+    let flat = Value::String(unescape(text));
+    let staged = super::RELAY_STAGED.try_with(|s| fw.delivered_preferring(&read, &flat, Some(s)));
+    match staged.unwrap_or_else(|_| fw.delivered_preferring(&read, &flat, None)) {
         Some(delivered) => {
             let digest = std::mem::take(&mut one.digest);
             one.digest = fw.retain_delivered(digest, &delivered);
