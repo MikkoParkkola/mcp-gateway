@@ -370,7 +370,9 @@ async fn forward_plain(
         let seen = (&admitted.call, preflight.challenge.as_deref());
         DirectRouteGuards::after_dispatch(state, seen, client, &admission, forward)
     } else {
-        forward.inspect(|_| super::record_client_success(state, client))
+        // Client success is recorded once the egress scan admits the answer
+        // (`finish_response`): a refused answer must not reset a breaker.
+        forward
     };
     // The spend is settled; an unsettled reservation is given back here.
     drop(admission);
@@ -405,7 +407,10 @@ fn finish_response(
     let target = screen_target(&admitted.call, method);
     super::super::direct_guards::scan_direct_egress(
         state,
-        (&target, method),
+        (
+            &target,
+            crate::gateway::meta_mcp::invoke::egress::ContentChecks::for_method(method),
+        ),
         client,
         &mut response,
     );
@@ -420,7 +425,11 @@ fn finish_response(
             caller.cert_identity.as_ref(),
         );
         super::direct_list::retain_invocable(state, client, oauth, cert, name, &mut response);
-    } else if method == "tools/call" {
+    } else if method != "tools/call" {
+        if !response.excludes_client_accounting() {
+            super::record_client_success(state, client);
+        }
+    } else {
         super::stamp_direct_provenance(
             state,
             name,
@@ -507,7 +516,15 @@ fn replay_scan(
 ) {
     let method = envelope.method.as_str();
     let target = screen_target(call, method);
-    super::super::direct_guards::scan_direct_egress(state, (&target, method), client, response);
+    super::super::direct_guards::scan_direct_egress(
+        state,
+        (
+            &target,
+            crate::gateway::meta_mcp::invoke::egress::ContentChecks::for_method(method),
+        ),
+        client,
+        response,
+    );
 }
 
 fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> BackendCall<'a> {

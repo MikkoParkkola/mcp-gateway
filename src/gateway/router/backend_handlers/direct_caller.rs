@@ -444,7 +444,10 @@ pub(super) async fn forward_notification(
                 trace_id: &envelope.method,
                 caller_key: None,
             };
-            let screen = (&call, envelope.method.as_str());
+            let screen = (
+                &call,
+                crate::gateway::meta_mcp::invoke::egress::ContentChecks::Here,
+            );
             let client = caller.client.as_ref();
             super::super::direct_guards::scan_direct_egress(state, screen, client, &mut response);
             super::super::helpers::build_http_response(

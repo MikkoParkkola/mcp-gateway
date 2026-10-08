@@ -197,6 +197,11 @@ pub(crate) fn publish(notifications: Vec<JsonRpcNotification>) {
             if !passes_level_filter(&notification) {
                 continue;
             }
+            // Screened as the backend sent it, before the caller's own token
+            // is put back: the screen judges backend text, not the caller's.
+            if !admitted(tx, &mut notification) {
+                continue;
+            }
             translate_back(&mut notification);
             send_or_count(tx, notification);
         }
@@ -210,13 +215,7 @@ pub(crate) fn publish(notifications: Vec<JsonRpcNotification>) {
 /// streaming `DeliveryHandle` -- so a drop is counted the same way whichever
 /// one shed it. Two copies of this accounting is how one path's overflow
 /// becomes invisible in the number the other path maintains.
-fn send_or_count(sink: &Sink, mut notification: JsonRpcNotification) {
-    // A screened-out notification is withheld, not shed: it is not counted.
-    if let Some(screen) = &sink.screen
-        && !screen.admit(&mut notification)
-    {
-        return;
-    }
+fn send_or_count(sink: &Sink, notification: JsonRpcNotification) {
     let sent = match &sink.out {
         Out::Raw(tx) => tx.try_send(notification).is_ok(),
         // A withheld notification is not queued; its rejection is audited.
@@ -232,6 +231,14 @@ fn send_or_count(sink: &Sink, mut notification: JsonRpcNotification) {
             "request notification sink full; dropping notification"
         );
     }
+}
+
+/// Whether `sink`'s screen admits `notification` (a screened-out one is
+/// withheld, not shed: it is not counted as overflow).
+fn admitted(sink: &Sink, notification: &mut JsonRpcNotification) -> bool {
+    sink.screen
+        .as_ref()
+        .is_none_or(|screen| screen.admit(notification))
 }
 
 /// Where one in-flight request's notifications go, in a form that survives
@@ -287,6 +294,9 @@ impl DeliveryHandle {
         let Some(sink) = self.sink.as_ref() else {
             return;
         };
+        if !admitted(sink, &mut notification) {
+            return;
+        }
         if let Some(client) = self.client_token.clone()
             && notification.method == "notifications/progress"
             && let Some(Value::Object(params)) = notification.params.as_mut()

@@ -77,7 +77,10 @@ impl DirectFailure<'_> {
         // An error frame: its method selects nothing, the target is `call`.
         let screen = super::super::direct_guards::scan_direct_egress(
             self.state,
-            (call, call.tool),
+            (
+                call,
+                crate::gateway::meta_mcp::invoke::egress::ContentChecks::Here,
+            ),
             self.client,
             &mut response,
         );

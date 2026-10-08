@@ -347,6 +347,7 @@ pub(super) async fn tasks_get(
                     )
                 })
             },
+            |current, frame| state.meta_mcp.scan_task_read(current, frame),
         )
         .await
 }

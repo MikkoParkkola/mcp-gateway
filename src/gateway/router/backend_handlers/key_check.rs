@@ -48,8 +48,12 @@ pub(super) async fn key_refusal(
         Ok(Some(text)) => {
             let result = json!({ "content": [{ "type": "text", "text": text }], "isError": true });
             let mut response = JsonRpcResponse::success(id.clone(), result);
-            // The text names the listing's keys: screened like any answer.
-            let screen = (&call, "tools/call");
+            // The text lists the backend's own parameter names, which no
+            // dispatch gate read: it meets the content checks here.
+            let screen = (
+                &call,
+                crate::gateway::meta_mcp::invoke::egress::ContentChecks::Here,
+            );
             super::super::direct_guards::scan_direct_egress(
                 failed.state,
                 screen,

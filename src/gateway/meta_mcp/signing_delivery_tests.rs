@@ -15,9 +15,7 @@ use super::SigningInvocationContext;
 use crate::backend::BackendRegistry;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::message_signing::MessageSigner;
-use crate::security::response_policy::{
-    ResponseCorrelation, ResponsePolicyTarget,
-};
+use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
 
 const KEY: &str = "delivery-component-key-sentinel-0123456789abcdef";
 const NONCE: &str = "delivery-component-nonce";

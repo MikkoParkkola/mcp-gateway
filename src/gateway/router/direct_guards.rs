@@ -8,7 +8,7 @@ use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::invoke::dispatch_guards::{Admission, BackendCall, DirectOutcome};
-use crate::gateway::meta_mcp::invoke::egress::EgressOutcome;
+use crate::gateway::meta_mcp::invoke::egress::{ContentChecks, EgressOutcome};
 use crate::gateway::meta_mcp::signing::SigningScope;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
@@ -118,7 +118,12 @@ impl DirectRouteGuards {
                 Err(e) => response = refusal(response.id.clone(), &e),
             }
         }
-        let outcome = scan_direct_egress(state, (call, "tools/call"), client, &mut response);
+        let outcome = scan_direct_egress(
+            state,
+            (call, ContentChecks::Dispatched),
+            client,
+            &mut response,
+        );
         if outcome != EgressOutcome::Refused
             && warned
             && let Some(result) = response.result.as_ref()
@@ -162,10 +167,11 @@ pub(super) fn refusal(id: Option<RequestId>, error: &Error) -> JsonRpcResponse {
 
 /// The egress scan (design `2026-10-08-one-egress-scan.md`) on a direct-route
 /// frame: `call`'s backend and tool (the method, for a non-tool answer) are
-/// the policy target, and the scan marks the frame so a later exit skips it.
+/// the policy target, `content` says whether dispatch already ran the content
+/// checks, and the scan marks the frame so a later exit skips it.
 pub(super) fn scan_direct_egress(
     state: &AppState,
-    (call, method): (&BackendCall<'_>, &str),
+    (call, content): (&BackendCall<'_>, ContentChecks),
     client: Option<&AuthenticatedClient>,
     response: &mut JsonRpcResponse,
 ) -> EgressOutcome {
@@ -184,7 +190,7 @@ pub(super) fn scan_direct_egress(
         subject: None,
     };
     let at = Egress {
-        method,
+        content,
         targets: &targets,
         correlation: &correlation,
         api_key_name: client.map(|c| c.name.as_str()),

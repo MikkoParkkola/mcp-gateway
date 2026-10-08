@@ -193,7 +193,7 @@ impl super::MetaMcp {
         // One egress scan, every method and every part (MIK-8139 family):
         // a frame another pass already screened carries the mark.
         let at = super::invoke::egress::Egress {
-            method: context.method,
+            content: super::invoke::egress::ContentChecks::for_method(context.method),
             targets: context.targets,
             correlation: &context.correlation,
             api_key_name: None,
@@ -282,7 +282,7 @@ impl super::MetaMcp {
         // A task's result is a `tools/call` result: its content gates ran at
         // dispatch.
         let at = Egress {
-            method: "tools/call",
+            content: super::invoke::egress::ContentChecks::Dispatched,
             targets,
             correlation: &correlation,
             api_key_name: None,

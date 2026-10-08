@@ -70,13 +70,18 @@ impl MetaMcp {
                     // `tasks/get` does: a policy tightened since settlement
                     // covers both reads. A refusal sends the minimal frame, so
                     // the subscriber still hears the task ended.
-                    let refused_now = params
-                        .as_mut()
-                        .is_some_and(|value| self.task_frame_refused(value));
-                    if refused_now {
+                    let outcome = match (stored, params.as_mut()) {
+                        (Some(task), Some(value)) => self.scan_stored_task(task, value),
+                        _ => super::invoke::egress::EgressOutcome::Delivered,
+                    };
+                    if outcome == super::invoke::egress::EgressOutcome::Refused {
                         params = None;
                     }
-                    let withheld = withheld || refused_now;
+                    // The receipts collected here describe the stored text: a
+                    // frame that no longer carries it (refused or redacted)
+                    // commits none.
+                    let withheld =
+                        withheld || outcome != super::invoke::egress::EgressOutcome::Delivered;
                     // A read of stored backend output only when the task serves
                     // some, as `tasks/get` counts it: a working or cancelled
                     // task read nothing.

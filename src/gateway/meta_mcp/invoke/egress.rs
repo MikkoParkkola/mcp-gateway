@@ -14,11 +14,34 @@ use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget
 /// The delivery refusal a screened-out frame becomes, on every route.
 pub(crate) const REFUSAL: &str = "Response blocked by security firewall";
 
-/// Where a frame is going: the method it answers and the policy targets and
-/// correlation its firewall verdict is evaluated under.
+/// Whether a result part still owes the content checks (inspection and
+/// context integrity). Every call site states it: a `tools/call` result met
+/// them at dispatch, with the tool's own capability flags, on every route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContentChecks {
+    /// Dispatch ran them on this result; running them again audits it twice.
+    Dispatched,
+    /// Nothing ran them yet: this scan does.
+    Here,
+}
+
+impl ContentChecks {
+    /// The usual answer for a frame answering `method`.
+    pub(crate) fn for_method(method: &str) -> Self {
+        if method == "tools/call" {
+            Self::Dispatched
+        } else {
+            Self::Here
+        }
+    }
+}
+
+/// Where a frame is going: whether it owes the content checks, and the policy
+/// targets and correlation its firewall verdict is evaluated under.
 pub(crate) struct Egress<'a> {
-    /// The method the frame answers (the client's, not a meta-tool's).
-    pub(crate) method: &'a str,
+    /// Whether a result part still owes the content checks (an error part
+    /// always meets them: no dispatch gate reads errors).
+    pub(crate) content: ContentChecks,
     /// The targets the firewall evaluates; never empty.
     pub(crate) targets: &'a [ResponsePolicyTarget],
     pub(crate) correlation: &'a ResponseCorrelation<'a>,
@@ -81,7 +104,7 @@ impl MetaMcp {
         // A `tools/call` result passed the content gates at dispatch, on
         // every route, with the tool's own capability flags; running them
         // again would audit it twice. Every other answer meets them here.
-        if at.method != "tools/call" && self.content_refuses(at, result) {
+        if at.content == ContentChecks::Here && self.content_refuses(at, result) {
             return EgressOutcome::Refused;
         }
         let snapshot = self.relay_snapshot(result);
@@ -236,7 +259,7 @@ impl MetaMcp {
             subject: None,
         };
         let at = Egress {
-            method: tool,
+            content: ContentChecks::Here,
             targets: &targets,
             correlation: &correlation,
             api_key_name,
@@ -282,9 +305,6 @@ struct NotificationEgress {
 impl crate::transport::notification_sink::NotificationScreen for NotificationEgress {
     fn admit(&self, notification: &mut crate::protocol::JsonRpcNotification) -> bool {
         let method = notification.method.clone();
-        let Some(params) = notification.params.as_mut() else {
-            return true;
-        };
         let targets = [ResponsePolicyTarget {
             server: "gateway".to_owned(),
             tool: method.clone(),
@@ -297,13 +317,13 @@ impl crate::transport::notification_sink::NotificationScreen for NotificationEgr
             subject: None,
         };
         let at = Egress {
-            method: &method,
+            content: ContentChecks::Here,
             targets: &targets,
             correlation: &correlation,
             api_key_name: None,
             firewall: self.meta.firewall.as_deref(),
         };
-        self.meta.scan_notification(params, &at) != EgressOutcome::Refused
+        self.meta.scan_notification(notification, &at) != EgressOutcome::Refused
     }
 }
 
@@ -322,23 +342,42 @@ impl MetaMcp {
         })
     }
 
-    /// A notification's params: content checks, then the firewall under
-    /// `Redact`; a redaction stays in place, a refusal withholds it.
-    fn scan_notification(&self, params: &mut Value, at: &Egress<'_>) -> EgressOutcome {
-        if self.content_refuses(at, params) {
+    /// A notification's method and params, one artifact: content checks,
+    /// then the firewall under `Redact`. A redaction of the params stays in
+    /// place; one that would change the method, or a refusal, withholds it.
+    fn scan_notification(
+        &self,
+        notification: &mut crate::protocol::JsonRpcNotification,
+        at: &Egress<'_>,
+    ) -> EgressOutcome {
+        let fields = serde_json::json!({
+            "method": notification.method,
+            "params": notification.params,
+        });
+        if self.content_refuses(at, &fields) {
             return EgressOutcome::Refused;
         }
         #[cfg(feature = "firewall")]
         if let Some(firewall) = at.firewall {
             use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
+            let mut artifact = fields.clone();
             let verdict = firewall.check_response_artifact(
-                params,
+                &mut artifact,
                 at.targets,
                 at.correlation,
                 ResponseArtifactKind::Notification,
                 ResponseMutationPolicy::Redact,
             );
-            return firewall_outcome(verdict);
+            if firewall_outcome(verdict) == EgressOutcome::Refused
+                || artifact["method"] != fields["method"]
+            {
+                return EgressOutcome::Refused;
+            }
+            if artifact == fields {
+                return EgressOutcome::Delivered;
+            }
+            notification.params = artifact.as_object_mut().and_then(|a| a.remove("params"));
+            return EgressOutcome::Rewritten;
         }
         EgressOutcome::Delivered
     }
@@ -375,29 +414,117 @@ impl Egressed {
     }
 }
 
-impl MetaMcp {
-    /// Whether a stored task's wire value, about to ride a `notifications/tasks`
-    /// frame, is refused by the egress scan's result step. Its content gates
-    /// ran when the task's call was dispatched.
-    pub(crate) fn task_frame_refused(&self, value: &mut Value) -> bool {
-        let targets = [ResponsePolicyTarget {
+/// The targets a stored task is judged under: the calls that produced it, so
+/// a rule on the original tool governs every later read; the gateway's task
+/// read when the row recorded none.
+fn stored_targets(task: &crate::gateway::task_service::CommittedTask) -> Vec<ResponsePolicyTarget> {
+    let recorded: Vec<_> = task
+        .targets
+        .iter()
+        .map(|t| ResponsePolicyTarget {
+            server: t.server.clone(),
+            tool: t.tool.clone(),
+        })
+        .collect();
+    if recorded.is_empty() {
+        vec![ResponsePolicyTarget {
             server: "gateway".to_owned(),
-            tool: "notifications/tasks".to_owned(),
-        }];
+            tool: "tasks/get".to_owned(),
+        }]
+    } else {
+        recorded
+    }
+}
+
+impl MetaMcp {
+    /// A stored task's output, about to be read again (`tasks/get`, a
+    /// `notifications/tasks` frame): the egress scan's result step under its
+    /// recorded targets, so a policy tightened since settlement covers every
+    /// read. Its content gates ran when its call was dispatched.
+    pub(crate) fn scan_stored_task(
+        &self,
+        task: &crate::gateway::task_service::CommittedTask,
+        value: &mut Value,
+    ) -> EgressOutcome {
+        let targets = stored_targets(task);
+        let (server, tool) = (targets[0].server.as_str(), targets[0].tool.as_str());
         let correlation = ResponseCorrelation {
-            session_id: "task-notify",
+            session_id: "task-read",
             caller: "task",
-            external_server: "gateway",
-            external_tool: "notifications/tasks",
+            external_server: server,
+            external_tool: tool,
             subject: None,
         };
         let at = Egress {
-            method: "tools/call",
+            content: ContentChecks::Dispatched,
             targets: &targets,
             correlation: &correlation,
             api_key_name: None,
             firewall: self.firewall.as_deref(),
         };
-        firewall_result(value, &at) == EgressOutcome::Refused
+        firewall_result(value, &at)
+    }
+
+    /// [`Self::scan_stored_task`] on a `tasks/get` answer: a refusal becomes
+    /// the delivery refusal, and the frame is marked so delivery skips it.
+    pub(crate) fn scan_task_read(
+        &self,
+        task: &crate::gateway::task_service::CommittedTask,
+        frame: &mut JsonRpcResponse,
+    ) {
+        let refused = frame
+            .result
+            .as_mut()
+            .is_some_and(|value| self.scan_stored_task(task, value) == EgressOutcome::Refused);
+        if refused {
+            *frame = JsonRpcResponse::delivery_refusal_error(frame.id.take(), -32600, REFUSAL);
+        }
+        frame.egress_scanned = true;
+    }
+}
+
+impl MetaMcp {
+    /// Inspect a `gateway_list_tools` / `gateway_search_tools` result once, on
+    /// the canonical value before it is serialised into `content[].text`
+    /// (OWASP ASI01 tool-poisoning, #2350): the content checks and the
+    /// firewall, the whole egress scan of a result. Detectors see the raw
+    /// strings: an escaped copy hides a quoted key or a split injection phrase
+    /// from them. A refusal refuses the call; otherwise credentials are
+    /// redacted in place. The discovery arm then marks its response
+    /// (`JsonRpcResponse::egress_scanned`, set after the meta-tool match,
+    /// never on a direct-name route), and every later exit skips only a marked
+    /// response: the mark, not the tool name, proves this pass ran. Every Ok
+    /// path of the three discovery handlers must call this.
+    ///
+    /// # Errors
+    /// [`crate::Error::ResponseFirewallRefused`] when the scan refuses.
+    pub(in crate::gateway::meta_mcp) fn inspect_discovery_value(
+        &self,
+        value: &mut Value,
+    ) -> crate::Result<()> {
+        let targets = [ResponsePolicyTarget {
+            server: "gateway".to_owned(),
+            tool: "tools/list".to_owned(),
+        }];
+        let correlation = ResponseCorrelation {
+            session_id: "meta:tools/list",
+            caller: "meta-mcp",
+            external_server: "gateway",
+            external_tool: "tools/list",
+            subject: None,
+        };
+        let at = Egress {
+            content: ContentChecks::Here,
+            targets: &targets,
+            correlation: &correlation,
+            api_key_name: None,
+            firewall: self.firewall.as_deref(),
+        };
+        if self.content_refuses(&at, value) || firewall_result(value, &at) == EgressOutcome::Refused
+        {
+            tracing::warn!("Egress scan: discovery response refused");
+            return Err(crate::Error::ResponseFirewallRefused);
+        }
+        Ok(())
     }
 }
