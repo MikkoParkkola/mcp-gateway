@@ -357,3 +357,65 @@ fn a_cli_write_refuses_a_config_that_no_longer_loads() {
     write_config_preserving(&missing, &config).expect("a missing file is created");
     assert!(missing.exists());
 }
+
+/// MIK-8029: `text` spliced with `edit`'s change to the config it loads as.
+fn spliced(text: &str, edit: impl FnOnce(&mut Config)) -> String {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, text).expect("write");
+    let (before, read) = Config::load_literal_with_text(&path).expect("load");
+    assert_eq!(read, text, "the loader hands back the file's own bytes");
+    let mut config = before.clone();
+    edit(&mut config);
+    splice::with_backends_edited(&read, &before, &config, Splice::One).expect("spliced")
+}
+
+/// A file whose first line ends `\n` and whose other lines end `\r\n`.
+const MIXED: &str = "backends:\n  a:\n    command: x\r\n  b:\r\n    command: y\r\n";
+
+fn backend(yaml: &str) -> crate::config::BackendConfig {
+    serde_yaml::from_str(yaml).expect("backend")
+}
+
+/// MIK-8029.EOL.1: editing one field leaves every other line's ending as it
+/// was, and the edited line keeps its own.
+#[test]
+fn an_edit_keeps_every_line_ending_of_a_mixed_file() {
+    let out = spliced(MIXED, |c| {
+        c.backends.insert("b".into(), backend("command: z\n"));
+    });
+    assert_eq!(out, MIXED.replace("command: y", "command: z"));
+}
+
+/// MIK-8029.EOL.2: a removal keeps the other lines' endings.
+#[test]
+fn a_removal_keeps_every_other_line_ending_of_a_mixed_file() {
+    let out = spliced(MIXED, |c| {
+        c.backends.remove("a");
+    });
+    assert_eq!(out, "backends:\n  b:\r\n    command: y\r\n");
+}
+
+/// MIK-8029.EOL.2/3: an addition keeps the file's bytes and its new lines
+/// take the ending of the line they follow.
+#[test]
+fn an_addition_keeps_a_mixed_file_and_follows_its_last_ending() {
+    let out = spliced(MIXED, |c| {
+        c.backends.insert("c".into(), backend("command: w\n"));
+    });
+    assert!(out.starts_with(MIXED), "{out:?}");
+    let added = &out[MIXED.len()..];
+    assert!(
+        !added.is_empty() && added.split_inclusive('\n').all(|l| l.ends_with("\r\n")),
+        "{added:?}"
+    );
+}
+
+/// MIK-8029.EOL.4: a file with no final line break keeps none.
+#[test]
+fn a_file_without_a_final_line_break_keeps_none() {
+    let out = spliced("backends:\n  a:\n    command: x", |c| {
+        c.backends.insert("a".into(), backend("command: z\n"));
+    });
+    assert_eq!(out, "backends:\n  a:\n    command: z");
+}
