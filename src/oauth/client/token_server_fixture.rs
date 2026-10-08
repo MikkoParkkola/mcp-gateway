@@ -24,6 +24,9 @@ pub(crate) enum Answer {
     RotateThenRedirect,
     /// Rotate, then redirect to an endpoint that answers an OAuth refusal.
     RotateThenRedirectToRefusal,
+    /// Rotate, then redirect to an `https://` name off this machine, which a
+    /// client that follows redirects would reach through its proxy.
+    RotateThenRedirectOffHost,
     /// Answer with the refresh token sent, as a non-rotating server does;
     /// reusing it is allowed.
     Keep,
@@ -131,6 +134,10 @@ impl TokenServer {
                     [("location", "http://127.0.0.1:1/token")],
                 )
                     .into_response();
+            }
+            Answer::RotateThenRedirectOffHost => {
+                let location = "https://refresh-redirect.invalid/token";
+                return (StatusCode::TEMPORARY_REDIRECT, [("location", location)]).into_response();
             }
             Answer::RotateThenRedirectToRefusal => {
                 let location = format!("{}/refused", self.base);

@@ -170,6 +170,11 @@ async fn an_uncertain_capability_refresh_is_not_replayed(uncertain: Answer) {
     storage.save(PROVIDER, PROVIDER, &rotated).unwrap();
 
     let _ = fetch(&executor(dir.path()), &server).await;
+    assert_eq!(
+        stored(dir.path()).and_then(|t| t.refresh_token),
+        None,
+        "the possibly consumed refresh token is cleared from storage"
+    );
     let _ = fetch(&executor(dir.path()), &server).await;
     assert_eq!(
         server.uses("r2"),
@@ -190,6 +195,33 @@ async fn a_capability_refresh_answered_502_is_not_replayed() {
 #[tokio::test]
 async fn a_redirected_capability_refresh_is_not_replayed() {
     an_uncertain_capability_refresh_is_not_replayed(Answer::RotateThenRedirect).await;
+}
+
+/// RESTREDIRECT.2: the refresh does not follow a redirect even to an
+/// `https://` name the capability call client would follow through its proxy.
+/// The token endpoint is on this machine, so it is reached directly.
+#[tokio::test]
+async fn a_capability_refresh_does_not_follow_a_redirect_through_the_proxy() {
+    let server = TokenServer::start(&[Answer::RotateThenRedirectOffHost]).await;
+    let (proxy, seen) = recording_token_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    store_expired(dir.path(), "r1");
+    let mut executor = through_proxy(&proxy);
+    executor.token_storage = Some(Arc::new(
+        TokenStorage::new(dir.path().to_path_buf()).unwrap(),
+    ));
+
+    let _ = fetch(&executor, &server).await;
+    assert_eq!(
+        server.uses("r1"),
+        1,
+        "the refresh never reached the token endpoint"
+    );
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        0,
+        "the redirect was followed through the proxy"
+    );
 }
 
 /// RESTMARK.1: a process stopped mid-refresh left the in-flight marker of a
