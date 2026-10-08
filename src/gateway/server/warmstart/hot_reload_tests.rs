@@ -18,7 +18,7 @@ use crate::config::Config;
 use crate::gateway::server::Gateway;
 
 /// A minimal MCP server over plain HTTP JSON: `initialize` and one tool.
-async fn mock(tool: &'static str) -> String {
+pub(super) async fn mock(tool: &'static str) -> String {
     use axum::Json;
     use axum::routing::post;
 

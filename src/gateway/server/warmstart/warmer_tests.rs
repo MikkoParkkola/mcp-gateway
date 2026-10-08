@@ -162,3 +162,39 @@ async fn a_warmer_never_touches_a_newer_instance() {
         "the old warmer kept retrying against a newer instance"
     );
 }
+
+/// A warmer that fills a backend's cache announces it, so a client that
+/// relisted on the registration (before the cache was filled) hears again once
+/// the tools are there. Registration alone announces too early.
+#[tokio::test]
+async fn a_filled_cache_is_announced() {
+    let backends = Arc::new(BackendRegistry::new());
+    let (feed, mut heard) = tokio::sync::mpsc::unbounded_channel();
+    backends.set_change_feed(feed);
+    let url = super::hot_reload_tests::mock("announced_tool").await;
+    let cfg = crate::config::BackendConfig {
+        transport: crate::config::TransportConfig::Http {
+            http_url: url,
+            streamable_http: Some(false),
+            protocol_version: None,
+        },
+        ..crate::config::BackendConfig::default()
+    };
+    assert!(backends.register(Arc::new(Backend::new(
+        "a",
+        cfg,
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ))));
+    assert_eq!(heard.recv().await.as_deref(), Some("a"), "registration");
+    let guard = WarmerGuard::new(&backends, WarmStartMode::Http, None);
+    guard.warm(vec!["a".to_string()]);
+    let again = tokio::time::timeout(Duration::from_secs(10), heard.recv()).await;
+    assert_eq!(
+        again.ok().flatten().as_deref(),
+        Some("a"),
+        "the filled cache was never announced"
+    );
+    let cached = backends.get("a").unwrap().get_cached_tools_snapshot();
+    assert!(cached.iter().any(|t| t.name == "announced_tool"));
+}
