@@ -7,13 +7,11 @@ use super::{MetaMcp, MetaMcpCallerContext, session_key};
 
 impl MetaMcpCallerContext<'_> {
     /// Who the A/B arm and the prefetch hints key on (MIK-7215.CONTROL.5, G4):
-    /// the caller key, else a real session id (a legacy connection or stdio,
-    /// neither shared). A keyless modern caller has neither: no arm of its
-    /// own and no hints, never the empty id every such caller shares.
-    pub(crate) fn experiment_key<'s>(&'s self, session_id: Option<&'s str>) -> Option<&'s str> {
-        self.caller_key
-            .filter(|key| !key.is_empty())
-            .or_else(|| session_key(session_id))
+    /// the caller key only. A caller with no key, stdio and keyless legacy HTTP
+    /// included, gets no arm of its own and no hints (MIK-7997): a session id
+    /// never stands in for the key.
+    pub(crate) fn experiment_key(&self) -> Option<&str> {
+        self.caller_key.filter(|key| !key.is_empty())
     }
 }
 
