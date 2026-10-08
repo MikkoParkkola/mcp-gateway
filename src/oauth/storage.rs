@@ -321,7 +321,14 @@ impl TokenStorage {
         let path = self.refresh_state_path(backend_name, resource_url);
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return RefreshState::default(),
+            // Absent only when no entry is there: a dangling link reads as
+            // NotFound too, and is damage (MIK-8091).
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    && fs::symlink_metadata(&path).is_err() =>
+            {
+                return RefreshState::default();
+            }
             Err(e) => {
                 warn!(backend = %backend_name, error = %e, "Unreadable refresh state; assuming the server rotates");
                 return RefreshState::unreadable();
