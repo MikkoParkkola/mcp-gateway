@@ -24,14 +24,33 @@ Run: python3 benchmarks/workload/schedule.py SEED REP   -> the cells of REP
 
 from __future__ import annotations
 
+import hashlib
 import random
 import sys
+from pathlib import Path
 
 CELLS = "ABCDE"
 GRADED_REPS = 18
 GRADED_SEED = 20261007
 GATED = "ABC"
 EXTRA_ROWS = ("ABCDE", "CDBEA", "DEABC")
+
+# Contract §9: a graded run runs on bench-host. The host is named by an
+# app-specific hash of its machine-id, never the raw id, which systemd treats
+# as confidential (machine-id(5)).
+HOST_ID_PREFIX = "mcp-gateway-workload-v1:"
+BENCH_HOST_ID = "02e36bb9d76598a7b1218b5ba2e13d95868b5b6ebea93ff216be8a6c413a3dd8"
+
+
+def host_id(machine_id: Path = Path("/etc/machine-id")) -> str | None:
+    """This host's workload id, or None when it has no readable machine-id."""
+    try:
+        raw = machine_id.read_text().strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    return hashlib.sha256((HOST_ID_PREFIX + raw).encode()).hexdigest()
 
 
 def _rows() -> list[str]:
@@ -71,5 +90,12 @@ def balance_problems(orders: list[list[str]]) -> list[str]:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["host-id"]:
+        print(host_id() or "")
+        sys.exit(0)
+    if sys.argv[1:2] == ["is-bench-host"]:
+        # This host, or the id given: exit 0 only for bench-host.
+        given = sys.argv[2] if len(sys.argv) > 2 else host_id()
+        sys.exit(0 if given == BENCH_HOST_ID else 1)
     seed, rep = int(sys.argv[1]), int(sys.argv[2])
     print(" ".join(graded_orders(seed)[rep - 1]))

@@ -173,6 +173,21 @@ loadavg1() {
 # --- build ------------------------------------------------------------------
 # --release --locked, deliberately outside CI's RUSTFLAGS: -Dwarnings. The
 # binary is what is being measured, not the lint gate.
+# Contract §9: a graded run is built and measured on bench-host, nowhere else.
+# Refused here, before any checkout, build or rep, rather than found by a
+# reader afterwards (a graded run once ran on a GitHub-hosted runner).
+require_bench_host() {
+  [[ "$GRADED" == 1 ]] || return 0
+  python3 "$HERE/schedule.py" is-bench-host || {
+    echo "void: a graded run is built and measured on bench-host only (contract §9)" >&2
+    exit 3
+  }
+}
+
+# The host an arm was built on, or nothing for an arm built before this was
+# recorded.
+arm_host() { cat "$ARMS_DIR/$1/.build_host_id" 2>/dev/null || true; }
+
 build_arm() {
   local cell="$1" ref; ref="$(cell_ref "$cell")"
   local dir="$ARMS_DIR/$cell"
@@ -193,9 +208,11 @@ build_arm() {
   git -C "$REPO" worktree add --detach "$dir" "$sha" >/dev/null
   ( CDPATH= cd -- "$dir" && cargo build --release --locked --features "$FEATURES" )
   echo "$sha" > "$dir/.checkout_sha"
+  python3 "$HERE/schedule.py" host-id > "$dir/.build_host_id"
 }
 
 do_build() {
+  require_bench_host
   mkdir -p "$ARMS_DIR"
   for cell in A B C; do build_arm "$cell"; done
   # D and E reuse the C binary; same ref, different protocol path.
@@ -370,13 +387,23 @@ do_measure() {
     echo "void: a graded run needs a fresh run dir; $run already holds pins, an order or a verdict" >&2
     exit 3
   fi
+  require_bench_host
+  if [[ "$GRADED" == 1 ]]; then
+    for cell in A B C; do
+      python3 "$HERE/schedule.py" is-bench-host "$(arm_host "$cell")" || {
+        echo "void: arm $cell was not built on bench-host (contract §9); rebuild it there" >&2
+        exit 3
+      }
+    done
+  fi
   render_configs "$run"
 
   python3 - "$run/pins.json" "$K6_IMAGE_DIGEST" \
     "$(cat "$ARMS_DIR/A/.checkout_sha")" "$(cat "$ARMS_DIR/B/.checkout_sha")" \
-    "$(cat "$ARMS_DIR/C/.checkout_sha")" "$REPS" "$(ncpu)" "$SEED" "$GRADED" <<'PY'
+    "$(cat "$ARMS_DIR/C/.checkout_sha")" "$REPS" "$(ncpu)" "$SEED" "$GRADED" \
+    "$(python3 "$HERE/schedule.py" host-id)" "$(arm_host A)" "$(arm_host B)" "$(arm_host C)" <<'PY'
 import json, subprocess, sys
-path, digest, a, b, c, reps, ncpu, seed, graded = sys.argv[1:10]
+path, digest, a, b, c, reps, ncpu, seed, graded, host, build_a, build_b, build_c = sys.argv[1:14]
 def ver(ref):
     out = subprocess.run(["git","show",f"{ref}:Cargo.toml"],capture_output=True,text=True).stdout
     for line in out.splitlines():
@@ -398,6 +425,14 @@ json.dump({"k6_image_digest": digest, "reps": list(range(1, int(reps) + 1)),
            "ncpu": int(ncpu), "load_envelope": {"max_load1": float(ncpu)},
            "cell_order_seed": seed, "graded": graded == "1", "cells": cells},
           open(path,"w"), indent=2)
+# Contract §9 provenance. Written only when known: an empty pin voids any run,
+# and a diagnostic run on a host with no machine-id must still grade.
+pins = json.load(open(path))
+if host:
+    pins["host_id"] = host
+if build_a and build_b and build_c:
+    pins["build_host_ids"] = {"A": build_a, "B": build_b, "C": build_c}
+json.dump(pins, open(path, "w"), indent=2)
 PY
 
   # Warm-up, discarded. Every cell gets one, including the report-only pair:

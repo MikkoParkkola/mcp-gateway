@@ -161,6 +161,8 @@ impl MetaMcp {
         let verified_identity = caller.verified_identity;
         let provenance = caller.provenance();
         let caller_proof = CallerProof::new(verified_identity, provenance);
+        // Names an MCP child when nothing above does (MIK-7825).
+        let credential_owner = super::support::credential_owner(caller);
         // The meta-tools this caller can see, for its recovery hints (MIK-7974).
         let surface = self.hint_surface(caller);
 
@@ -474,7 +476,7 @@ impl MetaMcp {
             session_id,
             arm_key,
             caller_identity,
-            caller_proof,
+            (caller_proof, credential_owner.as_deref()),
             &caller_credential.headers,
             dispatch_binding.as_deref(),
             account_credential,
@@ -580,7 +582,7 @@ impl MetaMcp {
                 prompt_cache_key.as_deref(),
                 want_full,
                 (arm_key, api_key_name),
-                (caller_identity, caller_proof),
+                (caller_identity, caller_proof, credential_owner.as_deref()),
                 verified_identity,
                 &caller_credential,
                 dispatch_binding.as_deref(),
@@ -778,3 +780,6 @@ mod ask_expiry_budget_tests;
 
 #[cfg(test)]
 mod tracing_target_tests;
+
+#[cfg(test)]
+mod mcp_credential_principal_tests;
