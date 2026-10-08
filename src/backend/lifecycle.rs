@@ -71,8 +71,12 @@ impl Backend {
         cache_ttl: Duration,
         runtime_plan: Option<RuntimePlan>,
     ) -> Self {
+        // Unique within the process; continuations live in memory, so process
+        // scope is the scope they need (MIK-8168).
+        static NEXT_INSTANCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
             name: name.to_string(),
+            instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             metric_label: Arc::<str>::from(name).into(),
             config,
             runtime_plan,
