@@ -346,6 +346,9 @@ def test_annotation_keys_are_config_rows() -> None:
         # Review d3: a narrowing predicate before the call, in either loader.
         code.replace("            && is_annotation(leaf)\n", "            && leaf.len() > 9\n            && is_annotation(leaf)\n", 1),
         code.replace("} else if is_annotation(key) {", "} else if key.len() > 9 && is_annotation(key) {", 1),
+        # Review d4: a rejection added after the insert, in either loader.
+        code.replace("ignored.insert(path, Ignored::Annotation);\n        } else if", "ignored.insert(path, Ignored::Annotation);\n            return;\n        } else if", 1),
+        code.replace("ignored.insert(path, Ignored::Annotation);\n                } else {", "ignored.insert(path, Ignored::Annotation);\n                    found.insert(path, None);\n                } else {", 1),
     ):
         assert mutated != code
         got = [e.id for e in rows(mutated, sk)]

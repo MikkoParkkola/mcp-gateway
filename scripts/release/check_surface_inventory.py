@@ -453,15 +453,16 @@ QUOTED = r"""(?:'[^']*'|"[^"]*")"""
 # A pure disjunction of prefix tests is the only shape `annotation_rows` can read.
 ANNOTATION_BODY = re.compile(rf"\s*key\.starts_with\({QUOTED}\)(?:\s*\|\|\s*key\.starts_with\({QUOTED}\))*\s*")
 # The two loaders that let an annotation key through: top-level keys and backend
-# keys (strict_keys.rs). Each branch is pinned whole, condition and body, modulo
+# keys (strict_keys.rs). Each branch is pinned whole, condition and body through
+# its closing brace, modulo
 # whitespace: any edit to either one, a narrowing, a negation or a removal, fails
 # closed and asks a human to re-read the annotation rows. Threat model (MIK-8077):
 # a careless edit, not an adversary; exact pinning ends the spelling rounds.
 ANNOTATION_BRANCHES = tuple(
     re.compile(r"\s+".join(map(re.escape, b.split())))
     for b in (
-        "if let KeyPath::Map { key: leaf, .. } = &key && is_annotation(leaf) { ignored.insert(path, Ignored::Annotation);",
-        "} else if is_annotation(key) { ignored.insert(path, Ignored::Annotation);",
+        "if let KeyPath::Map { key: leaf, .. } = &key && is_annotation(leaf) { ignored.insert(path, Ignored::Annotation); } else if",
+        "} else if is_annotation(key) { ignored.insert(path, Ignored::Annotation); } else {",
     )
 )
 
