@@ -55,6 +55,9 @@ fn request(route: Route, method: &'static str, part: Part) -> (&'static str, &'s
     if part.is_notification() {
         params["_meta"] = json!({"progressToken": "p1"});
     }
+    if matches!(part, Part::InterimQuestion | Part::InterimState) {
+        params["_meta"] = answering_client();
+    }
     let uri = match route {
         Route::Meta => "/mcp",
         Route::Direct => "/mcp/alpha",
@@ -65,12 +68,25 @@ fn request(route: Route, method: &'static str, part: Part) -> (&'static str, &'s
 /// POST one request accepting a streamed answer; the whole body as text, so
 /// a notification frame is read as surely as the answer.
 async fn post(fx: &Fx, uri: &str, method: &str, params: &Value) -> String {
-    let request = axum::http::Request::builder()
+    let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
         .header("authorization", "Bearer k-std")
         .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
+        .header("accept", "application/json, text/event-stream");
+    // A modern request mirrors its method and name in headers.
+    if params
+        .pointer("/_meta/io.modelcontextprotocol~1protocolVersion")
+        .is_some()
+    {
+        builder = builder
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", method);
+        if let Some(name) = params.get("name").and_then(Value::as_str) {
+            builder = builder.header("mcp-name", name);
+        }
+    }
+    let request = builder
         .body(axum::body::Body::from(
             json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string(),
         ))
@@ -126,6 +142,23 @@ async fn cell(setup: Setup, route: Route, method: &'static str, part: Part, text
     }
 }
 
+/// A 2026-07-28 request's `_meta` declaring `elicitation`: an interim
+/// question reaches the egress only for a client that said it can answer it
+/// (otherwise the capability gate refuses it first, -32021).
+fn answering_client() -> Value {
+    json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {"elicitation": {}},
+        "io.modelcontextprotocol/clientInfo": {"name": "EgressMatrix", "version": "1.0.0"}
+    })
+}
+
+/// Whether a question reached the client rewritten: MIK-8155 forbids it on
+/// every route (refused, or never asked, are both whole-question outcomes).
+fn rewritten(body: &str) -> bool {
+    body.contains("[REDACTED")
+}
+
 /// Whether the client was refused delivery, as the firewall refuses.
 fn refused(body: &str) -> bool {
     body.contains("Response blocked by security firewall") || body.contains("\"code\":-32600")
@@ -158,8 +191,8 @@ async fn egress_no_planted_credential_reaches_an_http_client() {
                 if seen.body.contains(&leak) {
                     failures.push(format!("{at}: credential delivered: {}", seen.body));
                 }
-                if part == Part::InterimQuestion && !refused(&seen.body) {
-                    failures.push(format!("{at}: question not refused: {}", seen.body));
+                if part == Part::InterimQuestion && rewritten(&seen.body) {
+                    failures.push(format!("{at}: question rewritten: {}", seen.body));
                 }
             }
         }
@@ -191,8 +224,11 @@ async fn egress_warn_redacts_an_answer_and_refuses_a_question() {
         }
         let part = Part::InterimQuestion;
         let seen = cell(Setup::Warn, route, "tools/call", part, leak.clone()).await;
-        if seen.body.contains(&leak) || !refused(&seen.body) {
-            failures.push(format!("{route:?} question not refused: {}", seen.body));
+        if seen.body.contains(&leak) || rewritten(&seen.body) || !refused(&seen.body) {
+            failures.push(format!(
+                "{route:?} question not refused whole: {}",
+                seen.body
+            ));
         }
     }
     report(&failures);
@@ -295,7 +331,9 @@ async fn egress_a_cross_route_replay_is_scanned() {
 /// A new arm in neither list fails here, so it cannot skip the matrix.
 #[test]
 fn egress_every_dispatched_method_is_a_matrix_row_or_gateway_own() {
-    const GATEWAY_OWN: [&str; 12] = [
+    // `sampling/createMessage` relays a client's own request to a session.
+    const GATEWAY_OWN: [&str; 13] = [
+        "sampling/createMessage",
         "initialize",
         "server/discover",
         "ping",
