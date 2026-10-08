@@ -205,3 +205,40 @@ fn a_live_cache_name_never_holds_a_dot() {
         assert!(!leaf.contains('.'), "{name:?} became {leaf:?}");
     }
 }
+
+/// MIK-7990.ENV.1: an assigned cache path that is not valid UTF-8 reaches the
+/// child byte for byte, and the transport reports that same path as the one
+/// the child was given, so the repair inspects the directory the child used.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_non_utf8_assigned_cache_reaches_the_child_byte_for_byte() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let dir = tempfile::tempdir().expect("dir");
+    let assigned = dir
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"caf\xe9-pkg-cache"));
+    let seen = dir.path().join("seen");
+    // The environment as production builds it: the string form of the path.
+    let env = HashMap::from([(
+        "npm_config_cache".to_string(),
+        assigned.to_string_lossy().into_owned(),
+    )]);
+    let transport = StdioTransport::new_with_assigned_cache(
+        &format!(
+            "sh -c 'printf %s \"$npm_config_cache\" > {}; exit 3'",
+            seen.display()
+        ),
+        env,
+        None,
+        std::time::Duration::from_secs(10),
+        None,
+        Some(assigned.clone()),
+    );
+    let _ = transport.start().await;
+    let written = std::fs::read(&seen).expect("the child wrote what it was given");
+    assert_eq!(written, assigned.as_os_str().as_bytes());
+    assert_eq!(
+        transport.package_cache_dir().as_deref(),
+        Some(assigned.as_path())
+    );
+}
