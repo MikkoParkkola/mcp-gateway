@@ -206,7 +206,6 @@ fn build_init_config(with_examples: bool, profile: InitProfile, starter: &str) -
             "# Keeps prompt overhead low by discovering backend tools on demand\n",
             "meta_mcp:\n",
             "  enabled: true\n",
-            "  cache_tools: true\n",
             "{examples_section}",
             "{starter}",
         ),

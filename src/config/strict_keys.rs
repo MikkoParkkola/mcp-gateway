@@ -51,6 +51,11 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
          Calls are bounded by the per-backend `timeout`. Remove server.request_timeout",
     ),
     (
+        &["meta_mcp", "cache_tools"],
+        "nothing ever read it, so tool lists were cached the same way whatever it said; \
+         `meta_mcp.cache_ttl` sets how long they are kept. Remove meta_mcp.cache_tools",
+    ),
+    (
         &["marketplace"],
         "the `plugin` command was removed in 4.0, and nothing else read this block: no \
          gateway path loaded the plugins it installed. Remove the marketplace block",
