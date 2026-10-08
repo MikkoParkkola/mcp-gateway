@@ -108,6 +108,57 @@ async fn a_removed_backend_withdraws_its_subscriptions() {
     );
 }
 
+/// MIK-7897 `LIFE.1`: a removed backend takes the subscriptions of all four
+/// of its event types with it, not only `tools_changed`; a re-added name
+/// starts clean.
+#[tokio::test]
+async fn a_removed_backend_withdraws_every_kind() {
+    let (hub, _dir) = hub();
+    let names = Arc::new(parking_lot::Mutex::new(vec!["x".to_owned()]));
+    let live = Arc::clone(&names);
+    hub.install_backend_source(Arc::new(move || live.lock().clone()));
+    let config = crate::config::EventsConfig::default();
+    for kind in [
+        "tools_changed",
+        "resources_changed",
+        "resource_updated",
+        "prompts_changed",
+    ] {
+        let row: records::Subscription = serde_json::from_value(serde_json::json!({
+            "v": 1, "id": format!("sub_{kind}"), "principal": "p", "url": "https://h/x",
+            "name": format!("backend.x.{kind}"), "arguments": {}, "secret": "whsec_x",
+            "previous_secret": null, "previous_until": null,
+            "granted_at": chrono::Utc::now(), "expires_at": null, "active": true,
+            "failed_since": null, "last_delivery_at": null, "last_error": null
+        }))
+        .expect("row");
+        hub.store
+            .admit(
+                row,
+                true,
+                store::Caps {
+                    per_principal: 10,
+                    global: 10,
+                },
+                chrono::Duration::zero(),
+                chrono::Utc::now(),
+                tail_policy(&config),
+            )
+            .expect("io")
+            .expect("admitted");
+    }
+    assert_eq!(hub.store.subscriptions().len(), 4, "premise: four kinds");
+    names.lock().clear();
+    hub.backend_tools_changed("x");
+    let left: Vec<String> = hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert!(left.is_empty(), "withdrawn with the backend: {left:?}");
+}
+
 /// A report still waiting when its backend leaves is not sent.
 #[tokio::test(start_paused = true)]
 async fn a_pending_report_does_not_outlive_its_backend() {
