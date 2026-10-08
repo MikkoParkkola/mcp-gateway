@@ -19,6 +19,7 @@ async fn a_body_declared_malformed_request_is_told_what_it_omitted() {
     let (mcp_status, mcp) = send(&fx, "/mcp", KEY, "tools/list", params.clone(), None).await;
     let (direct_status, direct) = send(&fx, "/mcp/alpha", KEY, "tools/list", params, None).await;
     assert_eq!(mcp_status, axum::http::StatusCode::BAD_REQUEST, "{mcp}");
+    assert_eq!(mcp["id"], 1, "the refusal answers its request: {mcp}");
     assert_eq!(mcp["error"]["code"], -32602, "{mcp}");
     assert!(
         mcp["error"]["message"]
@@ -37,7 +38,10 @@ async fn a_body_declared_malformed_request_is_told_what_it_omitted() {
 #[tokio::test]
 async fn a_legacy_request_still_gets_the_elicitation_refusal() {
     let fx = fixture_hardened_signed(Answer::Ok, false).await;
-    let (status, body) = send(&fx, "/mcp", KEY, "tools/list", json!({}), None).await;
-    assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], -32600, "{body}");
+    // Extension metadata that declares no revision is still a legacy request.
+    for params in [json!({}), json!({"_meta": {"io.example/trace": "t-1"}})] {
+        let (status, body) = send(&fx, "/mcp", KEY, "tools/list", params, None).await;
+        assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"]["code"], -32600, "{body}");
+    }
 }

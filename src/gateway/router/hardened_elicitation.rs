@@ -56,9 +56,11 @@ pub(super) fn refuse(request: &Value, declared_version: Option<&str>) -> axum::r
     if let RequestShape::Malformed { missing } =
         crate::protocol::meta::classify_request(params, declared_version)
     {
+        // The id as `/mcp` reads it everywhere else, so the error answers the
+        // request it refuses.
         let id = request
             .get("id")
-            .and_then(|id| serde_json::from_value::<RequestId>(id.clone()).ok());
+            .and_then(super::helpers::extract_request_id);
         return build_http_error_response(
             id,
             -32602,
