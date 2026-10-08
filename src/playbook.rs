@@ -375,6 +375,11 @@ pub struct PlaybookResult {
     pub step_errors: std::collections::BTreeMap<String, String>,
     /// Total execution time in milliseconds.
     pub duration_ms: u64,
+    /// Which `output` member each completed step produced, by the step's
+    /// label (its index in `steps`): what relay detection may attribute to
+    /// that step (MIK-8113). Never serialized.
+    #[serde(skip)]
+    pub(crate) provenance: Vec<(String, u32)>,
 }
 
 // ============================================================================
@@ -390,3 +395,4 @@ pub trait ToolInvoker: Send + Sync {
 
 pub mod engine;
 pub use engine::PlaybookEngine;
+pub(crate) use engine::current_step;
