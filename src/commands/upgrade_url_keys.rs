@@ -50,7 +50,7 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
     let at = path.display();
     let mut out = Vec::new();
     if rewrite.changed.is_empty() {
-        if rewrite.skipped.is_empty() {
+        if rewrite.skipped.is_empty() && rewrite.kept.is_empty() {
             out.push(format!(
                 "{at}: no `http_url` or `ws_url` to rewrite; nothing changed."
             ));
@@ -76,6 +76,14 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
              holding both `http_url` and `ws_url`, or beside text the rewrite could not edit \
              safely): backends {}.",
             rewrite.skipped.join(", ")
+        ));
+    }
+    if !rewrite.kept.is_empty() {
+        out.push(format!(
+            "{at}: kept `http_url`/`ws_url` for backends {}: `url` takes only a literal \
+             http(s):// or ws(s):// address of that key, and these hold another value \
+             (such as ${{VAR}}).",
+            rewrite.kept.join(", ")
         ));
     }
     out

@@ -221,14 +221,15 @@ fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
 /// `None` when the file cannot be read or parsed (the configuration check
 /// already reports that) or when it sets no such key.
 pub(super) fn check_hidden_keys(path: &Path) -> Option<CheckResult> {
-    let set = set_hidden_keys(&read_key_names(path)?);
+    let dict = read_key_names(path)?;
+    let set = set_hidden_keys(&dict);
     if set.is_empty() {
         return None;
     }
     let named: Vec<String> = set
         .iter()
         .map(|key| {
-            if URL_ALIASES.contains(key) {
+            if URL_ALIASES.contains(key) && upgrade_rewrites(&dict, key) {
                 format!("{key} (run mcp-gateway upgrade to rewrite it as url)")
             } else {
                 (*key).to_string()
@@ -250,6 +251,24 @@ pub(super) fn check_hidden_keys(path: &Path) -> Option<CheckResult> {
 
 /// The older spellings of a backend's `url`, which `mcp-gateway upgrade` rewrites.
 const URL_ALIASES: &[&str] = &["backends.<name>.http_url", "backends.<name>.ws_url"];
+
+/// Whether some backend holds the alias `key` names as a literal address of
+/// its scheme, the only kind `upgrade` rewrites (not `${VAR}`). The value is
+/// tested, never shown.
+fn upgrade_rewrites(dict: &Dict, key: &str) -> bool {
+    let alias = key.rsplit('.').next().unwrap_or(key);
+    let Some(Value::Dict(_, backends)) = dict.get("backends") else {
+        return false;
+    };
+    backends.values().any(|backend| match backend {
+        Value::Dict(_, fields) => matches!(
+            fields.get(alias),
+            Some(Value::String(_, address))
+                if super::super::backend_url_keys::transport_key_for(address) == Some(alias)
+        ),
+        _ => false,
+    })
+}
 
 #[cfg(test)]
 #[path = "hidden_keys_tests.rs"]

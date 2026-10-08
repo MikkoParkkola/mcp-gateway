@@ -23,7 +23,7 @@ pub(crate) struct UrlRewrite {
 
 /// The transport key a `url` stands for, by scheme. A private copy of the
 /// library's table, which is not public; a test holds the two equal.
-fn transport_key_for(url: &str) -> Option<&'static str> {
+pub(crate) fn transport_key_for(url: &str) -> Option<&'static str> {
     let lower = url.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
         Some("http_url")
@@ -39,7 +39,9 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
     let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_string).collect();
     let mut changed = Vec::new();
     let mut skipped = Vec::new();
+    let mut kept = Vec::new();
     let mut renamed: Vec<(String, &'static str)> = Vec::new();
+    let doc: Option<serde_yaml::Value> = serde_yaml::from_str(text).ok();
     for entry in backend_entries(&lines) {
         if only.is_some_and(|names| !names.contains(&entry.name)) {
             continue;
@@ -53,6 +55,15 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
             continue;
         }
         if let Some(&(at, alias)) = entry.aliases.first() {
+            let value = doc
+                .as_ref()
+                .and_then(|d| d.get("backends")?.get(entry.name.as_str())?.get(alias))
+                .and_then(serde_yaml::Value::as_str);
+            if value.and_then(transport_key_for) != Some(alias) {
+                // Renaming would not load (`${VAR}`) or would switch transport.
+                kept.push(entry.name);
+                continue;
+            }
             lines[at] = lines[at].replacen(alias, "url", 1);
             changed.push(at + 1);
             renamed.push((entry.name, alias));
@@ -67,14 +78,14 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
             text: text.to_string(),
             changed: Vec::new(),
             skipped,
-            kept: Vec::new(),
+            kept,
         };
     }
     UrlRewrite {
         text: rewritten,
         changed,
         skipped,
-        kept: Vec::new(),
+        kept,
     }
 }
 

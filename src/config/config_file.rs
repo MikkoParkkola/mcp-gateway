@@ -112,9 +112,16 @@ fn resolve_backend_urls(dict: &mut Dict) -> std::result::Result<(), String> {
             return Err(format!("backends.{name}.url must be a string."));
         };
         let Some(key) = super::backend_transport::transport_key_for(&address) else {
-            return Err(format!(
-                "backends.{name}.url must start with http://, https://, ws:// or wss://."
-            ));
+            // `url` is resolved here, before variables expand, so a reference
+            // cannot pick a transport; the aliases expand later and can.
+            return Err(if address.contains("${") || address.starts_with("env:") {
+                format!(
+                    "backends.{name}.url must be a literal address; for one from the \
+                     environment keep http_url or ws_url."
+                )
+            } else {
+                format!("backends.{name}.url must start with http://, https://, ws:// or wss://.")
+            });
         };
         fields.insert(key.to_string(), figment::value::Value::String(tag, address));
     }
