@@ -322,7 +322,7 @@ impl Store {
             remove_record(&self.outbox_dir, &OutboxRecord::file(&id))?;
             state.outbox.remove(&id);
         }
-        let buried = self.expire_pending(&mut state, now)?;
+        let buried = self.expire_pending(&mut state, now);
         let mut first: HashMap<&str, &OutboxRecord> = HashMap::new();
         let mut next: Option<DateTime<Utc>> = None;
         for record in state.outbox.values() {

@@ -74,7 +74,7 @@ impl Store {
         &self,
         state: &mut State,
         now: DateTime<Utc>,
-    ) -> std::io::Result<Vec<OutboxRecord>> {
+    ) -> Vec<OutboxRecord> {
         // The oldest batch by key first, then only those records cloned.
         let mut keys: Vec<(DateTime<Utc>, String)> = state
             .outbox
@@ -127,6 +127,6 @@ impl Store {
         {
             tracing::warn!(%error, "events store: a settled expired row was not removed; retried next tick");
         }
-        Ok(buried)
+        buried
     }
 }
