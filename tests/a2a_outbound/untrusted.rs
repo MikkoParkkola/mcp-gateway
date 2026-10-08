@@ -252,8 +252,19 @@ async fn mik_8112_an_a2a_answer_gets_the_kernel_verdict_of_an_mcp_result() {
         serde_json::to_value(expected).expect("a decision serialises"),
         "{delivered}"
     );
+    let integrity = &delivered["_context_integrity"];
+    assert_eq!(
+        integrity["policy"]["privilege_elevation_allowed"], false,
+        "{delivered}"
+    );
     assert!(
-        !delivered["content"].to_string().contains("admin access"),
+        integrity["classification"]
+            .to_string()
+            .contains("tool_access_escalation"),
+        "the oracle's escalation class: {delivered}"
+    );
+    assert!(
+        !delivered.to_string().contains("admin access"),
         "the instruction reached the caller: {delivered}"
     );
 }
