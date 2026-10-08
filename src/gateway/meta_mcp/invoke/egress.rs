@@ -363,3 +363,29 @@ impl Egressed {
         &self.0
     }
 }
+
+impl MetaMcp {
+    /// Whether a stored task's wire value, about to ride a `notifications/tasks`
+    /// frame, is refused by the egress scan's result step. Its content gates
+    /// ran when the task's call was dispatched.
+    pub(crate) fn task_frame_refused(&self, value: &mut Value) -> bool {
+        let targets = [ResponsePolicyTarget {
+            server: "gateway".to_owned(),
+            tool: "notifications/tasks".to_owned(),
+        }];
+        let correlation = ResponseCorrelation {
+            session_id: "task-notify",
+            caller: "task",
+            external_server: "gateway",
+            external_tool: "notifications/tasks",
+            subject: None,
+        };
+        let at = Egress {
+            method: "tools/call",
+            targets: &targets,
+            correlation: &correlation,
+            api_key_name: None,
+        };
+        self.firewall_result(value, &at) == EgressOutcome::Refused
+    }
+}
