@@ -24,18 +24,19 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::gateway::gateway_writes::WriteRecord;
-use crate::hashing::{canonical_json, sha256_hex_chunks};
 use crate::security::tenant_reads::ReadAttribution;
 use crate::{Error, Result};
 
 #[path = "idempotency/admission.rs"]
 pub(crate) mod admission;
 mod guard;
+mod key;
 // #1962: `disarm`, kept out of this file's size baseline.
 mod reservation_arm;
 pub use guard::{
     FIREWALL_REFUSAL_MARKER, GuardOutcome, cached_error_parts, enforce, spawn_cleanup_task,
 };
+pub use key::derive_key;
 
 // ── Public constants ──────────────────────────────────────────────────────────
 
@@ -624,23 +625,6 @@ impl IdempotencyCache {
 
 #[cfg(kani)]
 mod verification;
-
-// ── Key generation ────────────────────────────────────────────────────────────
-
-/// Derive an idempotency key from `tool_name` and `arguments`.
-///
-/// The key is the hex-encoded SHA-256 digest of
-/// `"{tool_name}\0{canonical_json(arguments)}"`.
-/// Using a NUL separator prevents collisions between tool names that share a
-/// common prefix and arguments.
-///
-/// The resulting key is stable: identical `(tool_name, arguments)` pairs
-/// always produce the same key regardless of JSON key ordering.
-#[must_use]
-pub fn derive_key(tool_name: &str, arguments: &Value) -> String {
-    let canonical = canonical_json(arguments);
-    sha256_hex_chunks([tool_name.as_bytes(), &b"\0"[..], canonical.as_bytes()])
-}
 
 // ── Idempotency enforcement ───────────────────────────────────────────────────
 
