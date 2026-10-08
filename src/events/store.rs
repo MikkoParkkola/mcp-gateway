@@ -105,6 +105,9 @@ type Pair = (String, String);
 #[derive(Default)]
 struct State {
     subs: HashMap<String, Subscription>,
+    /// Rows removed so far, by any path (design r3 L5: the worker tick
+    /// releases their keys).
+    removals: u64,
     /// Keyed by `verified_file(principal, url)`.
     verified: HashMap<String, Verified>,
     /// Pending deliveries, keyed by event id.
@@ -131,7 +134,9 @@ impl State {
     /// Remove row `id`, with its hold: no hold outlives its row, so the same
     /// key subscribed again is judged afresh (MIK-8057).
     fn drop_row(&mut self, id: &str) {
-        self.subs.remove(id);
+        if self.subs.remove(id).is_some() {
+            self.removals += 1;
+        }
         self.held.remove(id);
         self.hold_unsynced.remove(id);
     }
@@ -576,15 +581,18 @@ impl Store {
         Ok(())
     }
 
-    /// Whether some subscription's expiry fell in `(after, upto]`.
-    pub(crate) fn expired_between(&self, after: DateTime<Utc>, upto: DateTime<Utc>) -> bool {
+    /// Whether some subscription's expiry or hold deadline fell in
+    /// `(after, upto]`, and how many rows were removed so far.
+    pub(crate) fn lapses(&self, after: DateTime<Utc>, upto: DateTime<Utc>) -> (bool, u64) {
         // ponytail: scans every row per worker tick, in memory; keep an
         // expiry index if rows grow past the tens of thousands.
         let state = self.state.lock();
-        state
+        let within = |at: Option<DateTime<Utc>>| at.is_some_and(|at| after < at && at <= upto);
+        let lapsed = state
             .subs
             .values()
-            .any(|s| s.expires_at.is_some_and(|at| after < at && at <= upto))
+            .any(|s| within(s.expires_at) || within(s.held_until));
+        (lapsed, state.removals)
     }
 
     /// Delete subscription `id`. Expired rows are swept first, so an

@@ -186,6 +186,9 @@ pub(crate) trait EventSource: Send + Sync {
     fn charges(&self, _name: &str) -> bool {
         true
     }
+    /// Backend `backend`'s registration or configuration changed: wake
+    /// whatever upstream work was waiting on it (design r3 L2).
+    fn backend_changed(&self, _backend: &str) {}
     /// Upstream listener tasks this source spawned, so a hub-level test can
     /// see upstream work start (reconcile table, design r3 section 6).
     #[cfg(test)]

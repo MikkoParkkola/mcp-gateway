@@ -283,3 +283,52 @@ async fn t07_a_row_touched_during_a_withdraw_still_goes() {
         "the touched row is withdrawn"
     );
 }
+
+/// T02, parked-key half (R1a review MEDIUM): a `tools_changed` key started
+/// while its backend was unregistered is parked in the listeners; the
+/// backend's registration wakes it within a second, not at the sweep.
+#[tokio::test(start_paused = true)]
+async fn t02_a_parked_tools_key_is_listened_to_at_registration() {
+    let (hub, _dir) = hub();
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let none: backend_source::Ineligible = Arc::new(std::collections::BTreeSet::new);
+    hub.install_backend_source_with_upstream(
+        Arc::new(|| vec!["b".to_owned()]),
+        Arc::clone(&registry),
+        none,
+    );
+    admit_on(&hub, "b", "tools_changed");
+    hub.replay_starts().await;
+    assert!(
+        !hub.lifecycle.lock().await.is_empty(),
+        "premise: the tools key started, parked"
+    );
+    let source = hub
+        .source(types::SourceKind::BackendNotification)
+        .expect("source");
+    assert_eq!(source.upstream_starts(), 0, "premise: no task yet");
+    assert!(registry.register(silent_backend()));
+    hub.backend_tools_changed("b");
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(source.upstream_starts(), 1, "listened to at registration");
+}
+
+/// T10, removal half (R1a review MEDIUM): any removed row counts, so the
+/// worker tick releases its key whichever path removed it.
+#[test]
+fn t10_every_row_removal_is_counted_for_the_tick() {
+    let (hub, _dir) = hub();
+    admit_kind(&hub, "tools_changed");
+    let now = chrono::Utc::now();
+    let (_, before) = hub.store.lapses(now, now);
+    let tail = tail_policy(&hub.config);
+    assert!(
+        hub.store
+            .remove("sub_x_tools_changed", now, tail)
+            .expect("removed")
+    );
+    let (_, after) = hub.store.lapses(now, now);
+    assert_eq!(after, before + 1, "the removal is counted");
+}

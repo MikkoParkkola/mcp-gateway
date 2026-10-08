@@ -188,6 +188,12 @@ impl EventSource for BackendSource {
             .map_err(|_| RpcError::exhausted("upstream_uris", Some(MAX_URIS)))
     }
 
+    fn backend_changed(&self, backend: &str) {
+        if let Some(up) = &self.upstream {
+            up.listeners.revive_backend(backend);
+        }
+    }
+
     #[cfg(test)]
     fn upstream_starts(&self) -> usize {
         self.upstream.as_ref().map_or(0, |up| {

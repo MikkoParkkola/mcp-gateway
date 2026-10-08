@@ -310,11 +310,21 @@ impl UpstreamListeners {
     /// loop head. Collect and replace share one hold of the map lock that
     /// `add` and `remove` take, so no key changes in between.
     fn revive(&self) {
+        self.revive_where(|_| true);
+    }
+
+    /// Revive backend `name` now rather than at the sweep: its registration
+    /// changed (design r3 L2).
+    pub(crate) fn revive_backend(&self, name: &str) {
+        self.revive_where(|of| of == name);
+    }
+
+    fn revive_where(&self, only: impl Fn(&str) -> bool) {
         let refused = (self.ineligible)();
         let mut map = self.backends.lock();
         let due: Vec<String> = map
             .iter()
-            .filter(|(name, shared)| self.revivable(name, shared, &refused))
+            .filter(|(name, shared)| only(name) && self.revivable(name, shared, &refused))
             .map(|(name, _)| name.clone())
             .collect();
         for name in due {

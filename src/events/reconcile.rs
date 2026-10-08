@@ -40,6 +40,9 @@ impl EventsHub {
         if !gone.is_empty() {
             self.withdraw_rows(&gone);
         }
+        // A key started while the backend could not be listened to is parked
+        // in the listeners; wake it now, not at the revive sweep.
+        source.backend_changed(backend);
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
@@ -73,8 +76,16 @@ impl EventsHub {
     /// settlement still buries their records and removes the rows.
     pub(super) async fn stop_expired_keys(&self) {
         let now = chrono::Utc::now();
-        let since = std::mem::replace(&mut *self.runtime.expiry_seen.lock(), now);
-        if self.store.expired_between(since, now) {
+        let (lapsed, removed) = {
+            let mut seen = self.runtime.expiry_seen.lock();
+            let (lapsed, removals) = self.store.lapses(seen.0, now);
+            let removed = removals != seen.1;
+            *seen = (now, removals);
+            (lapsed, removed)
+        };
+        // A row that expired, whose hold lapsed, or that any path removed
+        // since the last tick no longer holds its key.
+        if lapsed || removed {
             self.reconcile_stops().await;
         }
     }
