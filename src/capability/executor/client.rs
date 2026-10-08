@@ -27,17 +27,7 @@ use crate::{Error, Result};
 ///
 /// Panics if the reqwest client cannot be created (invalid TLS config, etc.).
 pub(super) fn build(proxy: Option<&url::Url>) -> Client {
-    let builder = match proxy {
-        None => crate::security::ssrf::pinned_client_builder(),
-        // Loopback goes direct: cleartext to it is allowed only because it
-        // stays on the machine, and the proxy would carry it off (#3013).
-        Some(url) => Client::builder().no_proxy().proxy(
-            reqwest::Proxy::all(url.as_str())
-                .expect("capabilities.egress_proxy validated at load")
-                .no_proxy(reqwest::NoProxy::from_string("localhost,127.0.0.0/8,::1")),
-        ),
-    };
-    builder
+    route(proxy)
         .timeout(Duration::from_secs(60))
         .pool_max_idle_per_host(10)
         .pool_idle_timeout(Duration::from_secs(90))
@@ -64,6 +54,53 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
         }))
         .build()
         .expect("Failed to create HTTP client")
+}
+
+/// The route of every capability call: pinned and direct, or through
+/// `proxy`.
+fn route(proxy: Option<&url::Url>) -> reqwest::ClientBuilder {
+    match proxy {
+        None => crate::security::ssrf::pinned_client_builder(),
+        // Loopback goes direct: cleartext to it is allowed only because it
+        // stays on the machine, and the proxy would carry it off (#3013).
+        Some(url) => Client::builder().no_proxy().proxy(
+            reqwest::Proxy::all(url.as_str())
+                .expect("capabilities.egress_proxy validated at load")
+                .no_proxy(reqwest::NoProxy::from_string("localhost,127.0.0.0/8,::1")),
+        ),
+    }
+}
+
+/// The client a provider's OAuth refresh goes through (MIK-8020): the route
+/// of [`build`], with redirects off, so a refresh token is never re-sent to a
+/// redirect target and a connect error proves nothing was sent.
+#[derive(Clone)]
+pub(super) struct RefreshClient {
+    pub(super) http: Client,
+    /// The policy the route enforces, for typing a refused redirect target.
+    pub(super) destination: crate::security::ssrf::DestinationPolicy,
+}
+
+/// [`RefreshClient`] for `proxy`. Its 30 s request timeout stays under the
+/// refresh exchange's own bound.
+///
+/// # Panics
+///
+/// Panics if the reqwest client cannot be created, as [`build`] does.
+pub(super) fn build_refresh(proxy: Option<&url::Url>) -> RefreshClient {
+    use crate::security::ssrf::DestinationPolicy;
+    RefreshClient {
+        http: route(proxy)
+            .timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("Failed to create HTTP client"),
+        destination: if proxy.is_some() {
+            DestinationPolicy::Configured
+        } else {
+            DestinationPolicy::Public
+        },
+    }
 }
 
 /// Maximum number of send attempts (1 initial + 2 retries) for transient

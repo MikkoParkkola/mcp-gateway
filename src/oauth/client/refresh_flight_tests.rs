@@ -9,11 +9,11 @@
 //! one backend, one issuer) the way a replaced transport and its replacement,
 //! or two config-reload generations, hold it in production.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use super::token_server_fixture::{Answer, TokenServer};
 use super::*;
 use crate::security::ssrf::DestinationPolicy;
 
@@ -22,173 +22,6 @@ const BACKEND: &str = "flight-backend";
 const CLIENT_ID: &str = "flight-client";
 /// The `User-Agent` of the client a test supplies to `OAuthClient::new`.
 const SUPPLIED_AGENT: &str = "supplied-refresh-client";
-
-/// How the token server answers the next refresh request.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Answer {
-    /// Rotate and answer at once.
-    Rotate,
-    /// Rotate, then hold the answer until the test releases it.
-    HoldThenRotate,
-    /// Rotate, then answer 502 as a proxy in front of it would.
-    RotateThen502,
-    /// Rotate, then send a 200 whose body breaks off.
-    RotateThenBrokenBody,
-    /// Rotate, then redirect to a port nobody listens on.
-    RotateThenRedirect,
-    /// Rotate, then redirect to an endpoint that answers an OAuth refusal.
-    RotateThenRedirectToRefusal,
-    /// Answer with the refresh token sent, as a non-rotating server does;
-    /// reusing it is allowed.
-    Keep,
-    /// As `Keep`, then send a 200 whose body breaks off.
-    KeepThenBrokenBody,
-}
-
-/// A rotating token server that records every refresh it is sent.
-struct TokenServer {
-    base: String,
-    /// The refresh token of every refresh request, in arrival order.
-    sent: Mutex<Vec<String>>,
-    /// The client id of every refresh request, in arrival order.
-    client_ids: Mutex<Vec<String>>,
-    /// The `User-Agent` of every refresh request, in arrival order.
-    agents: Mutex<Vec<String>>,
-    /// Refresh tokens already consumed; a second use revokes the grant.
-    consumed: Mutex<Vec<String>>,
-    revoked: AtomicBool,
-    generation: AtomicUsize,
-    answers: Mutex<Vec<Answer>>,
-    arrived: tokio::sync::Notify,
-    release: tokio::sync::Notify,
-}
-
-impl TokenServer {
-    /// Start one; `answers` are used in order, then `Rotate`.
-    async fn start(answers: &[Answer]) -> Arc<Self> {
-        use axum::{Form, Router, routing::post};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let server = Arc::new(Self {
-            base: format!("http://{}", listener.local_addr().unwrap()),
-            sent: Mutex::default(),
-            client_ids: Mutex::default(),
-            agents: Mutex::default(),
-            consumed: Mutex::default(),
-            revoked: AtomicBool::new(false),
-            generation: AtomicUsize::new(1),
-            answers: Mutex::new(answers.iter().rev().copied().collect()),
-            arrived: tokio::sync::Notify::new(),
-            release: tokio::sync::Notify::new(),
-        });
-        let handler = Arc::clone(&server);
-        let refusal = || async {
-            let body = serde_json::json!({ "error": "invalid_request" });
-            (axum::http::StatusCode::BAD_REQUEST, axum::Json(body))
-        };
-        let app = Router::new().route("/refused", post(refusal)).route(
-            "/token",
-            post(
-                move |headers: axum::http::HeaderMap, Form(form): Form<HashMap<String, String>>| {
-                    let server = Arc::clone(&handler);
-                    let agent = headers.get("user-agent").and_then(|v| v.to_str().ok());
-                    server
-                        .agents
-                        .lock()
-                        .unwrap()
-                        .push(agent.unwrap_or_default().to_string());
-                    async move { server.answer(&form).await }
-                },
-            ),
-        );
-        tokio::spawn(async move { axum::serve(listener, app).await });
-        server
-    }
-
-    async fn answer(&self, form: &HashMap<String, String>) -> axum::response::Response {
-        use axum::{Json, http::StatusCode, response::IntoResponse};
-        let sent = form.get("refresh_token").cloned().unwrap_or_default();
-        self.sent.lock().unwrap().push(sent.clone());
-        let client_id = form.get("client_id").cloned().unwrap_or_default();
-        self.client_ids.lock().unwrap().push(client_id);
-        self.arrived.notify_waiters();
-        let answer = self.answers.lock().unwrap().pop().unwrap_or(Answer::Rotate);
-        let keeps = matches!(answer, Answer::Keep | Answer::KeepThenBrokenBody);
-        let reused = !keeps && {
-            let mut consumed = self.consumed.lock().unwrap();
-            let reused = consumed.contains(&sent);
-            consumed.push(sent.clone());
-            reused
-        };
-        if reused {
-            self.revoked.store(true, Ordering::SeqCst);
-        }
-        if reused || self.revoked.load(Ordering::SeqCst) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "invalid_grant" })),
-            )
-                .into_response();
-        }
-        let n = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let mut body = serde_json::json!({
-            "access_token": format!("a{n}"),
-            "token_type": "Bearer",
-            "expires_in": 3600,
-        });
-        body["refresh_token"] = serde_json::Value::from(if keeps { sent } else { format!("r{n}") });
-        match answer {
-            Answer::HoldThenRotate => self.release.notified().await,
-            Answer::RotateThen502 => return StatusCode::BAD_GATEWAY.into_response(),
-            Answer::RotateThenRedirect => {
-                return (
-                    StatusCode::TEMPORARY_REDIRECT,
-                    [("location", "http://127.0.0.1:1/token")],
-                )
-                    .into_response();
-            }
-            Answer::RotateThenRedirectToRefusal => {
-                let location = format!("{}/refused", self.base);
-                return (StatusCode::TEMPORARY_REDIRECT, [("location", location)]).into_response();
-            }
-            Answer::RotateThenBrokenBody | Answer::KeepThenBrokenBody => {
-                let broken = futures::stream::iter([
-                    Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"{\"access_token\":")),
-                    Err(std::io::Error::other("connection lost")),
-                ]);
-                return axum::response::Response::builder()
-                    .header("content-type", "application/json")
-                    .body(axum::body::Body::from_stream(broken))
-                    .unwrap();
-            }
-            Answer::Rotate | Answer::Keep => {}
-        }
-        Json(body).into_response()
-    }
-
-    /// How many refresh requests carried `token`.
-    fn uses(&self, token: &str) -> usize {
-        self.sent
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|t| *t == token)
-            .count()
-    }
-
-    fn requests(&self) -> usize {
-        self.sent.lock().unwrap().len()
-    }
-
-    /// Wait until `n` refresh requests have arrived, or `within` passes.
-    async fn arrivals(&self, n: usize, within: Duration) {
-        let _ = tokio::time::timeout(within, async {
-            while self.requests() < n {
-                self.arrived.notified().await;
-            }
-        })
-        .await;
-    }
-}
 
 /// A client of the shared credential, whose storage is `dir`, built the way
 /// production builds one: refreshes go through its own redirect-free client.
@@ -311,8 +144,12 @@ async fn two_live_clients_refresh_a_rotating_token_once() {
     server.arrivals(2, Duration::from_secs(2)).await;
     server.release.notify_one();
 
-    a.await.unwrap().expect("the first refresh succeeds");
-    let _ = b.await.unwrap();
+    let issued = a.await.unwrap().expect("the first refresh succeeds");
+    let adopted = b
+        .await
+        .unwrap()
+        .expect("the second client takes up the stored token");
+    assert_eq!(adopted, issued);
     assert_eq!(
         server.uses("r1"),
         1,
@@ -351,8 +188,15 @@ async fn a_cancelled_refresh_still_stores_the_rotated_token() {
         }
     })
     .await;
+    assert_eq!(
+        stored(&first).and_then(|t| t.refresh_token).as_deref(),
+        Some("r2"),
+        "the detached exchange stored the rotated token"
+    );
 
-    let _ = headless(&second).await;
+    headless(&second)
+        .await
+        .expect("the second client takes up the stored token");
     assert_eq!(
         server.uses("r1"),
         1,
@@ -615,14 +459,20 @@ async fn a_stored_rotation_that_kept_the_access_token_is_adopted() {
     assert_eq!(marker(&late), None, "an adoption marks nothing in flight");
 }
 
-/// RENEWREPLAY.4: a server never seen to rotate keeps its refresh token after
-/// an exchange whose answer was lost, and the next refresh reuses it.
+/// ROT3.3 (was RENEWREPLAY.4): a server seen not to rotate (a settled refresh
+/// kept the sent token) keeps its refresh token after an exchange whose answer
+/// was lost, and the next refresh reuses it.
 #[tokio::test]
 async fn an_uncertain_refresh_keeps_a_non_rotating_servers_token() {
-    let server = TokenServer::start(&[Answer::KeepThenBrokenBody, Answer::Keep]).await;
+    let server =
+        TokenServer::start(&[Answer::Keep, Answer::KeepThenBrokenBody, Answer::Keep]).await;
     let dir = tempfile::tempdir().unwrap();
     let late = client(dir.path(), &server);
     hold(&late, &token("a1", Some("r1"), true));
+    headless(&late)
+        .await
+        .expect("a settled refresh that keeps r1");
+    expire(&late);
 
     assert!(headless(&late).await.is_err(), "the answer was lost");
     assert_eq!(
@@ -631,7 +481,87 @@ async fn an_uncertain_refresh_keeps_a_non_rotating_servers_token() {
     );
     expire(&late);
     headless(&late).await.expect("the kept token refreshes");
-    assert_eq!(server.uses("r1"), 2);
+    assert_eq!(server.uses("r1"), 3);
+}
+
+/// ROT3.3b: a settled answer that leaves the refresh token out keeps the one
+/// sent (RFC 6749 section 6), so it shows the server does not rotate too.
+#[tokio::test]
+async fn an_answer_without_a_refresh_token_counts_as_keeping_it() {
+    let server =
+        TokenServer::start(&[Answer::Omit, Answer::KeepThenBrokenBody, Answer::Keep]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let late = client(dir.path(), &server);
+    hold(&late, &token("a1", Some("r1"), true));
+    headless(&late)
+        .await
+        .expect("a settled refresh without a refresh token");
+    expire(&late);
+
+    assert!(headless(&late).await.is_err(), "the answer was lost");
+    expire(&late);
+    headless(&late).await.expect("the kept token refreshes");
+    assert_eq!(server.uses("r1"), 3);
+}
+
+/// ROT3.5: a rotation, once seen, outranks an earlier refresh that kept the
+/// token. The server kept `r1`, then rotated it to `r3` (the fixture counts
+/// the kept answer too); the answer to `r3`'s refresh was lost, so `r3` is
+/// not sent again.
+#[tokio::test]
+async fn a_seen_rotation_outranks_an_earlier_kept_token() {
+    let server =
+        TokenServer::start(&[Answer::Keep, Answer::Rotate, Answer::RotateThenBrokenBody]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let late = client(dir.path(), &server);
+    hold(&late, &token("a1", Some("r1"), true));
+    headless(&late)
+        .await
+        .expect("a settled refresh that keeps r1");
+    expire(&late);
+    headless(&late)
+        .await
+        .expect("a settled refresh that rotates to r3");
+    expire(&late);
+    assert!(headless(&late).await.is_err(), "the answer was lost");
+    expire(&late);
+
+    let error = headless(&late).await.expect_err("a login is needed");
+    assert!(
+        matches!(error, Error::AuthorizationRequired { .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        server.uses("r3"),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+}
+
+/// ROT3.1b: a server not yet seen either way counts as rotating. Its first
+/// refresh lost its answer, so the token may be consumed: it is not sent
+/// again, and the next call asks for a login.
+#[tokio::test]
+async fn an_uncertain_first_refresh_is_not_resent() {
+    let server = TokenServer::start(&[Answer::KeepThenBrokenBody, Answer::Keep]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let late = client(dir.path(), &server);
+    hold(&late, &token("a1", Some("r1"), true));
+
+    assert!(headless(&late).await.is_err(), "the answer was lost");
+    expire(&late);
+    let error = headless(&late).await.expect_err("a login is needed");
+    assert!(
+        matches!(error, Error::AuthorizationRequired { .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        server.uses("r1"),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
 }
 
 /// FU-A.4: a marker left by a process that stopped mid-exchange, on a server
@@ -646,6 +576,7 @@ async fn a_token_marked_in_flight_on_a_rotating_server_is_not_sent() {
     let state = crate::oauth::storage::RefreshState {
         rotates: true,
         in_flight: Some(super::refresh_flight::fingerprint_hex("r1")),
+        ..Default::default()
     };
     late.storage
         .save_refresh_state(&key, RESOURCE, &state)
@@ -661,10 +592,42 @@ async fn a_token_marked_in_flight_on_a_rotating_server_is_not_sent() {
     assert_eq!(marker(&late), None, "the retired token's marker is settled");
 }
 
+/// ROT3.1: a process stopped during a credential's first refresh left its
+/// in-flight marker, before the server was seen either to rotate or to keep
+/// the token. The next start sends nothing and asks for a login.
+#[tokio::test]
+async fn a_token_marked_in_flight_before_any_settled_refresh_is_not_sent() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let late = client(dir.path(), &server);
+    hold(&late, &token("a1", Some("r1"), true));
+    let key = late.credential_key().unwrap();
+    let state = crate::oauth::storage::RefreshState {
+        in_flight: Some(super::refresh_flight::fingerprint_hex("r1")),
+        ..Default::default()
+    };
+    late.storage
+        .save_refresh_state(&key, RESOURCE, &state)
+        .unwrap();
+
+    let error = headless(&late).await.expect_err("a login is needed");
+    assert!(
+        matches!(error, Error::AuthorizationRequired { .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        server.requests(),
+        0,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+}
+
 /// RENEWREPLAY.3(d): the first rotation is seen while the storage directory
 /// refuses writes, so neither the rotation record nor the clear reaches disk.
-/// The spent set alone keeps a second client of this process from sending the
-/// possibly consumed token.
+/// A second client of this process does not send the possibly consumed token:
+/// the in-flight marker the first left retires it (the server is not yet known,
+/// so it may rotate, MIK-8145), with the in-process spent set as the backstop.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_token_spent_while_storage_refuses_writes_is_not_resent() {

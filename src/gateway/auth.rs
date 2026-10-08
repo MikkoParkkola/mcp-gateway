@@ -77,6 +77,10 @@ pub(crate) fn principal_of_digest(digest: &[u8; 32]) -> String {
     hex::encode(&digest[..6])
 }
 
+/// The prefix of a credential caller's owner key, `credential:<principal>`: a
+/// task's recorded owner and the key of its MCP child (MIK-7825).
+pub(crate) const CREDENTIAL_OWNER_PREFIX: &str = "credential:";
+
 /// MIK-7973: refuse a configuration where two credentials resolve to one
 /// principal, since each would then own the other's sessions, grants and tasks.
 ///

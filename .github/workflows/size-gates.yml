@@ -1,0 +1,30 @@
+name: Size gates after merge
+
+# The file-size gates in ci.yml see each pull request against the base it was
+# tested on. Two PRs that each pass can merge into a file over its baseline row
+# or over 800 lines, and ci.yml does not run on a push to the release line. This
+# runs both gates on every such push, so a merge-skew breach turns the merge
+# that caused it red (MIK-8163). Shape held by scripts/ci/test_size_gates_workflow.py.
+on:
+  push:
+    branches: [docs/ranking-1-release-line]
+  workflow_dispatch:
+
+# No concurrency group: each merge keeps its own run, so a red one names its merge.
+permissions:
+  contents: read
+
+jobs:
+  size-gates:
+    name: Size gates after merge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the per-file gate refuses what it claims to
+        run: python3 scripts/dev/test_check_file_size.py
+      - name: Check the 800-line ceiling per file
+        run: python3 scripts/dev/check-file-size.py
+      - name: Check the count ratchet refuses what it claims to
+        run: scripts/ci/check-loc-ceiling.sh --self-test
+      - name: Hold the count of oversized production files
+        run: scripts/ci/check-loc-ceiling.sh

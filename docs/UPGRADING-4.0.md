@@ -190,7 +190,12 @@ backend" and "fails a capability file" first.**
 | 163 | With gateway authentication off and agent authentication on, each agent owns its tasks apart, keyed on the `client_id` its token validates as (a renewed token for the same agent keeps them); every agent had shared one task owner | None. Tasks an agent created before the upgrade stay under the old shared owner, so the agent no longer finds them under its own |
 | 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept, a removed one released); restart to read a repaired task; probes (`/livez`, `/readyz`) are unaffected |
 | 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
-| 166 | With agent authentication on, a listen or GET /mcp stream opened with an agent token is checked again at every delivery and ends, with no closing message, once the token expires, the agent leaves the registry or its key changes. A GET /mcp stream also checks each queued notification when it writes it, for every credential kind. With gateway authentication on, a valid agent token can listen on a public `/mcp`. `AuthState` gains `agent_auth` | Clients: re-subscribe with a fresh token when a stream ends. Library users building `AuthState` with a struct literal set `agent_auth` to the `AgentAuthState` the router's agent middleware uses (or `AgentAuthState::new(false, ...)` without agent auth) |
+| 166 | A running gateway's web UI backend edits (add, edit, delete) load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still undo that writer's change | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
+| 167 | On a multi-user gateway, an API-key or admin-bearer caller with no other identity gets its own `mcp` capability child, named by its credential, instead of a refusal. An `mcp` capability's cached answer is read back only by the caller whose child produced it | None. Callers who share one API key share one child |
+| 168 | Once its shutdown steps return, an HTTP gateway (`serve`, or no subcommand) waits at most 10 more seconds for disk work still running, then exits and logs at ERROR that it gave up waiting; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running after 10 seconds points at the storage to check |
+| 169 | On the per-backend route `POST /mcp/{name}`, a backend's `requestState` is sealed into a gateway continuation, as on `/mcp`; a retry must send that continuation back once. Callers with an API key and no verified identity now keep multi-round tool calls on both routes, bound to their key | None. A client that already echoes `requestState` as received keeps working. A client that wrote its own `requestState`, reused one, or sent it from another key gets -32602. Holders of one shared key count as one caller |
+| 170 | `cap search` and `cap registry-list` take `-C` for `--capabilities`, as every other command does; `-c` there now means the global `--config`. A debug build panicked on both commands, and a release build read `-c` as `--capabilities` | Scripts that passed `-c <dir>` to these two commands: use `-C <dir>` or `--capabilities <dir>` |
+| 171 | With agent authentication on, a listen or GET /mcp stream opened with an agent token is checked again at every delivery and ends, with no closing message, once the token expires, the agent leaves the registry or its key changes. A GET /mcp stream also checks each queued notification when it writes it, for every credential kind. With gateway authentication on, a valid agent token can listen on a public `/mcp`. `AuthState` gains `agent_auth` | Clients: re-subscribe with a fresh token when a stream ends. Library users building `AuthState` with a struct literal set `agent_auth` to the `AgentAuthState` the router's agent middleware uses (or `AgentAuthState::new(false, ...)` without agent auth) |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4345,7 +4350,112 @@ The `gateway_reload_config` meta-tool answers that refusal with JSON-RPC
 -32600 (it was -32603) and keeps -32603 otherwise. The message text is
 unchanged on both.
 
-## 166. Agent-token streams end when the token stops validating
+## 166. Config writers take a lock
+
+**Startup:** no notice
+
+Two writers editing `gateway.yaml` at the same moment (the web UI saving while a CLI command
+runs, or two gateways on one config) could lose a change: each loaded the file, edited its copy
+and wrote it, and the later write erased the earlier one while both reported success.
+
+A running gateway now holds one lock from loading the file through writing it and reloading
+what it wrote, for every web UI backend add, edit and delete. The lock is a hidden file,
+`.gateway.yaml.lock`, next to the config. It stays there by design: deleting it would let two
+writers lock different files. If your config lives in a git repository, add it to
+`.gitignore`. On Linux and macOS a lock file other accounts can open (one copied in or checked
+out as `0644`) is made owner-only at the next write, since any account that can open it could
+hold it and stall every save; one owned by another account is refused: stop every gateway and CLI command using that config,
+then remove it. On Windows a lock file whose permissions let other accounts in (one copied in,
+restored or checked out from git) is refused with the PowerShell lines that make it private.
+
+CLI writes take the same lock for their write. One that finds it held prints
+`Waiting for gateway.yaml ...` and continues once it is free; if another writer holds it for
+30 seconds, the command writes nothing and exits non-zero with "Not saved: ... locked by
+another writer; retry." A config directory where the lock file cannot be created (a
+read-only mount) refuses the write instead of writing unlocked. A CLI write whose config
+does not load is refused and leaves the file unchanged, including a config that another
+program broke while the command waited for the lock.
+
+One case is not covered yet. A CLI command reads `gateway.yaml` before it takes the lock. If
+another program (the web UI, another CLI command, a second gateway) saves the file in the
+moment between that read and the CLI's write, the CLI can write parts of its older copy back:
+a backend the other program removed can come back, its edit can be undone, or a backend it
+added can disappear. Sometimes the CLI refuses instead, with a message about comments it
+would drop. Until this is closed, do not run a CLI config write while the web UI or another
+command is saving, and check the config after one that overlapped; run a refused one again.
+
+Editors such as vim do not take the lock; avoid editing the file by hand while a CLI command
+or the web UI is saving it.
+
+## 167. API-key callers get their own `mcp` capability child on a multi-user gateway
+
+**Startup:** no notice
+
+An `mcp` capability runs one child process per caller. On a multi-user
+gateway, a caller named by no identity-propagation binding, OIDC identity or
+grant subject was refused ("needs an identified caller"), which refused every
+API-key and admin-bearer caller. Such a caller now gets its own child, named by
+its validated credential, and a background task it starts reaches the same
+child. A single-user gateway still runs one shared child for every caller
+without an identity.
+
+An `mcp` capability with `cache:` set also keys its cached answers on that same
+per-caller name, so one caller is never served another caller's cached answer.
+
+## 168. An HTTP gateway exits within 10 seconds of finishing its shutdown
+
+**Startup:** no notice
+
+After an HTTP gateway's shutdown steps return (draining requests and closing
+the task store, under `server.shutdown_timeout`), the gateway now waits at
+most 10 more seconds for disk work still running (a task-store or
+audit write) and then exits. Before, it waited for that work without limit, so
+a write stuck on a stalled NFS or FUSE mount kept the process alive forever and
+an orchestrator had to kill it. `serve --stdio` already exited this way.
+
+Work that finishes within the 10 seconds completes as before. When the wait
+runs the full 10 seconds, one ERROR line says the gateway exited with blocking
+work still running. That is a timeout, not a diagnosis: check the storage
+behind the task store and the audit log.
+
+## 169. The per-backend route seals a backend's input-round state
+
+**Startup:** no notice
+
+What you lose: on `POST /mcp/{name}`, the client no longer sees the backend's
+own `requestState` when a tool asks for input, and the backend no longer
+accepts a `requestState` the client wrote. A client that sends back a state it
+was not given, one it already used, or one issued to another key is refused
+with -32602 before the backend is called.
+
+What you gain: the route now behaves like `/mcp`. The gateway seals the
+backend's state into a continuation bound to the caller and to the call, and
+gives it back to the backend only on that caller's retry, once. A caller that
+authenticates with an API key and has no verified identity keeps its input
+rounds on both routes; before, `/mcp` refused them (-32003). Everyone who holds
+one shared key counts as one caller, as for that key's sessions and tasks.
+
+What to do: nothing, if the client echoes `requestState` exactly as received.
+A client that built or stored its own state for this route must echo the
+gateway's instead. Behind identity propagation, a retry must carry the same
+backend credential as the question it answers.
+
+## 170. `cap search` and `cap registry-list` take `-C` for `--capabilities`
+
+**Startup:** no notice
+
+`mcp-gateway cap search` and `mcp-gateway cap registry-list` gave `-c` to
+`--capabilities`. The global `--config` also answers to `-c` on every command,
+so on these two the short flag meant two things: a debug build panicked as the
+command was parsed, and a release build read `-c` as `--capabilities`, leaving
+`--config` without a short form there.
+
+Both commands now take `-C` for `--capabilities`, the short form every other
+command already uses, and `-c` means `--config` everywhere. A script that
+passed `-c <dir>` to either command should pass `-C <dir>` or
+`--capabilities <dir>`.
+
+## 171. Agent-token streams end when the token stops validating
 
 **Startup:** no notice
 

@@ -317,7 +317,9 @@ fn stop_all(children: Vec<Child>) {
 }
 
 /// Which child a call belongs to: the dispatch binding, else the verified
-/// OIDC subject, else the caller's grant subject. A caller none of these names
+/// OIDC subject, else the caller's grant subject, else, on a multi-user
+/// gateway, an authenticated caller's credential owner key. A caller none of
+/// these names
 /// shares the one child of a single-user gateway and is refused on a
 /// multi-user one, where sharing would hand it another caller's state.
 pub(crate) fn principal(
@@ -339,6 +341,18 @@ pub(crate) fn principal(
             subject.subject.len(),
             subject.subject
         ));
+    }
+    // An API-key caller named by nothing above: its credential owner key
+    // (MIK-7825), the same string for a live call and the task it starts.
+    // Multi-user only: a single-user gateway keeps serving every key the one
+    // operator child, as before.
+    if multi_user
+        && let Some(owner) = context
+            .credential_principal
+            .as_deref()
+            .filter(|owner| !owner.is_empty())
+    {
+        return Ok(format!("cred:{}:{owner}", owner.len()));
     }
     if multi_user {
         return Err(Error::Config(format!(
@@ -743,7 +757,7 @@ fn bound_roots(config: &McpConfig, files: &crate::config::FileRoots) -> Vec<(Str
         .iter()
         .filter(|(name, _)| !is_reserved(name))
         .filter_map(|(name, root)| {
-            let dir = std::fs::canonicalize(files.get(root.as_str())?).ok()?;
+            let dir = super::cli::canonical(files.get(root.as_str())?).ok()?;
             Some((name.clone(), dir.display().to_string()))
         })
         .collect()
@@ -756,6 +770,10 @@ mod tests;
 #[cfg(test)]
 #[path = "shipped_capability_tests.rs"]
 mod shipped_capability_tests;
+
+#[cfg(test)]
+#[path = "mcp_principal_tests.rs"]
+mod principal_tests;
 
 impl super::CapabilityExecutor {
     /// Stop every MCP child of one capability, mid-call included (its

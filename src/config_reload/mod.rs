@@ -195,6 +195,10 @@ pub struct LiveConfig {
     running: Arc<Config>,
     /// Shared authorization-policy generation. `None` in isolated tests.
     policy_epoch: Option<Arc<AtomicU64>>,
+    /// Held exclusively while a reload publishes and shared while an event
+    /// send is admitted, so once `set` returns no send is admitted against
+    /// the old config (MIK-7907). Always taken before `inner`.
+    admission: RwLock<()>,
 }
 
 impl LiveConfig {
@@ -206,6 +210,7 @@ impl LiveConfig {
             inner: RwLock::new(Arc::clone(&running)),
             running,
             policy_epoch: None,
+            admission: RwLock::new(()),
         }
     }
 
@@ -252,8 +257,8 @@ impl LiveConfig {
 
     /// Atomically replace the current config.
     pub fn set(&self, config: Config) {
-        let mut lock = self.inner.write();
-        *lock = Arc::new(config);
+        let gate = self.admission.write();
+        let old = std::mem::replace(&mut *self.inner.write(), Arc::new(config));
         if let Some(epoch) = &self.policy_epoch {
             let prev = epoch.fetch_add(1, Ordering::Release);
             debug_assert!(
@@ -261,6 +266,18 @@ impl LiveConfig {
                 "policy epoch must be monotonic"
             );
         }
+        drop(gate);
+        // A large config is freed after the gate opens, never while a send
+        // waits on it.
+        drop(old);
+    }
+
+    /// Run `admit` under the admission gate: a reload's `set` waits for it,
+    /// and it sees the config the last returned `set` published. `admit` must
+    /// not block; it may read this config (`get` takes another lock).
+    pub(crate) fn admit<R>(&self, admit: impl FnOnce() -> R) -> R {
+        let _gate = self.admission.read();
+        admit()
     }
 }
 
@@ -398,6 +415,11 @@ pub async fn apply_patch(
 
 mod diff;
 mod reload_context;
+mod reload_warm_hook;
+// Linux-only, as the other real-watcher rows (inotify).
+#[cfg(all(test, target_os = "linux"))]
+mod reload_warm_hook_tests;
+pub(crate) use reload_warm_hook::{OnRegistered, RegisteredChange};
 mod watcher;
 mod write;
 use diff::pending_restart_fields;
@@ -417,9 +439,12 @@ pub use write::{
     ConfigMutation, ConfigWriteError, mutate_config_and_reload, write_config_and_reload,
     write_config_and_reload_outcome,
 };
+// The writer-lock tests call the refusing writer directly.
+#[cfg(test)]
+use write::mutate_config_and_reload_with;
 // Only the web UI writes in refusing mode.
 #[cfg(feature = "webui")]
-pub(crate) use write::{MutateError, mutate_config_and_reload_with};
+pub(crate) use write::{MutateError, mutate_config_and_reload_detached};
 
 mod env_poll;
 // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
@@ -437,7 +462,11 @@ mod c4_enable_tests;
 #[cfg(test)]
 mod c9_file_ref_tests;
 #[cfg(test)]
+mod reload_pause;
+#[cfg(test)]
 mod webhook_base_path_reload_tests;
+#[cfg(test)]
+mod writer_lock_tests;
 
 #[cfg(test)]
 mod grant_change_trigger_tests;

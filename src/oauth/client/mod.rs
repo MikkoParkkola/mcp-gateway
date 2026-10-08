@@ -601,6 +601,8 @@ mod authorize_tests;
 pub(crate) mod destination;
 #[cfg(test)]
 mod refresh_flight_tests;
+#[cfg(test)]
+pub(crate) mod token_server_fixture;
 
 #[cfg(test)]
 impl OAuthClient {
@@ -619,6 +621,9 @@ use url::Url;
 
 mod grants;
 mod refresh_flight;
+pub(crate) use refresh_flight::{
+    RefreshCaller, RefreshRequest, Refreshed, StoredCredential, refresh_stored,
+};
 mod registration;
 mod renewal;
 #[cfg(test)]

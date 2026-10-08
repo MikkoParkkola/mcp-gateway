@@ -33,11 +33,16 @@ async fn open(
     credential: Option<HeldCredential>,
 ) -> (String, axum::body::BodyDataStream) {
     use axum::response::IntoResponse as _;
-    let id = multiplexer.get_or_create_session_id_scoped(
-        None,
-        &crate::gateway::session_id::SessionOwner::Anonymous,
-        credential,
-    );
+    let id = multiplexer
+        .get_or_create_session_id_scoped(
+            None,
+            &crate::gateway::session_id::SessionOwner::Anonymous,
+            credential,
+        )
+        // The raw id the session map is keyed on, as the GET /mcp handler
+        // passes it; `Display` prints only the fingerprint.
+        .expose_secret()
+        .to_owned();
     let sse = create_sse_response(
         Arc::clone(multiplexer),
         id.clone(),
