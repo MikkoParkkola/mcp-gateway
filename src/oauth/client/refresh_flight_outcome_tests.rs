@@ -338,3 +338,50 @@ async fn a_refresh_that_cannot_take_the_cross_process_lock_sends_nothing() {
         server.sent.lock().unwrap()
     );
 }
+
+/// `MIK-8091.FAILCLOSED.1`: on a server that rotates, a refresh-state sidecar
+/// that cannot be read may have held an in-flight marker for the stored
+/// token. The token is retired, not sent: spent, cleared from storage, and a
+/// login is required.
+#[tokio::test]
+async fn a_damaged_refresh_state_retires_the_token_instead_of_sending_it() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let owned = client(dir.path(), &server);
+    hold(&owned, &token("a1", Some("r1"), true));
+    headless(&owned)
+        .await
+        .expect("a first refresh shows the server rotates");
+    expire(&owned);
+    let key = owned.credential_key().unwrap();
+    std::fs::write(owned.storage.refresh_state_path(&key, RESOURCE), "not json").unwrap();
+
+    assert!(headless(&owned).await.is_err(), "a login is needed");
+    assert_eq!(
+        server.uses("r2"),
+        0,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+    assert!(flight_of(&owned).is_spent("r2"));
+    assert_eq!(stored(&owned).and_then(|t| t.refresh_token), None);
+}
+
+/// `MIK-8091.FAILCLOSED.2`: an absent sidecar is no damage: the token is sent.
+#[tokio::test]
+async fn an_absent_refresh_state_still_sends_the_token() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let owned = client(dir.path(), &server);
+    hold(&owned, &token("a1", Some("r1"), true));
+    let key = owned.credential_key().unwrap();
+    assert!(!owned.storage.refresh_state_path(&key, RESOURCE).exists());
+
+    headless(&owned).await.expect("refreshed");
+    assert_eq!(
+        server.uses("r1"),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+}
