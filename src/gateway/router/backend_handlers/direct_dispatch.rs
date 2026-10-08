@@ -590,9 +590,12 @@ fn park_if_interim(
     forward: &crate::Result<JsonRpcResponse>,
     admitted: &mut Admitted<'_>,
 ) -> Option<crate::idempotency::IdempotencyReservation> {
+    // A response that also carries an `error` leaves the outcome uncertain:
+    // its key is settled with that error, never parked for release.
     let asked = forward
         .as_ref()
         .ok()
+        .filter(|response| response.error.is_none())
         .and_then(|response| response.result.as_ref())
         .is_some_and(crate::protocol::mrtr::InputRequired::claims_input_required);
     if asked {
