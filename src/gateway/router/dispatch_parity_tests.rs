@@ -757,3 +757,45 @@ async fn errscan_a_forged_account_refusal_is_screened() {
         }
     }
 }
+
+/// MIK-8139: a firewall Block withholds the whole backend error, not only its
+/// credential, and a catalogue read's error is screened under its method on
+/// both routes, so a prompt named like a tool cannot borrow that tool's rule.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn errscan_a_blocked_error_is_withheld_whole_on_every_route() {
+    use super::direct_guards_fixture::{fixture_firewalled_with, send};
+    use crate::security::firewall::FirewallAction;
+    let answer = Answer::RpcErrorText(WITH_SECRET);
+    for backend in BACKENDS {
+        // No rule: a credential is high severity, so the default blocks.
+        let fx = fixture_firewalled_with(answer, None, false).await;
+        let (status, body) = fw_call(&fx, true, backend, None).await;
+        assert_blocked(status, &body, &format!("{backend} tools/call"));
+        // The Warn rule names the tool `read`; a prompt of that name is a
+        // catalogue read and keeps the default Block.
+        let fx = fixture_firewalled_with(answer, Some(FirewallAction::Warn), false).await;
+        let direct = format!("/mcp/{backend}");
+        let (status, body) = send(
+            &fx,
+            &direct,
+            "k-std",
+            "prompts/get",
+            json!({"name": "read"}),
+            None,
+        )
+        .await;
+        assert_blocked(
+            status.as_u16(),
+            &body,
+            &format!("{backend} direct prompts/get"),
+        );
+        let meta = json!({"name": format!("{backend}/read")});
+        let (status, body) = send(&fx, "/mcp", "k-std", "prompts/get", meta, None).await;
+        assert_blocked(
+            status.as_u16(),
+            &body,
+            &format!("{backend} meta prompts/get"),
+        );
+    }
+}
