@@ -170,3 +170,28 @@ fn a_cli_write_keeps_url_on_a_backend_that_already_had_it() {
     );
     assert!(text.contains("url:"), "{text}");
 }
+
+#[test]
+fn a_line_inside_a_multiline_quoted_value_is_never_renamed() {
+    // The second line belongs to the quoted description; renaming it would
+    // change the operator's text, so the backend is reported instead.
+    let text = "backends:\n  fs:\n    description: \"first line\n    http_url: still the description\"\n    command: x\n";
+    let out = rewrite_url_aliases(text, None);
+    assert_eq!(out.text, text);
+    assert!(out.changed.is_empty());
+    assert_eq!(out.skipped, vec!["fs".to_string()]);
+}
+
+#[test]
+fn a_backend_name_with_spaces_is_rewritten() {
+    for name in ["my server", "\"my server\""] {
+        let text = format!("backends:\n  {name}:\n    http_url: \"https://a.example.com/mcp\"\n");
+        let out = rewrite_url_aliases(&text, None);
+        assert!(
+            out.text.contains("    url: \"https://a"),
+            "{name}: {}",
+            out.text
+        );
+        assert_eq!(out.changed, vec![3], "{name}");
+    }
+}

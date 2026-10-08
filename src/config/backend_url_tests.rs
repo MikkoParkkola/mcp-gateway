@@ -92,3 +92,36 @@ fn cleartext_credentials_on_url_are_refused_as_on_the_alias() {
     let via_alias = refusal(&format!("    ws_url: \"ws://10.0.0.5/mcp\"\n{headers}"));
     assert_eq!(via_url, via_alias);
 }
+
+#[test]
+fn a_url_from_the_environment_overrides_the_file_url() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env = dir.path().join("gw.env");
+    crate::gateway::test_helpers::write_owner_only(
+        &env,
+        "MCP_GATEWAY_BACKENDS__B__URL=wss://env.example.com/mcp\n",
+    )
+    .expect("write env file");
+    let config = load(
+        dir.path(),
+        &format!(
+            "env_files: ['{}']\nbackends:\n  b:\n    url: \"https://file.example.com/mcp\"\n",
+            env.display()
+        ),
+    )
+    .unwrap_or_else(|e| panic!("config loads: {e}"));
+    match &config.backends["b"].transport {
+        TransportConfig::WebSocket { ws_url, .. } => {
+            assert_eq!(ws_url, "wss://env.example.com/mcp")
+        }
+        other => panic!("the environment's url did not apply: {other:?}"),
+    }
+}
+
+#[test]
+fn a_key_of_another_transport_beside_url_is_refused() {
+    // `cwd` belongs to a stdio backend; beside an http `url` it would be
+    // silently ignored, exactly as beside `http_url`.
+    let message = refusal("    url: \"https://a.example.com/mcp\"\n    cwd: \"/tmp\"\n");
+    assert!(message.contains("b.cwd"), "{message}");
+}
