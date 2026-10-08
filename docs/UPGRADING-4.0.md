@@ -190,7 +190,7 @@ backend" and "fails a capability file" first.**
 | 163 | Reserved: #3489 | None |
 | 164 | Reserved: #3490 | None |
 | 165 | Reserved: #3479 | None |
-| 166 | A running gateway's web UI and admin edits load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still lose that writer's change on a config without comments, or with `--force` | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
+| 166 | A running gateway's web UI and admin edits load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still undo that writer's change | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4302,11 +4302,11 @@ existing file does not load leaves the directory as it was.
 
 One case is not covered yet. A CLI command reads `gateway.yaml` before it takes the lock. If
 another program (the web UI, another CLI command, a second gateway) saves the file in the
-moment between that read and the CLI's write, then on a config without comments, or with
-`--force`, the CLI writes its older copy back and the other program's change is lost. On a
-config with comments the CLI refuses instead, with a message about comments it would drop.
-Until this is closed, do not run a CLI config write while the web UI or another command is
-saving; if one is refused that way, run it again.
+moment between that read and the CLI's write, the CLI can write parts of its older copy back:
+a backend the other program removed can come back, its edit can be undone, or a backend it
+added can disappear. Sometimes the CLI refuses instead, with a message about comments it
+would drop. Until this is closed, do not run a CLI config write while the web UI or another
+command is saving, and check the config after one that overlapped; run a refused one again.
 
 Editors such as vim do not take the lock; avoid editing the file by hand while a CLI command
 or the web UI is saving it.
