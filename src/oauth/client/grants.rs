@@ -256,6 +256,8 @@ impl OAuthClient {
             .auth_metadata
             .as_ref()
             .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
+        // A local, so each log line's head names only a plain binding.
+        let backend = self.backend_name.as_str();
         let key = self.credential_key()?;
         let token_path = self.storage.token_path(&key, &self.resource_url);
         let flight = Flight::of(&token_path);
@@ -273,18 +275,19 @@ impl OAuthClient {
             .as_ref()
             .and_then(|record| record.refresh_token.clone())
         else {
-            warn!(backend = %self.backend_name, "No stored refresh token; a login is needed");
+            warn!(backend = %backend, "No stored refresh token; a login is needed");
             return Err(required());
         };
         if flight.is_spent(&sent) {
-            warn!(backend = %self.backend_name, "Refusing to resend a spent refresh token");
+            warn!(backend = %backend, "Refusing to resend a spent refresh token");
             return Err(required());
         }
         let mut state = self.storage.load_refresh_state(&key, &self.resource_url);
         let marker = fingerprint_hex(&sent);
-        if state.rotates && state.in_flight.as_deref() == Some(marker.as_str()) {
+        // A damaged sidecar may have held this token's marker (MIK-8091).
+        if state.rotates && (state.damaged || state.in_flight.as_deref() == Some(marker.as_str())) {
             let at = (key.as_str(), self.resource_url.as_str());
-            retire_unsettled(&flight, &self.storage, at, &self.backend_name, &sent, state);
+            retire_unsettled(&flight, &self.storage, at, backend, &sent, state);
             return Err(required());
         }
         self.reload_registered_client_id(&key);
@@ -302,7 +305,7 @@ impl OAuthClient {
             .storage
             .save_refresh_state(&key, &self.resource_url, &state)
         {
-            warn!(backend = %self.backend_name, %error, "Could not mark the refresh in flight; not refreshing");
+            warn!(backend = %backend, %error, "Could not mark the refresh in flight; not refreshing");
             return Err(error);
         }
         let exchange = Exchange {
@@ -329,7 +332,7 @@ impl OAuthClient {
             Outcome::Refreshed(token) => {
                 let access = token.access_token.clone();
                 *self.current_token.write() = Some(token);
-                info!(backend = %self.backend_name, "Token refreshed successfully");
+                info!(backend = %backend, "Token refreshed successfully");
                 Ok(access)
             }
             Outcome::Rejected { status, body } => {

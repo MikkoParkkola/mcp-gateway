@@ -288,17 +288,19 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
 /// loads. Why one does not is logged here, the file named, never its content.
 fn restore(bytes: &[u8], shown_path: &std::path::Display<'_>) -> Option<(Record, Task)> {
     // The file named, never the parser's message: it can quote the record.
-    let record: Record = serde_json::from_slice(bytes)
-        .inspect_err(|_| tracing::warn!(path = %shown_path, "task record does not parse"))
-        .ok()?;
+    let Ok(record) = serde_json::from_slice::<Record>(bytes) else {
+        tracing::warn!(path = %shown_path, "task record does not parse");
+        return None;
+    };
     if !(1..=MAX_LOADABLE_VERSION).contains(&record.version) {
         let version = record.version;
         tracing::warn!(path = %shown_path, version, "unsupported task record version");
         return None;
     }
-    let task = Task::from_snapshot(record.model.clone())
-        .inspect_err(|_| tracing::warn!(path = %shown_path, "task record does not restore"))
-        .ok()?;
+    let Ok(task) = Task::from_snapshot(record.model.clone()) else {
+        tracing::warn!(path = %shown_path, "task record does not restore");
+        return None;
+    };
     Some((record, task))
 }
 

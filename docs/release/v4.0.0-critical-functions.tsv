@@ -321,7 +321,7 @@ src/oauth/client/grants.rs	authorize	1	standard	borderline	OAuthClient::authoriz
 src/oauth/client/grants.rs	authorize_shared	1	standard	borderline	OAuthClient::authorize_shared	Refuses a non-interactive start and a refused login gate before any login opens
 src/oauth/client/grants.rs	adopt_stored_login	1	critical	c	OAuthClient::adopt_stored_login	Accepts a stored credential only when it is unexpired and stored under this client's own key and resource
 src/oauth/client/grants.rs	build_authorize_url	1	standard	borderline	OAuthClient::build_authorize_url	Sets state, S256 challenge and resource
-src/oauth/client/grants.rs	refresh_token	1	critical	d	OAuthClient::refresh_token	Refuses to resend a spent refresh token and retires one an unsettled exchange may have consumed
+src/oauth/client/grants.rs	refresh_token	1	critical	d	OAuthClient::refresh_token	Refuses to resend a spent refresh token; retires one an unsettled exchange may have consumed, or whose sidecar is damaged (MIK-8091)
 src/oauth/client/grants.rs	adopt_if_fresher	1	standard	borderline	OAuthClient::adopt_if_fresher	Adopts an unexpired stored credential through adopt_stored_login
 src/oauth/client/mod.rs	credential_key	1	critical	c	OAuthClient::credential_key	Credentials keyed by issuer; refuses before the issuer is known
 src/oauth/client/mod.rs	drop_credentials_from_other_issuer	1	critical	c	OAuthClient::drop_credentials_from_other_issuer	Drops token and registered client_id when the issuer changes
@@ -343,13 +343,14 @@ src/oauth/client/refresh_flight.rs	names_an_oauth_error	1	critical	d	names_an_oa
 src/oauth/client/refresh_flight.rs	hold_across_processes	1	critical	d	hold_across_processes	Serializes refreshes and token saves across gateway processes; a lock it cannot take refuses the refresh before anything is sent
 src/oauth/client/refresh_flight.rs	spend	1	standard	borderline	Flight::spend	Records a possibly consumed token in the spent set is_spent reads; a miss would let it be resent
 src/oauth/client/refresh_flight.rs	redirect_target	1	standard	borderline	Exchange::redirect_target	Resolves the untrusted Location that redirect_error judges; a None would turn an SSRF refusal into a generic error
+src/oauth/client/refresh_flight.rs	limit	1	standard	borderline	Flight::limit	The bound on one exchange; a wrong value lets a supplied client hold the credential indefinitely
 src/oauth/metadata.rs	discover	1	critical	b	AuthorizationServerMetadata::discover	RFC 8414 issuer must match the discovery base
 src/oauth/storage.rs	is_expired	1	critical	d	TokenInfo::is_expired	Expiry decision (60s buffer) gating reuse of a cached token
 src/oauth/storage.rs	create_secret_tmp	1	standard	borderline	TokenStorage::create_secret_tmp	Creates a private (0600/DACL) temp file via create_new_private
 src/oauth/storage.rs	save	1	standard	borderline	TokenStorage::save	Atomic 0600 write of the token file
 src/oauth/storage.rs	load_refresh_state	1	critical	d	TokenStorage::load_refresh_state	A refresh state that cannot be read or parsed reads as rotating, so an unsettled exchange retires the token instead of resending it
 src/oauth/storage.rs	save_refresh_state	1	standard	borderline	TokenStorage::save_refresh_state	Atomic 0600 write of the refresh state
-src/oauth/storage.rs	unreadable	1	critical	d	RefreshState::unreadable	The fail-closed reading of a refresh state that cannot be read: rotating, so an unsettled token is retired rather than resent
+src/oauth/storage.rs	unreadable	1	critical	d	RefreshState::unreadable	The fail-closed reading of a refresh state that cannot be read: rotating and damaged, so the stored token is retired rather than resent
 src/oauth/token_file.rs	read	1	critical	d	read	Refuses a token file whose mode lets other users read it
 src/personal_accounts/commit.rs	claim_forced_refresh	1	critical	b	claim_forced_refresh	Checks the live grant version; one forced refresh per claim
 src/personal_accounts/commit.rs	refresh_tokens	1	critical	d	refresh_tokens	Refuses version rollback; CAS refuses non-Connected (revoked) grants

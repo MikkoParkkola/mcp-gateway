@@ -27,6 +27,7 @@ fn rotating(client: &OAuthClient) {
     let state = RefreshState {
         rotates: true,
         in_flight: None,
+        damaged: false,
     };
     client
         .storage
@@ -215,10 +216,9 @@ async fn a_refresh_that_cannot_mark_its_token_sends_nothing() {
     assert_eq!(marker(&owned), None);
 }
 
-/// A refresh-state sidecar that does not parse reads as rotating, never as
-/// the non-rotating default, so an exchange that ends unsettled from here on
-/// spends its token. (An in-flight marker the damage destroyed is not
-/// recovered here; MIK-8091 tracks that case.)
+/// A refresh-state sidecar that does not parse reads as rotating and
+/// damaged, never as the non-rotating default: the marker it may have held is
+/// lost, so the stored token is retired rather than sent (MIK-8091).
 #[test]
 fn a_corrupt_refresh_state_reads_as_rotating() {
     let dir = tempfile::tempdir().unwrap();
@@ -226,6 +226,7 @@ fn a_corrupt_refresh_state_reads_as_rotating() {
     std::fs::write(storage.refresh_state_path(BACKEND, RESOURCE), "not json").unwrap();
     let state = storage.load_refresh_state(BACKEND, RESOURCE);
     assert!(state.rotates);
+    assert!(state.damaged);
     assert_eq!(state.in_flight, None);
 }
 
@@ -242,6 +243,7 @@ fn an_unreadable_refresh_state_reads_as_rotating() {
     std::fs::create_dir(storage.refresh_state_path(BACKEND, RESOURCE)).unwrap();
     let state = storage.load_refresh_state(BACKEND, RESOURCE);
     assert!(state.rotates);
+    assert!(state.damaged);
     assert_eq!(state.in_flight, None);
 }
 
@@ -267,6 +269,7 @@ async fn a_marked_token_that_cannot_be_cleared_is_not_sent() {
     let state = RefreshState {
         rotates: true,
         in_flight: Some(fingerprint.clone()),
+        damaged: false,
     };
     owned
         .storage
@@ -384,4 +387,27 @@ async fn an_absent_refresh_state_still_sends_the_token() {
         "sent: {:?}",
         server.sent.lock().unwrap()
     );
+}
+
+/// A sidecar that cannot even be opened (here a directory in its place) is
+/// damage too: the token is retired and cleared, though the sidecar cannot
+/// be rewritten, and nothing is sent.
+#[tokio::test]
+async fn an_unreadable_refresh_state_retires_the_token_it_cannot_rewrite() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let owned = client(dir.path(), &server);
+    hold(&owned, &token("a1", Some("r1"), true));
+    let key = owned.credential_key().unwrap();
+    std::fs::create_dir(owned.storage.refresh_state_path(&key, RESOURCE)).unwrap();
+
+    assert!(headless(&owned).await.is_err(), "a login is needed");
+    assert_eq!(
+        server.requests(),
+        0,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+    assert!(flight_of(&owned).is_spent("r1"));
+    assert_eq!(stored(&owned).and_then(|t| t.refresh_token), None);
 }

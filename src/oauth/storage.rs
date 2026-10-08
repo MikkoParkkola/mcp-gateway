@@ -67,14 +67,20 @@ pub(crate) struct RefreshState {
     /// set by a process that died mid-exchange.
     #[serde(default)]
     pub(crate) in_flight: Option<String>,
+    /// The sidecar exists but could not be read: whatever marker it held is
+    /// lost, so the stored token may be in flight (MIK-8091). Never written.
+    #[serde(skip)]
+    pub(crate) damaged: bool,
 }
 
 impl RefreshState {
-    /// What an unreadable sidecar reads as: rotating, nothing in flight.
+    /// What an unreadable sidecar reads as: rotating, and possibly holding a
+    /// marker for the stored token.
     fn unreadable() -> Self {
         Self {
             rotates: true,
             in_flight: None,
+            damaged: true,
         }
     }
 }
@@ -303,9 +309,9 @@ impl TokenStorage {
     /// The credential's refresh state; default when none was ever written.
     ///
     /// A sidecar that exists but cannot be read or parsed reads as "the server
-    /// rotates" (MIK-8018): an unknown outcome then retires the refresh token
-    /// rather than retrying one that may be consumed. The next settled refresh
-    /// rewrites the file.
+    /// rotates" and as damaged (MIK-8018, MIK-8091): the stored refresh token
+    /// is then retired rather than sent, since the lost sidecar may have
+    /// marked it in flight. The retirement rewrites the file.
     #[must_use]
     pub(crate) fn load_refresh_state(
         &self,
