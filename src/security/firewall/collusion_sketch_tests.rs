@@ -163,3 +163,37 @@ fn past_the_byte_cap_the_oldest_sketch_goes() {
         );
     }
 }
+
+/// One delivery bigger than the slack the cap leaves evicts as many of the
+/// oldest as it takes, not just one: two small sketches fill the cap, a
+/// larger third pushes both out.
+#[test]
+fn a_large_sketch_evicts_until_the_store_fits() {
+    let now = Instant::now();
+    let window = Duration::from_secs(600);
+    let (a, b, big) = (values(80, 10), values(81, 10), values(82, 100));
+    let one = Sketch::of(&a).bytes();
+    let large = Sketch::of(&big);
+    assert!(one < large.bytes() && large.bytes() <= 2 * one, "sizes");
+    let mut store = SketchStore::with_cap(2 * one);
+    store.insert((1, 9), Arc::new(Sketch::of(&a)), now);
+    store.insert(
+        (2, 9),
+        Arc::new(Sketch::of(&b)),
+        now + Duration::from_secs(1),
+    );
+    store.insert((3, 9), Arc::new(large), now + Duration::from_secs(2));
+    let at = now + Duration::from_secs(5);
+    assert!(
+        !store.holds((1, 9), a[0], at, window),
+        "the oldest was kept"
+    );
+    assert!(
+        !store.holds((2, 9), b[0], at, window),
+        "one pop left the store over its cap"
+    );
+    assert!(
+        store.holds((3, 9), big[0], at, window),
+        "the new sketch was evicted"
+    );
+}
