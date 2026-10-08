@@ -4,8 +4,9 @@
 //! `url` in the operator's config, keeping every comment, and says which
 //! lines it changed. A second run changes nothing and says so.
 //!
-//! Until MIK-8042 lands, this write does not take the config file lock the
-//! other writers will share; it runs only when the operator runs `upgrade`.
+//! This whole-file write does not take a config file lock; it runs only when
+//! the operator runs `upgrade`. It joins a lock only if that lock's write API
+//! gains a way to replace an existing file.
 
 use std::path::Path;
 use std::process::ExitCode;
