@@ -55,6 +55,10 @@ impl Transport for HttpTransport {
         // anything. Legacy peers may return a non-modern answer or time out;
         // the existing classifier then selects the legacy fallback. A
         // determined verdict still takes precedence over this probe default.
+        if identity_key.is_none() {
+            // A stream open's 404 dropped the shared session; heal it first.
+            let _ = self.reinit_if_needed().await;
+        }
         let era = self
             .outbound_era()
             .or_else(|| is_era_probe(method).then_some(Era::Modern));
@@ -104,8 +108,22 @@ impl Transport for HttpTransport {
             // Heal the session on BOTH branches: it really is dead, and leaving
             // the stale bucket in place poisons every later call through this
             // identity — including the ones that ARE allowed to be resent.
+            // The shared bucket heals under the stream opens' recovery lock,
+            // so the two never undo each other; a failed handshake leaves
+            // recovery pending for the next caller instead of dropping it.
+            let shared = identity_key.is_none();
+            let _held = if shared {
+                Some(self.reinit_lock.lock().await)
+            } else {
+                None
+            };
             self.sessions.write().remove(bucket);
-            if self.initialize().await.is_err() {
+            let handshake = self.initialize().await;
+            if shared {
+                self.reinit_needed
+                    .store(handshake.is_err(), std::sync::atomic::Ordering::SeqCst);
+            }
+            if handshake.is_err() {
                 // The caller asked about their request, not about our
                 // handshake; surfacing the re-initialization's error instead
                 // would hide what actually failed.

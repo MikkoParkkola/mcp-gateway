@@ -243,6 +243,35 @@ struct Listen {
     first: bool,
 }
 
+/// A filter over legacy `resources/updated` URIs.
+type UriFilter = std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// Which legacy `resources/updated` URIs the session still watches (D5):
+/// an update for any other is ignored before it can take a tap slot, so a
+/// subscription that outlived its watcher never displaces a wanted notice.
+#[derive(Clone, Default)]
+pub(crate) struct Watched(Option<UriFilter>);
+
+impl Watched {
+    pub(crate) fn by(admits: impl Fn(&str) -> bool + Send + Sync + 'static) -> Self {
+        Self(Some(std::sync::Arc::new(admits)))
+    }
+
+    /// Whether `note` may be delivered; every note but a URI update may.
+    pub(crate) fn admits(&self, note: &UpstreamNote) -> bool {
+        match (note, &self.0) {
+            (
+                UpstreamNote::Notice {
+                    kind: NoteKind::ResourceUpdated,
+                    uri: Some(uri),
+                },
+                Some(admits),
+            ) => admits(uri),
+            _ => true,
+        }
+    }
+}
+
 /// The reader loop's routing table for upstream notes (design §4). Every
 /// send is `try_send`: the reader is the only reader of the peer's output
 /// and must never park; a full channel drops and counts.
@@ -250,7 +279,7 @@ struct Listen {
 pub(crate) struct Taps {
     /// Listens by the canonical text of their JSON-RPC id.
     listens: parking_lot::Mutex<std::collections::HashMap<String, Listen>>,
-    unsolicited: parking_lot::Mutex<Option<tokio::sync::mpsc::Sender<UpstreamNote>>>,
+    unsolicited: parking_lot::Mutex<Option<(tokio::sync::mpsc::Sender<UpstreamNote>, Watched)>>,
     /// Frames dropped: full tap, untagged, or oversize.
     pub drops: std::sync::atomic::AtomicU64,
 }
@@ -279,10 +308,14 @@ impl Taps {
         self.listens.lock().remove(&id.to_string());
     }
 
-    /// Route the legacy peer's out-of-request notifications to a receiver.
-    pub(crate) fn unsolicited(&self) -> tokio::sync::mpsc::Receiver<UpstreamNote> {
+    /// Route the legacy peer's out-of-request notifications that `watched`
+    /// admits to a receiver.
+    pub(crate) fn unsolicited(
+        &self,
+        watched: Watched,
+    ) -> tokio::sync::mpsc::Receiver<UpstreamNote> {
         let (tx, rx) = tokio::sync::mpsc::channel(TAP_CAPACITY);
-        *self.unsolicited.lock() = Some(tx);
+        *self.unsolicited.lock() = Some((tx, watched));
         rx
     }
 
@@ -319,12 +352,12 @@ impl Taps {
             }
         }
         let guard = self.unsolicited.lock();
-        let Some(tx) = guard.as_ref() else {
+        let Some((tx, watched)) = guard.as_ref() else {
             return false;
         };
         match project(method, params, None) {
             Ok(note) => {
-                if tx.try_send(note).is_err() {
+                if watched.admits(&note) && tx.try_send(note).is_err() {
                     self.drop_one();
                 }
                 true
@@ -429,13 +462,50 @@ pub(crate) trait UpstreamListen: Send + Sync {
     ) -> Result<FrameStream, Refused>;
 
     /// The legacy peer's out-of-request notifications.
-    async fn unsolicited(self: std::sync::Arc<Self>) -> Result<FrameStream, Refused>;
+    async fn unsolicited(
+        self: std::sync::Arc<Self>,
+        watched: Watched,
+    ) -> Result<FrameStream, Refused>;
 
     /// The HTTP transport this connection detected, read live: `Some(true)`
     /// for Streamable HTTP, `Some(false)` for the SSE handshake, `None`
     /// before it is known and for every other transport (MIK-7969).
     fn detected_streamable(&self) -> Option<bool> {
         None
+    }
+
+    /// Where a legacy `resources/subscribe` sent now would land (D5).
+    /// The default names the transport instance alone as the holder.
+    fn legacy_pin(&self) -> LegacyPin {
+        LegacyPin::default()
+    }
+
+    /// `resources/subscribe` (or `unsubscribe`) of `uri` on exactly the
+    /// holder `pin` names, on this transport: never re-sent on a healed
+    /// session or another transport, so its answer is that holder's.
+    async fn legacy_interest(
+        self: std::sync::Arc<Self>,
+        pin: LegacyPin,
+        uri: &str,
+        subscribe: bool,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse>;
+}
+
+/// The holder a legacy call is pinned to: beyond the transport instance,
+/// an HTTP session, carried by the call and hashed for the ledger. The id
+/// itself (replayable) stays in memory and is never logged.
+#[derive(Clone, Default)]
+pub(crate) struct LegacyPin {
+    pub holder: u64,
+    pub session: Option<String>,
+}
+
+/// `resources/subscribe` or `resources/unsubscribe`.
+pub(crate) fn interest_method(subscribe: bool) -> &'static str {
+    if subscribe {
+        "resources/subscribe"
+    } else {
+        "resources/unsubscribe"
     }
 }
 

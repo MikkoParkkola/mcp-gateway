@@ -230,3 +230,25 @@ fn the_slot_reads_its_installed_transport_live() {
     *backend.shared_entry().transport.write() = None;
     assert_eq!(backend.connected_streamable(), None, "a stopped slot");
 }
+
+/// MIK-7899 CLASS.3: a listener acts on a determined era, reads a silent
+/// peer as legacy, and refuses to guess while the era is unresolved (never
+/// probed, or discarded with its re-probe in flight).
+#[tokio::test]
+async fn a_listener_reads_only_a_settled_era() {
+    use crate::protocol::era::{Era, EraCache, ProbeOutcome};
+    let cache = EraCache::for_backend("b");
+    assert_eq!(cache.settled().await, None, "never probed");
+    cache
+        .resolve_with(|| async { ProbeOutcome::NoAnswer })
+        .await;
+    assert_eq!(cache.settled().await, Some(Era::Legacy), "a silent peer");
+    let cache = EraCache::for_backend("b");
+    let modern = serde_json::json!({"capabilities": {}, "supportedVersions": ["2026-07-28"]});
+    cache
+        .resolve_with(|| async { ProbeOutcome::Result(modern) })
+        .await;
+    assert_eq!(cache.settled().await, Some(Era::Modern));
+    assert!(cache.discard_if(|_| true).await);
+    assert_eq!(cache.settled().await, None, "discarded, re-probe pending");
+}
