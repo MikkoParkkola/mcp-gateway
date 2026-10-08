@@ -227,19 +227,23 @@ where
     let failures = log.append_failures();
     let deadline = tokio::time::Instant::now() + HEAL_BOUND_FOR_TEST;
     loop {
-        let answer = match attempt().await {
-            Ok(value) => return value,
-            Err(answer) => answer,
-        };
+        let answer = attempt().await;
+        // A stalled write that lands as a failure is counted here even when
+        // a later attempt succeeds.
         assert_eq!(
             log.append_failures(),
             failures,
-            "an append failed, not a stall: {answer:?}"
+            "an append failed, not a stall: {:?}",
+            answer.as_ref().err()
         );
         assert!(
             tokio::time::Instant::now() < deadline,
-            "not recovered within {HEAL_BOUND_FOR_TEST:?}: {answer:?}"
+            "not recovered within {HEAL_BOUND_FOR_TEST:?}: {:?}",
+            answer.as_ref().err()
         );
+        if let Ok(value) = answer {
+            return value;
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }

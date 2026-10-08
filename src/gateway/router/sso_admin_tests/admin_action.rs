@@ -249,9 +249,10 @@ async fn admin_meta_tool_refused_while_degraded() {
     assert_audit_unavailable_rpc(status, &body);
     assert!(kill_switch.is_killed("alpha"), "the revive ran");
 
-    // Wait out a first probe that overruns its bound (MIK-8171).
-    fx.log.heal_for_test().await;
     let before = fx.entries().len();
+    // Wait out a first probe that overruns its bound (MIK-8171); the probe
+    // it writes is one of the entries counted below.
+    fx.log.heal_for_test().await;
     let (status, body) = fx.revive(&fx.alice()).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(

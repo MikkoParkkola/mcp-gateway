@@ -247,7 +247,8 @@ async fn readyz_alone_recovers_after_storage_heals() {
 /// fixture, under whatever load the suite puts on the runner.
 #[tokio::test]
 async fn readyz_alone_recovers_twenty_times_in_a_row() {
-    for _ in 0..20 {
+    for round in 0..20 {
+        eprintln!("readyz recovery round {round}");
         readyz_recovery_round().await;
     }
 }
