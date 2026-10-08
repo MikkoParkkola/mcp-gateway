@@ -10,7 +10,6 @@ use std::sync::{Arc, Weak};
 
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
-use serde_json::json;
 
 use super::Backend;
 use super::pool::{ActivityGuard, PoolKey};
@@ -38,7 +37,7 @@ pub(crate) struct ListenLease(#[allow(dead_code, reason = "held for its Drop")] 
 /// count a restart waits on; the listener upgrades it per call only.
 pub(crate) struct ListenTarget {
     pub handle: Weak<dyn UpstreamListen>,
-    pub era: Option<Era>,
+    pub era: Era,
 }
 
 /// The admitted start a subscribe runs to learn the HTTP transport, shared
@@ -71,10 +70,14 @@ impl Backend {
             .read()
             .clone()
             .ok_or_else(|| Error::Transport("transport has no event stream".to_owned()))?;
-        Ok(ListenTarget {
-            handle,
-            era: self.cached_era().await,
-        })
+        // An unresolved era is not read as legacy: a modern peer mid
+        // re-probe would be sent a legacy GET (MIK-7899 CLASS.3).
+        let era = self
+            .era
+            .settled()
+            .await
+            .ok_or_else(|| Error::Transport("era not resolved".to_owned()))?;
+        Ok(ListenTarget { handle, era })
     }
 
     /// Whether `handle` still names the shared slot's current transport.
@@ -202,30 +205,6 @@ impl Backend {
             .get_or_fetch_shared(ttl, || async { Ok(Vec::new()) })
             .await
             .expect("fill");
-    }
-
-    /// `resources/subscribe` or `resources/unsubscribe` for `uri` on the
-    /// legacy channel. `Ok(false)` when the peer answers method-not-found:
-    /// that backend's resource interest is unsupported (§3).
-    ///
-    /// # Errors
-    /// The request failed or the peer answered another error.
-    pub(crate) async fn legacy_resource_interest(
-        &self,
-        uri: &str,
-        subscribe: bool,
-    ) -> Result<bool> {
-        let method = if subscribe {
-            "resources/subscribe"
-        } else {
-            "resources/unsubscribe"
-        };
-        let answer = self.request(method, Some(json!({ "uri": uri }))).await?;
-        match answer.error {
-            None => Ok(true),
-            Some(error) if error.code == -32601 => Ok(false),
-            Some(error) => Err(Error::json_rpc(error.code, error.message)),
-        }
     }
 }
 

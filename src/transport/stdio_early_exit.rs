@@ -269,12 +269,11 @@ impl StdioTransport {
         let child = self.child.lock().await.take();
         let status = match child {
             Some(mut child) => {
-                if let Ok(Ok(status)) = tokio::time::timeout(DRAIN, child.wait()).await {
-                    Some(status)
-                } else {
-                    let _ = Box::into_pin(child.kill()).await;
-                    None
-                }
+                // Wait for the exit without reaping, then end the group (any
+                // descendant left in it) and reap, in that order (MIK-8080).
+                let exited = super::child_tree::wait_exited(&mut child, DRAIN).await;
+                let status = child.finish().await;
+                exited.then_some(status).flatten()
             }
             None => None,
         };
