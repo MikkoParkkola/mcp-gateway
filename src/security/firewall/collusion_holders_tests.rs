@@ -229,7 +229,7 @@ fn callers_whose_records_were_dropped_still_count_toward_common() {
 fn the_pool_is_bounded_in_bytes() {
     let record = std::mem::size_of::<super::Holder>();
     assert!(record <= 160, "a holder record grew to {record} bytes");
-    assert!(super::holders::EXTRA_RECORD_POOL * 160 <= 10 * 1024 * 1024);
+    const { assert!(super::holders::EXTRA_RECORD_POOL * 160 <= 10 * 1024 * 1024) };
 }
 
 /// `MIK-8123`: calls reach the lock out of time order, so a sensitive copy
