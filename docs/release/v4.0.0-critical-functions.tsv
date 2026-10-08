@@ -83,7 +83,11 @@ src/gateway/router/backend_handlers/direct_dispatch.rs	forward_plain	1	critical	
 src/gateway/router/backend_handlers/direct_dispatch.rs	finish_response	1	critical	d	finish_response	Firewall scan, list filtering, provenance stamp, settlement and signing of what the caller receives.
 src/gateway/router/backend_handlers/direct_preflight.rs	audit_unavailable	1	standard	borderline	audit_unavailable	The generic client answer when the mint audit cannot be written (CWE-209).
 src/gateway/router/backend_handlers/direct_dispatch.rs	answer_failure	1	standard	borderline	answer_failure	Settles the idempotency reservation for a dispatched failure.
-src/gateway/router/backend_handlers/direct_dispatch.rs	deliver_tail	1	critical	d	deliver_tail	Decides that a direct tools/call is signed when signing is on, after shaping, so the signature covers what is sent
+src/gateway/router/backend_handlers/direct_dispatch.rs	finish_tail	1	critical	d	finish_tail	Decides that a direct tools/call is signed when signing is on, after shaping, so the signature covers what is sent
+src/gateway/router/backend_handlers/direct_dispatch.rs	redeem_retry	1	critical	d	redeem_retry	Redeems a retry's continuation before dispatch; a refusal releases the key and the nonce (MIK-8078).
+src/gateway/router/backend_handlers/direct_dispatch.rs	give_back_nonce	1	critical	b,d	give_back_nonce	Gives back the signing nonce of a call refused or failed before its backend ran (MIK-7698).
+src/gateway/router/backend_handlers/direct_dispatch.rs	park_if_interim	1	critical	d	park_if_interim	Holds an interim answer's idempotency key out of settlement until the guards ran (MIK-8078).
+src/gateway/router/backend_handlers/direct_dispatch.rs	settle_parked	1	critical	d	settle_parked	Releases the parked key once the answer was read; a failed receipt puts it back to be settled (MIK-8078).
 src/gateway/router/backend_handlers/direct_list.rs	normalize_tools_list_response	1	critical	borderline	normalize_tools_list_response	Drops unjudged entries and rebuilds the result from an allow-list (A3).
 src/gateway/router/backend_handlers.rs	resolve_passthrough_headers	1	critical	a	resolve_passthrough_headers	Fails closed when a required passthrough credential is missing or the transport cannot carry it.
 src/gateway/router/backend_handlers.rs	scan_direct_tools_list_response	1	critical	d	scan_direct_tools_list_response	Applies the response firewall to a direct tools/list result.
@@ -107,6 +111,7 @@ src/gateway/router/direct_guards.rs	after_dispatch	1	critical	b,d	DirectRouteGua
 src/gateway/router/direct_guards.rs	before_dispatch	1	critical	d	DirectRouteGuards::before_dispatch	Spend/budget admission before dispatch.
 src/gateway/router/direct_guards.rs	response_blocked	1	critical	d	response_blocked	Response firewall check_response verdict blocks delivery (firewall build).
 src/gateway/router/direct_guards.rs	run	1	critical	a,d	DirectRouteGuards::run	admit_target policy plus refusal when message signing is enabled.
+src/gateway/router/direct_guards.rs	release_nonce	1	critical	b,d	DirectRouteGuards::release_nonce	Releases only the nonce registration a refused direct call made (MIK-7698).
 src/gateway/router/handlers.rs	health_handler	1	critical	a	health_handler	Backend detail only for admins; everyone else gets status and version.
 src/gateway/router/handlers.rs	mcp_delete_handler	1	critical	a,c	mcp_delete_handler	Requires an authenticated credential; deletes only a session the caller owns.
 src/gateway/router/handlers.rs	mcp_sse_handler	1	critical	c	mcp_sse_handler	SSE stream resumption is scoped to the session owner.
