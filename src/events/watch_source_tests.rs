@@ -94,7 +94,11 @@ fn fake(targets: Vec<Target>) -> Arc<Fake> {
 /// A hub with its controls handed over (no firewall, no audit), so the
 /// poller's live credential check can run.
 fn hub(dir: &std::path::Path) -> Arc<EventsHub> {
-    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir).expect("hub");
+    hub_with(dir, &crate::config::EventsConfig::default())
+}
+
+fn hub_with(dir: &std::path::Path, config: &crate::config::EventsConfig) -> Arc<EventsHub> {
+    let hub = EventsHub::open(config, dir).expect("hub");
     let services = super::super::Services {
         live: Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
@@ -676,6 +680,94 @@ async fn a_holder_that_joins_during_the_poll_keeps_the_poller() {
         "still started"
     );
     assert!(!poller.stop.load(Ordering::Acquire), "not stopped");
+}
+
+/// One pass of the worker's sweep, as the delivery loop runs it every 30 s.
+async fn sweep(hub: &Arc<EventsHub>) {
+    let services = hub.runtime.services.get().cloned().expect("services");
+    hub.sweep(&services).await;
+}
+
+/// MIK-8053 `WATCHREPLAY.1`/`.2`: a stored row whose capability was not
+/// offered when the source registered (the startup scan still running, or a
+/// partial catalogue) gets its poller from the next sweep once the capability
+/// is offered, and that poller polls.
+#[tokio::test]
+async fn a_sweep_starts_the_poller_of_a_capability_offered_again() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(Vec::new());
+    admit(&hub, "p", "watch.weather.changed", &json!({}));
+    hub.install_watch_source(Arc::clone(&host) as Arc<dyn WatchHost>);
+    // The replay the registration spawned runs here, over an empty catalogue.
+    tokio::task::yield_now().await;
+    assert!(hub.lifecycle.lock().await.is_empty(), "nothing offered yet");
+    *host.targets.lock() = vec![target("weather", true, CredentialUse::Free)];
+    sweep(&hub).await;
+    assert_eq!(hub.lifecycle.lock().await.len(), 1, "the sweep starts it");
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while host.calls.lock().is_empty() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(!host.calls.lock().is_empty(), "the started poller polls");
+}
+
+/// MIK-8053: the sweep stops pollers no live row holds before it starts the
+/// restored ones, so a stale poller never takes the last `max_pollers` slot.
+#[tokio::test]
+async fn a_sweep_frees_a_stale_slot_before_it_starts_a_restored_key() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut config = crate::config::EventsConfig::default();
+    config.watch.max_pollers = 1;
+    let hub = hub_with(dir.path(), &config);
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    admit(&hub, "p", "watch.weather.changed", &json!({}));
+    admit(&hub, "p", "watch.rain.changed", &json!({}));
+    hub.install_watch_source(Arc::clone(&host) as Arc<dyn WatchHost>);
+    tokio::task::yield_now().await;
+    assert_eq!(
+        hub.lifecycle.lock().await.len(),
+        1,
+        "weather holds the slot"
+    );
+    // Weather turns side-effecting (no longer offered); rain comes in.
+    *host.targets.lock() = vec![
+        target("weather", false, CredentialUse::Free),
+        target("rain", true, CredentialUse::Free),
+    ];
+    sweep(&hub).await;
+    let started = hub.lifecycle.lock().await;
+    assert_eq!(started.len(), 1, "one poller, within the cap");
+    assert!(
+        started.iter().any(|(_, key)| key.contains("rain")),
+        "the restored key took the freed slot: {started:?}"
+    );
+}
+
+/// MIK-8053 (review of #3406): a poller the sweep stopped while a partial
+/// catalogue left its capability unread starts again once the catalogue is
+/// whole; its row was kept throughout.
+#[tokio::test]
+async fn a_poller_stopped_during_a_partial_catalogue_restarts_after_it() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    admit(&hub, "p", "watch.weather.changed", &json!({}));
+    hub.install_watch_source(Arc::clone(&host) as Arc<dyn WatchHost>);
+    tokio::task::yield_now().await;
+    assert_eq!(hub.lifecycle.lock().await.len(), 1, "premise: started");
+    host.targets.lock().clear();
+    host.partial.store(true, Ordering::Release);
+    sweep(&hub).await;
+    assert!(
+        hub.lifecycle.lock().await.is_empty(),
+        "premise: stopped while unread"
+    );
+    assert_eq!(hub.store.subscriptions().len(), 1, "the row is kept");
+    host.partial.store(false, Ordering::Release);
+    *host.targets.lock() = vec![target("weather", true, CredentialUse::Free)];
+    sweep(&hub).await;
+    assert_eq!(hub.lifecycle.lock().await.len(), 1, "restarted once whole");
 }
 
 #[path = "watch_source_partial_tests.rs"]
