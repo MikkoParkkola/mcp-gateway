@@ -91,6 +91,9 @@ mod splice;
 #[path = "config_persistence_lock.rs"]
 pub(crate) mod lock;
 
+// Only the web UI names a write's dropped comments from the library; the
+// CLI keeps its own copy until MIK-8042's API change (MIK-8051).
+#[cfg(feature = "webui")]
 #[path = "config_persistence_comments.rs"]
 pub(crate) mod comments;
 
@@ -192,6 +195,7 @@ pub(crate) fn write_config_with(
 /// the answer is about this write and not one another writer made since.
 /// Empty when the write would not splice: a file with comments is then
 /// refused, and one without has none to drop.
+#[cfg(feature = "webui")]
 pub(crate) fn comments_a_write_drops(path: &Path, config: &Config) -> Vec<String> {
     let Ok((before, text)) = Config::load_literal_with_text(path) else {
         return Vec::new();

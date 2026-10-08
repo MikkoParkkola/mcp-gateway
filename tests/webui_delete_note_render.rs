@@ -26,7 +26,7 @@ fn remove_server_source() -> &'static str {
 /// return the note element's `textContent` and `style.display` afterwards.
 fn rendered(status: u16, body: &str) -> (String, String) {
     let script = format!(
-        r#"
+        r"
 const note = {{ textContent: '', style: {{ display: 'none' }} }};
 globalThis.document = {{ getElementById: (id) => (id === 'add-server-note' ? note : null) }};
 globalThis.confirm = () => true;
@@ -42,7 +42,7 @@ globalThis.fetch = async () => ({{
 {source}
 await removeServer('a');
 console.log(JSON.stringify([note.textContent, note.style.display]));
-"#,
+",
         source = remove_server_source()
     );
     let output = Command::new("node")
@@ -64,7 +64,7 @@ console.log(JSON.stringify([note.textContent, note.style.display]));
 fn the_dashboard_shows_a_delete_note() {
     let (text, display) = rendered(
         200,
-        r#"{ note: 'Comments inside the removed entry went with it: line 6' }"#,
+        r"{ note: 'Comments inside the removed entry went with it: line 6' }",
     );
     assert!(text.contains("line 6"), "the note was not shown: {text:?}");
     assert_ne!(display, "none", "the note element stayed hidden");
