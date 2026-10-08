@@ -188,17 +188,13 @@ pub(crate) fn sweep_due(next: &AtomicU64, now: u64) -> bool {
 /// Zero, negative and `NaN` read as 0.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub(crate) fn micro(usd: f64) -> u64 {
-    let exact = usd * 1_000_000.0;
-    let whole = exact.round();
-    // Exact equality is the test: `whole` is the price only if converting it
-    // back gives the same `f64`; any real fraction rounds up.
-    #[allow(clippy::float_cmp)]
-    let is_whole = whole / 1_000_000.0 == usd;
-    if is_whole {
-        whole as u64
-    } else {
-        exact.ceil() as u64
+    if usd.is_nan() || usd <= 0.0 {
+        return 0;
     }
+    let whole = (usd * 1_000_000.0).round();
+    // A price above the whole micro-USD it rounds to has a fraction left,
+    // even one the multiplication lost; it counts as one more.
+    (whole as u64).saturating_add(u64::from(usd > whole / 1_000_000.0))
 }
 
 #[allow(clippy::cast_precision_loss)]

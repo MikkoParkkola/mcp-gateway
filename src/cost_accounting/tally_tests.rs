@@ -168,4 +168,19 @@ fn a_positive_cost_rounds_up_to_whole_micro_usd() {
     // A genuine fraction of a micro-USD on a large price still rounds up.
     assert_eq!(micro(500.000_000_1), 500_000_001);
     assert_eq!(micro(0.0), 0);
+    assert_eq!(micro(-0.07), 0);
+    assert_eq!(micro(f64::NAN), 0);
+}
+
+/// `MIK-8081.CEIL.1`: the price one float step either side of a whole
+/// micro-USD rounds up above it and keeps the whole below it, even where the
+/// multiplication by a million loses the fraction.
+#[test]
+fn the_float_next_to_a_whole_micro_rounds_the_right_way() {
+    let whole: f64 = 0.000_15;
+    let above = f64::from_bits(whole.to_bits() + 1);
+    let below = f64::from_bits(whole.to_bits() - 1);
+    assert_eq!(micro(whole), 150);
+    assert_eq!(micro(above), 151, "a fraction above 150 micro-USD was lost");
+    assert_eq!(micro(below), 150);
 }
