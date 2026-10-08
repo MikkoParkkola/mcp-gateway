@@ -253,6 +253,21 @@ impl MetaMcp {
     }
 }
 
+impl<'a> BackendCall<'a> {
+    /// A catalogue read (`prompts/get`, `resources/read`) of `server`, for
+    /// screening its answer: the method is the policy target.
+    pub(crate) fn catalogue(server: &'a str, method: &'a str) -> Self {
+        Self {
+            server,
+            tool: method,
+            session_id: None,
+            api_key_name: None,
+            trace_id: method,
+            caller_key: None,
+        }
+    }
+}
+
 /// What screening a backend's JSON-RPC error left of it (MIK-8139).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorScreen {
@@ -276,10 +291,11 @@ impl MetaMcp {
         call: &BackendCall<'_>,
         error: &mut crate::protocol::JsonRpcError,
     ) -> ErrorScreen {
+        // Decoded strings and keys, not serialized JSON: escaping would hide
+        // a newline-split instruction or a quoted credential from the scan.
         let mut text = error.message.clone();
         if let Some(data) = &error.data {
-            text.push('\n');
-            text.push_str(&data.to_string());
+            decoded_text(data, &mut text);
         }
         if self
             .inspect_backend_text((call.server, call.tool, call.trace_id), &text)
@@ -317,6 +333,49 @@ impl MetaMcp {
             }
         }
         ErrorScreen::Clean
+    }
+
+    /// [`Self::screen_backend_error`] on `response`'s error, if any: a block
+    /// replaces the answer with the firewall's delivery refusal, as for a
+    /// blocked result on every route.
+    pub(crate) fn screen_backend_response(
+        &self,
+        call: &BackendCall<'_>,
+        response: &mut JsonRpcResponse,
+    ) -> ErrorScreen {
+        let Some(error) = response.error.as_mut() else {
+            return ErrorScreen::Clean;
+        };
+        let screen = self.screen_backend_error(call, error);
+        if screen == ErrorScreen::Blocked {
+            let refused = Error::ResponseFirewallRefused;
+            *response = JsonRpcResponse::delivery_refusal_error(
+                response.id.clone(),
+                refused.to_rpc_code(),
+                &refused.to_string(),
+            );
+        }
+        screen
+    }
+}
+
+/// Every string value and object key in `value`, one per line, appended to
+/// `out`.
+fn decoded_text(value: &Value, out: &mut String) {
+    match value {
+        Value::String(text) => {
+            out.push('\n');
+            out.push_str(text);
+        }
+        Value::Array(items) => items.iter().for_each(|item| decoded_text(item, out)),
+        Value::Object(members) => {
+            for (key, item) in members {
+                out.push('\n');
+                out.push_str(key);
+                decoded_text(item, out);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
 

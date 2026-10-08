@@ -310,12 +310,12 @@ impl MetaMcp {
                 return refusal;
             }
         }
-        let response =
+        let mut response =
             Self::forward_for_caller(id, backend, method, params, credential, empty).await;
+        let call = super::dispatch_guards::BackendCall::catalogue(&backend.name, method);
+        self.screen_backend_response(&call, &mut response); // MIK-8139
         #[cfg(feature = "firewall")]
-        {
-            self.stage_catalogue_result(caller, (&backend.name, method), &response);
-        }
+        self.stage_catalogue_result(caller, (&backend.name, method), &response);
         response
     }
 }

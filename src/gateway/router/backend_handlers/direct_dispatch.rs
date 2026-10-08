@@ -394,8 +394,9 @@ fn finish_response(
     response.id = Some(id.clone());
     // MIK-8139: a backend error gets a result's screening, on every method,
     // before the reservation settles, so a replay serves the screened answer.
-    let (screened, _) = super::screen_direct_error(state, &admitted.call, response);
-    let mut response = screened;
+    state
+        .meta_mcp
+        .screen_backend_response(&admitted.call, &mut response);
     if method == "tools/list" {
         // Redaction FIRST, then the trust stamp. The firewall may remove a
         // `$defs` entry a surviving `$ref` points at, so a verdict computed
