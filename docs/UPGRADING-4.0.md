@@ -197,7 +197,7 @@ backend" and "fails a capability file" first.**
 | 170 | `cap search` and `cap registry-list` take `-C` for `--capabilities`, as every other command does; `-c` there now means the global `--config`. A debug build panicked on both commands, and a release build read `-c` as `--capabilities` | Scripts that passed `-c <dir>` to these two commands: use `-C <dir>` or `--capabilities <dir>` |
 | 171 | With agent authentication on, a listen or GET /mcp stream opened with an agent token is checked again at every delivery and ends, with no closing message, once the token expires, the agent leaves the registry or its key changes. A GET /mcp stream also checks each queued notification when it writes it, for every credential kind. With gateway authentication on, a valid agent token can listen on a public `/mcp`. `AuthState` gains `agent_auth` | Clients: re-subscribe with a fresh token when a stream ends. Library users building `AuthState` with a struct literal set `agent_auth` to the `AgentAuthState` the router's agent middleware uses (or `AgentAuthState::new(false, ...)` without agent auth) |
 | 172 | Reserved: #3527 | None |
-| 173 | `meta_mcp.cache_tools` is retired: nothing ever read it. A config that sets it loads and logs one warning; `init` no longer writes it | Delete the key. To change how long tool lists are cached, set `meta_mcp.cache_ttl` |
+| 173 | `meta_mcp.cache_tools` is retired: nothing ever read it. A config that sets it loads and logs one warning; `upgrade` removes it and `init` no longer writes it | Run `mcp-gateway upgrade`, or delete the key. To change how long tool lists are cached, set `meta_mcp.cache_ttl` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4493,10 +4493,11 @@ whether it said `true` or `false`, so setting it to turn caching off did nothing
 In 4.0 the key is retired. A config that still sets it loads, and logs once, on start and
 on reload:
 
-  `` `meta_mcp.cache_tools` is ignored since 4.0: nothing ever read it, so tool lists were cached the same way whatever it said; `meta_mcp.cache_ttl` sets how long they are kept. Remove meta_mcp.cache_tools. ``
+  `` `meta_mcp.cache_tools` is ignored since 4.0: nothing ever read it, so tool lists were cached the same way whatever it said; `meta_mcp.cache_ttl` sets how long they are kept. `mcp-gateway upgrade` removes it. ``
 
-`mcp-gateway init` no longer writes the key. Delete it from your config; to change how long
-tool lists are cached, set `meta_mcp.cache_ttl`.
+`mcp-gateway upgrade` deletes the key line in the same pass that rewrites backend URL keys,
+keeping every other line and comment, and names the line it removed. `mcp-gateway init` no
+longer writes the key. To change how long tool lists are cached, set `meta_mcp.cache_ttl`.
 
 ## Upgrading from 3.5.x: a walkthrough
 

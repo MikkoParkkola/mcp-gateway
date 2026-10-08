@@ -28,6 +28,7 @@ pub mod paths;
 mod protocol_import;
 mod ranking;
 mod regular_file;
+mod retired_config_keys;
 mod setup;
 mod skills;
 mod stats;

@@ -59,8 +59,17 @@ pub fn run_upgrade_with_config(
 pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -> Vec<String> {
     let at = path.display();
     let mut out = Vec::new();
+    if let Some(line) = rewrite.retired {
+        let verb = match mode {
+            RewriteMode::Apply => "removed",
+            RewriteMode::DryRun => "upgrade would remove",
+        };
+        out.push(format!(
+            "{at}: {verb} `meta_mcp.cache_tools` (line {line}); nothing ever read it."
+        ));
+    }
     if rewrite.changed.is_empty() {
-        if rewrite.skipped.is_empty() && rewrite.kept.is_empty() {
+        if rewrite.skipped.is_empty() && rewrite.kept.is_empty() && rewrite.retired.is_none() {
             out.push(format!(
                 "{at}: no `http_url` or `ws_url` to rewrite; nothing changed."
             ));

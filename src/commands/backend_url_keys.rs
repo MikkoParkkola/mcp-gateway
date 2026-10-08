@@ -19,6 +19,9 @@ pub(crate) struct UrlRewrite {
     pub changed: Vec<usize>,
     pub skipped: Vec<String>,
     pub kept: Vec<String>,
+    /// The 1-based line `meta_mcp.cache_tools` was removed from, when the
+    /// same rewrite dropped that retired key (MIK-8064).
+    pub retired: Option<usize>,
 }
 
 /// The transport key a `url` stands for, by scheme. A private copy of the
@@ -99,6 +102,7 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
             changed: Vec::new(),
             skipped,
             kept,
+            retired: None,
         };
     }
     UrlRewrite {
@@ -106,6 +110,7 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
         changed,
         skipped,
         kept,
+        retired: None,
     }
 }
 

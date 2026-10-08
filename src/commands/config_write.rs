@@ -84,8 +84,13 @@ pub(crate) enum RewriteMode {
 pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<UrlRewrite, String> {
     let text = super::regular_file::read_regular_text(path)
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-    let rewrite = rewrite_url_aliases(&text, None);
-    if mode == RewriteMode::Apply && !rewrite.changed.is_empty() {
+    let mut rewrite = rewrite_url_aliases(&text, None);
+    // The retired key goes in the same pass, so the file is written once.
+    if let Some((text, line)) = super::retired_config_keys::drop_cache_tools(&rewrite.text) {
+        rewrite.text = text;
+        rewrite.retired = Some(line);
+    }
+    if mode == RewriteMode::Apply && (!rewrite.changed.is_empty() || rewrite.retired.is_some()) {
         write_config_text(path, &rewrite.text)?;
     }
     Ok(rewrite)
