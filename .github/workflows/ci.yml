@@ -559,6 +559,8 @@ jobs:
       # locks and paths behave differently on a Mac. The two skips are the
       # Tests job's, for the same reason; every test that does not run on
       # macOS is listed in docs/release/macos-test-exclusions.tsv.
+      - name: Every test kept off macOS is listed (MIK-8174)
+        run: python3 scripts/release/check_macos_exclusions.py
       - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
   test:
@@ -979,6 +981,8 @@ jobs:
         run: python3 scripts/release/test_critical_function_coverage.py
       - name: Test the inventory-row check (MIK-8169)
         run: python3 scripts/release/test_check_inventory_rows.py
+      - name: Test the macOS exclusion check (MIK-8174)
+        run: python3 scripts/release/test_check_macos_exclusions.py
       - name: Test the tag/manifest publish gate
         run: python3 scripts/release/test_check_tag_manifest.py
       - name: Test the burndown summary drift check

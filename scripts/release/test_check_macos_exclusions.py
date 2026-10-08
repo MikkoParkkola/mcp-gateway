@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+"""Tests for check_macos_exclusions.py: each case is a small tree with one
+Rust file and the exclusion list, and the check must report what it states."""
+
+from __future__ import annotations
+
+import importlib.util
+import tempfile
+import unittest
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location("mac", HERE / "check_macos_exclusions.py")
+mac = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mac)
+
+HEADER = "path\titem\tportable\treason\n"
+
+
+class CheckMacosExclusions(unittest.TestCase):
+    def tree(self, rust: str, rows: str = "", path: str = "src/x_tests.rs") -> list[str]:
+        root = Path(self.dir.name)
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(rust)
+        (root / mac.LIST).parent.mkdir(parents=True, exist_ok=True)
+        (root / mac.LIST).write_text(HEADER + rows)
+        return mac.problems(root)
+
+    def setUp(self) -> None:
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+
+    def test_an_unlisted_linux_only_test_fails(self) -> None:
+        found = self.tree('#[cfg(target_os = "linux")]\n#[test]\nfn probe() {}\n')
+        self.assertEqual(found, ["not run on macOS and not listed: src/x_tests.rs probe"])
+
+    def test_a_listed_test_with_a_reason_passes(self) -> None:
+        found = self.tree(
+            '/// doc\n#[cfg(target_os = "linux")]\n#[tokio::test]\nasync fn probe() {}\n',
+            "src/x_tests.rs\tprobe\tinherent\tuses /dev/full\n",
+        )
+        self.assertEqual(found, [])
+
+    def test_every_gate_spelling_is_seen(self) -> None:
+        rust = (
+            '#[test]\n#[cfg_attr(target_os = "macos", ignore = "flaky")]\nfn a() {}\n'
+            '#[cfg(not(target_os = "macos"))]\n#[test]\nfn b() {}\n'
+            '#[cfg(all(unix, not(target_os = "macos")))]\n#[test]\nfn c() {}\n'
+            '#[cfg(target_os = "linux")]\nmod d;\n'
+        )
+        self.assertEqual(len(self.tree(rust)), 4)
+
+    def test_a_row_without_a_reason_and_a_stale_row_fail(self) -> None:
+        found = self.tree("fn nothing() {}\n", "src/x_tests.rs\tgone\tinherent\tr\nsrc/y.rs\tz\tno\t\n")
+        self.assertEqual(
+            found,
+            [
+                "row without a reason: 'src/y.rs\\tz\\tno\\t'",
+                "stale row, nothing matches: src/x_tests.rs gone",
+            ],
+        )
+
+    def test_linux_only_production_code_is_not_a_test(self) -> None:
+        rust = '#[cfg(target_os = "linux")]\nfn read_proc() {}\n#[cfg(target_os = "linux")]\nmod inotify;\n'
+        self.assertEqual(self.tree(rust, path="src/watch.rs"), [])
+
+    def test_the_release_tree_passes(self) -> None:
+        self.assertEqual(mac.problems(HERE.parents[1]), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
