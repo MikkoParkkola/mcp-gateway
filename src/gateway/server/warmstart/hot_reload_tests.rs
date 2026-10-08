@@ -146,22 +146,26 @@ impl Running {
         assert_ne!(reply["result"]["isError"], true, "reload failed: {reply}");
     }
 
-    /// Whether `name`'s CURRENT instance fills its tool cache within `secs`,
-    /// with no discovery or direct call made in the meantime.
-    async fn warms(&self, name: &str, secs: u64) -> bool {
+    /// Whether `name`'s CURRENT instance caches `tool` within `secs`, with no
+    /// discovery or direct call made in the meantime.
+    async fn warms(&self, name: &str, tool: &str, secs: u64) -> bool {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
         while tokio::time::Instant::now() < deadline {
-            if self
-                .registry
-                .get(name)
-                .is_some_and(|b| b.cached_tools_known())
-            {
+            if self.registry.get(name).is_some_and(|b| caches(&b, tool)) {
                 return true;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         false
     }
+}
+
+/// Whether `backend` has `tool` in its shared tool cache.
+fn caches(backend: &crate::backend::Backend, tool: &str) -> bool {
+    backend
+        .get_cached_tools_snapshot()
+        .iter()
+        .any(|t| t.name == tool)
 }
 
 impl Drop for Running {
@@ -181,7 +185,10 @@ async fn a_backend_added_by_hot_reload_is_warmed() {
     // Control: the same fixture warms when present at boot, so a failure
     // below is the missing reload warm-start, not a fixture the gateway
     // cannot talk to.
-    assert!(gw.warms("boot", 10).await, "boot warm-start control");
+    assert!(
+        gw.warms("boot", "boot_tool", 10).await,
+        "boot warm-start control"
+    );
     let url = mock("added_tool").await;
     let both = format!(
         "{}{}",
@@ -195,7 +202,7 @@ async fn a_backend_added_by_hot_reload_is_warmed() {
         "the reload registered it"
     );
     assert!(
-        gw.warms("added", 10).await,
+        gw.warms("added", "added_tool", 10).await,
         "a hot-added backend's tools never reached the cache without a discovery call"
     );
 }
@@ -208,12 +215,15 @@ async fn a_backend_replaced_by_hot_reload_is_warmed_again() {
     let first = mock("first_tool").await;
     let path = write_config(dir.path(), &http_backend("svc", &first));
     let mut gw = Running::start(dir.path(), path).await;
-    assert!(gw.warms("svc", 10).await, "boot warm-start control");
+    assert!(
+        gw.warms("svc", "first_tool", 10).await,
+        "boot warm-start control"
+    );
     let second = mock("second_tool").await;
     write_config(dir.path(), &http_backend("svc", &second));
     gw.reload().await;
     assert!(
-        gw.warms("svc", 10).await,
+        gw.warms("svc", "second_tool", 10).await,
         "a hot-replaced backend's tools never reached the cache without a discovery call"
     );
 }
@@ -241,12 +251,12 @@ async fn http_a_backend_added_by_a_watched_edit_is_warmed() {
         .await
         .expect("the gateway bound within 60 s")
         .expect("the gateway bound");
-    let warmed = |name: &'static str| {
+    let warmed = |name: &'static str, tool: &'static str| {
         let registry = Arc::clone(&registry);
         async move {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
             while tokio::time::Instant::now() < deadline {
-                if registry.get(name).is_some_and(|b| b.cached_tools_known()) {
+                if registry.get(name).is_some_and(|b| caches(&b, tool)) {
                     return true;
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -254,7 +264,7 @@ async fn http_a_backend_added_by_a_watched_edit_is_warmed() {
             false
         }
     };
-    let control = warmed("boot").await;
+    let control = warmed("boot", "boot_tool").await;
     let url = mock("added_tool").await;
     let both = format!(
         "{}{}",
@@ -262,7 +272,7 @@ async fn http_a_backend_added_by_a_watched_edit_is_warmed() {
         http_backend("added", &url)
     );
     write_config(dir.path(), &both);
-    let added = warmed("added").await;
+    let added = warmed("added", "added_tool").await;
     server.abort();
     assert!(control, "boot warm-start control");
     assert!(added, "a backend added by a watched edit was not warmed");
