@@ -18,7 +18,12 @@ pub(crate) fn dropped_comment_lines(before: &str, after: &str) -> Vec<String> {
         .zip(a[head..].iter().rev())
         .take_while(|(x, y)| x == y)
         .count();
-    let (cb, ca) = (comments(&b), comments(&a));
+    // Only the changed region is classified: each candidate costs two parses
+    // of the whole file, so classifying every line would be quadratic.
+    let (cb, ca) = (
+        comments(&b, head..b.len() - tail),
+        comments(&a, head..a.len() - tail),
+    );
     let mut kept: Vec<String> = ca[head..a.len() - tail].iter().flatten().cloned().collect();
     (head..b.len() - tail)
         .filter(|&i| {
@@ -40,24 +45,38 @@ pub(crate) fn dropped_comment_lines(before: &str, after: &str) -> Vec<String> {
 /// the YAML parser agrees: removing it leaves the document
 /// unchanged. So a `#` inside a quoted, tagged or block scalar's text, or a
 /// URL fragment, is never named.
-fn comments(lines: &[&str]) -> Vec<Option<String>> {
+/// Lines outside `region` are not classified (`None`).
+fn comments(lines: &[&str], region: std::ops::Range<usize>) -> Vec<Option<String>> {
     (0..lines.len())
         .map(|i| {
+            if !region.contains(&i) {
+                return None;
+            }
             // Each `#` after a blank (or at the start) is a candidate, tried in
             // order: one inside a value is rejected and the next is tried.
             let line = lines[i];
             line.match_indices('#')
                 .filter(|&(at, _)| at == 0 || line[..at].ends_with([' ', '\t']))
                 .map(|(at, _)| &line[line[..at].trim_end_matches([' ', '\t']).len()..])
-                .find(|comment| super::splice::parsed_as_comment(lines, i, comment))
+                .find(|comment| {
+                    #[cfg(test)]
+                    PARSE_CHECKS.with(|n| n.set(n.get() + 1));
+                    super::splice::parsed_as_comment(lines, i, comment)
+                })
                 .map(|comment| comment.trim().to_owned())
         })
         .collect()
 }
 
 #[cfg(test)]
+thread_local! {
+    /// Parser checks made on this thread, for the bound test.
+    static PARSE_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 mod tests {
-    use super::dropped_comment_lines;
+    use super::{PARSE_CHECKS, dropped_comment_lines};
     #[test]
     fn a_removed_entry_names_its_own_line_not_a_repeat_of_it() {
         let before = "backends:\n  a:\n    command: y  # why\n  b:\n    command: y  # why\n";
@@ -107,5 +126,20 @@ mod tests {
             "backends:\n  a:\n    description: !!str \"old # x\" # real\n  b:\n    command: y\n";
         let after = "backends:\n  b:\n    command: y\n";
         assert_eq!(dropped_comment_lines(before, after), ["line 3"]);
+    }
+
+    /// Removing one entry from a 2,000-entry file checks only that entry's
+    /// comment with the parser, not every comment in the file.
+    #[test]
+    fn only_the_changed_region_is_parsed() {
+        let entry = |n: usize| format!("  b{n}:\n    command: x  # c{n}\n");
+        let before: String = std::iter::once("backends:\n".to_owned())
+            .chain((0..2000).map(entry))
+            .collect();
+        let after = before.replacen(&entry(1000), "", 1);
+        PARSE_CHECKS.with(|n| n.set(0));
+        assert_eq!(dropped_comment_lines(&before, &after), ["line 2003"]);
+        let checks = PARSE_CHECKS.with(std::cell::Cell::get);
+        assert!(checks <= 2, "{checks} parser checks for one removed entry");
     }
 }
