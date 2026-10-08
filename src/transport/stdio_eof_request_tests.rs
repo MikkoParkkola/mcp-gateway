@@ -70,9 +70,11 @@ async fn a_request_after_stdout_closed_fails_at_once() {
     stdout_closed(&t).await;
     let err = fails_fast(&t, None).await;
     assert!(
-        matches!(&err, Error::Transport(message) if message.contains("stdout closed")),
+        matches!(&err, Error::TransportConnect(message) if message.contains("stdout closed")),
         "{err:?}"
     );
+    // Nothing was sent, so a keyed retry of the same call may still run.
+    assert!(err.is_pre_dispatch(), "{err:?}");
     let _ = t.close().await;
 }
 
@@ -116,6 +118,8 @@ async fn eof_during_a_blocked_write_ends_the_call() {
         matches!(&err, Error::Transport(message) if message.contains("stdout closed")),
         "{err:?}"
     );
+    // Part of the frame left, so the outcome is not known: no free retry.
+    assert!(!err.is_pre_dispatch(), "{err:?}");
     // The race dropped the write mid-frame, so stdin is retired.
     stdin_retired(&t).await;
     let _ = t.close().await;
@@ -199,4 +203,17 @@ fn the_latch_trips_when_the_reader_panics() {
     }));
     assert!(ended.is_err());
     assert!(*rx.borrow(), "the latch tripped on the way out");
+}
+
+/// gpt review on #3531: a call that ends with no reply is pre-send only when
+/// no byte of it could have left, so a keyed retry is freed exactly then.
+#[test]
+fn an_unanswered_call_is_pre_send_only_before_its_first_byte() {
+    use std::sync::atomic::AtomicBool;
+    let unsent =
+        super::write::unsent_or(&AtomicBool::new(false), "stdout closed", Error::Transport);
+    assert!(unsent.is_pre_dispatch(), "{unsent:?}");
+    let sent = super::write::unsent_or(&AtomicBool::new(true), "stdout closed", Error::Transport);
+    assert!(!sent.is_pre_dispatch(), "{sent:?}");
+    assert!(matches!(sent, Error::Transport(_)), "{sent:?}");
 }

@@ -644,15 +644,17 @@ impl Transport for StdioTransport {
 
         // MIK-7871: stdout may have closed, and `pending` been cleared, before
         // the insert above. The reader trips the latch before it clears, so
-        // either this sees it, or the clear comes after the insert and drops it.
+        // either this sees it, or the clear drops the entry. Nothing is written
+        // yet, so the refusal is pre-send (MIK-7979).
         let eof = self.start.eof_receiver();
         if eof.as_ref().is_some_and(|eof| *eof.borrow()) {
-            return Err(Error::Transport("stdout closed".to_string()));
+            return Err(Error::TransportConnect("stdout closed".to_string()));
         }
+        let began = AtomicBool::new(false);
         // One deadline for the write and the reply: a child that stopped
         // reading stdin cannot hold the call past it.
         let exchange = tokio::time::timeout(self.request_timeout, async {
-            self.write_message(&message).await?;
+            self.write_frame(&message, &began).await?;
             (&mut rx)
                 .await
                 .map_err(|_| Error::Transport("Response channel closed".to_string()))
@@ -677,15 +679,18 @@ impl Transport for StdioTransport {
                 early_exit::reply_or_eof(exchange, closed).await
             }
         };
-        // Both guards drop after this value is produced, which is where the
-        // pending entry and the progress registration are retired.
+        // Both guards drop after this value: the pending entry and progress go.
         match outcome {
             Some(Ok(reply)) => reply,
-            Some(Err(_)) => Err(Error::BackendTimeout("Request timed out".to_string())),
+            Some(Err(_)) => Err(write::unsent_or(
+                &began,
+                "Request timed out",
+                Error::BackendTimeout,
+            )),
             // A reply routed while the write was still yielding is the answer.
             None => rx
                 .try_recv()
-                .map_err(|_| Error::Transport("stdout closed".to_string())),
+                .map_err(|_| write::unsent_or(&began, "stdout closed", Error::Transport)),
         }
     }
 
