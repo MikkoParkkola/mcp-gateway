@@ -97,7 +97,8 @@ fn a_config_write_leaves_no_scratch_file_on_any_platform() {
     let leftovers: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(|entry| entry.ok().map(|e| e.file_name()))
-        .filter(|name| name != "gateway.yaml")
+        // The lock sidecar stays by design (MIK-8042): never deleted.
+        .filter(|name| name != "gateway.yaml" && name != ".gateway.yaml.lock")
         .collect();
     assert!(
         leftovers.is_empty(),
@@ -255,7 +256,8 @@ fn concurrent_config_writes_do_not_lose_the_temp_file() {
     let leftovers: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(|e| e.ok().map(|e| e.file_name()))
-        .filter(|name| name != "gateway.yaml")
+        // The lock sidecar stays by design (MIK-8042): never deleted.
+        .filter(|name| name != "gateway.yaml" && name != ".gateway.yaml.lock")
         .collect();
     assert!(
         leftovers.is_empty(),
