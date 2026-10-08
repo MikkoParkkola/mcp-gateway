@@ -51,6 +51,7 @@ async fn a_watched_reload_reports_its_backends_to_the_hook() {
                 config.meta_mcp.warm_start.clone(),
                 published,
             ));
+            Vec::new()
         })
     };
     let (_shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);

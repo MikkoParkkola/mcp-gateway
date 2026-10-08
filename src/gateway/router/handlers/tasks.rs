@@ -40,7 +40,8 @@ pub(super) const AUTH_DISABLED_TASK_OWNER: &str = "local:auth-disabled:tasks:v1"
 /// The owner key of a stateless task: the validated API-key credential. Only
 /// `route_task_owner` reads it (the firewall keys on `identity::caller_key`);
 /// tasks keep this encoding so an upgrade does not orphan stored ones. Empty
-/// when the caller is unauthenticated: that is not an identity.
+/// when the caller is unauthenticated: that is not an identity by itself, but
+/// `route_task_owner` may still give a validated agent token its own owner.
 pub(super) fn session_owner_key(
     client: Option<&crate::gateway::auth::AuthenticatedClient>,
 ) -> String {
@@ -100,10 +101,31 @@ pub(super) fn route_task_owner(
             |agent| agent_task_owner(&agent.client_id),
         ),
         // With authentication ON the owner key decides (`task_owner_key`:
-        // proven subject, else credential), and an empty one is refused
-        // upstream rather than pooled here.
+        // proven subject, else credential). A validated agent with no gateway
+        // credential (a public path) owns as its `client_id`, the same owner
+        // it has with auth off (MIK-8055). With neither, the owner is empty
+        // and refused upstream rather than pooled here.
+        None if owner_key.is_empty() => {
+            agent.map_or_else(String::new, |agent| agent_task_owner(&agent.client_id))
+        }
         None => task_principal(None, owner_key),
     }
+}
+
+/// [`route_task_owner`] for a request, then its events owner. The events
+/// owner never comes from the agent arm: an event subscription is re-checked
+/// at each delivery by its gateway credential, and an agent-only caller has
+/// none to re-check, so it stays without an events principal (MIK-8055 K6).
+pub(super) fn route_owners(
+    state: &AppState,
+    verified_identity: Option<&VerifiedIdentity>,
+    agent: Option<&OAuthAgentIdentity>,
+    owner_key: &str,
+) -> (String, String) {
+    (
+        route_task_owner(state, verified_identity, agent, owner_key),
+        route_task_owner(state, verified_identity, None, owner_key),
+    )
 }
 
 /// The owner of a validated agent's tasks on a gateway with auth off.
