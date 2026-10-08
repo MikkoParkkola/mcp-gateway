@@ -96,6 +96,17 @@ impl EventsHub {
         let hub = Arc::clone(self);
         let fan_services = Arc::clone(&services);
         tokio::spawn(async move {
+            // Nothing is matched before the first startup pass has judged the
+            // routes: a subscription a narrowed route cannot serve is held
+            // first (MIK-8076). Occurrences wait in the bounded intake.
+            // ponytail: 50 ms poll of a flag set once; a Notify if it matters.
+            while !hub
+                .runtime
+                .reconciled
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
             while let Some(event) = intake.recv().await {
                 hub.fan_out(&fan_services, &event).await;
             }

@@ -142,11 +142,13 @@ impl Store {
         caps: OutboxCaps,
     ) -> std::io::Result<Enqueued> {
         // An expired row kept for its burials takes no new record, so the
-        // worker can always settle it (MIK-8061).
+        // worker can always settle it (MIK-8061); nor does a held one: what
+        // it filters on or relies on is not served now (MIK-8057, MIK-8076).
         if !state
             .subs
             .get(&record.subscription_id)
             .is_some_and(|s| s.live(Utc::now()))
+            || state.held.contains_key(&record.subscription_id)
         {
             return Ok(Enqueued::NoSubscription);
         }
