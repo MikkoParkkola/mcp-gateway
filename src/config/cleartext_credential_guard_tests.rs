@@ -287,3 +287,26 @@ fn a2a_url_is_guarded_on_the_same_terms() {
     );
     assert!(validate(with_oauth(a2a(&format!("https://{REMOTE}")))).is_ok());
 }
+
+// MIK-8063: credentials written into an a2a_url's userinfo are credentials on
+// the wire too (sent as HTTP Basic), on the same terms as any other.
+#[cfg(feature = "a2a")]
+#[test]
+fn a2a_url_userinfo_is_a_credential_on_the_same_terms() {
+    let a2a = |url: &str| BackendConfig {
+        transport: TransportConfig::A2a {
+            a2a_url: url.to_string(),
+            a2a_agent_card_path: None,
+        },
+        ..Default::default()
+    };
+    let userinfo = ["operator", "pw-7f3a"].join(":");
+    let message = refusal(a2a(&format!("http://{userinfo}@{REMOTE}")));
+    assert!(message.contains("cleartext"), "{message}");
+    assert!(
+        !message.contains("pw-7f3a"),
+        "the refusal never echoes the credential"
+    );
+    assert!(validate(a2a(&format!("https://{userinfo}@{REMOTE}"))).is_ok());
+    assert!(validate(a2a(&format!("http://{userinfo}@127.0.0.1:9"))).is_ok());
+}

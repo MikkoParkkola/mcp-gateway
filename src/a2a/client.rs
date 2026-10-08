@@ -21,11 +21,21 @@ use crate::{Error, Result};
 /// The A2A 1.0 version header. `.json()` sets `Content-Type` itself.
 const VERSION_HEADER: &str = "A2A-Version";
 
-/// The JSON-RPC interface a call goes to, chosen from the card.
-#[derive(Debug, Clone)]
+/// The JSON-RPC interface a call goes to, chosen from the card. Its URL can
+/// carry the operator's `a2a_url` credentials, so it never prints them.
+#[derive(Clone)]
 pub(crate) struct Endpoint {
     pub url: String,
     pub tenant: Option<String>,
+}
+
+impl std::fmt::Debug for Endpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Endpoint")
+            .field("url", &diagnostic_url(&self.url))
+            .field("tenant", &self.tenant)
+            .finish()
+    }
 }
 
 /// What one call came back as: its decoded result, or the agent's own error.
@@ -53,30 +63,36 @@ impl A2aClient {
     pub(crate) fn new(
         a2a_url: &str,
         card_path: Option<&str>,
-        headers: Vec<(String, String)>,
+        mut headers: Vec<(String, String)>,
         http: reqwest::Client,
     ) -> Result<Self> {
-        let origin = Url::parse(a2a_url).map_err(|e| {
+        let mut origin = Url::parse(a2a_url).map_err(|e| {
             Error::Config(format!(
                 "a2a_url {} is not a URL: {e}",
                 diagnostic_url(a2a_url)
             ))
         })?;
-        // Credentials in the URL would authenticate the card fetch but not
-        // the advertised endpoint, and would ride every diagnostic that
-        // forgot to redact: they belong in `headers`.
-        if !origin.username().is_empty() || origin.password().is_some() {
-            return Err(Error::Config(format!(
-                "a2a_url {} carries credentials; put them in the backend's `headers` \
-                 (for example an Authorization header) instead",
-                diagnostic_url(a2a_url)
-            )));
-        }
         let path = card_path.unwrap_or(DEFAULT_CARD_PATH);
         if !path.starts_with('/') || path.contains("://") {
             return Err(Error::Config(format!(
                 "a2a_agent_card_path must be a path starting with '/', got {path:?}"
             )));
+        }
+        // Credentials written into `a2a_url`, as curl takes them, become one
+        // configured `Authorization: Basic` header and leave every URL. As a
+        // header they follow the precedence rule in `with_headers`: an
+        // explicit configured `Authorization` wins over them, and a per-request
+        // (propagated) one replaces them, so an agent never sees two.
+        if !origin.username().is_empty() || origin.password().is_some() {
+            let basic = url_basic_auth(&http, &origin);
+            let _ = origin.set_username("");
+            let _ = origin.set_password(None);
+            let explicit = headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("authorization"));
+            if let Some(basic) = basic.filter(|_| !explicit) {
+                headers.push(("Authorization".to_owned(), basic));
+            }
         }
         // The card lives at a path on the agent's origin, whatever path,
         // query or fragment `a2a_url` itself carries.
@@ -146,7 +162,7 @@ impl A2aClient {
             )));
         }
         Ok(Endpoint {
-            url: interface.url.clone(),
+            url: without_credentials(&interface.url),
             tenant: interface.tenant.clone(),
         })
     }
@@ -267,6 +283,27 @@ impl A2aClient {
         }
         request.header(VERSION_HEADER, PROTOCOL_VERSION)
     }
+}
+
+/// The `Authorization: Basic` value for the credentials in `url`, computed by
+/// the HTTP client itself (it decodes the userinfo exactly as it would send
+/// it) on a request that is built and never sent.
+fn url_basic_auth(http: &reqwest::Client, url: &Url) -> Option<String> {
+    let request = http.get(url.as_str()).build().ok()?;
+    let value = request.headers().get(reqwest::header::AUTHORIZATION)?;
+    value.to_str().ok().map(str::to_owned)
+}
+
+/// `endpoint` without userinfo: the client would turn it into a second
+/// `Authorization` header beside the configured one. Credentials come only
+/// from the configuration.
+fn without_credentials(endpoint: &str) -> String {
+    let Ok(mut url) = Url::parse(endpoint) else {
+        return endpoint.to_owned();
+    };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.to_string()
 }
 
 /// The largest card or reply this bridge reads, the default stdio frame

@@ -510,3 +510,90 @@ async fn a2a_4_a_configured_version_header_never_overrides_the_bridges() {
         .collect();
     assert_eq!(versions, ["1.0"], "exactly one version header");
 }
+
+/// A2A.6: credentials written into `a2a_url`, as curl takes them, reach the
+/// agent as HTTP Basic on the card fetch and on every call.
+#[tokio::test]
+async fn a2a_6_url_credentials_authenticate_the_card_and_the_calls() {
+    let (base, log) = stub::serve(Agent::answering(stub::completed_task(
+        json!([{"text": "authenticated"}]),
+    )))
+    .await;
+    let userinfo = ["operator", "s3cret"].join(":");
+    let url = base.replacen("http://", &format!("http://{userinfo}@"), 1);
+    let result = call(&backend(&url, None, &[]), "hi")
+        .await
+        .expect("the call succeeds");
+    assert_eq!(texts(&result), ["authenticated"], "{result}");
+    // base64("operator:s3cret")
+    let basic = "Basic b3BlcmF0b3I6czNjcmV0";
+    let seen: Vec<Option<String>> = log
+        .lock()
+        .expect("log")
+        .iter()
+        .map(|seen| {
+            seen.headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        })
+        .collect();
+    assert!(seen.len() >= 2, "a card fetch and a send: {seen:?}");
+    assert!(
+        seen.iter().all(|auth| auth.as_deref() == Some(basic)),
+        "every request carries the credentials: {seen:?}"
+    );
+}
+
+/// A2A.6/A2A.7: a propagated credential replaces the `a2a_url` credentials,
+/// and a configured `Authorization` beside them too, on its request; the
+/// agent never sees two `Authorization` headers.
+#[tokio::test]
+async fn a2a_7_a_propagated_credential_replaces_url_credentials() {
+    let (base, log) = stub::serve(Agent::answering(stub::completed_task(
+        json!([{"text": "one identity"}]),
+    )))
+    .await;
+    let userinfo = ["operator", "s3cret"].join(":");
+    let url = base.replacen("http://", &format!("http://{userinfo}@"), 1);
+    let params = json!({"name": TOOL, "arguments": {"message": "hi"}});
+    let user = [("authorization".to_owned(), "Bearer user-1".to_owned())];
+    let configured: [&[(&str, &str)]; 2] = [&[], &[("authorization", "Bearer static")]];
+    for (index, headers) in configured.into_iter().enumerate() {
+        backend(&url, None, headers)
+            .request_with_headers("tools/call", Some(params.clone()), &user, Some("user-1"))
+            .await
+            .expect("the call succeeds");
+        let sent: Vec<String> = stub::sends(&log)[index]
+            .headers
+            .get_all("authorization")
+            .iter()
+            .filter_map(|v| v.to_str().ok().map(str::to_owned))
+            .collect();
+        assert_eq!(sent, ["Bearer user-1"], "exactly the propagated credential");
+    }
+}
+
+/// Check 3: with credentials in `a2a_url`, a redirect to another origin is
+/// refused, so the other origin never receives them.
+#[tokio::test]
+async fn a2a_3a_a_cross_origin_redirect_never_carries_url_credentials() {
+    let (elsewhere, tripped) = stub::tripwire().await;
+    let mut agent = Agent::answering(Value::Null);
+    agent.answer = Answer::Redirect(format!("{elsewhere}/steal"));
+    let (base, log) = stub::serve(agent).await;
+    let userinfo = ["operator", "s3cret"].join(":");
+    let url = base.replacen("http://", &format!("http://{userinfo}@"), 1);
+    let outcome = call(&backend(&url, None, &[]), "hi").await;
+    assert_eq!(
+        stub::sends(&log).len(),
+        1,
+        "the agent was reached: {outcome:?}"
+    );
+    let error = outcome.expect_err("a redirected call does not succeed");
+    assert!(!error.contains("s3cret"), "{error}");
+    assert!(
+        tripped.lock().expect("log").is_empty(),
+        "the other origin never received a request, credentials or not"
+    );
+}
