@@ -426,13 +426,13 @@ impl super::MetaMcp {
     /// could not be delivered (MIK-7869). Only a nonce this call admitted: a
     /// call left unadmitted registered none.
     pub(crate) fn release_unasked_nonce(&self, caller: &super::MetaMcpCallerContext<'_>) {
-        let (Some(store), Some(context)) = (&self.nonce_store, caller.signing) else {
+        let Some(context) = caller.signing else {
             return;
         };
         if let (true, Ok(Some(nonce)), Some(stamp)) =
             (context.admitted, context.nonce_value(), context.nonce_stamp)
         {
-            store.release_unused(
+            self.release_signing_nonce(
                 nonce,
                 caller.authorizer.quota_principal().map_or(
                     "anonymous",
@@ -495,9 +495,9 @@ impl super::MetaMcp {
         self.admit_signing_nonce_stamped(nonce, principal)
     }
 
-    /// Give back a nonce [`Self::admit_signing_nonce`] registered for a call
-    /// refused before its backend ran, so its retry may carry it again
-    /// (MIK-7698). Only that registration: see `release_unused`.
+    /// Give back a nonce registered for a call refused before its backend
+    /// ran, so its retry may carry it again (MIK-7698, MIK-7869). Only that
+    /// registration: see `release_unused`. The one release both routes use.
     pub(crate) fn release_signing_nonce(
         &self,
         nonce: &str,
