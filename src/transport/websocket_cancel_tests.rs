@@ -166,3 +166,40 @@ async fn the_writer_skips_a_request_abandoned_in_the_queue() {
         .collect();
     assert_eq!(ids, [json!(901)], "only the frame nobody abandoned");
 }
+
+/// A request still queued when the transport's own timeout fires is never
+/// written: nobody is waiting for its answer. No cancel either (design Q1).
+#[tokio::test]
+async fn a_queued_request_that_timed_out_is_never_written() {
+    let transport = WebSocketTransport::new(
+        "ws://localhost:9",
+        HashMap::new(),
+        Duration::from_millis(200),
+        None,
+    );
+    let (tx, mut rx) = channel::<Outbound>(8);
+    *transport.inner.outbound_tx.lock().await = Some(tx);
+    let result = transport.request("tools/call", None).await;
+    assert!(result.is_err(), "precondition: it timed out: {result:?}");
+    let (_, claim) = rx.try_recv().expect("the request was queued");
+    assert!(
+        !claim.expect("a claim").claim_write(),
+        "the writer skips it"
+    );
+    assert!(rx.try_recv().is_err(), "and no cancel follows");
+}
+
+/// An `initialize` dropped while queued is never written either, though it is
+/// never cancelled.
+#[tokio::test]
+async fn a_queued_initialize_dropped_is_never_written() {
+    let (_transport, mut rx, call, (_, claim)) = queued_request("initialize").await;
+    call.abort();
+    drop(call.await);
+    assert!(
+        !claim.expect("a claim").claim_write(),
+        "the writer skips it"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(rx.try_recv().is_err(), "no cancel");
+}

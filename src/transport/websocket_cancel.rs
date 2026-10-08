@@ -9,7 +9,7 @@ use tracing::debug;
 
 use super::{Inner, McpFrame};
 use crate::protocol::{JsonRpcRequest, RequestId};
-use crate::transport::write_claim::WriteClaim;
+use crate::transport::write_claim::{WriteClaim, cancelled_params};
 
 /// Armed for one request; disarmed once the request finished, answered or
 /// failed. Owns clones only, so it can send after its caller is gone.
@@ -46,15 +46,16 @@ impl Drop for CancelUnanswered {
     fn drop(&mut self) {
         // Removing the entry is the arbitration with the reader, which removes
         // it before delivering: exactly one of {answer, cancel} wins.
-        if !self.armed || self.inner.pending.remove(&self.key).is_none() || !self.claim.abandon() {
+        let answered = self.inner.pending.remove(&self.key).is_none();
+        // On EVERY exit, armed or not: a frame still queued when its caller
+        // stopped waiting (a timeout, an `initialize`) is never written.
+        let written = self.claim.abandon();
+        if !self.armed || answered || !written {
             return;
         }
         let frame = McpFrame::Notification {
             method: "notifications/cancelled".to_string(),
-            params: Some(serde_json::json!({
-                "requestId": self.id,
-                "reason": "the gateway's caller abandoned the request",
-            })),
+            params: Some(cancelled_params(&self.id)),
         };
         let (Ok(message), Ok(runtime)) =
             (frame.to_ws_message(), tokio::runtime::Handle::try_current())
