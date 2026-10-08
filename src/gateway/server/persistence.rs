@@ -186,10 +186,8 @@ pub(super) type ShutdownSave = (&'static str, Box<dyn FnOnce() + Send>);
 /// and logged by name, so it can neither hold the shutdown nor, being off the
 /// blocking pool, the runtime's drop after it.
 pub(super) async fn run_shutdown_saves(deadline: tokio::time::Instant, saves: Vec<ShutdownSave>) {
-    // Stub: waits for every save without a bound, as the shutdown did.
-    let _ = deadline;
-    for (_, save) in saves {
-        drop(tokio::task::spawn_blocking(save).await);
+    for (step, save) in saves {
+        super::stdio_shutdown::bounded_blocking(deadline, step, save).await;
     }
 }
 
