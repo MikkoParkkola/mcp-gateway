@@ -188,12 +188,14 @@ backend" and "fails a capability file" first.**
 | 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`, except those on lines the change deletes (a removed backend's entry, or a field an edit drops), which the command names by line number. On a file with comments, a change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. A file without comments is rewritten as before. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
 | 162 | An A2A backend (`transport: a2a`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public | None for gateway operators. Library users: configure the agent as a `transport: a2a` backend, or use your own A2A client to poll or cancel tasks |
 | 163 | With gateway authentication off and agent authentication on, each agent owns its tasks apart, keyed on the `client_id` its token validates as (a renewed token for the same agent keeps them); every agent had shared one task owner | None. Tasks an agent created before the upgrade stay under the old shared owner, so the agent no longer finds them under its own |
-| 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept, a removed one released); restart to read a repaired task; probes (`/livez`, `/readyz`) are unaffected |
+| 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept and its task reads again at the next expiry sweep, a removed one released); probes (`/livez`, `/readyz`) are unaffected |
 | 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
 | 166 | A running gateway's web UI backend edits (add, edit, delete) load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still undo that writer's change | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
 | 167 | On a multi-user gateway, an API-key or admin-bearer caller with no other identity gets its own `mcp` capability child, named by its credential, instead of a refusal. An `mcp` capability's cached answer is read back only by the caller whose child produced it | None. Callers who share one API key share one child |
 | 168 | Once its shutdown steps return, an HTTP gateway (`serve`, or no subcommand) waits at most 10 more seconds for disk work still running, then exits and logs at ERROR that it gave up waiting; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running after 10 seconds points at the storage to check |
 | 169 | On the per-backend route `POST /mcp/{name}`, a backend's `requestState` is sealed into a gateway continuation, as on `/mcp`; a retry must send that continuation back once. Callers with an API key and no verified identity now keep multi-round tool calls on both routes, bound to their key | None. A client that already echoes `requestState` as received keeps working. A client that wrote its own `requestState`, reused one, or sent it from another key gets -32602. Holders of one shared key count as one caller |
+| 170 | `cap search` and `cap registry-list` take `-C` for `--capabilities`, as every other command does; `-c` there now means the global `--config`. A debug build panicked on both commands, and a release build read `-c` as `--capabilities` | Scripts that passed `-c <dir>` to these two commands: use `-C <dir>` or `--capabilities <dir>` |
+| 171 | With agent authentication on, a listen or GET /mcp stream opened with an agent token is checked again at every delivery and ends, with no closing message, once the token expires, the agent leaves the registry or its key changes. A GET /mcp stream also checks each queued notification when it writes it, for every credential kind. With gateway authentication on, a valid agent token can listen on a public `/mcp`. `AuthState` gains `agent_auth` | Clients: re-subscribe with a fresh token when a stream ends. Library users building `AuthState` with a struct literal set `agent_auth` to the `AgentAuthState` the router's agent middleware uses (or `AgentAuthState::new(false, ...)` without agent auth) |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4319,11 +4321,11 @@ Now, while any such row is in the task store:
 
 It clears without a restart, at the next expiry sweep. Removing the file
 releases its key, so a retry of that call runs again. Repairing the file keeps
-its key, so a retry never runs again: until the next restart that retry is
-refused, and after a restart a task retry finds its task.
+its key, so a retry never runs again: at the same sweep the task reads again
+and a task retry finds it. A repaired task that was still running when the
+earlier process stopped is settled first, as a restart would settle it.
 
-The one step: repair or remove the file; restart to read a repaired task.
-Until a restart a repaired task stays unreadable (a known gap).
+The one step: repair or remove the file.
 
 A record-named FIFO in the task store is now refused as unsafe at startup
 instead of hanging it.
@@ -4437,6 +4439,48 @@ What to do: nothing, if the client echoes `requestState` exactly as received.
 A client that built or stored its own state for this route must echo the
 gateway's instead. Behind identity propagation, a retry must carry the same
 backend credential as the question it answers.
+
+## 170. `cap search` and `cap registry-list` take `-C` for `--capabilities`
+
+**Startup:** no notice
+
+`mcp-gateway cap search` and `mcp-gateway cap registry-list` gave `-c` to
+`--capabilities`. The global `--config` also answers to `-c` on every command,
+so on these two the short flag meant two things: a debug build panicked as the
+command was parsed, and a release build read `-c` as `--capabilities`, leaving
+`--config` without a short form there.
+
+Both commands now take `-C` for `--capabilities`, the short form every other
+command already uses, and `-c` means `--config` everywhere. A script that
+passed `-c <dir>` to either command should pass `-C <dir>` or
+`--capabilities <dir>`.
+
+## 171. Agent-token streams end when the token stops validating
+
+**Startup:** no notice
+
+With agent authentication on, a stream opened with an agent token used to keep
+receiving notifications after the token expired or the agent was removed, and
+an agent token could not listen at all on a public `/mcp` with gateway
+authentication on. Now:
+
+- Every delivery re-validates the held agent token against the registry: its
+  signature, `exp` (with the 30-second leeway), issuer, audience and key. A
+  token that no longer validates receives nothing more, and the stream ends
+  without a graceful end message. The client re-subscribes with a fresh token.
+- A GET `/mcp` stream checks each queued notification again when it writes
+  it, for every credential kind, so a credential revoked between queueing and
+  writing is written nothing. A prompt queued behind it fails at once instead
+  of waiting out its timeout.
+- With gateway authentication on, a valid agent token that no gateway
+  credential recognises gets the public identity on a public `/mcp`, as a
+  request does, and can listen.
+- The RS256 deprecation warning is logged once per accepted request, not per
+  delivery.
+
+Library users: `AuthState` has a new public field, `agent_auth`. Code that
+builds `AuthState` with a struct literal sets it to the same `AgentAuthState`
+the router's agent middleware uses, so delivery checks the same registry.
 
 ## Upgrading from 3.5.x: a walkthrough
 

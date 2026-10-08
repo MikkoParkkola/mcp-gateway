@@ -335,6 +335,7 @@ fn auth_off_multiplexer() -> Arc<NotificationMultiplexer> {
         live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
+        agent_auth: crate::gateway::oauth::AgentAuthState::new(false, std::sync::Arc::default()),
     });
     mux
 }

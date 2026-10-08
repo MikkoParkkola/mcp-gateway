@@ -186,6 +186,14 @@ impl MetaMcp {
         }
     }
 
+    /// The tools the capability backend named `backend` lists now, or `None`
+    /// when `backend` is not this gateway's capability backend (`MIK-8127`).
+    pub(crate) fn capability_tools(&self, backend: &str) -> Option<Vec<crate::protocol::Tool>> {
+        self.get_capabilities()
+            .filter(|capabilities| capabilities.name == backend)
+            .map(|capabilities| capabilities.get_tools())
+    }
+
     /// After a reload of capability backend `backend`, re-register the
     /// webhook routes, unless the reload narrows a live event type (T52).
     /// Only while events are on: without them the routes keep today's

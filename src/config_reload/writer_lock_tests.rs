@@ -20,7 +20,11 @@ fn config() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
     write_owner_only(&path, START).expect("write config");
-    let lock = dir.path().join(".gateway.yaml.lock");
+    // The writers lock the config's resolved spelling (MIK-8153), and
+    // `lock_attempts` counts by path, so the tests watch that spelling too.
+    let lock = crate::config_persistence::lock::lock_path(
+        &crate::identity_grants::journal::resolved(&path),
+    );
     (dir, path, lock)
 }
 

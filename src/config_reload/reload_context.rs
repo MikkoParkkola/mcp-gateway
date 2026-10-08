@@ -263,7 +263,7 @@ impl ReloadContext {
         if let (Some(capabilities), Some(before)) = (&self.capabilities, before)
             && capabilities.listed_names() != before
         {
-            self.registry.announce_change(&capabilities.name);
+            self.registry.nudge_catalogue(&capabilities.name);
         }
     }
 

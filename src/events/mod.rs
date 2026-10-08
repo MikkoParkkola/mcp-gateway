@@ -97,6 +97,9 @@ pub(crate) struct EventsHub {
     /// Test-only: one burial pauses between its store call and its receipts.
     #[cfg(test)]
     before_receipts: crate::test_pause::Slot,
+    /// Test-only: one attempt pauses just before its send admission.
+    #[cfg(test)]
+    before_send: crate::test_pause::Slot,
 }
 
 /// One producer of events (design §4). The core knows sources only through
@@ -111,6 +114,12 @@ pub(crate) trait EventSource: Send + Sync {
     /// Whether this source offers event type `name`.
     fn offers(&self, name: &str) -> bool {
         self.descriptors().iter().any(|d| d.name == name)
+    }
+    /// May an event of type `name` be sent now? Asked synchronously at the
+    /// send boundary, under the live config's admission gate, so a reload
+    /// that has returned is always seen (MIK-7907). The default admits.
+    fn admits_now(&self, _name: &str) -> bool {
+        true
     }
     /// May `principal` hold this subscription? Called at subscribe and at
     /// every fan-out. The default admits: visibility is the catalogue's.
@@ -134,6 +143,22 @@ pub(crate) trait EventSource: Send + Sync {
     fn lifecycle_key(&self, _principal: &str, name: &str, arguments: &serde_json::Value) -> String {
         String::from_utf8(rpc::canonical(&serde_json::json!([name, arguments]))).unwrap_or_default()
     }
+    /// The lifecycle key of a stored row this source owns even while it does
+    /// not offer the row's type (a held REST watch, MIK-8122): the key comes
+    /// from the row, never from a catalogue read. `None` for rows it does not
+    /// own; their key comes from the offering source.
+    fn row_key(&self, _sub: &records::Subscription) -> Option<String> {
+        None
+    }
+    /// The sharing class a new REST watch of type `name` is admitted under;
+    /// `None` for any other source (MIK-8122).
+    fn watch_class(&self, _name: &str) -> Option<records::WatchClass> {
+        None
+    }
+    /// Before the stored keys are replayed: record what each row this source
+    /// owns needs so its key never changes afterwards (a REST watch written
+    /// before its class was recorded takes the class it has now, MIK-8122).
+    fn pin_rows(&self, _store: &store::Store) {}
     /// The first live subscription for `key` appeared. A refusal fails that
     /// subscribe with the refusal's code.
     async fn on_first_subscriber(
@@ -219,6 +244,8 @@ impl EventsHub {
             before_admit: crate::test_pause::Slot::default(),
             #[cfg(test)]
             before_receipts: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_send: crate::test_pause::Slot::default(),
         }))
     }
 

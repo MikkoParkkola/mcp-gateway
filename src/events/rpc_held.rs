@@ -160,6 +160,12 @@ impl EventsHub {
         }
     }
 
+    /// The sharing class a new REST watch of type `name` is admitted under;
+    /// `None` for any other type (MIK-8122).
+    pub(super) fn watch_class(&self, name: &str) -> Option<crate::events::records::WatchClass> {
+        self.source_offering(name).and_then(|s| s.watch_class(name))
+    }
+
     /// The payload fields event type `name` carries now: a webhook route's
     /// mapped fields, none for any other source (MIK-8076).
     pub(super) fn payload_fields(&self, name: &str) -> Vec<String> {

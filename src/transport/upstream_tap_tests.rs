@@ -184,7 +184,7 @@ fn a_tagged_frame_goes_to_its_listen_only() {
     let taps = Taps::default();
     let id = json!(7);
     let mut rx = taps.listen(&id, requested());
-    let mut legacy = taps.unsolicited();
+    let mut legacy = taps.unsolicited(Watched::default());
     let ack = tag(
         &id,
         json!({"notifications": {"resourcesListChanged": true}}),
@@ -216,7 +216,7 @@ fn without_a_tap_nothing_is_consumed() {
 #[test]
 fn a_full_tap_drops_and_counts_without_blocking() {
     let taps = Taps::default();
-    let _legacy = taps.unsolicited();
+    let _legacy = taps.unsolicited(Watched::default());
     for _ in 0..TAP_CAPACITY + 3 {
         assert!(taps.notification(RESOURCES_CHANGED, None));
     }
@@ -336,4 +336,27 @@ fn a_full_tap_still_reports_unsupported() {
         last = Some(note);
     }
     assert_eq!(last, Some(UpstreamNote::Unsupported));
+}
+
+/// MIK-7898 SESS.2b (D5): a full tap's worth of updates for a URI nobody
+/// watches any more takes no slot, so a wanted update after them arrives.
+#[test]
+fn unwatched_legacy_updates_never_displace_a_wanted_one() {
+    let taps = Taps::default();
+    let mut legacy = taps.unsolicited(Watched::by(|uri| uri == "file:///wanted"));
+    for _ in 0..TAP_CAPACITY + 3 {
+        assert!(taps.notification(UPDATED, Some(&json!({"uri": "file:///stale"}))));
+    }
+    assert!(taps.notification(UPDATED, Some(&json!({"uri": "file:///wanted"}))));
+    assert_eq!(
+        legacy.try_recv(),
+        Ok(UpstreamNote::Notice {
+            kind: NoteKind::ResourceUpdated,
+            uri: Some("file:///wanted".to_owned()),
+        })
+    );
+    assert!(
+        legacy.try_recv().is_err(),
+        "the stale updates were not queued"
+    );
 }

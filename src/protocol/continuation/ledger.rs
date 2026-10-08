@@ -143,6 +143,9 @@ pub struct InFlight {
     capacity: usize,
     /// key -> (replica holding it, deadline).
     held: tokio::sync::Mutex<std::collections::HashMap<String, (String, u64)>>,
+    /// key -> the request digest of the chain step paused on that exchange
+    /// (MIK-8168). Crate-internal, and never longer-lived than its hold.
+    steps: parking_lot::Mutex<std::collections::HashMap<String, String>>,
 }
 
 /// Drop exchanges whose deadline has passed.
@@ -177,6 +180,7 @@ impl InFlight {
             replica: replica.to_string(),
             capacity,
             held: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            steps: parking_lot::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -227,6 +231,9 @@ impl InFlight {
     ) -> tokio::sync::MutexGuard<'_, std::collections::HashMap<String, (String, u64)>> {
         let mut held = self.held.lock().await;
         reclaim_abandoned(&mut held, now);
+        // A paused chain's step digest lives exactly as long as its hold, so
+        // an abandoned chain (its hold expired) leaves nothing behind either.
+        self.steps.lock().retain(|key, _| held.contains_key(key));
         held
     }
 
@@ -263,7 +270,25 @@ impl InFlight {
     /// ones that completed long ago. Reaping is the backstop for abandonment,
     /// not the ordinary path — the ordinary path is that an exchange ends.
     pub async fn complete(&self, key: &str, now: u64) -> bool {
-        self.guard(now).await.remove(key).is_some()
+        let removed = self.guard(now).await.remove(key).is_some();
+        self.steps.lock().remove(key);
+        removed
+    }
+
+    /// Remember the chain step paused on its exchange (MIK-8168): its request
+    /// digest, which binds the backend instance that asked. Synchronous
+    /// because the chain driver seals a stop synchronously; the entry goes
+    /// with its hold, on completion or on the next reclaim after expiry.
+    pub(crate) fn bind_step(&self, step: &Payload) {
+        let digest = step.original_request_digest.clone();
+        self.steps.lock().insert(step.hold_key.clone(), digest);
+    }
+
+    /// The step digest [`Self::bind_step`] recorded, while its exchange is
+    /// still held.
+    pub(crate) async fn step_digest(&self, key: &str, now: u64) -> Option<String> {
+        let _held = self.guard(now).await;
+        self.steps.lock().get(key).cloned()
     }
 
     /// How many exchanges are held, as of `now`.

@@ -13,6 +13,7 @@ use std::path::Path;
 use figment::providers::{Format as _, Yaml};
 use figment::value::{Dict, Value};
 
+use super::super::regular_file::read_regular_text;
 use super::CheckResult;
 
 /// Hidden config keys in inventory form: `<name>` matches any map key and a
@@ -35,10 +36,12 @@ pub(super) const HIDDEN_CONFIG_KEYS: &[&str] = &[
     "auth.dashboard_session.absolute_timeout_secs",
     "auth.dashboard_session.idle_timeout_secs",
     "backends.<name>.a2a_agent_card_path",
+    "backends.<name>.http_url",
     "backends.<name>.max_frame_bytes",
     "backends.<name>.oauth.token_refresh_buffer_secs",
     "backends.<name>.protocol_version",
     "backends.<name>.streamable_http",
+    "backends.<name>.ws_url",
     "cache.default_ttl",
     "cache.max_entries",
     "capabilities.files.downloads_quota_bytes",
@@ -173,44 +176,16 @@ fn is_set(map: &Dict, path: &[&str]) -> bool {
 
 /// Read the config file for its key names, never its values.
 ///
-/// `Config::load` has already read this path through the mode-checked reader.
-/// This second read opens the way that reader does, so it reads the same file:
-/// on Unix with `O_NONBLOCK | O_NOCTTY`, following a symlink (a Kubernetes
-/// `ConfigMap` mount is one), and it refuses anything the opened handle does
-/// not report as a regular file, so a FIFO is refused without blocking. Like
-/// that reader, it sets no size limit on a config file. A regular file swapped
-/// in since the first read can still be read; only its key names are
-/// reported. Every error is dropped unformatted, because a parser message can
-/// quote a line.
-fn read_key_names(path: &Path) -> Option<Dict> {
-    use std::io::Read as _;
-
-    let mut file = open_nonblocking(path).ok()?;
-    if !file.metadata().ok()?.is_file() {
-        return None;
-    }
-    let mut text = String::new();
-    file.read_to_string(&mut text).ok()?;
+/// `Config::load` has already read this path through the mode-checked reader;
+/// this second read opens it the same way (see `read_regular_text`), so a
+/// FIFO or device is refused without blocking. A regular file swapped in since
+/// the first read can still be read; only its key names are reported. Every
+/// error is dropped unformatted, because a parser message can quote a line.
+fn read_key_names(path: &Path) -> Option<(String, Dict)> {
+    let text = read_regular_text(path).ok()?;
     // The loader's own reader: two equal keys keep the last, as the gateway does.
-    Yaml::from_str::<Dict>(&text).ok()
-}
-
-#[cfg(unix)]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(
-            (rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY)
-                .bits()
-                .cast_signed(),
-        )
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(path)
+    let dict = Yaml::from_str::<Dict>(&text).ok()?;
+    Some((text, dict))
 }
 
 /// The `doctor` row listing the advanced keys the config file at `path` sets.
@@ -219,21 +194,55 @@ fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
 /// `None` when the file cannot be read or parsed (the configuration check
 /// already reports that) or when it sets no such key.
 pub(super) fn check_hidden_keys(path: &Path) -> Option<CheckResult> {
-    let set = set_hidden_keys(&read_key_names(path)?);
+    let (text, dict) = read_key_names(path)?;
+    let set = set_hidden_keys(&dict);
     if set.is_empty() {
         return None;
     }
+    let rewrite = super::super::backend_url_keys::rewrite_url_aliases(&text, None);
+    let named: Vec<String> = set
+        .iter()
+        .map(|key| {
+            if URL_ALIASES.contains(key) && upgrade_rewrites(&text, &rewrite, key) {
+                format!("{key} (run mcp-gateway upgrade to rewrite it as url)")
+            } else {
+                (*key).to_string()
+            }
+        })
+        .collect();
     Some(
         CheckResult::pass(
             "Advanced settings",
             format!(
                 "{} sets {}. Each value is applied; these keys are not in the configuration reference.",
                 path.display(),
-                set.join(", ")
+                named.join(", ")
             ),
         )
         .with_category("config"),
     )
+}
+
+/// The older spellings of a backend's `url`, which `mcp-gateway upgrade` rewrites.
+const URL_ALIASES: &[&str] = &["backends.<name>.http_url", "backends.<name>.ws_url"];
+
+/// Whether `mcp-gateway upgrade` would rewrite the alias `key` names on some
+/// line. The note follows what `upgrade` does, so a backend it keeps or leaves
+/// for a hand edit gets none. Nothing from the file is shown.
+fn upgrade_rewrites(
+    text: &str,
+    rewrite: &super::super::backend_url_keys::UrlRewrite,
+    key: &str,
+) -> bool {
+    let alias = key.rsplit('.').next().unwrap_or(key);
+    let lines: Vec<&str> = text.lines().collect();
+    rewrite.changed.iter().any(|&n| {
+        lines.get(n - 1).is_some_and(|line| {
+            line.trim_start()
+                .trim_start_matches(['"', '\''])
+                .starts_with(alias)
+        })
+    })
 }
 
 #[cfg(test)]

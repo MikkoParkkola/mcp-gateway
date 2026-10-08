@@ -73,6 +73,18 @@ mod listen_payload;
 #[path = "agent_task_owner.rs"]
 mod agent_task_owner;
 
+// MIK-7798: an agent-JWT listener is re-validated at every delivery.
+#[path = "agent_listener_liveness.rs"]
+mod agent_listener_liveness;
+
+// MIK-7798: a legacy-stream copy is re-validated when it is written.
+#[path = "agent_legacy_stream.rs"]
+mod agent_legacy_stream;
+
+// MIK-8055: an agent token owns its tasks on an auth-on public /mcp.
+#[path = "agent_auth_on_tasks.rs"]
+mod agent_auth_on_tasks;
+
 use helpers::{
     ReleasedOnDrop, SUBSCRIPTION_ID_META, TASK_NOTIFICATION, assert_only_its_own_task,
     assert_receives_nothing, expect_message, open_listen, task_notification,
