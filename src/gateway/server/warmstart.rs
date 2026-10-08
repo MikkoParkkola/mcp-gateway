@@ -392,9 +392,32 @@ pub(super) struct ReloadWarmer {
 
 #[derive(Default)]
 struct WarmerInner {
-    /// Set once shutdown begins; nothing is scheduled after it.
+    /// Set by `cancel`, by dropping the guard, or by the first admission after
+    /// the shutdown broadcast; nothing is scheduled once shutdown has begun.
     sealed: bool,
+    /// Taken when the warmer is built, before anything can be sent, so it holds
+    /// every shutdown broadcast. Read under this lock by every admission: a
+    /// reload past its last stop check can still call the hook after the
+    /// broadcast, and a task subscribed then would never hear it (`MIK-8128`).
+    shutdown_seen: Option<tokio::sync::broadcast::Receiver<()>>,
     tasks: HashMap<String, tokio::task::JoinHandle<()>>,
+}
+
+impl WarmerInner {
+    /// Whether admission is closed: sealed, or shutdown already broadcast.
+    fn closed(&mut self) -> bool {
+        if !self.sealed
+            && let Some(seen) = self.shutdown_seen.as_mut()
+            && !matches!(
+                seen.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            )
+        {
+            // A message, a lag or a closed channel all mean shutdown has begun.
+            self.sealed = true;
+        }
+        self.sealed
+    }
 }
 
 impl ReloadWarmer {
@@ -408,7 +431,7 @@ impl ReloadWarmer {
     /// Warm `names` now, replacing any earlier warmer per name. Returns the
     /// names scheduled.
     fn warm_locked(&self, inner: &mut WarmerInner, names: Vec<String>) -> Vec<String> {
-        if inner.sealed {
+        if inner.closed() {
             return Vec::new();
         }
         let mut scheduled = Vec::new();
@@ -433,7 +456,7 @@ impl ReloadWarmer {
     /// selects. An excluded replacement is left with no warmer at all.
     fn apply(&self, change: &RegisteredChange, config: &Config) -> Vec<String> {
         let mut inner = self.lock();
-        if inner.sealed {
+        if inner.closed() {
             return Vec::new();
         }
         for name in change.registered.iter().chain(&change.removed) {
@@ -503,7 +526,10 @@ impl WarmerGuard {
             mode,
             shutdown: shutdown.cloned(),
             policy: Arc::new(WarmStartPolicy::default()),
-            inner: std::sync::Mutex::new(WarmerInner::default()),
+            inner: std::sync::Mutex::new(WarmerInner {
+                shutdown_seen: shutdown.map(tokio::sync::broadcast::Sender::subscribe),
+                ..WarmerInner::default()
+            }),
         }))
     }
 
