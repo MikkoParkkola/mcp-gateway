@@ -502,3 +502,18 @@ async fn a_login_stands_when_the_sidecar_cannot_be_repaired() {
     assert_eq!(stored(&owned).map(|t| t.access_token), Some(access));
     assert!(owned.storage.load_refresh_state(&key, RESOURCE).damaged);
 }
+
+/// A sidecar path holding a dangling symlink is damage, not absence: the
+/// entry exists, and what it held may have been a marker for the stored token.
+#[cfg(unix)]
+#[test]
+fn a_dangling_refresh_state_link_reads_as_damaged() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+    let path = storage.refresh_state_path(BACKEND, RESOURCE);
+    std::os::unix::fs::symlink(dir.path().join("gone.json"), &path).unwrap();
+
+    let state = storage.load_refresh_state(BACKEND, RESOURCE);
+    assert!(state.rotates);
+    assert!(state.damaged);
+}
