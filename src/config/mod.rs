@@ -761,6 +761,8 @@ pub mod humantime_serde;
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+mod backend_url_tests;
+#[cfg(test)]
 mod secret_file_ref_tests;
 #[cfg(test)]
 mod secret_ref_tests;
