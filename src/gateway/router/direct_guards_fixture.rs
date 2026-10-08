@@ -53,6 +53,10 @@ pub(crate) enum Answer {
     /// Like `AskOnce`, a question `InputRequired::from_result` declines (an
     /// `inputRequests` that is not an object) beside a string state (MIK-8078).
     AskMalformed,
+    /// Like `AskOnce`, its state longer than a continuation can seal.
+    AskBig,
+    /// Like `AskOnce`, the question and a `content` text carrying this text.
+    AskWith(&'static str),
     /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
     /// `resultType`, `ttlMs` (5000) and `cacheScope` itself, and every other
     /// answer a `ttlMs` of 3000 (MIK-8022).
@@ -83,6 +87,13 @@ fn question(answer: Answer) -> Value {
     }
     if matches!(answer, Answer::AskMalformed) {
         asked["inputRequests"] = json!("surprise");
+    }
+    if matches!(answer, Answer::AskBig) {
+        asked["requestState"] = json!("s".repeat(16 * 1024));
+    }
+    if let Answer::AskWith(text) = answer {
+        asked["inputRequests"]["k1"]["params"]["message"] = json!(text);
+        asked["content"] = json!([{"type": "text", "text": text}]);
     }
     asked
 }
@@ -146,7 +157,11 @@ impl Transport for CountingBackend {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         if matches!(
             self.answer,
-            Answer::AskOnce | Answer::AskNoState | Answer::AskMalformed
+            Answer::AskOnce
+                | Answer::AskNoState
+                | Answer::AskMalformed
+                | Answer::AskBig
+                | Answer::AskWith(_)
         ) {
             return Ok(if n == 0 {
                 JsonRpcResponse::success(id, question(self.answer))
@@ -189,7 +204,11 @@ impl Transport for CountingBackend {
                 "rate limit exceeded",
             )),
             Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
-            Answer::AskOnce | Answer::AskNoState | Answer::AskMalformed => {
+            Answer::AskOnce
+            | Answer::AskNoState
+            | Answer::AskMalformed
+            | Answer::AskBig
+            | Answer::AskWith(_) => {
                 unreachable!("answered above")
             }
             Answer::Text(text) => Ok(JsonRpcResponse::success(

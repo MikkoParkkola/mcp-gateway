@@ -391,16 +391,19 @@ async fn r14_a_non_string_client_state_is_refused_before_the_backend() {
 }
 
 /// R15 (`MRTR.2a`, both routes): a state a backend put on a completed answer
-/// does not reach the client either. Mutant: the blanking limited to answers
-/// claiming `input_required`.
+/// does not reach the client either, and the field is removed rather than
+/// blanked. Mutants: the removal limited to answers claiming `input_required`;
+/// a completed answer's state blanked to `null`.
 #[tokio::test]
 async fn r15_a_completed_answer_does_not_carry_the_backends_state() {
     for backend in BACKENDS {
         let fx = fixture(Answer::DoneWithState, |_| {}).await;
         let (_, body) = call(&fx, backend, Some("alice"), json!({})).await;
         assert!(body.get("error").is_none(), "direct {backend}: {body}");
+        // Removed, not blanked: a completed answer carries no `requestState`
+        // at all, so nothing downstream reads it as interim or malformed.
         assert!(
-            !body.to_string().contains(BACKEND_STATE),
+            !body.to_string().contains("requestState"),
             "direct {backend}: {body}"
         );
         let fx = fixture(Answer::DoneWithState, |_| {}).await;
@@ -409,7 +412,7 @@ async fn r15_a_completed_answer_does_not_carry_the_backends_state() {
         assert!(body.get("error").is_none(), "meta {backend}: {body}");
         assert!(body.to_string().contains("ok"), "meta {backend}: {body}");
         assert!(
-            !body.to_string().contains(BACKEND_STATE),
+            !body.to_string().contains("requestState"),
             "meta {backend}: {body}"
         );
     }
@@ -545,4 +548,149 @@ async fn a4_a_shared_key_still_separates_callers_the_guard_separates() {
     meta.invoke_tool_for_test(&args, None, &caller(&alice, retry))
         .await
         .expect("alice resumes her own round");
+}
+
+/// Exchanges this gateway still holds open.
+async fn held(fx: &Fx) -> usize {
+    let now = crate::protocol::continuation::now_unix_secs();
+    fx.state.meta_mcp.continuation().in_flight().len(now).await
+}
+
+/// R16 (both routes): a state too long to seal is refused, and the slot its
+/// exchange took is given back rather than held until it expires. Mutant: the
+/// hold left open when the keyring refuses the mint.
+#[tokio::test]
+async fn r16_a_refused_mint_gives_its_slot_back() {
+    for backend in BACKENDS {
+        let fx = fixture(Answer::AskBig, |_| {}).await;
+        let (_, body) = call(&fx, backend, Some("alice"), json!({})).await;
+        assert_eq!(code(&body), Some(-32003), "direct {backend}: {body}");
+        assert_eq!(held(&fx).await, 0, "direct {backend}: slot kept");
+        let fx = fixture(Answer::AskBig, |_| {}).await;
+        let body = meta_call(&fx, "k-std", backend, json!({})).await;
+        assert!(body.get("error").is_some(), "meta {backend}: {body}");
+        assert_eq!(held(&fx).await, 0, "meta {backend}: slot kept");
+    }
+}
+
+/// Matches the shipped CRITICAL `secret` rule of response inspection and the
+/// firewall's credential rule (a fake, split so no scanner reads the source).
+const SECRET: &str = concat!("gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890");
+
+/// R17 (both routes): a sealed question a later gate refuses never reaches
+/// the client, so its slot is given back. Mutants: the release dropped after
+/// a refused payload gate (each route); after a direct firewall block.
+#[tokio::test]
+async fn r17_a_question_refused_after_its_seal_gives_its_slot_back() {
+    let inspecting = |meta: &mut crate::gateway::meta_mcp::MetaMcp| {
+        meta.enable_response_inspection_action_mode();
+    };
+    for backend in BACKENDS {
+        let fx = fixture(Answer::AskWith(SECRET), inspecting).await;
+        let (_, body) = call(&fx, backend, Some("alice"), json!({})).await;
+        assert!(body.get("error").is_some(), "direct gate {backend}: {body}");
+        assert_eq!(held(&fx).await, 0, "direct gate {backend}: slot kept");
+        let fx = fixture(Answer::AskWith(SECRET), inspecting).await;
+        let body = meta_call(&fx, "k-std", backend, json!({})).await;
+        assert!(body.get("error").is_some(), "meta gate {backend}: {body}");
+        assert_eq!(held(&fx).await, 0, "meta gate {backend}: slot kept");
+        #[cfg(feature = "firewall")]
+        {
+            use super::direct_guards_fixture::fixture_firewalled_with;
+            let fx = fixture_firewalled_with(Answer::AskWith(SECRET), None, false).await;
+            let (_, body) = call(&fx, backend, Some("alice"), json!({})).await;
+            assert!(body.get("error").is_some(), "direct fw {backend}: {body}");
+            assert_eq!(held(&fx).await, 0, "direct fw {backend}: slot kept");
+        }
+    }
+}
+
+/// `tools/call read` on `/mcp/{backend}` as a hardened modern request that
+/// declares form elicitation and carries `nonce`, with `extra` in the params.
+async fn signed_call(fx: &Fx, backend: &str, nonce: &str, extra: Value) -> (StatusCode, Value) {
+    use crate::gateway::meta_mcp::signing::NONCE_META;
+    let mut params = json!({"name": "read", "arguments": {}, "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}},
+        NONCE_META: nonce,
+    }});
+    if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+        params.extend(extra.clone());
+    }
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "read"),
+    ];
+    let path = format!("/mcp/{backend}");
+    super::direct_guards_fixture::send_with_headers(
+        fx,
+        &path,
+        "k-std",
+        "tools/call",
+        params,
+        None,
+        &headers,
+    )
+    .await
+}
+
+/// R18 (MIK-7698 on this route): a continuation refused before the backend
+/// consumes no signing nonce, so the honest retry under that nonce is served.
+/// Mutant: the nonce kept on a refused redeem.
+#[tokio::test]
+async fn r18_a_refused_continuation_consumes_no_nonce() {
+    use super::direct_guards_fixture::fixture_hardened_signed;
+    for backend in BACKENDS {
+        let fx = fixture_hardened_signed(Answer::AskOnce, true).await;
+        let (_, asked) = signed_call(&fx, backend, &format!("{backend}-n1"), json!({})).await;
+        let state = state_of(&asked);
+        let n2 = format!("{backend}-n2");
+        let forged = json!({"requestState": "forged", "inputResponses": answers()});
+        let (_, refused) = signed_call(&fx, backend, &n2, forged).await;
+        assert_eq!(code(&refused), Some(-32602), "{backend}: {refused}");
+        let honest = json!({"requestState": state, "inputResponses": answers()});
+        let (status, done) = signed_call(&fx, backend, &n2, honest).await;
+        assert_eq!(status, StatusCode::OK, "{backend}: nonce burned: {done}");
+        assert!(done.get("error").is_none(), "{backend}: {done}");
+        assert_eq!(dispatched(&fx), 2, "{backend}");
+    }
+}
+
+/// R19 (both routes): a continuation binds a caller as the idempotency guard
+/// does, the propagated binding first, so one verified identity presenting
+/// another binding (another backend credential) cannot redeem it. Mutant: the
+/// verified identity bound ahead of the binding (each route).
+#[tokio::test]
+async fn r19_the_propagated_binding_binds_ahead_of_the_identity() {
+    use crate::protocol::mrtr::source_fingerprint;
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    let meta = &fx.state.meta_mcp;
+    let alice = identity("alice");
+    let who = |binding| (Some(&alice), (Some(binding), None), None);
+    let sent = json!({"name": "read", "arguments": {}});
+    let mut asked = json!({
+        "resultType": "input_required",
+        "inputRequests": {"k1": {"method": "elicitation/create",
+            "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}}},
+        "requestState": BACKEND_STATE
+    });
+    meta.seal_direct_interim(who("binding-a"), ("alpha", Some(&sent)), &mut asked)
+        .await
+        .expect("sealed");
+    let retry = json!({"name": "read", "arguments": {},
+        "requestState": asked["requestState"], "inputResponses": answers()});
+    let mut outbound = retry.clone();
+    meta.redeem_direct_retry(who("binding-b"), ("alpha", Some(&retry)), &mut outbound)
+        .await
+        .expect_err("another binding redeemed it");
+    meta.redeem_direct_retry(who("binding-a"), ("alpha", Some(&retry)), &mut outbound)
+        .await
+        .expect("its own binding redeems it");
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        verified_identity: Some(&alice),
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    };
+    let bound = |binding| source_fingerprint(caller.principal_source(Some(binding)));
+    assert_ne!(bound("binding-a"), bound("binding-b"), "meta");
 }
