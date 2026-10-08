@@ -95,6 +95,14 @@ pub(super) const COST_SAVE_INTERVAL: std::time::Duration = std::time::Duration::
 /// Save today's spend to `<data_dir>/costs.json`.
 #[cfg(feature = "cost-governance")]
 pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) {
+    // One `costs.json` write at a time, the snapshot taken under the lock: a
+    // periodic save left running when its saver was stopped can never land
+    // after the final save, which waits its turn (bounded by its deadline)
+    // and writes the newest spend (MIK-8157).
+    static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = WRITING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let persisted = super::support::build_persisted_costs(&enforcer.snapshot());
     save_with_logging(
         &data_dir.join("costs.json"),
