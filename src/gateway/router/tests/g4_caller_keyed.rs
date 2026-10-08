@@ -265,7 +265,8 @@ async fn guard_a_keyed_caller_still_gets_hints_from_its_own_sequence() {
 }
 
 #[tokio::test]
-async fn guard_a_legacy_session_keeps_its_hints_without_a_caller_key() {
+async fn r6_a_keyless_legacy_session_gets_no_hints() {
+    // MIK-7997: a session id never stands in for a missing caller key.
     let f = fixture_with(Auth::Off, |meta| meta).await;
     f.state
         .meta_mcp
@@ -293,8 +294,8 @@ async fn guard_a_legacy_session_keeps_its_hints_without_a_caller_key() {
     )
     .await;
     assert!(
-        hints_beta(delivered(&last)),
-        "session fallback lost: {last}"
+        !has_hints(delivered(&last)),
+        "a keyless legacy session got hints: {last}"
     );
 }
 

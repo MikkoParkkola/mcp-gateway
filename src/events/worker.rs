@@ -233,17 +233,16 @@ impl EventsHub {
     /// the subscription, so it is kept (MIK-7976).
     async fn source_verdict(&self, sub: &super::records::Subscription) -> Verdict {
         match self.source_offering(&sub.name) {
-            Some(source) => {
-                let refused = source
-                    .authorize(&sub.principal, &sub.name, &sub.arguments)
-                    .await
-                    .is_err_and(|e| e.code == -32012);
-                if refused {
-                    Verdict::Refuses
-                } else {
-                    Verdict::Admits
-                }
-            }
+            Some(source) => match source
+                .authorize(&sub.principal, &sub.name, &sub.arguments)
+                .await
+            {
+                Err(e) if e.code == -32012 => Verdict::Refuses,
+                // Not found now (a catalogue that could not read the type,
+                // MIK-8037): held like a type no source offers.
+                Err(e) if e.code == -32011 => Verdict::Unoffered,
+                _ => Verdict::Admits,
+            },
             None if sub.name.starts_with(super::backend_source::NAME_PREFIX) => Verdict::Refuses,
             None => Verdict::Unoffered,
         }
