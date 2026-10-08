@@ -31,7 +31,7 @@ async fn two_tasks(root: &Path) -> (PathBuf, PathBuf, String) {
     (path, record, kept.id().to_owned())
 }
 
-fn rewrite(record: &Path, edit: impl FnOnce(&mut Value)) {
+pub(super) fn rewrite(record: &Path, edit: impl FnOnce(&mut Value)) {
     let mut value: Value = serde_json::from_slice(&fs::read(record).unwrap()).unwrap();
     edit(&mut value);
     fs::write(record, serde_json::to_vec(&value).unwrap()).unwrap();
@@ -39,7 +39,7 @@ fn rewrite(record: &Path, edit: impl FnOnce(&mut Value)) {
 
 /// Cut the record off `offset` bytes into the member named `member`, as a
 /// write that stopped part way would.
-fn truncate_inside(record: &Path, member: &str, offset: usize) {
+pub(super) fn truncate_inside(record: &Path, member: &str, offset: usize) {
     let bytes = fs::read(record).unwrap();
     let at = String::from_utf8_lossy(&bytes)
         .find(&format!("\"{member}\""))
