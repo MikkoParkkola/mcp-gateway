@@ -359,7 +359,26 @@ impl OAuthClient {
         let flight = super::refresh_flight::Flight::of(&token_path);
         let _guard = flight.lock.lock().await;
         let _across = super::refresh_flight::hold_across_processes(&token_path).await?;
-        self.storage.save(&key, &self.resource_url, token)
+        self.storage.save(&key, &self.resource_url, token)?;
+        // A token a login issues was never marked in flight, so a damaged
+        // sidecar's lost marker cannot name it (MIK-8091). Rewrite the sidecar
+        // clean, keeping the rotation observation, or every fresh token would
+        // be retired at its first refresh.
+        let state = self.storage.load_refresh_state(&key, &self.resource_url);
+        if state.damaged {
+            let repaired = crate::oauth::storage::RefreshState {
+                damaged: false,
+                ..state
+            };
+            if let Err(error) = self
+                .storage
+                .save_refresh_state(&key, &self.resource_url, &repaired)
+            {
+                let backend = self.backend_name.as_str();
+                warn!(backend = %backend, %error, "Could not repair the refresh state after a login");
+            }
+        }
+        Ok(())
     }
 
     /// The stored token instead of a refresh, when it is unexpired and either

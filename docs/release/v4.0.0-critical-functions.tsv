@@ -323,6 +323,7 @@ src/oauth/client/grants.rs	adopt_stored_login	1	critical	c	OAuthClient::adopt_st
 src/oauth/client/grants.rs	build_authorize_url	1	standard	borderline	OAuthClient::build_authorize_url	Sets state, S256 challenge and resource
 src/oauth/client/grants.rs	refresh_token	1	critical	d	OAuthClient::refresh_token	Refuses to resend a spent refresh token; retires one an unsettled exchange may have consumed, or whose sidecar is damaged (MIK-8091)
 src/oauth/client/grants.rs	adopt_if_fresher	1	standard	borderline	OAuthClient::adopt_if_fresher	Adopts an unexpired stored credential through adopt_stored_login
+src/oauth/client/grants.rs	save_issued	1	standard	borderline	OAuthClient::save_issued	Saves a login's token under the refresh flight and repairs a damaged sidecar, which no lost marker can tie to the new token
 src/oauth/client/mod.rs	credential_key	1	critical	c	OAuthClient::credential_key	Credentials keyed by issuer; refuses before the issuer is known
 src/oauth/client/mod.rs	drop_credentials_from_other_issuer	1	critical	c	OAuthClient::drop_credentials_from_other_issuer	Drops token and registered client_id when the issuer changes
 src/oauth/client/mod.rs	get_token	1	critical	b	get_token	Reuses a cached credential only while it is unexpired
