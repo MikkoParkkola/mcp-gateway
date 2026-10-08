@@ -533,12 +533,8 @@ impl EventsHub {
                     self.runtime.wake.notify_one();
                     let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())
                         && self.store.has_due(&id, Utc::now());
-                    return Ok(subscribe_answer(
-                        &id,
-                        expires_at,
-                        existing.as_ref(),
-                        throttled,
-                    ));
+                    let answer = subscribe_answer(&id, expires_at, existing.as_ref(), throttled);
+                    return Ok(self.held_answer(answer, &id));
                 }
                 Err(CapHit::Unverified) if verified => verified = false,
                 Err(hit) => return Err(self.cap_refusal_for(&record.principal, hit)),
@@ -589,10 +585,11 @@ impl EventsHub {
                 attempt.held_until = None;
                 Ok(())
             };
-            // A held row's refresh keeps the row's hold as the store holds it
-            // at the commit; every other commit is checked and ends any hold.
+            // A row held at the commit keeps its hold and committed fields,
+            // whether its refresh started held or a reload held it while the
+            // refresh waited; every other commit is checked and ends any hold.
             let mut hold = HoldCommit::Keep;
-            if commit == Commit::Checked {
+            if commit == Commit::Checked && store.held(&attempt.id).is_none() {
                 if let Err(refused) = checked(&mut attempt) {
                     return Ok(Err(refused));
                 }

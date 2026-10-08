@@ -77,6 +77,8 @@ impl EventsHub {
             credential_principal: Some(caller.credential.principal.clone()),
             read_key: caller.read_key.clone(),
             binding: caller.credential.binding.clone(),
+            // Rebound to the caller's credential, as every refresh is.
+            legacy_api_key_name: None,
             secret: secret.to_owned(),
             previous_secret: None,
             previous_until: None,
@@ -107,22 +109,27 @@ impl EventsHub {
             match outcome? {
                 Ok((_, expires_at)) => {
                     self.runtime.wake.notify_one();
-                    let mut answer = subscribe_answer(&id, expires_at, Some(&existing), false);
-                    // As committed: a reload may have resumed the row meanwhile.
-                    if let (Some(held), Some(row)) = (self.store.held(&id), self.store.get(&id)) {
-                        answer["held"] = json!({
-                            "reason": held.reason,
-                            "key": held.key,
-                            "until": to_wire_time(row.effective_expiry()),
-                        });
-                    }
-                    return Ok(Some(answer));
+                    let answer = subscribe_answer(&id, expires_at, Some(&existing), false);
+                    return Ok(Some(self.held_answer(answer, &id)));
                 }
                 Err(CapHit::Unverified) if verified => verified = false,
                 Err(hit) => return Err(self.cap_refusal_for(principal, hit)),
             }
         }
         Err(RpcError::internal())
+    }
+
+    /// `answer` with the subscription's hold as committed, when it is held:
+    /// why, the key, and when it ends (MIK-8057, MIK-8076).
+    pub(super) fn held_answer(&self, mut answer: Value, id: &str) -> Value {
+        if let (Some(held), Some(row)) = (self.store.held(id), self.store.get(id)) {
+            answer["held"] = json!({
+                "reason": held.reason,
+                "key": held.key,
+                "until": to_wire_time(row.effective_expiry()),
+            });
+        }
+        answer
     }
 
     /// [`cap_refusal`], naming the caller's held subscriptions: they keep

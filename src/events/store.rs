@@ -463,9 +463,10 @@ impl Store {
         // In place: memory follows the disk even when the directory sync
         // failed, and that failure is then reported.
         let expires_at = sub.expires_at;
+        // The row on disk now carries its current stamps.
+        state.hold_unsynced.remove(&sub.id);
         if hold == HoldCommit::End {
             state.held.remove(&sub.id);
-            state.hold_unsynced.remove(&sub.id);
         }
         state.subs.insert(sub.id.clone(), sub);
         placed.durable()?;

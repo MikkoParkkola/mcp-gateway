@@ -386,3 +386,40 @@ async fn a_refresh_records_the_payload_fields_served_at_its_commit() {
     let fields = hub.store.get(&id).expect("row").payload_fields;
     assert!(fields.iter().any(|f| f == "tag"), "{fields:?}");
 }
+
+/// Review (base round): a plain refresh that waits while reloads remove the
+/// type and restore it narrower commits as the held row it now is: the hold
+/// and the payload fields the row was committed with stay.
+#[tokio::test]
+async fn a_refresh_held_while_it_waited_keeps_the_hold_and_its_fields() {
+    let (_dir, hub, registry) = restarted(json!({}), &full()).await;
+    let id = hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .find(|s| s.name == TYPE)
+        .expect("row")
+        .id;
+    let started = hub.lifecycle.lock().await;
+    let (hub_ref, routes) = (&hub, &registry);
+    let narrow = async move {
+        refresh(hub_ref, routes, "");
+        refresh(hub_ref, routes, &narrower());
+        assert!(hub_ref.store.held(&id).is_some(), "held by the reloads");
+        drop(started);
+    };
+    let (answer, ()) = tokio::join!(subscribe(&hub, json!({})), narrow);
+    answer.expect("refresh");
+    let row = hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .find(|s| s.name == TYPE)
+        .expect("row");
+    assert!(hub.store.held(&row.id).is_some(), "still held");
+    assert!(
+        row.payload_fields.iter().any(|f| f == "ref"),
+        "{:?}",
+        row.payload_fields
+    );
+}
