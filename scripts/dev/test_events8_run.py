@@ -127,6 +127,22 @@ class EvidenceTests(unittest.TestCase):
         code, out = run_evidence(rows, audit_rows())
         self.assertEqual(code, 0, out)
 
+    def test_a_stale_subscription_delivered_before_this_fire_is_not_picked(self):
+        # MIK-7945 D6.PLATFORM.3: an earlier run's subscription, delivered
+        # before this fire, must not displace the one this fire exercised.
+        args = {"repo": REPO}
+        rows = shim_rows(args, args)
+        stale = {"kind": "http", "ts": T0 + 4, "status": 200, "error_code": None, "reply_ok": True,
+                 "rpc": ["events/subscribe"], "result_has_id": True, "result_id": "sub-old",
+                 "rpc_params": [{"method": "events/subscribe", "name": EVENT, "arguments": args,
+                                 "key": "k-old"}]}
+        rows.insert(3, stale)
+        audit = audit_rows()
+        audit.insert(0, {"ts": T0 + 6, "action": "events.delivery_outcome", "delivered": True,
+                         "subscription_id": "sub-old", "event_id": "ev-0"})
+        code, out = run_evidence(rows, audit)
+        self.assertEqual(code, 0, out)
+
     def test_a_malformed_reply_does_not_count_as_an_answer(self):
         args = {"repo": REPO}
         rows = shim_rows(args, args)
@@ -334,6 +350,25 @@ class UpCleanupTests(unittest.TestCase):
             capture_output=True, text=True, timeout=60)
         self.assertIn("not an events8 run directory", done.stderr)
         self.assertTrue((d / "keep.txt").exists(), "a borrowed marker emptied the directory")
+
+    def test_a_symlinked_run_directory_is_refused_and_its_target_kept(self):
+        # MIK-7945 D6.PLATFORM.1: the directory is judged and emptied through
+        # one handle that does not follow a symlink, so a link (or a swap made
+        # between the check and the removal) cannot point the cleanup elsewhere.
+        target = tempfile.TemporaryDirectory()
+        self.addCleanup(target.cleanup)
+        t = Path(target.name)
+        (t / "state.json").write_text(json.dumps({"owner": "events8_run"}))
+        (t / "keep.txt").write_text("behind a link")
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        d = Path(holder.name) / "run"
+        d.symlink_to(t, target_is_directory=True)
+        done = subprocess.run(
+            [sys.executable, str(SCRIPT), "--dir", str(d), "up", "--gateway", str(t / "no-such-gateway")],
+            capture_output=True, text=True, timeout=60)
+        self.assertIn("not an events8 run directory", done.stderr)
+        self.assertTrue((t / "keep.txt").exists(), "a symlinked --dir emptied its target")
 
     def test_a_directory_the_script_owns_is_cleared(self):
         d, done = self.up(json.dumps({"owner": "events8_run"}))

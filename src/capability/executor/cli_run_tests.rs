@@ -287,6 +287,30 @@ fn redaction_removes_secrets_at_any_length_and_caller_values_from_four_bytes() {
 }
 
 #[test]
+fn the_windows_bootstrap_names_are_reserved() {
+    // MIK-7945 D6.PLATFORM.2: the gateway sets SYSTEMROOT and COMSPEC for a
+    // Windows child itself, so neither an allowlist entry, a `token_env` nor
+    // a `root_env` (`bound_roots`) may supply them. Any casing, as on Windows.
+    for name in ["SYSTEMROOT", "SystemRoot", "COMSPEC", "ComSpec"] {
+        assert!(super::is_reserved(name), "{name} is not reserved");
+    }
+    let workdir = Path::new("/private-workdir");
+    let lookup = |_: &str| Some(std::ffi::OsString::from("/operator/value"));
+    let allowed = ["SystemRoot".to_owned(), "COMSPEC".to_owned()];
+    let env = super::child_env(workdir, &allowed, &lookup, Some(("ComSpec", "x")));
+    // Windows: once, from the platform baseline. Elsewhere: not at all.
+    let expected = usize::from(cfg!(windows));
+    for name in ["SYSTEMROOT", "COMSPEC"] {
+        let hits: Vec<_> = env
+            .iter()
+            .filter(|(k, _)| k.to_string_lossy().eq_ignore_ascii_case(name))
+            .collect();
+        assert_eq!(hits.len(), expected, "{name}: {env:?}");
+        assert!(hits.iter().all(|(_, v)| v != "x"), "{name}: {env:?}");
+    }
+}
+
+#[test]
 fn an_allowlisted_name_cannot_override_the_private_directories() {
     let workdir = Path::new("/private-workdir");
     let lookup = |_: &str| Some(std::ffi::OsString::from("/operator/home"));
