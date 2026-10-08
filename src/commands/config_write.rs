@@ -10,6 +10,7 @@ use mcp_gateway::config::Config;
 use mcp_gateway::config_persistence::{write_config, write_config_preserving, write_config_text};
 
 use super::backend_url_keys::{UrlRewrite, rewrite_url_aliases};
+use super::retired_config_keys::Retired;
 
 /// What a CLI write does when it cannot keep the file's comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,11 +87,14 @@ pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<U
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
     let mut rewrite = rewrite_url_aliases(&text, None);
     // The retired key goes in the same pass, so the file is written once.
-    if let Some((text, line)) = super::retired_config_keys::drop_cache_tools(&rewrite.text) {
+    let (dropped, retired) = super::retired_config_keys::drop_cache_tools(&rewrite.text);
+    rewrite.retired = retired;
+    if let Some(text) = dropped {
         rewrite.text = text;
-        rewrite.retired = Some(line);
     }
-    if mode == RewriteMode::Apply && (!rewrite.changed.is_empty() || rewrite.retired.is_some()) {
+    if mode == RewriteMode::Apply
+        && (!rewrite.changed.is_empty() || matches!(retired, Retired::Removed(_)))
+    {
         write_config_text(path, &rewrite.text)?;
     }
     Ok(rewrite)

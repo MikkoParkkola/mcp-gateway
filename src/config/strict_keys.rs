@@ -53,7 +53,8 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
     (
         &["meta_mcp", "cache_tools"],
         "nothing ever read it, so tool lists were cached the same way whatever it said; \
-         `meta_mcp.cache_ttl` sets how long they are kept. `mcp-gateway upgrade` removes it",
+         `meta_mcp.cache_ttl` sets how long they are kept. Delete it, or run `mcp-gateway upgrade`, \
+         which removes it or says why it cannot",
     ),
     (
         &["marketplace"],
