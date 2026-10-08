@@ -78,7 +78,7 @@ fn project_with_design() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("design.fig");
     std::fs::write(&file, b"fig").unwrap();
-    let canonical = std::fs::canonicalize(&file).unwrap();
+    let canonical = super::super::cli::canonical(&file).unwrap();
     (dir, canonical)
 }
 
@@ -200,7 +200,7 @@ providers:
         .execute_mcp(&cap, config, &json!({ "operation": "say" }), &caller())
         .await
         .unwrap();
-    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let root = super::super::cli::canonical(dir.path()).unwrap();
     assert_ne!(
         out["home"],
         json!(root.display().to_string()),

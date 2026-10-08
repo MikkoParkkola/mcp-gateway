@@ -191,6 +191,49 @@ pub(crate) fn confine_paths(
     Ok(params)
 }
 
+/// `path` canonicalized (symlinks followed), spelled as a program writes it.
+pub(crate) fn canonical(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    std::fs::canonicalize(path).map(spelled)
+}
+
+/// A canonical path in its plain spelling where one names the same file.
+/// On Windows `canonicalize` returns the verbatim form (`\\?\C:\x`); a server
+/// that resolves only one side of a prefix check reads that as another path
+/// (MIK-7911). Elsewhere the path is returned unchanged.
+fn spelled(resolved: std::path::PathBuf) -> std::path::PathBuf {
+    let plain = resolved
+        .to_str()
+        .and_then(plain)
+        .map(std::path::PathBuf::from);
+    plain.unwrap_or(resolved)
+}
+
+/// DOS device names: in the plain form `C:\x\con.txt` names the console, not
+/// the file the verbatim form names.
+const DEVICE_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// The plain spelling of a verbatim drive path (`\\?\C:\x` to `C:\x`), or
+/// `None` when the plain form would name something else: not a drive path
+/// (UNC, device), a device-name component, or one ending in a dot or space,
+/// which the plain form drops. Length is not limited: root and path take the
+/// same form, and long-path handling stays with the server.
+fn plain(verbatim: &str) -> Option<&str> {
+    let rest = verbatim.strip_prefix(r"\\?\")?;
+    let drive =
+        rest.starts_with(|c: char| c.is_ascii_alphabetic()) && rest.get(1..3) == Some(r":\");
+    let kept = |component: &str| {
+        let stem = component.split('.').next().unwrap_or(component).trim_end();
+        !component.ends_with(['.', ' '])
+            && !DEVICE_NAMES
+                .iter()
+                .any(|name| stem.eq_ignore_ascii_case(name))
+    };
+    (drive && rest[3..].split('\\').all(kept)).then_some(rest)
+}
+
 /// `value` canonicalized (symlinks followed) and checked to lie inside the
 /// root, component by component, so `/srv/uploads_evil` is not inside
 /// `/srv/uploads`.
@@ -215,7 +258,8 @@ pub(crate) fn confine(
     if resolved.strip_prefix(&root).is_err() {
         return Err(format!("is outside capabilities.files.{root_name}"));
     }
-    Ok(resolved)
+    // Checked in the verbatim form, handed on in the form the root takes.
+    Ok(spelled(resolved))
 }
 
 /// The child's answer as a result, or a redacted error.

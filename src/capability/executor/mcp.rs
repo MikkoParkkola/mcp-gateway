@@ -743,7 +743,7 @@ fn bound_roots(config: &McpConfig, files: &crate::config::FileRoots) -> Vec<(Str
         .iter()
         .filter(|(name, _)| !is_reserved(name))
         .filter_map(|(name, root)| {
-            let dir = std::fs::canonicalize(files.get(root.as_str())?).ok()?;
+            let dir = super::cli::canonical(files.get(root.as_str())?).ok()?;
             Some((name.clone(), dir.display().to_string()))
         })
         .collect()

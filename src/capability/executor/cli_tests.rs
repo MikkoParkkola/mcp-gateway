@@ -28,8 +28,27 @@ fn a_path_inside_the_root_resolves_to_its_canonical_form() {
     let got = confine("report.pdf", "uploads", &roots(dir.path())).unwrap();
     assert_eq!(
         got,
-        std::fs::canonicalize(dir.path().join("report.pdf")).unwrap()
+        super::canonical(&dir.path().join("report.pdf")).unwrap()
     );
+}
+
+/// MIK-7911: the plain spelling is used only where it names the same file.
+#[test]
+fn a_verbatim_drive_path_is_spelled_plain_only_where_that_is_the_same_file() {
+    for (verbatim, plain) in [
+        (r"\\?\C:\x\design.fig", Some(r"C:\x\design.fig")),
+        (r"\\?\d:\", Some(r"d:\")),
+        (r"\\?\UNC\server\share\x", None),
+        (r"\\?\Volume{0}\x", None),
+        (r"\\?\C:\x\con.txt", None),
+        (r"\\?\C:\x\Lpt9", None),
+        (r"\\?\C:\x\name.", None),
+        (r"\\?\C:\x\name ", None),
+        (r"C:\x", None),
+        ("/srv/uploads/x", None),
+    ] {
+        assert_eq!(super::plain(verbatim), plain, "{verbatim}");
+    }
 }
 
 /// MIK-7911: on Windows a confined path reaches the child in the plain drive
