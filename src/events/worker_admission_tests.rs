@@ -143,3 +143,80 @@ async fn a_reload_that_keeps_the_backend_before_the_send_still_sends() {
         "not sent though the backend stayed"
     );
 }
+
+/// A `backend.x.tools_changed` attempt paused before its send while backend
+/// `x` leaves the registry (`remove`) or stays; the posts its callback got.
+async fn backend_attempt_across_a_removal(remove: bool) -> usize {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = logged_services(dir.path());
+    let names = Arc::new(parking_lot::Mutex::new(vec!["x".to_owned()]));
+    let live = Arc::clone(&names);
+    hub.install_backend_source(Arc::new(move || live.lock().clone()));
+    let (port, accepted) = counting_callback().await;
+    queued_with(&hub, port, "evt_x", "backend.x.tools_changed", |_, _| {});
+    let (reached, release) = hub.before_send.arm();
+    let drive = async {
+        reached.notified().await;
+        if remove {
+            names.lock().clear();
+        }
+        release.notify_one();
+    };
+    tokio::time::timeout(Duration::from_secs(20), async {
+        tokio::join!(hub.attempt(&services, "evt_x"), drive)
+    })
+    .await
+    .expect("the attempt finished");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    accepted.load(Ordering::SeqCst)
+}
+
+/// A backend no source offers any more at the send is not sent to, though
+/// every earlier check saw it (the boundary reads it as `source_verdict` does).
+#[tokio::test]
+async fn a_backend_removed_before_the_send_sends_nothing() {
+    assert!(
+        backend_attempt_across_a_removal(false).await >= 1,
+        "premise: sent while the backend stays"
+    );
+    assert_eq!(
+        backend_attempt_across_a_removal(true).await,
+        0,
+        "sent for a backend that left"
+    );
+}
+
+/// `BackendSource::admits_now`: a removed backend admits nothing; an
+/// ineligible one still admits `tools_changed`, which the gateway announces
+/// itself, but not the upstream kinds.
+#[test]
+fn a_backend_source_admits_by_presence_and_eligibility() {
+    use crate::events::backend_source::{BackendSource, Ineligible, Upstream};
+    let ineligible: Ineligible = Arc::new(|| std::iter::once("i".to_owned()).collect());
+    let source = BackendSource {
+        names: Arc::new(|| vec!["e".to_owned(), "i".to_owned()]),
+        upstream: Some(Upstream {
+            listeners: crate::events::upstream_listener::UpstreamListeners::new(
+                Arc::new(crate::backend::BackendRegistry::new()),
+                std::sync::Weak::new(),
+                Arc::clone(&ineligible),
+            ),
+            ineligible,
+        }),
+    };
+    for (name, admitted) in [
+        ("backend.e.tools_changed", true),
+        ("backend.e.resources_changed", true),
+        ("backend.i.tools_changed", true),
+        ("backend.i.resources_changed", false),
+        ("backend.gone.tools_changed", false),
+        ("probe.other", true),
+    ] {
+        assert_eq!(source.admits_now(name), admitted, "{name}");
+    }
+}

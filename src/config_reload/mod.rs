@@ -157,6 +157,10 @@ pub struct LiveConfig {
     running: Arc<Config>,
     /// Shared authorization-policy generation. `None` in isolated tests.
     policy_epoch: Option<Arc<AtomicU64>>,
+    /// Held exclusively while a reload publishes and shared while an event
+    /// send is admitted, so once `set` returns no send is admitted against
+    /// the old config (MIK-7907). Always taken before `inner`.
+    admission: RwLock<()>,
 }
 
 impl LiveConfig {
@@ -168,6 +172,7 @@ impl LiveConfig {
             inner: RwLock::new(Arc::clone(&running)),
             running,
             policy_epoch: None,
+            admission: RwLock::new(()),
         }
     }
 
@@ -214,8 +219,8 @@ impl LiveConfig {
 
     /// Atomically replace the current config.
     pub fn set(&self, config: Config) {
-        let mut lock = self.inner.write();
-        *lock = Arc::new(config);
+        let gate = self.admission.write();
+        let old = std::mem::replace(&mut *self.inner.write(), Arc::new(config));
         if let Some(epoch) = &self.policy_epoch {
             let prev = epoch.fetch_add(1, Ordering::Release);
             debug_assert!(
@@ -223,6 +228,18 @@ impl LiveConfig {
                 "policy epoch must be monotonic"
             );
         }
+        drop(gate);
+        // A large config is freed after the gate opens, never while a send
+        // waits on it.
+        drop(old);
+    }
+
+    /// Run `admit` under the admission gate: a reload's `set` waits for it,
+    /// and it sees the config the last returned `set` published. `admit` must
+    /// not block; it may read this config (`get` takes another lock).
+    pub(crate) fn admit<R>(&self, admit: impl FnOnce() -> R) -> R {
+        let _gate = self.admission.read();
+        admit()
     }
 }
 
