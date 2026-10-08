@@ -251,8 +251,11 @@ impl Store {
         // The occurrence's own fan-out stamp: should a crash leave this record
         // and its dead letter both on disk, `load` reads them as one settled
         // occurrence and keeps only the dead letter.
+        // Marked replayed here, whoever replays it: at its subscription's
+        // expiry it is buried, never dropped (MIK-8061).
         let record = OutboxRecord {
             created_at: stamp,
+            replayed: true,
             ..record
         };
         match state.subs.get(&record.subscription_id) {
