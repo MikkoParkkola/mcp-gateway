@@ -408,3 +408,33 @@ async fn a_duplicated_field_still_forms_a_seam() {
         "a duplicated field broke the seam"
     );
 }
+
+/// `MIK-8113` (chain): a `gateway_execute` chain's results are each their
+/// step's, by the execution index the chain writes beside them. Only short
+/// text the chain wrote lies between the two steps' fields, so the fields
+/// form a seam: bob relaying them together is refused.
+#[tokio::test]
+async fn a_chains_two_results_form_a_seam() {
+    let mock = backend(&[FIELD_A, FIELD_B]);
+    let (state, _store) = seam_state(&mock, &playbook("    a:\n      path: $s1.x\n")).await;
+    let step = json!({"tool": format!("{BACKEND}:{TOOL}"), "arguments": {}});
+    let read = post(
+        &state,
+        "key-a",
+        modern(
+            1,
+            "tools/call",
+            json!({"name": "gateway_execute", "arguments": {"chain": [step, step]}}),
+            false,
+        ),
+    )
+    .await;
+    assert!(read.get("error").is_none(), "base: delivered: {read}");
+    // As the caller reads it: step one's field, its block's type and the
+    // chain's tool reference, then step two's field.
+    let received = format!("{FIELD_A}\ntext\n{BACKEND}:{TOOL}\n{FIELD_B}");
+    assert!(
+        refused(&state, "key-b", 2, &received).await,
+        "a seam between a chain's results was not receipted"
+    );
+}
