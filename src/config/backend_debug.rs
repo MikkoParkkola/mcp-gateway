@@ -101,6 +101,16 @@ mod tests {
     fn debug_never_prints_url_or_command_credentials() {
         let userinfo = ["operator", "debug-secret"].join(":");
         let transports = [
+            TransportConfig::Stdio {
+                command: "server --token debug-secret".into(),
+                cwd: None,
+                protocol_version: None,
+            },
+            TransportConfig::Stdio {
+                command: "server 'debug-secret".into(),
+                cwd: None,
+                protocol_version: None,
+            },
             TransportConfig::Http {
                 http_url: format!("https://{userinfo}@api.invalid/mcp?key=debug-secret"),
                 streamable_http: None,

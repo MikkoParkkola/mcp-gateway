@@ -536,8 +536,9 @@ async fn a2a_6_url_credentials_authenticate_the_card_and_the_calls() {
     );
 }
 
-/// A2A.6/A2A.7: a propagated credential replaces the `a2a_url` credentials
-/// on its request; the agent never sees two `Authorization` headers.
+/// A2A.6/A2A.7: a propagated credential replaces the `a2a_url` credentials,
+/// and a configured `Authorization` beside them too, on its request; the
+/// agent never sees two `Authorization` headers.
 #[tokio::test]
 async fn a2a_7_a_propagated_credential_replaces_url_credentials() {
     let (base, log) = stub::serve(Agent::answering(stub::completed_task(
@@ -546,20 +547,22 @@ async fn a2a_7_a_propagated_credential_replaces_url_credentials() {
     .await;
     let userinfo = ["operator", "s3cret"].join(":");
     let url = base.replacen("http://", &format!("http://{userinfo}@"), 1);
-    let backend = backend(&url, None, &[]);
     let params = json!({"name": TOOL, "arguments": {"message": "hi"}});
     let user = [("authorization".to_owned(), "Bearer user-1".to_owned())];
-    backend
-        .request_with_headers("tools/call", Some(params), &user, Some("user-1"))
-        .await
-        .expect("the call succeeds");
-    let sent: Vec<String> = stub::sends(&log)[0]
-        .headers
-        .get_all("authorization")
-        .iter()
-        .filter_map(|v| v.to_str().ok().map(str::to_owned))
-        .collect();
-    assert_eq!(sent, ["Bearer user-1"], "exactly the propagated credential");
+    let configured: [&[(&str, &str)]; 2] = [&[], &[("authorization", "Bearer static")]];
+    for (index, headers) in configured.into_iter().enumerate() {
+        backend(&url, None, headers)
+            .request_with_headers("tools/call", Some(params.clone()), &user, Some("user-1"))
+            .await
+            .expect("the call succeeds");
+        let sent: Vec<String> = stub::sends(&log)[index]
+            .headers
+            .get_all("authorization")
+            .iter()
+            .filter_map(|v| v.to_str().ok().map(str::to_owned))
+            .collect();
+        assert_eq!(sent, ["Bearer user-1"], "exactly the propagated credential");
+    }
 }
 
 /// Check 3: with credentials in `a2a_url`, a redirect to another origin is
