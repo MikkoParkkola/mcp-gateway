@@ -55,6 +55,12 @@ fn default_token_type() -> String {
 }
 
 /// What a credential's refreshes have shown, kept beside its token (MIK-8018).
+///
+/// Whether the server rotates refresh tokens has three answers: it rotates,
+/// it keeps them, or no settled refresh has said yet. Two flags rather than an
+/// enum keep the on-disk shape a sidecar from an earlier build already has:
+/// its `rotates: false` meant "not seen to rotate", which reads here as "not
+/// seen either way". Read them only through [`RefreshState::may_rotate`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RefreshState {
     /// A refresh answer once carried a refresh token different from the one
@@ -62,6 +68,11 @@ pub(crate) struct RefreshState {
     /// unknown outcome may already be consumed.
     #[serde(default)]
     pub(crate) rotates: bool,
+    /// A settled refresh answer kept the refresh token sent (or carried none):
+    /// the server does not rotate, so a token whose exchange had an unknown
+    /// outcome is still good (MIK-8145). Ignored once `rotates` is set.
+    #[serde(default)]
+    pub(crate) keeps: bool,
     /// SHA-256 (hex) of the refresh token an exchange was started with and has
     /// not settled; set before sending, cleared when the exchange settles. Left
     /// set by a process that died mid-exchange.
@@ -74,14 +85,25 @@ pub(crate) struct RefreshState {
 }
 
 impl RefreshState {
-    /// What an unreadable sidecar reads as: rotating, and possibly holding a
-    /// marker for the stored token.
+    /// What an unreadable sidecar reads as: possibly holding a marker for the
+    /// stored token, and not seen either way, which [`Self::may_rotate`]
+    /// treats as rotating. Not `rotates`: a login that repairs the sidecar
+    /// writes this state back, and the damage observed nothing about rotation,
+    /// so a server that keeps its tokens is not branded rotating for good.
     fn unreadable() -> Self {
         Self {
-            rotates: true,
-            in_flight: None,
             damaged: true,
+            ..Self::default()
         }
+    }
+
+    /// Whether a refresh token whose exchange had an unknown outcome may have
+    /// been consumed: unless a settled refresh showed the server keeps its
+    /// tokens. A server not yet seen either way counts as rotating, so its
+    /// first unsettled refresh is never sent again (MIK-8145).
+    #[must_use]
+    pub(crate) fn may_rotate(&self) -> bool {
+        self.rotates || !self.keeps
     }
 }
 
@@ -311,7 +333,9 @@ impl TokenStorage {
     /// A sidecar that exists but cannot be read or parsed reads as "the server
     /// rotates" and as damaged (MIK-8018, MIK-8091): the stored refresh token
     /// is then retired rather than sent, since the lost sidecar may have
-    /// marked it in flight. The retirement rewrites the file.
+    /// marked it in flight. The retirement rewrites the file. An absent one
+    /// reads as "not seen either way", which [`RefreshState::may_rotate`]
+    /// treats as rotating (MIK-8145).
     #[must_use]
     pub(crate) fn load_refresh_state(
         &self,

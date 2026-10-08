@@ -97,6 +97,9 @@ pub(crate) struct EventsHub {
     /// Test-only: one burial pauses between its store call and its receipts.
     #[cfg(test)]
     before_receipts: crate::test_pause::Slot,
+    /// Test-only: one attempt pauses just before its send admission.
+    #[cfg(test)]
+    before_send: crate::test_pause::Slot,
 }
 
 /// One producer of events (design §4). The core knows sources only through
@@ -111,6 +114,12 @@ pub(crate) trait EventSource: Send + Sync {
     /// Whether this source offers event type `name`.
     fn offers(&self, name: &str) -> bool {
         self.descriptors().iter().any(|d| d.name == name)
+    }
+    /// May an event of type `name` be sent now? Asked synchronously at the
+    /// send boundary, under the live config's admission gate, so a reload
+    /// that has returned is always seen (MIK-7907). The default admits.
+    fn admits_now(&self, _name: &str) -> bool {
+        true
     }
     /// May `principal` hold this subscription? Called at subscribe and at
     /// every fan-out. The default admits: visibility is the catalogue's.
@@ -235,6 +244,8 @@ impl EventsHub {
             before_admit: crate::test_pause::Slot::default(),
             #[cfg(test)]
             before_receipts: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_send: crate::test_pause::Slot::default(),
         }))
     }
 

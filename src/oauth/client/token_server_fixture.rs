@@ -32,6 +32,9 @@ pub(crate) enum Answer {
     Keep,
     /// As `Keep`, then send a 200 whose body breaks off.
     KeepThenBrokenBody,
+    /// Keep the refresh token sent but leave it out of the answer, as RFC 6749
+    /// section 6 allows.
+    Omit,
 }
 
 /// A rotating token server that records every refresh it is sent.
@@ -101,7 +104,10 @@ impl TokenServer {
         self.client_ids.lock().unwrap().push(client_id);
         self.arrived.notify_waiters();
         let answer = self.answers.lock().unwrap().pop().unwrap_or(Answer::Rotate);
-        let keeps = matches!(answer, Answer::Keep | Answer::KeepThenBrokenBody);
+        let keeps = matches!(
+            answer,
+            Answer::Keep | Answer::KeepThenBrokenBody | Answer::Omit
+        );
         let reused = !keeps && {
             let mut consumed = self.consumed.lock().unwrap();
             let reused = consumed.contains(&sent);
@@ -124,7 +130,10 @@ impl TokenServer {
             "token_type": "Bearer",
             "expires_in": 3600,
         });
-        body["refresh_token"] = serde_json::Value::from(if keeps { sent } else { format!("r{n}") });
+        if !matches!(answer, Answer::Omit) {
+            body["refresh_token"] =
+                serde_json::Value::from(if keeps { sent } else { format!("r{n}") });
+        }
         match answer {
             Answer::HoldThenRotate => self.release.notified().await,
             Answer::RotateThen502 => return StatusCode::BAD_GATEWAY.into_response(),
@@ -153,7 +162,7 @@ impl TokenServer {
                     .body(axum::body::Body::from_stream(broken))
                     .unwrap();
             }
-            Answer::Rotate | Answer::Keep => {}
+            Answer::Rotate | Answer::Keep | Answer::Omit => {}
         }
         Json(body).into_response()
     }

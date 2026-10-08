@@ -130,6 +130,18 @@ pub async fn agent_auth_middleware(
                 agent = %validated.agent.client_id,
                 "Agent JWT validated"
             );
+            // PQC deprecation (issue #116): RSA-2048 falls to Shor's algorithm
+            // on a CRQC. Warned here, once per accepted request, and never at
+            // delivery, which re-validates the held token per notification.
+            if jsonwebtoken::decode_header(token_str)
+                .is_ok_and(|header| header.alg == jsonwebtoken::Algorithm::RS256)
+            {
+                warn!(
+                    agent = %validated.agent.client_id,
+                    "RS256 agent token accepted — RSA-2048 is not post-quantum safe. \
+                     Migrate this agent to HS256 (see issue #116)."
+                );
+            }
             let raw_scopes = validated.agent.scopes.clone();
             // Authority follows the registration, not the token bytes or the
             // operator-chosen display name.
