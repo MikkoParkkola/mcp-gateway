@@ -193,7 +193,8 @@ backend" and "fails a capability file" first.**
 | 166 | A running gateway's web UI backend edits (add, edit, delete) load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still undo that writer's change | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
 | 167 | On a multi-user gateway, an API-key or admin-bearer caller with no other identity gets its own `mcp` capability child, named by its credential, instead of a refusal. An `mcp` capability's cached answer is read back only by the caller whose child produced it | None. Callers who share one API key share one child |
 | 168 | Once its shutdown steps return, an HTTP gateway (`serve`, or no subcommand) waits at most 10 more seconds for disk work still running, then exits and logs at ERROR that it gave up waiting; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running after 10 seconds points at the storage to check |
-| 169 | With agent authentication on, a listen or GET /mcp stream opened with an agent token is checked again at every delivery and ends, with no closing message, once the token expires, the agent leaves the registry or its key changes. A GET /mcp stream also checks each queued notification when it writes it, for every credential kind. With gateway authentication on, a valid agent token can listen on a public `/mcp`. `AuthState` gains `agent_auth` | Clients: re-subscribe with a fresh token when a stream ends. Library users building `AuthState` with a struct literal set `agent_auth` to the `AgentAuthState` the router's agent middleware uses (or `AgentAuthState::new(false, ...)` without agent auth) |
+| 169 | On the per-backend route `POST /mcp/{name}`, a backend's `requestState` is sealed into a gateway continuation, as on `/mcp`; a retry must send that continuation back once. Callers with an API key and no verified identity now keep multi-round tool calls on both routes, bound to their key | None. A client that already echoes `requestState` as received keeps working. A client that wrote its own `requestState`, reused one, or sent it from another key gets -32602. Holders of one shared key count as one caller |
+| 170 | With agent authentication on, a listen or GET /mcp stream opened with an agent token is checked again at every delivery and ends, with no closing message, once the token expires, the agent leaves the registry or its key changes. A GET /mcp stream also checks each queued notification when it writes it, for every credential kind. With gateway authentication on, a valid agent token can listen on a public `/mcp`. `AuthState` gains `agent_auth` | Clients: re-subscribe with a fresh token when a stream ends. Library users building `AuthState` with a struct literal set `agent_auth` to the `AgentAuthState` the router's agent middleware uses (or `AgentAuthState::new(false, ...)` without agent auth) |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4416,7 +4417,29 @@ runs the full 10 seconds, one ERROR line says the gateway exited with blocking
 work still running. That is a timeout, not a diagnosis: check the storage
 behind the task store and the audit log.
 
-## 169. Agent-token streams end when the token stops validating
+## 169. The per-backend route seals a backend's input-round state
+
+**Startup:** no notice
+
+What you lose: on `POST /mcp/{name}`, the client no longer sees the backend's
+own `requestState` when a tool asks for input, and the backend no longer
+accepts a `requestState` the client wrote. A client that sends back a state it
+was not given, one it already used, or one issued to another key is refused
+with -32602 before the backend is called.
+
+What you gain: the route now behaves like `/mcp`. The gateway seals the
+backend's state into a continuation bound to the caller and to the call, and
+gives it back to the backend only on that caller's retry, once. A caller that
+authenticates with an API key and has no verified identity keeps its input
+rounds on both routes; before, `/mcp` refused them (-32003). Everyone who holds
+one shared key counts as one caller, as for that key's sessions and tasks.
+
+What to do: nothing, if the client echoes `requestState` exactly as received.
+A client that built or stored its own state for this route must echo the
+gateway's instead. Behind identity propagation, a retry must carry the same
+backend credential as the question it answers.
+
+## 170. Agent-token streams end when the token stops validating
 
 **Startup:** no notice
 
