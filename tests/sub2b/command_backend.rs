@@ -41,11 +41,12 @@ while IFS= read -r line; do
 done
 "#;
 
-/// A temporary home whose path holds a space, so an unquoted path in the
-/// peer script or its `command:` line splits and the row fails.
+/// A temporary home whose path holds a space and an apostrophe, so a path
+/// left unquoted (or unescaped in YAML) in the peer script or its `command:`
+/// line breaks and the row fails.
 fn spaced_home() -> tempfile::TempDir {
     tempfile::Builder::new()
-        .prefix("home with space ")
+        .prefix("home o'space ")
         .tempdir()
         .expect("temporary home")
 }
@@ -72,7 +73,8 @@ fn write_command_config(home: &Path) -> std::path::PathBuf {
         home.join("gateway.yaml"),
         format!(
             "backends:\n  {BACKEND}:\n    command: 'sh {}'\n",
-            sh_path(&script)
+            // A single-quoted YAML scalar writes an apostrophe as two.
+            sh_path(&script).replace('\'', "''")
         ),
     )
     .expect("write gateway.yaml");
