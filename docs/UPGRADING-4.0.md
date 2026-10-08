@@ -4485,7 +4485,7 @@ the router's agent middleware uses, so delivery checks the same registry.
 
 ## 172. An HTTP or WebSocket backend's address takes one `url` key
 
-**Startup:** no notice; `mcp-gateway doctor` lists `http_url` and `ws_url` under advanced settings
+**Startup:** no notice; refuses to start, only for a backend with transport keys in both the file and the environment, or `__URL` in the environment
 
 What you gain: one key for an HTTP or WebSocket backend's address. The
 scheme picks the transport: `http://` or `https://` for HTTP, `ws://` or
@@ -4498,7 +4498,8 @@ backends:
     url: "https://files.example.test/mcp"
 ```
 
-What you keep: `http_url` and `ws_url` still load as before. `mcp-gateway
+What you keep: `http_url` and `ws_url` still load as before; `mcp-gateway
+doctor` lists them under advanced settings. `mcp-gateway
 add`, the setup wizard, `init` and the web UI write `url` for a backend they
 add and keep `url` where you wrote it.
 
