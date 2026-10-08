@@ -185,6 +185,14 @@ backend" and "fails a capability file" first.**
 | 158 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 | 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
+| 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`, except those on lines the change deletes (a removed backend's entry, or a field an edit drops), which the command names by line number. On a file with comments, a change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. A file without comments is rewritten as before. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
+| 162 | An A2A backend (`transport: a2a`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public | None for gateway operators. Library users: configure the agent as a `transport: a2a` backend, or use your own A2A client to poll or cancel tasks |
+| 163 | With gateway authentication off and agent authentication on, each agent owns its tasks apart, keyed on the `client_id` its token validates as (a renewed token for the same agent keeps them); every agent had shared one task owner | None. Tasks an agent created before the upgrade stay under the old shared owner, so the agent no longer finds them under its own |
+| 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept, a removed one released); restart to read a repaired task; probes (`/livez`, `/readyz`) are unaffected |
+| 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
+| 166 | A running gateway's web UI backend edits (add, edit, delete) load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still undo that writer's change | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
+| 167 | On a multi-user gateway, an API-key or admin-bearer caller with no other identity gets its own `mcp` capability child, named by its credential, instead of a refusal. An `mcp` capability's cached answer is read back only by the caller whose child produced it | None. Callers who share one API key share one child |
+| 168 | Once its shutdown steps return, an HTTP gateway (`serve`, or no subcommand) waits at most 10 more seconds for disk work still running, then exits and logs at ERROR that it gave up waiting; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running after 10 seconds points at the storage to check |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1617,17 +1625,15 @@ verify can report such a gap for records that never reached disk. To verify a co
 has no `.hwm`, run `audit verify --archive <path>`, which reports tail completeness as unchecked.
 On a signed log, `.hwm` is signed too.
 
-Limitation: this detects a partial deletion, not a total one. Anyone with write access to the
+On its own, `.hwm` detects a partial deletion, not a total one. Anyone with write access to the
 whole audit directory (a compromised gateway service account, a shared volume, a log-shipping
 agent's credentials, not only full host control) can delete every segment and the `.hwm`
-together. `audit verify` on the emptied path reports that nothing exists to read; once the
-gateway restarts and starts a fresh log, verify passes on it, and nothing in the directory
-shows an earlier log existed. A log stored only in that directory cannot prove it existed.
-Forward audit records off-host: `control_plane.export` writes a local NDJSON file, and the
-protection holds only once an agent running as another account ships that file to a store (a
-SIEM, for example) where the gateway account cannot delete or alter records already landed. To
-detect a wipe or rollback, keep a copy of `<log>.hwm` off the host and verify with
-`audit verify --anchor` (item 158).
+together, and a log stored only in that directory cannot prove it existed. An off-host anchor
+can: keep a copy of `<log>.hwm` off the host and verify with `audit verify --anchor` (item 158),
+which fails on a wiped or rolled-back log. To keep the records themselves, forward them off-host:
+`control_plane.export` writes a local NDJSON file, and the protection holds only once an agent
+running as another account ships that file to a store (a SIEM, for example) where the gateway
+account cannot delete or alter records already landed.
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
@@ -3412,9 +3418,11 @@ TTL has passed with no request is reaped at the next sweep, not a full TTL later
 When a session ends, by its owner's `DELETE /mcp` or by the reaper, the state kept under its id
 is reclaimed: routing profile, workflow state, cost bucket, last-tool entry, cached-token counter
 and spec-preview promotions. Before, these were never removed and grew with every session. The
-ended session's calls, tokens and cost stay in the operator's aggregate totals. A second pass
-two minutes after the end removes state that a call still in flight wrote under the ended id; a
-call that runs longer than that (a backend `timeout` above two minutes) can still leave an entry.
+ended session's calls, tokens and cost stay in the operator's aggregate totals. A call still in
+flight when the session ends, or one that starts after it (a task worker, an input-round resume, a
+call released from a confirmation), holds the session until it finishes; when it does, the state
+it wrote under the ended id is removed too, however long it ran. A second pass two minutes after
+the end stays as a backstop.
 
 **Action:** none. A client that relied on a session being replaced after 30 minutes should send
 `DELETE /mcp` instead.
@@ -4226,6 +4234,186 @@ build loads with both at 0.
 
 Library users: code that builds `EnforcerSnapshot` or `PersistedCosts` with a
 struct literal adds the two fields.
+
+## 161. CLI config writes keep comments, or refuse
+
+**Startup:** no notice
+
+`mcp-gateway add`, `remove`, `setup wizard` and `cap discover --write-config`
+(including the `--shadow` adoption) used to re-serialise `gateway.yaml`
+whenever the change was not a single block-style backend, which dropped every
+comment in the file, including the credential warning `init` writes.
+
+They now edit the file as text, one backend at a time, and write it once.
+Comments on lines the change deletes go with them (a removed backend's entry,
+or a field an edit drops), and the command names those comment lines. When a
+change cannot be written as text (a flow-style `backends:` mapping, or a
+comment inside a changed value) and the file has comments, the command writes
+nothing, exits non-zero, and names the line numbers of the comments a rewrite
+would drop. It never prints their text, which could hold a quoted secret. A
+file without comments is rewritten as before.
+
+`--force` keeps the old behaviour only for a change that cannot be written as
+text: it names the same lines, then rewrites the file without them, for
+example `mcp-gateway remove old-server --force`.
+
+## 162. A2A backends start, and the A2A module is crate-private
+
+**Startup:** no notice
+
+A backend with `transport: a2a` and `a2a_url` failed at its first use in 3.x. It now starts and
+exposes the agent as one tool, `send_message`, which delegates to an A2A 1.0 agent over the
+JSON-RPC binding (the `a2a` Cargo feature, on by default):
+
+```yaml
+backends:
+  travel-agent:
+    transport: a2a
+    a2a_url: "https://travel-agent.internal"
+```
+
+An agent that offers only A2A 0.3 is refused at start, and the error names the versions its card
+offers.
+
+`mcp_gateway::a2a` was a public module in 3.x and is now crate-private. A program that used it to
+send messages to an agent can configure the agent as a backend, as above. A program that also
+polled or cancelled tasks itself (`get_task`, `cancel_task`), or continued a conversation by its
+`context_id`, needs its own A2A client: each `send_message` call to the backend starts a new
+conversation with the agent and answers with the task's final result.
+
+## 163. Agent tokens own their tasks apart when gateway authentication is off
+
+**Startup:** no notice
+
+With gateway authentication off and agent authentication on, every caller
+holding a valid agent token shared one task owner, so one agent could read,
+update, cancel or replay another agent's task and listen to its
+notifications. Each agent now owns its own tasks, keyed on the `client_id`
+its token validated as, so a renewed token for the same agent keeps them.
+With agent authentication off nothing changes: callers share the one auth-off
+pool, as before. (With it on, a request without an agent token is refused.)
+
+Tasks an agent created before the upgrade were stored under the shared owner,
+so they stay in that pool: the agent that created them no longer finds them
+under its own owner.
+
+## 164. A task row with an unreadable key refuses new keyed calls
+
+**Startup:** no notice
+
+A stored task row whose idempotency key cannot be read unambiguously (damage
+before or inside its `admission` block, or a second copy of it) used to release
+that key, so a client retry was admitted as new work and its backend ran again.
+Now, while any such row is in the task store:
+
+- Every NEW keyed call, task or synchronous, is refused with code 409 and a
+  message saying new keyed calls are paused until an operator repairs or
+  removes a record. It never names the file. Keys already held and unkeyed
+  calls work as before.
+- The log names each file at startup and on every expiry sweep, the
+  `mcp_task_store_skipped_records{class="sealed"}` gauge counts the rows, and
+  `/health` reads `degraded` (503). The admin view adds
+  `task_store.sealed_rows`, `task_store.sealed_files` (full paths) and
+  `task_store.action`.
+
+It clears without a restart, at the next expiry sweep. Removing the file
+releases its key, so a retry of that call runs again. Repairing the file keeps
+its key, so a retry never runs again: until the next restart that retry is
+refused, and after a restart a task retry finds its task.
+
+The one step: repair or remove the file; restart to read a repaired task.
+Until a restart a repaired task stays unreadable (a known gap).
+
+A record-named FIFO in the task store is now refused as unsafe at startup
+instead of hanging it.
+
+## 165. A refused config reload answers 409, not 500
+
+**Startup:** no notice
+
+A config reload that failed always answered `POST /ui/api/reload` with 500,
+so a monitor read an operator's refused file as a gateway crash. Now the status
+says whose fault it is:
+
+- 409 Conflict when the network-posture policy refuses the file: it would
+  leave the tools reachable without a credential, or send credentials over
+  plain HTTP. Fix the file (revert the `public_url`, close the tool paths, or
+  put TLS in front).
+- 503 Service Unavailable when shutdown stopped the reload.
+- 500 for anything else, such as a file that does not parse or a change that
+  needs a restart.
+
+The `gateway_reload_config` meta-tool answers that refusal with JSON-RPC
+-32600 (it was -32603) and keeps -32603 otherwise. The message text is
+unchanged on both.
+
+## 166. Config writers take a lock
+
+**Startup:** no notice
+
+Two writers editing `gateway.yaml` at the same moment (the web UI saving while a CLI command
+runs, or two gateways on one config) could lose a change: each loaded the file, edited its copy
+and wrote it, and the later write erased the earlier one while both reported success.
+
+A running gateway now holds one lock from loading the file through writing it and reloading
+what it wrote, for every web UI backend add, edit and delete. The lock is a hidden file,
+`.gateway.yaml.lock`, next to the config. It stays there by design: deleting it would let two
+writers lock different files. If your config lives in a git repository, add it to
+`.gitignore`. On Linux and macOS a lock file other accounts can open (one copied in or checked
+out as `0644`) is made owner-only at the next write, since any account that can open it could
+hold it and stall every save; one owned by another account is refused: stop every gateway and CLI command using that config,
+then remove it. On Windows a lock file whose permissions let other accounts in (one copied in,
+restored or checked out from git) is refused with the PowerShell lines that make it private.
+
+CLI writes take the same lock for their write. One that finds it held prints
+`Waiting for gateway.yaml ...` and continues once it is free; if another writer holds it for
+30 seconds, the command writes nothing and exits non-zero with "Not saved: ... locked by
+another writer; retry." A config directory where the lock file cannot be created (a
+read-only mount) refuses the write instead of writing unlocked. A CLI write whose config
+does not load is refused and leaves the file unchanged, including a config that another
+program broke while the command waited for the lock.
+
+One case is not covered yet. A CLI command reads `gateway.yaml` before it takes the lock. If
+another program (the web UI, another CLI command, a second gateway) saves the file in the
+moment between that read and the CLI's write, the CLI can write parts of its older copy back:
+a backend the other program removed can come back, its edit can be undone, or a backend it
+added can disappear. Sometimes the CLI refuses instead, with a message about comments it
+would drop. Until this is closed, do not run a CLI config write while the web UI or another
+command is saving, and check the config after one that overlapped; run a refused one again.
+
+Editors such as vim do not take the lock; avoid editing the file by hand while a CLI command
+or the web UI is saving it.
+
+## 167. API-key callers get their own `mcp` capability child on a multi-user gateway
+
+**Startup:** no notice
+
+An `mcp` capability runs one child process per caller. On a multi-user
+gateway, a caller named by no identity-propagation binding, OIDC identity or
+grant subject was refused ("needs an identified caller"), which refused every
+API-key and admin-bearer caller. Such a caller now gets its own child, named by
+its validated credential, and a background task it starts reaches the same
+child. A single-user gateway still runs one shared child for every caller
+without an identity.
+
+An `mcp` capability with `cache:` set also keys its cached answers on that same
+per-caller name, so one caller is never served another caller's cached answer.
+
+## 168. An HTTP gateway exits within 10 seconds of finishing its shutdown
+
+**Startup:** no notice
+
+After an HTTP gateway's shutdown steps return (draining requests and closing
+the task store, under `server.shutdown_timeout`), the gateway now waits at
+most 10 more seconds for disk work still running (a task-store or
+audit write) and then exits. Before, it waited for that work without limit, so
+a write stuck on a stalled NFS or FUSE mount kept the process alive forever and
+an orchestrator had to kill it. `serve --stdio` already exited this way.
+
+Work that finishes within the 10 seconds completes as before. When the wait
+runs the full 10 seconds, one ERROR line says the gateway exited with blocking
+work still running. That is a timeout, not a diagnosis: check the storage
+behind the task store and the audit log.
 
 ## Upgrading from 3.5.x: a walkthrough
 

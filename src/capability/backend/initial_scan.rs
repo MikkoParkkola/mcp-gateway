@@ -72,10 +72,72 @@ impl CapabilityBackend {
     }
 
     /// Whether every configured directory loaded (meaningful once the scan
-    /// is complete): a failed one leaves the catalogue partial.
+    /// is complete): a failed one leaves the catalogue partial. A reload
+    /// rewrites this for the catalogue it installs (MIK-8028), so it always
+    /// describes the current catalogue.
     #[must_use]
     pub(crate) fn initial_scan_loaded_every_directory(&self) -> bool {
         self.initial_scan.load(std::sync::atomic::Ordering::Acquire) & FAILED == 0
+    }
+
+    /// Record whether the catalogue a reload is installing misses a
+    /// directory. Called under the capabilities write lock, with the swap.
+    pub(crate) fn set_catalogue_partial(&self, partial: bool) {
+        use std::sync::atomic::Ordering::AcqRel;
+        if partial {
+            self.initial_scan.fetch_or(FAILED, AcqRel);
+        } else {
+            self.initial_scan.fetch_and(!FAILED, AcqRel);
+        }
+    }
+
+    /// The catalogue generation: it moves at every catalogue write
+    /// (MIK-8037), so an equal value read twice means no write between.
+    pub(crate) fn catalogue_generation(&self) -> u64 {
+        self.catalogue_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// With the write, under its lock: `_held` is that lock's guard, so the
+    /// bump cannot be made outside it.
+    pub(super) fn bump_catalogue_generation(
+        &self,
+        _held: &parking_lot::RwLockWriteGuard<'_, super::IndexedCapabilities>,
+    ) {
+        self.catalogue_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Record `name` as read but refused by the account gate (MIK-8037): a
+    /// catalogue write, so the generation moves. Takes the write lock: call
+    /// it holding no capabilities guard. A reload rebuilds the refused names
+    /// from the directories it read.
+    pub(super) fn note_refused(&self, name: &str) {
+        let mut caps = self.capabilities.write();
+        caps.refused.insert(name.to_owned());
+        self.bump_catalogue_generation(&caps);
+    }
+
+    /// The capabilities and whether every directory loaded, read under one
+    /// lock, so a reload cannot change one without the other (MIK-8028).
+    pub(crate) fn catalogue_snapshot(&self) -> (Vec<super::CapabilityDefinition>, bool) {
+        let (catalogue, complete, ..) = self.catalogue_snapshot_at();
+        (catalogue, complete)
+    }
+
+    /// [`Self::catalogue_snapshot`], the generation it was read at and the
+    /// names known absent though read (refused by the account gate, or
+    /// unloaded), all under the one lock (MIK-8037).
+    pub(crate) fn catalogue_snapshot_at(
+        &self,
+    ) -> (Vec<super::CapabilityDefinition>, bool, u64, Vec<String>) {
+        let caps = self.capabilities.read();
+        (
+            caps.entries.clone(),
+            self.initial_scan_loaded_every_directory(),
+            self.catalogue_generation(),
+            caps.refused.iter().chain(&caps.unloaded).cloned().collect(),
+        )
     }
 }
 
@@ -174,5 +236,17 @@ mod held_reload_tests {
             "complete: the caller applies it now"
         );
         assert!(!backend.take_held_reload(), "and nothing was left held");
+    }
+}
+
+impl super::IndexedCapabilities {
+    /// After a reload's swap: its refusals replace the old ones, and an unload
+    /// stays read-yet-absent until the name is admitted again (MIK-8037). A
+    /// quarantined capability is unloaded, then a reload that cannot load its
+    /// file back must not turn the removal into an unread absence.
+    pub(super) fn settle_absent(&mut self, refused: std::collections::HashSet<String>) {
+        self.refused = refused;
+        let index = &self.index;
+        self.unloaded.retain(|name| !index.contains_key(name));
     }
 }

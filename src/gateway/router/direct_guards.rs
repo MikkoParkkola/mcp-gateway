@@ -64,8 +64,8 @@ impl DirectRouteGuards {
     /// S2 spend, once, immediately before an actual backend dispatch (after
     /// the idempotency short-circuit: a replay spends nothing).
     ///
-    /// The caller keeps the admission until `after_dispatch` has recorded the
-    /// call's spend, then drops it (MIK-7763).
+    /// The caller passes the admission to `after_dispatch`, which settles its
+    /// reservation with the spend, then drops it (MIK-7763, MIK-7903).
     pub(crate) fn before_dispatch(meta: &MetaMcp, call: &BackendCall<'_>) -> Result<Admission> {
         meta.admit_spend_for(call)
     }
@@ -77,11 +77,12 @@ impl DirectRouteGuards {
         state: &AppState,
         (call, challenge): (&BackendCall<'_>, Option<&str>),
         client: Option<&AuthenticatedClient>,
-        warnings: &[String],
+        admission: &Admission,
         forward: Result<JsonRpcResponse>,
     ) -> Result<JsonRpcResponse> {
         let meta = &state.meta_mcp;
-        meta.account_dispatch(call, DirectOutcome::from_response(&forward));
+        meta.account_dispatch(call, DirectOutcome::from_response(&forward), admission);
+        let warnings = &admission.warnings;
         let mut response = forward?;
         // ASI07 inc3 raw receipt: verify before the gates read the reply,
         // against the challenge this dispatch minted (never read back).
@@ -90,6 +91,7 @@ impl DirectRouteGuards {
             meta.chain_receive_for(call.server, result, challenge, &slot)?;
         }
         let receipt = std::mem::take(&mut *slot.lock());
+        let mut warned = false;
         if let Some(result) = response.result.take() {
             match meta.gate_payload(call, result) {
                 Ok((mut result, effect)) => {
@@ -97,6 +99,7 @@ impl DirectRouteGuards {
                         && let Some(obj) = result.as_object_mut()
                     {
                         obj.insert("_cost_warnings".to_string(), serde_json::json!(warnings));
+                        warned = true;
                     }
                     response.result = Some(result);
                     // A3 and inc3 D4: a gated-through backend answer, with
@@ -116,6 +119,12 @@ impl DirectRouteGuards {
         }
         if response_blocked(state, call, client, &mut response) {
             response = refusal(response.id.clone(), &Error::ResponseFirewallRefused);
+        } else if warned && let Some(result) = response.result.as_ref() {
+            // The warnings are the gateway's, as the scan left them (a
+            // redaction stays bound to the text the caller gets): noted, so
+            // the receipt leaves them out and a replay restores the note.
+            use crate::gateway::gateway_writes::{Layer, note};
+            note(Layer::Value, &["_cost_warnings"], result);
         }
         // Success only on an answered result, as on meta (`handlers.rs`): a
         // gate refusal must not reset a breaker the caller had tripped.

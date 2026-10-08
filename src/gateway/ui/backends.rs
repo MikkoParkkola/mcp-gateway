@@ -265,7 +265,9 @@ async fn add_backend(
 
 /// `DELETE /ui/api/backends/:name` — remove a backend.
 ///
-/// Returns 204 on success, 404 when the backend does not exist.
+/// Returns 204 on success, or 200 with `{"note": ...}` naming the comment
+/// lines that went with the removed entry (line numbers only); 404 when the
+/// backend does not exist.
 async fn remove_backend(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
@@ -280,13 +282,18 @@ async fn remove_backend(
         return config_path_unavailable().into_response();
     };
 
+    // Worked out inside the edit, which runs under the config lock, from the
+    // text this removal splices: never another writer's change.
+    let mut gone = Vec::new();
     let mutation = mutate_config_and_reload_with(
         config_path,
         state.meta_mcp.reload_context().as_deref(),
         CommentLoss::Refuse,
         |config| {
             remove_backend_config(config, &name)
-                .map_err(|_| (StatusCode::NOT_FOUND, format!("Backend '{name}' not found")))
+                .map_err(|_| (StatusCode::NOT_FOUND, format!("Backend '{name}' not found")))?;
+            gone = crate::config_persistence::comments_a_write_drops(config_path, config);
+            Ok::<(), (StatusCode, String)>(())
         },
     )
     .await;
@@ -301,7 +308,16 @@ async fn remove_backend(
 
     // The reload removed it, and removal announces (F24).
 
-    (StatusCode::NO_CONTENT, Json(json!({}))).into_response()
+    // A removed entry takes its own comments with it (MIK-8051): name the
+    // lines, never their text (a `#` inside a quoted value can be a secret).
+    if gone.is_empty() {
+        return (StatusCode::NO_CONTENT, Json(json!({}))).into_response();
+    }
+    let note = format!(
+        "Comments inside the removed entry went with it: {}",
+        gone.join("; ")
+    );
+    (StatusCode::OK, Json(json!({ "note": note }))).into_response()
 }
 
 /// `PATCH /ui/api/backends/:name` — partially update a backend.

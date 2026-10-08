@@ -56,6 +56,7 @@ owned_routes! {
     UI_DEAD_LETTERS = "/ui/api/events/dead-letters",
     UI_DEAD_LETTERS_REPLAY = "/ui/api/events/dead-letters/replay",
     UI_DEAD_LETTER_REPLAY = "/ui/api/events/dead-letters/{id}/replay",
+    UI_EVENTS_HELD = "/ui/api/events/held",
     UI_IMPORT_PREVIEW = "/ui/api/import/openapi/preview",
     UI_IMPORT = "/ui/api/import/openapi",
     /// The bare prefix, which the catch-all does not match; claimed so it

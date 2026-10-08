@@ -365,6 +365,15 @@ pub(super) async fn forward_notification(
     route: &Route<'_>,
     envelope: Envelope,
 ) -> Rejection {
+    // MIK-8072: a client's cancel names the client's request id, which the
+    // backend never saw (each transport numbers its own requests), so
+    // forwarding it could cancel another caller's call holding that number.
+    // Accepted and dropped before any per-caller credential is minted or
+    // leased for it; MIK-7642 sends the caller's own backend id.
+    if envelope.method == "notifications/cancelled" {
+        tracing::debug!(backend = %name, "Client cancel not forwarded");
+        return (StatusCode::ACCEPTED, Json(serde_json::json!({})));
+    }
     let Ok(super::notification_key::Resolved { headers, binding }) =
         super::notification_key::resolve(
             state,

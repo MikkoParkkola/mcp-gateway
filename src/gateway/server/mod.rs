@@ -93,7 +93,7 @@ use crate::transition::TransitionTracker;
 use crate::{Error, Result};
 use control_plane_store::{build_control_plane_store, control_plane_base};
 use identity_grants::load_configured_identity_grants;
-use warmstart::{WarmStartMode, build_warm_start_list, spawn_warm_start_task};
+use warmstart::{WarmStartMode, WarmerGuard, build_warm_start_list};
 
 use support::{log_startup_banner, shutdown_signal};
 
@@ -1232,6 +1232,7 @@ impl Gateway {
         // Create shutdown channel
         let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
         self.shutdown_tx = Some(shutdown_tx.clone());
+        let warmer = WarmerGuard::new(&self.backends, WarmStartMode::Http, Some(&shutdown_tx));
 
         // Install Prometheus metrics recorder (no-op when feature is disabled).
         #[cfg(feature = "metrics")]
@@ -1545,7 +1546,8 @@ impl Gateway {
                 .with_env(Arc::clone(&self.env))
                 .with_identity_grant_sink_opt(identity_grant_sink.clone())
                 .with_stop(reload_stop)
-                .with_capabilities(meta_mcp.get_capabilities()),
+                .with_capabilities(meta_mcp.get_capabilities())
+                .with_on_registered(warmer.hook()),
             );
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
         }
@@ -1843,7 +1845,7 @@ impl Gateway {
             path = %task_store_dir.display(),
             max_workers = self.config.tasks.max_workers,
             skipped_kept_key = skipped.reserved,
-            skipped_unreadable = skipped.unreadable,
+            skipped_sealed = skipped.sealed,
             "Durable task store opened"
         );
         // The trusted upstream adapter, installed after the store recovered and
@@ -1973,35 +1975,6 @@ impl Gateway {
         let accounts = account_handles_of(self.custody.as_ref());
         let app = create_router_with_accounts(state, webhook_routes, accounts);
 
-        // Start the config file watcher now that the router has snapshotted its
-        // startup bind-origin from `live_config` (still equal to the config the
-        // listener binds). Held for the server's lifetime so hot-reload stays
-        // active. MIK-6750 r4: starting it earlier would let a startup-time
-        // reload move `live_config` before the snapshot, surfacing a
-        // never-bound host/port in the advertised resource.
-        let _config_watcher: Option<ConfigWatcher> = if let Some(path) = self.reload_path() {
-            match ConfigWatcher::start(
-                path.clone(),
-                Arc::clone(&live_config),
-                Arc::clone(&self.backends),
-                &self.config,
-                Arc::clone(&self.env),
-                identity_grant_sink,
-                shutdown_tx.subscribe(),
-            ) {
-                Ok(w) => {
-                    info!(path = %path.display(), "Config hot-reload enabled");
-                    Some(w)
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to start config watcher, hot-reload disabled");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         // Refuse BEFORE opening ANY listener, so a configuration that must not
         // serve never opens a port at all. Only this path reaches it; stdio mode
         // has no listener and is untouched.
@@ -2055,20 +2028,44 @@ impl Gateway {
             Some(dashboard_bootstrap.as_ref()),
         );
 
-        // Warm-start backends: connect + prefetch tools into cache
-        // If warm_start list is empty, warm ALL backends (makes list/search fast)
-        // Bound, not discarded: the returned guard aborts the retry tasks when it
-        // drops, so letting it fall out of scope here would cancel warm-start the
-        // instant it began.
-        let _warm_start_tasks = {
-            let warm_start_list =
-                build_warm_start_list(&self.backends, &self.config.meta_mcp.warm_start, true);
-            spawn_warm_start_task(
-                &self.backends,
-                warm_start_list,
-                WarmStartMode::Http,
-                Some(&shutdown_tx),
-            )
+        // Warm-start backends: connect + prefetch tools into cache. If the
+        // warm_start list is empty, warm ALL backends (makes list/search fast).
+        // After the bind, so a refused or failed start contacts no backend.
+        let _ = warmer.warm(build_warm_start_list(
+            &self.backends,
+            &self.config.meta_mcp.warm_start,
+            true,
+        ));
+
+        // After boot warm-start is scheduled, so no reload precedes it
+        // (`MIK-8054`). Start the config file watcher now that the router has snapshotted its
+        // startup bind-origin from `live_config` (still equal to the config the
+        // listener binds). Held for the server's lifetime so hot-reload stays
+        // active. MIK-6750 r4: starting it earlier would let a startup-time
+        // reload move `live_config` before the snapshot, surfacing a
+        // never-bound host/port in the advertised resource.
+        let _config_watcher: Option<ConfigWatcher> = if let Some(path) = self.reload_path() {
+            match ConfigWatcher::start_with_hook(
+                path.clone(),
+                Arc::clone(&live_config),
+                Arc::clone(&self.backends),
+                &self.config,
+                Arc::clone(&self.env),
+                identity_grant_sink,
+                shutdown_tx.subscribe(),
+                Some(warmer.hook()),
+            ) {
+                Ok(w) => {
+                    info!(path = %path.display(), "Config hot-reload enabled");
+                    Some(w)
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to start config watcher, hot-reload disabled");
+                    None
+                }
+            }
+        } else {
+            None
         };
 
         // Start health check task. Shared with `run_stdio` for the same reason
@@ -2179,8 +2176,9 @@ impl Gateway {
             warn!(error = %e, "Personal account custody shutdown failed");
         }
 
-        // Stop all backends
+        // Stop all backends, after their warmers can no longer start one.
         info!("Shutting down backends...");
+        warmer.cancel().await;
         self.backends.stop_all().await;
 
         Ok(())
@@ -2246,6 +2244,7 @@ impl Gateway {
         )
         .await?;
         // Give stdio the same explicit reload context as HTTP.
+        let warmer = WarmerGuard::new(&self.backends, WarmStartMode::Stdio, None);
         if let Some(path) = self.reload_path() {
             let live_config = Arc::new(
                 LiveConfig::new(self.config.clone())
@@ -2260,7 +2259,8 @@ impl Gateway {
                     self.config.meta_mcp.cache_ttl,
                 )?
                 .with_env(Arc::clone(&self.env))
-                .with_identity_grant_sink_opt(grant_sink.clone()),
+                .with_identity_grant_sink_opt(grant_sink.clone())
+                .with_on_registered(warmer.hook()),
             );
             meta_mcp.set_reload_context(reload_ctx);
         }
@@ -2351,11 +2351,11 @@ impl Gateway {
         // Warm-start backends (same as HTTP mode). Held for the rest of the
         // function: dropping the guard aborts the retry tasks, so cancelling
         // `run_stdio` anywhere cancels them too, not only the EOF path below.
-        let warm_start_tasks = {
-            let warm_start_list =
-                build_warm_start_list(&self.backends, &self.config.meta_mcp.warm_start, false);
-            spawn_warm_start_task(&self.backends, warm_start_list, WarmStartMode::Stdio, None)
-        };
+        let _ = warmer.warm(build_warm_start_list(
+            &self.backends,
+            &self.config.meta_mcp.warm_start,
+            false,
+        ));
 
         // Reap what warm-start and lazy starts spawn, and probe backends so a
         // dead one recovers. Both were HTTP-only or EOF-only before: stdio has
@@ -2801,7 +2801,7 @@ impl Gateway {
         // any other exit path, which is the point of them.
         drop(idle_reaper);
         drop(health_loop);
-        self.stdio_teardown(shutdown_deadline, warm_start_tasks, task_store)
+        self.stdio_teardown(shutdown_deadline, warmer, task_store)
             .await;
         Ok(())
     }

@@ -4,6 +4,7 @@
 //! its load checks, and the egress check and delivery recording the direct
 //! route calls (design `2026-09-28-asi10-verbatim-relay.md` §13.1).
 
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -12,11 +13,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::collusion::{CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams};
+use super::collusion_digest::DELIVERED_SET_CAP;
+#[cfg(test)]
 pub(super) use super::collusion_digest::delivery_leaves;
+pub(super) use super::collusion_digest::delivery_parts;
 pub(crate) use super::collusion_digest::{Delivered, DeliveryDigest};
 use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
 };
+
+/// What one delivery may stage for its plan steps in all (MIK-7992): past it
+/// a step's receipt is dropped and counted, as an over-bound answer's are
+/// (under-receipt, never a false excuse).
+const PLAN_STAGED_CAP: usize = 4 * DELIVERED_SET_CAP;
 
 /// What relay detection does with a finding.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +186,16 @@ pub(super) struct RelayGate {
 }
 
 impl RelayGate {
+    /// See [`super::Firewall::keeping_every_kgram`].
+    #[cfg(test)]
+    pub(super) fn keep_every_kgram(&mut self) {
+        if let Some(detector) = self.detector.as_mut() {
+            Arc::get_mut(detector)
+                .expect("a gate just built shares its detector with no one")
+                .keep_every_kgram();
+        }
+    }
+
     pub(super) fn from_config(config: &CollusionConfig) -> Self {
         let compile = |patterns: &[String]| {
             patterns
@@ -240,8 +259,8 @@ fn detector_for(config: &CollusionConfig) -> Option<Arc<CollusionDetector>> {
 
 /// Result text kept per delivery: the first and last half of this, so an
 /// excerpt from either end still matches. Sized under the detector's
-/// 1,024-fingerprint keep limit (one fingerprint per ~8.5 chars, kept in
-/// text order): a larger cap would silently drop the tail's fingerprints.
+/// per-delivery keep limit (about one fingerprint per 4 chars and form, kept
+/// in text order): a larger cap would silently drop the tail's fingerprints.
 pub(super) const RECORD_CAP: usize = 6 * 1024;
 
 /// A context-integrity data class that makes a delivery sensitive.
@@ -408,31 +427,123 @@ impl Firewall {
         tool: &str,
         result: &Value,
     ) -> Option<DeliveryDigest> {
+        self.digest_with(server, tool, result, DeliveryDigest::of_parts)
+    }
+
+    /// [`Self::delivery_digest`], or for a plan step (`plan`: what its
+    /// delivery has staged so far, as [`DeliveryDigest::staged_len`] counts)
+    /// staged whole, capped once it is kept to what the plan delivers or when
+    /// recorded (MIK-7992). From [`DELIVERED_SET_CAP`] staged on, a step is
+    /// capped now; from [`PLAN_STAGED_CAP`] on, its receipt is dropped and
+    /// counted, so a plan of many steps stages a bounded total.
+    pub(crate) fn receipt_digest(
+        &self,
+        server: &str,
+        tool: &str,
+        result: &Value,
+        plan: Option<&Cell<usize>>,
+    ) -> Option<DeliveryDigest> {
+        let Some(staged) = plan else {
+            return self.delivery_digest(server, tool, result);
+        };
+        let total = staged.get();
+        if total >= PLAN_STAGED_CAP {
+            self.relay_detector()?;
+            self.count_plan_drop_once(staged);
+            return None;
+        }
+        let digest = if total < DELIVERED_SET_CAP {
+            self.digest_with(server, tool, result, DeliveryDigest::of_plan_step_parts)?
+        } else {
+            self.delivery_digest(server, tool, result)?
+        };
+        staged.set(total + digest.staged_len());
+        Some(digest)
+    }
+
+    fn digest_with(
+        &self,
+        server: &str,
+        tool: &str,
+        result: &Value,
+        of_parts: fn(&[&str], usize, bool) -> (DeliveryDigest, bool),
+    ) -> Option<DeliveryDigest> {
         self.relay_detector()?;
         let source = format!("{server}:{tool}");
         let sensitive = self.relay.sources.iter().any(|p| p.matches(&source))
             || context_integrity_sensitive(result);
-        let (digest, cut) = DeliveryDigest::of_leaves(&delivery_leaves(result), sensitive);
+        let (leaves, values) = delivery_parts(result);
+        let (digest, cut) = of_parts(&leaves, values, sensitive);
+        self.count_cut(cut);
+        Some(digest)
+    }
+
+    /// A copy of `digest` with its deferred cap applied, a cut counted;
+    /// `None` when it was capped at staging.
+    fn capped(&self, digest: &DeliveryDigest) -> Option<DeliveryDigest> {
+        let (digest, cut) = digest.capped()?;
+        self.count_cut(cut);
+        Some(digest)
+    }
+
+    fn count_cut(&self, cut: bool) {
         if cut {
             self.relay.text_cut.fetch_add(1, Ordering::Relaxed);
         }
-        Some(digest)
     }
 
     /// The leaves of a plan's final answer that its step receipts are kept
     /// against (MIK-7887.RECEIPT.2). `None` with relay detection off, or over
     /// the bound, where the plan's receipts are dropped and counted.
-    pub(crate) fn delivered_for_plan<'v>(&self, answer: &'v Value) -> Option<Delivered<'v>> {
+    pub(crate) fn delivered_for_plan<'v>(
+        &self,
+        answer: &'v Value,
+        staged: Option<&Cell<usize>>,
+    ) -> Option<Delivered<'v>> {
         self.relay_detector()?;
-        let delivered = Delivered::of_leaves(delivery_leaves(answer));
+        let (leaves, values) = delivery_parts(answer);
+        let delivered = Delivered::of_parts(leaves, values);
         if delivered.is_none() {
-            self.relay.plan_drop.fetch_add(1, Ordering::Relaxed);
-            telemetry_metrics::counter!(PLAN_DROP_METRIC).increment(1);
+            match staged {
+                Some(staged) => self.count_plan_drop_once(staged),
+                None => self.count_plan_drop(),
+            }
         }
         delivered
     }
 
-    /// `digest` kept to what `delivered` carries; unchanged with relay
+    /// What `answer` delivers, read as `delivered_for_plan` reads it; when it is
+    /// over the bound, what `fallback` (the same text read as one leaf)
+    /// delivers instead, so a fuller reading never loses a receipt the plainer
+    /// one keeps (`MIK-8043.JOIN.4`). A drop is counted only when both fail.
+    pub(crate) fn delivered_preferring<'v>(
+        &self,
+        answer: &'v Value,
+        fallback: &'v Value,
+        staged: Option<&Cell<usize>>,
+    ) -> Option<Delivered<'v>> {
+        self.relay_detector()?;
+        let (leaves, values) = delivery_parts(answer);
+        Delivered::of_parts(leaves, values).or_else(|| self.delivered_for_plan(fallback, staged))
+    }
+
+    /// [`Self::count_plan_drop`] unless this delivery already counted one:
+    /// `staged` then holds `usize::MAX`, past every bound (`MIK-8094`).
+    fn count_plan_drop_once(&self, staged: &Cell<usize>) {
+        if staged.get() != usize::MAX {
+            self.count_plan_drop();
+            staged.set(usize::MAX);
+        }
+    }
+
+    fn count_plan_drop(&self) {
+        self.relay.plan_drop.fetch_add(1, Ordering::Relaxed);
+        telemetry_metrics::counter!(PLAN_DROP_METRIC).increment(1);
+    }
+
+    /// `digest` kept to what `delivered` carries, its deferred cap still to
+    /// apply: the seam pass reads which leaves it keeps whole before
+    /// [`Self::cap_kept`] cuts any (`MIK-8113`); unchanged with relay
     /// detection off.
     pub(crate) fn retain_delivered(
         &self,
@@ -443,6 +554,11 @@ impl Firewall {
             Some(detector) => digest.retaining(detector, delivered),
             None => digest,
         }
+    }
+
+    /// `digest` with its deferred cap applied, a cut counted.
+    pub(crate) fn cap_kept(&self, digest: DeliveryDigest) -> DeliveryDigest {
+        self.capped(&digest).unwrap_or(digest)
     }
 
     /// Record `digest` as delivered to `caller` from `server:tool`.
@@ -457,7 +573,24 @@ impl Firewall {
             return;
         };
         let source = format!("{server}:{tool}");
+        // MIK-8113: a seam of several sources leaves only by a flow every
+        // contributing source allows.
+        if let Some(sources) = digest.seam_sources.as_deref() {
+            let masks = sources.iter().map(|s| self.relay.source_flows(s)).collect();
+            detector.record_seam_at(
+                &source,
+                caller.key(),
+                (digest.sensitive, masks),
+                digest.fingerprints(detector),
+                Instant::now(),
+            );
+            return;
+        }
         let flows = self.relay.source_flows(&source);
+        // MIK-7992: the one sink every record passes, so a plan step's
+        // receipt never kept to its plan's answer is recorded capped too.
+        let capped = self.capped(digest);
+        let digest = capped.as_ref().unwrap_or(digest);
         detector.record_fingerprints_at(
             &source,
             caller.key(),
@@ -465,6 +598,26 @@ impl Firewall {
             digest.fingerprints(detector),
             Instant::now(),
         );
+    }
+}
+
+impl Firewall {
+    /// The seam fingerprints of a plan answer's value leaves (`MIK-8113`),
+    /// each leaf with the plan step that produced it; empty with relay
+    /// detection off.
+    pub(crate) fn seam_fingerprints(
+        &self,
+        parts: &[(&str, Option<u32>)],
+    ) -> Vec<super::collusion::SeamFingerprint> {
+        self.relay_detector()
+            .map(|detector| detector.seam_fingerprints(parts))
+            .unwrap_or_default()
+    }
+
+    /// The `allowed_flows` mask of each of `sources`, in order: a seam's flow
+    /// policy beside its sensitivity (`MIK-8113`).
+    pub(crate) fn source_masks(&self, sources: &[String]) -> Vec<u64> {
+        sources.iter().map(|s| self.relay.source_flows(s)).collect()
     }
 }
 
@@ -483,7 +636,7 @@ fn relay_finding(description: String, matched: String) -> Finding {
 /// leaves once more run together, since a copy split mid-word over fields
 /// shorter than a fingerprint is still one the backend can join, then every
 /// object key, since a key reaches the backend like a value. What a caller
-/// is delivered is read by [`delivery_leaves`].
+/// is delivered is read by [`delivery_parts`].
 pub(super) fn egress_text(value: &Value) -> String {
     fn visit<'v>(value: &'v Value, leaves: &mut Vec<&'v str>, keys: &mut Vec<&'v str>) {
         match value {

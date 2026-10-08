@@ -5,27 +5,14 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::config::Config;
+use crate::fs_lock::ExclusiveFileLock;
 
-/// Gateway state directory, honoring the existing operator override.
-#[must_use]
-pub fn gateway_data_dir() -> PathBuf {
-    resolve_gateway_data_dir(
-        std::env::var("MCP_GATEWAY_CONFIG_DIR").ok(),
-        crate::home_dir::home_dir(),
-    )
-}
-
-fn resolve_gateway_data_dir(configured: Option<String>, home: Option<PathBuf>) -> PathBuf {
-    configured.map_or_else(
-        || {
-            home.unwrap_or_else(|| PathBuf::from("."))
-                .join(".mcp-gateway")
-        },
-        PathBuf::from,
-    )
-}
+#[path = "config_persistence_data_dir.rs"]
+mod data_dir;
+pub use data_dir::gateway_data_dir;
 
 /// Load config tolerantly, returning defaults when the file is absent or unloadable.
 ///
@@ -70,9 +57,15 @@ pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
 ///
 /// # Errors
 ///
-/// Returns `Err` on validation, serialisation, or I/O failure.
+/// Returns `Err` on validation, serialisation, or I/O failure, or when the
+/// existing file no longer loads.
+///
+/// Takes the cross-process config lock first ([`lock`]), waiting up to
+/// [`CLI_LOCK_WAIT`] while another writer holds it; this blocks the calling
+/// thread, so an async caller uses the reload module's write API instead.
 pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
-    write_config_with(path, config, CommentLoss::Rewrite).map_err(|e| match e {
+    let held = lock_for_cli(path)?;
+    write_config_with(path, config, CommentLoss::Rewrite, &held).map_err(|e| match e {
         Unwritten::Failed(message) | Unwritten::CommentLoss(message) => message,
     })
 }
@@ -80,13 +73,62 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
 #[path = "config_persistence_splice.rs"]
 mod splice;
 
+#[path = "config_persistence_lock.rs"]
+pub(crate) mod lock;
+
+// Only the web UI names a write's dropped comments from the library; the
+// CLI keeps its own copy until MIK-8042's API change (MIK-8051).
+#[cfg(feature = "webui")]
+#[path = "config_persistence_comments.rs"]
+pub(crate) mod comments;
+
+/// How long a synchronous writer (the CLI) waits for another writer's
+/// config lock: long enough to outlast a gateway's write and reload.
+pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(30);
+
+/// Take the config lock for a CLI write, then load the file again under it.
+///
+/// The command loaded the file before it waited for the lock, so a file that
+/// no longer loads was changed meanwhile: it is refused, not replaced by the
+/// command's older copy. A missing file is still created.
+fn lock_for_cli(path: &Path) -> Result<ExclusiveFileLock, String> {
+    let held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
+        say_waiting(path, lock);
+    })
+    .map_err(|e| not_locked(path, e))?;
+    load_existing_or_default(path)
+        .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
+    Ok(held)
+}
+
+/// Tell a CLI user, once, why their command is not finishing yet.
+fn say_waiting(config: &Path, lock: &Path) {
+    eprintln!(
+        "Waiting for {} (another writer holds {})...",
+        config.display(),
+        lock.display()
+    );
+}
+
+/// A lock that was not taken, as a message ready to print.
+fn not_locked(path: &Path, e: lock::NotLocked) -> String {
+    match e {
+        lock::NotLocked::Busy => format!(
+            "Not saved: {} is locked by another writer; retry.",
+            path.display()
+        ),
+        lock::NotLocked::Failed(message) => format!("Not saved: {message}"),
+    }
+}
+
 /// What a write does when it cannot keep the file's comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommentLoss {
-    /// Re-serialise the whole file (CLI, setup import).
+    /// Re-serialise the whole file (a CLI write given `--force`, and the
+    /// reload module's public write API).
     Rewrite,
-    /// Write nothing and say what would be lost (web UI backend edits), and
-    /// skip a write that would change nothing.
+    /// Write nothing and say what would be lost (web UI backend edits and
+    /// CLI writes), and skip a write that would change nothing.
     Refuse,
 }
 
@@ -115,10 +157,78 @@ impl From<String> for Unwritten {
 /// another writer changed into something more than one backend away, is
 /// rewritten in full, or refused. An edit landing after that read is
 /// overwritten by the rename, as the full rewrite overwrites it.
+///
+/// # Errors
+///
+/// [`Unwritten::CommentLoss`] when `mode` refuses a write that would drop
+/// comments; [`Unwritten::Failed`] on validation, serialisation or I/O failure.
+///
+/// `_held` is the config lock ([`lock`]) the caller took before it loaded:
+/// the load, the edit and this write are one critical section.
 pub(crate) fn write_config_with(
     path: &Path,
     config: &Config,
     mode: CommentLoss,
+    _held: &ExclusiveFileLock,
+) -> Result<(), Unwritten> {
+    write_spliced(path, config, mode, Splice::One)
+}
+
+/// The comment lines (as `line N`) that [`write_config_with`] writing
+/// `config` to `path` would drop, from the same single read and the same
+/// one-backend splice the write makes. Call it inside the locked edit, so
+/// the answer is about this write and not one another writer made since.
+/// Empty when the write would not splice: a file with comments is then
+/// refused, and one without has none to drop.
+#[cfg(feature = "webui")]
+pub(crate) fn comments_a_write_drops(path: &Path, config: &Config) -> Vec<String> {
+    let Ok((before, text)) = Config::load_literal_with_text(path) else {
+        return Vec::new();
+    };
+    splice::with_backends_edited(&text, &before, config, Splice::One)
+        .map(|after| comments::dropped_comment_lines(&text, &after))
+        .unwrap_or_default()
+}
+
+/// Write `config` to `path` for a CLI command, keeping the file's comments.
+///
+/// The file's text is edited in place when `config` differs from it in
+/// `backends` alone: one backend added, removed or edited, or several added or
+/// edited (setup and discovery import). A write that would drop comments is
+/// refused, and the refusal names the comment lines; [`write_config`] (the
+/// CLI's `--force`) rewrites the file in full when it cannot splice. A `config`
+/// that is what the file already loads as writes nothing.
+///
+/// # Errors
+///
+/// The refusal, which starts with `Not saved:`; an existing file that no
+/// longer loads; or a validation, serialisation or I/O failure. Each is a
+/// message ready to print.
+pub fn write_config_preserving(path: &Path, config: &Config) -> Result<(), String> {
+    let _held = lock_for_cli(path)?;
+    write_spliced(path, config, CommentLoss::Refuse, Splice::NoRemoval).map_err(|e| match e {
+        Unwritten::CommentLoss(message) => message,
+        Unwritten::Failed(message) => format!("Failed to write {}: {message}", path.display()),
+    })
+}
+
+/// How many backends one splice may change.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Splice {
+    /// Exactly one: the web UI and the reload write API change one backend
+    /// per write, so two differences mean another writer got in between.
+    One,
+    /// Several when none is a removal (CLI setup and discovery import, which
+    /// adds backends and replaces a same-named one).
+    NoRemoval,
+}
+
+/// [`write_config_with`] with the splice limited to `scope`.
+fn write_spliced(
+    path: &Path,
+    config: &Config,
+    mode: CommentLoss,
+    scope: Splice,
 ) -> Result<(), Unwritten> {
     config
         .validate_with_env(&config.env_overlay())
@@ -129,9 +239,7 @@ pub(crate) fn write_config_with(
         if mode == CommentLoss::Refuse && value(before) == value(config) {
             return Ok(());
         }
-        if let Some(edited) = splice::changed_backend(before, config)
-            .and_then(|name| splice::with_backend_edited(text, before, config, &name))
-        {
+        if let Some(edited) = splice::with_backends_edited(text, before, config, scope) {
             return Ok(write_yaml(path, &edited)?);
         }
     }
@@ -388,349 +496,5 @@ fn scratch_candidate(path: &Path, seed: u64) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
-
-    #[test]
-    fn gateway_state_override_precedes_home_and_preserves_default_fallback() {
-        let home = Some(std::path::PathBuf::from("operator-home"));
-        assert_eq!(
-            super::resolve_gateway_data_dir(Some("isolated-state".into()), home.clone()),
-            std::path::PathBuf::from("isolated-state")
-        );
-        assert_eq!(
-            super::resolve_gateway_data_dir(None, home),
-            std::path::PathBuf::from("operator-home/.mcp-gateway")
-        );
-        assert_eq!(
-            super::resolve_gateway_data_dir(None, None),
-            std::path::PathBuf::from("./.mcp-gateway")
-        );
-    }
-    use super::*;
-
-    #[test]
-    fn load_existing_or_default_returns_default_when_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("missing.yaml");
-
-        let config = load_existing_or_default(&path).unwrap();
-
-        assert!(config.backends.is_empty());
-    }
-
-    #[test]
-    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
-    #[cfg(unix)]
-    fn a_written_config_is_not_readable_by_other_users() {
-        // A config can hold a bearer token and API keys. Loopback isolates
-        // machines, not users, so another account on the same host can already
-        // reach the port; it must not also be able to read the credential.
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("gateway.yaml");
-        write_config(&path, &Config::default()).expect("write");
-
-        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "config wrote mode {mode:o}, expected 600");
-    }
-
-    #[test]
-    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
-    #[cfg(unix)]
-    fn the_scratch_file_is_not_readable_by_other_users_either() {
-        // The scratch file exists next to the config for the duration of the
-        // write. Creating it at the umask and tightening the final file after
-        // the rename leaves exactly the window this is meant to close.
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("gateway.yaml");
-        let (file, scratch) = create_scratch_exclusive(&path, 1).expect("scratch");
-        let mode = file.metadata().expect("stat").permissions().mode() & 0o777;
-        let _ = std::fs::remove_file(&scratch);
-        assert_eq!(mode, 0o600, "scratch wrote mode {mode:o}, expected 600");
-    }
-
-    #[test]
-    fn write_config_persists_yaml() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gateway.yaml");
-        let config = Config::default();
-
-        write_config(&path, &config).unwrap();
-
-        assert!(path.exists());
-        let loaded = Config::load(Some(&path)).unwrap();
-        assert_eq!(loaded.backends.len(), config.backends.len());
-    }
-
-    /// The temp file used by an atomic config write must be unique per call.
-    /// A shared `<config>.tmp` lets two concurrent writers clobber each other:
-    /// one renames the other's bytes into place and reports its own edit saved.
-    /// Every platform writes through a scratch file and renames it into place.
-    ///
-    /// Windows used to write the config in place, so a crash mid-write left a
-    /// truncated config behind — on the one platform no test covered. This
-    /// asserts the observable half of the unified path: the scratch file is
-    /// gone, the config parses, and nothing extra is left in the directory.
-    #[test]
-    fn a_config_write_leaves_no_scratch_file_on_any_platform() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gateway.yaml");
-
-        write_config(&path, &Config::default()).unwrap();
-
-        assert!(Config::load(Some(&path)).is_ok(), "config is not parseable");
-        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .filter_map(|entry| entry.ok().map(|e| e.file_name()))
-            .filter(|name| name != "gateway.yaml")
-            .collect();
-        assert!(
-            leftovers.is_empty(),
-            "the write left scratch files next to the config: {leftovers:?}"
-        );
-    }
-
-    /// A rename that fails for a reason another process can stop causing is
-    /// retried; one that cannot succeed is reported immediately.
-    #[test]
-    fn only_transient_rename_errors_are_retried() {
-        assert!(
-            is_transient(&std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
-            "a sharing violation would be reported as a permanent failure"
-        );
-        assert!(
-            !is_transient(&std::io::Error::from(std::io::ErrorKind::NotFound)),
-            "a missing scratch file would be retried until the attempts ran out"
-        );
-    }
-
-    /// The write path runs on an async executor worker while the reload lock is
-    /// held. Parking that thread stalls unrelated requests and lengthens the
-    /// hold that the busy bound exists to cap, so no sleep may creep back in.
-    #[test]
-    fn the_write_path_never_parks_the_thread_it_runs_on() {
-        // Split so this needle does not match the line that defines it.
-        let needle = concat!("thread::", "sleep");
-        let source = include_str!("config_persistence.rs");
-        let sleeps: Vec<&str> = source
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.starts_with("//"))
-            .filter(|line| line.contains(needle))
-            .collect();
-        assert!(
-            sleeps.is_empty(),
-            "the config write path blocks its executor thread: {sleeps:?}"
-        );
-    }
-
-    #[test]
-    fn a_scratch_name_already_in_use_is_never_claimed() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gateway.yaml");
-        let taken = scratch_candidate(&path, 7);
-        std::fs::write(&taken, b"another writer's bytes").unwrap();
-
-        let (_file, chosen) = create_scratch_exclusive(&path, 7).unwrap();
-
-        assert_ne!(
-            chosen, taken,
-            "the write claimed a scratch file another writer already held"
-        );
-        assert_eq!(
-            std::fs::read(&taken).unwrap(),
-            b"another writer's bytes",
-            "the write truncated another writer's scratch file"
-        );
-    }
-
-    /// Exhausting every candidate must fail rather than reuse a live name.
-    #[test]
-    fn a_write_fails_when_every_scratch_name_is_taken() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gateway.yaml");
-        for seed in 0..SCRATCH_ATTEMPTS {
-            std::fs::write(scratch_candidate(&path, seed), b"held").unwrap();
-        }
-
-        let error = create_scratch_exclusive(&path, 0).unwrap_err();
-
-        assert!(
-            error.contains("were all in use"),
-            "exhaustion is not distinguishable from an I/O failure: {error}"
-        );
-    }
-
-    #[test]
-    fn each_config_write_gets_its_own_temp_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gateway.yaml");
-
-        let (_first_handle, first) = create_scratch_exclusive(&path, next_scratch_seed()).unwrap();
-        let (_second_handle, second) =
-            create_scratch_exclusive(&path, next_scratch_seed()).unwrap();
-
-        assert_ne!(
-            first, second,
-            "two writers shared one temp path, so either can overwrite the other"
-        );
-        for tmp in [&first, &second] {
-            assert_eq!(tmp.parent(), path.parent(), "temp file left its directory");
-        }
-    }
-
-    /// Concurrent writers must each either persist their own bytes or fail
-    /// honestly, and the file left behind must be exactly one writer's config.
-    /// Against a shared scratch path one writer's rename finds the file already
-    /// renamed away and fails with "Failed to replace config file", and the
-    /// bytes that land can belong to a writer that reported success elsewhere.
-    #[test]
-    fn concurrent_config_writes_do_not_lose_the_temp_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gateway.yaml");
-
-        // Each writer's config is distinguishable, so the assertion below can
-        // tell "one writer won" from "the file is a mix of two writers".
-        let config_for = |writer: usize| {
-            let mut config = Config::default();
-            config.backends.insert(
-                format!("writer-{writer}"),
-                crate::config::BackendConfig {
-                    transport: crate::config::TransportConfig::Http {
-                        http_url: "http://127.0.0.1:9/mcp".to_string(),
-                        streamable_http: Some(false),
-                        protocol_version: None,
-                    },
-                    ..crate::config::BackendConfig::default()
-                },
-            );
-            config
-        };
-
-        for _ in 0..40 {
-            let errors: Vec<String> = std::thread::scope(|scope| {
-                let path = &path;
-                let config_for = &config_for;
-                let handles: Vec<_> = (0..8)
-                    .map(|writer| scope.spawn(move || write_config(path, &config_for(writer))))
-                    .collect();
-                handles
-                    .into_iter()
-                    .filter_map(|h| h.join().unwrap().err())
-                    .collect()
-            });
-
-            assert!(
-                errors.is_empty(),
-                "concurrent writers collided on the scratch file: {errors:?}"
-            );
-
-            let loaded = Config::load(Some(&path)).expect("config left unparseable");
-            let names: Vec<&String> = loaded.backends.keys().collect();
-            assert_eq!(
-                names.len(),
-                1,
-                "persisted config is not any single writer's: {names:?}"
-            );
-            assert!(
-                names[0].starts_with("writer-"),
-                "persisted config is not any single writer's: {names:?}"
-            );
-        }
-
-        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .filter_map(|e| e.ok().map(|e| e.file_name()))
-            .filter(|name| name != "gateway.yaml")
-            .collect();
-        assert!(
-            leftovers.is_empty(),
-            "scratch files were left next to the config: {leftovers:?}"
-        );
-    }
-
-    #[test]
-    fn write_config_rejects_invalid_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gateway.yaml");
-        let mut config = Config::default();
-        config.backends.insert(
-            "invalid_backend".to_string(),
-            crate::config::BackendConfig {
-                transport: crate::config::TransportConfig::Http {
-                    http_url: "not a url".to_string(),
-                    streamable_http: Some(false),
-                    protocol_version: None,
-                },
-                ..crate::config::BackendConfig::default()
-            },
-        );
-
-        let result = write_config(&path, &config);
-
-        assert!(matches!(result, Err(msg) if msg.contains("Failed to validate config")));
-        assert!(!path.exists());
-    }
-
-    /// A config edit must not turn secret *references* into secret *values* on
-    /// disk. The read-modify-write helpers behind `mcp-gateway add` and the
-    /// admin UI load the file, apply one change, and serialise the whole
-    /// struct back — so anything the loader resolved in memory is written out
-    /// in plaintext, into a file an operator keeps in version control.
-    #[test]
-    fn a_config_rewrite_keeps_secret_references_unresolved() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let env_path = dir.path().join("secrets.env");
-        crate::gateway::test_helpers::write_owner_only(
-            &env_path,
-            "FALSIFIER_TOKEN=tok-must-not-land\nFALSIFIER_HEADER=hdr-must-not-land\n",
-        )
-        .expect("write env file");
-        let path = dir.path().join("config.yaml");
-        crate::gateway::test_helpers::write_owner_only(
-            &path,
-            format!(
-                "env_files:\n  - {}\nsecurity:\n  transparency_log:\n    enabled: true\nauth:\n  enabled: true\n  bearer_token: env:FALSIFIER_TOKEN\nbackends:\n  demo:\n    http_url: https://example.invalid/mcp\n    headers:\n      Authorization: \"Bearer ${{FALSIFIER_HEADER}}\"\n",
-                env_path.display()
-            ),
-        )
-        .expect("write config");
-
-        let mut config = load_config_or_default(&path);
-        config.server.port = 9191;
-        write_config(&path, &config).expect("rewrite the config");
-
-        let written = std::fs::read_to_string(&path).expect("read the config back");
-        assert!(
-            !written.contains("tok-must-not-land"),
-            "the bearer token was written in plaintext:\n{written}"
-        );
-        assert!(
-            !written.contains("hdr-must-not-land"),
-            "the expanded header was written in plaintext:\n{written}"
-        );
-        assert!(
-            written.contains("env:FALSIFIER_TOKEN"),
-            "the reference must survive the rewrite:\n{written}"
-        );
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn a_written_config_is_owner_only_even_in_an_open_directory() {
-        // WT-ASSERT 1718-W1: the scratch file is created private, so the rename
-        // hands the config an owner-only DACL, not the directory's.
-        use crate::private_fs::test_support::{assert_owner_only, everyone_full_dir};
-
-        let dir = everyone_full_dir("1718-W1");
-        let path = dir.path().join("gateway.yaml");
-
-        write_config_text(&path, "server:\n  port: 1\n").expect("write");
-
-        // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
-        assert_owner_only("1718-W1", &path, false);
-    }
-}
+#[path = "config_persistence_tests.rs"]
+mod tests;

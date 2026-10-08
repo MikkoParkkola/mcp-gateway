@@ -35,8 +35,6 @@ mod schedule_source;
 mod services;
 mod store;
 mod task_source;
-#[cfg(test)]
-mod test_pause;
 mod types;
 mod upstream;
 mod upstream_listener;
@@ -58,7 +56,6 @@ pub(crate) use fanout::CatalogueScan;
 #[cfg(feature = "webui")]
 pub(crate) use governance::Actor;
 pub(crate) use records::{ApiKeyRef, Credential, LiveBinding};
-pub(crate) use reload::refresh_webhooks;
 pub(crate) use rpc::Caller;
 pub(crate) use services::{LiveCredentials, Services};
 pub(crate) use types::CallbackFailure;
@@ -83,16 +80,23 @@ pub(crate) struct EventsHub {
     debounce: backend_source::Debounce,
     /// Held while the catalogue changes or is read to delete from it.
     catalogue_gate: parking_lot::Mutex<()>,
+    /// The webhook routes, for the payload fields a subscribe records
+    /// (MIK-8076). Set once with the webhook source.
+    webhook_registry: std::sync::OnceLock<Arc<parking_lot::RwLock<WebhookRegistry>>>,
     /// Held by each burial and dead-letter sweep from its store call through
     /// its last receipt, so a burial's receipt comes before any eviction of
     /// it. Taken before the store's own lock, and never with `lifecycle`.
     receipts: tokio::sync::Mutex<()>,
     /// Test-only: one subscribe pauses between its commit and its audit.
     #[cfg(test)]
-    after_commit: test_pause::Slot,
+    after_commit: crate::test_pause::Slot,
+    /// Test-only: one subscribe pauses after its commit-time re-check, still
+    /// holding the catalogue gate, before its store admit (MIK-8038).
+    #[cfg(test)]
+    before_admit: crate::test_pause::Slot,
     /// Test-only: one burial pauses between its store call and its receipts.
     #[cfg(test)]
-    before_receipts: test_pause::Slot,
+    before_receipts: crate::test_pause::Slot,
 }
 
 /// One producer of events (design §4). The core knows sources only through
@@ -207,11 +211,14 @@ impl EventsHub {
             lifecycle: lifecycle::Started::default(),
             debounce: backend_source::Debounce::default(),
             catalogue_gate: parking_lot::Mutex::new(()),
+            webhook_registry: std::sync::OnceLock::new(),
             receipts: tokio::sync::Mutex::new(()),
             #[cfg(test)]
-            after_commit: test_pause::Slot::default(),
+            after_commit: crate::test_pause::Slot::default(),
             #[cfg(test)]
-            before_receipts: test_pause::Slot::default(),
+            before_admit: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_receipts: crate::test_pause::Slot::default(),
         }))
     }
 
@@ -243,6 +250,7 @@ impl EventsHub {
         self: &Arc<Self>,
         registry: Arc<parking_lot::RwLock<WebhookRegistry>>,
     ) {
+        let _ = self.webhook_registry.set(Arc::clone(&registry));
         self.register_source(Arc::new(webhook_source::WebhookSource { registry }));
     }
 

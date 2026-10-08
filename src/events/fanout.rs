@@ -90,19 +90,26 @@ impl EventsHub {
         let Some(source) = self.source(event.kind) else {
             return;
         };
-        let matching: Vec<Subscription> = self
-            .store
-            .subscriptions()
-            .into_iter()
-            .filter(|s| s.name == event.name && s.live(now))
-            // A keyed occurrence belongs to its key's holders alone (MIK-7811).
-            .filter(|s| {
-                event.lifecycle_key.as_deref().is_none_or(|key| {
-                    source.lifecycle_key(&s.principal, &s.name, &s.arguments) == key
+        // Matched under the catalogue gate a route refresh holds while it
+        // swaps the routes and judges the held set: no match against new
+        // routes reaches a subscription they hold (MIK-8076). No I/O and no
+        // await under it.
+        let matching: Vec<Subscription> = {
+            let _gate = self.catalogue_lock();
+            self.store
+                .subscriptions()
+                .into_iter()
+                .filter(|s| s.name == event.name && s.live(now))
+                .filter(|s| self.store.held(&s.id).is_none())
+                // A keyed occurrence belongs to its key's holders alone (MIK-7811).
+                .filter(|s| {
+                    event.lifecycle_key.as_deref().is_none_or(|key| {
+                        source.lifecycle_key(&s.principal, &s.name, &s.arguments) == key
+                    })
                 })
-            })
-            .filter(|s| source.matches(&s.principal, &s.arguments, event))
-            .collect();
+                .filter(|s| source.matches(&s.principal, &s.arguments, event))
+                .collect()
+        };
         for sub in matching {
             if !services
                 .admits_subscription(&sub, event.scope.grant_backend())
@@ -172,10 +179,7 @@ impl EventsHub {
             // Asks no backend grant at delivery: owner and operator events
             // are authorized by their source, not by a backend's grant.
             owner_scoped: event.scope.grant_backend().is_none(),
-            callback_host: url::Url::parse(&sub.url)
-                .ok()
-                .and_then(|u| u.host_str().map(str::to_owned))
-                .unwrap_or_default(),
+            callback_host: super::outbox::callback_host_of(&sub.url),
             tenants,
             attribution,
             attribution_keys,
@@ -189,6 +193,7 @@ impl EventsHub {
             state: OutboxState::Pending,
             last_status: None,
             dead_as: None,
+            replayed: false,
         };
         let refusal = if scan == Scan::Block {
             Some(DeadReason::FirewallBlocked)
@@ -247,17 +252,26 @@ impl EventsHub {
     }
 
     /// Once the startup capability scan has registered the webhook routes:
-    /// delete the subscriptions to webhook event types the catalogue no
-    /// longer offers (a route removed while the gateway was down, or webhooks
-    /// turned off), their pending records with them, and let the worker start.
-    /// Before this the webhook catalogue is partial, so no webhook type is
-    /// withdrawn and nothing is sent (MIK-7772); backend types are complete
-    /// from the start and are withdrawn whatever the scan did (MIK-7803). `false`, with the worker still held, when
-    /// a removal failed: the caller retries.
+    /// withdraw the subscriptions of backends removed while the gateway was
+    /// down (MIK-7803), hold the webhook subscriptions the routes do not offer
+    /// or serve (MIK-8057; nothing is sent to them, nothing deleted), and let
+    /// the worker start. `false`, with the worker still held, when a removal
+    /// failed: the caller retries.
+    #[cfg(test)]
     pub(crate) fn reconcile_catalogue(&self, scan: CatalogueScan) -> bool {
+        self.reconcile_catalogue_after(&|| scan)
+    }
+
+    /// [`Self::reconcile_catalogue`], with the scan given by `refresh`, run
+    /// under the same catalogue gate first: the startup refresh of the
+    /// webhook routes and the withdraw decision share one hold, so no other
+    /// refresh lands between them (MIK-7944). A capability catalogue swap is
+    /// not held off by this gate (MIK-8027).
+    pub(crate) fn reconcile_catalogue_after(&self, refresh: &dyn Fn() -> CatalogueScan) -> bool {
         // Held through the snapshot and the withdrawal, so a capability reload
         // cannot restore a route in between and lose its subscriptions.
         let _gate = self.catalogue_lock();
+        let scan = refresh();
         // With webhooks off no route can come back, so a partial capability
         // scan proves nothing about them: their catalogue is complete (empty).
         let webhooks_on = self
@@ -273,40 +287,58 @@ impl EventsHub {
         if !self.withdraw(&self.absent_backend_names(&offered)) {
             return false;
         }
+        if !webhooks_on {
+            // No route can be offered: every webhook row is held until it
+            // lapses (MIK-8057).
+            self.hold_unserved(&std::collections::BTreeMap::new());
+        }
         if scan == CatalogueScan::Partial && webhooks_on {
             tracing::warn!(
-                "events: a capability directory could not be read at startup; stored \
-                 subscriptions are kept and reconciled at the next complete start"
+                "events: the startup catalogue is partial (a capability directory could not \
+                 be read) or its webhook refresh was refused; webhook subscriptions it does \
+                 not serve are held, and resume when a reload serves them"
             );
-            return self.release_worker();
         }
-        let gone = self.absent_names(super::webhook_source::NAME_PREFIX, &offered);
-        if !self.withdraw(&gone) {
-            return false;
+        let held = self.store.held_listing();
+        if !held.is_empty() {
+            let types: Vec<(&str, usize)> =
+                held.iter().map(|t| (t.name.as_str(), t.count)).collect();
+            tracing::info!(
+                ?types,
+                "events: webhook subscriptions held: their type is not offered or served now"
+            );
         }
         self.release_worker()
     }
 
-    /// Run [`Self::reconcile_catalogue`] until it succeeds, on the blocking
-    /// pool, waiting `retry` between attempts. Every failed attempt is
+    /// Run [`Self::reconcile_catalogue_after`] until it succeeds, on the
+    /// blocking pool, waiting `retry` between attempts; each attempt refreshes
+    /// and recomputes from the stored state. Every failed attempt is
     /// logged, a join error with its cause: a retry that fails silently
-    /// cannot be diagnosed (MIK-7891).
+    /// cannot be diagnosed (MIK-7891). `pass` names the startup pass in
+    /// those logs, so a stuck deferred withdraw reads apart from the first
+    /// pass (MIK-8027).
     pub(crate) async fn reconcile_until_done(
         self: &Arc<Self>,
-        scan: CatalogueScan,
+        pass: &'static str,
+        refresh: Arc<dyn Fn() -> CatalogueScan + Send + Sync>,
         retry: std::time::Duration,
     ) {
         for attempt in 1_u64.. {
-            let hub = Arc::clone(self);
-            match tokio::task::spawn_blocking(move || hub.reconcile_catalogue(scan)).await {
+            let (hub, refresh) = (Arc::clone(self), Arc::clone(&refresh));
+            match tokio::task::spawn_blocking(move || hub.reconcile_catalogue_after(&*refresh))
+                .await
+            {
                 Ok(true) => return,
                 Ok(false) => tracing::warn!(
+                    pass,
                     attempt,
                     retry_secs = retry.as_secs(),
                     "events: startup reconcile could not remove a stale subscription \
                      (cause in the preceding log line); the worker stays held, retrying"
                 ),
                 Err(error) => tracing::warn!(
+                    pass,
                     attempt,
                     %error,
                     "events: startup reconcile task failed; the worker stays held, retrying"
@@ -314,20 +346,6 @@ impl EventsHub {
             }
             tokio::time::sleep(retry).await;
         }
-    }
-
-    /// Stored subscriptions' event names under `prefix` that `offered` lacks.
-    fn absent_names(
-        &self,
-        prefix: &str,
-        offered: &std::collections::HashSet<String>,
-    ) -> Vec<String> {
-        self.store
-            .subscriptions()
-            .into_iter()
-            .map(|sub| sub.name)
-            .filter(|name| name.starts_with(prefix) && !offered.contains(name))
-            .collect()
     }
 
     /// Stored `backend.<x>.<kind>` names whose backend `x` is gone. A backend
@@ -356,6 +374,45 @@ impl EventsHub {
             .store(true, std::sync::atomic::Ordering::Release);
         self.runtime.wake.notify_one();
         true
+    }
+
+    /// Under the catalogue gate the caller holds: re-register the webhook
+    /// routes of `capabilities` ([`super::reload::refresh_webhooks`]), then
+    /// hold every stored webhook subscription they do not offer or serve and
+    /// resume every one they serve again (MIK-8057, MIK-8076). Nothing is
+    /// deleted.
+    ///
+    /// # Errors
+    /// The live event type the reload would narrow (T52); the routes stay
+    /// as they were, and the stored rows are judged against them.
+    pub(crate) fn refresh_webhooks(
+        &self,
+        registry: &Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>,
+        capabilities: &[crate::capability::CapabilityDefinition],
+    ) -> Result<(), String> {
+        match super::reload::refresh_webhooks(registry, capabilities) {
+            Ok(shapes) => {
+                self.hold_unserved(&shapes);
+                Ok(())
+            }
+            // The routes left live may be ones no row was judged against yet,
+            // as when a startup scan registered them: judge against those.
+            Err(narrowed) => {
+                self.hold_unserved(&super::reload::live_shapes(registry));
+                Err(narrowed)
+            }
+        }
+    }
+
+    /// Judge every stored webhook subscription against `shapes`; a stamp
+    /// that could not be written is logged and written by the next refresh.
+    fn hold_unserved(&self, shapes: &std::collections::BTreeMap<String, super::reload::Shape>) {
+        let max_ttl =
+            chrono::Duration::from_std(self.config.max_ttl).unwrap_or(chrono::Duration::days(1));
+        let judge = |sub: &Subscription| super::reload::judge(sub, shapes).unwrap_or_default();
+        if let Err(error) = self.store.apply_holds(&judge, Utc::now(), max_ttl) {
+            tracing::warn!(%error, "events: a held subscription's stamp was not written; retried at the next refresh");
+        }
     }
 
     /// Serializes startup reconciliation with capability reloads.

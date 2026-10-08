@@ -60,6 +60,9 @@ struct IndexedCapabilities {
     index: HashMap<String, usize>,
     /// Pre-built MCP `Tool` representations — rebuilt whenever `entries` changes.
     tools: Vec<Tool>,
+    /// Read yet absent: gate refusals (rebuilt by each reload) and unloads (until admitted).
+    refused: std::collections::HashSet<String>,
+    unloaded: std::collections::HashSet<String>,
 }
 
 /// True when `new` differs from `old` in any serialised field. A definition
@@ -168,6 +171,8 @@ pub struct CapabilityBackend {
     /// [`validate_oauth_isolation`] inside `call_tool_with_context`.
     multi_user: std::sync::atomic::AtomicBool,
     initial_scan: std::sync::atomic::AtomicU8,
+    /// Moves at every catalogue write, under the write lock (MIK-8037).
+    catalogue_generation: std::sync::atomic::AtomicU64,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -194,6 +199,7 @@ impl CapabilityBackend {
             rug_pull_state: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
             initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
+            catalogue_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -232,6 +238,7 @@ impl CapabilityBackend {
             caps.entries.remove(pos);
             caps.tools.remove(pos);
             caps.index.remove(name);
+            caps.unloaded.insert(name.to_owned());
             // Shift remaining indices down.
             for idx in caps.index.values_mut() {
                 if *idx > pos {
@@ -242,6 +249,7 @@ impl CapabilityBackend {
             // removal under the old epoch.
             self.executor.bump_policy_epoch();
             self.executor.bump_mcp_generation(name);
+            self.bump_catalogue_generation(&caps);
             true
         } else {
             false
@@ -343,6 +351,7 @@ impl CapabilityBackend {
                     "Capability refused: its account binding does not resolve"
                 );
                 report.admitted -= 1;
+                self.note_refused(&capability);
                 report.rejected.push(format!("{capability}: {error}"));
             }
             tokio::task::yield_now().await;
@@ -370,6 +379,9 @@ impl CapabilityBackend {
 
         let mut all_caps = Vec::new();
         let mut total = 0;
+        // A directory that could not be read leaves the catalogue partial:
+        // its capabilities are missing from this load, not deleted (MIK-8028).
+        let mut partial = false;
 
         for dir in &dirs {
             match CapabilityLoader::load_directory(dir).await {
@@ -378,6 +390,7 @@ impl CapabilityBackend {
                     all_caps.extend(loaded);
                 }
                 Err(e) => {
+                    partial = true;
                     warn!(backend = %self.name, directory = %dir, error = %e, "Failed to reload directory");
                 }
             }
@@ -385,11 +398,13 @@ impl CapabilityBackend {
 
         // The same admission gate the initial load applies.
         let mut admitted = Vec::with_capacity(all_caps.len());
+        let mut refused = std::collections::HashSet::new();
         for cap in all_caps {
             match validate_capability_account_binding(&cap, self.executor.account_strategies()) {
                 Ok(()) => admitted.push(cap),
                 Err(error) => {
                     total -= 1;
+                    refused.insert(cap.name.clone());
                     warn!(
                         backend = %self.name,
                         capability = %cap.name,
@@ -420,6 +435,11 @@ impl CapabilityBackend {
                 }
             }
             caps.replace_all(admitted);
+            caps.settle_absent(refused);
+            // With the swap, under the same lock: `catalogue_snapshot` never
+            // sees one without the other.
+            self.set_catalogue_partial(partial);
+            self.bump_catalogue_generation(&caps);
             self.executor.bump_policy_epoch();
             self.executor.stop_unloaded_mcp(&|name| {
                 !revoked.contains(name) && caps.index.contains_key(name)
@@ -678,6 +698,8 @@ impl CapabilityBackend {
         let mut caps = self.capabilities.write();
         let replaced = caps.contains(&name);
         caps.upsert(capability);
+        caps.unloaded.remove(&name);
+        self.bump_catalogue_generation(&caps);
         if replaced {
             // A replacement is a live-policy change (MIK-7814): children
             // started under the old definition stop, and its cached answers

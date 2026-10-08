@@ -45,12 +45,16 @@ fn a_literal_secret_is_redacted_where_the_result_equals_it() {
     assert_eq!(value["t"], true, "{value}");
 }
 
-/// Text that is not a JSON scalar ("007", "TRUE") is not taken for one.
+/// Text that is not a JSON scalar ("TRUE") is not taken for one. "007" is not
+/// JSON either, but it names the number 7 by value, so it redacts it at any
+/// length (MIK-8065 ruling: a leak is worse than blanking an equal number,
+/// #3238 already blanks it for the literal `7`, and the 4-byte floor was meant
+/// for caller values, which never reach this function).
 #[test]
-fn a_short_secret_that_is_not_json_matches_no_scalar() {
+fn a_secret_that_is_not_json_matches_no_scalar_but_its_number_value() {
     let mut value = json!({"n": 7, "t": true});
     redact_value(&mut value, &["007".to_owned(), "TRUE".to_owned()]);
-    assert_eq!(value, json!({"n": 7, "t": true}));
+    assert_eq!(value, json!({"n": "[redacted]", "t": true}));
 }
 
 /// An integer-valued form is judged by its significant digits: zeros leading
@@ -83,14 +87,62 @@ fn padded_and_overflowing_zero_forms_match_their_integer() {
     assert_eq!(value["one"], 1, "{value}");
 }
 
-/// Below the floor a number secret matches by JSON equality alone: "1e5" is
-/// the float 1e5, so the integer 100000 stays.
+/// A short exponent secret matches by value too: "1e5" redacts the float 1e5
+/// and the equal integer 100000 (MIK-8065 ruling, as above).
 #[test]
-fn a_short_exponent_secret_leaves_the_equal_integer() {
+fn a_short_exponent_secret_redacts_the_equal_integer() {
     let mut value: Value = serde_json::from_str(r#"{"f": 1e5, "i": 100000}"#).unwrap();
     redact_value(&mut value, &["1e5".to_owned()]);
     assert_eq!(value["f"], "[redacted]", "{value}");
-    assert_eq!(value["i"], 100_000, "{value}");
+    assert_eq!(value["i"], "[redacted]", "{value}");
+}
+
+/// `MIK-8065.NUM.1`/`NUM.2`: a credential of 1-3 bytes in a number form that is
+/// not a JSON literal is redacted from a result number equal to it, and never
+/// from one whose digits merely hold it. Mutant: the length floor restored.
+#[test]
+fn a_short_credential_in_another_number_form_is_redacted_by_value() {
+    let mut value: Value =
+        serde_json::from_str(r#"{"n": 12, "f": 12.0, "held": 912, "near": 13}"#).unwrap();
+    redact_value(&mut value, &["012".to_owned()]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+    assert_eq!(value["f"], "[redacted]", "{value}");
+    assert_eq!(value["held"], 912, "{value}");
+    assert_eq!(value["near"], 13, "{value}");
+
+    let mut value = json!({"n": 12, "neg": -12});
+    redact_value(&mut value, &["+12".to_owned()]);
+    assert_eq!(value, json!({"n": "[redacted]", "neg": "[redacted]"}));
+
+    let mut value: Value = serde_json::from_str(r#"{"i": 100, "f": 100.0, "k": 1000}"#).unwrap();
+    redact_value(&mut value, &["1e2".to_owned()]);
+    assert_eq!(value["i"], "[redacted]", "{value}");
+    assert_eq!(value["f"], "[redacted]", "{value}");
+    assert_eq!(value["k"], 1000, "{value}");
+}
+
+/// `MIK-8065.NUM.4`: a credential with no digit before its exponent names no
+/// number, so it never blanks a zero. Mutant: the coefficient check removed.
+#[test]
+fn a_credential_with_no_digit_leaves_every_zero() {
+    for secret in ["e123", "-e10", "    ", "+", "e2", "-.e5"] {
+        let mut value: Value = serde_json::from_str(r#"{"z": 0, "zf": 0.0, "one": 1}"#).unwrap();
+        redact_value(&mut value, &[secret.to_owned()]);
+        assert_eq!(value["z"], 0, "{secret:?}: {value}");
+        assert_eq!(value["one"], 1, "{secret:?}: {value}");
+        assert!(value["zf"].is_number(), "{secret:?}: {value}");
+    }
+}
+
+/// The digit check rejects only digitless needles: short forms with a digit
+/// before the exponent still match ("0e2" is zero, ".5" is one half).
+#[test]
+fn a_short_form_with_a_digit_still_matches() {
+    let mut value: Value = serde_json::from_str(r#"{"z": 0, "h": 0.5, "one": 1}"#).unwrap();
+    redact_value(&mut value, &["0e2".to_owned(), ".5".to_owned()]);
+    assert_eq!(value["z"], "[redacted]", "{value}");
+    assert_eq!(value["h"], "[redacted]", "{value}");
+    assert_eq!(value["one"], 1, "{value}");
 }
 
 /// A number secret with a fraction names no integer: "12345.5" redacts the

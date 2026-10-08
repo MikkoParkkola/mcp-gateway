@@ -28,6 +28,13 @@ use super::registry::CostRegistry;
 #[cfg(feature = "cost-governance")]
 #[path = "enforcer_crossings.rs"]
 pub(crate) mod crossings;
+#[cfg(feature = "cost-governance")]
+#[path = "enforcer_rows.rs"]
+mod rows;
+#[cfg(all(feature = "cost-governance", test))]
+use rows::MAX_UNBUDGETED_ROWS;
+#[cfg(feature = "cost-governance")]
+use rows::add_capped;
 
 // ── DailyAccumulator ─────────────────────────────────────────────────────────
 
@@ -104,14 +111,31 @@ thread_local! {
     /// before the counter is cleared: a test lands an add there (MIK-7880).
     static AFTER_DAY_PUBLISH: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
+    /// Runs once on this thread inside a settle, under the ledger lock, right
+    /// after the spend is added: it may start a check but never wait on one.
+    static AFTER_SPEND_ADDED: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+    /// Runs once on this thread when a settle has let the ledger go, before it
+    /// returns: the caller still holds its admission (MIK-7903).
+    static AFTER_SETTLE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+type TestHook = std::thread::LocalKey<std::cell::RefCell<Option<Box<dyn FnOnce()>>>>;
+
+/// Run and clear the hook a test set on this thread, if any.
+#[cfg(test)]
+fn fire(hook: &'static TestHook) {
+    let taken = hook.with(|hook| hook.borrow_mut().take());
+    if let Some(f) = taken {
+        f();
+    }
 }
 
 #[cfg(test)]
 fn fire_after_day_publish() {
-    let taken = AFTER_DAY_PUBLISH.with(|hook| hook.borrow_mut().take());
-    if let Some(f) = taken {
-        f();
-    }
+    fire(&AFTER_DAY_PUBLISH);
 }
 
 #[cfg(all(test, feature = "cost-governance"))]
@@ -137,42 +161,6 @@ fn current_day() -> u64 {
         .unwrap_or(Duration::ZERO)
         .as_secs()
         / 86_400
-}
-
-/// Unbudgeted names one day map keeps entries for; later names add into
-/// `(other)`. A check reads only budgeted names, so with R2 off and a non-zero
-/// `default_cost` the caller would otherwise choose how many entries exist.
-#[cfg(feature = "cost-governance")]
-const MAX_UNBUDGETED_ROWS: usize = 256;
-
-/// Add `micro` to `name`'s entry and return that entry's running total. A
-/// budgeted name always has its own. Any other name has one only while `map`
-/// holds fewer than [`MAX_UNBUDGETED_ROWS`] unbudgeted entries, and only if it is no longer than the cost tracker's row-name limit; past
-/// either, its spend goes to `overflow`, which no budget check ever reads, so
-/// a budget whose name happens to be `(other)` keeps its own total.
-/// ponytail: a soft cap; racing first inserts can pass it by the caller count.
-#[cfg(feature = "cost-governance")]
-fn add_capped(
-    (map, overflow): (&DashMap<String, DailyAccumulator>, &DailyAccumulator),
-    name: &str,
-    limits: &HashMap<String, f64>,
-    micro: u64,
-) -> u64 {
-    // Budgeted entries never count against the cap, present or not, so the map
-    // holds at most every budgeted name plus MAX_UNBUDGETED_ROWS others.
-    let unbudgeted = || {
-        let budgeted = limits.keys().filter(|k| map.contains_key(*k)).count();
-        // A sweep may remove entries between the two reads.
-        map.len().saturating_sub(budgeted)
-    };
-    let own = limits.contains_key(name)
-        || map.contains_key(name)
-        || (name.len() <= super::tally::MAX_ROW_NAME_BYTES && unbudgeted() < MAX_UNBUDGETED_ROWS);
-    if own {
-        map.entry(name.to_string()).or_default().add(micro)
-    } else {
-        overflow.add(micro)
-    }
 }
 
 // ── EnforcementResult ────────────────────────────────────────────────────────
@@ -213,6 +201,10 @@ struct Pending {
 #[cfg(feature = "cost-governance")]
 impl Pending {
     fn add(&mut self, tool: &str, key: Option<&str>, micro: u64) {
+        // A zero hold is never released, so it must not create rows.
+        if micro == 0 {
+            return;
+        }
         self.global = self.global.saturating_add(micro);
         let slot = self.tools.entry(tool.to_string()).or_default();
         *slot = slot.saturating_add(micro);
@@ -259,23 +251,36 @@ fn locked(ledger: &Ledger) -> MutexGuard<'_, Pending> {
     ledger.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// One admitted call's reservation. Dropping it gives the allowance back, so a
-/// call that fails without spend, is refused later or is cancelled keeps
-/// nothing. The caller records the spend first and drops the hold after:
-/// a check then never sees the spend missing from both places.
+/// One admitted call's reservation. A settle consumes it in the same step
+/// that records the spend (MIK-7903), so a check never sees the call twice.
+/// Dropping an unsettled hold gives the allowance back, so a call that fails
+/// without spend, is refused later or is cancelled keeps nothing; dropping a
+/// settled one gives back nothing.
 #[cfg(feature = "cost-governance")]
 #[must_use = "dropping a hold gives the reservation back"]
 pub(crate) struct SpendHold {
     ledger: Arc<Ledger>,
     tool: String,
     key: Option<String>,
-    micro: u64,
+    /// Still reserved; 0 once settled or released.
+    micro: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(feature = "cost-governance")]
+impl SpendHold {
+    /// Give the reservation back into `pending`, the locked ledger, once.
+    fn release_into(&self, pending: &mut Pending) {
+        let micro = self.micro.swap(0, std::sync::atomic::Ordering::Relaxed);
+        if micro > 0 {
+            pending.release(&self.tool, self.key.as_deref(), micro);
+        }
+    }
 }
 
 #[cfg(feature = "cost-governance")]
 impl Drop for SpendHold {
     fn drop(&mut self) {
-        locked(&self.ledger).release(&self.tool, self.key.as_deref(), self.micro);
+        self.release_into(&mut locked(&self.ledger));
     }
 }
 
@@ -389,6 +394,9 @@ pub struct BudgetEnforcer {
     /// Spend of unbudgeted tool and key names past the day maps' cap.
     tool_overflow: DailyAccumulator,
     key_overflow: DailyAccumulator,
+    /// The day an overflowing spend last swept each map (MIK-8045).
+    tool_overflow_swept: std::sync::atomic::AtomicU64,
+    key_overflow_swept: std::sync::atomic::AtomicU64,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -407,6 +415,8 @@ impl BudgetEnforcer {
             swept_day: std::sync::atomic::AtomicU64::new(0),
             tool_overflow: DailyAccumulator::new(),
             key_overflow: DailyAccumulator::new(),
+            tool_overflow_swept: std::sync::atomic::AtomicU64::new(0),
+            key_overflow_swept: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -444,9 +454,10 @@ impl BudgetEnforcer {
             };
         }
 
-        // The same conversion `record_spend` applies to this cost.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let cost_micro = (cost * 1_000_000.0) as u64;
+        // The same conversion `record_spend` applies to this cost, and the
+        // amount every projection below counts (MIK-8081).
+        let cost_micro = super::tally::micro(cost);
+        let cost = usd(cost_micro);
 
         // One step from here to the reservation below. Nothing in it waits or
         // writes a log: alerts are recorded and emitted after the lock is gone.
@@ -550,7 +561,7 @@ impl BudgetEnforcer {
                 ledger: Arc::clone(&self.ledger),
                 tool: tool_name.to_string(),
                 key: api_key_name.map(str::to_string),
-                micro: cost_micro,
+                micro: std::sync::atomic::AtomicU64::new(cost_micro),
             })
         });
         drop(pending);
@@ -567,15 +578,30 @@ impl BudgetEnforcer {
         }
     }
 
-    /// Record actual spend after a successful invocation.
-    ///
-    /// Must be called AFTER the tool dispatch completes (post-invoke).
+    /// Record actual spend after a successful invocation, with no reservation
+    /// to settle (restore paths and tests). A dispatched call uses
+    /// `settle`.
     pub fn record_spend(&self, tool_name: &str, api_key_name: Option<&str>, cost_usd: f64) {
+        self.settle(None, tool_name, api_key_name, cost_usd);
+    }
+
+    /// Record an admitted call's spend and settle the reservation its check
+    /// made, in one step under the ledger lock (MIK-7903): a concurrent check
+    /// sees the call either reserved or spent, never both.
+    ///
+    /// Must be called AFTER the tool dispatch completes (post-invoke). A zero
+    /// cost records nothing and leaves the hold to its drop.
+    pub(crate) fn settle(
+        &self,
+        hold: Option<&SpendHold>,
+        tool_name: &str,
+        api_key_name: Option<&str>,
+        cost_usd: f64,
+    ) {
         if cost_usd == 0.0 {
             return;
         }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let micro = (cost_usd * 1_000_000.0) as u64;
+        let micro = super::tally::micro(cost_usd);
 
         let budgets = &self.config.budgets;
         // Before the adds, so the first spend of a day never finds yesterday's
@@ -590,14 +616,26 @@ impl BudgetEnforcer {
                 (&self.tool_daily, &budgets.per_tool),
                 (&self.key_daily, &budgets.per_key),
             ] {
-                map.retain(|name, day| limits.contains_key(name) || day.is_current());
+                rows::sweep_stale(map, limits);
             }
             self.swept_day
                 .fetch_max(today, std::sync::atomic::Ordering::Relaxed);
         }
+        // Same order as `check`: ledger, then map shard, then accumulator.
+        let mut pending = locked(&self.ledger);
         let global = self.global_daily.add(micro);
         let tool = add_capped(self.tool_maps(), tool_name, &budgets.per_tool, micro);
         let key = api_key_name.map(|key| add_capped(self.key_maps(), key, &budgets.per_key, micro));
+        #[cfg(test)]
+        fire(&AFTER_SPEND_ADDED);
+        // A hold from another enforcer (replaced on reload) belongs to its
+        // own ledger and is released by its drop.
+        if let Some(hold) = hold.filter(|hold| Arc::ptr_eq(&hold.ledger, &self.ledger)) {
+            hold.release_into(&mut pending);
+        }
+        drop(pending);
+        #[cfg(test)]
+        fire(&AFTER_SETTLE);
         if self.observer.is_set() {
             self.report_crossings(
                 tool_name,
@@ -647,14 +685,22 @@ impl BudgetEnforcer {
         self.key_overflow.add(micro(persisted.key_overflow_usd));
     }
 
-    /// The per-tool day map and its overflow accumulator.
-    fn tool_maps(&self) -> (&DashMap<String, DailyAccumulator>, &DailyAccumulator) {
-        (&self.tool_daily, &self.tool_overflow)
+    /// The per-tool day rows.
+    fn tool_maps(&self) -> rows::Rows<'_> {
+        (
+            &self.tool_daily,
+            &self.tool_overflow,
+            &self.tool_overflow_swept,
+        )
     }
 
-    /// The per-key day map and its overflow accumulator.
-    fn key_maps(&self) -> (&DashMap<String, DailyAccumulator>, &DailyAccumulator) {
-        (&self.key_daily, &self.key_overflow)
+    /// The per-key day rows.
+    fn key_maps(&self) -> rows::Rows<'_> {
+        (
+            &self.key_daily,
+            &self.key_overflow,
+            &self.key_overflow_swept,
+        )
     }
 
     /// Snapshot current accumulator state for persistence and the UI endpoint.
@@ -731,3 +777,7 @@ mod tests;
 #[cfg(test)]
 #[path = "enforcer_atomic_tests.rs"]
 mod atomic_tests;
+
+#[cfg(test)]
+#[path = "enforcer_settle_seam.rs"]
+pub(crate) mod settle_seam;

@@ -9,7 +9,8 @@ use std::time::Duration;
 use chrono::Utc;
 
 use super::{
-    DeadReason, EventsHub, Settle, counting_callback, logged_services, offer, queued, queued_event,
+    DeadReason, EventsHub, Settle, audit_actions, config_default, counting_callback,
+    logged_services, offer, queued, queued_event, queued_with,
 };
 
 /// The audit lines for `event_id`, in log order, as their `action`.
@@ -38,7 +39,7 @@ fn assert_burial_first(dir: &std::path::Path, event_id: &str) {
 fn pending(hub: &EventsHub, event_id: &str) -> crate::events::outbox::OutboxRecord {
     let later = Utc::now() + chrono::Duration::minutes(5);
     hub.store
-        .due(later, &std::collections::HashSet::new())
+        .due(later, &std::collections::HashSet::new(), hub.dead_policy())
         .expect("io")
         .ready
         .into_iter()
@@ -168,7 +169,7 @@ where
     A: std::future::Future<Output = ()> + Send + 'static,
     B: std::future::Future<Output = ()> + Send + 'static,
 {
-    use crate::events::test_pause::within;
+    use crate::test_pause::within;
     let (reached, release) = hub.before_receipts.arm();
     let first = tokio::spawn(first);
     within("the first burial's pause", reached.notified()).await;
@@ -304,4 +305,68 @@ async fn a_failure_after_unsent_claims_is_judged_by_its_sends() {
         matches!(settle, Settle::Retry { .. }),
         "one send of two allowed: {settle:?}"
     );
+}
+
+/// MIK-8061: an expiry burial the byte cap evicts at once is receipted
+/// before its eviction, in the worker's own pass.
+#[tokio::test]
+async fn a_self_evicting_expiry_burial_is_receipted_before_its_eviction() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        dead_letter_max_bytes: 1,
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = Arc::new(logged_services(dir.path()));
+    queued_with(&hub, 9, "evt_exp", "webhook.c.r.received", |_, record| {
+        record.attempt = 1;
+    });
+    let now = Utc::now();
+    let mut row = hub.store.subscriptions().remove(0);
+    row.expires_at = Some(now - chrono::Duration::seconds(1));
+    let caps = crate::events::store::Caps {
+        per_principal: 10,
+        global: 10,
+    };
+    let tail = crate::events::store::TailPolicy {
+        ttl: Duration::from_secs(3600),
+        max: 10,
+        max_per_principal: 10,
+    };
+    hub.store
+        .admit(row, true, caps, chrono::Duration::zero(), now, tail)
+        .expect("io")
+        .expect("refreshed to an expiry in the past");
+    let slots = Arc::new(tokio::sync::Semaphore::new(1));
+    hub.dispatch(&services, &slots).await;
+    assert!(hub.store.dead_letter_by_id("evt_exp").is_none(), "evicted");
+    assert_burial_first(dir.path(), "evt_exp");
+}
+
+/// MIK-7805 AC4: the host on a dead-letter record is the one stamped on the
+/// occurrence at fan-out, even when the subscription is gone by then.
+#[tokio::test]
+async fn a_dead_letter_record_names_the_host_stamped_on_the_occurrence() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let services = logged_services(dir.path());
+    queued(&hub, 9, "evt_hosted");
+    let later = Utc::now() + chrono::Duration::minutes(5);
+    let mut record = hub
+        .store
+        .due(later, &std::collections::HashSet::new(), hub.dead_policy())
+        .expect("io")
+        .ready
+        .remove(0);
+    record.callback_host = "stamped.example".to_owned();
+    // The subscription leaves while the burial is being recorded.
+    let tail = crate::events::tail_policy(&config_default());
+    hub.store
+        .remove("sub_worker", Utc::now(), tail)
+        .expect("removed");
+    hub.dead_lettered(&services, &record, DeadReason::Gone)
+        .await;
+    let written = audit_actions(dir.path(), "events.dead_letter");
+    assert_eq!(written.len(), 1, "{written:?}");
+    assert_eq!(written[0]["callback_host"], "stamped.example");
 }

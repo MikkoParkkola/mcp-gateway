@@ -34,8 +34,9 @@ impl MetaMcp {
     /// once the startup scan has registered its routes. Called after the
     /// hub is installed and started.
     ///
-    /// A directory the startup scan failed to load makes the scan partial,
-    /// and a partial scan withdraws nothing.
+    /// No webhook subscription is withdrawn by any read of the catalogue: one
+    /// whose type the routes do not offer or serve is held, and resumes when
+    /// they serve it again (MIK-8057, MIK-8076).
     pub(crate) fn reconcile_events_after_scan(&self) {
         let Some(hub) = self.events().cloned() else {
             return;
@@ -59,25 +60,14 @@ impl MetaMcp {
                     }
                 }
             }
-            // A reload that arrived mid-scan was held: apply it before the
-            // catalogue is reconciled against the routes.
-            if let (Some(capabilities), Some(registry)) = (&capabilities, &registry)
-                && capabilities.take_held_reload()
-            {
-                apply_webhook_refresh(&hub, capabilities, registry);
-            }
-            // The loader's own outcome, read once the scan is over.
-            let scan = if capabilities
-                .as_ref()
-                .is_none_or(|c| c.initial_scan_loaded_every_directory())
-            {
-                crate::events::CatalogueScan::Complete
-            } else {
-                crate::events::CatalogueScan::Partial
-            };
-            // Disk work, off the async workers; a removal that failed is
-            // retried and logged, the worker held meanwhile.
-            hub.reconcile_until_done(scan, std::time::Duration::from_secs(5))
+            // The routes the scan registered may predate a reload that landed
+            // during it, announced or not (MIK-7944): refresh them from the
+            // catalogue as it is now, under the reconcile's own gate, and
+            // judge the held subscriptions against that one snapshot. Disk
+            // work, off the async workers; a backend subscription removal
+            // that failed is retried, the worker held meanwhile.
+            let pass = startup_pass(&hub, capabilities, registry);
+            hub.reconcile_until_done("startup", pass, std::time::Duration::from_secs(5))
                 .await;
         });
     }
@@ -219,16 +209,31 @@ impl MetaMcp {
         apply_webhook_refresh(hub, &capabilities, &registry);
     }
 
-    /// Every REST-only capability as the events watch source sees it: its
-    /// read-only classification (data, MIK-7216.IDEM.1) and whose credential
-    /// a call needs. Empty without a capability backend.
-    pub(crate) fn watch_targets(&self) -> Vec<crate::events::watch_source::Target> {
-        use crate::events::watch_source::{CredentialUse, Target};
+    /// The catalogue as the events watch source sees it, read once
+    /// (MIK-8037): every REST-only capability with its read-only
+    /// classification (data, `MIK-7216.IDEM.1`) and whose credential a call
+    /// needs, every capability name read, whether the catalogue is whole, and
+    /// its generation. Empty and complete without a capability backend.
+    pub(crate) fn watch_catalogue(&self) -> crate::events::watch_source::Catalogue {
+        use crate::events::watch_source::{Catalogue, CredentialUse, Target};
         let Some(capabilities) = self.get_capabilities() else {
-            return Vec::new();
+            return Catalogue {
+                complete: true,
+                ..Catalogue::default()
+            };
         };
-        capabilities
-            .list_capabilities()
+        // Read first: once `true` it stays true, so it always covers the
+        // snapshot read after it.
+        let scanned = capabilities.initial_scan_complete();
+        let (catalogue, every_directory, generation, absent) = capabilities.catalogue_snapshot_at();
+        // A capability the account gate refused, or an unload removed, was
+        // read: its absence is confirmed, not unread.
+        let present = catalogue
+            .iter()
+            .map(|c| c.name.clone())
+            .chain(absent)
+            .collect();
+        let targets = catalogue
             .into_iter()
             .filter(crate::capability::served_over_rest)
             .map(|definition| Target {
@@ -244,27 +249,84 @@ impl MetaMcp {
                 backend: capabilities.name.clone(),
                 capability: definition.name,
             })
-            .collect()
+            .collect();
+        Catalogue {
+            targets,
+            present,
+            complete: scanned && every_directory,
+            generation,
+        }
     }
 }
 
 /// Re-register the webhook routes of `capabilities`, unless the reload
-/// narrows a live event type (T52).
+/// narrows a live event type (T52), and hold the subscriptions they do not
+/// offer or serve (MIK-8057, MIK-8076). Nothing is deleted.
 fn apply_webhook_refresh(
     hub: &Arc<EventsHub>,
     capabilities: &crate::capability::CapabilityBackend,
     registry: &Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>,
 ) {
     let _gate = hub.catalogue_lock();
-    match crate::events::refresh_webhooks(registry, &capabilities.list_capabilities()) {
-        Ok(removed) => {
-            hub.withdraw(&removed);
+    let _ = refresh_from_snapshot(hub, capabilities, registry);
+}
+
+/// The startup reconcile pass, as the refresh `reconcile_until_done` runs
+/// under the hub's catalogue gate.
+fn startup_pass(
+    hub: &Arc<EventsHub>,
+    capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
+    registry: Option<Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>>,
+) -> Arc<dyn Fn() -> crate::events::CatalogueScan + Send + Sync> {
+    let hub = Arc::clone(hub);
+    Arc::new(move || startup_refresh(&hub, capabilities.as_deref(), registry.as_ref()))
+}
+
+/// The startup reconcile's refresh, run under its catalogue gate: the routes
+/// follow the catalogue as it is now (MIK-7944). `Partial` only reports that
+/// the snapshot lacked a directory or the refresh was refused.
+fn startup_refresh(
+    hub: &EventsHub,
+    capabilities: Option<&crate::capability::CapabilityBackend>,
+    registry: Option<&Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>>,
+) -> crate::events::CatalogueScan {
+    use crate::events::CatalogueScan::{Complete, Partial};
+    match (capabilities, registry) {
+        (Some(capabilities), Some(registry)) => {
+            // Covered by this refresh, held or not.
+            let _ = capabilities.take_held_reload();
+            match refresh_from_snapshot(hub, capabilities, registry) {
+                Some(true) => Complete,
+                _ => Partial,
+            }
         }
-        Err(event) => tracing::error!(
-            %event,
-            "capability reload not applied to webhook routes: it removes a filter or \
-             mapped field of a live event type; the previous routes stay live"
-        ),
+        (Some(capabilities), None) if !capabilities.initial_scan_loaded_every_directory() => {
+            Partial
+        }
+        _ => Complete,
+    }
+}
+
+/// Under the catalogue gate the caller holds: re-register the webhook routes
+/// from one snapshot of the catalogue. `Some(complete)` when applied;
+/// `None` when refused because it narrows a live event type (T52), the
+/// previous routes then staying live.
+fn refresh_from_snapshot(
+    hub: &EventsHub,
+    capabilities: &crate::capability::CapabilityBackend,
+    registry: &Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>,
+) -> Option<bool> {
+    let (catalogue, complete) = capabilities.catalogue_snapshot();
+    match hub.refresh_webhooks(registry, &catalogue) {
+        Ok(()) => Some(complete),
+        Err(event) => {
+            tracing::error!(
+                %event,
+                "capability reload not applied to webhook routes: it removes a filter or \
+                 mapped field of a live event type; the previous routes stay live"
+            );
+            None
+        }
     }
 }
 

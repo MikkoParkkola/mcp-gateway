@@ -41,6 +41,9 @@ fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscription {
         failed_since: None,
         last_delivery_at: None,
         last_error: None,
+        payload_fields: Vec::new(),
+        unoffered_since: None,
+        held_until: None,
     }
 }
 
@@ -225,6 +228,32 @@ fn rotation_keeps_the_stored_secret_as_previous() {
     assert_eq!(stored.previous_secret.as_deref(), Some("whsec_x"));
     // The grace runs from the commit that rotated, not the request.
     assert_eq!(stored.previous_until, Some(stored.granted_at + grace()));
+}
+
+/// The rotation grace protects a live rotation only: an expired row's old
+/// secret ends with the row and is never dual-signed for its successor.
+#[test]
+fn an_expired_rows_secret_is_not_carried_into_a_new_grace() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let mut first = sub("p", "https://h/1", now);
+    first.expires_at = Some(now + chrono::Duration::seconds(1));
+    store
+        .admit(first.clone(), true, CAPS, grace(), now, TAIL)
+        .expect("io")
+        .expect("first");
+    let later = now + chrono::Duration::seconds(5);
+    let mut renewed = sub("p", "https://h/1", later);
+    renewed.secret = "whsec_second".into();
+    store
+        .admit(renewed, true, CAPS, grace(), later, TAIL)
+        .expect("io")
+        .expect("renewed");
+    let stored = store.get(&first.id).expect("row");
+    assert_eq!(stored.secret, "whsec_second");
+    assert_eq!(stored.previous_secret, None, "the expired secret is gone");
+    assert_eq!(stored.previous_until, None);
 }
 
 #[test]
@@ -418,7 +447,14 @@ fn the_grant_is_fixed_at_the_commit_instant() {
         until: None,
     };
     let (_, answered) = store
-        .admit_granted(s.clone(), grant, true, (CAPS, grace(), TAIL), asked)
+        .admit_granted(
+            s.clone(),
+            grant,
+            true,
+            (CAPS, grace(), TAIL),
+            asked,
+            crate::events::store::HoldCommit::End,
+        )
         .expect("io")
         .expect("admitted");
     let row = store.get(&s.id).expect("row");

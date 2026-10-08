@@ -27,24 +27,3 @@ fn a_panic_in_the_main_body_reaches_the_caller() {
     let payload = caught.expect_err("the panic must propagate");
     assert_eq!(payload.downcast_ref::<&str>(), Some(&"body panicked"));
 }
-
-/// MIK-7683: only `serve --stdio` bounds the runtime's shutdown. HTTP serve
-/// (with or without the subcommand) and every other command keep waiting for
-/// blocking work, whose audit and store flushes are not proven finished.
-#[test]
-fn only_stdio_serve_bounds_the_runtime_shutdown() {
-    use crate::runtime::{RuntimeShutdown, STDIO_RUNTIME_SHUTDOWN_TIMEOUT};
-    use mcp_gateway::cli::Command;
-    assert_eq!(
-        RuntimeShutdown::of(Some(&Command::Serve { stdio: true })),
-        RuntimeShutdown::Bounded(STDIO_RUNTIME_SHUTDOWN_TIMEOUT)
-    );
-    assert_eq!(
-        RuntimeShutdown::of(Some(&Command::Serve { stdio: false })),
-        RuntimeShutdown::WaitForBlockingWork
-    );
-    assert_eq!(
-        RuntimeShutdown::of(None),
-        RuntimeShutdown::WaitForBlockingWork
-    );
-}

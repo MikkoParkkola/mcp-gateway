@@ -90,22 +90,27 @@ fn stdio_meta(answer: Value) -> (Arc<MetaMcp>, Arc<Firewall>) {
     ));
     backend.set_transport_for_test(Arc::new(Alpha(answer)));
     assert!(registry.register(backend));
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec!["alpha:*".to_string()],
-                ..CollusionConfig::default()
-            },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
     let mut meta = MetaMcp::new(registry).with_surfaced_tools(vec![SurfacedToolConfig {
         server: "alpha".to_string(),
         tool: "read".to_string(),
     }]);
+    // As the gateway's own: its minted continuations are not read as
+    // credentials (#2210, MIK-8092).
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["alpha:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    );
     meta.set_firewall(Some(Arc::clone(&firewall)));
     (Arc::new(meta), firewall)
 }

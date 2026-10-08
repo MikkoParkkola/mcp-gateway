@@ -58,6 +58,8 @@ use client::send_with_retry;
 /// Executor for capability REST calls
 pub struct CapabilityExecutor {
     pub(super) client: Client,
+    /// The client provider OAuth refreshes go through (MIK-8020).
+    refresh: client::RefreshClient,
     pub(super) cache: ResponseCache,
     /// OAuth token storage
     pub(super) token_storage: Option<Arc<TokenStorage>>,
@@ -111,6 +113,7 @@ impl CapabilityExecutor {
 
         Self {
             client: client::build(None),
+            refresh: client::build_refresh(None),
             cache: ResponseCache::new(),
             token_storage,
             oauth_tokens: RwLock::new(DashMap::new()),
@@ -143,6 +146,7 @@ impl CapabilityExecutor {
                  gateway, resolves their destinations"
             );
             executor.client = client::build(Some(&proxy));
+            executor.refresh = client::build_refresh(Some(&proxy));
         }
         executor
     }
@@ -256,6 +260,7 @@ impl CapabilityExecutor {
     pub fn with_token_storage(token_storage: Arc<TokenStorage>) -> Self {
         Self {
             client: client::build(None),
+            refresh: client::build_refresh(None),
             cache: ResponseCache::new(),
             token_storage: Some(token_storage),
             oauth_tokens: RwLock::new(DashMap::new()),

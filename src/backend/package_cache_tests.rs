@@ -1,0 +1,433 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Classifying, owning and removing the package caches a stdio backend
+//! installs into.
+
+use super::{
+    Retired, TOMBSTONE_MARK, install_failure_needle, is_a_tree_to_walk, remove_now, retire_now,
+    sweep_tombstones_once,
+};
+use super::{attempt_bound, lock_hold_bound, rename_bound};
+use crate::Error;
+
+// Verbatim texts Node and npm print when a package tree is missing, half
+// unpacked, or refused. A fresh install repairs every one of them.
+const CACHE_SHAPED: [&str; 6] = [
+    "Error: Cannot find module 'zod'",
+    "node:internal/modules/cjs/loader:1228\n  throw err;\n  ^\nError: Cannot find module 'zod'\nRequire stack:\n- /root/.npm/_npx/1c2d/node_modules/.bin/mcp-server-foo",
+    "Error: Cannot find module '/root/.npm/_npx/1c2d/node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js'",
+    "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'zod' imported from /srv/foo/dist/index.js",
+    "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/srv/foo/dist/index.js' imported from /srv/foo/dist/bin.js",
+    "npm error code MODULE_NOT_FOUND",
+];
+
+// Failures a fresh install cannot repair. Clearing the cache on any of these
+// deletes a directory that was never broken and retries against an unchanged
+// cause, so each must be judged exactly `false`.
+const NOT_CACHE_SHAPED: [&str; 9] = [
+    "npm error code ENEEDAUTH\nnpm error need auth This command requires you to be logged in",
+    "npm error code E401\nnpm error Incorrect or missing password",
+    "Initialize failed for 'npx -y caldav-mcp': 401 Unauthorized: invalid_token",
+    "connect ECONNREFUSED 127.0.0.1:8118",
+    "Response channel closed",
+    "npm error code E404\nnpm error 404 Not Found - GET https://registry.invalid/zod",
+    "EACCES: permission denied, access '/root/.npm'",
+    "spawn uvx EPERM",
+    "npm error code EALLOWGIT\nnpm error Git dependencies are not supported when running in CI mode",
+];
+
+#[test]
+fn cache_failure_recognises_what_a_torn_package_tree_prints() {
+    for text in CACHE_SHAPED {
+        let error = Error::Transport(text.to_string());
+        let needle = install_failure_needle(&error, "");
+        assert!(
+            needle.is_some_and(|needle| text.contains(needle)),
+            "a fresh install is the only repair, and the match has to name itself: {text}"
+        );
+    }
+}
+
+#[test]
+fn cache_failure_leaves_a_failure_an_install_cannot_fix_alone() {
+    for text in NOT_CACHE_SHAPED {
+        assert!(
+            install_failure_needle(&Error::Transport(text.to_string()), "").is_none(),
+            "clearing the cache repairs nothing here, and a false positive throws away a \
+             directory that was fine: {text}"
+        );
+    }
+}
+
+#[test]
+fn cache_failure_reads_the_rendered_error_whichever_variant_carries_it() {
+    assert!(
+        install_failure_needle(
+            &Error::Protocol(
+                "Initialize failed for 'npx -y foo': Cannot find module 'zod'".to_string()
+            ),
+            ""
+        )
+        .is_some(),
+        "the classification is on the rendered text, so the variant it arrives in is irrelevant"
+    );
+    assert!(
+        install_failure_needle(
+            &Error::TransportPermanent("Failed to spawn: Cannot find module 'zod'".to_string()),
+            ""
+        )
+        .is_some(),
+        "and that holds for the permanent variant too"
+    );
+}
+
+#[test]
+fn cache_failure_reads_the_childs_stderr_not_only_the_errors_own_text() {
+    // A package manager prints the reason to stderr and the child dies before
+    // it can answer anything, so this is the route the failure actually takes.
+    let timeout = Error::BackendTimeout("Request timed out".to_string());
+    assert!(
+        install_failure_needle(&timeout, "").is_none(),
+        "a timeout on its own says nothing about the install"
+    );
+    assert!(
+        install_failure_needle(&timeout, "Error: Cannot find module 'zod'").is_some(),
+        "the same timeout is a failed install once the child has said why"
+    );
+    assert!(
+        install_failure_needle(&timeout, "Error: backend exploded during startup").is_none(),
+        "stderr that names no install problem leaves the tree alone"
+    );
+}
+
+#[test]
+fn the_walk_refuses_a_path_that_ends_in_a_separator() {
+    let root = scratch_dir("trailing-separator");
+    std::fs::create_dir_all(&root).expect("create the scratch directory");
+    let plain = root.join("cache");
+    std::fs::create_dir_all(&plain).expect("create the cache");
+
+    assert!(
+        is_a_tree_to_walk(&plain),
+        "the path the gateway assigned is the shape this walks: {plain:?}"
+    );
+    assert!(
+        !is_a_tree_to_walk(&root.join("cache/")),
+        "a trailing separator makes the OS resolve the final component before the walk, so a \
+         link there would be followed"
+    );
+    assert!(
+        !remove_now(&root.join("cache/")),
+        "and the removal refuses it too rather than clearing it"
+    );
+    assert!(
+        plain.exists(),
+        "the cache is untouched by the refused removal"
+    );
+    cleanup(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_walk_refuses_a_trailing_separator_that_reaches_through_a_link() {
+    use std::os::unix::fs::symlink;
+
+    let root = scratch_dir("trailing-separator-link");
+    let outside = scratch_dir("trailing-separator-link-outside");
+    std::fs::create_dir_all(&root).expect("create the scratch directory");
+    std::fs::create_dir_all(outside.join("node_modules")).expect("create the operator's own tree");
+    let sentinel = outside.join("node_modules/zod.js");
+    std::fs::write(&sentinel, "module").expect("seed it");
+    let leaf = root.join("cache");
+    symlink(&outside, &leaf).expect("link the cache path at another tree");
+
+    // The removal deletes the target's contents and then reports the error, so
+    // a caller told "could not clear" has already lost a tree it was never
+    // given. This is the shape the whole-path refusal exists for.
+    let through_the_link = std::path::PathBuf::from(format!("{}/", leaf.display()));
+    assert!(
+        !remove_now(&through_the_link),
+        "a separator-neutral path check reads this as one component below the root"
+    );
+    assert!(
+        sentinel.exists(),
+        "and nothing behind the link is deleted on the way to that answer"
+    );
+    cleanup(&root);
+    cleanup(&outside);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_walk_refuses_a_leaf_that_is_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let root = scratch_dir("leaf-symlink");
+    let outside = scratch_dir("leaf-symlink-outside");
+    std::fs::create_dir_all(&root).expect("create the scratch directory");
+    std::fs::create_dir_all(outside.join("node_modules")).expect("create the operator's own tree");
+    let sentinel = outside.join("node_modules/zod.js");
+    std::fs::write(&sentinel, "module").expect("seed it");
+    let leaf = root.join("cache");
+    symlink(&outside, &leaf).expect("link the cache path at another tree");
+
+    assert!(
+        !is_a_tree_to_walk(&leaf),
+        "the gateway creates a directory here, so a link is not this cache"
+    );
+    assert!(
+        !remove_now(&leaf),
+        "only NotFound means 'already gone'; a link reported as removed would say the install \
+         was cleared when nothing was"
+    );
+    assert!(
+        sentinel.exists(),
+        "and nothing outside the cache is deleted to reach it"
+    );
+    cleanup(&root);
+    cleanup(&outside);
+}
+
+#[test]
+fn cache_failure_judges_the_errors_the_start_path_returns() {
+    let invalid_frame = Error::from(
+        serde_json::from_str::<serde_json::Value>("not a JSON-RPC frame")
+            .expect_err("the literal above is not valid JSON"),
+    );
+    for (error, why) in [
+        (
+            invalid_frame,
+            "an unparsable frame from a live backend is a protocol problem, not a torn tree",
+        ),
+        (
+            Error::BackendTimeout("Request timed out".to_string()),
+            "a timeout is retried, and its tree is untouched",
+        ),
+        (
+            Error::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            "a permission failure is not repaired by an install",
+        ),
+        (
+            Error::TransportPermanent(
+                "Failed to spawn: No such file or directory (os error 2)".to_string(),
+            ),
+            "a command path that does not exist is not a cache problem",
+        ),
+    ] {
+        assert!(
+            install_failure_needle(&error, "").is_none(),
+            "{error} -- {why}"
+        );
+    }
+}
+
+fn scratch_dir(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("stdio-cache-{}-{name}", std::process::id()))
+}
+
+fn cleanup(dir: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn remove_cache_dir_removes_a_populated_nested_tree() {
+    let cache = scratch_dir("populated");
+    let module = cache.join("_npx/1c2d/node_modules/zod");
+    std::fs::create_dir_all(&module).expect("create a nested cache tree");
+    std::fs::write(module.join("package.json"), "{\"name\":\"zod\"}").expect("seed a module");
+    std::fs::write(cache.join("_update-notifier-last-checked"), "0").expect("seed a root file");
+    let parent = cache
+        .parent()
+        .expect("the temp dir has a parent")
+        .to_path_buf();
+
+    assert!(remove_now(&cache), "a populated cache is removable");
+    assert!(!cache.exists(), "the cache directory itself is gone");
+    assert!(
+        !module.exists(),
+        "and so is everything the install had left in it"
+    );
+    assert!(
+        parent.exists(),
+        "removal must not reach above the directory it was handed"
+    );
+}
+
+#[test]
+fn remove_cache_dir_treats_an_absent_cache_as_already_gone() {
+    let cache = scratch_dir("absent");
+    assert!(!cache.exists());
+    assert!(
+        remove_now(&cache),
+        "a cache the first spawn never created is not a failure to clear: reporting one would \
+         block the retry for a backend whose install has not run yet"
+    );
+    assert!(
+        remove_now(&cache.join("_npx/1c2d/node_modules")),
+        "nor is a path whose parents never existed"
+    );
+}
+
+#[test]
+fn remove_cache_dir_reports_failure_when_it_was_handed_a_regular_file() {
+    let root = scratch_dir("regular-file");
+    std::fs::create_dir_all(&root).expect("create the scratch directory");
+    let file = root.join("cache");
+    std::fs::write(&file, "not a directory tree").expect("seed a regular file");
+
+    assert!(
+        !remove_now(&file),
+        "a file is not a tree this removed: claiming success would let the caller retry against \
+         a cache that is still there"
+    );
+    assert!(file.exists(), "a failed removal leaves the path as it was");
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("the file is still readable"),
+        "not a directory tree",
+        "and it still holds what it held"
+    );
+    cleanup(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_cache_dir_reports_failure_when_a_parent_is_not_a_directory() {
+    let root = scratch_dir("blocked-parent");
+    std::fs::create_dir_all(&root).expect("create the scratch directory");
+    let file = root.join("cache");
+    std::fs::write(&file, "x").expect("seed a regular file");
+
+    assert!(
+        !remove_now(&file.join("_npx")),
+        "only NotFound means 'already gone'; a path below a regular file was never a cache"
+    );
+    assert!(
+        file.exists(),
+        "the file it has to walk through is untouched"
+    );
+    cleanup(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_cache_dir_deletes_a_link_without_following_it() {
+    use std::os::unix::fs::symlink;
+
+    let cache = scratch_dir("symlink");
+    let outside = scratch_dir("symlink-outside");
+    std::fs::create_dir_all(outside.join("node_modules")).expect("create the operator's own tree");
+    std::fs::write(outside.join("node_modules/zod.js"), "module").expect("seed it");
+    std::fs::create_dir_all(cache.join("_npx")).expect("create the cache");
+    symlink(&outside, cache.join("_npx/linked")).expect("link the cache at another tree");
+
+    assert!(remove_now(&cache), "the cache is removable");
+    assert!(!cache.exists());
+    assert!(
+        outside.join("node_modules/zod.js").exists(),
+        "the link is removed, the tree it points at is not: a cache that links outside itself \
+         must not let the recovery take the target with it"
+    );
+    cleanup(&outside);
+}
+
+#[test]
+fn retire_moves_a_cache_aside_in_one_step() {
+    let root = tempfile::tempdir().expect("root");
+    let cache = root.path().join("backend-0123456789abcdef");
+    std::fs::create_dir_all(cache.join("_npx/1/node_modules/zod")).expect("seed the cache");
+
+    let Retired::Moved(tombstone) = retire_now(&cache) else {
+        panic!("a real cache tree is moved aside");
+    };
+    assert!(
+        !cache.exists(),
+        "the cache path is free for a fresh install"
+    );
+    assert!(
+        tombstone.join("_npx/1/node_modules/zod").is_dir(),
+        "the old tree is whole at the tombstone, waiting to be deleted"
+    );
+    assert_eq!(
+        tombstone.parent(),
+        cache.parent(),
+        "a sibling, on the same filesystem"
+    );
+    assert!(
+        tombstone.to_string_lossy().contains(TOMBSTONE_MARK),
+        "named so a later run's sweep finds it"
+    );
+}
+
+#[test]
+fn retire_treats_an_absent_cache_as_already_gone() {
+    let root = tempfile::tempdir().expect("root");
+    assert_eq!(
+        retire_now(&root.path().join("never-made")),
+        Retired::AlreadyGone
+    );
+}
+
+#[test]
+fn retire_refuses_what_is_not_a_cache_tree() {
+    let root = tempfile::tempdir().expect("root");
+    let file = root.path().join("a-file");
+    std::fs::write(&file, "not a cache").expect("write a file");
+    assert_eq!(retire_now(&file), Retired::Refused);
+    assert!(file.is_file(), "a refused path is left where it was");
+
+    let dir = root.path().join("cache");
+    std::fs::create_dir_all(&dir).expect("create the cache");
+    assert_eq!(
+        retire_now(&root.path().join("cache/")),
+        Retired::Refused,
+        "a trailing separator is refused, as for removal"
+    );
+    assert!(dir.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn retire_refuses_a_cache_that_is_a_symlink() {
+    let root = tempfile::tempdir().expect("root");
+    let target = root.path().join("elsewhere");
+    std::fs::create_dir_all(&target).expect("create the link target");
+    let leaf = root.path().join("cache");
+    std::os::unix::fs::symlink(&target, &leaf).expect("link the cache path");
+    assert_eq!(retire_now(&leaf), Retired::Refused);
+    assert!(target.is_dir(), "the link's target is untouched");
+}
+
+#[tokio::test]
+async fn the_startup_sweep_deletes_tombstones_and_nothing_else() {
+    let root = tempfile::tempdir().expect("root");
+    let live = root.path().join("backend-0123456789abcdef");
+    std::fs::create_dir_all(live.join("_npx")).expect("a live cache");
+    let tombstone = root
+        .path()
+        .join(format!("backend-0123456789abcdef{TOMBSTONE_MARK}1-0"));
+    std::fs::create_dir_all(tombstone.join("_npx")).expect("a leftover tombstone");
+
+    sweep_tombstones_once(root.path());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while tombstone.exists() {
+        assert!(std::time::Instant::now() < deadline, "the sweep never ran");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(live.join("_npx").is_dir(), "a live cache is never swept");
+}
+
+#[test]
+fn the_lock_hold_bound_is_its_steps_summed() {
+    let t = std::time::Duration::from_secs(1);
+    assert_eq!(
+        attempt_bound(t),
+        std::time::Duration::from_secs(4),
+        "2t + 2s"
+    );
+    assert_eq!(rename_bound(t), t);
+    assert_eq!(
+        lock_hold_bound(t),
+        std::time::Duration::from_secs(9),
+        "a failed attempt, the rename and the retry: 5t + 4s"
+    );
+}

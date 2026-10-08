@@ -9,7 +9,6 @@ use tracing::debug;
 
 use super::bridge_settle::{arm, refuse_if_killed};
 use super::classify_bridged_dispatch_error;
-#[cfg(feature = "cost-governance")]
 use super::dispatch_guards;
 use super::relay;
 use crate::Error;
@@ -120,6 +119,8 @@ pub(super) struct BridgeDispatcher<'a> {
     pub(super) arm_key: Option<&'a str>,
     pub(super) caller_identity: Option<&'a GrantSubject>,
     pub(super) caller_proof: CallerProof<'a>,
+    /// Names an MCP child when nothing else does (MIK-7825).
+    pub(super) credential_owner: Option<&'a str>,
     pub(super) headers: &'a [(String, String)],
     pub(super) cache_binding: Option<&'a str>,
     pub(super) account_credential:
@@ -227,6 +228,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             .map_err(|e| crate::gateway::input_bridge::BridgeError::NotAdmitted {
                 message: e.to_string(),
             })?;
+        #[cfg(not(feature = "cost-governance"))]
+        let admission = dispatch_guards::Admission::default();
 
         // Through `accounted_dispatch`, not `dispatch_to_backend`: a bridged
         // round is a real backend call and is accounted and gated exactly like
@@ -287,7 +290,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.session_id,
                 self.arm_key,
                 self.caller_identity,
-                self.caller_proof,
+                (self.caller_proof, self.credential_owner),
                 self.headers,
                 self.cache_binding,
                 self.account_credential.clone(),
@@ -299,10 +302,10 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.scope,
                 self.captured.clone(),
                 &super::super::response_security::chain_receipt::ChainSlot::default(),
+                &admission,
             )
             .await;
-        // The round's spend is recorded: give its reservation back.
-        #[cfg(feature = "cost-governance")]
+        // The round's spend is settled; an unsettled reservation is given back.
         drop(admission);
         let error = match dispatched {
             Ok(value) => {

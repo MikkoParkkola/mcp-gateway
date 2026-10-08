@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
 
-use super::{CollusionDetector, RelayAction, RelayParams, W, winnow};
+use super::{CollusionDetector, MAX_SOURCE_FINGERPRINTS, RelayAction, RelayParams, SAMPLE, sample};
 
 const A: &str = "principal-a";
 const B: &str = "principal-b";
@@ -55,15 +55,6 @@ fn text(seed: u64, words: usize) -> String {
 
 fn secret() -> String {
     text(7, 250)
-}
-
-/// First offset from 200 where a 63- and a 79-char slice neither start nor
-/// end on a space, so normalization cannot shorten them.
-fn solid_start(s: &str) -> usize {
-    let b = s.as_bytes();
-    (200..s.len() - 79)
-        .find(|&i| b[i] != b' ' && b[i + 62] != b' ' && b[i + 78] != b' ')
-        .unwrap()
 }
 
 fn shared(d: &CollusionDetector, a: &str, b: &str) -> usize {
@@ -120,44 +111,33 @@ fn copy_interleaved_with_stripped_characters_detected() {
     }
 }
 
-/// The winnowing guarantee itself: every 63-char span of a document shares a
-/// fingerprint with it. A fixed stride or a global bottom-N sample leaves
-/// spans with none.
+/// Context-free selection (MIK-8083): a k-gram is kept by its own hash, so
+/// every fingerprint of a span is one of the whole document's, whatever the
+/// span's edges cut. Winnowing kept a span's edge minima that the document
+/// did not, and a same-source excuse then missed.
 #[test]
-fn every_63_char_span_shares_a_fingerprint() {
+fn every_span_keeps_only_the_documents_fingerprints() {
     let d = detector();
-    // Several times more k-grams than the 1,024-fingerprint source cap, so a
-    // global bottom-1024 sample cannot reach every span.
     let s = text(7, 2_000);
     let all: HashSet<u64> = d.fingerprints(&s).into_iter().collect();
     assert!(!all.is_empty());
-    for start in 0..=s.len() - 63 {
-        let span = &s[start..start + 63];
-        // Normalization trims edge spaces, which would shorten the span.
-        if span.starts_with(' ') || span.ends_with(' ') {
-            continue;
+    for start in (0..=s.len() - 120).step_by(7) {
+        let span = &s[start..start + 120];
+        for fp in d.fingerprints(span) {
+            assert!(
+                all.contains(&fp),
+                "span at {start} kept {fp} the document did not"
+            );
         }
-        let span = d.fingerprints(span);
-        assert!(
-            span.iter().any(|f| all.contains(f)),
-            "span at {start} shares no fingerprint"
-        );
     }
 }
 
-/// The same guarantee on controlled hash values, independent of the key:
-/// every window's minimum is kept. 1,100 low hashes then a high run: a global
-/// bottom-N for any N up to 1,100 (so the 1,024 source cap included) drops
-/// every high minimum, and a fixed stride skips positions.
+/// The selection on controlled hashes, independent of the key: exactly the
+/// hashes `0 mod SAMPLE`, each once, in position order.
 #[test]
-fn winnow_keeps_every_window_minimum() {
-    let hashes: Vec<u64> = (0..1_100).chain((10_000..10_064).rev()).collect();
-    let kept: HashSet<u64> = winnow(&hashes).into_iter().collect();
-    for window in hashes.windows(W) {
-        let min = window.iter().min().unwrap();
-        assert!(kept.contains(min), "window minimum {min} dropped");
-    }
-    assert!(kept.iter().any(|&h| h >= 10_000));
+fn sample_keeps_each_multiple_once_in_order() {
+    let hashes = [SAMPLE, 1, 2 * SAMPLE, SAMPLE, 3, 0, SAMPLE + 1, 2 * SAMPLE];
+    assert_eq!(sample(&hashes, SAMPLE), vec![SAMPLE, 2 * SAMPLE, 0]);
 }
 
 // Row 4 ────────────────────────────────────────────────────────────────────
@@ -219,20 +199,17 @@ fn common_content_skipped() {
 fn one_match_not_flagged() {
     let d = detector();
     let now = Instant::now();
-    let s = secret();
-    // k + w - 1 = 63 chars: 16 k-grams, one winnowing window, one fingerprint.
-    let at = solid_start(&s);
-    let excerpt = &s[at..at + 63];
-    assert_eq!(d.fingerprints(excerpt).len(), 1, "premise: one fingerprint");
-    assert_eq!(
-        shared(&d, &s, excerpt),
-        1,
-        "premise: shared with the source"
-    );
+    // Space-free, so each added char adds one k-gram and the shared count
+    // steps by at most one: the excerpt passes through exactly one, then two.
+    let s = secret().replace(' ', "");
+    let at = 200;
+    let first = |n| (at + 48..s.len()).find(|&end| shared(&d, &s, &s[at..end]) == n);
+    let one = first(1).expect("premise: one shared fingerprint");
+    let two = first(2).expect("premise: two shared fingerprints");
     d.record_delivery_at(T, A, true, &s, now);
-    assert!(d.check_egress_at(B, U, excerpt, now).is_none());
-    // Control: 79 chars hold two disjoint 16-hash windows, so two matches.
-    assert!(d.check_egress_at(B, U, &s[at..at + 79], now).is_some());
+    assert!(d.check_egress_at(B, U, &s[at..one], now).is_none());
+    // Control: the first excerpt sharing two is a finding.
+    assert!(d.check_egress_at(B, U, &s[at..two], now).is_some());
 }
 
 #[test]
@@ -243,9 +220,9 @@ fn two_matches_flagged() {
     // normalization and the count can be walked one char at a time.
     let s = secret().replace(' ', "");
     let at = 200;
-    let end = (at + 64..=at + 79)
+    let end = (at + 48..s.len())
         .find(|&end| shared(&d, &s, &s[at..end]) == 2)
-        .expect("premise: two shared fingerprints by 79 chars");
+        .expect("premise: two shared fingerprints");
     d.record_delivery_at(T, A, true, &s, now);
     let finding = d
         .check_egress_at(B, U, &s[at..end], now)
@@ -507,11 +484,22 @@ fn saturated_fingerprint_never_flags() {
 #[test]
 fn short_text_has_no_fingerprints() {
     let d = detector();
-    assert!(d.fingerprints(&"x".repeat(47)).is_empty());
-    assert!(!d.fingerprints(&secret()[..48]).is_empty());
+    assert!(d.kgram_hashes(&"x".repeat(47)).is_empty());
+    assert_eq!(d.kgram_hashes(&secret()[..48]).len(), 1);
     // k-grams count characters, not bytes: 48 two-byte chars are one k-gram.
-    assert_eq!(d.fingerprints(&"\u{e9}".repeat(48)).len(), 1);
-    assert!(d.fingerprints(&"\u{e9}".repeat(47)).is_empty());
+    assert_eq!(d.kgram_hashes(&"\u{e9}".repeat(48)).len(), 1);
+    assert!(d.kgram_hashes(&"\u{e9}".repeat(47)).is_empty());
+    // A fingerprint is a sampled k-gram, so whether one k-gram is kept
+    // depends on its hash alone. The long text's ~350 distinct k-grams pin
+    // the production rate: keeping all of them matches only under 4^-350
+    // of keys.
+    let long: String = (100..200).map(|i: u32| i.to_string() + " ").collect();
+    for text in [secret()[..48].to_string(), "\u{e9}".repeat(48), long] {
+        assert_eq!(
+            d.fingerprints(&text),
+            sample(&d.kgram_hashes(&text), SAMPLE)
+        );
+    }
 }
 
 #[test]
@@ -530,19 +518,20 @@ fn whitespace_and_nfc_normalized() {
 #[test]
 fn source_fingerprints_capped() {
     let d = detector();
-    let big = text(5, 12_000);
+    let big = text(5, 24_000);
+    let cap = MAX_SOURCE_FINGERPRINTS;
     assert!(
-        d.fingerprints(&big).len() > 1_024,
+        d.fingerprints(&big).len() > cap,
         "premise: oversized result"
     );
     d.record_delivery_at(T, A, true, &big, Instant::now());
-    assert_eq!(d.tracked_fingerprints(), 1_024);
+    assert_eq!(d.tracked_fingerprints(), cap);
     let first = d.fingerprints(&big);
     assert!(
-        first[..1_024].iter().all(|&fp| d.is_tracked(fp)),
-        "keeps the first 1,024"
+        first[..cap].iter().all(|&fp| d.is_tracked(fp)),
+        "keeps the first {cap}"
     );
-    let dropped = d.fingerprints(&big).len() - 1_024;
+    let dropped = d.fingerprints(&big).len() - cap;
     assert_eq!(d.source_truncated(), u64::try_from(dropped).unwrap());
 }
 
@@ -710,4 +699,90 @@ fn a_sensitive_copy_after_a_plain_one_is_a_witness() {
     d.record_delivery_at(T, A, true, &s, start + Duration::from_secs(1));
     let now = start + Duration::from_secs(2);
     assert!(d.check_egress_at(B, U, &s, now).is_some());
+}
+
+/// `RELAY-SPLIT-FP.2` (MIK-7773): a receipt runs only values together, as
+/// egress does, never a value into a long object key: an excuse may cover
+/// only what an egress of the same pieces would read.
+#[test]
+fn a_split_receipt_never_runs_a_value_into_a_key() {
+    use super::super::collusion_digest::{DeliveryDigest, delivery_parts};
+    let d = detector();
+    let flat = text(9, 40);
+    let key = text(11, 20);
+    assert!(
+        key.chars().count() >= super::K,
+        "premise: a key long enough to read"
+    );
+    let mut map = serde_json::Map::new();
+    for (i, piece) in flat.as_bytes().chunks(20).enumerate() {
+        let piece = String::from_utf8(piece.to_vec()).expect("ascii");
+        map.insert(format!("p{i:03}"), serde_json::Value::String(piece));
+    }
+    map.insert(key, serde_json::Value::String("v".into()));
+    let value = serde_json::Value::Object(map);
+    let (leaves, values) = delivery_parts(&value);
+    assert_eq!(values, leaves.len() - 1, "the key comes last");
+    let (digest, _) = DeliveryDigest::of_parts(&leaves, values, false);
+    let allowed: HashSet<u64> = [leaves.join("\n"), leaves[..values].concat()]
+        .iter()
+        .flat_map(|t| d.kgram_hashes(t))
+        .collect();
+    assert!(
+        d.fingerprints(&leaves.concat())
+            .iter()
+            .any(|fp| !allowed.contains(fp)),
+        "premise: running the key in adds fingerprints"
+    );
+    let recorded: HashSet<u64> = digest.fingerprints(&d).into_iter().collect();
+    assert!(recorded.iter().all(|fp| allowed.contains(fp)));
+    // The newline form keeps the key, as egress reads keys apart.
+    assert!(
+        d.fingerprints(&leaves.join("\n"))
+            .iter()
+            .all(|fp| recorded.contains(fp)),
+        "the newline form, key included, is recorded"
+    );
+}
+
+/// `RELAY-SPLIT-FP.2` (MIK-7773): a plan step's values that the final answer
+/// carries only as object keys are not run together in the kept receipt, as
+/// egress never runs keys together.
+#[test]
+fn a_kept_receipt_never_runs_together_values_delivered_as_keys() {
+    use super::super::collusion_digest::{Delivered, DeliveryDigest, delivery_parts};
+    let d = detector();
+    // Twenty words each: keys long enough for the walk to read.
+    let (a, b) = (text(13, 20), text(17, 20));
+    let mut map = serde_json::Map::new();
+    map.insert(a.clone(), "v".into());
+    map.insert(b.clone(), "w".into());
+    let answer = serde_json::Value::Object(map);
+    let (leaves, values) = delivery_parts(&answer);
+    let delivered = Delivered::of_parts(leaves, values).expect("bounded");
+    let allowed: HashSet<u64> = [&a, &b].iter().flat_map(|t| d.kgram_hashes(t)).collect();
+    assert!(
+        d.fingerprints(&format!("{a}{b}"))
+            .iter()
+            .any(|fp| !allowed.contains(fp)),
+        "premise: running the two together adds fingerprints"
+    );
+    // Staged as a delivery is and as a plan step is, cap deferred (MIK-7992).
+    for of in [DeliveryDigest::of_parts, DeliveryDigest::of_plan_step_parts] {
+        let (step, _) = of(&[a.as_str(), b.as_str()], 2, false);
+        let kept: HashSet<u64> = step
+            .retaining(&d, &delivered)
+            .fingerprints(&d)
+            .into_iter()
+            .collect();
+        assert!(
+            kept.iter().all(|fp| allowed.contains(fp)),
+            "only fingerprints of a key as delivered are kept"
+        );
+        let own: Vec<u64> = [&a, &b].iter().flat_map(|t| d.fingerprints(t)).collect();
+        assert!(
+            own.iter().all(|fp| kept.contains(fp)),
+            "each key's fps stay"
+        );
+    }
 }

@@ -1,0 +1,157 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! The transport's own contract: close aborts, ping is live, the rest is -32601.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use axum::Router;
+use axum::routing::{get, post};
+use serde_json::json;
+
+use super::*;
+
+/// An agent whose card is served and counted, and whose RPC never answers.
+/// `reached` is notified when a `SendMessage` arrives.
+async fn hanging_agent() -> (String, Arc<AtomicUsize>, Arc<tokio::sync::Notify>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let fetches = Arc::new(AtomicUsize::new(0));
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let (counted, endpoint) = (Arc::clone(&fetches), format!("{base}/a2a"));
+    let arrived = Arc::clone(&reached);
+    let app = Router::new()
+        .route(
+            "/.well-known/agent-card.json",
+            get(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let endpoint = endpoint.clone();
+                async move {
+                    axum::Json(json!({"name": "hang", "supportedInterfaces": [
+                        {"url": endpoint, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}]}))
+                }
+            }),
+        )
+        .route(
+            "/a2a",
+            post(move || {
+                arrived.notify_one();
+                std::future::pending::<String>()
+            }),
+        );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (base, fetches, reached)
+}
+
+async fn started(base: &str) -> Arc<A2aTransport> {
+    A2aTransport::start(
+        base,
+        None,
+        &HashMap::new(),
+        Duration::from_secs(60),
+        DestinationPolicy::Configured,
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn close_aborts_an_in_flight_call() {
+    let (base, _, reached) = hanging_agent().await;
+    let transport = started(&base).await;
+    let pending = tokio::spawn({
+        let transport = Arc::clone(&transport);
+        async move {
+            let params = json!({"name": TOOL_NAME, "arguments": {"message": "hi"}});
+            transport.request("tools/call", Some(params)).await
+        }
+    });
+    // Closed only once the agent holds the request: the row proves an
+    // in-flight call is aborted, not one that had not left yet.
+    tokio::time::timeout(Duration::from_secs(5), reached.notified())
+        .await
+        .expect("the call reaches the agent");
+    transport.close().await.unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), pending)
+        .await
+        .expect("close ends the call well before the 60 s timeout")
+        .unwrap();
+    assert!(
+        outcome.is_err(),
+        "a closed transport does not answer: {outcome:?}"
+    );
+    assert!(!transport.is_connected());
+}
+
+#[tokio::test]
+async fn ping_is_a_live_card_fetch() {
+    let (base, fetches, _) = hanging_agent().await;
+    let transport = started(&base).await;
+    let before = fetches.load(Ordering::SeqCst);
+    let response = transport.request("ping", None).await.unwrap();
+    assert_eq!(response.result, Some(json!({})));
+    assert_eq!(
+        fetches.load(Ordering::SeqCst),
+        before + 1,
+        "ping reached the agent"
+    );
+}
+
+#[tokio::test]
+async fn initialize_is_synthetic_and_other_methods_are_not_found() {
+    let (base, _, _) = hanging_agent().await;
+    let transport = started(&base).await;
+    let init = transport.request("initialize", None).await.unwrap();
+    let init = init.result.unwrap();
+    assert_eq!(init["serverInfo"]["name"], "hang");
+    assert_eq!(init["capabilities"], json!({"tools": {}}));
+    for method in ["server/discover", "resources/list", "prompts/list"] {
+        let response = transport.request(method, None).await.unwrap();
+        assert_eq!(response.error.map(|e| e.code), Some(-32601), "{method}");
+    }
+}
+
+#[tokio::test]
+async fn an_unknown_tool_or_a_missing_message_is_invalid_params() {
+    let (base, _, _) = hanging_agent().await;
+    let transport = started(&base).await;
+    for params in [
+        json!({"name": "other", "arguments": {"message": "hi"}}),
+        json!({"name": TOOL_NAME, "arguments": {}}),
+    ] {
+        let response = transport
+            .request("tools/call", Some(params.clone()))
+            .await
+            .unwrap();
+        assert_eq!(response.error.map(|e| e.code), Some(-32602), "{params}");
+    }
+}
+
+/// MIK-8063 A2A.3: under the hardened policy a literal private `a2a_url` is
+/// refused at start, before anything connects (no server listens there).
+#[tokio::test]
+async fn a_private_literal_a2a_url_is_refused_under_the_hardened_policy() {
+    for url in [
+        "http://169.254.169.254",
+        "http://10.0.0.7:8080",
+        "http://127.0.0.1:9",
+    ] {
+        let refused = A2aTransport::start(
+            url,
+            None,
+            &HashMap::new(),
+            Duration::from_secs(5),
+            DestinationPolicy::Public,
+        )
+        .await;
+        let Err(error) = refused else {
+            panic!("{url} must be refused under the hardened policy");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains(crate::security::ssrf::SSRF_BLOCKED),
+            "{url}: {error}"
+        );
+    }
+}

@@ -117,9 +117,14 @@ async fn stall_parks_one_blocking_thread() {
         );
         tokio::task::yield_now().await;
     }
-    // One more round for every caller to reach the permit wait: the runtime
-    // has one thread and every caller is ready, so each is polled again.
-    for _ in 0..CALLERS {
+    // Every caller acknowledges reaching the permit wait (its deadline is
+    // armed in the same poll) before the clock moves, rather than trusting a
+    // count of yields to the scheduler.
+    while l.permit_waits_for_test() < CALLERS {
+        assert!(
+            guard.elapsed() < Duration::from_secs(60),
+            "callers never reached the permit wait"
+        );
         tokio::task::yield_now().await;
     }
     assert!(

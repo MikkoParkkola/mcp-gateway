@@ -133,6 +133,31 @@ async fn a_relayed_modern_discover_gains_the_result_type() {
     assert_eq!(body["result"]["resultType"], "complete", "{body}");
 }
 
+/// MIK-8047 DISC.1: a relayed modern discover carries the cache pair when the
+/// backend omits it, and keeps a backend hint under the gateway cap.
+#[tokio::test]
+async fn a_relayed_modern_discover_carries_the_cache_pair() {
+    for (answer, want) in [
+        (Answer::Ok, crate::protocol::cacheable::LIST_TTL_MS),
+        (Answer::ModernList, 3000),
+    ] {
+        let fx = fixture(answer, |_| {}).await;
+        let body = modern(&fx, "alpha", "server/discover", json!({})).await;
+        assert_eq!(body["result"]["ttlMs"], want, "{body}");
+        assert_eq!(body["result"]["cacheScope"], "private", "{body}");
+    }
+}
+
+/// MIK-8047 KEEP.1: a legacy discover relayed to a backend gains neither.
+#[tokio::test]
+async fn a_relayed_legacy_discover_gains_no_cache_pair() {
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    let body = legacy(&fx, "alpha", "server/discover", json!({})).await;
+    for key in ["resultType", "ttlMs", "cacheScope"] {
+        assert!(body["result"].get(key).is_none(), "gained {key}: {body}");
+    }
+}
+
 /// The drain keeps the shortest valid hint across pages; an absent hint
 /// erases nothing, `0` survives, and the shaper caps an over-long hint.
 #[tokio::test]
@@ -379,4 +404,90 @@ fn the_declared_revision_is_observed() {
         "{observed}"
     );
     assert_eq!(observed["fields"]["revision_source"], "_meta", "{observed}");
+}
+
+/// MIK-8022.FOLLOW.1: through the route, a modern answer is delivered with
+/// the gateway's `serverInfo`, and the receipt is built without it, on both
+/// call arms, on a replay, and on a catalogue read. This pins the stamps
+/// from `deliver_tail` to each stager, not only inside the stagers.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_direct_receipt_is_built_without_the_gateway_stamp() {
+    use super::super::direct_guards_fixture::fixture_relayed;
+    use crate::gateway::meta_mcp::invoke::relay::take_staged_for_test;
+    let info = crate::protocol::meta::KEY_SERVER_INFO;
+    let unstamped = |label: &str, delivered: &Value| {
+        assert!(
+            delivered["result"]["_meta"][info].is_object(),
+            "{label}: {delivered}"
+        );
+        let staged = take_staged_for_test();
+        assert!(!staged.is_empty(), "{label}: nothing staged");
+        for copy in &staged {
+            assert!(
+                copy["_meta"].get(info).is_none(),
+                "{label}: stamped receipt {copy}"
+            );
+        }
+    };
+    for backend in BACKENDS {
+        let fx = fixture_relayed(Answer::Ok).await;
+        let _ = take_staged_for_test();
+        let first = keyed(&fx, backend, (true, 1), "receipt").await;
+        unstamped(&format!("{backend} fresh"), &first);
+        let dispatched = fx.calls.load(std::sync::atomic::Ordering::SeqCst);
+        let again = keyed(&fx, backend, (true, 2), "receipt").await;
+        assert_eq!(
+            fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+            dispatched,
+            "{backend}: the replay dispatched again"
+        );
+        unstamped(&format!("{backend} replay"), &again);
+    }
+    let fx = fixture_relayed(Answer::Ok).await;
+    let _ = take_staged_for_test();
+    let read = modern(&fx, "alpha", "resources/read", json!({"uri": "res://x"})).await;
+    unstamped("catalogue", &read);
+}
+
+/// `MIK-8025.SHAPE.1`: through the route, a modern answer is delivered with
+/// the members the shaper wrote (`resultType`, and on a catalogue read the
+/// cache hints), and the receipt is built without them, live and on a
+/// replay, which is shaped again for its own request.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_direct_receipt_is_built_without_the_shapers_members() {
+    use super::super::direct_guards_fixture::fixture_relayed;
+    use crate::gateway::meta_mcp::invoke::relay::take_staged_for_test;
+    let unshaped = |label: &str, delivered: &Value, members: &[&str]| {
+        let staged = take_staged_for_test();
+        assert!(!staged.is_empty(), "{label}: nothing staged");
+        for member in members {
+            assert!(
+                delivered["result"].get(*member).is_some(),
+                "{label}: base: {member} not delivered: {delivered}"
+            );
+            for copy in &staged {
+                assert!(copy.get(*member).is_none(), "{label}: {member} in {copy}");
+            }
+        }
+    };
+    for backend in BACKENDS {
+        let fx = fixture_relayed(Answer::Ok).await;
+        let _ = take_staged_for_test();
+        let first = keyed(&fx, backend, (true, 1), "shaped").await;
+        unshaped(&format!("{backend} fresh"), &first, &["resultType"]);
+        let dispatched = fx.calls.load(std::sync::atomic::Ordering::SeqCst);
+        let again = keyed(&fx, backend, (true, 2), "shaped").await;
+        assert_eq!(
+            fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+            dispatched,
+            "{backend}: base: the replay dispatched again"
+        );
+        unshaped(&format!("{backend} replay"), &again, &["resultType"]);
+    }
+    let fx = fixture_relayed(Answer::Ok).await;
+    let _ = take_staged_for_test();
+    let read = modern(&fx, "alpha", "resources/read", json!({"uri": "res://x"})).await;
+    unshaped("catalogue", &read, &["resultType", "cacheScope", "ttlMs"]);
 }

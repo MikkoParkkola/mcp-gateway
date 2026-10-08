@@ -9,13 +9,20 @@
 //! removes a member only while the member still hashes to the note's digest,
 //! so a note left over from a value replaced wholesale removes nothing.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
-use std::hash::{Hash, Hasher};
 
 use serde_json::Value;
 
+/// A noted member's fingerprint: SHA-256 over its RFC 8785 canonical JSON
+/// (MIK-7993). Durable in a task row, so key order and number spelling must
+/// not change it across builds, and a backend that controls the bytes at a
+/// known path must not be able to steer a collision.
+type Digest = [u8; 32];
+
 /// Where a noted member lives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum Layer {
     /// The tool value: a wrapped answer's decoded value, or the answer
     /// itself when it is not wrapped.
@@ -29,12 +36,347 @@ pub(crate) enum Layer {
 #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 struct Written {
     layer: Layer,
-    path: &'static [&'static str],
-    digest: u64,
+    /// Where the member lives in the value this record travels with. Starts
+    /// as the noted path; a composite boundary rebases it onto the composite's
+    /// answer (MIK-7993).
+    dest: Vec<String>,
+    /// The [`NOTED_PATHS`] entry the note was made as: which gateway member
+    /// this is, whatever `dest` became.
+    kind: &'static [&'static str],
+    /// The part of the noted member that `dest` holds, when a projection
+    /// took out less than the whole member; empty otherwise.
+    within: Vec<String>,
+    digest: Digest,
+    /// Order of noting within the delivery, so one invocation's own notes
+    /// are told apart from an earlier step's (MIK-7991). Never reused: a
+    /// [`rebind`] that drops a note does not free its number.
+    seq: u64,
+}
+
+/// A delivery's write record.
+#[derive(Default)]
+struct Writes {
+    next: u64,
+    list: Vec<Written>,
+}
+
+impl Writes {
+    fn push(&mut self, written: Written) {
+        self.list.push(Written {
+            seq: self.next,
+            ..written
+        });
+        self.next += 1;
+    }
 }
 
 tokio::task_local! {
-    static GATEWAY_WRITES: RefCell<Vec<Written>>;
+    static GATEWAY_WRITES: RefCell<Writes>;
+}
+
+/// Where an invocation's own notes begin in its delivery's record.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Mark(u64);
+
+/// The members one invocation wrote, stored beside its answer in the
+/// response and idempotency caches so a hit served from either restores
+/// them (MIK-7991): the hit writes nothing itself, yet serves what the
+/// original call wrote.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct WriteRecord(Vec<Written>);
+
+impl WriteRecord {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Every member the gateway notes. A stored record names its path by these
+/// segments, and decoding maps them back here: a path this build does not
+/// note is dropped, so that member stays receipted (MIK-7991 r4).
+const NOTED_PATHS: &[&[&str]] = &[
+    &["recovery"],
+    &["_signature"],
+    TASK_ID,
+    &["trace_id"],
+    &["predicted_next"],
+    &["_meta", "provenance"],
+    &["_security_findings"],
+    &["_cost_warnings"],
+    &["_cost_suggestion"],
+    // MIK-7994: the continuation envelope the gateway mints into an interim
+    // answer.
+    &["requestState"],
+    // MIK-8025: what the modern shaper writes.
+    &["resultType"],
+    &["cacheScope"],
+    &["ttlMs"],
+    // MIK-7993 (r4 M1): the response-contract annotations the gateway adds.
+    CONTRACT_VIOLATION,
+    CONTRACT_REASON,
+];
+
+/// The response-contract verdict the gateway writes on a violating answer.
+pub(super) const CONTRACT_VIOLATION: &[&str] = &["_contract_violation"];
+
+/// The response-contract reason the gateway writes beside the verdict.
+pub(super) const CONTRACT_REASON: &[&str] = &["_contract_reason"];
+
+/// A note as a task row or the sync admission stores it. `seq` is not kept:
+/// a restored note is numbered in the replay's own record.
+///
+/// A stored record is a TRUSTED ownership assertion: the gateway wrote it
+/// into a store only its owner can write. The digest binds a note to bytes;
+/// it does not prove who wrote them. Reading it back only has to fail open on
+/// damage (a dropped note leaves its member receipted), never authenticate.
+#[derive(serde::Serialize)]
+struct StoredWrite<'w> {
+    layer: Layer,
+    dest: &'w [String],
+    kind: &'static [&'static str],
+    within: &'w [String],
+    digest: String,
+}
+
+impl serde::Serialize for WriteRecord {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.0.iter().map(|w| StoredWrite {
+            layer: w.layer,
+            dest: &w.dest,
+            kind: w.kind,
+            within: &w.within,
+            digest: hex::encode(w.digest),
+        }))
+    }
+}
+
+/// Never fails: whatever the stored value is, a record decodes. A non-list
+/// is an empty record, and each entry that does not read as a note this build
+/// makes is dropped on its own, so a damaged or older record can never make
+/// the row or delivery holding it unreadable (MIK-7993 r5c).
+impl<'de> serde::Deserialize<'de> for WriteRecord {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let stored = Value::deserialize(deserializer)?;
+        let entries = stored.as_array().map_or(&[][..], Vec::as_slice);
+        let decoded: Vec<Written> = entries
+            .iter()
+            .filter_map(|entry| {
+                let written = decode_entry(entry);
+                if written.is_none() {
+                    tracing::debug!(
+                        "a stored gateway write did not read back; its member stays receipted"
+                    );
+                }
+                written
+            })
+            .collect();
+        Ok(Self(decoded))
+    }
+}
+
+fn decode_entry(entry: &Value) -> Option<Written> {
+    let layer = serde_json::from_value(entry.get("layer")?.clone()).ok()?;
+    let dest = segments(entry.get("dest")?)?;
+    let within = segments(entry.get("within")?)?;
+    let kind = segments(entry.get("kind")?)?;
+    let kind = NOTED_PATHS
+        .iter()
+        .copied()
+        .find(|path| path.iter().copied().eq(kind.iter().map(String::as_str)))?;
+    let hex_digest = entry.get("digest")?.as_str()?;
+    if hex_digest.len() != 64
+        || !hex_digest
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return None;
+    }
+    let mut digest = [0u8; 32];
+    hex::decode_to_slice(hex_digest, &mut digest).ok()?;
+    if dest.is_empty() {
+        return None;
+    }
+    Some(Written {
+        layer,
+        dest,
+        kind,
+        within,
+        digest,
+        seq: 0,
+    })
+}
+
+/// A stored path. No length bound of its own: every record this build writes
+/// must read back (MIK-7993 impl F2), and the row it sits in is already held
+/// to its record budget on write and on read.
+fn segments(value: &Value) -> Option<Vec<String>> {
+    value
+        .as_array()?
+        .iter()
+        .map(|segment| segment.as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The current end of the delivery's record; `0` outside a scope.
+pub(crate) fn mark() -> Mark {
+    Mark(GATEWAY_WRITES.try_with(|w| w.borrow().next).unwrap_or(0))
+}
+
+/// The notes made since `mark`, still bound to what they wrote. Empty
+/// outside a scope.
+pub(crate) fn snapshot_since(mark: Mark) -> WriteRecord {
+    WriteRecord(
+        GATEWAY_WRITES
+            .try_with(|w| {
+                w.borrow()
+                    .list
+                    .iter()
+                    .filter(|written| written.seq >= mark.0)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
+/// The whole delivery's record: what a sync admission stores beside the
+/// response it secures (MIK-7991 r4). Empty outside a scope.
+pub(crate) fn recorded() -> WriteRecord {
+    snapshot_since(Mark(0))
+}
+
+/// Add `record` to the delivery's record, as notes of this call. A no-op
+/// outside a scope.
+pub(crate) fn restore(record: &WriteRecord) {
+    let _ = GATEWAY_WRITES.try_with(|w| {
+        let mut writes = w.borrow_mut();
+        for written in &record.0 {
+            writes.push(written.clone());
+        }
+    });
+}
+
+/// Take the notes made since `mark` out of the delivery's record: a
+/// composite step's own, to be put back rebased onto the composite's answer
+/// (MIK-7993 r5). Empty outside a scope.
+pub(crate) fn take_since(mark: Mark) -> WriteRecord {
+    WriteRecord(
+        GATEWAY_WRITES
+            .try_with(|w| {
+                // The list is in `seq` order (notes push with a rising number;
+                // a rebind only retains), so the step's own notes are its tail.
+                let mut writes = w.borrow_mut();
+                let at = writes.list.partition_point(|written| written.seq < mark.0);
+                writes.list.split_off(at)
+            })
+            .unwrap_or_default(),
+    )
+}
+
+/// The concrete note paths a playbook output mapping's path (`a.b[].c`)
+/// reaches inside `value`, in the order `transform::resolve_path` visits
+/// them: a wildcard names each element it walks (MIK-7993 impl F3). The
+/// engine stores one match as the value itself and several as an array of
+/// them, in this order.
+pub(crate) fn mapping_paths(value: &Value, path: &str) -> Vec<Vec<String>> {
+    fn walk(
+        value: &Value,
+        path: &[crate::transform::JsonPathSegment],
+        at: &mut Vec<String>,
+        found: &mut Vec<Vec<String>>,
+    ) {
+        use crate::transform::JsonPathSegment;
+        let Some((first, rest)) = path.split_first() else {
+            found.push(at.clone());
+            return;
+        };
+        let children: Vec<(String, &Value)> = match first {
+            JsonPathSegment::Key(key) => value
+                .as_object()
+                .and_then(|map| map.get(key))
+                .map(|child| vec![(key.clone(), child)])
+                .unwrap_or_default(),
+            JsonPathSegment::ArrayIndex(index) => value
+                .as_array()
+                .and_then(|items| items.get(*index))
+                .map(|child| vec![(index.to_string(), child)])
+                .unwrap_or_default(),
+            JsonPathSegment::ArrayWildcard => value
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .enumerate()
+                        .map(|(index, child)| (index.to_string(), child))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+        for (segment, child) in children {
+            at.push(segment);
+            walk(child, rest, at, found);
+            at.pop();
+        }
+    }
+    let mut found = Vec::new();
+    walk(
+        value,
+        &crate::transform::parse_json_path(path),
+        &mut Vec::new(),
+        &mut found,
+    );
+    found
+}
+
+impl WriteRecord {
+    /// Every note moved under `prefix`: what it describes now sits at
+    /// `prefix` of a composite's answer, inside its value.
+    pub(crate) fn rebased(self, prefix: &[String]) -> Self {
+        Self(
+            self.0
+                .into_iter()
+                .map(|mut written| {
+                    written.layer = Layer::Value;
+                    written.dest = prefix.iter().cloned().chain(written.dest).collect();
+                    written
+                })
+                .collect(),
+        )
+    }
+
+    /// The notes a projection of `from` out of `step` (a step's value)
+    /// carries to `to` in a composite's answer. A note inside the projected
+    /// value moves with it. A note that holds the projected value (part of
+    /// what the gateway wrote was taken out) becomes a note of that part,
+    /// but only while the member still holds what was written: a part of
+    /// backend bytes is never the gateway's. Any other note does not reach
+    /// the answer, and its member there stays receipted.
+    pub(crate) fn projected(&self, step: &Value, from: &[String], to: &[String]) -> Self {
+        let mut carried = Vec::new();
+        for written in &self.0 {
+            if let Some(rest) = written.dest.strip_prefix(from) {
+                carried.push(Written {
+                    layer: Layer::Value,
+                    dest: to.iter().chain(rest).cloned().collect(),
+                    ..written.clone()
+                });
+            } else if let Some(inside) = from.strip_prefix(written.dest.as_slice()) {
+                let holds = member(step, &written.dest).and_then(digest) == Some(written.digest);
+                let Some(part) = member(step, from).filter(|_| holds).and_then(digest) else {
+                    continue;
+                };
+                carried.push(Written {
+                    layer: Layer::Value,
+                    dest: to.to_vec(),
+                    kind: written.kind,
+                    within: written.within.iter().chain(inside).cloned().collect(),
+                    digest: part,
+                    seq: 0,
+                });
+            }
+        }
+        Self(carried)
+    }
 }
 
 /// Run `delivery` with a write record, beside its receipt collector.
@@ -45,34 +387,67 @@ tokio::task_local! {
 pub(super) fn scope<F: std::future::Future>(
     delivery: F,
 ) -> impl std::future::Future<Output = F::Output> {
-    GATEWAY_WRITES.scope(RefCell::new(Vec::new()), delivery)
+    GATEWAY_WRITES.scope(RefCell::new(Writes::default()), delivery)
 }
 
-// ponytail: a DefaultHasher over the member's JSON text; a member the gateway
-// writes is small (an id, a hint, advice, a signature block).
-fn digest(member: &Value) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    member.to_string().hash(&mut hasher);
-    hasher.finish()
+// ponytail: no extra bound: a gateway-written member is small (an id, a hint,
+// advice, a signature block), and the record budget backs this up on a task
+// row.
+/// `None` only if `member` cannot be canonicalized, which a parsed `Value`
+/// cannot fail; the note is then not taken, and the member stays receipted.
+fn digest(member: &Value) -> Option<Digest> {
+    let canonical = serde_json_canonicalizer::to_vec(member).ok()?;
+    Some(<sha2::Sha256 as sha2::Digest>::digest(&canonical).into())
 }
 
-fn member<'v>(value: &'v Value, path: &[&str]) -> Option<&'v Value> {
-    path.iter().try_fold(value, |at, key| at.get(key))
+/// The member at `path`. An object segment is a key (a numeric-looking key
+/// stays a key); an array segment must be a canonical index. Anything else
+/// is no member, so the note is not applied and the member stays receipted.
+fn member<'v, S: AsRef<str>>(value: &'v Value, path: &[S]) -> Option<&'v Value> {
+    path.iter().try_fold(value, |at, segment| match at {
+        Value::Object(map) => map.get(segment.as_ref()),
+        Value::Array(items) => index(segment.as_ref()).and_then(|i| items.get(i)),
+        _ => None,
+    })
+}
+
+/// A canonical array index: decimal digits, no sign, no leading zero
+/// unless it is `0` itself.
+fn index(segment: &str) -> Option<usize> {
+    let canonical = segment == "0"
+        || (!segment.is_empty()
+            && !segment.starts_with('0')
+            && segment.bytes().all(|b| b.is_ascii_digit()));
+    canonical.then(|| segment.parse().ok()).flatten()
 }
 
 /// Note that the gateway wrote `path` of `value` (at `layer`). A no-op
 /// outside a delivery scope or when the member is absent.
 pub(crate) fn note(layer: Layer, path: &'static [&'static str], value: &Value) {
-    let Some(written) = member(value, path) else {
+    debug_assert!(
+        NOTED_PATHS.contains(&path),
+        "{path:?} is not in NOTED_PATHS, so a stored record would drop it"
+    );
+    let Some(digest) = member(value, path).and_then(digest) else {
         return;
     };
     let _ = GATEWAY_WRITES.try_with(|writes| {
         writes.borrow_mut().push(Written {
             layer,
-            path,
-            digest: digest(written),
+            dest: path.iter().map(|segment| (*segment).to_owned()).collect(),
+            kind: path,
+            within: Vec::new(),
+            digest,
+            seq: 0,
         });
     });
+}
+
+/// Note the response-contract annotations the gateway just wrote into
+/// `value` (MIK-7993 r4 M1): its own verdict, never the backend's text.
+pub(super) fn note_contract(value: &Value) {
+    note(Layer::Value, CONTRACT_VIOLATION, value);
+    note(Layer::Value, CONTRACT_REASON, value);
 }
 
 /// The member a task envelope the gateway built is known by: the task id
@@ -93,34 +468,23 @@ pub(crate) fn note_task_envelope(answer: &Value) {
 /// backend answer that merely looks like one is not.
 #[cfg(feature = "firewall")]
 pub(super) fn built_task_envelope(answer: &Value) -> bool {
-    let Some(id) = member(answer, TASK_ID) else {
-        return false;
-    };
-    GATEWAY_WRITES
-        .try_with(|writes| {
-            let digest = digest(id);
-            writes
-                .borrow()
-                .iter()
-                .any(|w| w.layer == Layer::Answer && w.path == TASK_ID && w.digest == digest)
-        })
-        .unwrap_or(false)
+    owns(Layer::Answer, TASK_ID, answer)
 }
 
 /// Whether the gateway wrote `path` of `value` (at `layer`) on this call and
 /// the member still holds what it wrote: a backend member of that name does
 /// not count.
 pub(super) fn owns(layer: Layer, path: &[&str], value: &Value) -> bool {
-    let Some(written) = member(value, path) else {
+    let Some(digest) = member(value, path).and_then(digest) else {
         return false;
     };
-    let digest = digest(written);
     GATEWAY_WRITES
         .try_with(|writes| {
-            writes
-                .borrow()
-                .iter()
-                .any(|w| w.layer == layer && w.path == path && w.digest == digest)
+            writes.borrow().list.iter().any(|w| {
+                w.layer == layer
+                    && w.digest == digest
+                    && w.dest.iter().map(String::as_str).eq(path.iter().copied())
+            })
         })
         .unwrap_or(false)
 }
@@ -129,22 +493,85 @@ pub(super) fn owns(layer: Layer, path: &[&str], value: &Value) -> bool {
 /// holds what it wrote.
 #[cfg(feature = "firewall")]
 pub(super) fn strip(value: &mut Value, layer: Layer) {
-    let _ = GATEWAY_WRITES.try_with(|writes| {
-        for w in writes.borrow().iter().filter(|w| w.layer == layer) {
-            let Some((last, parent)) = w.path.split_last() else {
-                continue;
-            };
-            let owned = member(value, w.path).is_some_and(|m| digest(m) == w.digest);
-            if owned && let Some(map) = member_mut(value, parent).and_then(Value::as_object_mut) {
-                map.remove(*last);
-            }
-        }
-    });
+    let _ = GATEWAY_WRITES.try_with(|writes| remove_owned(value, &writes.borrow().list, layer));
 }
 
+/// Remove from `value` the answer-layer members the gateway wrote on this
+/// call, for a route that stages its own delivered copy (the direct route,
+/// whose result is both answer and tool value); the value layer is left to
+/// `receipt_with`, which strips it on every stage.
 #[cfg(feature = "firewall")]
-fn member_mut<'v>(value: &'v mut Value, path: &[&str]) -> Option<&'v mut Value> {
-    path.iter().try_fold(value, |at, key| at.get_mut(key))
+pub(crate) fn strip_noted(value: &mut Value) {
+    strip(value, Layer::Answer);
+}
+
+/// `value` without what `record` wrote, for a cache or replay hit's receipt:
+/// stripped by that entry's own record, never by another step's notes.
+/// Borrowed when there is nothing to remove, so a plain hit copies nothing.
+#[cfg_attr(not(feature = "firewall"), allow(unused_variables))]
+pub(crate) fn without<'v>(value: &'v Value, record: &WriteRecord) -> Cow<'v, Value> {
+    #[cfg(feature = "firewall")]
+    if !record.0.is_empty() {
+        let mut copy = value.clone();
+        remove_owned(&mut copy, &record.0, Layer::Value);
+        return Cow::Owned(copy);
+    }
+    Cow::Borrowed(value)
+}
+
+/// Remove each `layer` member of `writes` that still holds what was written;
+/// the names of those removed (their noted kinds). An object member is
+/// removed; an array element becomes `null`, so the indices of the elements
+/// after it, and the notes that name them, still hold (impl delta D3).
+fn remove_owned(value: &mut Value, writes: &[Written], layer: Layer) -> Vec<String> {
+    let mut removed = Vec::new();
+    for w in writes.iter().filter(|w| w.layer == layer) {
+        let Some((last, parent)) = w.dest.split_last() else {
+            continue;
+        };
+        if member(value, &w.dest).and_then(digest) != Some(w.digest) {
+            continue;
+        }
+        let gone = match member_mut(value, parent) {
+            Some(Value::Object(map)) => map.remove(last).is_some(),
+            Some(Value::Array(items)) => index(last)
+                .and_then(|i| items.get_mut(i))
+                .map(|slot| *slot = Value::Null)
+                .is_some(),
+            _ => false,
+        };
+        if gone {
+            removed.push(w.kind.join("."));
+        }
+    }
+    removed
+}
+
+/// MIK-7993 F1 (lead ruling c): `result`, as a task row stores it, without
+/// every member `record` would exempt. For a row that cannot hold its
+/// record, so the gateway's own text is never stored unrecorded and never
+/// receipted as backend text. Returns the names of the members removed.
+///
+/// A task stores its NATIVE result whatever tool started it (the worker
+/// dispatches through `dispatch_below_gate_native_result`, never the
+/// wrapped answer), so each note is applied to that result itself, at the
+/// path it names, and nowhere else: a backend member elsewhere is never
+/// removed (last-round delta D4).
+pub(crate) fn strip_recorded(result: &mut Value, record: &WriteRecord) -> Vec<String> {
+    let mut stripped = remove_owned(result, &record.0, Layer::Answer);
+    stripped.extend(remove_owned(result, &record.0, Layer::Value));
+    stripped.sort();
+    stripped.dedup();
+    stripped
+}
+
+/// [`member`], mutable: the same segment rules.
+fn member_mut<'v>(value: &'v mut Value, path: &[String]) -> Option<&'v mut Value> {
+    path.iter().try_fold(value, |at, segment| match at {
+        Value::Object(map) => map.get_mut(segment),
+        Value::Array(items) => index(segment).and_then(|i| items.get_mut(i)),
+        _ => None,
+    })
 }
 
 /// A final check rewrote the answer in place (`before` to `after`, both read
@@ -154,14 +581,14 @@ fn member_mut<'v>(value: &'v mut Value, path: &[&str]) -> Option<&'v mut Value> 
 #[cfg(feature = "firewall")]
 pub(super) fn rebind(layer: Layer, before: &Value, after: &Value) {
     let _ = GATEWAY_WRITES.try_with(|writes| {
-        writes.borrow_mut().retain_mut(|w| {
+        writes.borrow_mut().list.retain_mut(|w| {
             if w.layer != layer {
                 return true;
             }
-            let owned = member(before, w.path).is_some_and(|m| digest(m) == w.digest);
-            match member(after, w.path) {
+            let owned = member(before, &w.dest).and_then(digest) == Some(w.digest);
+            match member(after, &w.dest).and_then(digest) {
                 Some(now) if owned => {
-                    w.digest = digest(now);
+                    w.digest = now;
                     true
                 }
                 _ => false,
@@ -171,51 +598,5 @@ pub(super) fn rebind(layer: Layer, before: &Value, after: &Value) {
 }
 
 #[cfg(all(test, feature = "firewall"))]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    /// A noted member is removed while it holds what was written; a member
-    /// of the same name with other text (a replaced value) stays.
-    #[tokio::test]
-    async fn a_note_removes_only_what_was_written() {
-        scope(async {
-            let written = json!({"trace_id": "t-1", "text": "x"});
-            note(Layer::Value, &["trace_id"], &written);
-            let mut same = written.clone();
-            strip(&mut same, Layer::Value);
-            assert!(same.get("trace_id").is_none(), "{same}");
-            let mut replaced = json!({"trace_id": "backend", "text": "x"});
-            strip(&mut replaced, Layer::Value);
-            assert_eq!(replaced["trace_id"], "backend");
-        })
-        .await;
-    }
-
-    /// An in-place rewrite of an owned member keeps it owned; a stale note
-    /// is dropped and stays dropped through a later rewrite.
-    #[tokio::test]
-    async fn a_rebind_follows_only_owned_members() {
-        scope(async {
-            let written = json!({"recovery": {"hint": "a b"}});
-            note(Layer::Value, &["recovery"], &written);
-            let redacted = json!({"recovery": {"hint": "a [redacted]"}});
-            rebind(Layer::Value, &written, &redacted);
-            let mut delivered = redacted.clone();
-            strip(&mut delivered, Layer::Value);
-            assert!(delivered.get("recovery").is_none(), "{delivered}");
-
-            let replaced = json!({"recovery": {"hint": "backend"}});
-            rebind(
-                Layer::Value,
-                &replaced,
-                &json!({"recovery": {"hint": "back"}}),
-            );
-            let mut later = json!({"recovery": {"hint": "back"}});
-            strip(&mut later, Layer::Value);
-            assert_eq!(later["recovery"]["hint"], "back", "a stale note revived");
-        })
-        .await;
-    }
-}
+#[path = "gateway_writes_tests.rs"]
+mod tests;

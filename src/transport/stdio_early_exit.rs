@@ -144,12 +144,24 @@ pub(super) async fn reply_or_eof<T>(
     }
 }
 
+/// Trips a start's stdout-closed latch when dropped. The reader task holds it,
+/// so the latch trips however the task ends: at EOF, on an early return, or in
+/// a panic. A handshake or request racing the latch then never waits out its
+/// timeout behind a reader that is gone, though `StartState` keeps the sender.
+pub(super) struct TripOnDrop(pub(super) std::sync::Arc<tokio::sync::watch::Sender<bool>>);
+
+impl Drop for TripOnDrop {
+    fn drop(&mut self) {
+        self.0.send_replace(true);
+    }
+}
+
 /// Per-start state: the stdout-closed latch (fresh each start, so a previous
 /// generation's exit cannot answer this one) and whether the race saw it. Tests
 /// also keep the class and needle of the last early exit.
 #[derive(Default)]
 pub(super) struct StartState {
-    eof: parking_lot::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
+    eof: parking_lot::Mutex<Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>>,
     exited: std::sync::atomic::AtomicBool,
     /// The last early exit's stderr tail, already sanitized: the raw bytes
     /// never outlive `early_exit_error`.
@@ -166,7 +178,7 @@ impl StartState {
         self.shown_stderr.lock().clear();
     }
 
-    pub(super) fn begin(&self, eof: tokio::sync::watch::Receiver<bool>) {
+    pub(super) fn begin(&self, eof: std::sync::Arc<tokio::sync::watch::Sender<bool>>) {
         *self.eof.lock() = Some(eof);
         // A class describes the last start only.
         // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
@@ -176,6 +188,11 @@ impl StartState {
         }
         self.exited
             .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// This start's stdout-closed latch, or `None` before the first start.
+    pub(super) fn eof_receiver(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
+        self.eof.lock().as_ref().map(|eof| eof.subscribe())
     }
 
     pub(super) fn exited_early(&self) -> bool {
@@ -207,7 +224,7 @@ impl StdioTransport {
         params: serde_json::Value,
     ) -> Result<crate::protocol::JsonRpcResponse> {
         use crate::transport::Transport as _;
-        let Some(mut eof) = self.start.eof.lock().clone() else {
+        let Some(mut eof) = self.start.eof_receiver() else {
             return self.request("initialize", Some(params)).await;
         };
         // `wait_for` reads the current value first, so the clone sees an EOF
@@ -261,6 +278,8 @@ impl StdioTransport {
             }
             None => None,
         };
+        // Kept for classifying the failure (#1759).
+        self.failure.record_exit(status);
         let (reader, tail) = stderr_tail;
         let abort = reader.abort_handle();
         if tokio::time::timeout(DRAIN, reader).await.is_err() {

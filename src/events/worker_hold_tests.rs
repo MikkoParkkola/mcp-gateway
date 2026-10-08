@@ -46,7 +46,7 @@ async fn an_unoffered_type_is_held_then_sent_once_offered() {
         let later = Utc::now() + chrono::Duration::minutes(5);
         let due = hub
             .store
-            .due(later, &std::collections::HashSet::new())
+            .due(later, &std::collections::HashSet::new(), hub.dead_policy())
             .expect("io");
         assert_eq!(due.ready.len(), 1, "{name}: still pending");
         assert_eq!(
@@ -175,5 +175,51 @@ async fn a_type_withdrawn_after_the_sending_record_is_held() {
     let ended = audit_actions(dir.path(), "events.delivery_outcome");
     assert_eq!(ended.len(), 1, "{ended:?}");
     assert_eq!(ended[0]["status"], "source_unavailable");
+    assert_eq!(hub.store.subscriptions().len(), 1, "kept");
+}
+
+/// MIK-8037: a source that answers `-32011` (the type's capability is not in
+/// the catalogue now, which could not be read whole) holds the record like an
+/// unoffered type: no POST, the subscription kept.
+#[tokio::test]
+async fn a_not_found_authorize_holds_the_record() {
+    struct Unread;
+    #[async_trait::async_trait]
+    impl crate::events::EventSource for Unread {
+        fn kind(&self) -> SourceKind {
+            SourceKind::Webhook
+        }
+        fn descriptors(&self) -> Vec<crate::events::types::EventDescriptor> {
+            vec![super::descriptor(
+                "webhook.c.r.received",
+                SourceKind::Webhook,
+            )]
+        }
+        fn matches(
+            &self,
+            _principal: &str,
+            _arguments: &serde_json::Value,
+            _event: &crate::events::fanout::SourceEvent,
+        ) -> bool {
+            true
+        }
+        async fn authorize(
+            &self,
+            _principal: &str,
+            _name: &str,
+            _arguments: &serde_json::Value,
+        ) -> Result<(), crate::events::types::RpcError> {
+            Err(crate::events::types::RpcError::not_found())
+        }
+    }
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = open_hub(dir.path(), 5);
+    hub.register_source(Arc::new(Unread));
+    let services = logged_services(dir.path());
+    let (port, accepted) = counting_callback().await;
+    queued_as(&hub, port, "evt_unread", "webhook.c.r.received");
+    hub.attempt(&services, "evt_unread").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "no POST");
     assert_eq!(hub.store.subscriptions().len(), 1, "kept");
 }

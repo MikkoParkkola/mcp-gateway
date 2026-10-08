@@ -348,6 +348,13 @@ def check_graded_schedule(run: Path, pins: dict, measured: list) -> None:
     schedule = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(schedule)
 
+    # Contract §9: built and measured on bench-host, by recorded host id.
+    if pins.get("host_id") != schedule.BENCH_HOST_ID:
+        raise Void(f"graded run: measured on host {pins.get('host_id')!r}, "
+                   "not bench-host (contract §9)")
+    builds = pins.get("build_host_ids")
+    if not isinstance(builds, dict) or any(builds.get(c) != schedule.BENCH_HOST_ID for c in "ABC"):
+        raise Void(f"graded run: arms built on {builds!r}, not all on bench-host (contract §9)")
     if measured != list(range(1, schedule.GRADED_REPS + 1)):
         raise Void(f"graded run: pins.reps {measured} must be 1..{schedule.GRADED_REPS}")
     if pins.get("cell_order_seed") != str(schedule.GRADED_SEED):

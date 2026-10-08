@@ -55,6 +55,9 @@ pub(crate) enum Answer {
     /// A two-page `tools/list` whose first page carries this `ttlMs` hint and
     /// whose last page is unreadable (its `tools` is not an array).
     Unreadable(Option<u64>),
+    /// A two-page `tools/list` whose first page carries this `ttlMs` hint and
+    /// whose last page a non-numeric one (MIK-8049).
+    NonNumeric(u64),
     /// Like `Ok`, claiming `cacheScope: "public"` for the call's answer.
     PublicScope,
 }
@@ -68,46 +71,63 @@ struct CountingBackend {
     answer: Answer,
 }
 
+/// The `tools/list` page `answer` scripts for the request carrying `params`.
+fn listing(answer: Answer, params: Option<&Value>) -> Value {
+    let mut result = json!({"tools": [{"name": "read", "inputSchema": {
+        "type": "object",
+        "properties": {"cmd": {"type": "string"}}
+    }}]});
+    match answer {
+        Answer::ModernList => {
+            result["resultType"] = json!("complete");
+            result["ttlMs"] = json!(5000);
+            result["cacheScope"] = json!("private");
+        }
+        Answer::Paged(first, second) => {
+            let later = params.and_then(|p| p.get("cursor")).is_some();
+            let hint = if later { second } else { first };
+            if later {
+                result["tools"] = json!([]);
+            } else {
+                result["nextCursor"] = json!("page-2");
+            }
+            if let Some(hint) = hint {
+                result["ttlMs"] = json!(hint);
+            }
+        }
+        Answer::NonNumeric(hint) => {
+            if params.and_then(|p| p.get("cursor")).is_some() {
+                result["tools"] = json!([{"name": "later", "inputSchema": {"type": "object"}}]);
+                result["ttlMs"] = json!("soon");
+            } else {
+                result["nextCursor"] = json!("page-2");
+                result["ttlMs"] = json!(hint);
+            }
+        }
+        Answer::Unreadable(hint) => {
+            if params.and_then(|p| p.get("cursor")).is_some() {
+                result["tools"] = json!("not a list");
+            } else {
+                result["nextCursor"] = json!("page-2");
+                if let Some(hint) = hint {
+                    result["ttlMs"] = json!(hint);
+                }
+            }
+        }
+        _ => {}
+    }
+    result
+}
+
 #[async_trait::async_trait]
 impl Transport for CountingBackend {
     async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         let id = RequestId::Number(1);
         if method == "tools/list" {
-            let mut result = json!({"tools": [{"name": "read", "inputSchema": {
-                "type": "object",
-                "properties": {"cmd": {"type": "string"}}
-            }}]});
-            match self.answer {
-                Answer::ModernList => {
-                    result["resultType"] = json!("complete");
-                    result["ttlMs"] = json!(5000);
-                    result["cacheScope"] = json!("private");
-                }
-                Answer::Paged(first, second) => {
-                    let later = params.as_ref().and_then(|p| p.get("cursor")).is_some();
-                    let hint = if later { second } else { first };
-                    if later {
-                        result["tools"] = json!([]);
-                    } else {
-                        result["nextCursor"] = json!("page-2");
-                    }
-                    if let Some(hint) = hint {
-                        result["ttlMs"] = json!(hint);
-                    }
-                }
-                Answer::Unreadable(hint) => {
-                    if params.as_ref().and_then(|p| p.get("cursor")).is_some() {
-                        result["tools"] = json!("not a list");
-                    } else {
-                        result["nextCursor"] = json!("page-2");
-                        if let Some(hint) = hint {
-                            result["ttlMs"] = json!(hint);
-                        }
-                    }
-                }
-                _ => {}
-            }
-            return Ok(JsonRpcResponse::success(id, result));
+            return Ok(JsonRpcResponse::success(
+                id,
+                listing(self.answer, params.as_ref()),
+            ));
         }
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         if matches!(self.answer, Answer::AskOnce) {
@@ -133,10 +153,12 @@ impl Transport for CountingBackend {
             });
         }
         match &self.answer {
-            Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
-            )),
+            Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) | Answer::NonNumeric(_) => {
+                Ok(JsonRpcResponse::success(
+                    id,
+                    json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+                ))
+            }
             Answer::ModernList => Ok(JsonRpcResponse::success(
                 id,
                 json!({"content": [{"type": "text", "text": "ok"}], "isError": false, "ttlMs": 3000}),
@@ -257,22 +279,52 @@ pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef
 /// signing armed, so the direct route signs every `tools/call` it serves.
 pub(crate) async fn fixture_hardened_signed(answer: Answer, require_nonce: bool) -> Fx {
     HARDENED.with(|h| h.set(true));
-    let fx = fixture_inner(answer, false, |mut meta| {
-        meta.enable_message_signing(
-            crate::security::message_signing::MessageSigner::new(
-                SIGNING_KEY.as_bytes().to_vec(),
-                None,
-                "hardened".into(),
-            ),
-            Duration::from_secs(300),
-            require_nonce,
-        );
-        meta
-    })
-    .await;
+    let fx = fixture_inner(answer, false, |meta| signing(meta, require_nonce)).await;
     HARDENED.with(|h| h.set(false));
     fx
 }
+
+/// `meta` with message signing armed under [`SIGNING_KEY`].
+fn signing(mut meta: MetaMcp, require_nonce: bool) -> MetaMcp {
+    meta.enable_message_signing(
+        crate::security::message_signing::MessageSigner::new(
+            SIGNING_KEY.as_bytes().to_vec(),
+            None,
+            "hardened".into(),
+        ),
+        Duration::from_secs(300),
+        require_nonce,
+    );
+    meta
+}
+
+/// [`fixture_hardened_signed`] with relay detection on as in
+/// [`fixture_relayed`]: every direct `tools/call` is signed and staged.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_signed_relayed(answer: Answer) -> Fx {
+    HARDENED.with(|h| h.set(true));
+    RELAY.with(|r| r.set(true));
+    let fx = fixture_inner(answer, true, |meta| signing(meta, false)).await;
+    HARDENED.with(|h| h.set(false));
+    RELAY.with(|r| r.set(false));
+    fx
+}
+
+/// [`fixture_firewalled`] with relay detection on for `alpha:read` and
+/// `alpha:resources/read`, so the direct route stages receipts (MIK-8022).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_relayed(answer: Answer) -> Fx {
+    RELAY.with(|r| r.set(true));
+    let fx = fixture_inner(answer, true, |meta| meta).await;
+    RELAY.with(|r| r.set(false));
+    fx
+}
+
+/// A key whose name the response redactor reads as a GitHub token (a fake,
+/// split so no scanner reads the source as one), so text naming it (a
+/// per-key cost warning) is redacted on the way out.
+#[cfg(feature = "firewall")]
+pub(crate) const CREDENTIAL_KEY: &str = concat!("ghp_", "abcdefghijklmnopqrstuvwxyz1234567890");
 
 /// [`fixture`] under the default posture with `server.modern_protocol: false`,
 /// the rollback gate that turns the 2026-07-28 revision off.
@@ -307,6 +359,7 @@ thread_local! {
         const { std::cell::Cell::new(None) };
     static CLIENT_BREAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ANOMALY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static RELAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The auth the fixture serves: four keys, plus a client breaker when asked.
@@ -415,6 +468,15 @@ async fn fixture_inner(
             anomaly_threshold: 0.7,
             anomaly_block_threshold: anomaly.then_some(0.9),
             anomaly_min_observations: 1,
+            collusion: if RELAY.with(std::cell::Cell::get) {
+                crate::security::firewall::CollusionConfig {
+                    action: crate::security::firewall::CollusionAction::Block,
+                    sources: vec!["alpha:read".into(), "alpha:resources/read".into()],
+                    ..crate::security::firewall::CollusionConfig::default()
+                }
+            } else {
+                crate::security::firewall::CollusionConfig::default()
+            },
             ..FirewallConfig::default()
         };
         state_mut.firewall = Some(Arc::new(Firewall::from_config(

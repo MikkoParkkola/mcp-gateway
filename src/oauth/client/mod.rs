@@ -120,6 +120,14 @@ pub struct OAuthClient {
     /// machine. `None` if it could not be built; such a fetch then fails.
     loopback_client: Option<Client>,
 
+    /// Refresh-token clients with redirects off, built on first use: index 0
+    /// the policy route, 1 the unproxied loopback route (MIK-8018).
+    refresh_clients: [std::sync::OnceLock<Client>; 2],
+
+    /// Whether refreshes go through `refresh_clients` or the caller's own
+    /// `http_client` (MIK-8018).
+    refresh_route: destination::RefreshRoute,
+
     /// Backend name (for storage key)
     backend_name: String,
 
@@ -285,6 +293,8 @@ impl OAuthClient {
         Self {
             http_client,
             loopback_client: destination::loopback_client().ok(),
+            refresh_clients: [std::sync::OnceLock::new(), std::sync::OnceLock::new()],
+            refresh_route: destination::RefreshRoute::Supplied,
             backend_name,
             login_gate: None,
             resource_url,
@@ -471,13 +481,16 @@ impl OAuthClient {
         }
 
         // Try to refresh if we have a refresh token
-        let refresh_token_opt = {
-            let token = self.current_token.read();
-            token.as_ref().and_then(|t| t.refresh_token.clone())
-        };
+        // A refresh sends the stored refresh token (MIK-8018); a cached one
+        // only says this client has a grant to refresh.
+        let has_refresh_token = self
+            .current_token
+            .read()
+            .as_ref()
+            .is_some_and(|t| t.refresh_token.is_some());
 
-        if let Some(refresh_token) = refresh_token_opt {
-            match self.refresh_token(&refresh_token).await {
+        if has_refresh_token {
+            match self.refresh_token().await {
                 Ok(new_token) => return Ok(new_token),
                 // A policy refusal is not an expired grant: re-authorizing
                 // would only walk past it (MIK-7701).
@@ -586,6 +599,10 @@ fn open_browser(url: &str) -> bool {
 #[cfg(test)]
 mod authorize_tests;
 pub(crate) mod destination;
+#[cfg(test)]
+mod refresh_flight_tests;
+#[cfg(test)]
+pub(crate) mod token_server_fixture;
 
 #[cfg(test)]
 impl OAuthClient {
@@ -603,6 +620,10 @@ impl OAuthClient {
 use url::Url;
 
 mod grants;
+mod refresh_flight;
+pub(crate) use refresh_flight::{
+    RefreshCaller, RefreshRequest, Refreshed, Rotation, StoredCredential, refresh_stored,
+};
 mod registration;
 mod renewal;
 #[cfg(test)]

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::{EventsHub, Probe, seed_verified, services, subscribe};
-use crate::events::test_pause::within;
+use crate::test_pause::within;
 
 /// The lifecycle actions in the audit log, in log order.
 fn lifecycle_actions(dir: &std::path::Path) -> Vec<String> {
@@ -74,4 +74,38 @@ async fn a_racing_refresh_is_audited_after_the_insert_it_follows() {
         ["events.subscribe", "events.refresh"],
         "audit order follows commit order"
     );
+}
+
+/// MIK-8038 part 1 (A8): a subscribe holds the catalogue gate from its
+/// commit-time re-check through its store admit, so a reload, which takes
+/// the same gate, cannot change the catalogue in between.
+#[tokio::test]
+async fn a_subscribe_holds_the_catalogue_gate_through_its_admit() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.register_source(Arc::new(Probe::default()));
+    assert!(hub.runtime.services.set(Arc::new(services())).is_ok());
+    seed_verified(&hub, &config, "p");
+
+    let (reached, release) = hub.before_admit.arm();
+    let subscribing = tokio::spawn({
+        let hub = Arc::clone(&hub);
+        async move { subscribe(&hub, "p").await }
+    });
+    within("the subscribe's pause", reached.notified()).await;
+    let reload = tokio::task::spawn_blocking({
+        let hub = Arc::clone(&hub);
+        move || drop(hub.catalogue_lock())
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Read, then release before asserting: a failed assertion must not
+    // leave the paused subscribe holding the runtime at teardown.
+    let waited = !reload.is_finished();
+    release.notify_one();
+    within("the subscribe", subscribing)
+        .await
+        .expect("subscribe");
+    within("the reload", reload).await.expect("reload");
+    assert!(waited, "a reload waits on the gate the subscribe holds");
 }

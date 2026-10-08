@@ -165,6 +165,77 @@ fn an_add_inside_the_day_reset_window_is_kept() {
     assert_eq!(acc.current(), 8, "an add inside the reset window was lost");
 }
 
+/// MIK-7903 (MIK-7763C.1): a check that runs after a call's spend is added,
+/// before its reservation would be released, sees the call once.
+///
+/// The hook fires inside `settle` right after the adds. It records whether
+/// the ledger is held at that point, which does not depend on scheduling,
+/// and starts call B's check on another thread. With the release in the
+/// same step under the ledger lock, B waits and then sees only the spend;
+/// otherwise it can see the spend and the reservation together and is
+/// refused.
+#[test]
+fn a_check_during_a_settle_counts_the_call_once() {
+    use std::sync::{Mutex, TryLockError};
+    use std::thread::JoinHandle;
+    /// Whether the ledger was held inside the settle, and call B's check.
+    type Slot = Arc<Mutex<Option<(bool, JoinHandle<bool>)>>>;
+
+    for scope in [Scope::Global, Scope::Tool, Scope::Key] {
+        // GIVEN: room for exactly two calls, and call A admitted
+        let enforcer = enforcer(scope, 2);
+        let a = enforcer.check(TOOL, Some(KEY));
+        assert!(a.allowed, "{scope:?}: call A is admitted");
+        let slot: Slot = Arc::default();
+        let (inner, hook_slot) = (Arc::clone(&enforcer), Arc::clone(&slot));
+        AFTER_SPEND_ADDED.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                let held = matches!(inner.ledger.try_lock(), Err(TryLockError::WouldBlock));
+                let b = std::thread::spawn(move || inner.check(TOOL, Some(KEY)).allowed);
+                *hook_slot.lock().unwrap() = Some((held, b));
+            }));
+        });
+        // WHEN: A settles while B checks; A's hold outlives B's answer
+        enforcer.settle(a.hold.as_deref(), TOOL, Some(KEY), a.cost_usd);
+        let (held, b) = slot.lock().unwrap().take().expect("the hook ran");
+        // THEN: the spend was added under the ledger lock, and B fits,
+        // because A counts once (spent), not twice (spent + held)
+        assert!(
+            held,
+            "{scope:?}: the spend was added outside the ledger lock"
+        );
+        assert!(b.join().unwrap(), "{scope:?}: call B was refused");
+        drop(a);
+    }
+}
+
+/// MIK-7903: a settled hold gives nothing back on drop, through any clone, so
+/// another call's reservation is never released with it.
+#[test]
+fn dropping_a_settled_hold_keeps_other_reservations() {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let micro = (COST * 1_000_000.0) as u64;
+    // GIVEN: two admitted calls, A and B
+    let enforcer = enforcer(Scope::Global, 4);
+    let a = enforcer.check(TOOL, Some(KEY));
+    let copy = a.clone();
+    let b = enforcer.check(TOOL, Some(KEY));
+    // WHEN: A settles through one clone, then both clones drop
+    enforcer.settle(a.hold.as_deref(), TOOL, Some(KEY), a.cost_usd);
+    drop(a);
+    drop(copy);
+    // THEN: B's reservation is still held whole, and A's spend is recorded
+    let pending = locked(&enforcer.ledger);
+    assert_eq!(
+        (pending.global, pending.tool(TOOL), pending.key(KEY)),
+        (micro, micro, micro),
+        "B's reservation was released with A's"
+    );
+    drop(pending);
+    assert!((enforcer.snapshot().global_daily_usd - COST).abs() < 1e-9);
+    drop(b);
+}
+
 /// A total at the top of the range saturates rather than wrapping to a small
 /// number that would read as budget left.
 #[test]
@@ -181,4 +252,36 @@ fn an_add_on_an_earlier_day_never_resets_backward() {
     let acc = DailyAccumulator::stale(current_day() + 1, 700);
     assert_eq!(acc.add(5), 705, "the newer day's spend was erased");
     assert_eq!(acc.current(), 705, "the newer day's spend is still counted");
+}
+
+/// A positive cost below one micro-USD reserves one whole micro-USD
+/// (MIK-8081), and both a settle and a dropped hold give it back, so no tool
+/// or key row stays behind.
+#[test]
+fn a_cost_below_one_micro_leaves_no_ledger_rows() {
+    // GIVEN: a tool priced below one micro-USD, under a per-key budget
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..CostGovernanceConfig::default()
+    };
+    cfg.budgets.per_key.insert(KEY.to_string(), 1.0);
+    cfg.tool_costs.insert(TOOL.to_string(), 1e-7);
+    let registry = Arc::new(CostRegistry::new(&cfg));
+    let enforcer = BudgetEnforcer::new(cfg, registry);
+    // WHEN: one admitted call settles and another is dropped unsettled
+    let settled = enforcer.check(TOOL, Some(KEY));
+    let dropped = enforcer.check(TOOL, Some("other_key"));
+    assert!(
+        settled.allowed && dropped.allowed && settled.cost_usd > 0.0 && dropped.cost_usd > 0.0,
+        "both calls are admitted at a positive cost"
+    );
+    enforcer.settle(settled.hold.as_deref(), TOOL, Some(KEY), settled.cost_usd);
+    drop(settled);
+    drop(dropped);
+    // THEN: the ledger holds no rows
+    let pending = locked(&enforcer.ledger);
+    assert!(
+        pending.tools.is_empty() && pending.keys.is_empty(),
+        "zero-valued reservations stayed in the ledger"
+    );
 }
