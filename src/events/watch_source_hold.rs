@@ -5,9 +5,12 @@
 
 use chrono::Utc;
 
+use serde_json::Value;
+
+use super::super::store::Store;
 use super::{
-    Catalogue, Charge, CredentialUse, EventsHub, Held, Judged, Run, Subscription, Target,
-    WatchClass, event_name,
+    Catalogue, Charge, CredentialUse, EventSource, EventsHub, Held, Judged, Run, Subscription,
+    Target, WatchClass, WatchSource, event_name, is_watch,
 };
 
 impl Charge {
@@ -85,5 +88,50 @@ impl Run {
             && self.key_of(s) == self.key
             && s.watch_class
                 .is_none_or(|class| Charge::of(class) == self.charge)
+    }
+}
+
+impl WatchSource {
+    /// The class a new subscribe's key polls under: what the catalogue
+    /// admits the capability under now, else (a held watch) a stored row's
+    /// class, else keyed. A held row keeps its own key (`row_key`),
+    /// so a key started here for another class finds no row and retires.
+    pub(super) fn class_for(&self, principal: &str, name: &str, arguments: &Value) -> WatchClass {
+        self.watch_class(name)
+            .or_else(|| {
+                let hub = self.hub.upgrade()?;
+                Self::rows(&hub, principal, name, arguments)
+                    .first()
+                    .map(|row| self.effective_class(row))
+            })
+            .unwrap_or(WatchClass::Keyed)
+    }
+
+    /// A row's class: recorded, else (a watch written before the class was
+    /// recorded) what the catalogue admits its capability under now, else
+    /// keyed, so one principal's credential never answers for another.
+    pub(super) fn effective_class(&self, row: &Subscription) -> WatchClass {
+        row.watch_class
+            .or_else(|| self.watch_class(&row.name))
+            .unwrap_or(WatchClass::Keyed)
+    }
+
+    /// Record the class of every watch row written before it was recorded:
+    /// what the catalogue admits its capability under now, else keyed.
+    pub(super) fn pin_classes(&self, store: &Store) {
+        let mut names: Vec<String> = store
+            .subscriptions()
+            .into_iter()
+            .filter(|s| s.watch_class.is_none() && is_watch(&s.name))
+            .map(|s| s.name)
+            .collect();
+        names.sort();
+        names.dedup();
+        for name in names {
+            let class = self.watch_class(&name).unwrap_or(WatchClass::Keyed);
+            if let Err(error) = store.backfill_watch_class(&name, class) {
+                tracing::warn!(%error, "events: a watch class was not recorded; retried at the next replay");
+            }
+        }
     }
 }

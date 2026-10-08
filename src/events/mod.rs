@@ -146,6 +146,10 @@ pub(crate) trait EventSource: Send + Sync {
     fn watch_class(&self, _name: &str) -> Option<records::WatchClass> {
         None
     }
+    /// Before the stored keys are replayed: record what each row this source
+    /// owns needs so its key never changes afterwards (a REST watch written
+    /// before its class was recorded takes the class it has now, MIK-8122).
+    fn pin_rows(&self, _store: &store::Store) {}
     /// The first live subscription for `key` appeared. A refusal fails that
     /// subscribe with the refusal's code.
     async fn on_first_subscriber(
