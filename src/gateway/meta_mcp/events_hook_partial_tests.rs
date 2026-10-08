@@ -5,9 +5,12 @@
 
 use super::*;
 
-/// Alpha in `d1`, beta in `d2`, both read by the scan, a subscription to
-/// each, the scan complete.
-async fn two_dirs() -> (
+/// Alpha and `extra` in `d1`, beta in `d2`, all read by the scan, a
+/// subscription to each (seeded before the hub opens, so it loads them), the
+/// scan complete.
+async fn two_dirs_with(
+    extra: &[&str],
+) -> (
     tempfile::TempDir,
     tempfile::TempDir,
     std::path::PathBuf,
@@ -18,7 +21,10 @@ async fn two_dirs() -> (
     let root = tempfile::tempdir().expect("root");
     let store = tempfile::tempdir().expect("store");
     let (d1, d2) = (root.path().join("d1"), root.path().join("d2"));
-    for (dir, cap) in [(&d1, "alpha"), (&d2, "beta")] {
+    let placed = [(&d1, "alpha"), (&d2, "beta")]
+        .into_iter()
+        .chain(extra.iter().map(|cap| (&d1, *cap)));
+    for (dir, cap) in placed {
         std::fs::create_dir_all(dir).expect("dir");
         std::fs::write(dir.join(format!("{cap}.yaml")), capability(cap)).expect("write");
         seed_subscription(store.path(), cap);
@@ -28,6 +34,18 @@ async fn two_dirs() -> (
     // Past the grace period, as a running gateway is.
     meta.run_deferred_webhook_withdraw().await;
     (root, store, d1, d2, caps, meta)
+}
+
+/// [`two_dirs_with`] and nothing extra.
+async fn two_dirs() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    Arc<CapabilityBackend>,
+    MetaMcp,
+) {
+    two_dirs_with(&[]).await
 }
 
 /// `PARTIALSCOPE.1` (P1): `d2` cannot be read while alpha's file is deleted
@@ -141,36 +159,37 @@ async fn a_capability_whose_file_cannot_be_read_is_kept() {
     assert!(subscribed(store.path(), "alpha"));
 }
 
-/// Round 4 CRITICAL (P12): `d1`'s read fails one file and admits a new
-/// one; a later read cannot read `d1` at all. Both capabilities'
-/// subscriptions are kept.
+/// Round 4 CRITICAL (P12): `d1`'s read fails one file and admits another;
+/// a later read cannot read `d1` at all. Both capabilities' subscriptions are
+/// kept: a partial read adds to what the directory is known to hold.
 #[cfg(unix)]
 #[tokio::test]
-async fn a_capability_first_read_by_a_partial_read_is_kept_when_its_directory_fails() {
+async fn a_capability_read_by_a_partial_read_is_kept_when_its_directory_fails() {
     use std::os::unix::fs::PermissionsExt as _;
-    let (_root, store, d1, _d2, caps, meta) = two_dirs().await;
-    seed_subscription(store.path(), "delta");
+    let (_root, store, d1, _d2, caps, meta) = two_dirs_with(&["delta"]).await;
     let alpha = d1.join("alpha.yaml");
     std::fs::set_permissions(&alpha, std::fs::Permissions::from_mode(0o000)).expect("lock");
-    std::fs::write(d1.join("delta.yaml"), capability("delta")).expect("delta, new");
     reload(&caps, &meta).await;
     std::fs::set_permissions(&alpha, std::fs::Permissions::from_mode(0o600)).expect("unlock");
+    assert!(
+        subscribed(store.path(), "alpha"),
+        "an unreadable file is not a deletion"
+    );
     std::fs::rename(&d1, d1.with_extension("away")).expect("make d1 unreadable");
     reload(&caps, &meta).await;
     assert!(subscribed(store.path(), "alpha"));
     assert!(
         subscribed(store.path(), "delta"),
-        "first read by a partial read: kept"
+        "read by the partial read, then unread: kept"
     );
 }
 
-/// MIK-8057 round 1 (P16): beta's file appears in `d1`, which read cleanly
-/// before, but does not parse. Nothing proves beta absent, so its
-/// subscription is kept until a clean read.
+/// MIK-8057 round 1 (P16): gamma's file in `d1` stops parsing mid-edit. Its
+/// name is not readable, so nothing proves gamma absent: its subscription is
+/// kept until a clean read.
 #[tokio::test]
-async fn a_capability_whose_new_file_does_not_parse_is_kept() {
-    let (_root, store, d1, _d2, caps, meta) = two_dirs().await;
-    seed_subscription(store.path(), "gamma");
+async fn a_capability_whose_file_stops_parsing_is_kept() {
+    let (_root, store, d1, _d2, caps, meta) = two_dirs_with(&["gamma"]).await;
     std::fs::write(d1.join("gamma.yaml"), "name: gamma\nwebhooks: [").expect("half-written");
     reload(&caps, &meta).await;
     assert!(
