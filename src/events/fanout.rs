@@ -418,6 +418,32 @@ impl EventsHub {
         true
     }
 
+    /// Under the catalogue gate the caller holds: re-register the webhook
+    /// routes of `capabilities` ([`super::reload::refresh_webhooks`]),
+    /// judging a restore against the retired shapes of the types stored
+    /// subscriptions still name (MIK-8038).
+    ///
+    /// # Errors
+    /// The event type the reload would narrow; nothing changes.
+    pub(crate) fn refresh_webhooks(
+        &self,
+        registry: &Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>,
+        capabilities: &[crate::capability::CapabilityDefinition],
+    ) -> Result<Vec<String>, String> {
+        let subscribed: std::collections::BTreeSet<String> = self
+            .store
+            .subscriptions()
+            .into_iter()
+            .map(|sub| sub.name)
+            .collect();
+        super::reload::refresh_webhooks(
+            registry,
+            capabilities,
+            &mut self.retired.lock(),
+            &subscribed,
+        )
+    }
+
     /// Serializes startup reconciliation with capability reloads.
     pub(crate) fn catalogue_lock(&self) -> parking_lot::MutexGuard<'_, ()> {
         self.catalogue_gate.lock()

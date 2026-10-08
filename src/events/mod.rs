@@ -56,7 +56,6 @@ pub(crate) use fanout::CatalogueScan;
 #[cfg(feature = "webui")]
 pub(crate) use governance::Actor;
 pub(crate) use records::{ApiKeyRef, Credential, LiveBinding};
-pub(crate) use reload::refresh_webhooks;
 pub(crate) use rpc::Caller;
 pub(crate) use services::{LiveCredentials, Services};
 pub(crate) use types::CallbackFailure;
@@ -86,6 +85,9 @@ pub(crate) struct EventsHub {
     /// before the grace period ends a reload withdraws only the types it
     /// removed (MIK-8027). Read and set under `catalogue_gate`.
     webhook_withdrawals: std::sync::atomic::AtomicBool,
+    /// The last shapes of webhook types whose route is gone while stored
+    /// subscriptions remain (MIK-8038). Changed under `catalogue_gate`.
+    retired: parking_lot::Mutex<reload::Retired>,
     /// Held by each burial and dead-letter sweep from its store call through
     /// its last receipt, so a burial's receipt comes before any eviction of
     /// it. Taken before the store's own lock, and never with `lifecycle`.
@@ -93,6 +95,10 @@ pub(crate) struct EventsHub {
     /// Test-only: one subscribe pauses between its commit and its audit.
     #[cfg(test)]
     after_commit: crate::test_pause::Slot,
+    /// Test-only: one subscribe pauses after its commit-time re-check, still
+    /// holding the catalogue gate, before its store admit (MIK-8038).
+    #[cfg(test)]
+    before_admit: crate::test_pause::Slot,
     /// Test-only: one burial pauses between its store call and its receipts.
     #[cfg(test)]
     before_receipts: crate::test_pause::Slot,
@@ -211,9 +217,12 @@ impl EventsHub {
             debounce: backend_source::Debounce::default(),
             catalogue_gate: parking_lot::Mutex::new(()),
             webhook_withdrawals: std::sync::atomic::AtomicBool::new(false),
+            retired: parking_lot::Mutex::default(),
             receipts: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             after_commit: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_admit: crate::test_pause::Slot::default(),
             #[cfg(test)]
             before_receipts: crate::test_pause::Slot::default(),
         }))
