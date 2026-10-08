@@ -79,6 +79,20 @@ pub(crate) enum CapHit {
     /// The caller skipped the challenge on a cached opt-in that is gone or
     /// past its tail by commit time: it must verify again.
     Unverified,
+    /// A held row's refresh found the row gone or expired at the commit.
+    HeldRowGone,
+}
+
+/// How a commit treats the hold of the row it replaces (MIK-8057,
+/// MIK-8076), decided under the store lock with the commit itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HoldCommit {
+    /// A held row's refresh: keeps the live row's hold and payload fields;
+    /// [`CapHit::HeldRowGone`] when that row is gone or expired.
+    Keep,
+    /// Checked against the routes at the commit: a hold of the key ends
+    /// with the row put in place.
+    End,
 }
 
 /// A `(principal, url)` pair, the unit a verification belongs to.
@@ -311,10 +325,19 @@ impl Store {
         verified_now: bool,
         (caps, grace, tail): (Caps, chrono::Duration, TailPolicy),
         now: DateTime<Utc>,
+        hold: HoldCommit,
     ) -> std::io::Result<Result<Admitted, CapHit>> {
         let mut state = self.state.lock();
         let at = Utc::now().max(now);
         self.sweep(&mut state, at)?;
+        if hold == HoldCommit::Keep {
+            let Some(old) = state.subs.get(&sub.id).filter(|s| s.live(at)) else {
+                return Ok(Err(CapHit::HeldRowGone));
+            };
+            sub.payload_fields.clone_from(&old.payload_fields);
+            sub.unoffered_since = old.unoffered_since;
+            sub.held_until = old.held_until;
+        }
         // A tail over the cap in force is gone before it can vouch.
         self.trim_tails(&mut state, at, tail)?;
         sub.granted_at = at;
@@ -396,6 +419,10 @@ impl Store {
         // In place: memory follows the disk even when the directory sync
         // failed, and that failure is then reported.
         let expires_at = sub.expires_at;
+        if hold == HoldCommit::End {
+            state.held.remove(&sub.id);
+            state.hold_unsynced.remove(&sub.id);
+        }
         state.subs.insert(sub.id.clone(), sub);
         placed.durable()?;
         self.trim_tails(&mut state, at, tail)?;
@@ -422,7 +449,8 @@ impl Store {
             ttl: None,
             until: sub.expires_at,
         };
-        self.admit_granted(sub, grant, verified_now, (caps, grace, tail), now)
+        let policy = (caps, grace, tail);
+        self.admit_granted(sub, grant, verified_now, policy, now, HoldCommit::End)
             .map(|admitted| admitted.map(|(admission, _)| admission))
     }
 

@@ -114,12 +114,6 @@ impl Store {
         self.state.lock().held.get(id).cloned()
     }
 
-    /// End the hold of `id`: its row was just checked against the routes
-    /// at a commit, under the catalogue gate, and they serve it.
-    pub(crate) fn clear_hold(&self, id: &str) {
-        self.state.lock().held.remove(id);
-    }
-
     /// The event types of `principal`'s held subscriptions, sorted, with
     /// how many rows each.
     pub(crate) fn held_types_of(&self, principal: &str) -> Vec<(String, usize)> {

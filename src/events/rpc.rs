@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::EventsHub;
 use super::governance::{Attribution, Lifecycle};
 use super::records::{Credential, Subscription};
-use super::store::{CapHit, Caps, Grant};
+use super::store::{CapHit, Caps, Grant, HoldCommit};
 use super::types::{EventDescriptor, RpcError, Visibility};
 use super::upstream::{self, Ineligible, Judged, Kind};
 
@@ -330,7 +330,7 @@ fn cap_refusal(hit: CapHit) -> RpcError {
         }
         // Only reachable for a fresh opt-in, which the store never refuses
         // as unverified.
-        CapHit::Unverified => RpcError::internal(),
+        CapHit::Unverified | CapHit::HeldRowGone => RpcError::internal(),
     }
 }
 
@@ -578,30 +578,36 @@ impl EventsHub {
             // subscription is stored that its route can no longer serve
             // (MIK-8038).
             let _gate = hub.catalogue_lock();
-            // A held row's refresh keeps the row's hold as it is now, not as
-            // the refresh read it; any other commit, a held refresh whose row
-            // is gone included, is checked against the routes now and
-            // records the payload fields they carry now (MIK-8057, MIK-8076).
-            let held_row = (commit == Commit::Held)
-                .then(|| store.get(&attempt.id).filter(|s| s.live(now)))
-                .flatten();
-            if let Some(row) = held_row {
-                attempt.payload_fields = row.payload_fields;
-                attempt.unoffered_since = row.unoffered_since;
-                attempt.held_until = row.held_until;
-            } else {
-                if let Err(refused) = hub.still_admits(&attempt) {
-                    return Ok(Err(refused));
-                }
+            // Checked against the routes now, with the payload fields they
+            // carry now and no hold stamp (MIK-8057, MIK-8076).
+            let checked = |attempt: &mut Subscription| -> Result<(), RpcError> {
+                hub.still_admits(attempt)?;
                 attempt.payload_fields = hub.payload_fields(&attempt.name);
                 attempt.unoffered_since = None;
                 attempt.held_until = None;
-                store.clear_hold(&attempt.id);
+                Ok(())
+            };
+            // A held row's refresh keeps the row's hold as the store holds it
+            // at the commit; every other commit is checked and ends any hold.
+            let mut hold = HoldCommit::Keep;
+            if commit == Commit::Checked {
+                if let Err(refused) = checked(&mut attempt) {
+                    return Ok(Err(refused));
+                }
+                hold = HoldCommit::End;
             }
             #[cfg(test)]
             tokio::runtime::Handle::current().block_on(hub.before_admit.pause());
+            let admitted = store.admit_granted(attempt.clone(), grant, fresh, policy, now, hold)?;
+            if !matches!(admitted, Err(CapHit::HeldRowGone)) {
+                return Ok(Ok(admitted));
+            }
+            // The held row went while the refresh waited: a fresh subscribe.
+            if let Err(refused) = checked(&mut attempt) {
+                return Ok(Err(refused));
+            }
             store
-                .admit_granted(attempt, grant, fresh, policy, now)
+                .admit_granted(attempt, grant, fresh, policy, now, HoldCommit::End)
                 .map(Ok)
         })
         .await
