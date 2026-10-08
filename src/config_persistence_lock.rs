@@ -23,11 +23,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::fs_lock::ExclusiveFileLock;
+use crate::identity_grants::journal::resolved;
 
 /// How often a waiting writer tries the lock again.
 const POLL: Duration = Duration::from_millis(25);
 
 /// The lock sidecar for `config`: `.<file name>.lock` in the same directory.
+/// Callers pass the resolved config ([`resolved`]), so every spelling of one
+/// config (a symlink, relative against absolute) meets one lock (MIK-8153).
 pub(crate) fn lock_path(config: &Path) -> PathBuf {
     let name = config
         .file_name()
@@ -157,7 +160,7 @@ pub(crate) async fn lock_config(
     config: &Path,
     deadline: Instant,
 ) -> Result<ExclusiveFileLock, NotLocked> {
-    let lock = lock_path(config);
+    let lock = lock_path(&resolved(config));
     loop {
         if let Some(held) = try_once(config, &lock)? {
             return Ok(held);
@@ -177,7 +180,7 @@ pub(crate) fn lock_config_blocking(
     deadline: Instant,
     on_wait: impl FnOnce(&Path),
 ) -> Result<ExclusiveFileLock, NotLocked> {
-    let lock = lock_path(config);
+    let lock = lock_path(&resolved(config));
     let mut on_wait = Some(on_wait);
     loop {
         if let Some(held) = try_once(config, &lock)? {
