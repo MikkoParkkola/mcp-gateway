@@ -490,8 +490,11 @@ fn short_text_has_no_fingerprints() {
     assert_eq!(d.kgram_hashes(&"\u{e9}".repeat(48)).len(), 1);
     assert!(d.kgram_hashes(&"\u{e9}".repeat(47)).is_empty());
     // A fingerprint is a sampled k-gram, so whether one k-gram is kept
-    // depends on its hash alone.
-    for text in [secret()[..48].to_string(), "\u{e9}".repeat(48)] {
+    // depends on its hash alone. The long text's ~350 distinct k-grams pin
+    // the production rate: keeping all of them matches only under 4^-350
+    // of keys.
+    let long: String = (0..100).map(|i| format!("{i:03} ")).collect();
+    for text in [secret()[..48].to_string(), "\u{e9}".repeat(48), long] {
         assert_eq!(
             d.fingerprints(&text),
             sample(&d.kgram_hashes(&text), SAMPLE)
