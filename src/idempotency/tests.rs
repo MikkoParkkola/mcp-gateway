@@ -372,7 +372,7 @@ fn evict_expired_removes_only_stale_entries() {
     // THEN: only the stale entry is removed
     let cache = IdempotencyCache::new();
     cache.mark_in_flight("stale");
-    cache.mark_completed("stale", json!(2));
+    assert!(cache.mark_completed("stale", json!(2)));
     advance(&cache, COMPLETED_TTL + Duration::from_secs(1));
     cache.mark_in_flight("fresh");
     cache.mark_completed("fresh", json!(1));
@@ -507,7 +507,8 @@ async fn spawn_cleanup_task_evicts_expired_entries() {
     // before the virtual wait returns, however loaded the host (#1821).
     let cache = Arc::new(IdempotencyCache::new());
     cache.mark_in_flight("stale");
-    cache.mark_completed("stale", json!(null));
+    assert!(cache.mark_completed("stale", json!(null)));
+    assert_eq!(cache.len(), 1, "the fixture stored the entry to evict");
     advance(&cache, COMPLETED_TTL + Duration::from_secs(1));
 
     spawn_cleanup_task(Arc::clone(&cache), Duration::from_millis(10));
