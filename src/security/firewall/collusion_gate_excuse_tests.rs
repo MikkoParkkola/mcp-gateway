@@ -207,6 +207,10 @@ fn a_holder_of_a_delivery_over_a_mebibyte_is_excused() {
     let answer = format!("{} {P} {}", filler(4, 600_000), filler(5, 600_000));
     deliver(&fw, "alice", "read", &answer);
     assert!(
+        relays(&fw, "bob", P),
+        "control: bob without a copy is a relay"
+    );
+    assert!(
         !relays(&fw, "alice", P),
         "a holder of a large delivery was refused for its middle"
     );

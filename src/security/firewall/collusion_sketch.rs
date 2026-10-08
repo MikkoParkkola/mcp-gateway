@@ -65,8 +65,9 @@ impl Sketch {
 fn positions(fp: u64, len: usize) -> impl Iterator<Item = usize> {
     let len = u64::try_from(len).unwrap_or(u64::MAX);
     // Mixed first: a kept fingerprint is 0 mod 4 (sampling), so its low
-    // bits alone would reach a quarter of the table.
-    let h = fp.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    // bits alone would reach a quarter of the table; folding the high bits
+    // in before the multiply fills them.
+    let h = (fp ^ (fp >> 31)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let step = h.rotate_left(32) | 1;
     (0..u64::from(PROBES)).map(move |i| {
         let at = h.wrapping_add(i.wrapping_mul(step)) % len;

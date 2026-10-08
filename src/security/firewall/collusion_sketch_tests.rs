@@ -94,7 +94,9 @@ fn a_small_sketch_keeps_the_rate() {
 #[test]
 fn sampled_fingerprints_keep_the_rate() {
     let quarter = |v: Vec<u64>| v.into_iter().map(|x| x << 2).collect::<Vec<_>>();
-    let sketch = Sketch::of(&quarter(values(40, 10_000)));
+    let mine = quarter(values(40, 10_000));
+    let sketch = Sketch::of(&mine);
+    assert!(mine.iter().all(|fp| sketch.holds(*fp)), "a false negative");
     let strangers = quarter(values(41, 100_000));
     let held = strangers.iter().filter(|fp| sketch.holds(**fp)).count();
     assert!(held * 400 < strangers.len(), "{held} strangers held");
