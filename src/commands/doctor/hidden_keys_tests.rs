@@ -46,11 +46,15 @@ fn doctor_names_the_hidden_keys_a_config_file_sets() {
         "{}",
         row.detail
     );
+    assert_eq!(
+        row.status,
+        super::super::CheckStatus::Pass,
+        "a set value is not a problem"
+    );
     assert!(
-        row.hint
-            .as_deref()
-            .is_some_and(|h| h.contains("still applied")),
-        "{row:?}"
+        row.detail.contains("Each value is applied"),
+        "{}",
+        row.detail
     );
 }
 
@@ -136,7 +140,8 @@ fn a_malformed_config_produces_no_row_and_no_parse_text() {
 fn named_keys(row: &CheckResult) -> Vec<String> {
     row.detail
         .split_once(" sets ")
-        .map(|(_, keys)| keys.split(", ").map(str::to_string).collect())
+        .and_then(|(_, rest)| rest.split_once(". "))
+        .map(|(keys, _)| keys.split(", ").map(str::to_string).collect())
         .unwrap_or_default()
 }
 

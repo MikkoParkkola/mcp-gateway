@@ -213,22 +213,26 @@ fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
-/// The `doctor` row listing the hidden keys the config file at `path` sets.
+/// The `doctor` row listing the advanced keys the config file at `path` sets.
 ///
+/// A passing row, not a warning: a set value is applied, so nothing is wrong.
 /// `None` when the file cannot be read or parsed (the configuration check
-/// already reports that) or when it sets no hidden key.
+/// already reports that) or when it sets no such key.
 pub(super) fn check_hidden_keys(path: &Path) -> Option<CheckResult> {
     let set = set_hidden_keys(&read_key_names(path)?);
     if set.is_empty() {
         return None;
     }
     Some(
-        CheckResult::warn(
-            "Hidden settings",
-            format!("{} sets {}", path.display(), set.join(", ")),
+        CheckResult::pass(
+            "Advanced settings",
+            format!(
+                "{} sets {}. Each value is applied; these keys are not in the configuration reference.",
+                path.display(),
+                set.join(", ")
+            ),
         )
-        .with_category("config")
-        .with_hint("These keys are left out of the reference; each set value is still applied."),
+        .with_category("config"),
     )
 }
 
