@@ -265,7 +265,9 @@ async fn add_backend(
 
 /// `DELETE /ui/api/backends/:name` — remove a backend.
 ///
-/// Returns 204 on success, 404 when the backend does not exist.
+/// Returns 204 on success, or 200 with `{"note": ...}` naming the comment
+/// lines that went with the removed entry (line numbers only); 404 when the
+/// backend does not exist.
 async fn remove_backend(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
@@ -280,11 +282,15 @@ async fn remove_backend(
         return config_path_unavailable().into_response();
     };
 
+    // Read inside the edit, which runs under the config lock: the text this
+    // removal actually changed, not one another writer replaced meanwhile.
+    let mut before = String::new();
     let mutation = mutate_config_and_reload_with(
         config_path,
         state.meta_mcp.reload_context().as_deref(),
         CommentLoss::Refuse,
         |config| {
+            before = std::fs::read_to_string(config_path).unwrap_or_default();
             remove_backend_config(config, &name)
                 .map_err(|_| (StatusCode::NOT_FOUND, format!("Backend '{name}' not found")))
         },
@@ -301,7 +307,18 @@ async fn remove_backend(
 
     // The reload removed it, and removal announces (F24).
 
-    (StatusCode::NO_CONTENT, Json(json!({}))).into_response()
+    // A removed entry takes its own comments with it (MIK-8051): name the
+    // lines, never their text (a `#` inside a quoted value can be a secret).
+    let after = std::fs::read_to_string(config_path).unwrap_or_default();
+    let gone = crate::config_persistence::comments::dropped_comment_lines(&before, &after);
+    if gone.is_empty() {
+        return (StatusCode::NO_CONTENT, Json(json!({}))).into_response();
+    }
+    let note = format!(
+        "Comments inside the removed entry went with it: {}",
+        gone.join("; ")
+    );
+    (StatusCode::OK, Json(json!({ "note": note }))).into_response()
 }
 
 /// `PATCH /ui/api/backends/:name` — partially update a backend.
