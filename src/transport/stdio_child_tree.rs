@@ -30,7 +30,7 @@ pub(super) struct ChildTree {
     status: Option<ExitStatus>,
     #[cfg(test)]
     pub(super) group_signals_sent: usize,
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) signals_refused: usize,
     #[cfg(test)]
     pub(super) after_close_before_wait: crate::test_pause::Slot,
@@ -81,7 +81,7 @@ impl ChildTree {
             status: None,
             #[cfg(test)]
             group_signals_sent: 0,
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             signals_refused: 0,
             #[cfg(test)]
             after_close_before_wait: crate::test_pause::Slot::default(),
@@ -205,12 +205,12 @@ impl ChildTree {
 
     /// Test-only: reap through the raw wrapper, behind the tree's back, as a
     /// regression that bypassed it would.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) async fn reap_bypassing_tree(&mut self) {
         let _ = self.wrapper.wait().await;
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn pid(&self) -> Option<u32> {
         self.wrapper.id()
     }
