@@ -70,11 +70,18 @@ fn refresh(hub: &EventsHub, registry: &Registry, yaml: &str) {
     let _ = hub.refresh_webhooks(registry, &caps);
 }
 
+/// `p`, seeing the backends the webhook routes are scoped to.
+fn hooks_caller(hub: &EventsHub) -> crate::events::Caller {
+    let mut caller = caller("p");
+    caller.visible_backends = hub.scope_backends().into_iter().collect();
+    caller
+}
+
 /// Subscribe (or refresh) `p` to beta with `arguments`.
 async fn subscribe(hub: &Arc<EventsHub>, arguments: Value) -> Result<Value, String> {
     let params = json!({"name": TYPE, "arguments": arguments, "delivery": {
         "mode": "webhook", "url": url("p"), "secret": whsec()}});
-    hub.subscribe(&caller("p"), Some(&params))
+    hub.subscribe(&hooks_caller(hub), Some(&params))
         .await
         .map_err(|e| format!("{e:?}"))
 }
@@ -181,7 +188,7 @@ async fn the_cap_refusal_names_held_rows() {
     let params = json!({"name": NAME, "arguments": {"k": "v"}, "delivery": {
         "mode": "webhook", "url": url("p"), "secret": whsec()}});
     let refused = hub
-        .subscribe(&caller("p"), Some(&params))
+        .subscribe(&hooks_caller(&hub), Some(&params))
         .await
         .expect_err("at the per-principal cap");
     let refused = format!("{refused:?}");
