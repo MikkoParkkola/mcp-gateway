@@ -591,7 +591,17 @@ impl EventsHub {
             let mut hold = HoldCommit::Keep;
             if commit == Commit::Checked {
                 if let Err(refused) = checked(&mut attempt) {
-                    return Ok(Err(refused));
+                    // A reload held the row while this refresh waited: it
+                    // refreshes as the held row it is; anything else is
+                    // refused as checked.
+                    if store.held(&attempt.id).is_none() {
+                        return Ok(Err(refused));
+                    }
+                    let kept = store.admit_granted(attempt, grant, fresh, policy, now, hold)?;
+                    return Ok(match kept {
+                        Err(CapHit::HeldRowGone) => Err(refused),
+                        other => Ok(other),
+                    });
                 }
                 hold = HoldCommit::End;
             }

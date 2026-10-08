@@ -423,3 +423,20 @@ async fn a_refresh_held_while_it_waited_keeps_the_hold_and_its_fields() {
         row.payload_fields
     );
 }
+
+/// Review (base round 3): a refresh whose type a reload removes while it
+/// waits is not refused: its row is held by then, and it refreshes as the
+/// held row it is.
+#[tokio::test]
+async fn a_refresh_whose_type_goes_while_it_waits_refreshes_as_held() {
+    let (_dir, hub, registry) = restarted(json!({}), &full()).await;
+    let started = hub.lifecycle.lock().await;
+    let (hub_ref, routes) = (&hub, &registry);
+    let remove = async move {
+        refresh(hub_ref, routes, "");
+        drop(started);
+    };
+    let (answer, ()) = tokio::join!(subscribe(&hub, json!({})), remove);
+    let answer = answer.expect("refreshed as held");
+    assert!(answer["held"]["reason"].is_string(), "{answer}");
+}
