@@ -666,6 +666,14 @@ async fn an_unresolvable_auth_config_leaves_the_stdio_store_open() {
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.auth.bearer_token = Some("env:MIK_7638_UNSET_FIXTURE_TOKEN".to_string());
+    assert!(
+        crate::gateway::auth::ResolvedAuthConfig::try_from_config(
+            &config.auth,
+            &crate::config::EnvOverlay::default()
+        )
+        .is_err(),
+        "premise: the fixture's auth secret must not resolve"
+    );
     let opened = stdio_tasks::open(
         &config,
         &crate::config::EnvOverlay::default(),
