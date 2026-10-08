@@ -60,6 +60,16 @@ static FLIGHTS: LazyLock<parking_lot::Mutex<HashMap<PathBuf, Arc<Flight>>>> =
     LazyLock::new(parking_lot::Mutex::default);
 
 impl Flight {
+    /// The bound on one exchange: `EXCHANGE_LIMIT`, or a test's shorter one.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    fn limit(&self) -> std::time::Duration {
+        #[cfg(test)]
+        if let Some(limit) = *self.exchange_limit.lock() {
+            return limit;
+        }
+        EXCHANGE_LIMIT
+    }
+
     /// The flight of the credential stored at `token_path`.
     pub(super) fn of(token_path: &Path) -> Arc<Self> {
         Arc::clone(FLIGHTS.lock().entry(token_path.to_path_buf()).or_default())
@@ -214,7 +224,11 @@ pub(crate) async fn refresh_stored(
         state.rotates = true;
     }
     let marker = fingerprint_hex(&sent);
-    if state.rotates && state.in_flight.as_deref() == Some(marker.as_str()) {
+    // A damaged sidecar may have held this token's marker (MIK-8091).
+    if state.rotates && (state.damaged || state.in_flight.as_deref() == Some(marker.as_str())) {
+        if state.damaged {
+            warn!(backend = %label, "Refresh state unreadable; retiring the stored token");
+        }
         retire_unsettled(&flight, storage, (key, resource_url), label, &sent, state);
         return Ok(Refreshed::LoginRequired);
     }
@@ -303,10 +317,7 @@ impl Exchange {
     }
 
     async fn run(mut self) -> Outcome {
-        #[cfg(not(test))]
-        let limit = EXCHANGE_LIMIT;
-        #[cfg(test)]
-        let limit = self.flight.exchange_limit.lock().unwrap_or(EXCHANGE_LIMIT);
+        let limit = self.flight.limit();
         // A supplied client may have no timeout: an endpoint that takes the
         // request and never answers would hold the credential, and every later
         // refresh and login save, for good. Unanswered means possibly consumed.
@@ -335,7 +346,8 @@ impl Exchange {
             self.storage
                 .save_refresh_state(&self.key, &self.resource_url, &self.state)
         {
-            warn!(backend = %self.backend, %error, "Could not settle the refresh state");
+            let backend = &self.backend;
+            warn!(backend = %backend, %error, "Could not settle the refresh state");
         }
         drop(self.across);
         drop(self.guard);
@@ -396,7 +408,8 @@ impl Exchange {
                 self.storage
                     .save_refresh_state(&self.key, &self.resource_url, &self.state)
             {
-                warn!(backend = %self.backend, %error, "Could not record that the server rotates");
+                let backend = &self.backend;
+                warn!(backend = %backend, %error, "Could not record that the server rotates");
                 return Outcome::Uncertain(error);
             }
         }
@@ -419,7 +432,8 @@ impl Exchange {
         match self.storage.save(&self.key, &self.resource_url, &token) {
             Ok(()) => Outcome::Refreshed(token),
             Err(error) => {
-                warn!(backend = %self.backend, %error, "Could not save a refreshed token");
+                let backend = &self.backend;
+                warn!(backend = %backend, %error, "Could not save a refreshed token");
                 Outcome::Uncertain(error)
             }
         }
