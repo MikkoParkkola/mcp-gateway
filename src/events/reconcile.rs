@@ -48,4 +48,46 @@ impl EventsHub {
                 .await;
         });
     }
+
+    /// The sweep's lifecycle half, every `SWEEP_EVERY` (design r3 L8): a
+    /// safety net that no row relies on.
+    pub(super) async fn sweep_lifecycle(&self) {
+        // Gone subscriptions take their rate and failure state along.
+        let held = self.store.live_subscription_ids(chrono::Utc::now());
+        self.runtime.rates.retain(&held);
+        self.runtime.failures.retain(&held);
+        self.reconcile_stops().await;
+        // After the stops, so freed slots are free: a watch key whose
+        // capability is offered again (the startup scan finished, a reload
+        // restored it) starts here, whatever changed the catalogue
+        // (MIK-8053). Watch only: its start is local, while another source's
+        // may reach a backend, and those are not retried every sweep.
+        self.replay_starts_of(|kind| kind == SourceKind::RestWatch)
+            .await;
+    }
+
+    /// Stop the keys of rows that expired since the last check, at the
+    /// worker's tick rather than the sweep (design r3 D4, L5); expiry
+    /// settlement still buries their records and removes the rows.
+    pub(super) async fn stop_expired_keys(&self) {
+        let now = chrono::Utc::now();
+        let since = std::mem::replace(&mut *self.runtime.expiry_seen.lock(), now);
+        if self.store.expired_between(since, now) {
+            self.reconcile_stops().await;
+        }
+    }
+
+    /// Stop the keys no live row holds and start those of `kind` that one
+    /// now holds, in the background (design r3 G4a): callable from
+    /// synchronous code, which never awaits a source.
+    pub(super) fn reconcile_keys_soon(&self, kind: SourceKind) {
+        let (Some(hub), Ok(runtime)) = (self.me.upgrade(), tokio::runtime::Handle::try_current())
+        else {
+            return;
+        };
+        runtime.spawn(async move {
+            hub.reconcile_stops().await;
+            hub.replay_starts_of(|of| of == kind).await;
+        });
+    }
 }

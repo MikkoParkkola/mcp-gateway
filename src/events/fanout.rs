@@ -426,6 +426,9 @@ impl EventsHub {
         {
             tracing::warn!(%error, "events: a held subscription's stamp was not written; retried at the next refresh");
         }
+        // A held row keeps no key, a resumed one gets its key back (design
+        // r3 K rule), without waiting for the sweep.
+        self.reconcile_keys_soon(super::types::SourceKind::Webhook);
     }
 
     /// The longest a hold keeps a row: the maximum lease.
