@@ -651,3 +651,22 @@ async fn a_replay_into_a_suspended_subscription_is_refused() {
     assert_eq!(body["reason"], "subscription_suspended", "{body}");
     assert_eq!(dead_letters(root.path()).len(), 1, "the dead letter stays");
 }
+
+/// MIK-8057: the held listing is admin only, like the dead-letter routes; an
+/// admin gets the per-type listing (empty while nothing is held).
+#[tokio::test]
+async fn the_held_listing_is_admin_only() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let gw = start(root.path(), &rx, json!({})).await;
+    for key in [Some(ALICE), Some(BOB), None] {
+        let (status, _) = gw.admin(key, "GET", "/ui/api/events/held").await;
+        assert!(
+            matches!(status, 401 | 403),
+            "a non-admin held listing is refused, got {status}"
+        );
+    }
+    let (status, body) = gw.admin(Some(ADMIN), "GET", "/ui/api/events/held").await;
+    assert_eq!(status, 200, "admin held listing answered {status}: {body}");
+    assert!(body["held"].is_array(), "{body}");
+}

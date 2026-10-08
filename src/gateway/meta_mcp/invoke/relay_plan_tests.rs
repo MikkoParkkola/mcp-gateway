@@ -65,7 +65,7 @@ async fn deliver_plan(
     let ((), staged) = meta
         .collecting_staged(async {
             for (tool, text) in steps {
-                plan_step(async {
+                plan_step(None, async {
                     meta.stage_relay_receipt(
                         RelayKey::new("alice", true),
                         ("alpha", tool),
@@ -235,7 +235,7 @@ async fn a_kept_plan_receipt_stays_sensitive() {
     let ((), staged) = meta
         .collecting_staged(async {
             for (tool, value) in [("x", marked(PROSE)), ("y", text_result(OTHER_PROSE))] {
-                plan_step(async {
+                plan_step(None, async {
                     meta.stage_relay_receipt(RelayKey::new("alice", true), ("beta", tool), &value);
                 })
                 .await;
@@ -318,7 +318,7 @@ async fn a_changed_plan_receipt_never_commits_unkept() {
     let (meta, firewall) = relay_meta();
     let ((), staged) = meta
         .collecting_staged(async {
-            plan_step(async {
+            plan_step(None, async {
                 meta.stage_relay_receipt(
                     RelayKey::new("alice", true),
                     ("alpha", "a"),
@@ -348,7 +348,7 @@ async fn a_changed_plan_receipt_never_commits_unkept() {
 async fn a_changed_plan_receipt_never_commits_unkept_from_a_dispatch() {
     let (meta, firewall) = relay_meta();
     crate::gateway::meta_mcp::invoke::relay::collecting(async {
-        plan_step(async {
+        plan_step(None, async {
             meta.stage_relay_receipt(
                 RelayKey::new("alice", true),
                 ("alpha", "a"),
@@ -394,7 +394,7 @@ async fn removing_a_middle_leaf_keeps_its_neighbours_whole() {
         let ((), staged) = meta
             .collecting_staged(async {
                 for (tool, value) in [("a", step(&gone)), ("b", text_result(OTHER_PROSE))] {
-                    plan_step(async {
+                    plan_step(None, async {
                         meta.stage_relay_receipt(
                             RelayKey::new("alice", true),
                             ("alpha", tool),
@@ -451,7 +451,7 @@ async fn a_short_field_step_keeps_its_receipt_through_its_run() {
     let ((), staged) = meta
         .collecting_staged(async {
             for (tool, value) in [("a", text_result(&a)), ("b", row.clone())] {
-                plan_step(async {
+                plan_step(None, async {
                     meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", tool), &value);
                 })
                 .await;
@@ -509,7 +509,7 @@ async fn a_plan_steps_continuation_never_takes_its_receipts_budget() {
         let answer = plan_answer(&json!({"a": step}));
         let ((), staged) = meta
             .collecting_staged(async {
-                plan_step(async {
+                plan_step(None, async {
                     note(Layer::Value, &["requestState"], &step);
                     meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), &step);
                 })
@@ -556,7 +556,7 @@ async fn a_mapped_member_past_the_padding_stays_receipted() {
     let answer = plan_answer(&json!({"summary": PROSE}));
     let ((), staged) = meta
         .collecting_staged(async {
-            plan_step(async {
+            plan_step(None, async {
                 meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), &step);
             })
             .await;
@@ -593,7 +593,7 @@ async fn copies_of_a_delivered_leaf_do_not_crowd_out_a_mapped_member() {
     let answer = plan_answer(&json!({"summary": PROSE, "x": copy}));
     let ((), staged) = meta
         .collecting_staged(async {
-            plan_step(async {
+            plan_step(None, async {
                 meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), &step);
             })
             .await;
@@ -625,7 +625,7 @@ async fn deliver_step(
 ) {
     let ((), staged) = meta
         .collecting_staged(async {
-            plan_step(async {
+            plan_step(None, async {
                 meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "a"), step);
             })
             .await;

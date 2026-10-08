@@ -117,3 +117,6 @@ fn missing(body: &Value, cacheable: bool) -> Vec<&'static str> {
 
 #[path = "direct_modern_shape_rows.rs"]
 mod rows;
+
+#[path = "direct_modern_shape_followups.rs"]
+mod followups;
