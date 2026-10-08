@@ -309,8 +309,17 @@ pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef
 /// The fixture under `security.posture: hardened` (personal keys) with message
 /// signing armed, so the direct route signs every `tools/call` it serves.
 pub(crate) async fn fixture_hardened_signed(answer: Answer, require_nonce: bool) -> Fx {
+    fixture_hardened_signed_built(answer, require_nonce, |meta| meta).await
+}
+
+/// [`fixture_hardened_signed`], arming the signed `MetaMcp` with `build`.
+pub(crate) async fn fixture_hardened_signed_built(
+    answer: Answer,
+    require_nonce: bool,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
     HARDENED.with(|h| h.set(true));
-    let fx = fixture_inner(answer, false, |meta| signing(meta, require_nonce)).await;
+    let fx = fixture_inner(answer, false, |meta| build(signing(meta, require_nonce))).await;
     HARDENED.with(|h| h.set(false));
     fx
 }

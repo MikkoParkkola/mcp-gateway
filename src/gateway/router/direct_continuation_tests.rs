@@ -319,6 +319,25 @@ async fn r11_an_unusable_round_does_not_carry_the_state() {
     }
 }
 
+/// Cost governance at 1.0 a `read`, `k-budget` holding 1.5: one call paid,
+/// the next refused.
+#[cfg(feature = "cost-governance")]
+fn budget(meta: crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp {
+    use crate::cost_accounting::config::CostGovernanceConfig;
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    cfg.tool_costs.insert("read".to_string(), 1.0);
+    cfg.budgets.per_key.insert("k-budget".to_string(), 1.5);
+    let registry = std::sync::Arc::new(crate::cost_accounting::registry::CostRegistry::new(&cfg));
+    let enforcer = std::sync::Arc::new(crate::cost_accounting::enforcer::BudgetEnforcer::new(
+        cfg,
+        std::sync::Arc::clone(&registry),
+    ));
+    meta.with_cost_governance(enforcer, registry)
+}
+
 /// R12: a retry the spend budget refuses is refused before its continuation is
 /// spent, as on the meta route, so the caller can still resume it. `k-budget`
 /// (1.5 at 1.0 a call) pays for the question and is refused the retry; the
@@ -327,24 +346,8 @@ async fn r11_an_unusable_round_does_not_carry_the_state() {
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn r12_a_budget_refusal_does_not_spend_the_continuation() {
-    use crate::cost_accounting::config::CostGovernanceConfig;
     for backend in BACKENDS {
-        let mut cfg = CostGovernanceConfig {
-            enabled: true,
-            ..Default::default()
-        };
-        cfg.tool_costs.insert("read".to_string(), 1.0);
-        cfg.budgets.per_key.insert("k-budget".to_string(), 1.5);
-        let registry =
-            std::sync::Arc::new(crate::cost_accounting::registry::CostRegistry::new(&cfg));
-        let enforcer = std::sync::Arc::new(crate::cost_accounting::enforcer::BudgetEnforcer::new(
-            cfg,
-            std::sync::Arc::clone(&registry),
-        ));
-        let fx = super::direct_guards_fixture::fixture_built(Answer::AskOnce, move |meta| {
-            meta.with_cost_governance(enforcer, registry)
-        })
-        .await;
+        let fx = super::direct_guards_fixture::fixture_built(Answer::AskOnce, budget).await;
         let (_, asked) = call_as(&fx, "k-budget", backend, Some("alice"), json!({})).await;
         let retry = json!({"requestState": state_of(&asked), "inputResponses": answers()});
         let (_, refused) = call_as(&fx, "k-budget", backend, Some("alice"), retry.clone()).await;
@@ -605,9 +608,14 @@ async fn r17_a_question_refused_after_its_seal_gives_its_slot_back() {
     }
 }
 
-/// `tools/call read` on `/mcp/{backend}` as a hardened modern request that
+/// `tools/call read` on `/mcp/{backend}` as `key`, a hardened modern request that
 /// declares form elicitation and carries `nonce`, with `extra` in the params.
-async fn signed_call(fx: &Fx, backend: &str, nonce: &str, extra: Value) -> (StatusCode, Value) {
+async fn signed_call(
+    fx: &Fx,
+    (key, backend): (&str, &str),
+    nonce: &str,
+    extra: Value,
+) -> (StatusCode, Value) {
     use crate::gateway::meta_mcp::signing::NONCE_META;
     let mut params = json!({"name": "read", "arguments": {}, "_meta": {
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -626,7 +634,7 @@ async fn signed_call(fx: &Fx, backend: &str, nonce: &str, extra: Value) -> (Stat
     super::direct_guards_fixture::send_with_headers(
         fx,
         &path,
-        "k-std",
+        key,
         "tools/call",
         params,
         None,
@@ -643,14 +651,15 @@ async fn r18_a_refused_continuation_consumes_no_nonce() {
     use super::direct_guards_fixture::fixture_hardened_signed;
     for backend in BACKENDS {
         let fx = fixture_hardened_signed(Answer::AskOnce, true).await;
-        let (_, asked) = signed_call(&fx, backend, &format!("{backend}-n1"), json!({})).await;
+        let (_, asked) =
+            signed_call(&fx, ("k-std", backend), &format!("{backend}-n1"), json!({})).await;
         let state = state_of(&asked);
         let n2 = format!("{backend}-n2");
         let forged = json!({"requestState": "forged", "inputResponses": answers()});
-        let (_, refused) = signed_call(&fx, backend, &n2, forged).await;
+        let (_, refused) = signed_call(&fx, ("k-std", backend), &n2, forged).await;
         assert_eq!(code(&refused), Some(-32602), "{backend}: {refused}");
         let honest = json!({"requestState": state, "inputResponses": answers()});
-        let (status, done) = signed_call(&fx, backend, &n2, honest).await;
+        let (status, done) = signed_call(&fx, ("k-std", backend), &n2, honest).await;
         assert_eq!(status, StatusCode::OK, "{backend}: nonce burned: {done}");
         assert!(done.get("error").is_none(), "{backend}: {done}");
         assert_eq!(dispatched(&fx), 2, "{backend}");
@@ -693,4 +702,29 @@ async fn r19_the_propagated_binding_binds_ahead_of_the_identity() {
     };
     let bound = |binding| source_fingerprint(caller.principal_source(Some(binding)));
     assert_ne!(bound("binding-a"), bound("binding-b"), "meta");
+}
+
+/// R20 (MIK-7698 on this route, both arms): a call the spend budget refuses
+/// consumes no signing nonce, so re-sent under that nonce it meets the budget
+/// again, not a replay refusal. Mutant: the nonce kept on a spend refusal
+/// (each arm).
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn r20_a_spend_refusal_consumes_no_nonce() {
+    use super::direct_guards_fixture::fixture_hardened_signed_built;
+    for backend in BACKENDS {
+        let fx = fixture_hardened_signed_built(Answer::Ok, true, budget).await;
+        let who = ("k-budget", backend);
+        let _ = signed_call(&fx, who, &format!("{backend}-n1"), json!({})).await;
+        let n2 = format!("{backend}-n2");
+        let (status, refused) = signed_call(&fx, who, &n2, json!({})).await;
+        assert!(refused.get("error").is_some(), "{backend}: {refused}");
+        let (again_status, again) = signed_call(&fx, who, &n2, json!({})).await;
+        assert_eq!(
+            (again_status, code(&again)),
+            (status, code(&refused)),
+            "{backend}: nonce burned: {again}"
+        );
+        assert_eq!(dispatched(&fx), 1, "{backend}");
+    }
 }
