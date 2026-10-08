@@ -153,6 +153,29 @@ fn a_repeated_key_is_read_the_way_the_loader_reads_it() {
     .expect("write config");
     let row = check_hidden_keys(&path).expect("a row for a file the loader accepts");
     assert_eq!(named_keys(&row), vec!["meta_mcp.projection_mode"]);
+
+    // Last wins, not a merge: a hidden key only in the first copy is gone.
+    std::fs::write(
+        &path,
+        "meta_mcp:\n  projection_mode: true\nmeta_mcp:\n  warm_start: []\n",
+    )
+    .expect("write config");
+    assert!(
+        check_hidden_keys(&path).is_none(),
+        "the first copy was kept"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_config_is_read_like_the_loader_reads_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("real.yaml");
+    std::fs::write(&target, "meta_mcp:\n  projection_mode: true\n").expect("write config");
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&target, &link).expect("symlink");
+    let row = check_hidden_keys(&link).expect("a symlinked config gets its row");
+    assert_eq!(named_keys(&row), vec!["meta_mcp.projection_mode"]);
 }
 
 #[test]

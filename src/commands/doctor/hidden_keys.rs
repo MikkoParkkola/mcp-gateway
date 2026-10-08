@@ -174,12 +174,14 @@ fn is_set(map: &Dict, path: &[&str]) -> bool {
 /// Read the config file for its key names, never its values.
 ///
 /// `Config::load` has already read this path through the mode-checked reader.
-/// This second read is refused rather than allowed to block or follow a link:
-/// on Unix it opens with `O_NONBLOCK | O_NOFOLLOW` and refuses anything the
-/// opened handle does not report as a regular file. Like that reader, it sets
-/// no size limit on a config file. A regular file swapped in since the first
-/// read can still be read; only its key names are reported. Every error is
-/// dropped unformatted, because a parser message can quote a line.
+/// This second read opens the way that reader does, so it reads the same file:
+/// on Unix with `O_NONBLOCK | O_NOCTTY`, following a symlink (a Kubernetes
+/// `ConfigMap` mount is one), and it refuses anything the opened handle does
+/// not report as a regular file, so a FIFO is refused without blocking. Like
+/// that reader, it sets no size limit on a config file. A regular file swapped
+/// in since the first read can still be read; only its key names are
+/// reported. Every error is dropped unformatted, because a parser message can
+/// quote a line.
 fn read_key_names(path: &Path) -> Option<Dict> {
     use std::io::Read as _;
 
@@ -199,7 +201,7 @@ fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(
-            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
+            (rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY)
                 .bits()
                 .cast_signed(),
         )
