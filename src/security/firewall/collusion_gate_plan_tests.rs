@@ -51,7 +51,7 @@ fn a_deferred_digest_is_capped_where_it_is_recorded() {
     };
     let step = json!({"a": pad("head"), "body": PROSE, "z": pad("tail")});
     let digest = fw
-        .receipt_digest("alpha", "read", &step, Some(0))
+        .receipt_digest("alpha", "read", &step, Some(&std::cell::Cell::new(0)))
         .expect("relay detection is on");
     assert_eq!(fw.relay_text_cuts(), 0, "premise: staged whole");
     fw.record_digest(RelayCaller::Keyed("carol"), "alpha", "read", &digest);
