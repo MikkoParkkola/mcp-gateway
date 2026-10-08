@@ -203,6 +203,9 @@ struct Entry {
     /// MIK-7991: what the gateway wrote into a completed result on the call
     /// that stored it, restored on a replay so its receipt leaves it out.
     writes: WriteRecord,
+    /// Extra in-flight age from [`IdempotencyCache::age_in_flight`]; added,
+    /// never subtracted from an `Instant`, so it cannot underflow (MIK-8070).
+    aged: Duration,
 }
 
 impl Entry {
@@ -213,6 +216,7 @@ impl Entry {
             owner: Weak::new(),
             read: None,
             writes: WriteRecord::default(),
+            aged: Duration::ZERO,
         }
     }
 
@@ -224,6 +228,7 @@ impl Entry {
             owner: Arc::downgrade(owner),
             read: None,
             writes: WriteRecord::default(),
+            aged: Duration::ZERO,
         }
     }
 
@@ -333,7 +338,8 @@ fn classify(entry: &Entry, now: Instant) -> CacheEntryStatus {
     let age = |at: &Instant| now.saturating_duration_since(*at);
     match &entry.state {
         IdempotencyState::InFlight(started)
-            if entry.owner_is_live() || age(started) <= IN_FLIGHT_TIMEOUT =>
+            if entry.owner_is_live()
+                || age(started).saturating_add(entry.aged) <= IN_FLIGHT_TIMEOUT =>
         {
             CacheEntryStatus::LiveInFlight
         }
@@ -605,7 +611,7 @@ impl IdempotencyCache {
     /// A test seam, and the only one: staleness is measured against the process
     /// clock, so the aged state the ADR-012 acceptance rows are stated against
     /// is otherwise reachable only by waiting out [`IN_FLIGHT_TIMEOUT`] in real
-    /// time. It moves the start instant and touches nothing else — in
+    /// time. It adds to the entry's age and touches nothing else — in
     /// particular not the owner handle — so it cannot change which rule those
     /// rows observe.
     #[doc(hidden)]
@@ -613,13 +619,10 @@ impl IdempotencyCache {
         let Some(mut entry) = self.entries.get_mut(key) else {
             return false;
         };
-        let IdempotencyState::InFlight(started) = &mut entry.state else {
+        if !matches!(entry.state, IdempotencyState::InFlight(_)) {
             return false;
-        };
-        let Some(aged) = started.checked_sub(by) else {
-            return false;
-        };
-        *started = aged;
+        }
+        entry.aged = entry.aged.saturating_add(by);
         true
     }
 
