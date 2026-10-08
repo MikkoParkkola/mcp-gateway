@@ -294,10 +294,11 @@ fn a_dropped_middle_leaf_leaves_no_fingerprint_across_it() {
 }
 
 /// MIK-7887.RECEIPT.2: retention keeps exactly the source fingerprints whose
-/// k-gram a delivered leaf holds, including one the delivered leaf's own
-/// winnowing did not select, and drops every other.
+/// k-gram a delivered leaf holds, and drops every other. Selection is
+/// context-free (MIK-8083), so each kept one is also a fingerprint of the
+/// delivered leaf itself.
 #[test]
-fn retaining_keeps_a_delivered_kgram_whichever_window_selected_it() {
+fn retaining_keeps_exactly_the_delivered_kgrams() {
     use std::collections::HashSet;
 
     use super::super::collusion::{CollusionDetector, RelayParams};
@@ -309,7 +310,7 @@ fn retaining_keeps_a_delivered_kgram_whichever_window_selected_it() {
             .collect::<Vec<_>>()
             .join(" ")
     };
-    let mut premise = false;
+    let mut kept_any = false;
     for round in 0..20 {
         let (kept_part, gone) = (words(&format!("k{round}x")), words(&format!("g{round}x")));
         let source = format!("{kept_part} {gone}");
@@ -321,16 +322,14 @@ fn retaining_keeps_a_delivered_kgram_whichever_window_selected_it() {
             .into_iter()
             .collect();
         let kgrams: HashSet<u64> = detector.kgram_hashes(&kept_part).into_iter().collect();
-        let minima: HashSet<u64> = detector.fingerprints(&kept_part).into_iter().collect();
+        let own: HashSet<u64> = detector.fingerprints(&kept_part).into_iter().collect();
         for fp in detector.fingerprints(&source) {
             assert_eq!(kept.contains(&fp), kgrams.contains(&fp), "round {round}");
-            premise |= kgrams.contains(&fp) && !minima.contains(&fp);
+            assert_eq!(kgrams.contains(&fp), own.contains(&fp), "round {round}");
+            kept_any |= kept.contains(&fp);
         }
     }
-    assert!(
-        premise,
-        "premise: some kept fingerprint was not a delivered window minimum"
-    );
+    assert!(kept_any, "premise: something delivered was kept");
 }
 
 /// Empty leaves past the cap add no segments: each walk stops once its half
@@ -657,7 +656,7 @@ fn a_dropped_plan_receipt_increments_the_metric() {
     let text = "x".repeat(super::super::collusion_digest::DELIVERED_SET_CAP + 1);
     let answer = json!({"content": [{"type": "text", "text": text}]});
     assert!(
-        fw.delivered_for_plan(&answer).is_none(),
+        fw.delivered_for_plan(&answer, None).is_none(),
         "premise: over the bound"
     );
     assert!(rendered_count(series) > before, "dropped plan: not counted");
@@ -723,3 +722,6 @@ fn a_clean_call_and_a_blocked_relay_log_no_observed_warning() {
     );
     assert!(warnings.is_empty(), "{warnings:?}");
 }
+
+#[path = "collusion_gate_relay_excuse_tests.rs"]
+mod relay_excuse;

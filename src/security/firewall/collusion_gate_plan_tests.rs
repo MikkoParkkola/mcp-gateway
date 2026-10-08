@@ -51,7 +51,7 @@ fn a_deferred_digest_is_capped_where_it_is_recorded() {
     };
     let step = json!({"a": pad("head"), "body": PROSE, "z": pad("tail")});
     let digest = fw
-        .receipt_digest("alpha", "read", &step, Some(0))
+        .receipt_digest("alpha", "read", &step, Some(&std::cell::Cell::new(0)))
         .expect("relay detection is on");
     assert_eq!(fw.relay_text_cuts(), 0, "premise: staged whole");
     fw.record_digest(RelayCaller::Keyed("carol"), "alpha", "read", &digest);
@@ -135,11 +135,10 @@ fn a_split_step_keeps_its_run_together_form_across_an_interleaved_leaf() {
     );
 }
 
-/// `MIK-7887.RECEIPT.2`: removing a middle leaf splits its run, and the
-/// neighbours re-winnowed can select other minima. Every fingerprint of the
-/// original run whose k-gram is still delivered, inside one leaf or across
-/// adjacent kept short fields, is kept, and no other: none of the removed
-/// text, none across a seam.
+/// `MIK-7887.RECEIPT.2`: removing a middle leaf splits its run. Every
+/// fingerprint of the original run whose k-gram is still delivered, inside one
+/// leaf or across adjacent kept short fields, is kept, and no other: none of
+/// the removed text, none across a seam.
 #[test]
 fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
     use std::collections::HashSet;
@@ -147,7 +146,7 @@ fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
     use super::super::DeliveryDigest as D;
     let detector = CollusionDetector::new(RelayParams::default());
     let fields = |tag: &str| (0..12).map(|i| format!("{tag} f{i}")).collect::<Vec<_>>();
-    let (mut moved, mut moved_together) = (false, false);
+    let (mut kept_any, mut kept_together) = (false, false);
     let ofs = [D::of_leaves, D::of_plan_step_leaves];
     for round in 0..40 {
         let (left, right) = (fields(&format!("l{round}")), fields(&format!("r{round}")));
@@ -200,18 +199,21 @@ fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
             .collect();
         for fp in &original {
             assert_eq!(kept.contains(fp), allowed.contains(fp), "round {round}");
-            moved |= allowed.contains(fp) && !alone.contains(fp);
-            moved_together |= together.contains(fp) && !alone.contains(fp);
+            // Context-free selection (MIK-8083): a delivered k-gram is a
+            // fingerprint of its kept run as well.
+            assert_eq!(allowed.contains(fp), alone.contains(fp), "round {round}");
+            kept_any |= kept.contains(fp);
+            kept_together |= together.contains(fp) && kept.contains(fp);
         }
         assert!(
             kept.iter().all(|fp| allowed.contains(fp)),
             "round {round}: kept text never delivered"
         );
     }
-    assert!(moved, "premise: a split moved some minimum");
+    assert!(kept_any, "premise: something delivered was kept");
     assert!(
-        moved_together,
-        "premise: a split moved a run-together minimum"
+        kept_together,
+        "premise: a fingerprint only the run-together form carries was kept"
     );
 }
 
@@ -260,4 +262,28 @@ fn a_kept_receipt_holds_no_more_than_its_step_staged() {
         kept.staged_len() <= before,
         "copies past the step's size kept"
     );
+}
+
+/// `MIK-8043.JOIN.4`: a rewritten wrapper of many short fields whose fields
+/// together are over the bound is still read as its whole text, as before the
+/// fields were read; no drop is counted while that reading fits.
+#[test]
+fn a_reading_over_the_bound_falls_back_to_the_whole_text() {
+    let (fw, _dir) = observing(|_| {});
+    let fields: Vec<serde_json::Value> = (0..40_000).map(|i| json!(format!("f{i:04}"))).collect();
+    let answer = serde_json::Value::Array(fields.clone());
+    let flat = json!(
+        fields
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    assert!(
+        fw.delivered_for_plan(&answer, None).is_none(),
+        "premise: field by field is over the bound"
+    );
+    let drops = fw.relay_plan_drops();
+    assert!(fw.delivered_preferring(&answer, &flat, None).is_some());
+    assert_eq!(fw.relay_plan_drops(), drops, "no drop while the text fits");
 }
