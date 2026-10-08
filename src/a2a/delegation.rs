@@ -47,6 +47,10 @@ pub(crate) struct Pending {
     /// on the caller's behalf authenticates as the caller did.
     pub headers: Vec<(String, String)>,
     expires: Instant,
+    /// Counts the task as work `close` waits on from the moment it is parked
+    /// until whoever takes it (a cancel, a resumed call's guard) holds it,
+    /// so no handoff leaves a moment where nothing owns it.
+    _owed: Busy,
 }
 
 /// Why a token was not redeemed.
@@ -97,6 +101,7 @@ impl Parked {
         identity: Option<&str>,
         headers: Vec<(String, String)>,
         now: Instant,
+        owed: Busy,
     ) -> Result<String, ParkRefused> {
         let mut entries = self.entries.lock();
         if entries.closed {
@@ -115,6 +120,7 @@ impl Parked {
                 identity: identity.map(str::to_owned),
                 headers,
                 expires: now + self.ttl,
+                _owed: owed,
             },
         );
         Ok(token)
@@ -223,10 +229,15 @@ impl Canceller {
         }
     }
 
-    /// Count work for `close` to wait on while a task changes owner: taken
-    /// before a task leaves [`Parked`], held until its guard or cancel exists.
+    /// One unit of work for `close` to wait on: a parked task holds one.
     pub(crate) fn hold(&self) -> Busy {
         Busy::new(&self.work)
+    }
+
+    /// The work `close` would still wait on.
+    #[cfg(test)]
+    pub(crate) fn outstanding(&self) -> usize {
+        *self.work.borrow()
     }
 
     /// Queue one `CancelTask` without waiting for it, never retried. A

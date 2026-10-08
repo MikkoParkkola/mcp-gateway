@@ -395,3 +395,28 @@ async fn close_cancels_the_task_of_a_call_it_aborts() {
     assert_eq!(script.canceled.lock().as_slice(), ["t-1"]);
     let _ = call.await;
 }
+
+/// MIK-8063: a parked question is work `close` waits on from the moment it
+/// is parked until its cancel has run, so no handoff out of the map leaves
+/// a moment where nothing owns the task.
+#[tokio::test]
+async fn a_parked_question_is_owed_work_until_its_cancel_runs() {
+    let (base, script) = scripted_agent("TASK_STATE_INPUT_REQUIRED", false).await;
+    let transport = started(&base).await;
+    park_questions(&transport, 1).await;
+    assert_eq!(
+        transport.canceller.outstanding(),
+        1,
+        "the parked task is owed"
+    );
+    transport.sweep(std::time::Instant::now() + PARKED_TTL);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while transport.canceller.outstanding() > 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the owed work never cleared"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(script.canceled.lock().as_slice(), ["t-1"]);
+}

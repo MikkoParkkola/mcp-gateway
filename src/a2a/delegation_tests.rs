@@ -10,6 +10,11 @@ fn parked() -> Parked {
     Parked::new(Duration::from_secs(60))
 }
 
+/// A work unit no `close` waits on.
+fn owed() -> Busy {
+    Busy::new(&std::sync::Arc::new(tokio::sync::watch::channel(0).0))
+}
+
 fn park(parked: &Parked, identity: Option<&str>, now: Instant) -> String {
     parked
         .park(
@@ -18,6 +23,7 @@ fn park(parked: &Parked, identity: Option<&str>, now: Instant) -> String {
             identity,
             Vec::new(),
             now,
+            owed(),
         )
         .unwrap_or_else(|refused| panic!("room to park: {refused:?}"))
 }
@@ -97,7 +103,7 @@ fn parking_stops_at_the_cap() {
         park(&parked, None, now);
     }
     assert_eq!(
-        parked.park("one-more".into(), None, None, Vec::new(), now),
+        parked.park("one-more".into(), None, None, Vec::new(), now, owed()),
         Err(ParkRefused::Full)
     );
     assert_eq!(parked.close().len(), PARKED_CAP);
@@ -109,7 +115,7 @@ fn nothing_parks_after_close() {
     park(&parked, None, now);
     assert_eq!(parked.close().len(), 1, "close hands back what was waiting");
     assert_eq!(
-        parked.park("late".into(), None, None, Vec::new(), now),
+        parked.park("late".into(), None, None, Vec::new(), now, owed()),
         Err(ParkRefused::Closed),
         "a park racing close is refused, so its caller cancels the task"
     );
