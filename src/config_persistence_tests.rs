@@ -373,3 +373,28 @@ fn a_cli_write_refuses_a_config_that_no_longer_loads() {
     write_config_preserving(&missing, &config).expect("a missing file is created");
     assert!(missing.exists());
 }
+
+/// MIK-8153: a write through a symlinked config updates its target and keeps
+/// the link; replacing the link would detach the config from its target.
+#[cfg(unix)]
+#[test]
+fn a_write_through_a_symlinked_config_keeps_the_link() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("real.yaml");
+    crate::gateway::test_helpers::write_owner_only(&target, "backends: {}\n").expect("config");
+    let link = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&target, &link).expect("link");
+    let mut config = load_existing_or_default(&link).expect("load");
+    let backend = serde_yaml::from_str("command: echo\n").expect("backend");
+    config.backends.insert("b".into(), backend);
+
+    write_config_preserving(&link, &config).expect("write");
+
+    let kind = std::fs::symlink_metadata(&link).expect("stat").file_type();
+    assert!(kind.is_symlink(), "the link is kept");
+    let written = std::fs::read_to_string(&target).expect("read");
+    assert!(
+        written.contains("b:"),
+        "the target holds the write:\n{written}"
+    );
+}
