@@ -649,7 +649,7 @@ impl Transport for StdioTransport {
         let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
 
         // Both guards drop after this value: the pending entry and progress go.
-        self.exchange(&message, rx).await
+        self.exchange(message, rx).await
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
@@ -660,7 +660,7 @@ impl Transport for StdioTransport {
         };
 
         let message = serde_json::to_string(&notification)?;
-        self.write_message(&message).await
+        self.write_message(message).await
     }
 
     fn is_connected(&self) -> bool {

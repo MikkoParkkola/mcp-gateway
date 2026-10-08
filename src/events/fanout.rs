@@ -103,8 +103,12 @@ impl EventsHub {
                 .filter(|s| self.store.held(&s.id).is_none())
                 // A keyed occurrence belongs to its key's holders alone (MIK-7811).
                 .filter(|s| {
+                    // A row's own key first: a held watch keeps its class's
+                    // key whatever the catalogue says now (MIK-8122).
                     event.lifecycle_key.as_deref().is_none_or(|key| {
-                        source.lifecycle_key(&s.principal, &s.name, &s.arguments) == key
+                        source.row_key(s).unwrap_or_else(|| {
+                            source.lifecycle_key(&s.principal, &s.name, &s.arguments)
+                        }) == key
                     })
                 })
                 .filter(|s| source.matches(&s.principal, &s.arguments, event))
@@ -407,12 +411,18 @@ impl EventsHub {
     /// Judge every stored webhook subscription against `shapes`; a stamp
     /// that could not be written is logged and written by the next refresh.
     fn hold_unserved(&self, shapes: &std::collections::BTreeMap<String, super::reload::Shape>) {
-        let max_ttl =
-            chrono::Duration::from_std(self.config.max_ttl).unwrap_or(chrono::Duration::days(1));
-        let judge = |sub: &Subscription| super::reload::judge(sub, shapes).unwrap_or_default();
-        if let Err(error) = self.store.apply_holds(&judge, Utc::now(), max_ttl) {
+        let judge = |sub: &Subscription| super::reload::judge(sub, shapes);
+        if let Err(error) = self
+            .store
+            .apply_holds(&judge, Utc::now(), self.hold_bound())
+        {
             tracing::warn!(%error, "events: a held subscription's stamp was not written; retried at the next refresh");
         }
+    }
+
+    /// The longest a hold keeps a row: the maximum lease.
+    pub(super) fn hold_bound(&self) -> chrono::Duration {
+        chrono::Duration::from_std(self.config.max_ttl).unwrap_or(chrono::Duration::days(1))
     }
 
     /// Serializes startup reconciliation with capability reloads.

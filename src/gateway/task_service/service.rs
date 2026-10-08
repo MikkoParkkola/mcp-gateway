@@ -75,7 +75,7 @@ pub struct TaskService {
     /// once at shutdown; a share another holder placed is never touched.
     /// `None` once released: a re-read that finishes after shutdown cannot
     /// put a share back (seat-2 review).
-    sealed: parking_lot::Mutex<Option<usize>>,
+    sealed: Arc<parking_lot::Mutex<Option<usize>>>,
 }
 
 impl TaskService {
@@ -110,27 +110,46 @@ impl TaskService {
         Ok(Self {
             store,
             admission,
-            sealed: parking_lot::Mutex::new(Some(sealed)),
+            sealed: Arc::new(parking_lot::Mutex::new(Some(sealed))),
         })
+    }
+
+    /// [`Self::reread_sealed_deferring`] with no managed adapters: the tests'
+    /// shorthand.
+    #[cfg(test)]
+    pub(crate) async fn reread_sealed(&self) -> Vec<CommittedTask> {
+        self.reread_sealed_deferring(Arc::from([])).await
     }
 
     /// Read the sealed rows again and lower the seal only after any repaired
     /// row's key is imported, so that key is never admitted as new in between
     /// (MIK-8052). Runs on every expiry sweep; a store with nothing sealed
-    /// returns at once.
-    pub(crate) async fn reread_sealed(&self) {
+    /// returns at once. A repaired row that restores is served again, a live
+    /// one first settled as startup recovery would
+    /// (MIK-8121). Returns the rows settled, for the caller to announce.
+    /// A live row whose backend is in `managed` is deferred, exactly as
+    /// startup recovery does.
+    pub(crate) async fn reread_sealed_deferring(
+        &self,
+        managed: Arc<[String]>,
+    ) -> Vec<CommittedTask> {
         // Imported under the share's lock, and only while this service still
         // holds a share: once shutdown released it, custody is gone and no key
         // is published on the caller's authority. Lock order is share, then
         // admission, as in `move_seal` and `release_seal`.
-        let sealed = self
+        let (share, admission) = (Arc::clone(&self.sealed), Arc::clone(&self.admission));
+        let (sealed, settled) = self
             .store
-            .reread_sealed(|binding, id| {
-                let share = self.sealed.lock();
-                share.is_some() && self.admission.import_tasks(&[(binding, id)]).is_ok()
-            })
+            .reread_sealed(
+                move |binding, id| {
+                    let share = share.lock();
+                    share.is_some() && admission.import_tasks(&[(binding, id)]).is_ok()
+                },
+                move |row| super::execution::recovery_event(row, &managed),
+            )
             .await;
         self.move_seal(sealed);
+        settled
     }
 
     /// Move this service's share of the seal to `rows`, under its own lock so
@@ -174,7 +193,7 @@ impl TaskService {
         serde_json::json!({
             "sealed_rows": files.len(),
             "sealed_files": files,
-            "action": "repair or remove each file; new keyed calls resume at the next expiry sweep; restart to read a repaired task",
+            "action": "repair or remove each file; new keyed calls resume and a repaired task reads again at the next expiry sweep",
         })
     }
 

@@ -14,13 +14,13 @@ use crate::{Error, Result};
 
 impl StdioTransport {
     /// Write one frame to stdin, cancel-safely: see [`tree::write_frame`].
-    pub(super) async fn write_message(&self, message: &str) -> Result<()> {
+    pub(super) async fn write_message(&self, message: String) -> Result<()> {
         self.write_frame(message, &AtomicBool::new(false)).await
     }
 
     /// [`Self::write_message`], recording in `began` the moment the frame is
     /// committed to go out whole: a call that fails before it sent nothing.
-    pub(super) async fn write_frame(&self, message: &str, began: &AtomicBool) -> Result<()> {
+    pub(super) async fn write_frame(&self, message: String, began: &AtomicBool) -> Result<()> {
         debug!(message_len = message.len(), "Writing to stdin");
         tree::write_frame(&self.writer, &self.shutdown, message, began).await?;
         tokio::task::yield_now().await;
@@ -33,7 +33,7 @@ impl StdioTransport {
     /// child whose stdout is gone (MIK-7871).
     pub(super) async fn exchange(
         &self,
-        message: &str,
+        message: String,
         mut rx: oneshot::Receiver<JsonRpcResponse>,
     ) -> Result<JsonRpcResponse> {
         // MIK-7871: stdout may have closed, and `pending` been cleared, before

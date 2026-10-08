@@ -286,6 +286,11 @@ impl Backend {
                 );
             }
         }
+        drop(logged);
+        drop(blocked);
+        // The shared view is filtered by this set, so a verdict can change what
+        // discovery shows without any list being stored (`MIK-8127`).
+        self.nudge_tools(super::tools_nudge::NudgeKind::Changed);
     }
 
     /// Refusal text when `tool` is blocked on this backend.

@@ -53,10 +53,12 @@ pub(super) fn spawn_in_own_tree(cmd: Command) -> Result<Box<dyn ChildWrapper>> {
 pub(super) async fn write_frame(
     writer: &std::sync::Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdin>>>,
     shutdown: &parking_lot::Mutex<tokio_util::sync::CancellationToken>,
-    message: &str,
+    message: String,
     began: &std::sync::atomic::AtomicBool,
 ) -> Result<()> {
-    let frame = [message.as_bytes(), b"\n"].concat();
+    // Built in place: a queued write holds one copy of the message.
+    let mut frame = message.into_bytes();
+    frame.push(b'\n');
     let mut writer = std::sync::Arc::clone(writer).lock_owned().await;
     // Taken under the stdin lock: the token belongs to the stdin it guards.
     let shutdown = shutdown.lock().clone();
