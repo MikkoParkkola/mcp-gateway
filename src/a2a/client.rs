@@ -19,11 +19,21 @@ use crate::{Error, Result};
 /// The A2A 1.0 version header. `.json()` sets `Content-Type` itself.
 const VERSION_HEADER: &str = "A2A-Version";
 
-/// The JSON-RPC interface a call goes to, chosen from the card.
-#[derive(Debug, Clone)]
+/// The JSON-RPC interface a call goes to, chosen from the card. Its URL can
+/// carry the operator's `a2a_url` credentials, so it never prints them.
+#[derive(Clone)]
 pub(crate) struct Endpoint {
     pub url: String,
     pub tenant: Option<String>,
+}
+
+impl std::fmt::Debug for Endpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Endpoint")
+            .field("url", &diagnostic_url(&self.url))
+            .field("tenant", &self.tenant)
+            .finish()
+    }
 }
 
 /// What one `SendMessage` came back as.
@@ -55,16 +65,6 @@ impl A2aClient {
                 diagnostic_url(a2a_url)
             ))
         })?;
-        // Credentials in the URL would authenticate the card fetch but not
-        // the advertised endpoint, and would ride every diagnostic that
-        // forgot to redact: they belong in `headers`.
-        if !origin.username().is_empty() || origin.password().is_some() {
-            return Err(Error::Config(format!(
-                "a2a_url {} carries credentials; put them in the backend's `headers` \
-                 (for example an Authorization header) instead",
-                diagnostic_url(a2a_url)
-            )));
-        }
         let path = card_path.unwrap_or(DEFAULT_CARD_PATH);
         if !path.starts_with('/') || path.contains("://") {
             return Err(Error::Config(format!(
@@ -139,7 +139,7 @@ impl A2aClient {
             )));
         }
         Ok(Endpoint {
-            url: interface.url.clone(),
+            url: with_credentials(&interface.url, &self.origin),
             tenant: interface.tenant.clone(),
         })
     }
@@ -213,6 +213,23 @@ impl A2aClient {
         }
         request.header(VERSION_HEADER, PROTOCOL_VERSION)
     }
+}
+
+/// `endpoint` with the credentials `a2a_url` carries, when it carries none
+/// of its own. The HTTP client sends URL credentials as `Authorization:
+/// Basic`, so an operator who writes them into `a2a_url`, as curl takes them,
+/// authenticates the card and the calls alike. The endpoint already shares
+/// the configured origin, so the credentials go nowhere else.
+fn with_credentials(endpoint: &str, origin: &Url) -> String {
+    let Ok(mut url) = Url::parse(endpoint) else {
+        return endpoint.to_owned();
+    };
+    if url.username().is_empty() && url.password().is_none() && !origin.username().is_empty() {
+        // Same origin: setting userinfo on it cannot fail.
+        let _ = url.set_username(origin.username());
+        let _ = url.set_password(origin.password());
+    }
+    url.to_string()
 }
 
 /// The largest card or reply this bridge reads, the default stdio frame

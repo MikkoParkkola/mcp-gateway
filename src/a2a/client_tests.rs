@@ -110,15 +110,39 @@ fn the_card_sits_at_the_origin_whatever_a2a_url_carries() {
 }
 
 #[test]
-fn credentials_in_a2a_url_are_refused_without_echoing_them() {
+fn credentials_in_a2a_url_ride_the_endpoint_and_never_print() {
     let userinfo = ["operator", "hunter2-secret"].join(":");
-    let url = format!("https://{userinfo}@agent.invalid");
-    let error = A2aClient::new(&url, None, Vec::new(), reqwest::Client::new())
-        .err()
-        .expect("userinfo is refused")
-        .to_string();
-    assert!(error.contains("headers"), "{error}");
-    assert!(!error.contains("hunter2-secret"), "{error}");
+    let configured = A2aClient::new(
+        &format!("https://{userinfo}@agent.invalid"),
+        None,
+        Vec::new(),
+        reqwest::Client::new(),
+    )
+    .unwrap();
+    let chosen = configured
+        .endpoint(&card(&json!([
+            {"url": "https://agent.invalid/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
+        ])))
+        .unwrap();
+    assert!(
+        chosen.url.contains(&userinfo),
+        "the endpoint authenticates as the card does"
+    );
+    assert!(!configured.target().contains("hunter2-secret"));
+    assert!(
+        !format!("{chosen:?}").contains("hunter2-secret"),
+        "{chosen:?}"
+    );
+
+    let own = configured
+        .endpoint(&card(&json!([
+            {"url": "https://other:own@agent.invalid/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
+        ])))
+        .unwrap();
+    assert!(
+        own.url.contains("other:own") && !own.url.contains("hunter2-secret"),
+        "credentials the card names are its own"
+    );
 }
 
 fn response(body: Vec<u8>) -> reqwest::Response {

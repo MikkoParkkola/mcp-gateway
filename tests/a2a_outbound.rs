@@ -501,3 +501,37 @@ async fn a2a_4_a_configured_version_header_never_overrides_the_bridges() {
         .collect();
     assert_eq!(versions, ["1.0"], "exactly one version header");
 }
+
+/// A2A.6: credentials written into `a2a_url`, as curl takes them, reach the
+/// agent as HTTP Basic on the card fetch and on every call.
+#[tokio::test]
+async fn a2a_6_url_credentials_authenticate_the_card_and_the_calls() {
+    let (base, log) = stub::serve(Agent::answering(stub::completed_task(
+        json!([{"text": "authenticated"}]),
+    )))
+    .await;
+    let userinfo = ["operator", "s3cret"].join(":");
+    let url = base.replacen("http://", &format!("http://{userinfo}@"), 1);
+    let result = call(&backend(&url, None, &[]), "hi")
+        .await
+        .expect("the call succeeds");
+    assert_eq!(texts(&result), ["authenticated"], "{result}");
+    // base64("operator:s3cret")
+    let basic = "Basic b3BlcmF0b3I6czNjcmV0";
+    let seen: Vec<Option<String>> = log
+        .lock()
+        .expect("log")
+        .iter()
+        .map(|seen| {
+            seen.headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        })
+        .collect();
+    assert!(seen.len() >= 2, "a card fetch and a send: {seen:?}");
+    assert!(
+        seen.iter().all(|auth| auth.as_deref() == Some(basic)),
+        "every request carries the credentials: {seen:?}"
+    );
+}
