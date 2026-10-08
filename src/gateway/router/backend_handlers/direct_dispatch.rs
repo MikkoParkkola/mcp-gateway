@@ -392,6 +392,10 @@ fn finish_response(
     // Upstream transport IDs are private gateway correlation state;
     // direct-route clients must receive the ID they supplied.
     response.id = Some(id.clone());
+    // MIK-8139: a backend error gets a result's screening, on every method,
+    // before the reservation settles, so a replay serves the screened answer.
+    let (screened, _) = super::screen_direct_error(state, &admitted.call, response);
+    let mut response = screened;
     if method == "tools/list" {
         // Redaction FIRST, then the trust stamp. The firewall may remove a
         // `$defs` entry a surviving `$ref` points at, so a verdict computed
@@ -484,10 +488,11 @@ fn deliver_tail(
 async fn answer_failure(admitted: Admitted<'_>, e: crate::Error) -> Rejection {
     let Admitted {
         failed,
+        call,
         mut idem_reservation,
         ..
     } = admitted;
-    failed.answer(idem_reservation.as_mut(), e).await
+    failed.answer(idem_reservation.as_mut(), e, &call).await
 }
 
 /// The terminal arm: dispatch, then answer. Settled, never dropped: an
