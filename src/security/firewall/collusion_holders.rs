@@ -114,10 +114,9 @@ impl Tracked {
             // record goes in only once its storage fits the pool, so the
             // bound holds whatever spare capacity the allocator returns.
             if self.records.len() >= INLINE_RECORDS {
+                // Room for exactly one more, so the push never reallocates.
                 self.records.reserve_exact(1);
-                if self.pool_records() > room {
-                    self.records.shrink_to_fit();
-                }
+                self.records.shrink_to(self.records.len() + 1);
             }
             if self.pool_records() <= room {
                 self.records.push(new);
