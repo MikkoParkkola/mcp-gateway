@@ -64,7 +64,9 @@ pub(crate) fn shut_down(runtime: tokio::runtime::Runtime, mode: RuntimeShutdown)
     let started = std::time::Instant::now();
     runtime.shutdown_timeout(timeout);
     // `shutdown_timeout` returns as soon as the blocking pool is idle, so a
-    // wait that lasted the whole bound gave up on work still running.
+    // wait that lasted the whole bound is read as work left running. Work
+    // that ended in the bound's last instant reads the same; the log is a
+    // pointer to look at the disk, not a proof.
     let left_running = started.elapsed() >= timeout;
     if left_running {
         tracing::error!(

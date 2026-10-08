@@ -5,11 +5,11 @@
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use mcp_gateway::cli::Command;
 
-use super::{RuntimeShutdown, SERVE_RUNTIME_SHUTDOWN_TIMEOUT, shut_down};
+use super::{RuntimeShutdown, SERVE_RUNTIME_SHUTDOWN_TIMEOUT, block_on, shut_down};
 
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
@@ -82,22 +82,36 @@ fn every_serve_mode_bounds_the_runtime_shutdown() {
     );
 }
 
+/// Run `body` on its own thread and return its value, failing at this
+/// assertion, not by hanging the suite, when it has not returned in 5 s.
+fn within_watchdog<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+    let (sent, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sent.send(body());
+    });
+    result
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the shutdown did not return within 5 s")
+}
+
 /// `MIK-8084.SHUTDOWN.1` and `.3`: a blocking task stuck past the bound does
 /// not hold the shutdown, which returns at the bound, reports that it left
 /// work running and logs it at ERROR.
 #[test]
 fn a_stuck_blocking_task_is_left_behind_at_the_bound_and_logged() {
-    let bound = Duration::from_millis(200);
     let runtime = runtime();
     let release = stuck_task(&runtime);
-    let started = Instant::now();
-    let mut left_running = false;
-    let logged = errors_logged(|| {
-        left_running = shut_down(runtime, RuntimeShutdown::Bounded(bound));
+    let (left_running, logged) = within_watchdog(move || {
+        let mut left_running = false;
+        let logged = errors_logged(|| {
+            left_running = shut_down(
+                runtime,
+                RuntimeShutdown::Bounded(Duration::from_millis(200)),
+            );
+        });
+        (left_running, logged)
     });
-    let took = started.elapsed();
     drop(release);
-    assert!(took < Duration::from_secs(5), "shutdown took {took:?}");
     assert!(left_running, "the shutdown did not report the stuck task");
     assert!(
         logged.contains("ERROR") && logged.contains("blocking work"),
@@ -105,18 +119,44 @@ fn a_stuck_blocking_task_is_left_behind_at_the_bound_and_logged() {
     );
 }
 
-/// `MIK-8084.SHUTDOWN.2`: blocking work that finishes inside the bound (a
-/// flush) completes before the shutdown returns, which then reports and
-/// logs nothing.
+/// `MIK-8084.SHUTDOWN.1`: the runtime `main` runs on is shut down by its mode
+/// when `block_on` returns, so a stuck blocking task does not hold the exit.
+#[test]
+fn block_on_returns_behind_a_stuck_blocking_task() {
+    let (release, stuck) = mpsc::channel::<()>();
+    within_watchdog(move || {
+        block_on(
+            RuntimeShutdown::Bounded(Duration::from_millis(200)),
+            async move {
+                let (started, running) = tokio::sync::oneshot::channel();
+                tokio::task::spawn_blocking(move || {
+                    let _ = started.send(());
+                    let _ = stuck.recv();
+                });
+                running.await.expect("the stuck task starts");
+            },
+        );
+    });
+    drop(release);
+}
+
+/// `MIK-8084.SHUTDOWN.2`: blocking work already running that finishes inside
+/// the bound (a flush) completes before the shutdown returns, which then
+/// reports and logs nothing.
 #[test]
 fn a_flush_inside_the_bound_completes_and_logs_nothing() {
     let runtime = runtime();
     let flushed = Arc::new(AtomicBool::new(false));
     let done = Arc::clone(&flushed);
+    let (started, running) = mpsc::channel();
     runtime.spawn_blocking(move || {
+        started.send(()).expect("the test waits for the start");
         std::thread::sleep(Duration::from_millis(100));
         done.store(true, Ordering::SeqCst);
     });
+    running
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the flush starts");
     let mut left_running = true;
     let logged = errors_logged(|| {
         left_running = shut_down(runtime, RuntimeShutdown::Bounded(Duration::from_secs(5)));
