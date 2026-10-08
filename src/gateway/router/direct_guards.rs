@@ -79,7 +79,10 @@ impl DirectRouteGuards {
     /// an interim answer's continuation is bound to (MIK-8078).
     pub(crate) async fn after_dispatch(
         state: &AppState,
-        ((call, challenge), (identity, sent)): ((&BackendCall<'_>, Option<&str>), Seal<'_>),
+        ((call, challenge), (identity, sent, declared)): (
+            (&BackendCall<'_>, Option<&str>),
+            Seal<'_>,
+        ),
         client: Option<&AuthenticatedClient>,
         admission: &Admission,
         forward: Result<JsonRpcResponse>,
@@ -101,10 +104,15 @@ impl DirectRouteGuards {
         // the client receives.
         if let Some(result) = response.result.as_mut()
             && let Err(e) = meta
-                .seal_direct_interim(identity, (call.server, sent), result)
+                .seal_direct_interim(identity, (call.server, sent, declared), result)
                 .await
         {
-            return Ok(refusal(response.id.clone(), &e));
+            // The meta route's serializer: a capability refusal keeps the
+            // `data` that names what to declare (MIK-8089).
+            return Ok(match response.id.clone() {
+                Some(id) => crate::gateway::meta_mcp::error_response_preserving_status(id, &e),
+                None => refusal(None, &e),
+            });
         }
         if let Some(result) = response.result.take() {
             match meta.gate_payload(call, result) {
@@ -146,10 +154,12 @@ impl DirectRouteGuards {
 }
 
 /// What an interim answer's continuation is bound to (MIK-8078): the caller's
-/// verified identity and the params as the client sent them.
+/// verified identity and the params as the client sent them; and what the
+/// client declared it can be asked (MIK-8089).
 pub(crate) type Seal<'a> = (
     Option<&'a crate::key_server::oidc::VerifiedIdentity>,
     Option<&'a serde_json::Value>,
+    crate::protocol::meta::Declared,
 );
 
 /// The JSON-RPC error a direct-route refusal answers with (HTTP 200). A
