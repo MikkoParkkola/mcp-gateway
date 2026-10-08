@@ -370,10 +370,10 @@ async fn watch_pollers_are_shared_per_canonical_arguments_and_credential() {
     );
 }
 
-/// U11: a capability reclassified as side-effecting stops its poller on the
-/// next poll, with no call made, and its subscriptions are deleted.
+/// U11 with MIK-8122: a capability reclassified as side-effecting is not
+/// called on the next poll, and its subscriptions are held, not deleted.
 #[tokio::test]
-async fn watch_stops_when_its_capability_is_reclassified() {
+async fn watch_holds_when_its_capability_is_reclassified() {
     let dir = tempfile::tempdir().expect("dir");
     let hub = hub(dir.path());
     let host = fake(vec![target("weather", true, CredentialUse::Free)]);
@@ -382,21 +382,20 @@ async fn watch_stops_when_its_capability_is_reclassified() {
     let poller = run(&hub, &host, "p", name, &json!({}));
     *host.targets.lock() = vec![target("weather", false, CredentialUse::Free)];
     let mut last = None;
-    assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
+    assert!(matches!(poller.once(&hub, &mut last).await, Step::Polled));
     assert!(
         host.calls.lock().is_empty(),
         "no call after the reclassification"
     );
-    assert!(
-        hub.store.subscriptions().is_empty(),
-        "subscriptions deleted"
-    );
+    let rows = hub.store.subscriptions();
+    assert_eq!(rows.len(), 1, "kept");
+    assert!(hub.store.held(&rows[0].id).is_some(), "held");
 }
 
-/// U11: a capability removed from the catalogue stops its poller the same
-/// way, with no call made and its subscriptions deleted.
+/// U11 with MIK-8122: a capability removed from the catalogue is held the
+/// same way, with no call made.
 #[tokio::test]
-async fn watch_stops_when_its_capability_is_removed() {
+async fn watch_holds_when_its_capability_is_removed() {
     let dir = tempfile::tempdir().expect("dir");
     let hub = hub(dir.path());
     let host = fake(vec![target("weather", true, CredentialUse::Free)]);
@@ -405,12 +404,11 @@ async fn watch_stops_when_its_capability_is_removed() {
     let poller = run(&hub, &host, "p", name, &json!({}));
     host.targets.lock().clear();
     let mut last = None;
-    assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
+    assert!(matches!(poller.once(&hub, &mut last).await, Step::Polled));
     assert!(host.calls.lock().is_empty(), "no call after the removal");
-    assert!(
-        hub.store.subscriptions().is_empty(),
-        "subscriptions deleted"
-    );
+    let rows = hub.store.subscriptions();
+    assert_eq!(rows.len(), 1, "kept");
+    assert!(hub.store.held(&rows[0].id).is_some(), "held");
 }
 
 /// U4: jitter only stretches a wait, so no two polls come closer than the
@@ -425,13 +423,13 @@ fn jitter_never_shortens_the_interval() {
     }
 }
 
-/// U11: a credential-free capability that starts needing a credential is
-/// reclassified: its shared poller makes no call (one sharer's credential
-/// never answers for every principal) and the type's subscriptions are
-/// withdrawn, as for a side-effecting reclassification. Subscribers
-/// subscribe again under the new class.
+/// U11 with MIK-8122: a credential-free capability that starts needing a
+/// credential is reclassified: its shared poller makes no call (one sharer's
+/// credential never answers for every principal) and its subscriptions are
+/// held under their old class until they lapse; subscribers subscribe again
+/// to follow the new class.
 #[tokio::test]
-async fn watch_stops_when_its_capability_changes_credential_class() {
+async fn watch_holds_when_its_capability_changes_credential_class() {
     let dir = tempfile::tempdir().expect("dir");
     let hub = hub(dir.path());
     let host = fake(vec![target("weather", true, CredentialUse::Free)]);
@@ -440,16 +438,20 @@ async fn watch_stops_when_its_capability_changes_credential_class() {
     let poller = run(&hub, &host, "p", name, &json!({}));
     *host.targets.lock() = vec![target("weather", true, CredentialUse::Keyed)];
     let mut last = None;
-    assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
+    assert!(matches!(poller.once(&hub, &mut last).await, Step::Polled));
     assert!(host.calls.lock().is_empty(), "no call under the new class");
-    assert!(hub.store.subscriptions().is_empty(), "withdrawn");
+    let rows = hub.store.subscriptions();
+    assert_eq!(rows.len(), 1, "kept");
+    assert!(
+        hub.store.held(&rows[0].id).is_some(),
+        "held under its old class"
+    );
 }
 
-/// A poller that withdraws its type retires its key before it lets go of the
-/// lifecycle lock: a subscribe in that gap (the capability watchable again)
-/// starts a fresh poller instead of joining a key with nothing polling.
+/// MIK-8122: a poller that holds its type keeps its key started and goes on
+/// polling the catalogue, so it sees the capability return.
 #[tokio::test]
-async fn a_withdrawing_poller_retires_its_key_under_the_lock() {
+async fn a_holding_poller_keeps_its_key() {
     let dir = tempfile::tempdir().expect("dir");
     let hub = hub(dir.path());
     let host = fake(vec![target("weather", true, CredentialUse::Free)]);
@@ -460,12 +462,10 @@ async fn a_withdrawing_poller_retires_its_key_under_the_lock() {
     hub.lifecycle.lock().await.insert(started.clone());
     *host.targets.lock() = vec![target("weather", false, CredentialUse::Free)];
     let mut last = None;
-    assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
-    // Read before the background reconcile can run: what a subscribe taking
-    // the lock next would find.
-    let gap = hub.lifecycle.try_lock().expect("the lock is free");
-    assert!(!gap.contains(&started), "the key is no longer started");
-    assert!(poller.stop.load(Ordering::Acquire), "marked stopped");
+    assert!(matches!(poller.once(&hub, &mut last).await, Step::Polled));
+    let lock = hub.lifecycle.try_lock().expect("the lock is free");
+    assert!(lock.contains(&started), "the key stays started");
+    assert!(!poller.stop.load(Ordering::Acquire), "not stopped");
 }
 
 /// A reclassification read once is confirmed under the lifecycle lock before
@@ -551,10 +551,11 @@ async fn watch_ignores_default_volatile_fields_and_metadata() {
     assert_eq!(events[0].data["changed"], json!(["/timestamp"]));
 }
 
-/// A holder that may no longer invoke the capability is revoked before the
-/// poll; with no holder left the poller stops and makes no call.
+/// MIK-8122: a holder the capability's current definition no longer lets
+/// invoke it is kept and skipped, not revoked: no call is made, the poller
+/// stays, and fan-out skips the occurrence instead of revoking.
 #[tokio::test]
-async fn a_holder_without_access_is_revoked_before_any_call() {
+async fn a_holder_without_access_is_skipped_not_revoked() {
     let dir = tempfile::tempdir().expect("dir");
     let hub = hub(dir.path());
     let host = fake(vec![target("crm", true, CredentialUse::Keyed)]);
@@ -563,16 +564,15 @@ async fn a_holder_without_access_is_revoked_before_any_call() {
     let poller = run(&hub, &host, "p", name, &json!({}));
     host.denied.lock().push("p".into());
     let mut last = None;
-    assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
+    assert!(matches!(poller.once(&hub, &mut last).await, Step::Polled));
     assert!(host.calls.lock().is_empty());
-    assert!(hub.store.subscriptions().is_empty(), "revoked");
+    assert_eq!(hub.store.subscriptions().len(), 1, "kept");
     let source = WatchSource::new(&hub, Arc::clone(&host) as Arc<dyn WatchHost>);
-    admit(&hub, "p", name, &json!({}));
     let refused = source
         .authorize("p", name, &json!({}))
         .await
-        .expect_err("fan-out re-check refuses");
-    assert_eq!(refused.code, -32012);
+        .expect_err("fan-out re-check skips");
+    assert_eq!(refused.code, -32011, "skip, keep");
 }
 
 /// A shared poller counts against the principal that opened it, so one key

@@ -39,9 +39,6 @@ pub(crate) struct Judged {
     /// The payload fields to record for a row that has none yet (a row
     /// written before MIK-8076): its type's fields now.
     pub backfill: Option<Vec<String>>,
-    /// The sharing class to record for a watch row that has none yet (a
-    /// row written before MIK-8122).
-    pub watch_class: Option<WatchClass>,
 }
 
 impl Store {
@@ -67,9 +64,6 @@ impl Store {
                 continue;
             };
             let mut row = sub.clone();
-            if row.watch_class.is_none() {
-                row.watch_class = judged.watch_class;
-            }
             if let Some(fields) = judged.backfill
                 && row.payload_fields.is_empty()
             {
@@ -89,7 +83,6 @@ impl Store {
             if row.payload_fields != sub.payload_fields
                 || row.unoffered_since != sub.unoffered_since
                 || row.held_until != sub.held_until
-                || row.watch_class != sub.watch_class
                 || state.hold_unsynced.contains(&row.id)
             {
                 changed.push(row);
@@ -123,6 +116,27 @@ impl Store {
             state.hold_unsynced.insert(id);
         }
         written
+    }
+
+    /// Record `class` on every row of watch type `name` written before the
+    /// class was recorded (MIK-8122). Hold state is left as it is.
+    pub(crate) fn backfill_watch_class(
+        &self,
+        name: &str,
+        class: WatchClass,
+    ) -> std::io::Result<()> {
+        let mut state = self.state.lock();
+        let legacy: Vec<Subscription> = state
+            .subs
+            .values()
+            .filter(|s| s.name == name && s.watch_class.is_none())
+            .cloned()
+            .collect();
+        for mut row in legacy {
+            row.watch_class = Some(class);
+            self.persist_row(&mut state, row)?;
+        }
+        Ok(())
     }
 
     /// Why subscription `id` is held, if it is.
