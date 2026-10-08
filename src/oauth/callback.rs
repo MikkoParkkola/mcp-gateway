@@ -184,9 +184,7 @@ impl Drop for CallbackServer {
 /// Anything else keeps today's behaviour: bound on 127.0.0.1, named
 /// `localhost`, and the callback never listens beyond loopback.
 fn loopback_literal(host: &str, dual_bind: bool) -> Option<IpAddr> {
-    let ip = host
-        .trim_start_matches('[')
-        .trim_end_matches(']')
+    let ip = unbracketed(host)
         .parse::<IpAddr>()
         .ok()
         .filter(IpAddr::is_loopback);
@@ -201,12 +199,23 @@ fn loopback_literal(host: &str, dual_bind: bool) -> Option<IpAddr> {
     ip
 }
 
+/// `host` without the brackets an IPv6 literal may be written in.
+fn unbracketed(host: &str) -> &str {
+    host.trim_start_matches('[').trim_end_matches(']')
+}
+
 /// The host as the redirect URI names it: a loopback IP literal as
 /// configured, IPv6 in brackets as a URI authority requires; otherwise
 /// `localhost`, where the callback listens.
-fn url_host(loopback_ip: Option<IpAddr>) -> String {
+///
+/// An IPv6 literal keeps the configured spelling rather than the parsed
+/// address re-printed: a provider compares the redirect URI as a string, so a
+/// client registered with `[0:0:0:0:0:0:0:1]` must not be sent `[::1]`
+/// (MIK-7739). `host` parsed as that address once unbracketed, so it holds only
+/// hex digits, colons and dots.
+fn url_host(host: &str, loopback_ip: Option<IpAddr>) -> String {
     match loopback_ip {
-        Some(IpAddr::V6(v6)) => format!("[{v6}]"),
+        Some(IpAddr::V6(_)) => format!("[{}]", unbracketed(host)),
         Some(IpAddr::V4(v4)) => v4.to_string(),
         None => "localhost".to_string(),
     }
@@ -282,7 +291,7 @@ pub async fn start_callback_server(
 
     let callback_url = format!(
         "http://{}:{actual_port}{callback_path}",
-        url_host(loopback_ip)
+        url_host(effective_host, loopback_ip)
     );
 
     // #143 — structured telemetry: server bind event.
