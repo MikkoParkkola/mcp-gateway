@@ -399,12 +399,90 @@ pub(super) struct MetaMcpInvoker<'a, 'c> {
     /// authorizer, which nothing on this path consulted — an identity no check
     /// reads is not a check.
     pub(super) caller: &'c MetaMcpCallerContext<'c>,
+    /// Each successful step call's gateway notes, taken out of the delivery's
+    /// record, with the value they describe (MIK-7993 r5): put back onto the
+    /// playbook's answer once its output is built.
+    pub(super) steps: parking_lot::Mutex<Vec<(crate::gateway::gateway_writes::WriteRecord, Value)>>,
+}
+
+impl MetaMcpInvoker<'_, '_> {
+    /// Put each completed step's gateway notes back, rebased onto the
+    /// playbook's stored answer (the `output` of its serialized result): by
+    /// step name with no output mapping, through each mapping otherwise.
+    /// Successful calls pair with `completed` in order; if the counts differ,
+    /// nothing is carried, and those members stay receipted.
+    pub(super) fn carry_writes(
+        &self,
+        output: Option<&crate::playbook::PlaybookOutput>,
+        completed: &[String],
+    ) {
+        let steps = std::mem::take(&mut *self.steps.lock());
+        if steps.len() != completed.len() {
+            return;
+        }
+        let named: Vec<(&String, crate::gateway::gateway_writes::WriteRecord, Value)> = completed
+            .iter()
+            .zip(steps)
+            .map(|(name, (record, value))| (name, record, value))
+            .collect();
+        let Some(output) = output else {
+            // The engine keeps the LAST result under a repeated name, so only
+            // that call's notes describe what is stored there (delta D2).
+            let mut last: Vec<(&String, crate::gateway::gateway_writes::WriteRecord)> = Vec::new();
+            for (name, record, _) in named {
+                if let Some(slot) = last.iter_mut().find(|(kept, _)| *kept == name) {
+                    slot.1 = record;
+                } else {
+                    last.push((name, record));
+                }
+            }
+            for (name, record) in last {
+                crate::gateway::gateway_writes::restore(
+                    &record.rebased(&["output".to_owned(), name.clone()]),
+                );
+            }
+            return;
+        };
+        for (prop, mapping) in &output.properties {
+            let path = mapping.path.trim_start_matches('$');
+            let (step, rest) = path.split_once('.').unwrap_or((path, ""));
+            // `inputs` is the caller's namespace even beside a step of that
+            // name, as `PlaybookContext::resolve_var` reads it (impl F5).
+            if step == "inputs" {
+                continue;
+            }
+            // The engine keeps the LAST result under a repeated name (impl F4).
+            let Some((_, record, value)) =
+                named.iter().rev().find(|(name, ..)| name.as_str() == step)
+            else {
+                continue;
+            };
+            // One match is stored as itself, several as an array of them in
+            // the order the resolver visits them (impl F3).
+            let found = crate::gateway::gateway_writes::mapping_paths(value, rest);
+            let to = ["output".to_owned(), prop.clone()];
+            match found.as_slice() {
+                [one] => {
+                    crate::gateway::gateway_writes::restore(&record.projected(value, one, &to));
+                }
+                many => {
+                    for (index, from) in many.iter().enumerate() {
+                        let at = [to[0].clone(), to[1].clone(), index.to_string()];
+                        crate::gateway::gateway_writes::restore(
+                            &record.projected(value, from, &at),
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[async_trait::async_trait]
 impl ToolInvoker for MetaMcpInvoker<'_, '_> {
     async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
         let args = internal_invoke_args(server, tool, arguments);
+        let writes_mark = crate::gateway::gateway_writes::mark();
         // Steps inherit the invoking caller's standing, admin included.
         // Hard-coding non-admin meant an operator's own playbook failed on a
         // step they could run directly, which is a regression rather than a
@@ -420,7 +498,7 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
         // may not reach, so it is replaced with a neutral one (A3). Decided
         // from the refusal plus the silent non-authorizer pieces, so the
         // authorizer is consulted once per step, as before.
-        match outcome {
+        let answered = match outcome {
             Err(e)
                 if matches!(e, crate::Error::Forbidden { .. })
                     || self
@@ -434,7 +512,13 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
                 })
             }
             other => other,
+        };
+        // A failed attempt's notes describe nothing the playbook keeps.
+        let taken = crate::gateway::gateway_writes::take_since(writes_mark);
+        if let Ok(value) = &answered {
+            self.steps.lock().push((taken, value.clone()));
         }
+        answered
     }
 }
 

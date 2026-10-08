@@ -657,6 +657,7 @@ async fn a_built_task_envelope_is_read_as_one() {
         output_free: false,
         error_author: None,
         owner_digest: String::new(),
+        gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
     };
     let ((), receipts) = meta
         .collecting_staged(async {
@@ -691,5 +692,69 @@ async fn a_built_task_envelope_is_read_as_one() {
     assert!(
         relayed_by_bob(&firewall, OTHER_PROSE),
         "a backend's envelope-shaped answer was narrowed"
+    );
+}
+
+/// Backend text a test places where the gateway also writes, with bytes
+/// other than the gateway's.
+const BACKEND_ADVICE: &str = "Field notes from the upland survey: the stone wall along the east \
+    boundary needs resetting, the spring by the shepherd's hut runs clear again, and the gate \
+    hinge on the lower track was replaced with a galvanised one before the first snow.";
+
+/// `MIK-7993.STORE.1`/`.2`: a `tasks/get` read restores the row's write
+/// record before staging. The advice the gateway wrote into the stored
+/// result is not receipted; the backend's text is; and a backend member of
+/// the same name holding other bytes stays receipted.
+#[tokio::test]
+async fn a_stored_result_receipts_only_what_the_backend_wrote() {
+    use crate::gateway::meta_mcp::invoke::gateway_writes;
+    let written = json!({
+        "content": [{"type": "text", "text": PROSE}],
+        "_cost_warnings": [OTHER_PROSE],
+    });
+    // The record the worker stored: the gateway wrote `_cost_warnings`.
+    let record = gateway_writes::scope(async {
+        gateway_writes::note(gateway_writes::Layer::Value, &["_cost_warnings"], &written);
+        gateway_writes::recorded()
+    })
+    .await;
+    assert!(!record.is_empty(), "premise: the note was taken");
+
+    let (meta, firewall) = relay_meta();
+    let mut stored = stored_task(|task| task.complete(written.clone()));
+    stored.gateway_writes = record.clone();
+    let ((), staged) = meta
+        .collecting_staged(async {
+            meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
+        })
+        .await;
+    staged.commit(true);
+    assert!(
+        relayed_by_bob(&firewall, PROSE),
+        "the backend's text lost its receipt"
+    );
+    assert!(
+        !relayed_by_bob(&firewall, OTHER_PROSE),
+        "the gateway's own advice was receipted as backend text"
+    );
+
+    // STORE.2: the same record over a backend member of that name with
+    // other bytes exempts nothing.
+    let (meta, firewall) = relay_meta();
+    let backend = json!({
+        "content": [{"type": "text", "text": PROSE}],
+        "_cost_warnings": [BACKEND_ADVICE],
+    });
+    let mut stored = stored_task(|task| task.complete(backend));
+    stored.gateway_writes = record;
+    let ((), staged) = meta
+        .collecting_staged(async {
+            meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
+        })
+        .await;
+    staged.commit(true);
+    assert!(
+        relayed_by_bob(&firewall, BACKEND_ADVICE),
+        "a backend member the gateway did not write lost its receipt"
     );
 }
