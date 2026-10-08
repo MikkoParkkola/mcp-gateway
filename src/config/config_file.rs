@@ -53,6 +53,20 @@ impl super::Config {
         )?;
         Ok((evaluated.config, file.text))
     }
+
+    /// `text` loaded as a config file is, `url` resolved, with no environment
+    /// layer: what a comment-keeping write proves its edited text loads as.
+    /// Extraction only: no strict-key check, no two-transport check and no
+    /// validation run here, so this is not proof that a file is acceptable.
+    pub(crate) fn from_file_text(text: &str) -> Result<Self> {
+        let file = ConfigFile {
+            path: PathBuf::from("gateway.yaml"),
+            text: text.to_owned(),
+        };
+        figment::Figment::from(file)
+            .extract()
+            .map_err(|e| crate::Error::Config(e.to_string()))
+    }
 }
 
 /// Parses the bytes already read, but reports them as the file they came from,
@@ -63,6 +77,59 @@ impl Provider for ConfigFile {
     }
 
     fn data(&self) -> figment::Result<Map<Profile, Dict>> {
-        Yaml::string(&self.text).data()
+        let mut data = Yaml::string(&self.text).data()?;
+        for dict in data.values_mut() {
+            resolve_backend_urls(dict).map_err(figment::Error::from)?;
+        }
+        Ok(data)
     }
+}
+
+/// Turn each backend's `url` into the key its scheme selects (`http_url` or
+/// `ws_url`), once, before anything reads the backend. A refusal names the
+/// keys and never the URL, which can carry a credential.
+fn resolve_backend_urls(dict: &mut Dict) -> std::result::Result<(), String> {
+    let Some(figment::value::Value::Dict(_, backends)) = dict.get_mut("backends") else {
+        return Ok(());
+    };
+    for (name, backend) in backends.iter_mut() {
+        let figment::value::Value::Dict(_, fields) = backend else {
+            continue;
+        };
+        let Some(url) = fields.remove("url") else {
+            continue;
+        };
+        if let Some(other) = super::backend_transport::TRANSPORT_KEYS
+            .iter()
+            .find(|k| fields.contains_key(**k))
+        {
+            return Err(format!(
+                "backends.{name}.url and backends.{name}.{other} both choose how to reach the \
+                 backend; keep `url` and delete `{other}`."
+            ));
+        }
+        let figment::value::Value::String(tag, address) = url else {
+            return Err(format!("backends.{name}.url must be a string."));
+        };
+        let Some(key) = super::backend_transport::transport_key_for(&address) else {
+            // Backend addresses are never expanded, so a reference is not an
+            // address; the environment supplies one through the override keys.
+            let var = format!(
+                "{}BACKENDS__{}",
+                super::OverlayEnv::PREFIX,
+                name.to_uppercase()
+            );
+            return Err(if address.contains("${") || address.starts_with("env:") {
+                format!(
+                    "backends.{name}.url is not expanded, so it must be the address itself; \
+                     to take it from the environment, delete backends.{name}.url and set \
+                     {var}__HTTP_URL or {var}__WS_URL."
+                )
+            } else {
+                format!("backends.{name}.url must start with http://, https://, ws:// or wss://.")
+            });
+        };
+        fields.insert(key.to_string(), figment::value::Value::String(tag, address));
+    }
+    Ok(())
 }

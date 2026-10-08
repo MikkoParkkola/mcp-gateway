@@ -222,3 +222,23 @@ async fn row_13_a_walk_resets_the_bound_to_the_earliest_survivor() {
     let walked = table.walks.load(std::sync::atomic::Ordering::SeqCst) - before;
     assert_eq!(walked, 0, "a stale bound would walk on every read");
 }
+
+/// `MIK-8168`: a paused chain's step digest goes with its hold when the chain
+/// is abandoned. Expiry is the abandonment path (a client that stops calling
+/// makes no call; a reload keeps the shared table). Asserted on the map itself,
+/// after a reader that is not `step_digest`, so only the reclaim can clear it.
+#[tokio::test]
+async fn an_expired_hold_drops_its_step_digest() {
+    let (table, key) = held_until_t(4).await;
+    table
+        .steps
+        .lock()
+        .insert(key.clone(), "step-digest".to_string());
+    assert_eq!(table.len(T).await, 1);
+    assert_eq!(table.steps.lock().len(), 1, "a live hold keeps its digest");
+    assert_eq!(table.len(T + 1).await, 0);
+    assert!(
+        table.steps.lock().is_empty(),
+        "an abandoned chain's digest stayed"
+    );
+}

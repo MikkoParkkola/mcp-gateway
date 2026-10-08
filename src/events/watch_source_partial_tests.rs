@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8037: a watch subscription ends only on a confirmed absence (a
-//! complete catalogue without the capability, or a capability read and no
-//! longer watchable), decided against one catalogue generation.
+//! MIK-8037: a watch is acted on only on a confirmed absence (a complete
+//! catalogue without the capability, or a capability read and no longer
+//! watchable), decided against one catalogue generation; since MIK-8122 the
+//! act is a hold, never a withdrawal.
 
 use std::sync::Arc;
 
@@ -51,10 +52,11 @@ async fn a_partial_confirmation_keeps_the_rows() {
     assert_eq!(hub.store.subscriptions().len(), 1, "nothing withdrawn");
 }
 
-/// MIK-8037: a partial catalogue that did read the capability, and found it
-/// side-effecting, still withdraws: the capability was read, not missed.
+/// MIK-8037 with MIK-8122: a partial catalogue that did read the capability,
+/// and found it side-effecting, holds it: the capability was read, not
+/// missed, and no read deletes a watch.
 #[tokio::test]
-async fn a_partial_catalogue_still_withdraws_a_reclassified_capability() {
+async fn a_partial_catalogue_holds_a_reclassified_capability() {
     let dir = tempfile::tempdir().expect("dir");
     let hub = hub(dir.path());
     let host = fake(vec![target("weather", true, CredentialUse::Free)]);
@@ -64,15 +66,17 @@ async fn a_partial_catalogue_still_withdraws_a_reclassified_capability() {
     *host.targets.lock() = vec![target("weather", false, CredentialUse::Free)];
     host.partial.store(true, Ordering::Release);
     let mut last = None;
-    assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
-    assert!(hub.store.subscriptions().is_empty(), "withdrawn");
+    assert!(matches!(poller.once(&hub, &mut last).await, Step::Polled));
+    let rows = hub.store.subscriptions();
+    assert_eq!(rows.len(), 1, "kept");
+    assert!(hub.store.held(&rows[0].id).is_some(), "held");
 }
 
-/// MIK-8037: `authorize` answers `-32011` (skip the occurrence, keep the row)
-/// for a capability a partial catalogue lacks, and `-32012` (revoke) only for
-/// one a complete catalogue lacks.
+/// MIK-8037 with MIK-8122: `authorize` answers `-32011` (skip the
+/// occurrence, keep the row) for a capability a catalogue lacks, partial,
+/// moved or complete alike: the watch's poller holds it.
 #[tokio::test]
-async fn authorize_revokes_only_on_a_complete_absence() {
+async fn authorize_skips_on_any_absence() {
     let dir = tempfile::tempdir().expect("dir");
     let hub = hub(dir.path());
     let host = fake(Vec::new());
@@ -91,14 +95,13 @@ async fn authorize_revokes_only_on_a_complete_absence() {
     );
     host.moves.store(false, Ordering::Release);
     let complete = source.authorize("p", name, &json!({})).await;
-    assert_eq!(complete.map_err(|e| e.code), Err(-32012), "removed: revoke");
+    assert_eq!(complete.map_err(|e| e.code), Err(-32011), "removed: skip");
 }
 
-/// MIK-8037: a holder denied while a reload moved the catalogue between the
-/// read and the check is not revoked (the denial may be the reload's absence);
-/// with the generation unmoved, it is.
+/// MIK-8037 with MIK-8122: a holder the capability's definition refuses is
+/// never revoked, across a reload or not: the denial is about the catalogue.
 #[tokio::test]
-async fn a_denial_across_a_reload_revokes_nothing() {
+async fn a_definition_denial_revokes_nothing() {
     let dir = tempfile::tempdir().expect("dir");
     let hub = hub(dir.path());
     let host = fake(vec![target("weather", true, CredentialUse::Free)]);
@@ -115,13 +118,13 @@ async fn a_denial_across_a_reload_revokes_nothing() {
     assert_eq!(moved.map_err(|e| e.code), Err(-32011), "skip, keep");
     host.moves.store(false, Ordering::Release);
     poller.once(&hub, &mut last).await;
-    assert!(hub.store.subscriptions().is_empty(), "revoked when unmoved");
+    assert_eq!(hub.store.subscriptions().len(), 1, "kept when unmoved");
 }
 
-/// MIK-8037: a confirmed absence withdraws only when no catalogue write
-/// landed since the read it was confirmed in.
+/// MIK-8037 with MIK-8122: an absence is acted on only when no catalogue
+/// write landed since the read; then it holds, never withdraws.
 #[tokio::test]
-async fn an_absence_across_a_reload_withdraws_nothing() {
+async fn an_absence_is_held_once_stable() {
     let dir = tempfile::tempdir().expect("dir");
     let hub = hub(dir.path());
     let host = fake(vec![target("weather", true, CredentialUse::Free)]);
@@ -133,10 +136,9 @@ async fn an_absence_across_a_reload_withdraws_nothing() {
     let mut last = None;
     assert!(matches!(poller.once(&hub, &mut last).await, Step::Polled));
     assert_eq!(hub.store.subscriptions().len(), 1, "kept across the write");
+    let id = hub.store.subscriptions()[0].id.clone();
+    assert!(hub.store.held(&id).is_none(), "not held across the write");
     host.moves.store(false, Ordering::Release);
-    assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
-    assert!(
-        hub.store.subscriptions().is_empty(),
-        "withdrawn once stable"
-    );
+    assert!(matches!(poller.once(&hub, &mut last).await, Step::Polled));
+    assert!(hub.store.held(&id).is_some(), "held once stable");
 }

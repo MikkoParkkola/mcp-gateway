@@ -74,6 +74,9 @@ impl ExclusiveFileLock {
     pub(crate) fn try_acquire(lock_path: &Path) -> io::Result<Self> {
         use std::os::unix::fs::OpenOptionsExt as _;
 
+        #[cfg(test)]
+        count_attempt(lock_path);
+
         let mut opts = OpenOptions::new();
         opts.create(true).write(true).read(true);
         set_owner_only(&mut opts);
@@ -97,6 +100,9 @@ impl ExclusiveFileLock {
         use windows_sys::Win32::Storage::FileSystem::{
             FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
         };
+
+        #[cfg(test)]
+        count_attempt(lock_path);
         let file = match create_file_private(lock_path, Share::LockSidecar) {
             // An existing sidecar is judged before it is trusted, exactly as a
             // unix sidecar with a foreign mode would be refused.

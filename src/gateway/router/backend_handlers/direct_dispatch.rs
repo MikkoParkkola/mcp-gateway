@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 use serde_json::Value;
 
 use super::super::AppState;
-use super::super::direct_guards::{DirectRouteGuards, refusal};
+use super::super::direct_guards::{AdmittedNonce, DirectRouteGuards, refusal};
 use super::super::helpers::{build_http_error_response, build_http_response};
 use super::direct_caller::{Caller, Envelope, Rejection, Route};
 use super::direct_failure::DirectFailure;
@@ -43,6 +43,16 @@ pub(super) struct Admitted<'a> {
     pub(super) auth: BackendAuthContext<'a>,
     pub(super) sanitized: Option<Value>,
     pub(super) idem_reservation: Option<crate::idempotency::IdempotencyReservation>,
+    /// The signing nonce this call registered, if it registered one.
+    pub(super) nonce: Option<AdmittedNonce>,
+    /// An interim answer's sealed envelope and hold key (MIK-8078).
+    pub(super) sealed: Option<(String, String)>,
+}
+
+/// A refusal before dispatch: give back the nonce this call admitted
+/// (MIK-7698).
+fn give_back_nonce(state: &AppState, admitted: &mut Admitted<'_>) {
+    DirectRouteGuards::release_nonce(state, admitted.nonce.take());
 }
 
 /// SECURITY: apply tool policy, name validation, and input sanitization to
@@ -135,9 +145,14 @@ fn idempotency_outcome(
 /// Admitted once, here: after every refusal above and the idempotency guard,
 /// so a refused call consumes no nonce (MIK-7698), and before a cached result
 /// is delivered, so it is signed against the replaying request's own nonce.
-fn admit_signing_nonce(scope: Scope<'_>, preflight: &Preflight) -> Result<(), Rejection> {
+/// The refusals that can still follow (the spend, a continuation) give it back
+/// ([`give_back_nonce`]).
+fn admit_signing_nonce(
+    scope: Scope<'_>,
+    preflight: &Preflight,
+) -> Result<Option<AdmittedNonce>, Rejection> {
     if !preflight.signs {
-        return Ok(());
+        return Ok(None);
     }
     let caller = scope.caller;
     DirectRouteGuards::admit_nonce(
@@ -226,10 +241,12 @@ pub(super) async fn admit<'a>(
         auth,
         sanitized: None,
         idem_reservation: None,
+        nonce: None,
+        sealed: None,
     };
     guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
     let guarded = idempotency_outcome(scope, envelope, preflight, propagation)?;
-    admit_signing_nonce(scope, preflight)?;
+    admitted.nonce = admit_signing_nonce(scope, preflight)?;
     match guarded {
         Some(crate::idempotency::GuardOutcome::CachedResult(cached)) => {
             crate::gateway::meta_mcp::invoke::audit::note_cached();
@@ -237,7 +254,8 @@ pub(super) async fn admit<'a>(
             // shaped for this request's era (MIK-8022).
             let response = JsonRpcResponse::success(id.clone(), cached);
             let auth = (admitted.auth, admitted.call.tool);
-            return Err(deliver_tail(scope, envelope, preflight, auth, response));
+            let response = finish_tail(scope, envelope, preflight, auth, response);
+            return Err(build_http_response(&response, StatusCode::OK));
         }
         Some(crate::idempotency::GuardOutcome::CachedError(error)) => {
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
@@ -258,7 +276,7 @@ async fn forward_sanitized(
     scope: Scope<'_>,
     envelope: &Envelope,
     (preflight, propagation): (&Preflight, &Propagation),
-    (mut admitted, sanitized_params): (Admitted<'_>, Value),
+    (mut admitted, mut sanitized_params): (Admitted<'_>, Value),
 ) -> Rejection {
     let Scope {
         state,
@@ -271,9 +289,23 @@ async fn forward_sanitized(
     let admission = match DirectRouteGuards::before_dispatch(&state.meta_mcp, call) {
         Ok(admission) => admission,
         Err(e) => {
+            give_back_nonce(state, &mut admitted);
             return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
         }
     };
+    if preflight.retry.is_retry()
+        && let Err(refused) = redeem_retry(
+            (scope, propagation),
+            envelope,
+            &mut admitted,
+            &mut sanitized_params,
+        )
+        .await
+    {
+        // Not dispatched: the spend reservation is given back on drop.
+        drop(admission);
+        return refused;
+    }
     // Forward the sanitized params to the backend
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
@@ -288,14 +320,31 @@ async fn forward_sanitized(
     ))
     .await;
     let client = caller.client.as_ref();
+    let parked = park_if_interim(&forward, &mut admitted);
     let seen = (&admitted.call, preflight.challenge.as_deref());
-    let forward = DirectRouteGuards::after_dispatch(state, seen, client, &admission, forward);
+    let seal = (
+        (
+            caller.verified_identity.as_ref(),
+            (
+                propagation.identity_key.as_deref(),
+                caller.grant_subject.as_ref(),
+            ),
+            caller.client.as_ref(),
+        ),
+        (envelope.params.as_ref(), route.backend.instance()),
+    );
+    let guards = (client, &mut admitted.sealed);
+    let forward =
+        DirectRouteGuards::after_dispatch(state, (seen, seal), guards, &admission, forward).await;
+    settle_parked(parked, &forward, &mut admitted);
     // The spend is settled; an unsettled reservation is given back here.
     drop(admission);
     match forward {
         // The same delivery as a plain answer: one tail, so a modern
         // sanitized call is shaped like any other (MIK-8022).
-        Ok(response) => finish_response(scope, envelope, preflight, (&mut admitted, response)),
+        Ok(response) => {
+            finish_response(scope, envelope, preflight, (&mut admitted, response)).await
+        }
         // Settled as terminal unless raised before dispatch
         // (ADR-012 consequence 1; see `settle_direct_failure`).
         Err(e) => answer_failure(admitted, e).await,
@@ -338,6 +387,7 @@ async fn forward_plain(
         match DirectRouteGuards::before_dispatch(&state.meta_mcp, &admitted.call) {
             Ok(admission) => admission,
             Err(e) => {
+                give_back_nonce(state, admitted);
                 return Err(build_http_response(
                     &refusal(Some(id.clone()), &e),
                     StatusCode::OK,
@@ -361,8 +411,25 @@ async fn forward_plain(
     ))
     .await;
     let answered = if method == "tools/call" {
+        let parked = park_if_interim(&forward, admitted);
         let seen = (&admitted.call, preflight.challenge.as_deref());
-        DirectRouteGuards::after_dispatch(state, seen, client, &admission, forward)
+        let seal = (
+            (
+                caller.verified_identity.as_ref(),
+                (
+                    propagation.identity_key.as_deref(),
+                    caller.grant_subject.as_ref(),
+                ),
+                caller.client.as_ref(),
+            ),
+            (envelope.params.as_ref(), route.backend.instance()),
+        );
+        let guards = (client, &mut admitted.sealed);
+        let guarded =
+            DirectRouteGuards::after_dispatch(state, (seen, seal), guards, &admission, forward)
+                .await;
+        settle_parked(parked, &guarded, admitted);
+        guarded
     } else {
         forward.inspect(|_| super::record_client_success(state, client))
     };
@@ -374,7 +441,7 @@ async fn forward_plain(
 /// What the caller receives from an answered plain dispatch: the id they
 /// supplied, the list or call post-processing, the settled idempotency key,
 /// the chain finish, and (for `tools/call`) the signature.
-fn finish_response(
+async fn finish_response(
     scope: Scope<'_>,
     envelope: &Envelope,
     preflight: &Preflight,
@@ -428,30 +495,32 @@ fn finish_response(
         // shaper alone; a legacy listing stays byte-identical.
         result.remove("ttlMs");
     }
-    deliver_tail(
-        scope,
-        envelope,
-        preflight,
-        (admitted.auth, admitted.call.tool),
-        response,
-    )
+    let auth = (admitted.auth, admitted.call.tool);
+    let response = finish_tail(scope, envelope, preflight, auth, response);
+    // MIK-8078: a sealed question keeps its slot only if the answer that
+    // leaves still carries it; every step that could refuse or replace it ran.
+    let sealed = admitted.sealed.take();
+    let delivered = response.result.as_ref();
+    state.meta_mcp.release_direct_hold(sealed, delivered).await;
+    build_http_response(&response, StatusCode::OK)
 }
 
 /// The tail every success shares, a cached replay included: the 2026-07-28
 /// shape for a modern request, the clamp and chain finish, then (for
 /// `tools/call`) the signature, or the catalogue receipt. Shaping comes before
 /// the finish and the signature, as on `/mcp`, so both cover what is sent; the
-/// stamps tell the receipt which members the gateway wrote.
+/// stamps tell the receipt which members the gateway wrote. Returns the
+/// answer as it will leave, so a caller can still act on what it carries.
 ///
 /// MIK-8025/MIK-8011 (secE) wrap this tail and the fresh steps in a
 /// `gateway_writes` scope.
-fn deliver_tail(
+fn finish_tail(
     scope: Scope<'_>,
     envelope: &Envelope,
     preflight: &Preflight,
     (auth, tool): (BackendAuthContext<'_>, &str),
     mut response: JsonRpcResponse,
-) -> Rejection {
+) -> JsonRpcResponse {
     let (state, name) = (scope.state, scope.name);
     let method = envelope.method.as_str();
     let stamps = if envelope.era == Era::Modern {
@@ -476,12 +545,90 @@ fn deliver_tail(
             stamps,
         );
     }
-    build_http_response(&response, StatusCode::OK)
+    response
+}
+
+/// MIK-8078 (MRTR.1, MRTR.3-6): a retry presents the continuation this route
+/// sealed, and the backend gets its own state back in `outbound` in its place,
+/// as on the meta route. Refused before dispatch, so the key is released: the
+/// backend has not acted.
+async fn redeem_retry(
+    (scope, propagation): (Scope<'_>, &Propagation),
+    envelope: &Envelope,
+    admitted: &mut Admitted<'_>,
+    outbound: &mut Value,
+) -> Result<(), Rejection> {
+    let who = (
+        scope.caller.verified_identity.as_ref(),
+        (
+            propagation.identity_key.as_deref(),
+            scope.caller.grant_subject.as_ref(),
+        ),
+        scope.caller.client.as_ref(),
+    );
+    let instance = Some(scope.route.backend.instance());
+    let sent = (scope.name, instance, envelope.params.as_ref());
+    let redeemed = scope
+        .state
+        .meta_mcp
+        .redeem_direct_retry(who, sent, outbound)
+        .await;
+    redeemed.map_err(|e| {
+        if let Some(reservation) = admitted.idem_reservation.as_mut() {
+            reservation.release();
+        }
+        give_back_nonce(scope.state, admitted);
+        build_http_response(&refusal(Some(scope.id.clone()), &e), StatusCode::OK)
+    })
+}
+
+/// MIK-8078: a backend that stopped to ask did not act, so its key is
+/// released rather than settled (the meta route's rule). Taken out here,
+/// before the guards, because a seal they refuse returns before settlement, and
+/// an armed reservation dropped unsettled records an uncertain outcome;
+/// [`settle_parked`] decides once they ran.
+fn park_if_interim(
+    forward: &crate::Result<JsonRpcResponse>,
+    admitted: &mut Admitted<'_>,
+) -> Option<crate::idempotency::IdempotencyReservation> {
+    // A response that also carries an `error` leaves the outcome uncertain:
+    // its key is settled with that error, never parked for release.
+    let asked = forward
+        .as_ref()
+        .ok()
+        .filter(|response| response.error.is_none())
+        .and_then(|response| response.result.as_ref())
+        .is_some_and(crate::protocol::mrtr::InputRequired::claims_input_required);
+    if asked {
+        admitted.idem_reservation.take()
+    } else {
+        None
+    }
+}
+
+/// The key [`park_if_interim`] took out: released once the guards read the
+/// answer, put back to be settled when they refused it unread. A failed chain
+/// receipt proves nothing about what the backend did, so a retry must not run
+/// it again.
+fn settle_parked(
+    parked: Option<crate::idempotency::IdempotencyReservation>,
+    guarded: &crate::Result<JsonRpcResponse>,
+    admitted: &mut Admitted<'_>,
+) {
+    match (parked, guarded) {
+        (Some(reservation), Err(_)) => admitted.idem_reservation = Some(reservation),
+        (Some(mut reservation), Ok(_)) => reservation.release(),
+        (None, _) => {}
+    }
 }
 
 /// Answer a dispatch that failed, settling the reservation (`answer` consumes
 /// the failure context, so this takes the admission by value).
-async fn answer_failure(admitted: Admitted<'_>, e: crate::Error) -> Rejection {
+async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error) -> Rejection {
+    // Nothing reached the backend, so the nonce is given back (MIK-7698).
+    if e.is_pre_dispatch() {
+        give_back_nonce(admitted.failed.state, &mut admitted);
+    }
     let Admitted {
         failed,
         mut idem_reservation,
@@ -499,12 +646,22 @@ pub(super) async fn dispatch(
     stages: (&Preflight, &Propagation),
     mut admitted: Admitted<'_>,
 ) -> Rejection {
+    // MIK-8078: a retry goes out through the sanitized arm, which redeems it
+    // after the spend is admitted. For `tools/call` the two arms run the same
+    // guards and the same dispatch; only `tools/list` differs, and it is never
+    // a retry.
+    if envelope.method == "tools/call" && stages.0.retry.is_retry() && admitted.sanitized.is_none()
+    {
+        admitted.sanitized = Some(envelope.params.clone().unwrap_or_default());
+    }
     if let Some(sanitized_params) = admitted.sanitized.take() {
         return forward_sanitized(scope, envelope, stages, (admitted, sanitized_params)).await;
     }
     match forward_plain(scope, envelope, stages, &mut admitted).await {
         Err(refusal) => refusal,
-        Ok(Ok(response)) => finish_response(scope, envelope, stages.0, (&mut admitted, response)),
+        Ok(Ok(response)) => {
+            finish_response(scope, envelope, stages.0, (&mut admitted, response)).await
+        }
         Ok(Err(e)) => answer_failure(admitted, e).await,
     }
 }

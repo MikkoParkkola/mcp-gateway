@@ -303,7 +303,7 @@ async fn a_repaired_row_without_fallback_room_stays_sealed() {
     );
     fs::write(&record, &original).unwrap();
     assert_eq!(
-        store.reread_sealed(|_, _| true).await,
+        store.reread_sealed(|_, _| true, |_| None).await.0,
         1,
         "a repaired row with no room for its bounded failure lifted the seal"
     );

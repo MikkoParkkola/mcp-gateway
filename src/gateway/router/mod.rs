@@ -76,7 +76,13 @@ mod callback_admin_denial_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod collusion_direct_tests;
 #[cfg(test)]
+mod continuation_instance_tests;
+#[cfg(test)]
 mod direct_audit_tests;
+#[cfg(test)]
+mod direct_continuation_gate_tests;
+#[cfg(test)]
+mod direct_continuation_tests;
 #[cfg(test)]
 mod direct_guards_fixture;
 #[cfg(test)]
@@ -354,6 +360,7 @@ fn build_auth_state(state: &Arc<AppState>) -> AuthState {
         // The listener's own TLS (restart-only). An HTTPS `public_url` in front
         // is read live per response (`auth::cookie_secure`).
         tls_enabled: state.live_config.running().mtls.enabled,
+        agent_auth: state.agent_auth.clone(),
     }
 }
 

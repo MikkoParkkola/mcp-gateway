@@ -161,6 +161,8 @@ impl MetaMcp {
         let verified_identity = caller.verified_identity;
         let provenance = caller.provenance();
         let caller_proof = CallerProof::new(verified_identity, provenance);
+        // Names an MCP child when nothing above does (MIK-7825).
+        let credential_owner = super::support::credential_owner(caller);
         // The meta-tools this caller can see, for its recovery hints (MIK-7974).
         let surface = self.hint_surface(caller);
 
@@ -231,6 +233,7 @@ impl MetaMcp {
         // so per-user results cache in ISOLATION rather than leaking across users
         // (IDP.3/8) — reused verbatim at dispatch so there is no re-mint or drift.
         let backend = self.backends.get(server);
+        let target = (server, backend.as_ref().map(|backend| backend.instance()));
         let caller_credential = if let Some(idp_cfg) = backend
             .as_ref()
             .and_then(|b| b.identity_propagation_config().cloned())
@@ -427,8 +430,12 @@ impl MetaMcp {
         // the backend with the credential the first round used, and an `Arc` clone
         // is that same credential rather than a second resolution of it.
         let mut bridge_account_credential = account_credential.clone();
+        let source = (
+            caller.principal_source(dispatch_binding.as_deref()),
+            caller.retry,
+        );
         let outbound_retry =
-            match redeem_retry(&self.continuation, caller, server, tool, &arguments).await {
+            match redeem_retry(&self.continuation, source, target, tool, &arguments).await {
                 Ok(retry) => retry,
                 Err(error) => {
                     // Refused before the backend was reached, so it has not
@@ -474,7 +481,7 @@ impl MetaMcp {
             session_id,
             arm_key,
             caller_identity,
-            caller_proof,
+            (caller_proof, credential_owner.as_deref()),
             &caller_credential.headers,
             dispatch_binding.as_deref(),
             account_credential,
@@ -580,7 +587,7 @@ impl MetaMcp {
                 prompt_cache_key.as_deref(),
                 want_full,
                 (arm_key, api_key_name),
-                (caller_identity, caller_proof),
+                (caller_identity, caller_proof, credential_owner.as_deref()),
                 verified_identity,
                 &caller_credential,
                 dispatch_binding.as_deref(),
@@ -608,11 +615,12 @@ impl MetaMcp {
         // may be asked at all: a continuation for a question the client will
         // never be shown is a redeemable envelope for an exchange that cannot
         // happen.
+        let mut sealed = None;
         if let Some(interim) = interim {
-            let Some(envelope) = mint_continuation(
+            let Some((envelope, hold_key)) = mint_continuation(
                 &self.continuation,
-                caller,
-                server,
+                caller.principal_source(dispatch_binding.as_deref()),
+                target,
                 tool,
                 &arguments,
                 interim.request_state,
@@ -625,7 +633,8 @@ impl MetaMcp {
                 );
                 return Err(unbindable_continuation(server, tool));
             };
-            result["requestState"] = json!(envelope);
+            result["requestState"] = json!(&envelope);
+            sealed = Some((envelope, hold_key));
             // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
             // must not take the receipt's capped budget from the backend's
             // prompt. Noted at the value layer: `tool_value` still reads
@@ -635,6 +644,9 @@ impl MetaMcp {
                 gateway_writes::REQUEST_STATE,
                 &result,
             );
+        } else {
+            // MRTR.2a holds for an unusable round too (MIK-8078).
+            continuation::withhold_unsealed_state(&mut result);
         }
 
         let call = dispatch_guards::BackendCall {
@@ -645,7 +657,10 @@ impl MetaMcp {
             trace_id,
             caller_key: None,
         };
-        let (gated, effect) = self.gate_payload(&call, result)?;
+        let gated = self.gate_payload(&call, result);
+        let kept = gated.as_ref().ok().map(|(gated, _)| gated);
+        continuation::release_unless_carried(&self.continuation, sealed, kept).await;
+        let (gated, effect) = gated?;
         result = gated;
         self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
         // A chained backend is eligible only with a checked upstream outcome.
@@ -778,3 +793,6 @@ mod ask_expiry_budget_tests;
 
 #[cfg(test)]
 mod tracing_target_tests;
+
+#[cfg(test)]
+mod mcp_credential_principal_tests;

@@ -137,7 +137,10 @@ impl PlaybookEngine {
         // on past a failure, so a partial result explains itself.
         let mut step_errors = std::collections::BTreeMap::new();
 
-        for step in &definition.steps {
+        // Each completed step's label, its index in `steps` (MIK-8113).
+        let mut labels: HashMap<String, u32> = HashMap::new();
+        for (index, step) in definition.steps.iter().enumerate() {
+            let label = u32::try_from(index).unwrap_or(u32::MAX);
             // Check timeout
             if start.elapsed() > timeout {
                 return Err(crate::Error::Internal(format!(
@@ -177,12 +180,16 @@ impl PlaybookEngine {
                     debug!(step = %step.name, attempt, "Retrying step");
                 }
 
-                match invoker
-                    .invoke(&step.server, &step.tool, arguments.clone())
+                match STEP
+                    .scope(
+                        label,
+                        invoker.invoke(&step.server, &step.tool, arguments.clone()),
+                    )
                     .await
                 {
                     Ok(result) => {
                         debug!(step = %step.name, "Step completed");
+                        labels.insert(step.name.clone(), label);
                         ctx.step_results.insert(step.name.clone(), result);
                         steps_completed.push(step.name.clone());
                         succeeded = true;
@@ -232,7 +239,7 @@ impl PlaybookEngine {
         }
 
         // Build output
-        let output = build_output(definition, &ctx);
+        let (output, provenance) = build_output(definition, &ctx, &labels);
         #[allow(clippy::cast_possible_truncation)]
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -243,6 +250,7 @@ impl PlaybookEngine {
             steps_failed,
             step_errors,
             duration_ms,
+            provenance,
         })
     }
 }
@@ -253,21 +261,53 @@ impl Default for PlaybookEngine {
     }
 }
 
-/// Build the final output from output mappings or raw step results.
-fn build_output(definition: &PlaybookDefinition, ctx: &PlaybookContext) -> Value {
+tokio::task_local! {
+    /// The label of the step being invoked: its index in `steps`.
+    static STEP: u32;
+}
+
+/// The label of the playbook step whose invocation this task runs, if any:
+/// its index in the definition's `steps` (MIK-8113).
+pub(crate) fn current_step() -> Option<u32> {
+    STEP.try_with(|label| *label).ok()
+}
+
+/// Build the final output from output mappings or raw step results, and
+/// which output member each completed step produced, by its label: only a
+/// member resolved from that step's own result, never a fallback or an
+/// input (MIK-8113).
+fn build_output(
+    definition: &PlaybookDefinition,
+    ctx: &PlaybookContext,
+    labels: &HashMap<String, u32>,
+) -> (Value, Vec<(String, u32)>) {
+    let mut provenance = Vec::new();
     let Some(ref output_def) = definition.output else {
         // No output mapping: return all step results.
-        return Value::Object(
-            ctx.step_results
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        );
+        for (name, label) in labels {
+            provenance.push((name.clone(), *label));
+        }
+        let all = ctx
+            .step_results
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        return (Value::Object(all), provenance);
     };
 
     let mut result = serde_json::Map::new();
     for (prop_name, mapping) in &output_def.properties {
         let resolved = ctx.resolve_var(&mapping.path);
+        let step = mapping
+            .path
+            .trim_start_matches('$')
+            .split('.')
+            .next()
+            .filter(|name| *name != "inputs")
+            .and_then(|name| labels.get(name));
+        if let (Some(label), false) = (step, resolved.is_null()) {
+            provenance.push((prop_name.clone(), *label));
+        }
         if resolved.is_null() {
             if let Some(ref fallback) = mapping.fallback {
                 result.insert(prop_name.clone(), fallback.clone());
@@ -278,7 +318,7 @@ fn build_output(definition: &PlaybookDefinition, ctx: &PlaybookContext) -> Value
             result.insert(prop_name.clone(), resolved);
         }
     }
-    Value::Object(result)
+    (Value::Object(result), provenance)
 }
 
 // ============================================================================

@@ -36,7 +36,7 @@ SKIPPED = {
 }
 # Workflows with no pull_request trigger: they cannot run on a docs-only PR, so
 # they need no gate. Gaining a pull_request trigger fails main() until gated.
-PUSH_ONLY_WORKFLOWS = ("codeql.yml", "feature-combos.yml", "packaged-suite.yml")
+PUSH_ONLY_WORKFLOWS = ("codeql.yml", "feature-combos.yml", "packaged-suite.yml", "size-gates.yml")
 # Every job that runs tests stays on docs-only PRs, except task-sdk-recovery
 # and gws-dry-run (neither reads a docs file): tests read docs files
 # (include_str!, doc-claim tests), in the lib/bin suite as well as tests/.

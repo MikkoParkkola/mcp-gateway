@@ -88,26 +88,11 @@ impl MetaMcp {
                 &crate::protocol::mrtr::NO_RETRY
             });
 
-            match plan_step(self.invoke_tool(&invoke_args, session_id, &step_caller)).await {
+            let dispatch = self.invoke_tool(&invoke_args, session_id, &step_caller);
+            match plan_step(chain_label(idx), dispatch).await {
                 // A tool error in the success channel is still an error.
                 Ok(result) => chain_step_result(idx, &tool_ref, result),
-                // A refusal stays a refusal. Flattening it into -32603 told
-                // the caller their chain hit an internal error when in fact
-                // they were not allowed to run that step — and it hid the
-                // denial from anything downstream that classifies errors.
-                Err(Error::Forbidden {
-                    code,
-                    status,
-                    message,
-                }) => Err(Error::Forbidden {
-                    code,
-                    status,
-                    message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
-                }),
-                Err(e) => Err(Error::json_rpc(
-                    -32603,
-                    format!("Chain step {idx} ({tool_ref}) failed: {e}"),
-                )),
+                Err(e) => Err(step_failure(idx, &tool_ref, e)),
             }
         };
 
@@ -140,6 +125,8 @@ impl MetaMcp {
                 previous.expires_at = expiry;
             }
             let backend_state = previous.backend_request_state.clone();
+            // The resume seals the step's handle over this digest (MIK-8168).
+            self.continuation.in_flight().bind_step(&previous);
             let payload = seal_chain_stop(&previous, chain_ref, idx, backend_state);
             self.continuation
                 .keyring()
@@ -147,7 +134,31 @@ impl MetaMcp {
                 .map_err(|error| Error::json_rpc(-32603, error.to_string()))
         };
 
-        super::super::chain_interim::drive_chain(&chain, start_step, &mut run_step, seal_stop).await
+        super::super::chain_interim::drive_chain(&chain, start_step, &mut run_step, seal_stop)
+            .await
+            .inspect(note_chain_members)
+    }
+}
+
+/// A chain step's plan label: its execution index, as the chain's answer
+/// names it (`results[i].step`), so a resumed chain's results keep their
+/// steps (MIK-8113).
+fn chain_label(idx: usize) -> Option<u32> {
+    u32::try_from(idx).ok()
+}
+
+/// MIK-8113: each result of a chain's answer is its step's, by the execution
+/// index the chain wrote beside it, so a resumed chain's results keep theirs.
+fn note_chain_members(answer: &Value) {
+    let results = answer.get("results").and_then(Value::as_array);
+    for (i, done) in results.into_iter().flatten().enumerate() {
+        if let Some(label) = done.get("step").and_then(Value::as_u64) {
+            let label = u32::try_from(label).unwrap_or(u32::MAX);
+            crate::gateway::meta_mcp::invoke::relay::note_plan_member(
+                format!("/results/{i}/result"),
+                label,
+            );
+        }
     }
 }
 
@@ -169,4 +180,62 @@ fn chain_step_result(idx: usize, tool_ref: &str, result: Value) -> Result<Value>
         -32603,
         format!("Chain step {idx} ({tool_ref}) failed: {detail}"),
     ))
+}
+
+/// A failed chain step, with its index and tool named. A refusal stays a
+/// refusal: flattening it into -32603 told the caller their chain hit an
+/// internal error when they were not allowed to run that step, and hid the
+/// denial from anything downstream that classifies errors. A refused
+/// continuation (-32602, e.g. a step whose backend was replaced while the
+/// chain was paused, MIK-8168) likewise keeps its code, so the client asks
+/// again instead of reporting a gateway fault.
+fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
+    match error {
+        Error::Forbidden {
+            code,
+            status,
+            message,
+        } => Error::Forbidden {
+            code,
+            status,
+            message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
+        },
+        Error::JsonRpc {
+            code: -32602,
+            message,
+            data,
+        } => Error::JsonRpc {
+            code: -32602,
+            message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
+            data,
+        },
+        e => Error::json_rpc(-32603, format!("Chain step {idx} ({tool_ref}) failed: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod member_tests {
+    use serde_json::json;
+
+    /// `MIK-8113` (chain provenance): each result is its step's by the
+    /// execution index written beside it, not its place in the array, so a
+    /// chain resumed at step 3 labels its first result 3.
+    #[tokio::test]
+    async fn a_resumed_chains_results_keep_their_execution_index() {
+        let answer = json!({"steps": 2, "results": [
+            {"step": 3, "tool": "mock:echo", "result": {}},
+            {"step": 4, "tool": "mock:echo", "result": {}},
+        ]});
+        let ((), noted) = crate::gateway::meta_mcp::invoke::relay::noting_plan_members(async {
+            super::note_chain_members(&answer);
+        })
+        .await;
+        assert_eq!(
+            noted,
+            vec![
+                ("/results/0/result".to_string(), 3),
+                ("/results/1/result".to_string(), 4),
+            ]
+        );
+    }
 }

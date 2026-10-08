@@ -151,6 +151,9 @@ pub struct InFlight {
     /// How many times a reader walked the whole table to reclaim (`MIK-8060`).
     #[cfg(test)]
     walks: std::sync::atomic::AtomicUsize,
+    /// key -> the request digest of the chain step paused on that exchange
+    /// (MIK-8168). Crate-internal, and never longer-lived than its hold.
+    steps: parking_lot::Mutex<std::collections::HashMap<String, String>>,
 }
 
 /// Drop exchanges whose deadline has passed, returning the earliest deadline
@@ -197,6 +200,7 @@ impl InFlight {
             earliest: std::sync::atomic::AtomicU64::new(u64::MAX),
             #[cfg(test)]
             walks: std::sync::atomic::AtomicUsize::new(0),
+            steps: parking_lot::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -256,6 +260,10 @@ impl InFlight {
             self.walks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let left = reclaim_abandoned(&mut held, now);
             earliest.store(left, std::sync::atomic::Ordering::Relaxed);
+            // A paused chain's step digest lives exactly as long as its hold, so
+            // an abandoned chain (its hold expired) leaves nothing behind either.
+            // Only a walk removes holds here; `complete` drops its own step.
+            self.steps.lock().retain(|key, _| held.contains_key(key));
         }
         held
     }
@@ -293,7 +301,30 @@ impl InFlight {
     /// ones that completed long ago. Reaping is the backstop for abandonment,
     /// not the ordinary path — the ordinary path is that an exchange ends.
     pub async fn complete(&self, key: &str, now: u64) -> bool {
-        self.guard(now).await.remove(key).is_some()
+        let removed = self.guard(now).await.remove(key).is_some();
+        self.steps.lock().remove(key);
+        removed
+    }
+
+    /// Remember the chain step paused on its exchange (MIK-8168): its request
+    /// digest, which binds the backend instance that asked. Synchronous
+    /// because the chain driver seals a stop synchronously; the entry goes
+    /// with its hold, on completion or on the next reclaim after expiry.
+    pub(crate) fn bind_step(&self, step: &Payload) {
+        let digest = step.original_request_digest.clone();
+        self.steps.lock().insert(step.hold_key.clone(), digest);
+    }
+
+    /// The step digest [`Self::bind_step`] recorded, while its exchange is
+    /// still held.
+    pub(crate) async fn step_digest(&self, key: &str, now: u64) -> Option<String> {
+        // Checked against the table, not left to the reclaim pass: a skipped
+        // walk (`MIK-8060`) must not let a step outlive its hold.
+        let held = self.guard(now).await;
+        if !held.contains_key(key) {
+            return None;
+        }
+        self.steps.lock().get(key).cloned()
     }
 
     /// How many exchanges are held, as of `now`.
@@ -375,6 +406,15 @@ impl ContinuationState {
             in_flight: InFlight::new(&replica, IN_FLIGHT_CAPACITY),
             replica,
         }
+    }
+
+    /// Test-only: a store whose in-flight table holds nothing, so every mint
+    /// is refused for want of a slot (MIK-8078).
+    #[cfg(test)]
+    pub(crate) fn full_for_test() -> Self {
+        let mut state = Self::new();
+        state.in_flight = InFlight::new(&state.replica, 0);
+        state
     }
 
     /// Open an exchange on this replica and seal a continuation for it
