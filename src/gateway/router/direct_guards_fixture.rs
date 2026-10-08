@@ -51,6 +51,12 @@ pub(crate) enum Answer {
     /// Like `AskOnce`, a question `InputRequired::from_result` declines (an
     /// `inputRequests` that is not an object) beside a string state (MIK-8078).
     AskMalformed,
+    /// Like `AskOnce`, asking an elicitation and a sampling in one round
+    /// (MIK-8089).
+    AskMixed,
+    /// Like `AskOnce`, a valid question beside a non-string state, which
+    /// `InputRequired::from_result` declines (MIK-8089).
+    AskBadState,
     /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
     /// `resultType`, `ttlMs` (5000) and `cacheScope` itself, and every other
     /// answer a `ttlMs` of 3000 (MIK-8022).
@@ -81,6 +87,15 @@ fn question(answer: Answer) -> Value {
     }
     if matches!(answer, Answer::AskMalformed) {
         asked["inputRequests"] = json!("surprise");
+    }
+    if matches!(answer, Answer::AskBadState) {
+        asked["requestState"] = json!(7);
+    }
+    if matches!(answer, Answer::AskMixed) {
+        asked["inputRequests"]["k2"] = json!({
+            "method": "sampling/createMessage",
+            "params": {"messages": [], "maxTokens": 8}
+        });
     }
     asked
 }
@@ -144,7 +159,11 @@ impl Transport for CountingBackend {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         if matches!(
             self.answer,
-            Answer::AskOnce | Answer::AskNoState | Answer::AskMalformed
+            Answer::AskOnce
+                | Answer::AskNoState
+                | Answer::AskMalformed
+                | Answer::AskMixed
+                | Answer::AskBadState
         ) {
             return Ok(if n == 0 {
                 JsonRpcResponse::success(id, question(self.answer))
@@ -182,9 +201,11 @@ impl Transport for CountingBackend {
                 "rate limit exceeded",
             )),
             Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
-            Answer::AskOnce | Answer::AskNoState | Answer::AskMalformed => {
-                unreachable!("answered above")
-            }
+            Answer::AskOnce
+            | Answer::AskNoState
+            | Answer::AskMalformed
+            | Answer::AskMixed
+            | Answer::AskBadState => unreachable!("answered above"),
             Answer::Text(text) => Ok(JsonRpcResponse::success(
                 id,
                 json!({"content": [{"type": "text", "text": text}], "isError": false}),
