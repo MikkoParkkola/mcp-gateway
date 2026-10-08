@@ -93,5 +93,9 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["host-id"]:
         print(host_id() or "")
         sys.exit(0)
+    if sys.argv[1:2] == ["is-bench-host"]:
+        # This host, or the id given: exit 0 only for bench-host.
+        given = sys.argv[2] if len(sys.argv) > 2 else host_id()
+        sys.exit(0 if given == BENCH_HOST_ID else 1)
     seed, rep = int(sys.argv[1]), int(sys.argv[2])
     print(" ".join(graded_orders(seed)[rep - 1]))
