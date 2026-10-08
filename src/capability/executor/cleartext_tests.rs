@@ -151,14 +151,13 @@ async fn a_templated_cleartext_url_is_refused_at_send_time() {
 #[tokio::test]
 async fn a_cleartext_token_endpoint_never_receives_the_refresh_token() {
     let dir = tempfile::tempdir().unwrap();
-    let storage = crate::oauth::TokenStorage::new(dir.path().to_path_buf()).unwrap();
+    let storage =
+        std::sync::Arc::new(crate::oauth::TokenStorage::new(dir.path().to_path_buf()).unwrap());
     let error = CapabilityExecutor::new()
-        .perform_token_refresh(
+        .refresh_provider_token(
             "cleartext",
-            "REFRESH_SECRET",
             "http://off-machine.invalid/token",
             &storage,
-            None,
             &CapabilityExecutionContext::default(),
         )
         .await

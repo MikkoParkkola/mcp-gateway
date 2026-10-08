@@ -26,6 +26,8 @@ const PRE_SEND_SITES: &[&str] = &[
     "backend/lifecycle.rs",
     // Stale tools refresh refused in cooldown.
     "backend/metadata.rs",
+    // Start refused: package cache still locked, or its rename timed out.
+    "backend/package_cache.rs",
     // Concurrency semaphore closed (request and notify paths).
     "backend/ops.rs",
     // Health probe with no shared transport (not tool dispatch).

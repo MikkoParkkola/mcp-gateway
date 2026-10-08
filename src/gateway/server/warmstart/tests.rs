@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use super::{
     ATTEMPT_REQUEST_BUDGET, DORMANT_YIELDS_BEFORE_RETRY, DormantAction,
-    EMPTY_TOOL_LISTS_BEFORE_ACCEPTING, WarmStartMode, WarmStartPolicy, dormant_action,
+    EMPTY_TOOL_LISTS_BEFORE_ACCEPTING, WarmStartMode, WarmStartPolicy, WarmerGuard, dormant_action,
     effective_attempt_timeout, gap_before_attempt, is_readiness_error, resolve_warm_start_names,
-    retry_warm_start_attempts, spawn_warm_start_task, warm_start_prefetches_tools,
+    retry_warm_start_attempts, warm_start_prefetches_tools,
 };
 use crate::Error;
 
@@ -450,17 +450,9 @@ async fn dropping_the_guard_aborts_the_retry_tasks() {
     let backends = Arc::new(crate::backend::BackendRegistry::new());
     assert!(backends.register(unreachable_backend("never-up")));
 
-    let guard = spawn_warm_start_task(
-        &backends,
-        vec!["never-up".to_string()],
-        WarmStartMode::Http,
-        None,
-    );
-    let probes: Vec<_> = guard
-        .0
-        .iter()
-        .map(tokio::task::JoinHandle::abort_handle)
-        .collect();
+    let guard = WarmerGuard::new(&backends, WarmStartMode::Http, None);
+    assert_eq!(guard.warm(vec!["never-up".to_string()]), ["never-up"]);
+    let probes = guard.abort_handles();
     assert_eq!(probes.len(), 1);
 
     tokio::task::yield_now().await;

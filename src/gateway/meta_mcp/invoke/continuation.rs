@@ -593,6 +593,15 @@ impl crate::gateway::meta_mcp::MetaMcp {
         Ok(Some((envelope, hold_key)))
     }
 
+    /// Test-only: replace the continuation store (MIK-8078).
+    #[cfg(test)]
+    pub(crate) fn set_continuation_for_test(
+        &mut self,
+        state: crate::protocol::continuation::ContinuationState,
+    ) {
+        self.continuation = std::sync::Arc::new(state);
+    }
+
     /// Give back the slot of a question sealed on the direct route unless
     /// `delivered`, the answer that leaves, still carries it
     /// ([`release_unless_carried`]).
