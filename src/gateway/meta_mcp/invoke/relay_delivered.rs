@@ -307,10 +307,15 @@ fn rewritten_answer(text: &str) -> Value {
 fn line_literals(line: &str) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     let mut at = 0;
+    // A literal whose closing quote is gone: its index in `out` and start.
+    let mut unclosed = None;
     while let Some(open) = line[at..].find('"') {
         let start = at + open + 1;
         let close = closing_quote(&line[start..]).map(|c| start + c);
         let (raw, next) = close.map_or((&line[start..], line.len()), |c| (&line[start..c], c + 1));
+        if close.is_none() {
+            unclosed = Some((out.len(), start));
+        }
         out.push((unescape(raw), line[next..].trim_start().starts_with(':')));
         at = next;
     }
@@ -319,8 +324,17 @@ fn line_literals(line: &str) -> Vec<(String, bool)> {
         && let Some(open) = last_open_quote(body)
     {
         let last = unescape(&body[open + 1..]);
-        if !out.iter().any(|(literal, _)| *literal == last) {
-            out.push((last, false));
+        match unclosed {
+            // The unclosed literal ran over the value: it keeps only what lies
+            // before the value's opening quote, so no text is read twice.
+            // Read from the same quote, it is that literal: keep one reading.
+            Some((i, start)) if open + 1 == start => out[i] = (last, false),
+            Some((i, start)) if open >= start => {
+                out[i] = (unescape(&line[start..open]), false);
+                out.push((last, false));
+            }
+            _ if out.iter().any(|(literal, _)| *literal == last) => {}
+            _ => out.push((last, false)),
         }
     }
     out
@@ -540,6 +554,21 @@ mod tests {
             line_literals(r#"    "text": "postgres://[REDACTED]"#),
             [lit("text", true), lit("postgres://[REDACTED]", false)]
         );
+    }
+
+    /// `MIK-8043.JOIN.4`: a line's literals never hold more text than the line,
+    /// even when the forward and backward reads disagree (a lone backslash
+    /// before the closing quote), so the answer's bound is never inflated.
+    #[test]
+    fn a_line_is_never_read_twice() {
+        for line in [
+            r#"    "k": "orchard rows\""#,
+            r#"    "k[REDACTED] "south terrace rows","#,
+            r#"    "text": "a \"quoted\" word""#,
+        ] {
+            let total: usize = line_literals(line).iter().map(|(t, _)| t.len()).sum();
+            assert!(total <= line.len(), "{line}: {:?}", line_literals(line));
+        }
     }
 
     /// `MIK-8043.JOIN.4` (G1): a key that lost its closing quote does not take
