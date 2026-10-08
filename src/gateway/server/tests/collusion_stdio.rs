@@ -226,15 +226,29 @@ async fn staged_read(
     Option<Value>,
     crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
 ) {
-    use crate::gateway::server::{Gateway, StdioClient, StdioTelemetry};
     *cell.lock() = text;
+    let params = json!({"name": "gateway_invoke",
+        "arguments": {"server": "alpha", "tool": "read", "arguments": {}}});
+    let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
+    staged_request(meta, reads, request).await
+}
+
+/// [`staged_read`] of a request as given.
+async fn staged_request(
+    meta: &Arc<MetaMcp>,
+    reads: &crate::gateway::outbound::StdioReads,
+    request: Value,
+) -> (
+    crate::gateway::server::stdio_delivery::StdioAnswer,
+    Option<crate::security::tenant_reads::ReadAttribution>,
+    Option<Value>,
+    crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
+) {
+    use crate::gateway::server::{Gateway, StdioClient, StdioTelemetry};
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
-    let params = json!({"name": "gateway_invoke",
-        "arguments": {"server": "alpha", "tool": "read", "arguments": {}}});
-    let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
     let client = StdioClient {
         session_id: SESSION,
         channel: &crate::gateway::input_bridge::NoClientChannel,
@@ -649,4 +663,59 @@ async fn stdio_gateway_built_refusal_is_sent_as_written() {
         Some(&json!("Missing method"))
     );
     assert!(document.get("result").is_none(), "{document}");
+}
+
+/// MIK-7991 r4 (R8): over stdio a keyed read's re-issue is answered by the
+/// sync admission from the stored delivery, which carries the cost
+/// suggestion the gateway wrote on the first run. Settlement runs past the
+/// dispatch's scope, so the record rides with the answer: the replay's
+/// receipt leaves the suggestion out (an HTTP caller sending its text is not
+/// refused) and keeps the backend's text (sending that is).
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn stdio_replay_leaves_the_cost_suggestion_out_of_the_receipt() {
+    use crate::gateway::server::Gateway;
+    const CATEGORY: &str =
+        "cellar inventory of pressed cider barrels sorted by vintage, cask size and orchard row";
+    let (mut meta, firewall, cell) = judged_stdio(None);
+    Arc::get_mut(&mut meta)
+        .expect("the fixture holds the only handle")
+        .suggest_cheaper_for_test(CATEGORY, "read", "send");
+    let reads = meta.stdio_reads();
+    let params = json!({"name": "gateway_invoke",
+        "arguments": {"server": "alpha", "tool": "read", "arguments": {}},
+        "_meta": {crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "key-7991-stdio"}});
+    let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
+    // The backend's answer changes between the runs: the second frame still
+    // carrying the first text proves it was a replay.
+    for text in [PROSE, OTHER] {
+        *cell.lock() = text.to_string();
+        let (value, hidden, params, staged) = staged_request(&meta, &reads, request.clone()).await;
+        let frame = Gateway::judge_and_commit(
+            &meta,
+            &reads,
+            SESSION,
+            (value, params.as_ref(), hidden.as_ref()),
+            staged,
+        )
+        .await;
+        let served = frame
+            .response()
+            .and_then(|response| response.result.as_ref())
+            .map(Value::to_string)
+            .unwrap_or_default();
+        assert!(
+            frame.delivers_result() && served.contains(CATEGORY) && served.contains("late pears"),
+            "base: both runs deliver the first answer and its suggestion: {served}"
+        );
+        frame.stdio_written();
+    }
+    assert!(
+        !http_relay_refused(&firewall, CATEGORY),
+        "the gateway's suggestion is in the replay's receipt"
+    );
+    assert!(
+        http_relay_refused(&firewall, PROSE),
+        "control: the backend's text is receipted"
+    );
 }

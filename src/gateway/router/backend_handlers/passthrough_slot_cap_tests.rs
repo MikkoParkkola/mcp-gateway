@@ -81,7 +81,7 @@ async fn send(
     notification: bool,
 ) -> (StatusCode, String) {
     let body = if notification {
-        json!({ "jsonrpc": "2.0", "method": "notifications/cancelled", "params": { "requestId": 7 } })
+        json!({ "jsonrpc": "2.0", "method": "notifications/roots/list_changed" })
     } else {
         json!({ "jsonrpc": "2.0", "id": i, "method": "resources/list" })
     };
@@ -256,7 +256,7 @@ async fn an_over_budget_caller_is_refused_and_never_reaches_the_shared_slot() {
     assert!(
         !reached
             .iter()
-            .any(|m| m == "resources/list" || m == "notifications/cancelled"),
+            .any(|m| m == "resources/list" || m == "notifications/roots/list_changed"),
         "an over-budget caller reached the shared slot: {reached:?}"
     );
     assert_eq!(backend.per_user_slots_for_test(), PER_PRINCIPAL);
