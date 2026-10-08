@@ -227,6 +227,111 @@ def test_cli_root_globals_carry_their_env() -> None:
     assert "mcp-gateway serve --stdio" in cli
 
 
+def test_placeholder_reasons_fail() -> None:
+    # MIK-8077.1/.2: every listed placeholder, plus the spellings reviewers found.
+    words = set(inv.PLACEHOLDER_REASONS) | {"TODO", "TBD", "FIXME", "XXX", "later", "pending"}
+    for word in sorted(words) + ["Todo", "tbd.", "FIXME!", "Pending"]:
+        doc = DOC.replace("| `A` | KEEP | needed |", f"| `A` | KEEP | {word} |")
+        assert any("'A' has no reason" in e for e in check(doc)), (word, check(doc))
+
+
+def test_real_reasons_with_punctuation_pass() -> None:
+    # MIK-8077.3: acronyms and punctuation are not placeholders.
+    for reason in ("A2A transport (MIK-8063)", "TLS cert path", "later-stage hook, kept for tests"):
+        doc = DOC.replace("| `A` | KEEP | needed |", f"| `A` | KEEP | {reason} |")
+        assert check(doc) == [], (reason, check(doc))
+
+
+CLI_FIXTURE = """
+pub struct Args {
+    #[arg(short, long)]
+    config: String,
+    #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
+    env: Vec<String>,
+    #[arg(long)]
+    force: bool,
+    #[arg(value_name = "DESCRIPTOR")]
+    descriptor: PathBuf,
+    target: String,
+}
+"""
+
+
+def cli_rows(source: str) -> dict[str, inv.Entry]:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "args.rs"
+        path.write_text(source, encoding="utf-8")
+        item = inv.parse_items(path)[0]
+        walker = inv.CliWalker.__new__(inv.CliWalker)
+        walker.out = {}
+        orig_rel = inv.rel
+        inv.rel = lambda p: p.name  # the fixture lives outside the repository
+        try:
+            walker.args(item.members, path, item.line, "x")
+        finally:
+            inv.rel = orig_rel
+    return walker.out
+
+
+def test_short_flag_alias_is_its_own_row() -> None:
+    # MIK-8077.5: `-c` and `-e` are rows, each naming the long form it aliases.
+    rows = cli_rows(CLI_FIXTURE)
+    assert {"x --config", "x -c", "x --env", "x -e", "x --force"} <= set(rows), sorted(rows)
+    assert rows["x -c"].note == "alias of --config", rows["x -c"]
+    assert rows["x -e"].note == "alias of --env", rows["x -e"]
+    assert "x -f" not in rows, sorted(rows)
+    # Removing the `short` attribute removes the row, so the doc's row goes stale.
+    assert "x -c" not in cli_rows(CLI_FIXTURE.replace("#[arg(short, long)]", "#[arg(long)]"))
+
+
+def test_alias_class_must_match_its_long_form() -> None:
+    # MIK-8077.5: an alias inherits its long form's class.
+    head = "## Surface: cli\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n"
+    entries = {"cli": [inv.Entry("x --config", "src/a.rs", 1), inv.Entry("x -c", "src/a.rs", 1, "alias of --config")]}
+    full = {s: [inv.Entry(f"x-{s}", "src/x.rs", 1)] for s in inv.SURFACES if s != "cli"}
+    full.update(entries)
+    rows = "".join(f"## Surface: {s}\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n| `x-{s}` | KEEP | filler | - | src/x.rs:1 |\n" for s in full if s != "cli")
+    same = head + "| `x --config` | KEEP | config path | - | src/a.rs:1 |\n| `x -c` | KEEP | short alias | - | src/a.rs:1 |\n"
+    assert inv.check(same + rows, full) == [], inv.check(same + rows, full)
+    differ = same.replace("| `x -c` | KEEP | short alias | - |", "| `x -c` | INTERNAL | short alias | use --config |")
+    errors = inv.check(differ + rows, full)
+    assert any("'x -c'" in e and "long form" in e for e in errors), errors
+
+
+def test_positional_uses_value_name() -> None:
+    # MIK-8077.8: clap shows `value_name`, so the row does too.
+    rows = cli_rows(CLI_FIXTURE)
+    assert "x <DESCRIPTOR>" in rows and "x <target>" in rows, sorted(rows)
+    renamed = cli_rows(CLI_FIXTURE.replace('value_name = "DESCRIPTOR"', 'value_name = "FILE"'))
+    assert "x <DESCRIPTOR>" not in renamed and "x <FILE>" in renamed, sorted(renamed)
+
+
+def test_root_version_and_help_are_rows() -> None:
+    # MIK-8077.6: clap generates them from the root `Cli` attributes.
+    cli = {e.id for e in inv.extract_cli()}
+    assert {"mcp-gateway --version", "mcp-gateway --help"} <= cli, sorted(i for i in cli if i.count(" ") == 1)
+    root_rows = getattr(inv, "cli_root_rows", None)
+    assert root_rows is not None, "no root-flag extractor"
+    root = inv.Index().resolve("Cli", inv.SRC / "cli/mod.rs", "Parser")
+    assert "mcp-gateway --version" in {e.id for e in root_rows(root)}
+    root.attrs = root.attrs.replace("#[command(version, ", "#[command(")
+    assert "mcp-gateway --version" not in {e.id for e in root_rows(root)}, root.attrs
+
+
+def test_annotation_keys_are_config_rows() -> None:
+    # MIK-8077.7: `_` and `x-` keys load at any level; tightening that must fail the gate.
+    config = {e.id for e in inv.extract_config()}
+    assert {"_*", "x-*"} <= config, sorted(i for i in config if "*" in i)
+    rows = getattr(inv, "annotation_rows", None)
+    assert rows is not None, "no annotation-key extractor"
+    code = (inv.SRC / "config/strict_keys.rs").read_text(encoding="utf-8")
+    narrowed = code.replace(' || key.starts_with("x-")', "")
+    assert {e.id for e in rows(code, inv.SRC / "config/strict_keys.rs")} == {"_*", "x-*"}
+    assert {e.id for e in rows(narrowed, inv.SRC / "config/strict_keys.rs")} == {"_*"}
+
+
 def test_repository_inventory_is_complete() -> None:
     assert inv.main([]) == 0, "docs/design/surface-4.0.md misses surface items; see stderr"
 
