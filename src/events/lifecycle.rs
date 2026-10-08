@@ -99,11 +99,22 @@ impl EventsHub {
             .into_iter()
             .filter(|s| s.live(now))
         {
-            if let Some(source) = self.source_offering(&sub.name) {
-                let key = (
-                    source.kind(),
-                    source.lifecycle_key(&sub.principal, &sub.name, &sub.arguments),
-                );
+            // A held REST watch keeps its key while its type is not offered:
+            // its poller must run to see the capability return (MIK-8122).
+            let owned = self
+                .sources
+                .read()
+                .iter()
+                .find_map(|s| s.row_key(&sub).map(|key| (s.kind(), key)));
+            let key = owned.or_else(|| {
+                self.source_offering(&sub.name).map(|source| {
+                    (
+                        source.kind(),
+                        source.lifecycle_key(&sub.principal, &sub.name, &sub.arguments),
+                    )
+                })
+            });
+            if let Some(key) = key {
                 keys.push((key, sub.principal, sub.name, sub.arguments));
             }
         }
