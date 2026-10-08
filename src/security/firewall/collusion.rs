@@ -607,3 +607,6 @@ pub(crate) use seam::SeamFingerprint;
 #[cfg(test)]
 #[path = "collusion_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "collusion_holders_tests.rs"]
+mod holders_tests;
