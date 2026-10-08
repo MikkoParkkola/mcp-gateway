@@ -108,6 +108,15 @@ enum Req<'a> {
     Any(Vec<Req<'a>>),
 }
 
+/// What is known about a level before its keys are judged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Level {
+    /// Nothing: whether it matches any object is still to be checked.
+    Unchecked,
+    /// It can match an object (`Walk::node` checked it).
+    Open,
+}
+
 #[derive(Debug, Clone)]
 enum Verdict<'a> {
     Refuse,
@@ -156,6 +165,11 @@ impl<'a> Walk<'a> {
         if !self.charge(depth) {
             return Vec::new();
         }
+        // A scalar has no keys, so its result is empty: nothing to remember.
+        // Its visit is charged above, as before (`MIK-8014.PERF.3a`).
+        if !(value.is_object() || value.is_array()) {
+            return Vec::new();
+        }
         let key = (
             std::ptr::from_ref(schema) as usize,
             std::ptr::from_ref(value) as usize,
@@ -180,6 +194,8 @@ impl<'a> Walk<'a> {
             }
             _ => Vec::new(),
         };
+        #[cfg(test)]
+        MEMO_INSERTS.with(|n| n.set(n.get() + 1));
         self.memo.insert(key, faults.clone());
         faults
     }
@@ -193,18 +209,24 @@ impl<'a> Walk<'a> {
         depth: usize,
     ) -> Vec<KeyFault> {
         let mut faults = Vec::new();
+        // Whether an undecided key is let through: a property of the level,
+        // so decided at most once for it, on its first undecided key.
+        let mut open = None;
         for (name, item) in map {
             let at = if path.is_empty() {
                 name.clone()
             } else {
                 format!("{path}.{name}")
             };
-            match self.verdict(root, schema, name, depth, false) {
+            // `node` has already found this level able to match an object.
+            match self.verdict_at(root, schema, name, depth, false, Level::Open) {
                 Verdict::Accept(req) => faults.extend(self.value(item, &req, &at, depth + 1)),
                 Verdict::Undecided
-                    if self.standard
-                        || is_free_map(schema)
-                        || ref_to_free_map(root, schema, depth) => {}
+                    if *open.get_or_insert_with(|| {
+                        self.standard
+                            || is_free_map(schema, Level::Open)
+                            || ref_to_free_map(root, schema, depth, Level::Open)
+                    }) => {}
                 Verdict::Undecided | Verdict::Refuse | Verdict::MatchesNothing => {
                     faults.push(KeyFault::Undeclared(at));
                 }
@@ -255,6 +277,20 @@ impl<'a> Walk<'a> {
         hops: usize,
         in_any: bool,
     ) -> Verdict<'a> {
+        self.verdict_at(root, schema, key, hops, in_any, Level::Unchecked)
+    }
+
+    /// [`Self::verdict`], told whether `schema` is already known to match an
+    /// object, so a level judged once per key is checked once per walk node.
+    fn verdict_at(
+        &mut self,
+        root: &'a Value,
+        schema: &'a Value,
+        key: &str,
+        hops: usize,
+        in_any: bool,
+        level: Level,
+    ) -> Verdict<'a> {
         if !self.charge(hops) {
             return Verdict::Refuse;
         }
@@ -264,10 +300,10 @@ impl<'a> Walk<'a> {
             Value::Object(map) => map,
             _ => return Verdict::Undecided,
         };
-        if in_any && (is_free_map(schema) || ref_to_free_map(root, schema, hops)) {
+        if in_any && (is_free_map(schema, level) || ref_to_free_map(root, schema, hops, level)) {
             return Verdict::Accept(Req::Free);
         }
-        if matches_nothing(map) {
+        if level == Level::Unchecked && matches_nothing(map) {
             return Verdict::MatchesNothing;
         }
         let root = if map.get("$id").is_some_and(Value::is_string) {
@@ -474,12 +510,15 @@ fn combine(parts: Vec<Verdict<'_>>) -> Verdict<'_> {
 /// A level that accepts any key: `true`, or an object-capable schema whose
 /// every keyword is in [`KEY_NEUTRAL`] (an allowlist, so an unrecognised
 /// keyword closes the level rather than opening it).
-fn is_free_map(schema: &Value) -> bool {
+///
+/// `level` says whether `schema` is already known to match an object.
+fn is_free_map(schema: &Value, level: Level) -> bool {
     match schema {
         Value::Bool(open) => *open,
         Value::Object(map) => {
             // `properties: {}` declares no key (design revision 2, item 4).
-            !matches_nothing(map) && map.iter().all(|(k, v)| key_neutral(k, v))
+            (level == Level::Open || !matches_nothing(map))
+                && map.iter().all(|(k, v)| key_neutral(k, v))
         }
         _ => false,
     }
@@ -494,7 +533,7 @@ fn key_neutral(keyword: &str, value: &Value) -> bool {
 /// such `$ref`: as free as X inlined. A sibling that closes the level (say
 /// `additionalProperties: false`) is not neutral, and its Refuse is decided
 /// before this is asked. Bounded by [`MAX_DEPTH`] like any `$ref` descent.
-fn ref_to_free_map<'a>(root: &'a Value, schema: &'a Value, hops: usize) -> bool {
+fn ref_to_free_map<'a>(root: &'a Value, schema: &'a Value, hops: usize, level: Level) -> bool {
     let Some(map) = schema.as_object() else {
         return false;
     };
@@ -507,14 +546,18 @@ fn ref_to_free_map<'a>(root: &'a Value, schema: &'a Value, hops: usize) -> bool 
         root
     };
     hops < MAX_DEPTH
-        && !matches_nothing(map)
+        && (level == Level::Open || !matches_nothing(map))
         && map.iter().all(|(k, v)| k == "$ref" || key_neutral(k, v))
-        && resolve(root, pointer)
-            .is_some_and(|target| is_free_map(target) || ref_to_free_map(root, target, hops + 1))
+        && resolve(root, pointer).is_some_and(|target| {
+            is_free_map(target, Level::Unchecked)
+                || ref_to_free_map(root, target, hops + 1, Level::Unchecked)
+        })
 }
 
 /// `enum: []`, or a `type` that excludes `object`.
 fn matches_nothing(map: &Map<String, Value>) -> bool {
+    #[cfg(test)]
+    NOTHING_CHECKS.with(|n| n.set(n.get() + 1));
     if map
         .get("enum")
         .and_then(Value::as_array)
@@ -563,6 +606,14 @@ pub(crate) fn count_reason(kind: &'static str, reason: &'static str) {
         "reason" => reason
     )
     .increment(1);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Walk results stored in the memo on this thread (`MIK-8014.PERF.3a`).
+    static MEMO_INSERTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// [`matches_nothing`] evaluations on this thread (`MIK-8014.PERF.3a`).
+    static NOTHING_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
