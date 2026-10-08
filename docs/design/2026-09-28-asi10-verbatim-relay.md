@@ -52,8 +52,8 @@ that source. Per-principal controls (`firewall/mod.rs:412-499`) see A and B each
   matches a finding needs with probability (3/4)^n (1 + n/3): 79 chars 1.2e-3, 87 chars 1.4e-4,
   100 chars 4.5e-6, 127 chars 2.8e-9. The key is per process, so which k-grams are kept cannot be
   predicted from outside.
-- Results keep at most 4,096 fingerprints per delivery (both forms of a capped split copy fit;
-  rest counted as `source_truncated`);
+- Results keep at most 4,096 fingerprints per delivery (both forms of a capped split copy are
+  expected to fit, about 3,050; the rest is counted as `source_truncated`);
   egress arguments are fingerprinted in full within the request-size limit.
 
 **State.** `fp -> {tuples: [(source_id, principal_id, sensitive, last_seen)], principals: n}`,
@@ -123,7 +123,7 @@ entry; the metric is the rate to watch before `block`.
   sensitive tuples from `Common` would bring back the boilerplate false positives.
 - **Per replica only:** A and B on different replicas are never correlated.
 - **Flush:** every delivered result is recorded, so ordinary traffic fills the 250k map; the
-  effective window is `min(window_secs, 250,000 / total fingerprint rate)`: about 244 large
+  effective window is `min(window_secs, 250,000 / total fingerprint rate)`: about 61 large
   (4,096-fingerprint) results from anyone evict the oldest evidence. Evictions are counted.
 - **Depends on #1785 and HARDENED increment 3.** Until both land, the direct route has a single
   identity, so the relay rule cannot fire there.
