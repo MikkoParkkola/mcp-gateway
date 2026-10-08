@@ -1,6 +1,6 @@
 # One egress scan for every outgoing frame (response-firewall-coverage family)
 
-Status: proposed, 2026-10-08. Tickets: MIK-8139 (errors), MIK-8146 (prompts/get,
+Status: accepted after review round 3 (lead stop rule), 2026-10-08. Tickets: MIK-8139 (errors), MIK-8146 (prompts/get,
 resources/read results), MIK-8112 (A2A results), MIK-8131 (blocked interim answer
 keeps its slot), MIK-8155 (interim answer redacted on HTTP, refused on stdio).
 PR: #3527.
@@ -120,8 +120,10 @@ which takes the frame by value and returns it wrapped beside its outcome
 refusal). There is no third constructor: a replay is a backend frame and is
 scanned. The tenant read judge (`gateway/outbound`) takes the frame out of
 `Egressed` after the scan, so its verdict is about the delivered bytes; a
-batch answers with one `Egressed` per item; bridged server-to-client requests
-are requests, not responses, and keep their `Immutable` challenge check. Every one of the 17
+batch answers with one `Egressed` per item. `Egressed` types response frames
+only: the writer's request and notification paths keep their own checks
+(bridged requests: the `Immutable` challenge check before each round;
+notifications: the sink screen, E2b). Every one of the 17
 `build_http_response` callers and the stdio writer must pick one, so a new
 exit cannot compile without deciding, and a `gateway_own` wrapping backend
 text is visible in review at its call site. Both seats asked for this over a
@@ -160,8 +162,9 @@ into the async world: the scan is synchronous, as `check_response_artifact` is.
 gateway, not streamed through the sink, and carry the stored task result to
 its subscriber. That result is rescanned at send under the task's recorded
 targets with the result-part policy, exactly as `tasks/get` delivers it: an
-interim task result gets `PreserveInputRequired`, and a refusal withholds the
-frame. Exempting them would reopen round 1 finding 2.
+interim task result gets `PreserveInputRequired`, and a refusal is delivered
+in the frame, as the delivery refusal `tasks/get` would serve, never a dropped
+frame: a subscriber waiting for completion must hear that the task ended. Exempting them would reopen round 1 finding 2.
 
 Not frames for this family, with the reason:
 
@@ -212,7 +215,10 @@ One table test, `egress_matrix_tests.rs`:
   credential pattern matches) and a context-integrity-only finding, on an
   error and a catalogue result, so a part marked after only the firewall ran
   fails.
-- Replay cells: a meta-route call settles a key, a direct retry with the same
+- Task notification cells: a policy tightened after settlement refuses the
+  stored result; the subscriber receives the refusal frame, and the stored
+  row is unchanged.
+- Replay cells: cached results and cached errors; a meta-route call settles a key, a direct retry with the same
   key replays it; the secret never arrives.
 - Clean cells: the same frames without a secret come out byte-identical.
 - Completeness: a source scan lists every method arm of the HTTP and stdio
@@ -279,3 +285,18 @@ the egress call removed per route, the mark ignored.
 | 5 | gpt | How `Egressed` composes with the read judge, batches, bridge requests | Specified (E2) |
 | 6 | gpt | Mixed-frame and D2-only / context-integrity-only cases | Added to the test plan |
 | 7 | agy | Security logic in the transport layer | Adopted: `dyn NotificationScreen` supplied by the gateway (E2b) |
+
+## Review round 3 (delta: gpt-review SHIP, agy-review SHIP-WITH-FIXES)
+
+Last full round under the lead's stop rule: only a CRITICAL or HIGH finding
+naming a concrete input and a wrong outcome reopens the design.
+
+| # | Seat | Finding | Disposition |
+|---|---|---|---|
+| 1 | agy (CRITICAL) | Bridged server-to-client requests cannot yield `Egressed` | Note, no concrete wrong outcome: `Egressed` types responses only; requests keep the challenge check they pass today (E2 text clarified) |
+| 2 | agy (HIGH) | A rescanned redacted replay fails context integrity | Note, no concrete input: integrity checks text, and redacted text scans clean. The proposed fix (cache the unscanned copy) reopens round 2 finding 1 |
+| 3 | agy (HIGH) | A withheld `notifications/tasks` frame leaves a subscriber waiting forever | Adopted: concrete input (policy tightened after settlement) and wrong outcome (hang). The refusal is delivered in the frame (E2b) |
+| 4 | agy | Type `gateway_own` input as a gateway error enum | Note for implementation review |
+| 5 | agy | Reject result+error frames at the parser | Note for implementation review; scanning both parts is safe either way |
+| 6 | gpt | Cached-error replay and policy-reload rows | Added to the test plan |
+| 7 | gpt | Spell out writer composition | Done (E2) |
