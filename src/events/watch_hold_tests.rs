@@ -114,3 +114,68 @@ async fn a_key_the_definition_refuses_is_kept_and_skipped() {
     poller.once(&hub, &mut last).await;
     assert!(host.calls.lock().len() > calls, "polled again");
 }
+
+/// W4: a judge that does not own a row leaves its hold alone: a webhook
+/// route refresh, which judges webhook rows only, keeps a watch held.
+#[tokio::test]
+async fn another_sources_judgement_keeps_a_watch_hold() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    admit(&hub, "p", NAME, &json!({}));
+    let poller = run(&hub, &host, "p", NAME, &json!({}));
+    let id = only_row(&hub);
+    host.targets.lock().clear();
+    poller.once(&hub, &mut None).await;
+    assert!(hub.store.held(&id).is_some(), "held");
+    let not_mine = |_: &Subscription| None;
+    hub.store
+        .apply_holds(&not_mine, Utc::now(), chrono::Duration::hours(1))
+        .expect("io");
+    assert!(hub.store.held(&id).is_some(), "still held");
+}
+
+/// W9: the lifecycle sweep keeps a held watch's key started while the
+/// catalogue does not offer its type, so its poller sees it return.
+#[tokio::test]
+async fn the_sweep_keeps_a_held_watch_started() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    let source = Arc::new(WatchSource::new(
+        &hub,
+        Arc::clone(&host) as Arc<dyn WatchHost>,
+    ));
+    hub.register_source(Arc::clone(&source) as Arc<dyn EventSource>);
+    admit(&hub, "p", NAME, &json!({}));
+    // As the replay does before any sweep: the row's class is recorded.
+    source.pin_rows(&hub.store);
+    let poller = run(&hub, &host, "p", NAME, &json!({}));
+    let started = (SourceKind::RestWatch, poller.key.clone());
+    hub.lifecycle.lock().await.insert(started.clone());
+    host.targets.lock().clear();
+    poller.once(&hub, &mut None).await;
+    hub.reconcile_stops().await;
+    assert!(
+        hub.lifecycle.lock().await.contains(&started),
+        "the held watch's key stays started"
+    );
+}
+
+/// W11: a held row stays held across a restart until its poller judges it
+/// again; its refresh is answered as held meanwhile.
+#[tokio::test]
+async fn a_hold_survives_a_restart() {
+    let dir = tempfile::tempdir().expect("dir");
+    let id = {
+        let hub = hub(dir.path());
+        let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+        admit(&hub, "p", NAME, &json!({}));
+        let poller = run(&hub, &host, "p", NAME, &json!({}));
+        host.targets.lock().clear();
+        poller.once(&hub, &mut None).await;
+        only_row(&hub)
+    };
+    let hub = hub(dir.path());
+    assert!(hub.store.held(&id).is_some(), "held after the restart");
+}
