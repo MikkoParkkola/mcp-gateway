@@ -154,3 +154,35 @@ fn a_tally_logs_its_first_overflow_once() {
     });
     assert_eq!(crate::test_log_capture::count(&records, "WARN", LINE), 1);
 }
+
+/// `MIK-8081.CEIL.1`: a positive cost rounds up to the next whole micro-USD,
+/// a cost already whole in micro-USD keeps its value despite float noise, and
+/// zero stays zero.
+#[test]
+fn a_positive_cost_rounds_up_to_whole_micro_usd() {
+    assert_eq!(micro(1e-7), 1, "a sub-micro cost counted as free");
+    assert_eq!(micro(1.5e-6), 2, "a fractional micro was dropped");
+    // 0.07 * 1e6 is 70000.00000000001 in f64: it must not become 70001.
+    assert_eq!(micro(0.07), 70_000);
+    assert_eq!(micro(0.01), 10_000);
+    // A genuine fraction of a micro-USD on a large price still rounds up.
+    assert_eq!(micro(500.000_000_1), 500_000_001);
+    assert_eq!(micro(0.0), 0);
+    assert_eq!(micro(-0.07), 0);
+    // A negative fraction must not round up to a positive charge.
+    assert_eq!(micro(-1.5e-6), 0);
+    assert_eq!(micro(f64::NAN), 0);
+}
+
+/// `MIK-8081.CEIL.1`: the price one float step either side of a whole
+/// micro-USD rounds up above it and keeps the whole below it, even where the
+/// multiplication by a million loses the fraction.
+#[test]
+fn the_float_next_to_a_whole_micro_rounds_the_right_way() {
+    let whole: f64 = 0.000_15;
+    let above = f64::from_bits(whole.to_bits() + 1);
+    let below = f64::from_bits(whole.to_bits() - 1);
+    assert_eq!(micro(whole), 150);
+    assert_eq!(micro(above), 151, "a fraction above 150 micro-USD was lost");
+    assert_eq!(micro(below), 150);
+}

@@ -345,11 +345,15 @@ fn frame(
 }
 
 #[cfg(test)]
+#[path = "listen_stream_tests.rs"]
+mod stream_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::transport::upstream_tap::{KindSet, NoteKind, SUBSCRIPTION_ID};
 
-    fn req() -> Requested {
+    pub(super) fn req() -> Requested {
         Requested {
             kinds: KindSet {
                 resources_changed: true,
@@ -489,7 +493,7 @@ mod tests {
 
     /// A one-shot HTTP peer on loopback: it answers the first request with
     /// `reply(id)`, `id` being that request's JSON-RPC id, then closes.
-    async fn peer(reply: impl Fn(&Value) -> String + Send + 'static) -> String {
+    pub(super) async fn peer(reply: impl Fn(&Value) -> String + Send + 'static) -> String {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -527,7 +531,7 @@ mod tests {
         url
     }
 
-    fn transport(url: &str) -> std::sync::Arc<HttpTransport> {
+    pub(super) fn transport(url: &str) -> std::sync::Arc<HttpTransport> {
         HttpTransport::new(
             url,
             std::collections::HashMap::new(),

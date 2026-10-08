@@ -163,12 +163,23 @@ impl crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
     ///
     /// The one derivation both the mint and the redeem read, so the two cannot
     /// name one caller two ways.
-    pub(crate) fn principal_source(&self) -> crate::protocol::mrtr::PrincipalSource<'_> {
+    pub(crate) fn principal_source(
+        &self,
+        dispatch_binding: Option<&str>,
+    ) -> crate::protocol::mrtr::PrincipalSource<'_> {
         match self.stdio_nonce {
             Some(nonce) => crate::protocol::mrtr::PrincipalSource::Stdio {
                 nonce: nonce.bytes(),
             },
-            None => crate::protocol::mrtr::PrincipalSource::Credential(self.verified_identity),
+            None if self.verified_identity.is_some() => {
+                crate::protocol::mrtr::PrincipalSource::Credential(self.verified_identity)
+            }
+            // The guard's own inputs (`invoke.rs`, `caller_cache_principal`).
+            None => crate::gateway::meta_mcp::support::key_binding(
+                (dispatch_binding, self.grant_subject.as_ref()),
+                self.owner_principal(),
+                self.authentication,
+            ),
         }
     }
 }

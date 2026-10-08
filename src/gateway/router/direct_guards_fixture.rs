@@ -312,20 +312,34 @@ pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef
 /// signing armed, so the direct route signs every `tools/call` it serves.
 pub(crate) async fn fixture_hardened_signed(answer: Answer, require_nonce: bool) -> Fx {
     HARDENED.with(|h| h.set(true));
-    let fx = fixture_inner(answer, false, |mut meta| {
-        meta.enable_message_signing(
-            crate::security::message_signing::MessageSigner::new(
-                SIGNING_KEY.as_bytes().to_vec(),
-                None,
-                "hardened".into(),
-            ),
-            Duration::from_secs(300),
-            require_nonce,
-        );
-        meta
-    })
-    .await;
+    let fx = fixture_inner(answer, false, |meta| signing(meta, require_nonce)).await;
     HARDENED.with(|h| h.set(false));
+    fx
+}
+
+/// `meta` with message signing armed under [`SIGNING_KEY`].
+fn signing(mut meta: MetaMcp, require_nonce: bool) -> MetaMcp {
+    meta.enable_message_signing(
+        crate::security::message_signing::MessageSigner::new(
+            SIGNING_KEY.as_bytes().to_vec(),
+            None,
+            "hardened".into(),
+        ),
+        Duration::from_secs(300),
+        require_nonce,
+    );
+    meta
+}
+
+/// [`fixture_hardened_signed`] with relay detection on as in
+/// [`fixture_relayed`]: every direct `tools/call` is signed and staged.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_signed_relayed(answer: Answer) -> Fx {
+    HARDENED.with(|h| h.set(true));
+    RELAY.with(|r| r.set(true));
+    let fx = fixture_inner(answer, true, |meta| signing(meta, false)).await;
+    HARDENED.with(|h| h.set(false));
+    RELAY.with(|r| r.set(false));
     fx
 }
 
@@ -338,6 +352,12 @@ pub(crate) async fn fixture_relayed(answer: Answer) -> Fx {
     RELAY.with(|r| r.set(false));
     fx
 }
+
+/// A key whose name the response redactor reads as a GitHub token (a fake,
+/// split so no scanner reads the source as one), so text naming it (a
+/// per-key cost warning) is redacted on the way out.
+#[cfg(feature = "firewall")]
+pub(crate) const CREDENTIAL_KEY: &str = concat!("ghp_", "abcdefghijklmnopqrstuvwxyz1234567890");
 
 /// [`fixture`] under the default posture with `server.modern_protocol: false`,
 /// the rollback gate that turns the 2026-07-28 revision off.

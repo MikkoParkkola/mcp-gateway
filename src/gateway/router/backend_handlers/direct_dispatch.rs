@@ -275,8 +275,13 @@ async fn forward_sanitized(
         }
     };
     if preflight.retry.is_retry()
-        && let Err(refused) =
-            redeem_retry(scope, envelope, &mut admitted, &mut sanitized_params).await
+        && let Err(refused) = redeem_retry(
+            (scope, propagation),
+            envelope,
+            &mut admitted,
+            &mut sanitized_params,
+        )
+        .await
     {
         // Not dispatched: the spend reservation is given back on drop.
         drop(admission);
@@ -299,7 +304,14 @@ async fn forward_sanitized(
     release_if_interim(&forward, &mut admitted);
     let seen = (&admitted.call, preflight.challenge.as_deref());
     let seal = (
-        caller.verified_identity.as_ref(),
+        (
+            caller.verified_identity.as_ref(),
+            (
+                propagation.identity_key.as_deref(),
+                caller.grant_subject.as_ref(),
+            ),
+            caller.client.as_ref(),
+        ),
         envelope.params.as_ref(),
         envelope.declared,
     );
@@ -379,7 +391,14 @@ async fn forward_plain(
         release_if_interim(&forward, admitted);
         let seen = (&admitted.call, preflight.challenge.as_deref());
         let seal = (
-            caller.verified_identity.as_ref(),
+            (
+                caller.verified_identity.as_ref(),
+                (
+                    propagation.identity_key.as_deref(),
+                    caller.grant_subject.as_ref(),
+                ),
+                caller.client.as_ref(),
+            ),
             envelope.params.as_ref(),
             envelope.declared,
         );
@@ -505,17 +524,24 @@ fn deliver_tail(
 /// as on the meta route. Refused before dispatch, so the key is released: the
 /// backend has not acted.
 async fn redeem_retry(
-    scope: Scope<'_>,
+    (scope, propagation): (Scope<'_>, &Propagation),
     envelope: &Envelope,
     admitted: &mut Admitted<'_>,
     outbound: &mut Value,
 ) -> Result<(), Rejection> {
-    let identity = scope.caller.verified_identity.as_ref();
+    let who = (
+        scope.caller.verified_identity.as_ref(),
+        (
+            propagation.identity_key.as_deref(),
+            scope.caller.grant_subject.as_ref(),
+        ),
+        scope.caller.client.as_ref(),
+    );
     let sent = (scope.name, envelope.params.as_ref());
     let redeemed = scope
         .state
         .meta_mcp
-        .redeem_direct_retry(identity, sent, outbound)
+        .redeem_direct_retry(who, sent, outbound)
         .await;
     redeemed.map_err(|e| {
         if let Some(reservation) = admitted.idem_reservation.as_mut() {

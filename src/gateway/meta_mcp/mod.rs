@@ -744,6 +744,15 @@ impl MetaMcp {
         Self::build(backends, cache, stats, ranker, default_ttl, clock)
     }
 
+    /// Test-only: replace the continuation store (MIK-8078).
+    #[cfg(test)]
+    pub(crate) fn set_continuation_for_test(
+        &mut self,
+        state: crate::protocol::continuation::ContinuationState,
+    ) {
+        self.continuation = Arc::new(state);
+    }
+
     /// The continuation state this run mints and redeems with.
     ///
     /// Handed to `AppState` so the legacy bridge redeems against the same

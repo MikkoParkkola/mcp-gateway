@@ -182,13 +182,13 @@ async fn r5_a_continuation_is_redeemed_once() {
     }
 }
 
-/// R6: a caller no continuation can be bound to is refused, and is not handed
-/// the backend's state instead.
+/// R6: a seal the store refuses (here: no slot to hold the exchange) answers
+/// -32003, and the backend's state is not handed out instead.
 #[tokio::test]
-async fn r6_an_unbindable_caller_is_refused_not_handed_the_state() {
+async fn r6_a_refused_seal_is_refused_not_handed_the_state() {
     for backend in BACKENDS {
-        let fx = fixture(Answer::AskOnce, |_| {}).await;
-        let (_, body) = call(&fx, backend, None, json!({})).await;
+        let fx = full_store().await;
+        let (_, body) = call(&fx, backend, Some("alice"), json!({})).await;
         assert_eq!(code(&body), Some(-32003), "{backend}: {body}");
         assert!(
             !body.to_string().contains(BACKEND_STATE),
@@ -204,12 +204,22 @@ async fn r6_an_unbindable_caller_is_refused_not_handed_the_state() {
 #[tokio::test]
 async fn r6b_a_refused_seal_releases_the_key() {
     for backend in BACKENDS {
-        let fx = fixture(Answer::AskOnce, |_| {}).await;
+        let fx = full_store().await;
         let opening = json!({"_meta": { IDEMPOTENCY_KEY_META: format!("k-8078-6b-{backend}") }});
-        let _ = call(&fx, backend, None, opening.clone()).await;
-        let (_, again) = call(&fx, backend, None, opening).await;
+        let _ = call(&fx, backend, Some("alice"), opening.clone()).await;
+        let (_, again) = call(&fx, backend, Some("alice"), opening).await;
         assert_eq!(dispatched(&fx), 2, "{backend}: the key was held: {again}");
     }
+}
+
+/// The fixture with a continuation store that refuses every mint.
+async fn full_store() -> Fx {
+    fixture(Answer::AskOnce, |meta| {
+        meta.set_continuation_for_test(
+            crate::protocol::continuation::ContinuationState::full_for_test(),
+        );
+    })
+    .await
 }
 
 /// R7 (preservation, green on the base too: the cache already refuses a
@@ -413,4 +423,136 @@ async fn r15_a_completed_answer_does_not_carry_the_backends_state() {
             "meta {backend}: {body}"
         );
     }
+}
+
+/// A1-A3 (lead ruling A): an API-key caller with no verified identity keeps
+/// its round, bound to its key's credential principal, on the direct route.
+/// A1: it resumes; A2: another key cannot redeem it; A3: once only.
+#[tokio::test]
+async fn a1_a3_an_api_key_caller_keeps_its_round_on_the_direct_route() {
+    for backend in BACKENDS {
+        let fx = fixture(Answer::AskOnce, |_| {}).await;
+        let (_, asked) = call_as(&fx, "k-std", backend, None, json!({})).await;
+        assert_eq!(
+            asked["result"]["resultType"], "input_required",
+            "A1 {backend}: {asked}"
+        );
+        let retry = json!({"requestState": state_of(&asked), "inputResponses": answers()});
+        let (_, other) = call_as(&fx, "k-budget", backend, None, retry.clone()).await;
+        assert_eq!(code(&other), Some(-32602), "A2 {backend}: {other}");
+        let (_, done) = call_as(&fx, "k-std", backend, None, retry.clone()).await;
+        assert!(done.get("error").is_none(), "A1 {backend}: {done}");
+        let seen = fx.seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(seen["requestState"], BACKEND_STATE, "A1 {backend}: {seen}");
+        let (_, again) = call_as(&fx, "k-std", backend, None, retry).await;
+        assert_eq!(code(&again), Some(-32602), "A3 {backend}: {again}");
+        assert_eq!(dispatched(&fx), 2, "{backend}");
+    }
+}
+
+/// `tools/call gateway_invoke` of `backend`/`read` on `/mcp` as `key`, a
+/// modern request declaring form elicitation, with `extra` beside `name`.
+async fn meta_call(fx: &Fx, key: &str, backend: &str, extra: Value) -> Value {
+    let mut params = json!({
+        "name": "gateway_invoke",
+        "arguments": {"server": backend, "tool": "read", "arguments": {}},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}}
+        }
+    });
+    if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+        params.extend(extra.clone());
+    }
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "gateway_invoke"),
+    ];
+    super::direct_guards_fixture::send_with_headers(
+        fx,
+        "/mcp",
+        key,
+        "tools/call",
+        params,
+        None,
+        &headers,
+    )
+    .await
+    .1
+}
+
+/// A1-A3 on the meta route: one binding rule for both routes.
+#[tokio::test]
+async fn a1_a3_an_api_key_caller_keeps_its_round_on_the_meta_route() {
+    for backend in BACKENDS {
+        let fx = fixture(Answer::AskOnce, |_| {}).await;
+        let asked = meta_call(&fx, "k-std", backend, json!({})).await;
+        let state = asked["result"]["requestState"]
+            .as_str()
+            .unwrap_or_else(|| panic!("A1 {backend}: an interim answer with a state: {asked}"))
+            .to_owned();
+        assert_ne!(state, BACKEND_STATE, "{backend}");
+        let retry = json!({"requestState": state, "inputResponses": answers()});
+        let other = meta_call(&fx, "k-budget", backend, retry.clone()).await;
+        assert_eq!(code(&other), Some(-32602), "A2 {backend}: {other}");
+        let done = meta_call(&fx, "k-std", backend, retry.clone()).await;
+        assert!(done.get("error").is_none(), "A1 {backend}: {done}");
+        let again = meta_call(&fx, "k-std", backend, retry).await;
+        assert_eq!(code(&again), Some(-32602), "A3 {backend}: {again}");
+        assert_eq!(dispatched(&fx), 2, "{backend}");
+    }
+}
+
+/// A4: callers the idempotency guard tells apart behind one shared key (here
+/// by their grant subject) are told apart by the continuation too: one cannot
+/// redeem the other's round. Mutant: the binding built from the key alone.
+#[tokio::test]
+async fn a4_a_shared_key_still_separates_callers_the_guard_separates() {
+    let fx = fixture(Answer::AskOnce, |_| {}).await;
+    let declared = crate::protocol::meta::classify_request(
+        Some(&json!({"_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}}
+        }})),
+        Some("2026-07-28"),
+    )
+    .declared_capabilities();
+    let subject = |name: &str| crate::identity_grants::GrantSubject {
+        authority: "mtls".to_string(),
+        subject: name.to_string(),
+        label: None,
+    };
+    let (alice, bob) = (Some(subject("alice")), Some(subject("bob")));
+    let caller = |grant: &Option<crate::identity_grants::GrantSubject>,
+                  retry: &'static crate::protocol::mrtr::RetryFields| {
+        crate::gateway::meta_mcp::MetaMcpCallerContext {
+            credential_principal: Some("shared-key-principal"),
+            authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
+            grant_subject: grant.clone(),
+            input_capabilities: declared,
+            retry,
+            ..crate::gateway::meta_mcp::anonymous_caller()
+        }
+    };
+    let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
+    let fresh: &'static _ = Box::leak(Box::default());
+    let meta = &fx.state.meta_mcp;
+    let asked = meta
+        .invoke_tool_for_test(&args, None, &caller(&alice, fresh))
+        .await
+        .expect("alice is asked");
+    let retry: &'static _ = Box::leak(Box::new(crate::protocol::mrtr::RetryFields::from_params(
+        Some(
+            &json!({"requestState": state_of(&json!({"result": asked})), "inputResponses": answers()}),
+        ),
+    )));
+    let stolen = meta
+        .invoke_tool_for_test(&args, None, &caller(&bob, retry))
+        .await;
+    let refused = stolen.expect_err("bob redeemed alice's continuation");
+    assert_eq!(refused.to_rpc_code(), -32602, "{refused}");
+    meta.invoke_tool_for_test(&args, None, &caller(&alice, retry))
+        .await
+        .expect("alice resumes her own round");
 }
