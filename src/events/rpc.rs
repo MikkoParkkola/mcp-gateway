@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::EventsHub;
 use super::governance::{Attribution, Lifecycle};
 use super::records::{Credential, Subscription};
-use super::store::{CapHit, Caps, Grant};
+use super::store::{CapHit, Caps, Grant, HoldCommit};
 use super::types::{EventDescriptor, RpcError, Visibility};
 use super::upstream::{self, Ineligible, Judged, Kind};
 
@@ -330,7 +330,9 @@ fn cap_refusal(hit: CapHit) -> RpcError {
         }
         // Only reachable for a fresh opt-in, which the store never refuses
         // as unverified.
-        CapHit::Unverified => RpcError::internal(),
+        CapHit::Unverified | CapHit::HeldRowGone => RpcError::internal(),
+        // Retryable: the worker settles an expired row's records each tick.
+        CapHit::Settling => RpcError::exhausted("expiredSubscriptionSettling", None),
     }
 }
 
@@ -363,6 +365,12 @@ fn callback_url(raw: Option<&Value>) -> Result<url::Url, RpcError> {
         .and_then(|s| url::Url::parse(s).ok())
         .filter(|u| u.scheme() == "https" && u.host_str().is_some_and(|h| !h.is_empty()))
         .ok_or_else(|| RpcError::invalid("delivery.url"))
+}
+
+/// How long a rotated-out secret still signs; one that does not fit is none.
+fn rotation_grace(hub: &EventsHub) -> chrono::Duration {
+    chrono::Duration::from_std(hub.config.secret_rotation_grace)
+        .unwrap_or_else(|_| chrono::Duration::zero())
 }
 
 /// The granted length for a `ttlMs` (design §6.3, TTL); `None` is no
@@ -433,6 +441,9 @@ impl EventsHub {
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        if let Some(answer) = self.refresh_held(caller, &principal, name, &params).await? {
+            return Ok(answer);
+        }
         let descriptor = self.visible(caller, name)?;
         let delivery = &params["delivery"];
         match delivery.get("mode") {
@@ -455,14 +466,11 @@ impl EventsHub {
         };
         let now = Utc::now();
         let id = subscription_id(&principal, url.as_str(), &descriptor.name, &arguments);
-        let caps = Caps {
-            per_principal: self.config.max_subscriptions_per_principal,
-            global: self.config.max_subscriptions,
-        };
+        let caps = self.caps();
         if self.store.get(&id).as_ref().is_none_or(|s| !s.live(now)) {
             self.store
                 .would_admit(&principal, caps, now)
-                .map_err(cap_refusal)?;
+                .map_err(|hit| self.cap_refusal_for(&principal, hit))?;
         }
 
         // After the cheap refusals and before any callback traffic, since it
@@ -477,8 +485,7 @@ impl EventsHub {
         let tail = super::tail_policy(&self.config);
         let mut verified = self.store.is_verified(&principal, url.as_str(), now, tail);
         let existing = self.store.get(&id).filter(|s| s.live(now));
-        let grace = chrono::Duration::from_std(self.config.secret_rotation_grace)
-            .unwrap_or_else(|_| chrono::Duration::zero());
+        let grace = rotation_grace(self);
         let record = Subscription {
             v: 1,
             id: id.clone(),
@@ -504,11 +511,14 @@ impl EventsHub {
             failed_since: None,
             last_delivery_at: None,
             last_error: None,
+            payload_fields: self.payload_fields(&descriptor.name),
+            unoffered_since: None,
+            held_until: None,
         };
         // At most two passes: a cached opt-in can vanish (tail eviction)
         // between the read above and the commit; the store then refuses
         // and the callback is challenged before a second commit.
-        let (policy, by) = ((caps, grace, tail), (caller, &url));
+        let (policy, by) = ((caps, grace, tail), (caller, &url, Commit::Checked));
         for _pass in 0..2 {
             if !verified {
                 self.challenge(caller, &descriptor.name, &url, &id, &key)
@@ -523,15 +533,11 @@ impl EventsHub {
                     self.runtime.wake.notify_one();
                     let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())
                         && self.store.has_due(&id, Utc::now());
-                    return Ok(subscribe_answer(
-                        &id,
-                        expires_at,
-                        existing.as_ref(),
-                        throttled,
-                    ));
+                    let answer = subscribe_answer(&id, expires_at, existing.as_ref(), throttled);
+                    return Ok(self.held_answer(answer, &id));
                 }
                 Err(CapHit::Unverified) if verified => verified = false,
-                Err(hit) => return Err(cap_refusal(hit)),
+                Err(hit) => return Err(self.cap_refusal_for(&record.principal, hit)),
             }
         }
         Err(RpcError::internal())
@@ -549,9 +555,9 @@ impl EventsHub {
         fresh: bool,
         policy: (Caps, chrono::Duration, super::store::TailPolicy),
         now: DateTime<Utc>,
-        (caller, url): (&Caller, &url::Url),
+        (caller, url, commit): (&Caller, &url::Url, Commit),
     ) -> Result<Result<super::store::Admitted, CapHit>, RpcError> {
-        let attempt = record.clone();
+        let mut attempt = record.clone();
         let mut started = self.lifecycle.lock().await;
         self.upstream_admits(&record.name)?;
         let begun = self
@@ -570,13 +576,47 @@ impl EventsHub {
             // subscription is stored that its route can no longer serve
             // (MIK-8038).
             let _gate = hub.catalogue_lock();
-            if let Err(refused) = hub.still_admits(&attempt) {
-                return Ok(Err(refused));
+            // Checked against the routes now, with the payload fields they
+            // carry now and no hold stamp (MIK-8057, MIK-8076).
+            let checked = |attempt: &mut Subscription| -> Result<(), RpcError> {
+                hub.still_admits(attempt)?;
+                attempt.payload_fields = hub.payload_fields(&attempt.name);
+                attempt.unoffered_since = None;
+                attempt.held_until = None;
+                Ok(())
+            };
+            // A held row's refresh keeps the row's hold as the store holds it
+            // at the commit; every other commit is checked, and the store
+            // keeps the hold of a row held by then (MIK-8057, MIK-8076).
+            let mut hold = HoldCommit::Keep;
+            if commit == Commit::Checked {
+                if let Err(refused) = checked(&mut attempt) {
+                    // A reload held the row while this refresh waited: it
+                    // refreshes as the held row it is; anything else is
+                    // refused as checked.
+                    if store.held(&attempt.id).is_none() {
+                        return Ok(Err(refused));
+                    }
+                    let kept = store.admit_granted(attempt, grant, fresh, policy, now, hold)?;
+                    return Ok(match kept {
+                        Err(CapHit::HeldRowGone) => Err(refused),
+                        other => Ok(other),
+                    });
+                }
+                hold = HoldCommit::End;
             }
             #[cfg(test)]
             tokio::runtime::Handle::current().block_on(hub.before_admit.pause());
+            let admitted = store.admit_granted(attempt.clone(), grant, fresh, policy, now, hold)?;
+            if !matches!(admitted, Err(CapHit::HeldRowGone)) {
+                return Ok(Ok(admitted));
+            }
+            // The held row went while the refresh waited: a fresh subscribe.
+            if let Err(refused) = checked(&mut attempt) {
+                return Ok(Err(refused));
+            }
             store
-                .admit_granted(attempt, grant, fresh, policy, now)
+                .admit_granted(attempt, grant, fresh, policy, now, HoldCommit::End)
                 .map(Ok)
         })
         .await
@@ -710,6 +750,10 @@ impl EventsHub {
         }
     }
 }
+
+#[path = "rpc_held.rs"]
+mod held;
+use held::Commit;
 
 #[cfg(test)]
 #[path = "rpc_tests.rs"]

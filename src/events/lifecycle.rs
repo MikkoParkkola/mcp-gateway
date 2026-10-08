@@ -26,9 +26,20 @@ pub(super) type Started = tokio::sync::Mutex<HashSet<(SourceKind, String)>>;
 impl EventsHub {
     /// The source that offers event type `name`.
     pub(super) fn source_offering(&self, name: &str) -> Option<Arc<dyn EventSource>> {
-        // ponytail: scans every source's descriptors; sources are few and the
-        // callers are subscribe and removal, not the delivery path.
+        // ponytail: scans every source's descriptors per call, delivery
+        // included; sources are few. Index by name if that changes.
         self.sources.read().iter().find(|s| s.offers(name)).cloned()
+    }
+
+    /// May an event of type `name` be sent now (MIK-7907)? Its source
+    /// answers; a backend name no source offers any more is not admitted,
+    /// as in `source_verdict`. Call it inside `LiveConfig::admit`, without
+    /// awaiting, so a reload that has returned is always seen.
+    pub(super) fn admits_now(&self, name: &str) -> bool {
+        match self.source_offering(name) {
+            Some(source) => source.admits_now(name),
+            None => !name.starts_with(super::backend_source::NAME_PREFIX),
+        }
     }
 
     /// Start `(name, arguments)` for `principal` unless it is already
@@ -128,11 +139,16 @@ impl EventsHub {
     /// state is rebuilt from the store, and a source registered later joins
     /// the same way. A refusal leaves the key unstarted for the next replay.
     pub(crate) async fn replay_starts(&self) {
+        self.replay_starts_of(|_| true).await;
+    }
+
+    /// [`Self::replay_starts`] for the keys of the source kinds `of` admits.
+    pub(super) async fn replay_starts_of(&self, of: impl Fn(SourceKind) -> bool) {
         let mut started = self.lifecycle.lock().await;
         // One attempt per key per replay, even when several rows hold it.
         let mut tried = HashSet::new();
         for (key, principal, name, arguments) in self.live_keys() {
-            if started.contains(&key) || !tried.insert(key.clone()) {
+            if !of(key.0) || started.contains(&key) || !tried.insert(key.clone()) {
                 continue;
             }
             let Some(source) = self.source_of_kind(key.0) else {

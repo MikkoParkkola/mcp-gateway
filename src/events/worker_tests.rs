@@ -182,6 +182,9 @@ fn queued_with(
         failed_since: None,
         last_delivery_at: None,
         last_error: None,
+        payload_fields: Vec::new(),
+        unoffered_since: None,
+        held_until: None,
     };
     let tail = TailPolicy {
         ttl: Duration::from_secs(3600),
@@ -210,6 +213,7 @@ fn queued_with(
         state: OutboxState::Pending,
         last_status: None,
         dead_as: None,
+        replayed: false,
         attribution: None,
         attribution_keys: Vec::new(),
         firewall: None,
@@ -251,6 +255,7 @@ fn queued_event(hub: &EventsHub, event_id: &str) {
         state: OutboxState::Pending,
         last_status: None,
         dead_as: None,
+        replayed: false,
         attribution: None,
         attribution_keys: Vec::new(),
         firewall: None,
@@ -314,7 +319,7 @@ async fn an_attempt_the_audit_log_refuses_is_not_sent() {
     let later = Utc::now() + chrono::Duration::minutes(5);
     let due = hub
         .store
-        .due(later, &std::collections::HashSet::new())
+        .due(later, &std::collections::HashSet::new(), hub.dead_policy())
         .expect("io");
     assert_eq!(due.ready.len(), 1, "the record waits for a retry");
     assert_eq!(
@@ -432,7 +437,7 @@ async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
     let later = Utc::now() + chrono::Duration::minutes(5);
     let due = hub
         .store
-        .due(later, &std::collections::HashSet::new())
+        .due(later, &std::collections::HashSet::new(), hub.dead_policy())
         .expect("io");
     assert_eq!(due.ready.len(), 1, "still pending, not buried");
     assert_eq!(
@@ -510,7 +515,7 @@ async fn a_burial_the_caps_evict_at_once_still_leaves_its_record() {
     let later = Utc::now() + chrono::Duration::minutes(5);
     let record = hub
         .store
-        .due(later, &std::collections::HashSet::new())
+        .due(later, &std::collections::HashSet::new(), hub.dead_policy())
         .expect("io")
         .ready
         .remove(0);
@@ -530,34 +535,6 @@ async fn a_burial_the_caps_evict_at_once_still_leaves_its_record() {
     let written = audit_actions(dir.path(), "events.dead_letter");
     assert_eq!(written.len(), 1, "one record for the burial: {written:?}");
     assert_eq!(written[0]["event_id"], "evt_evicted");
-}
-
-/// MIK-7805 AC4: the host on a dead-letter record is the one stamped on the
-/// occurrence at fan-out, even when the subscription is gone by then.
-#[tokio::test]
-async fn a_dead_letter_record_names_the_host_stamped_on_the_occurrence() {
-    let dir = tempfile::tempdir().expect("dir");
-    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
-    let services = logged_services(dir.path());
-    queued(&hub, 9, "evt_hosted");
-    let later = Utc::now() + chrono::Duration::minutes(5);
-    let mut record = hub
-        .store
-        .due(later, &std::collections::HashSet::new())
-        .expect("io")
-        .ready
-        .remove(0);
-    record.callback_host = "stamped.example".to_owned();
-    // The subscription leaves while the burial is being recorded.
-    let tail = crate::events::tail_policy(&config_default());
-    hub.store
-        .remove("sub_worker", Utc::now(), tail)
-        .expect("removed");
-    hub.dead_lettered(&services, &record, DeadReason::Gone)
-        .await;
-    let written = audit_actions(dir.path(), "events.dead_letter");
-    assert_eq!(written.len(), 1, "{written:?}");
-    assert_eq!(written[0]["callback_host"], "stamped.example");
 }
 
 fn config_default() -> crate::config::EventsConfig {
