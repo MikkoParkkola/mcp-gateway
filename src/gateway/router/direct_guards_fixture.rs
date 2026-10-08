@@ -374,31 +374,6 @@ pub(crate) async fn fixture_firewalled(answer: Answer) -> Fx {
     fixture_inner(answer, true, |meta| meta).await
 }
 
-/// The MIK-8139 error answers: a backend error carrying `text`, answered or
-/// as a failed dispatch.
-fn error_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRpcResponse> {
-    match answer {
-        Answer::RpcErrorText(text) => Ok(JsonRpcResponse::error(Some(id), -32001, text)),
-        Answer::RpcErrorData(text) => Ok(JsonRpcResponse::error_with_data(
-            Some(id),
-            -32001,
-            "backend says no",
-            json!({"detail": text}),
-        )),
-        Answer::FailedWith(text) => Err(crate::Error::json_rpc(-32001, text)),
-        Answer::ForgedAccount(text) => Err(crate::Error::JsonRpc {
-            code: -32603,
-            message: text.to_owned(),
-            data: Some(json!({
-                "schema_version": "accounts.v1",
-                "account_id": "acct-1",
-                "error": {"code": "reconnect_required"},
-            })),
-        }),
-        _ => unreachable!("not an error answer"),
-    }
-}
-
 /// [`fixture_firewalled`] with a firewall rule for `read` and a client
 /// circuit breaker that opens after one counted failure, so a cell can tell a
 /// refusal the gateway excludes from client accounting from one it charges.
@@ -416,13 +391,12 @@ pub(crate) async fn fixture_firewalled_with(
     fx
 }
 
-#[cfg(feature = "firewall")]
 #[path = "direct_guards_fixture_egress.rs"]
 mod egress;
+pub(crate) use egress::fixture_inspecting_on;
+use egress::{backend_transport, error_answer};
 #[cfg(feature = "firewall")]
-pub(crate) use egress::{
-    fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on, meta_firewall,
-};
+pub(crate) use egress::{fixture_audited_on, fixture_firewalled_on, meta_firewall};
 
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 
@@ -557,21 +531,6 @@ fn fixture_auth() -> AuthConfig {
         });
     }
     auth
-}
-
-/// The transport both fixture backends answer with: a planted one when a
-/// cell set it, the scripted one otherwise.
-fn backend_transport(
-    (calls, seen): (&Arc<AtomicUsize>, &Arc<std::sync::Mutex<Vec<Value>>>),
-    answer: Answer,
-) -> Arc<dyn Transport> {
-    TRANSPORT.with(|t| t.borrow().clone()).unwrap_or_else(|| {
-        Arc::new(CountingBackend {
-            calls: Arc::clone(calls),
-            seen: Arc::clone(seen),
-            answer,
-        })
-    })
 }
 
 async fn fixture_inner(
