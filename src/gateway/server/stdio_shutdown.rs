@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::time::Instant;
-use tracing::warn;
+use tracing::{error, warn};
 
 use super::{Gateway, StdioTelemetry, stdio_tasks, task_runtime, warmstart::WarmerGuard};
 
@@ -28,7 +28,8 @@ pub(super) async fn bounded_step<F: Future>(
 ) -> Option<F::Output> {
     let finished = tokio::time::timeout_at(deadline, future).await.ok();
     if finished.is_none() {
-        warn!(
+        // ERROR: an abandoned step may be a write that never landed.
+        error!(
             step,
             "shutdown step did not finish within its deadline; abandoned"
         );
