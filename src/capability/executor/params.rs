@@ -361,6 +361,19 @@ impl CapabilityExecutor {
             context.caller_identity.as_ref(),
         ) {
             (CapabilityExposure::Personal, None) => return None,
+            // An MCP answer came from one caller's child, so it is keyed on
+            // that child's name: only that caller reads it back (MIK-7825).
+            // Single-user names every unnamed caller one child, as the run does.
+            _ if matches!(
+                super::process::spawned_process(capability),
+                Some(crate::capability::definition::ProcessConfig::Mcp(_))
+            ) =>
+            {
+                format!(
+                    "2:{}",
+                    super::mcp::principal(capability, context, false).ok()?
+                )
+            }
             (_, Some(identity)) => {
                 format!(
                     "1:{}:{}|{}:{}",
