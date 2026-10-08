@@ -512,7 +512,7 @@ impl Backend {
         // traversal finds it, or shutdown latches first and this refuses. There
         // is no third case, which is what the previous check-then-publish could
         // not say.
-        if let Err(refusal) = self.publish(entry, &transport, built_under) {
+        if let Err(refusal) = self.publish(entry, (&transport, listen), built_under) {
             warn!(
                 backend = %self.name,
                 %refusal,
@@ -530,7 +530,6 @@ impl Backend {
             let gate = self.publish_gate.lock().clone();
             hold_at(gate).await;
         }
-        *entry.listen.write() = listen;
 
         // Note: Tools are fetched lazily on first get_tools() call
         // We can't pre-cache here because get_tools() -> ensure_started() -> start()
