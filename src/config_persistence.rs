@@ -73,6 +73,9 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
 #[path = "config_persistence_splice.rs"]
 mod splice;
 
+#[path = "config_persistence_eol.rs"]
+mod eol;
+
 #[path = "config_persistence_lock.rs"]
 pub(crate) mod lock;
 

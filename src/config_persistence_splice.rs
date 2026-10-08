@@ -6,6 +6,8 @@
 
 use serde_yaml::{Mapping, Value};
 
+use super::eol::{Line, render as render_lines};
+
 use crate::config::Config;
 
 /// The text at `original` with the one backend edit that turns `before` into
@@ -61,16 +63,6 @@ pub(super) fn with_backend_edited(
         }
         (None, None) => return None,
     };
-    // The edits write `\n`; a file whose first line break is `\r\n` gets
-    // its own ending back, rather than a change to every line.
-    let edited = if original
-        .find('\n')
-        .is_some_and(|at| original[..at].ends_with('\r'))
-    {
-        edited.replace("\r\n", "\n").replace('\n', "\r\n")
-    } else {
-        edited
-    };
     let got: Value = serde_yaml::from_str(&edited).ok()?;
     // The text must also load as `config` itself: `original` is re-read at
     // write time, and a file another writer changed since `before` was
@@ -99,17 +91,10 @@ fn splice(original: &str, block: &str) -> Option<String> {
     let lines: Vec<&str> = original.lines().collect();
     let indented = |line: &str| line.starts_with([' ', '\t']);
     let Some(header) = lines.iter().position(|l| l.starts_with("backends:")) else {
-        let separator = if original.is_empty() || original.ends_with('\n') {
-            ""
-        } else {
-            "\n"
-        };
-        let entry = block
-            .lines()
-            .map(|l| format!("  {l}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Some(format!("{original}{separator}backends:\n{entry}\n"));
+        let mut out: Vec<Line> = (0..lines.len()).map(Line::Kept).collect();
+        out.push(Line::New("backends:".to_owned()));
+        out.extend(block.lines().map(|l| Line::New(format!("  {l}"))));
+        return Some(render_lines(original, &out));
     };
     // Only an empty or block-style mapping is edited; flow style such as
     // `backends: {a: ...}` is left to the full rewrite.
@@ -135,12 +120,16 @@ fn splice(original: &str, block: &str) -> Option<String> {
         .find(|l| indented(l) && !l.trim_start().starts_with('#'))
         .map_or("  ", |l| &l[..l.len() - l.trim_start().len()]);
 
-    let mut out: Vec<String> = lines[..header].iter().map(ToString::to_string).collect();
-    out.push(head);
-    out.extend(lines[header + 1..=last].iter().map(ToString::to_string));
-    out.extend(block.lines().map(|l| format!("{child_indent}{l}")));
-    out.extend(lines[last + 1..].iter().map(ToString::to_string));
-    Some(out.join("\n") + "\n")
+    let mut out: Vec<Line> = (0..header).map(Line::Kept).collect();
+    out.push(Line::Replaced(header, head));
+    out.extend((header + 1..=last).map(Line::Kept));
+    out.extend(
+        block
+            .lines()
+            .map(|l| Line::New(format!("{child_indent}{l}"))),
+    );
+    out.extend((last + 1..lines.len()).map(Line::Kept));
+    Some(render_lines(original, &out))
 }
 
 /// Remove the entry `name` from the top-level block-style `backends:`
@@ -181,15 +170,15 @@ fn remove_entry(original: &str, name: &str) -> Option<String> {
         stop -= 1;
     }
 
-    let mut out: Vec<String> = lines[..start].iter().map(ToString::to_string).collect();
-    out.extend(lines[stop..].iter().map(ToString::to_string));
+    let mut out: Vec<Line> = (0..start).map(Line::Kept).collect();
+    out.extend((stop..lines.len()).map(Line::Kept));
     let emptied = !lines[header + 1..end]
         .iter()
         .enumerate()
         .any(|(k, l)| !(start..stop).contains(&(header + 1 + k)) && content(l));
     if emptied {
         let after_key = lines[header]["backends:".len()..].trim_start();
-        out[header] = if after_key.starts_with('#') {
+        let empty = if after_key.starts_with('#') {
             format!("backends: {{}} {after_key}")
         } else if after_key.is_empty() {
             "backends: {}".to_owned()
@@ -198,8 +187,9 @@ fn remove_entry(original: &str, name: &str) -> Option<String> {
             // cannot be carried onto `{}` here; leave it to the caller.
             return None;
         };
+        out[header] = Line::Replaced(header, empty);
     }
-    Some(out.join("\n") + "\n")
+    Some(render_lines(original, &out))
 }
 
 /// The trailing comment of `line` with the blanks before it (`  # why`):
@@ -388,11 +378,20 @@ fn edit_entry(original: &str, name: &str, old: &Mapping, new: &Mapping) -> Optio
     edit_block(&lines, start + 1, stop, old, new, &mut edits)?;
     // Applied from the bottom up, so each edit's line numbers still hold.
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
-    let mut out: Vec<String> = lines.iter().map(ToString::to_string).collect();
+    let mut out: Vec<Line> = (0..lines.len()).map(Line::Kept).collect();
     for (from, to, with) in edits {
-        out.splice(from..to, with);
+        // Each written line replaces one source line in order and keeps its
+        // ending; lines beyond those are new.
+        let written = with.into_iter().enumerate().map(|(k, text)| {
+            if from + k < to {
+                Line::Replaced(from + k, text)
+            } else {
+                Line::New(text)
+            }
+        });
+        out.splice(from..to, written);
     }
-    Some(out.join("\n") + "\n")
+    Some(render_lines(original, &out))
 }
 
 /// `raw`, the file's own spelling of an entry, with the keys that differ
@@ -536,7 +535,8 @@ mod tests {
         let edited = splice("# only a comment\nserver:\n  port: 1", BLOCK).expect("appends");
         assert_eq!(
             edited,
-            "# only a comment\nserver:\n  port: 1\nbackends:\n  new:\n    command: echo\n"
+            // The file ends without a line break, and still does (MIK-8029).
+            "# only a comment\nserver:\n  port: 1\nbackends:\n  new:\n    command: echo"
         );
         // A commented-out example is not the mapping.
         let edited = splice("# backends:\n#   x: {}\n", BLOCK).expect("appends");
