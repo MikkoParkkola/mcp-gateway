@@ -479,10 +479,11 @@ impl MetaMcp {
     /// The ordinary post-dispatch processing for a FAILURE that arrived late.
     ///
     /// A peer's `error.message` and its nested `error.data` are upstream text
-    /// like any recovered result, so they face the same configured gates —
-    /// response contract, anomaly screening, context integrity — carried in the
-    /// shape those gates read. Refusal or content rewriting withholds the raw
-    /// content; observe-mode annotations retain the configured pass-through.
+    /// like any recovered result, so they face the screen every route's
+    /// backend error shares (MIK-8139): anomaly screening, context integrity
+    /// and the configured response firewall, not a result's output contract.
+    /// Refusal or content rewriting withholds the raw content; observe-mode
+    /// findings retain the configured pass-through.
     ///
     /// The outcome stays a failure and keeps the peer's `code`: there is no
     /// return path here through which an error could become a result.

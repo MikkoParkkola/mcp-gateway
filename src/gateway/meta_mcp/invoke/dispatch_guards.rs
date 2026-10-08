@@ -274,6 +274,7 @@ pub(crate) enum ErrorScreen {
     /// Nothing acted on it: deliver it as the backend sent it.
     Clean,
     /// The firewall redacted text in its message or data.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     Rewritten,
     /// A policy refuses it: deliver the route's refusal instead.
     Blocked,
@@ -343,7 +344,7 @@ impl MetaMcp {
                 };
                 message.clone_into(&mut error.message);
                 if error.data.is_some() {
-                    error.data = Some(artifact["data"].take());
+                    error.data = artifact.as_object_mut().and_then(|a| a.remove("data"));
                 }
                 return ErrorScreen::Rewritten;
             }
