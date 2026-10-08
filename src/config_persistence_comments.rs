@@ -18,7 +18,8 @@ pub(crate) fn dropped_comment_lines(before: &str, after: &str) -> Vec<String> {
         .zip(a[head..].iter().rev())
         .take_while(|(x, y)| x == y)
         .count();
-    let comment = |line: &str| line.find('#').map(|at| line[at..].trim_end().to_owned());
+    // A `#` inside a quoted value or a URL fragment is not a comment.
+    let comment = |line: &str| super::splice::inline_comment(line).map(|c| c.trim().to_owned());
     let mut kept: Vec<String> = a[head..a.len() - tail]
         .iter()
         .copied()
@@ -61,5 +62,12 @@ mod tests {
             "# top\nbackends:\n  a:\n    # note\n    command: x  # why\n  b:\n    command: y\n";
         let after = "# top\nbackends:\n  b:\n    command: y\n";
         assert_eq!(dropped_comment_lines(before, after), ["line 4", "line 5"]);
+    }
+
+    #[test]
+    fn a_hash_inside_a_value_is_not_a_comment() {
+        let before = "backends:\n  a:\n    http_url: \"http://h/#q\"\n    command: x#y\n  b:\n    command: y\n";
+        let after = "backends:\n  b:\n    command: y\n";
+        assert!(dropped_comment_lines(before, after).is_empty());
     }
 }
