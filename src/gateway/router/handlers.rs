@@ -693,6 +693,9 @@ async fn meta_mcp_dispatch(
     let session_id = opened
         .as_ref()
         .map_or_else(String::new, |id| id.expose_secret().to_owned());
+    // MIK-8161: the notification screen's verdicts name this caller and session.
+    let screen_caller = client.as_ref().map_or("anonymous", |c| c.name.as_str());
+    crate::transport::notification_sink::bind_screen(screen_caller, &session_id);
 
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
     // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).

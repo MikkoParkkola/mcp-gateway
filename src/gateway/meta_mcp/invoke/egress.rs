@@ -300,18 +300,29 @@ struct NotificationEgress {
     meta: std::sync::Arc<MetaMcp>,
     caller: String,
     session_id: String,
+    /// The caller and session the dispatch bound once it authenticated them;
+    /// the labels above until then.
+    bound: std::sync::OnceLock<(String, String)>,
 }
 
 impl crate::transport::notification_sink::NotificationScreen for NotificationEgress {
+    fn bind(&self, caller: &str, session_id: &str) {
+        let _ = self.bound.set((caller.to_owned(), session_id.to_owned()));
+    }
+
     fn admit(&self, notification: &mut crate::protocol::JsonRpcNotification) -> bool {
+        let (caller, session_id) = self.bound.get().map_or(
+            (self.caller.as_str(), self.session_id.as_str()),
+            |(c, s)| (c.as_str(), s.as_str()),
+        );
         let method = notification.method.clone();
         let targets = [ResponsePolicyTarget {
             server: "gateway".to_owned(),
             tool: method.clone(),
         }];
         let correlation = ResponseCorrelation {
-            session_id: &self.session_id,
-            caller: &self.caller,
+            session_id,
+            caller,
             external_server: "gateway",
             external_tool: &method,
             subject: None,
@@ -339,6 +350,7 @@ impl MetaMcp {
             meta: std::sync::Arc::clone(self),
             caller: caller.to_owned(),
             session_id: session_id.to_owned(),
+            bound: std::sync::OnceLock::new(),
         })
     }
 

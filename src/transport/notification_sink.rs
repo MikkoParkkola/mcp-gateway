@@ -60,6 +60,10 @@ tokio::task_local! {
 pub(crate) trait NotificationScreen: Send + Sync {
     /// Screen `notification` in place; `false` withholds it.
     fn admit(&self, notification: &mut JsonRpcNotification) -> bool;
+
+    /// Label later verdicts with the caller and session the dispatch has
+    /// since authenticated (a scope opens before it knows them).
+    fn bind(&self, _caller: &str, _session_id: &str) {}
 }
 
 /// A scope's screen. `None` only where nothing reaches a client (a test, or
@@ -152,6 +156,16 @@ pub(crate) fn bind_reader(key: impl FnOnce() -> String) {
             && judge.judges()
         {
             judge.bind(key());
+        }
+    });
+}
+
+/// Bind this request's screen to the caller and session the dispatch
+/// authenticated, once it knows them. A no-op outside a screened scope.
+pub(crate) fn bind_screen(caller: &str, session_id: &str) {
+    let _ = SINK.try_with(|sink| {
+        if let Some(screen) = &sink.screen {
+            screen.bind(caller, session_id);
         }
     });
 }
