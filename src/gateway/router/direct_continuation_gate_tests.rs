@@ -79,9 +79,53 @@ async fn r24_a_failure_before_sending_consumes_no_nonce() {
         assert_eq!(dispatched(&fx), 1, "{backend}: not attempted");
         let (status, again) = signed_call(&fx, who, &nonce, json!({})).await;
         assert_ne!(status, StatusCode::BAD_REQUEST, "{backend}: {again}");
+        assert_eq!(dispatched(&fx), 2, "{backend}: not re-attempted");
         assert!(
             !again.to_string().to_lowercase().contains("nonce"),
             "{backend}: nonce burned: {again}"
         );
+    }
+}
+
+/// R25 (control): a question that is delivered keeps its slot through the
+/// whole tail, the chain link included, so its retry resumes. Mutant: every
+/// sealed slot given back at the tail.
+#[tokio::test]
+async fn r25_a_delivered_question_keeps_its_slot() {
+    use crate::config::ChainEmit;
+    for backend in BACKENDS {
+        let fx = fixture(Answer::AskOnce, |meta| {
+            meta.set_chain_signer(
+                crate::gateway::chain_test_support::signer(),
+                ChainEmit::Always,
+            );
+        })
+        .await;
+        let (_, asked) = call(&fx, backend, Some("alice"), json!({})).await;
+        assert_eq!(held(&fx).await, 1, "{backend}: {asked}");
+        let state = asked["result"]["requestState"].clone();
+        let answers = json!({"k1": {"action": "accept", "content": {"account": "work"}}});
+        let retry = json!({"requestState": state, "inputResponses": answers});
+        let (_, done) = call(&fx, backend, Some("alice"), retry).await;
+        assert!(done.get("error").is_none(), "{backend}: {done}");
+        assert_eq!(dispatched(&fx), 2, "{backend}");
+    }
+}
+
+/// R24b (control, both arms): a call that may have reached its backend (the
+/// stream died after sending) keeps its nonce, so re-sending it under that
+/// nonce is refused as a replay. Mutant: the nonce given back on every failure.
+#[tokio::test]
+async fn r24b_a_failure_after_sending_keeps_the_nonce() {
+    use super::direct_guards_fixture::fixture_hardened_signed;
+    for backend in BACKENDS {
+        let fx = fixture_hardened_signed(Answer::Transport, true).await;
+        let who = ("k-std", backend);
+        let nonce = format!("{backend}-n1");
+        let (_, failed) = signed_call(&fx, who, &nonce, json!({})).await;
+        assert!(failed.get("error").is_some(), "{backend}: {failed}");
+        let (status, again) = signed_call(&fx, who, &nonce, json!({})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{backend}: {again}");
+        assert_eq!(dispatched(&fx), 1, "{backend}: re-dispatched");
     }
 }
