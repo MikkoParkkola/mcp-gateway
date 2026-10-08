@@ -52,6 +52,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "operator-named client cert, key and CA for one request (#1832); the mode-checked read is lib-internal, widening it was declined",
     ),
     (
+        "src/commands/doctor/hidden_keys.rs",
+        "gateway.yaml re-read only after Config::load's mode-checked read succeeded; prints key names, never values",
+    ),
+    (
         "src/commands/kubernetes.rs",
         "Kubernetes manifests input; public",
     ),

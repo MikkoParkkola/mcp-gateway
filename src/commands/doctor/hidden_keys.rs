@@ -128,17 +128,54 @@ pub(super) const HIDDEN_CONFIG_KEYS: &[&str] = &[
 ];
 
 /// Hidden keys that `raw` sets, in table order.
-pub(super) fn set_hidden_keys(_raw: &serde_yaml::Value) -> Vec<&'static str> {
-    // Red-proof stub: reads the table, matches nothing.
-    HIDDEN_CONFIG_KEYS.iter().copied().take(0).collect()
+pub(super) fn set_hidden_keys(raw: &serde_yaml::Value) -> Vec<&'static str> {
+    HIDDEN_CONFIG_KEYS
+        .iter()
+        .copied()
+        .filter(|key| is_set(raw, &key.split('.').collect::<Vec<_>>()))
+        .collect()
+}
+
+/// Whether `value` holds something at `path`. `<name>` matches any map key; a
+/// segment ending in `[]` names a list whose every item is searched.
+fn is_set(value: &serde_yaml::Value, path: &[&str]) -> bool {
+    let Some((head, rest)) = path.split_first() else {
+        return true;
+    };
+    let Some(map) = value.as_mapping() else {
+        return false;
+    };
+    if *head == "<name>" {
+        return map.values().any(|child| is_set(child, rest));
+    }
+    if let Some(list_key) = head.strip_suffix("[]") {
+        return map
+            .get(list_key)
+            .and_then(serde_yaml::Value::as_sequence)
+            .is_some_and(|items| items.iter().any(|item| is_set(item, rest)));
+    }
+    map.get(*head).is_some_and(|child| is_set(child, rest))
 }
 
 /// The `doctor` row listing the hidden keys the config file at `path` sets.
-pub(super) fn check_hidden_keys(_path: &Path) -> Option<CheckResult> {
-    // Red-proof stub: never reports a row.
-    set_hidden_keys(&serde_yaml::Value::Null)
-        .first()
-        .map(|_| CheckResult::warn("Hidden settings", ""))
+///
+/// `None` when the file cannot be read or parsed (the configuration check
+/// already reports that) or when it sets no hidden key.
+pub(super) fn check_hidden_keys(path: &Path) -> Option<CheckResult> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let raw: serde_yaml::Value = serde_yaml::from_str(&text).ok()?;
+    let set = set_hidden_keys(&raw);
+    if set.is_empty() {
+        return None;
+    }
+    Some(
+        CheckResult::warn(
+            "Hidden settings",
+            format!("{} sets {}", path.display(), set.join(", ")),
+        )
+        .with_category("config")
+        .with_hint("These keys are left out of the reference; each set value is still applied."),
+    )
 }
 
 #[cfg(test)]
