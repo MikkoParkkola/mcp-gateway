@@ -88,7 +88,7 @@ fn resolve_backend_urls(dict: &mut Dict) -> figment::Result<()> {
         let Some(url) = fields.remove("url") else {
             continue;
         };
-        if let Some(other) = TRANSPORT_KEYS.iter().find(|k| fields.contains_key(*k)) {
+        if let Some(other) = TRANSPORT_KEYS.iter().find(|k| fields.contains_key(**k)) {
             return Err(format!(
                 "backends.{name}.url and backends.{name}.{other} both choose how to reach the \
                  backend; keep `url` and delete `{other}`."
