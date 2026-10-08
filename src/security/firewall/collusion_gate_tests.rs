@@ -14,6 +14,9 @@ use crate::security::firewall::{
     Severity,
 };
 
+#[path = "collusion_gate_plan_tests.rs"]
+mod plan;
+
 fn finding(scan_type: ScanType, severity: Severity) -> Finding {
     Finding {
         scan_type,
@@ -344,82 +347,6 @@ fn empty_leaves_past_the_cap_add_no_segments() {
     let (digest, cut) = DeliveryDigest::of_leaves(&leaves, false);
     assert!(cut);
     assert_eq!(digest.segment_texts().len(), 2, "the two edge leaves only");
-}
-
-/// `MIK-7887.RECEIPT.2`: removing a middle leaf splits its run. Every original
-/// fingerprint whose k-gram is still delivered, inside one leaf or across
-/// adjacent kept short fields, is kept; none of the removed text or a seam.
-#[test]
-fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
-    use std::collections::HashSet;
-
-    use super::super::collusion::{CollusionDetector, RelayParams};
-    use super::Delivered;
-    let detector = CollusionDetector::new(RelayParams::default());
-    let fields = |tag: &str| (0..12).map(|i| format!("{tag} f{i}")).collect::<Vec<_>>();
-    let (mut kept_any, mut kept_together) = (false, false);
-    for round in 0..20 {
-        let (left, right) = (fields(&format!("l{round}")), fields(&format!("r{round}")));
-        let gone = format!("removed paragraph {round} ").repeat(8);
-        let mut leaves: Vec<&str> = left.iter().map(String::as_str).collect();
-        leaves.push(&gone);
-        leaves.extend(right.iter().map(String::as_str));
-        let (digest, _) = DeliveryDigest::of_leaves(&leaves, false);
-        let original = digest.fingerprints(&detector);
-        let mut shown: Vec<&str> = left.iter().map(String::as_str).collect();
-        shown.extend(right.iter().map(String::as_str));
-        let delivered = Delivered::of_leaves(shown).expect("bounded");
-        let kept: HashSet<u64> = digest
-            .retaining(&detector, &delivered)
-            .fingerprints(&detector)
-            .into_iter()
-            .collect();
-        // Each kept run in both forms, newline-joined and run together.
-        let forms = [
-            left.join("\n"),
-            left.concat(),
-            right.join("\n"),
-            right.concat(),
-        ];
-        let allowed: HashSet<u64> = forms
-            .iter()
-            .flat_map(|run| detector.kgram_hashes(run))
-            .collect();
-        let alone: HashSet<u64> = forms
-            .iter()
-            .flat_map(|run| detector.fingerprints(run))
-            .collect();
-        // The run-together forms' k-grams that no newline form carries.
-        let newline: HashSet<u64> = forms
-            .iter()
-            .step_by(2)
-            .flat_map(|run| detector.kgram_hashes(run))
-            .collect();
-        let together: HashSet<u64> = forms
-            .iter()
-            .skip(1)
-            .step_by(2)
-            .flat_map(|run| detector.kgram_hashes(run))
-            .filter(|k| !newline.contains(k))
-            .collect();
-        for fp in &original {
-            assert_eq!(kept.contains(fp), allowed.contains(fp), "round {round}");
-            // Context-free selection (MIK-8083): a delivered k-gram is a
-            // fingerprint of its kept run as well.
-            assert_eq!(allowed.contains(fp), alone.contains(fp), "round {round}");
-            kept_any |= kept.contains(fp);
-            kept_together |= together.contains(fp) && kept.contains(fp);
-        }
-        assert!(
-            kept.iter().all(|fp| allowed.contains(fp)),
-            "round {round}: kept text never delivered"
-        );
-    }
-    assert!(kept_any, "premise: something delivered was kept");
-    assert!(
-        kept_together,
-        "premise: a fingerprint only the run-together form carries was kept"
-    );
 }
 
 /// Non-periodic ASCII text cut into 20-character pieces, shorter than a
