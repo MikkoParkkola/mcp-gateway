@@ -193,6 +193,9 @@ pub struct ChainResumePlan {
     pub backend_id: String,
     /// The caller this envelope was sealed to.
     pub principal_fingerprint: String,
+    /// The stopped step's own request digest, bound to its backend instance
+    /// (MIK-8168): the step handle the resume mints is sealed over it.
+    pub step_request_digest: Option<String>,
 }
 
 /// Validate a presented resume against the chain, the caller, and the ledger.
@@ -275,6 +278,7 @@ pub async fn plan_chain_resume(
         expires_at: payload.expires_at,
         backend_id: payload.backend_id.clone(),
         principal_fingerprint: payload.principal_fingerprint.clone(),
+        step_request_digest: state.in_flight().step_digest(&payload.hold_key, now).await,
     })
 }
 
@@ -404,9 +408,12 @@ pub fn mint_step_resume(
         backend_id: plan.backend_id.clone(),
         backend_request_state: plan.backend_request_state.clone(),
         principal_fingerprint: plan.principal_fingerprint.clone(),
-        original_request_digest: crate::protocol::mrtr::original_request_digest(
-            server, tool, arguments,
-        ),
+        // The digest the stopped step was sealed over, which binds its backend
+        // instance (MIK-8168); recomputed from the name alone it would match
+        // no redeem, so a plan without one fails closed.
+        original_request_digest: plan.step_request_digest.clone().unwrap_or_else(|| {
+            crate::protocol::mrtr::original_request_digest(server, tool, arguments)
+        }),
         purpose: ContinuationPurpose::BackendInput,
         next_step: None,
         rounds_used: 0,
@@ -475,3 +482,7 @@ pub fn malformed_interim_error(idx: usize, tool_ref: &str) -> Error {
         ),
     )
 }
+
+#[cfg(test)]
+#[path = "chain_step_binding_tests.rs"]
+mod step_binding_tests;

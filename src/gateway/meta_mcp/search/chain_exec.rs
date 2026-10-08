@@ -92,23 +92,7 @@ impl MetaMcp {
             match plan_step(chain_label(idx), dispatch).await {
                 // A tool error in the success channel is still an error.
                 Ok(result) => chain_step_result(idx, &tool_ref, result),
-                // A refusal stays a refusal. Flattening it into -32603 told
-                // the caller their chain hit an internal error when in fact
-                // they were not allowed to run that step — and it hid the
-                // denial from anything downstream that classifies errors.
-                Err(Error::Forbidden {
-                    code,
-                    status,
-                    message,
-                }) => Err(Error::Forbidden {
-                    code,
-                    status,
-                    message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
-                }),
-                Err(e) => Err(Error::json_rpc(
-                    -32603,
-                    format!("Chain step {idx} ({tool_ref}) failed: {e}"),
-                )),
+                Err(e) => Err(step_failure(idx, &tool_ref, e)),
             }
         };
 
@@ -141,6 +125,8 @@ impl MetaMcp {
                 previous.expires_at = expiry;
             }
             let backend_state = previous.backend_request_state.clone();
+            // The resume seals the step's handle over this digest (MIK-8168).
+            self.continuation.in_flight().bind_step(&previous);
             let payload = seal_chain_stop(&previous, chain_ref, idx, backend_state);
             self.continuation
                 .keyring()
@@ -194,6 +180,37 @@ fn chain_step_result(idx: usize, tool_ref: &str, result: Value) -> Result<Value>
         -32603,
         format!("Chain step {idx} ({tool_ref}) failed: {detail}"),
     ))
+}
+
+/// A failed chain step, with its index and tool named. A refusal stays a
+/// refusal: flattening it into -32603 told the caller their chain hit an
+/// internal error when they were not allowed to run that step, and hid the
+/// denial from anything downstream that classifies errors. A refused
+/// continuation (-32602, e.g. a step whose backend was replaced while the
+/// chain was paused, MIK-8168) likewise keeps its code, so the client asks
+/// again instead of reporting a gateway fault.
+fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
+    match error {
+        Error::Forbidden {
+            code,
+            status,
+            message,
+        } => Error::Forbidden {
+            code,
+            status,
+            message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
+        },
+        Error::JsonRpc {
+            code: -32602,
+            message,
+            data,
+        } => Error::JsonRpc {
+            code: -32602,
+            message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
+            data,
+        },
+        e => Error::json_rpc(-32603, format!("Chain step {idx} ({tool_ref}) failed: {e}")),
+    }
 }
 
 #[cfg(test)]
