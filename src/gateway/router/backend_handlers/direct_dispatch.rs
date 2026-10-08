@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 use serde_json::Value;
 
 use super::super::AppState;
-use super::super::direct_guards::{AdmittedNonce, DirectRouteGuards, refusal};
+use super::super::direct_guards::{DirectRouteGuards, refusal};
 use super::super::helpers::{build_http_error_response, build_http_response};
 use super::direct_caller::{Caller, Envelope, Rejection, Route};
 use super::direct_failure::DirectFailure;
@@ -43,14 +43,6 @@ pub(super) struct Admitted<'a> {
     pub(super) auth: BackendAuthContext<'a>,
     pub(super) sanitized: Option<Value>,
     pub(super) idem_reservation: Option<crate::idempotency::IdempotencyReservation>,
-    /// The signing nonce this call registered, if it registered one.
-    pub(super) nonce: Option<AdmittedNonce>,
-}
-
-/// A refusal before dispatch: give back the nonce this call admitted
-/// (MIK-7698).
-fn give_back_nonce(state: &AppState, admitted: &mut Admitted<'_>) {
-    DirectRouteGuards::release_nonce(state, admitted.nonce.take());
 }
 
 /// SECURITY: apply tool policy, name validation, and input sanitization to
@@ -143,14 +135,9 @@ fn idempotency_outcome(
 /// Admitted once, here: after every refusal above and the idempotency guard,
 /// so a refused call consumes no nonce (MIK-7698), and before a cached result
 /// is delivered, so it is signed against the replaying request's own nonce.
-/// The refusals that can still follow (the spend, a continuation) give it back
-/// ([`give_back_nonce`]).
-fn admit_signing_nonce(
-    scope: Scope<'_>,
-    preflight: &Preflight,
-) -> Result<Option<AdmittedNonce>, Rejection> {
+fn admit_signing_nonce(scope: Scope<'_>, preflight: &Preflight) -> Result<(), Rejection> {
     if !preflight.signs {
-        return Ok(None);
+        return Ok(());
     }
     let caller = scope.caller;
     DirectRouteGuards::admit_nonce(
@@ -239,11 +226,10 @@ pub(super) async fn admit<'a>(
         auth,
         sanitized: None,
         idem_reservation: None,
-        nonce: None,
     };
     guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
     let guarded = idempotency_outcome(scope, envelope, preflight, propagation)?;
-    admitted.nonce = admit_signing_nonce(scope, preflight)?;
+    admit_signing_nonce(scope, preflight)?;
     match guarded {
         Some(crate::idempotency::GuardOutcome::CachedResult(cached)) => {
             crate::gateway::meta_mcp::invoke::audit::note_cached();
@@ -285,7 +271,6 @@ async fn forward_sanitized(
     let admission = match DirectRouteGuards::before_dispatch(&state.meta_mcp, call) {
         Ok(admission) => admission,
         Err(e) => {
-            give_back_nonce(state, &mut admitted);
             return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
         }
     };
@@ -316,7 +301,7 @@ async fn forward_sanitized(
     ))
     .await;
     let client = caller.client.as_ref();
-    let parked = park_if_interim(&forward, &mut admitted);
+    release_if_interim(&forward, &mut admitted);
     let seen = (&admitted.call, preflight.challenge.as_deref());
     let seal = (
         (
@@ -331,7 +316,6 @@ async fn forward_sanitized(
     );
     let forward =
         DirectRouteGuards::after_dispatch(state, (seen, seal), client, &admission, forward).await;
-    settle_parked(parked, &forward, &mut admitted);
     // The spend is settled; an unsettled reservation is given back here.
     drop(admission);
     match forward {
@@ -380,7 +364,6 @@ async fn forward_plain(
         match DirectRouteGuards::before_dispatch(&state.meta_mcp, &admitted.call) {
             Ok(admission) => admission,
             Err(e) => {
-                give_back_nonce(state, admitted);
                 return Err(build_http_response(
                     &refusal(Some(id.clone()), &e),
                     StatusCode::OK,
@@ -404,7 +387,7 @@ async fn forward_plain(
     ))
     .await;
     let answered = if method == "tools/call" {
-        let parked = park_if_interim(&forward, admitted);
+        release_if_interim(&forward, admitted);
         let seen = (&admitted.call, preflight.challenge.as_deref());
         let seal = (
             (
@@ -417,11 +400,7 @@ async fn forward_plain(
             ),
             envelope.params.as_ref(),
         );
-        let guarded =
-            DirectRouteGuards::after_dispatch(state, (seen, seal), client, &admission, forward)
-                .await;
-        settle_parked(parked, &guarded, admitted);
-        guarded
+        DirectRouteGuards::after_dispatch(state, (seen, seal), client, &admission, forward).await
     } else {
         forward.inspect(|_| super::record_client_success(state, client))
     };
@@ -566,45 +545,22 @@ async fn redeem_retry(
         if let Some(reservation) = admitted.idem_reservation.as_mut() {
             reservation.release();
         }
-        give_back_nonce(scope.state, admitted);
         build_http_response(&refusal(Some(scope.id.clone()), &e), StatusCode::OK)
     })
 }
 
 /// MIK-8078: a backend that stopped to ask did not act, so its key is
-/// released rather than settled (the meta route's rule). Taken out here,
-/// before the guards, because a seal they refuse returns before settlement, and
-/// an armed reservation dropped unsettled records an uncertain outcome;
-/// [`settle_parked`] decides once they ran.
-fn park_if_interim(
-    forward: &crate::Result<JsonRpcResponse>,
-    admitted: &mut Admitted<'_>,
-) -> Option<crate::idempotency::IdempotencyReservation> {
+/// released rather than settled (the meta route's rule). Released here, before
+/// the guards, because a seal they refuse returns before settlement, and an
+/// armed reservation dropped unsettled records an uncertain outcome.
+fn release_if_interim(forward: &crate::Result<JsonRpcResponse>, admitted: &mut Admitted<'_>) {
     let asked = forward
         .as_ref()
         .ok()
         .and_then(|response| response.result.as_ref())
         .is_some_and(crate::protocol::mrtr::InputRequired::claims_input_required);
-    if asked {
-        admitted.idem_reservation.take()
-    } else {
-        None
-    }
-}
-
-/// The key [`park_if_interim`] took out: released once the guards read the
-/// answer, put back to be settled when they refused it unread. A failed chain
-/// receipt proves nothing about what the backend did, so a retry must not run
-/// it again.
-fn settle_parked(
-    parked: Option<crate::idempotency::IdempotencyReservation>,
-    guarded: &crate::Result<JsonRpcResponse>,
-    admitted: &mut Admitted<'_>,
-) {
-    match (parked, guarded) {
-        (Some(reservation), Err(_)) => admitted.idem_reservation = Some(reservation),
-        (Some(mut reservation), Ok(_)) => reservation.release(),
-        (None, _) => {}
+    if asked && let Some(mut reservation) = admitted.idem_reservation.take() {
+        reservation.release();
     }
 }
 

@@ -24,13 +24,7 @@ use crate::{Error, Result};
 /// close the mint budget is to being spent.
 ///
 /// The exchange is opened on this replica before the envelope is sealed, so the
-/// handle that goes out names a slot this process is holding (MRTR.8). A mint
-/// the keyring refuses gives that slot back at once: no envelope names it, so
-/// held until it expired it would only take capacity from other exchanges.
-///
-/// `Some((envelope, hold_key))`: the hold key lets a caller give the slot
-/// back ([`release_unsent`]) when a later gate keeps the envelope from the
-/// client.
+/// handle that goes out names a slot this process is holding (MRTR.8).
 pub(super) async fn mint_continuation(
     continuation: &crate::protocol::continuation::ContinuationState,
     source: crate::protocol::mrtr::PrincipalSource<'_>,
@@ -38,7 +32,7 @@ pub(super) async fn mint_continuation(
     tool: &str,
     arguments: &Value,
     backend_request_state: Option<String>,
-) -> Option<(String, String)> {
+) -> Option<String> {
     let Some(payload) = continuation
         .begin_exchange(
             server.to_string(),
@@ -56,28 +50,13 @@ pub(super) async fn mint_continuation(
     match continuation.keyring().mint(&payload) {
         Ok(envelope) => {
             record_continuation_mint("ok");
-            Some((envelope, payload.hold_key))
+            Some(envelope)
         }
         Err(error) => {
             warn!(server, tool, %error, "Continuation mint refused");
             record_continuation_mint(continuation_error_reason(&error));
-            release_unsent(continuation, Some(payload.hold_key.as_str())).await;
             None
         }
-    }
-}
-
-/// Give back the slot of a sealed question that will not reach its client
-/// (MIK-8078): the mint was refused, or a gate after the seal refused the
-/// answer. Its envelope never leaves, so nothing can redeem the slot, and held
-/// until it expired it would only take capacity from other exchanges.
-pub(crate) async fn release_unsent(
-    continuation: &crate::protocol::continuation::ContinuationState,
-    hold_key: Option<&str>,
-) {
-    if let Some(hold_key) = hold_key {
-        let now = crate::protocol::continuation::now_unix_secs();
-        continuation.in_flight().complete(hold_key, now).await;
     }
 }
 
@@ -411,23 +390,15 @@ pub(super) async fn redeem_retry(
 /// non-string state, neither question nor state). No continuation is minted
 /// for it, so a `requestState` the backend put on it must not travel with it.
 ///
-/// On a result claiming `input_required`, blanked to `null`, not removed: a
-/// present state that is not a string keeps the round unusable everywhere it
-/// is read again. Removed, a malformed state would leave a valid state-less
-/// round, which the task path parks instead of settling (#2416). On any other
-/// result it is removed: `requestState` is an optional string, and a present
-/// one marks an answer as interim to every reader downstream.
+/// Blanked to `null`, not removed: a present state that is not a string keeps
+/// the round unusable everywhere it is read again. Removed, a malformed state
+/// would leave a valid state-less round, which the task path parks instead of
+/// settling (#2416).
 pub(super) fn withhold_unsealed_state(result: &mut Value) {
-    use crate::protocol::mrtr::InputRequired;
-    if InputRequired::from_result(result).is_some() {
-        return;
-    }
-    if InputRequired::claims_input_required(result) {
-        if let Some(state) = result.get_mut("requestState") {
-            *state = Value::Null;
-        }
-    } else if let Some(object) = result.as_object_mut() {
-        object.remove("requestState");
+    if crate::protocol::mrtr::InputRequired::from_result(result).is_none()
+        && let Some(state) = result.get_mut("requestState")
+    {
+        *state = Value::Null;
     }
 }
 
@@ -445,12 +416,11 @@ pub(crate) type DirectCaller<'a> = (
 
 /// What a direct-route continuation binds its caller to: the meta route's
 /// rule (`principal_source`), from the same idempotency-guard inputs the
-/// direct route keys the caller's calls on (`direct_route_idempotency`), in
-/// the guard's order: a propagated binding first, then the verified identity.
+/// direct route keys the caller's calls on (`direct_route_idempotency`).
 fn direct_source(
     (identity, guard, client): DirectCaller<'_>,
 ) -> crate::protocol::mrtr::PrincipalSource<'_> {
-    if identity.is_some() && guard.0.is_none() {
+    if identity.is_some() {
         return crate::protocol::mrtr::PrincipalSource::Credential(identity);
     }
     crate::gateway::meta_mcp::support::key_binding(
@@ -529,9 +499,6 @@ impl crate::gateway::meta_mcp::MetaMcp {
     /// call, as the meta route does. An answer that is not interim is left as
     /// it is.
     ///
-    /// Returns the sealed exchange's hold key, for
-    /// [`Self::release_direct_hold`] when a later gate refuses the answer.
-    ///
     /// # Errors
     ///
     /// `-32003` when no continuation can be bound to this caller, or the mint
@@ -541,14 +508,14 @@ impl crate::gateway::meta_mcp::MetaMcp {
         who: DirectCaller<'_>,
         (server, sent): (&str, Option<&Value>),
         result: &mut Value,
-    ) -> Result<Option<String>> {
+    ) -> Result<()> {
         let Some(interim) = crate::protocol::mrtr::InputRequired::from_result(result) else {
             withhold_unsealed_state(result);
-            return Ok(None);
+            return Ok(());
         };
         let (tool, arguments) = direct_call_parts(sent);
         let source = direct_source(who);
-        let Some((envelope, hold_key)) = mint_continuation(
+        let Some(envelope) = mint_continuation(
             &self.continuation,
             source,
             server,
@@ -570,12 +537,6 @@ impl crate::gateway::meta_mcp::MetaMcp {
             super::gateway_writes::REQUEST_STATE,
             result,
         );
-        Ok(Some(hold_key))
-    }
-
-    /// Give back the slot of a question sealed on the direct route that a
-    /// later gate refused ([`release_unsent`]).
-    pub(crate) async fn release_direct_hold(&self, hold_key: Option<&str>) {
-        release_unsent(&self.continuation, hold_key).await;
+        Ok(())
     }
 }

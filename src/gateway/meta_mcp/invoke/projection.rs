@@ -171,8 +171,7 @@ impl crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
             Some(nonce) => crate::protocol::mrtr::PrincipalSource::Stdio {
                 nonce: nonce.bytes(),
             },
-            // The guard's order: a propagated binding ahead of the identity.
-            None if self.verified_identity.is_some() && dispatch_binding.is_none() => {
+            None if self.verified_identity.is_some() => {
                 crate::protocol::mrtr::PrincipalSource::Credential(self.verified_identity)
             }
             // The guard's own inputs (`invoke.rs`, `caller_cache_principal`).
