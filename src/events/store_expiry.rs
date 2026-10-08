@@ -128,16 +128,20 @@ impl Store {
                 record.callback_host = callback_host_of(&sub.url);
             }
             let bury = record.needs_burial_at_expiry();
-            let placed = bury.then(|| self.entomb(state, record.clone(), DeadReason::Expired, now));
-            // Receipted once, as soon as its dead letter is in place, durable
-            // or not, as every burial is: a restart before the copy is gone
-            // then loses no receipt, and a retry adds none.
-            let in_place = bury
-                && state
+            let in_place = |state: &State| {
+                state
                     .dead
                     .get(&id)
-                    .is_some_and(|(dead, _)| dead.record.created_at == record.created_at);
-            if in_place && state.expiry_receipted.insert(id.clone()) {
+                    .is_some_and(|(dead, _)| dead.record.created_at == record.created_at)
+            };
+            // Receipted once, by the pass that puts its dead letter in place,
+            // durable or not, as every burial is: the retry that finishes it
+            // finds the letter already there and adds no receipt, and a
+            // restart before then drops the copy at load (the letter is in
+            // place) and loses none.
+            let placed_before = bury && in_place(state);
+            let placed = bury.then(|| self.entomb(state, record.clone(), DeadReason::Expired, now));
+            if bury && !placed_before && in_place(state) {
                 buried.push(record.clone());
             }
             if let Some(Err(error)) = placed {
@@ -151,7 +155,6 @@ impl Store {
                 break;
             }
             state.outbox.remove(&id);
-            state.expiry_receipted.remove(&id);
             settled_any = true;
         }
         let settled: Vec<String> = state
