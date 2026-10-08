@@ -636,8 +636,8 @@ impl MetaMcp {
                 );
                 return Err(unbindable_continuation(server, tool));
             };
-            result["requestState"] = json!(envelope);
-            sealed = Some(hold_key);
+            result["requestState"] = json!(&envelope);
+            sealed = Some((envelope, hold_key));
             // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
             // must not take the receipt's capped budget from the backend's
             // prompt. Noted at the value layer: `tool_value` still reads
@@ -661,9 +661,8 @@ impl MetaMcp {
             caller_key: None,
         };
         let gated = self.gate_payload(&call, result);
-        if gated.is_err() {
-            continuation::release_unsent(&self.continuation, sealed.as_deref()).await;
-        }
+        let kept = gated.as_ref().ok().map(|(gated, _)| gated);
+        continuation::release_unless_carried(&self.continuation, sealed, kept).await;
         let (gated, effect) = gated?;
         result = gated;
         self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);

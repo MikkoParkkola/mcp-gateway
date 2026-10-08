@@ -96,11 +96,13 @@ impl DirectRouteGuards {
     /// the caller's failure arm.
     ///
     /// `seal` is the caller's verified identity and the params as sent: what
-    /// an interim answer's continuation is bound to (MIK-8078).
+    /// an interim answer's continuation is bound to (MIK-8078). `sealed`
+    /// receives the sealed envelope and its hold key; the delivery tail gives
+    /// the slot back unless the answer that leaves still carries it.
     pub(crate) async fn after_dispatch(
         state: &AppState,
         ((call, challenge), (who, sent)): ((&BackendCall<'_>, Option<&str>), Seal<'_>),
-        client: Option<&AuthenticatedClient>,
+        (client, sealed): (Option<&AuthenticatedClient>, &mut Option<(String, String)>),
         admission: &Admission,
         forward: Result<JsonRpcResponse>,
     ) -> Result<JsonRpcResponse> {
@@ -119,13 +121,12 @@ impl DirectRouteGuards {
         // receipt is checked and before any gate reads or rewrites the answer,
         // the meta route's order, so no gate can copy the raw state into what
         // the client receives.
-        let mut sealed = None;
         if let Some(result) = response.result.as_mut() {
             match meta
                 .seal_direct_interim(who, (call.server, sent), result)
                 .await
             {
-                Ok(hold_key) => sealed = hold_key,
+                Ok(minted) => *sealed = minted,
                 Err(e) => return Ok(refusal(response.id.clone(), &e)),
             }
         }
@@ -163,11 +164,6 @@ impl DirectRouteGuards {
             // the receipt leaves them out and a replay restores the note.
             use crate::gateway::gateway_writes::{Layer, note};
             note(Layer::Value, &["_cost_warnings"], result);
-        }
-        // A sealed question a gate refused never reaches the client, so its
-        // slot is given back rather than held until it expires.
-        if response.error.is_some() {
-            meta.release_direct_hold(sealed.as_deref()).await;
         }
         // Success only on an answered result, as on meta (`handlers.rs`): a
         // gate refusal must not reset a breaker the caller had tripped.

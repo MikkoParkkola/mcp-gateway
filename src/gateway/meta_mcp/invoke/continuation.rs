@@ -29,8 +29,8 @@ use crate::{Error, Result};
 /// held until it expired it would only take capacity from other exchanges.
 ///
 /// `Some((envelope, hold_key))`: the hold key lets a caller give the slot
-/// back ([`release_unsent`]) when a later gate keeps the envelope from the
-/// client.
+/// back ([`release_unless_carried`]) when a later step keeps the envelope from
+/// the client.
 pub(super) async fn mint_continuation(
     continuation: &crate::protocol::continuation::ContinuationState,
     source: crate::protocol::mrtr::PrincipalSource<'_>,
@@ -68,16 +68,36 @@ pub(super) async fn mint_continuation(
 }
 
 /// Give back the slot of a sealed question that will not reach its client
-/// (MIK-8078): the mint was refused, or a gate after the seal refused the
-/// answer. Its envelope never leaves, so nothing can redeem the slot, and held
-/// until it expired it would only take capacity from other exchanges.
-pub(crate) async fn release_unsent(
+/// (MIK-8078). Its envelope never leaves, so nothing can redeem the slot, and
+/// held until it expired it would only take capacity from other exchanges.
+async fn release_unsent(
     continuation: &crate::protocol::continuation::ContinuationState,
     hold_key: Option<&str>,
 ) {
     if let Some(hold_key) = hold_key {
         let now = crate::protocol::continuation::now_unix_secs();
         continuation.in_flight().complete(hold_key, now).await;
+    }
+}
+
+/// Keep a sealed question's slot only if `delivered`, the answer that leaves,
+/// still carries its envelope (MIK-8078). A step after the seal that refused
+/// the answer, or replaced it (a tool error in its place), took the question
+/// from the client, so its slot is given back.
+pub(crate) async fn release_unless_carried(
+    continuation: &crate::protocol::continuation::ContinuationState,
+    sealed: Option<(String, String)>,
+    delivered: Option<&Value>,
+) {
+    let Some((envelope, hold_key)) = sealed else {
+        return;
+    };
+    let carried = delivered
+        .and_then(|result| result.get("requestState"))
+        .and_then(Value::as_str)
+        == Some(envelope.as_str());
+    if !carried {
+        release_unsent(continuation, Some(hold_key.as_str())).await;
     }
 }
 
@@ -529,8 +549,8 @@ impl crate::gateway::meta_mcp::MetaMcp {
     /// call, as the meta route does. An answer that is not interim is left as
     /// it is.
     ///
-    /// Returns the sealed exchange's hold key, for
-    /// [`Self::release_direct_hold`] when a later gate refuses the answer.
+    /// Returns the sealed envelope and its hold key, for
+    /// [`Self::release_direct_hold`] once the answer that leaves is known.
     ///
     /// # Errors
     ///
@@ -541,7 +561,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
         who: DirectCaller<'_>,
         (server, sent): (&str, Option<&Value>),
         result: &mut Value,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<(String, String)>> {
         let Some(interim) = crate::protocol::mrtr::InputRequired::from_result(result) else {
             withhold_unsealed_state(result);
             return Ok(None);
@@ -564,18 +584,23 @@ impl crate::gateway::meta_mcp::MetaMcp {
             );
             return Err(unbindable_continuation(server, tool));
         };
-        result["requestState"] = json!(envelope);
+        result["requestState"] = json!(&envelope);
         super::gateway_writes::note(
             super::gateway_writes::Layer::Value,
             super::gateway_writes::REQUEST_STATE,
             result,
         );
-        Ok(Some(hold_key))
+        Ok(Some((envelope, hold_key)))
     }
 
-    /// Give back the slot of a question sealed on the direct route that a
-    /// later gate refused ([`release_unsent`]).
-    pub(crate) async fn release_direct_hold(&self, hold_key: Option<&str>) {
-        release_unsent(&self.continuation, hold_key).await;
+    /// Give back the slot of a question sealed on the direct route unless
+    /// `delivered`, the answer that leaves, still carries it
+    /// ([`release_unless_carried`]).
+    pub(crate) async fn release_direct_hold(
+        &self,
+        sealed: Option<(String, String)>,
+        delivered: Option<&Value>,
+    ) {
+        release_unless_carried(&self.continuation, sealed, delivered).await;
     }
 }
