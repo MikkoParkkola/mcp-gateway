@@ -167,3 +167,37 @@ async fn a_replayed_direct_provenance_stamp_stays_out_of_the_receipt() {
     assert_sent(&fx, &fx.send(Some("b"), &text).await, 1);
     assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 1);
 }
+
+/// A direct `read` as `key` on the signed, relayed fixture; with `cmd`, the
+/// text a relay check reads.
+async fn signed_read(
+    fx: &crate::gateway::router::direct_guards_fixture::Fx,
+    key: &str,
+    cmd: Option<&str>,
+) -> (axum::http::StatusCode, Value) {
+    let args = cmd.map_or_else(|| json!({}), |cmd| json!({ "cmd": cmd }));
+    crate::gateway::router::direct_guards_fixture::post_direct(
+        fx, "alpha", key, "read", args, None, None,
+    )
+    .await
+}
+
+/// `MIK-8025.NOTE.1`: the hardened direct route signs every answer; the
+/// signature is the gateway's, so A's receipt leaves it out (B may send it)
+/// and keeps the backend's text (B is refused).
+#[tokio::test]
+async fn a_direct_signature_stays_out_of_the_receipt() {
+    use crate::gateway::router::direct_guards_fixture::{Answer, fixture_signed_relayed};
+    let fx = fixture_signed_relayed(Answer::Text(PROSE)).await;
+    let (status, first) = signed_read(&fx, "k-std", None).await;
+    assert_eq!(status, 200, "{first}");
+    let signature = &first["result"]["_signature"];
+    assert!(signature.is_object(), "base: no gateway signature: {first}");
+    let text = leaf_run(signature);
+    let (status, sent) = signed_read(&fx, "k-budget", Some(&text)).await;
+    assert_eq!(status, 200, "the signature was receipted: {sent}");
+    assert!(sent.get("error").is_none(), "{sent}");
+    let (status, relay) = signed_read(&fx, "k-budget", Some(PROSE)).await;
+    assert_eq!(status, 403, "the backend's text was not receipted: {relay}");
+    assert_eq!(relay["error"]["code"], -32002, "{relay}");
+}
