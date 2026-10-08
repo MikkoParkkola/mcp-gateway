@@ -456,8 +456,8 @@ impl DeliveryDigest {
 
     /// This kept digest with `retained`, then the `original` fingerprints
     /// whose k-gram is `found` in a delivered leaf, spans adjacent kept
-    /// leaves, or is `in_step` (a removed leaf splits its run, and
-    /// re-winnowing the pieces can drop minima of text still delivered);
+    /// leaves, or is `in_step` (a removed leaf splits its run, and the
+    /// pieces' own fingerprints miss a k-gram that ran across the cut);
     /// each fingerprint once, so a
     /// later cap on their count never drops a distinct one for a repeat.
     fn with_original(
@@ -528,7 +528,7 @@ fn run_forms(run: &[&Segment]) -> Vec<String> {
 
 /// The string leaves of a plan's final answer, and every k-gram hash in them,
 /// taken leaf by leaf when first needed. With the kept runs' own k-grams they
-/// decide which fingerprints a receipt keeps, whichever window selected them.
+/// decide which fingerprints a receipt keeps.
 pub(crate) struct Delivered<'v> {
     values: HashSet<&'v str>,
     keys: HashSet<&'v str>,

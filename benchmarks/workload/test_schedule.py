@@ -45,8 +45,11 @@ def graded_run(run: Path, orders: list[list[str]], **pin_overrides) -> int:
     """A clean 18-rep run (equal latencies) marked graded, with `orders` recorded."""
     tev.build(run, {c: (10.0, 20.0) for c in "ABCDE"}, reps=18)
     pins = json.loads((run / "pins.json").read_text())
-    pins.update({"graded": True, "cell_order_seed": str(schedule.GRADED_SEED)})
+    pins.update({"graded": True, "cell_order_seed": str(schedule.GRADED_SEED),
+                 "host_id": schedule.BENCH_HOST_ID,
+                 "build_host_ids": {c: schedule.BENCH_HOST_ID for c in "ABC"}})
     pins.update(pin_overrides)
+    pins = {k: v for k, v in pins.items() if v is not None}  # None drops a pin
     (run / "pins.json").write_text(json.dumps(pins))
     (run / "cell_order.jsonl").write_text(
         "".join(json.dumps({"rep": n, "order": o}) + "\n" for n, o in enumerate(orders, 1))
@@ -139,6 +142,69 @@ def main() -> int:
         check("a diagnostic verdict says it is diagnostic",
               json.loads((run / "verdict.json").read_text()).get("mode") == "diagnostic"
               and "DIAGNOSTIC" in plain.stderr, plain.stderr[-200:])
+    # Contract §9: a graded run is built and measured on bench-host. The
+    # 2026-10-08 graded run ran on a GitHub-hosted runner and was accepted.
+    with tempfile.TemporaryDirectory() as tmp:
+        vector = Path(tmp) / "machine-id"
+        vector.write_text("0123456789abcdef0123456789abcdef\n")
+        check("the host id is the app-specific hash of the machine-id",
+              schedule.host_id(vector)
+              == "2e326ec7223cf104c8cdd21238903c1c5bcf1b4e68171e469cbede0eb67876a8")
+        check("a host with no machine-id has no host id",
+              schedule.host_id(vector.with_name("absent")) is None)
+    for name, overrides in [
+        ("measured on another host", {"host_id": "0" * 64}),
+        ("with no recorded host", {"host_id": None}),
+        ("with an arm built on another host",
+         {"build_host_ids": {"A": schedule.BENCH_HOST_ID, "B": schedule.BENCH_HOST_ID, "C": "0" * 64}}),
+        ("with an arm whose build host is unrecorded",
+         {"build_host_ids": {"A": schedule.BENCH_HOST_ID, "B": schedule.BENCH_HOST_ID}}),
+        ("with no recorded build hosts", {"build_host_ids": None}),
+    ]:
+        with tempfile.TemporaryDirectory() as tmp:
+            check(f"a graded run {name} is VOID", graded_run(Path(tmp), planned, **overrides) == 3)
+    with tempfile.TemporaryDirectory() as tmp:
+        tev.build(Path(tmp), {c: (10.0, 20.0) for c in "ABCDE"}, reps=18)
+        check("a diagnostic run with no host pins still grades", tev.run_eval(Path(tmp)) == 0)
+
+    def graded_runner(tmp: Path, *args: str) -> tuple[subprocess.CompletedProcess, list[str]]:
+        """run_workload.sh, graded, with git/cargo/docker as failing stubs that
+        leave a mark: no row can check out or build an arm, even while red."""
+        stubs = tmp / "stubs"
+        stubs.mkdir()
+        for tool in ("git", "cargo", "docker"):
+            (stubs / tool).write_text(f"#!/bin/sh\ntouch '{stubs}/ran-{tool}'\nexit 97\n")
+            (stubs / tool).chmod(0o755)
+        env = {**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}", "ARMS_DIR": str(tmp / "arms"),
+               "K6_IMAGE_DIGEST": "sha256:" + "0" * 64, "WORKLOAD_GRADED": "1",
+               "WORKLOAD_REPS": "18", "WORKLOAD_SEED": "20261007"}
+        done = subprocess.run(["bash", str(HERE / "run_workload.sh"), *args], env=env,
+                              capture_output=True, text=True, timeout=60)
+        return done, sorted(m.name for m in stubs.glob("ran-*"))
+
+    if schedule.host_id() != schedule.BENCH_HOST_ID:
+        with tempfile.TemporaryDirectory() as tmp:
+            done, ran = graded_runner(Path(tmp), "build")
+            check("the runner refuses a graded build off bench-host, before any build",
+                  done.returncode == 3 and "bench-host" in done.stderr and ran == []
+                  and not (Path(tmp) / "arms").exists(),
+                  f"exit {done.returncode} ran {ran}: {done.stderr[-200:]}")
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "fresh"
+            run.mkdir()
+            done, ran = graded_runner(Path(tmp), "measure", str(run))
+            check("the runner refuses a graded measure off bench-host",
+                  done.returncode == 3 and "bench-host" in done.stderr and ran == []
+                  and not (run / "pins.json").exists(),
+                  f"exit {done.returncode} ran {ran}: {done.stderr[-200:]}")
+    else:
+        # On bench-host the refusal must not fire: the build proceeds to its
+        # first tool, which is a stub.
+        with tempfile.TemporaryDirectory() as tmp:
+            done, ran = graded_runner(Path(tmp), "build")
+            check("on bench-host a graded build passes the host check",
+                  "bench-host" not in done.stderr and "ran-git" in ran,
+                  f"exit {done.returncode} ran {ran}: {done.stderr[-200:]}")
     for leftover in ("A1.summary.json", "pins.json", "cell_order.jsonl", "verdict.json"):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp) / "used"

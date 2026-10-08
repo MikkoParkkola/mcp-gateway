@@ -11,8 +11,8 @@ use pretty_assertions::assert_eq;
 use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
 
 /// Step one's field and step two's, each under a k-gram (48 chars), so every
-/// fingerprint across them spans the two steps; together they pass the
-/// 63-char run that guarantees a shared fingerprint.
+/// fingerprint across them spans the two steps. The suite's detector keeps
+/// every k-gram, so a relay of them shares one under any hash key.
 const FIELD_A: &str = "north slope rows seven to twelve, late pears";
 const FIELD_B: &str = "south terrace rows one to six, early quinces";
 
@@ -49,13 +49,16 @@ async fn seam_state_with(
     more: &[&str],
     collusion: CollusionConfig,
 ) -> (Arc<AppState>, tempfile::TempDir) {
-    let relay = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            collusion,
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+    let relay = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                collusion,
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keeping_every_kgram(),
+    );
     let definition: crate::playbook::PlaybookDefinition =
         serde_yaml::from_str(playbook).expect("playbook fixture must parse");
     let mut auth = two_principal_auth();
@@ -468,13 +471,16 @@ async fn a_redacted_field_is_no_steps_text() {
         },
         None,
     ));
-    let relay = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            collusion: blocking(&[BACKEND]),
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+    let relay = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                collusion: blocking(&[BACKEND]),
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keeping_every_kgram(),
+    );
     let definition: crate::playbook::PlaybookDefinition = serde_yaml::from_str(&playbook(
         "    a:\n      path: $s1.content[0].text\n    b:\n      path: $s2.content[0].text\n",
     ))

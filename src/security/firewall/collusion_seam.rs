@@ -20,7 +20,7 @@ use icu_normalizer::properties::{
     CanonicalDecompositionBorrowed, Decomposed,
 };
 
-use super::{CollusionDetector, K, key, winnow};
+use super::{CollusionDetector, K, key, sample};
 
 /// The longest piece of text normalized together, in bytes: past it the
 /// stream is cut even inside a composing run.
@@ -36,7 +36,7 @@ impl CollusionDetector {
     /// adds its steps, so each occurrence's limits apply to it together.
     ///
     /// Cost: each form is normalized once, part by part, and the window is
-    /// slid twice, collecting steps only for winnowed seam fingerprints:
+    /// slid twice, collecting steps only for sampled seam fingerprints:
     /// O(L) time and memory for L chars of answer.
     pub(crate) fn seam_fingerprints(&self, parts: &[(&str, Option<u32>)]) -> Vec<SeamFingerprint> {
         let mut steps: HashMap<u64, BTreeSet<u32>> = HashMap::new();
@@ -58,7 +58,7 @@ impl CollusionDetector {
 
     /// One form's seam fingerprints, each with the steps of every occurrence.
     /// Two slides of the window: the first finds the seam k-grams and the
-    /// winnowed fingerprints among them, the second collects steps only for
+    /// sampled fingerprints among them, the second collects steps only for
     /// those, so an answer with few seams allocates for few.
     fn form_seams(
         &self,
@@ -84,7 +84,7 @@ impl CollusionDetector {
                 seam.insert(hash);
             }
         });
-        let selected: HashSet<u64> = winnow(&hashes)
+        let selected: HashSet<u64> = sample(&hashes, self.sample)
             .into_iter()
             .filter(|fp| seam.contains(fp))
             .collect();

@@ -277,7 +277,15 @@ impl MetaMcp {
                 "restart_required": outcome.restart_required,
                 "restart_reason": outcome.restart_reason,
             })),
-            Err(e) => Err(Error::json_rpc(-32603, e)),
+            // A network-posture refusal is the caller's config refused, as the
+            // admin API's 409 says (MIK-8058); anything else stays -32603.
+            Err(e) => Err(Error::json_rpc(
+                match crate::config_reload::reload_failure(&e) {
+                    crate::config_reload::ReloadFailure::PostureRefused => -32600,
+                    _ => -32603,
+                },
+                e,
+            )),
         }
     }
 
@@ -358,11 +366,18 @@ impl MetaMcp {
                 .ok_or_else(|| Error::json_rpc(-32602, format!("Playbook not found: {name}")))?
         };
 
-        let invoker = MetaMcpInvoker { meta: self, caller };
+        let invoker = MetaMcpInvoker {
+            meta: self,
+            caller,
+            steps: parking_lot::Mutex::default(),
+        };
+        let output = definition.output.clone();
 
         let mut temp_engine = PlaybookEngine::new();
         temp_engine.register(definition);
         let result = temp_engine.execute(name, arguments, &invoker).await?;
+        // MIK-7993 r5: the steps' gateway notes, onto the answer as stored.
+        invoker.carry_writes(output.as_ref(), &result.steps_completed);
         // MIK-8113: which output member each step produced, for its seams.
         for (member, label) in &result.provenance {
             let pointer = format!("/output/{}", super::relay::pointer_token(member));

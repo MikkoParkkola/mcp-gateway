@@ -13,15 +13,19 @@ const ALICE: &str = "principal-a";
 const BOB: &str = "principal-b";
 const SEAM: &str = "[mock:alpha+mock:beta]";
 const EGRESS: &str = "mock:post_message";
-/// Longer than the 63-char run that guarantees a shared fingerprint.
+/// Two fields joined: every k-gram over them spans both.
 const TEXT: &str =
     "north slope rows seven to twelve, late pearssouth terrace rows one to six, early quinces";
 
+/// Every k-gram kept, so each row checks the seams its text holds under any
+/// hash key.
 fn detector() -> CollusionDetector {
-    CollusionDetector::new(RelayParams {
+    let mut det = CollusionDetector::new(RelayParams {
         action: RelayAction::Observe,
         ..RelayParams::default()
-    })
+    });
+    det.keep_every_kgram();
+    det
 }
 
 fn seam(det: &CollusionDetector, masks: Vec<u64>, now: Instant) {
