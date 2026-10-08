@@ -275,28 +275,59 @@ async fn a_foreign_reap_leaks_rather_than_signals() {
     assert!(after > before, "the descendant's heartbeat stopped");
 }
 
-/// D1: a member forking in a tight loop while close runs. Every pid it
-/// recorded is gone afterwards: the pre-reap signal (A5) catches a fork that
-/// raced the close signal.
+/// D1: a member forking in a tight loop while close runs. Each child
+/// records its own pid before it sleeps, so a child whose parent dies
+/// between fork and record still registers; late registrations get a
+/// bounded window, and every registered pid must be gone.
 #[tokio::test]
 async fn close_ends_a_group_that_keeps_forking() {
-    let forker = "(while :; do sleep 30 </dev/null >/dev/null 2>&1 & echo $! >> pids; sleep 0.005; done) </dev/null >/dev/null 2>&1 &\necho $! >> pids\nwhile IFS= read -r l; do :; done";
+    let forker = "(while :; do sh -c 'echo $$ >> pids; exec sleep 30' </dev/null >/dev/null 2>&1 & sleep 0.005; done) </dev/null >/dev/null 2>&1 &\necho $! >> pids\nwhile IFS= read -r l; do :; done";
     let (w, t) = started(forker, None).await;
     let file = w.path().join("pids");
-    poll_until("the member forks", || {
-        std::fs::read_to_string(&file).map_or(0, |s| s.lines().count()) >= 10
-    })
-    .await;
+    let registered = || -> Vec<Pid> {
+        std::fs::read_to_string(&file)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.trim().parse().ok())
+            .map(pid_of)
+            .collect()
+    };
+    poll_until("the member forks", || registered().len() >= 10).await;
     t.close().await.expect("close");
-    let recorded: Vec<Pid> = std::fs::read_to_string(&file)
-        .expect("pids")
-        .lines()
-        .filter_map(|l| l.trim().parse().ok())
-        .map(pid_of)
-        .collect();
-    for pid in recorded {
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let pids = registered();
+    let survivors: Vec<Pid> = pids.iter().copied().filter(|p| alive(*p)).collect();
+    for pid in &survivors {
+        let _ = rustix::process::kill_process(*pid, rustix::process::Signal::KILL);
+    }
+    for pid in pids {
         gone(pid).await;
     }
+    assert!(survivors.is_empty(), "outlived close: {survivors:?}");
+}
+
+/// A finish cancelled inside the pre-reap grace has not had that phase: a
+/// retried finish still sends the pre-reap signal.
+#[tokio::test]
+async fn a_retried_finish_still_sends_the_pre_reap_signal() {
+    let (w, t) = started(
+        &format!("{DESCENDANT}\nwhile IFS= read -r l; do :; done"),
+        None,
+    )
+    .await;
+    let child = descendant(w.path()).await;
+    let mut guard = t.child.lock().await;
+    let tree = guard.as_mut().expect("a started tree");
+    let (reached, _release) = tree.in_pre_reap_grace.arm();
+    tokio::select! {
+        _ = tree.finish() => panic!("finish passed the armed grace"),
+        () = reached.notified() => {} // parked: dropping finish cancels it
+    }
+    assert_eq!(tree.group_signals_sent, 1, "only the close signal so far");
+    tree.finish().await;
+    assert_eq!((tree.group_signals_sent, tree.signals_refused), (2, 0));
+    drop(guard);
+    gone(child).await;
 }
 
 /// A5's wait ends when the killed leader exits, not after its 1 s grace:

@@ -20,10 +20,12 @@ pub(super) struct ChildTree {
     wrapper: Box<dyn ChildWrapper>,
     #[cfg(unix)]
     pid: Option<rustix::process::Pid>,
-    /// Set once the group has had its signal (or the leader proved gone):
-    /// a start's group gets at most one, and none after the reap.
+    /// Set once the close phase has signalled the group (or the leader proved
+    /// gone): `start_kill` sends at most one, and nothing signals after the
+    /// reap. The pre-reap phase (A5) has its own latch.
     signals_closed: bool,
-    /// The pre-reap phase ran (A5): at most one signal per phase.
+    /// The pre-reap phase ran to its probe (A5): at most one signal per
+    /// phase. Set after the grace, so a cancelled grace retries the phase.
     #[cfg(unix)]
     pre_reap_done: bool,
     /// The leader's exit, from the single reap.
@@ -34,6 +36,9 @@ pub(super) struct ChildTree {
     pub(super) signals_refused: usize,
     #[cfg(test)]
     pub(super) after_close_before_wait: crate::test_pause::Slot,
+    /// Test-only: inside the pre-reap phase, before its grace and latch.
+    #[cfg(all(test, unix))]
+    pub(super) in_pre_reap_grace: crate::test_pause::Slot,
 }
 
 /// What the kernel says about the leader, without reaping it.
@@ -85,6 +90,8 @@ impl ChildTree {
             signals_refused: 0,
             #[cfg(test)]
             after_close_before_wait: crate::test_pause::Slot::default(),
+            #[cfg(all(test, unix))]
+            in_pre_reap_grace: crate::test_pause::Slot::default(),
         }
     }
 
@@ -122,8 +129,8 @@ impl ChildTree {
         }
     }
 
-    /// The only place a group signal is sent. One per start: SIGKILL to the
-    /// whole group is final, so a second could only reach a reused id.
+    /// The only place a group signal is sent, always after an ownership check
+    /// (Unix): close once, pre-reap once (A5), never after the reap.
     fn send_group_signal(&mut self) {
         let _ = self.wrapper.start_kill();
         self.signals_closed = true;
@@ -186,8 +193,12 @@ impl ChildTree {
         if self.pre_reap_done {
             return;
         }
-        self.pre_reap_done = true;
+        #[cfg(test)]
+        self.in_pre_reap_grace.pause().await;
         wait_exited(self, PRE_REAP_GRACE).await;
+        // Latched only now: a finish cancelled during the grace has not had
+        // this phase, and a retried finish must still send it.
+        self.pre_reap_done = true;
         if matches!(self.leader_state(), Leader::Running | Leader::Zombie) {
             self.send_group_signal();
         } else {
