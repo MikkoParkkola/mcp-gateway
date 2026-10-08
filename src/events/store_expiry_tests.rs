@@ -453,3 +453,50 @@ fn a_backlog_the_disk_refuses_is_not_due_at_once() {
     mode(0o700).expect("writable");
     assert_eq!(due.expect("io").next, None, "no progress: not due at once");
 }
+
+/// MIK-8057 with MIK-8061: a held row with no lease of its own ends at its
+/// hold's bound. Its tried record is buried as `subscription_expired`, and
+/// the opt-in's tail starts at that bound, not at the opt-in.
+#[test]
+fn a_lapsed_hold_buries_its_records_and_starts_the_tail_at_its_bound() {
+    use crate::events::store::{Held, Judged};
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let unleased = Subscription {
+        expires_at: None,
+        ..sub("s1", now)
+    };
+    store
+        .admit(unleased, true, CAPS, chrono::Duration::zero(), now, TAIL)
+        .expect("io")
+        .expect("admitted");
+    let tried = OutboxRecord {
+        attempt: 1,
+        ..record("e1", "s1", now)
+    };
+    store.enqueue(tried, OUTBOX).expect("io");
+    let held = |_: &Subscription| Judged {
+        held: Some(Held {
+            reason: "event type no longer offered",
+            key: None,
+        }),
+        backfill: None,
+    };
+    let bound = now + chrono::Duration::hours(1);
+    store
+        .apply_holds(&held, now, chrono::Duration::hours(1))
+        .expect("io");
+    let past = bound + chrono::Duration::minutes(10);
+    store.due(past, &HashSet::new(), ROOMY).expect("io");
+    assert_eq!(
+        dead_reason(&store, "e1").as_deref(),
+        Some("subscription_expired"),
+        "the hold's bound ended the row"
+    );
+    let within = bound + chrono::Duration::minutes(30);
+    assert!(
+        store.is_verified("p", "https://h/s1", within, TAIL),
+        "the tail started at the hold's bound"
+    );
+}

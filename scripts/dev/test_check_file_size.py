@@ -113,6 +113,12 @@ class FileSizeGate(unittest.TestCase):
         # change that starts exempting it is a decision, not an accident.
         self.assert_grew("mod r#x;\n", {"src/x.rs": ""})
 
+    def test_t11_a_workspace_crate_file_is_held_to_the_ceiling(self):
+        # MIK-8163: crates/ is production source too (gateway-core).
+        status, out = self.run_gate("", {"crates/core/src/lib.rs": body(801)})
+        self.assertEqual(status, 1, out)
+        self.assertIn("FAIL crates/core/src/lib.rs: 801 lines, over the 800-line ceiling", out)
+
     def test_t8_the_repository_tree_passes(self):
         gate = load_gate(Path(__file__).resolve().parents[2])
         gate.BASELINE = SCRIPT.with_name("file-size-baseline.txt")
