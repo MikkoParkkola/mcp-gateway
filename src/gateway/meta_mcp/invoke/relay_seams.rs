@@ -59,3 +59,28 @@ pub(super) use with_firewall::add_seams;
 #[cfg(feature = "firewall")]
 #[path = "relay_seams_record.rs"]
 mod with_firewall;
+
+#[cfg(test)]
+mod tests {
+    use super::super::{PLAN_STEP, plan_step};
+
+    fn label() -> Option<u32> {
+        PLAN_STEP.try_with(|label| *label).ok().flatten()
+    }
+
+    /// `MIK-8113`: a plan run inside a step stages under the outer step's
+    /// label, never its own indices; an unlabelled outer step stays
+    /// unlabelled; outside the nesting a step's own label holds.
+    #[tokio::test]
+    async fn a_nested_plan_keeps_the_outer_steps_label() {
+        let nested = plan_step(Some(0), async {
+            plan_step(Some(5), async { label() }).await
+        })
+        .await;
+        assert_eq!(nested, Some(0));
+        let unlabelled =
+            plan_step(None, async { plan_step(Some(5), async { label() }).await }).await;
+        assert_eq!(unlabelled, None);
+        assert_eq!(plan_step(Some(7), async { label() }).await, Some(7));
+    }
+}
