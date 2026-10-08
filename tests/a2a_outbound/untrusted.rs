@@ -64,24 +64,36 @@ fn blocking_firewall() -> Firewall {
     Firewall::from_config(config, None)
 }
 
-/// MIK-8112 AC1, default configuration: an injected instruction in an A2A
-/// answer is screened like any tool result. It is delivered with the
-/// `_security_findings` annotation that marks it, not as a clean answer.
+/// MIK-8112 AC1 and AC3, default configuration: an injected instruction in
+/// an A2A answer is screened like any tool result. The delivered result
+/// carries the anomaly screen's `_security_findings` naming it, and the
+/// context-integrity provenance marking it as remote tool output from the
+/// agent, not an instruction from the user.
 #[tokio::test]
 async fn mik_8112_an_injected_a2a_answer_is_flagged_by_default() {
     let (state, _store) = gateway(INJECTED, None).await;
     let answer = invoke(&state).await;
-    let findings = answer
-        .pointer("/result/_security_findings")
-        .and_then(Value::as_array)
-        .unwrap_or_else(|| panic!("the answer carries its findings: {answer}"));
-    assert!(!findings.is_empty(), "{answer}");
+    // `gateway_invoke` delivers the backend's result as JSON text.
+    let delivered: Value = answer
+        .pointer("/result/content/0/text")
+        .and_then(Value::as_str)
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_else(|| panic!("a wrapped tool result: {answer}"));
+    let findings = delivered["_security_findings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the answer carries its findings: {delivered}"));
     assert!(
         findings
             .iter()
             .any(|f| f.to_string().contains("previous instructions")),
         "the planted instruction is the finding: {findings:?}"
     );
+    let provenance = &delivered["_context_integrity"]["provenance"];
+    assert_eq!(
+        provenance["trust_boundary"], "remote_tool_output",
+        "{delivered}"
+    );
+    assert_eq!(provenance["origin"], format!("agent:{TOOL}"), "{delivered}");
 }
 
 /// MIK-8112 AC1 under a Block rule: the injected A2A answer never reaches the
