@@ -107,6 +107,9 @@ mod settlement;
 #[cfg(feature = "firewall")]
 mod settlement_record;
 mod signing_joint;
+/// `MIK-7993.STORE.1`/`.2`: a task row records the members the gateway wrote.
+#[cfg(feature = "firewall")]
+mod stored_gateway_writes;
 mod stored_result_policy;
 /// MIK-7974: a task keeps its request's meta-tool surface for its hints.
 mod surface_hints;
