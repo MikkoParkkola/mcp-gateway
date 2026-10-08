@@ -333,6 +333,8 @@ impl EventsHub {
                 .await;
             return;
         }
+        #[cfg(test)]
+        self.before_send.pause().await;
         // Charged once the attempt is on record, so a retry after an audit
         // outage is not charged for an attempt that never left. A type its
         // source exempts (a budget event) is never charged.

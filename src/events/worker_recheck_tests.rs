@@ -376,3 +376,6 @@ impl crate::events::EventSource for AfterTenantRecord {
         }
     }
 }
+
+#[path = "worker_admission_tests.rs"]
+mod admission;
