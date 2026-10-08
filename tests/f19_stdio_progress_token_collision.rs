@@ -69,10 +69,10 @@ fn spaced_home() -> tempfile::TempDir {
         .expect("temporary home")
 }
 
-/// A path as `sh` reads it: forward slashes, since a Windows backslash is an
-/// escape to the shell (and to a quoted YAML scalar).
+/// A path as `sh` reads it: double-quoted so a space cannot split it, with
+/// forward slashes because a Windows backslash is a shell escape.
 fn sh_path(path: &std::path::Path) -> String {
-    path.display().to_string().replace('\\', "/")
+    format!("\"{}\"", path.display().to_string().replace('\\', "/"))
 }
 
 fn register_command_backend(state: &Arc<AppState>, home: &std::path::Path) -> std::path::PathBuf {

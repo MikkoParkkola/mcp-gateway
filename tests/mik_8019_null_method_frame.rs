@@ -43,10 +43,10 @@ fn spaced_home() -> tempfile::TempDir {
         .expect("temporary home")
 }
 
-/// A path as `sh` reads it: forward slashes, since a Windows backslash is an
-/// escape to the shell (and to the quoted YAML scalar it sits in).
+/// A path as `sh` reads it: double-quoted so a space cannot split it, with
+/// forward slashes because a Windows backslash is a shell escape.
 fn sh_path(path: &std::path::Path) -> String {
-    path.display().to_string().replace('\\', "/")
+    format!("\"{}\"", path.display().to_string().replace('\\', "/"))
 }
 
 fn spawn_gateway(home: &std::path::Path) -> StdioSession {
@@ -55,7 +55,7 @@ fn spawn_gateway(home: &std::path::Path) -> StdioSession {
     mcp_gateway::gateway::test_helpers::write_owner_only(
         home.join("gateway.yaml"),
         format!(
-            "backends:\n  {BACKEND}:\n    command: \"sh {}\"\n",
+            "backends:\n  {BACKEND}:\n    command: 'sh {}'\n",
             sh_path(&script)
         ),
     )
