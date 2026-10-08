@@ -3,6 +3,7 @@
 **Date**: 2026-04-16
 **Status**: Accepted (shipped opt-in: HMAC-SHA256 response signing with nonce replay protection, `src/security/message_signing.rs`; off by default)
 **Deciders**: Mikko Parkkola
+**Status note**: multi-gateway Ed25519 signature chaining shipped after this decision, opt-in per backend (`src/security/signature_chain.rs`, `tests/signature_chain_hops.rs`). Statements below that chaining is absent describe the state at acceptance; `docs/OWASP_AGENTIC_AI_COMPLIANCE.md` (ASI07) is current.
 **OWASP Reference**: ASI07 (Insecure Inter-Agent Communication)
 
 ---

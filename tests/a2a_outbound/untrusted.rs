@@ -109,7 +109,11 @@ async fn mik_8112_an_injected_a2a_answer_is_refused_under_a_block_rule() {
 
     let (injected, _injected_store) = gateway(INJECTED, Some(blocking_firewall())).await;
     let refused = invoke(&injected).await;
-    assert!(refused.get("error").is_some(), "refused: {refused}");
+    let refusal = refused["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        refusal.to_ascii_lowercase().contains("blocked"),
+        "refused by the screen, not by an unrelated error: {refused}"
+    );
     assert!(
         !refused.to_string().contains("delete_everything"),
         "the planted instruction never reaches the caller: {refused}"
@@ -184,5 +188,13 @@ async fn mik_8140_a_task_delivered_answer_carries_the_same_provenance() {
     // as the JSON text `gateway_invoke` wraps it in.
     let text = settled.to_string();
     assert!(text.contains("_security_findings"), "findings: {settled}");
+    assert!(
+        text.contains("previous instructions"),
+        "the finding: {settled}"
+    );
     assert!(text.contains("remote_tool_output"), "provenance: {settled}");
+    assert!(
+        text.contains(&format!("agent:{TOOL}")),
+        "attributed to the agent's tool: {settled}"
+    );
 }
