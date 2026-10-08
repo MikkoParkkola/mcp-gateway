@@ -65,7 +65,7 @@ impl Provider for ConfigFile {
     fn data(&self) -> figment::Result<Map<Profile, Dict>> {
         let mut data = Yaml::string(&self.text).data()?;
         for dict in data.values_mut() {
-            resolve_backend_urls(dict)?;
+            resolve_backend_urls(dict).map_err(figment::Error::from)?;
         }
         Ok(data)
     }
@@ -77,7 +77,7 @@ const TRANSPORT_KEYS: &[&str] = &["command", "http_url", "ws_url", "a2a_url"];
 /// Turn each backend's `url` into the key its scheme selects (`http_url` or
 /// `ws_url`), once, before anything reads the backend. A refusal names the
 /// keys and never the URL, which can carry a credential.
-fn resolve_backend_urls(dict: &mut Dict) -> figment::Result<()> {
+fn resolve_backend_urls(dict: &mut Dict) -> std::result::Result<(), String> {
     let Some(figment::value::Value::Dict(_, backends)) = dict.get_mut("backends") else {
         return Ok(());
     };
@@ -92,11 +92,10 @@ fn resolve_backend_urls(dict: &mut Dict) -> figment::Result<()> {
             return Err(format!(
                 "backends.{name}.url and backends.{name}.{other} both choose how to reach the \
                  backend; keep `url` and delete `{other}`."
-            )
-            .into());
+            ));
         }
         let figment::value::Value::String(tag, address) = url else {
-            return Err(format!("backends.{name}.url must be a string.").into());
+            return Err(format!("backends.{name}.url must be a string."));
         };
         let lower = address.to_ascii_lowercase();
         let key = if lower.starts_with("http://") || lower.starts_with("https://") {
@@ -106,8 +105,7 @@ fn resolve_backend_urls(dict: &mut Dict) -> figment::Result<()> {
         } else {
             return Err(format!(
                 "backends.{name}.url must start with http://, https://, ws:// or wss://."
-            )
-            .into());
+            ));
         };
         fields.insert(key.to_string(), figment::value::Value::String(tag, address));
     }
