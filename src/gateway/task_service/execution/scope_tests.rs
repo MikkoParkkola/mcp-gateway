@@ -34,6 +34,8 @@ fn a_retry_that_finds_a_completed_task_delivers_its_result_private() {
 fn a_sealed_start_says_what_happened_without_a_path() {
     let response = BeginOutcome::Sealed.into_response(RequestId::Number(1));
     let error = response.error.expect("a refusal");
+    // The code the synchronous path and the upgrade notes give a sealed call.
+    assert_eq!(error.code, 409, "{}", error.message);
     assert!(error.message.contains("paused"), "{}", error.message);
     assert!(
         error.message.contains("resume on their own"),

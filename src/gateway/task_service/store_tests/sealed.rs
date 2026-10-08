@@ -586,3 +586,48 @@ async fn sealed_files_are_absolute_under_a_relative_store_dir() {
     assert!(files[0].is_absolute(), "not a full path: {files:?}");
     assert!(files[0].ends_with("task-relative.json"), "{files:?}");
 }
+
+/// A store directory moved away (renamed, unmounted) is not a removed file:
+/// every sealed row may still exist under the old directory, so the seal
+/// stays, and so it does when a fresh directory takes the name.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_moved_store_directory_keeps_the_seal() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    store.seal_for_test("task-00000000-0000-4000-8000-000000000001.json");
+    std::fs::rename(&path, dir.path().join("moved")).unwrap();
+    assert_eq!(
+        store.reread_sealed(|_, _| true).await,
+        1,
+        "a missing store directory lifted the seal"
+    );
+    std::fs::create_dir(&path).unwrap();
+    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    assert_eq!(
+        store.reread_sealed(|_, _| true).await,
+        1,
+        "another directory under the store's name lifted the seal"
+    );
+}
+
+/// A repaired row read again after shutdown imports nothing: the closed
+/// service has released custody, so its key must not be published on the
+/// caller's authority.
+#[tokio::test]
+async fn a_repair_read_after_shutdown_imports_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, rows, admission, service) = sealed_service(dir.path(), &["k-late"]).await;
+    service.shutdown().await.expect("the store closes");
+    let (id, original) = &rows[0];
+    std::fs::write(path.join(format!("{id}.json")), original).unwrap();
+    service.reread_sealed().await;
+    assert!(
+        !matches!(
+            admission.admit_task(task_request("oidc:acme:alice", "k-late")),
+            Ok(TaskAdmission::Existing { .. })
+        ),
+        "a re-read after shutdown published the repaired key"
+    );
+}
