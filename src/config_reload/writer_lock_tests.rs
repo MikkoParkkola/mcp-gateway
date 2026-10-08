@@ -219,3 +219,89 @@ async fn a_concurrent_writer_lands_after_the_edit_not_inside_it() {
         "both writers' changes must survive; the file is:\n{written}"
     );
 }
+
+fn add_c(config: &mut Config) -> Result<(), String> {
+    let backend = config.backends["a"].clone();
+    config.backends.insert("c".to_string(), backend);
+    Ok(())
+}
+
+fn gateway(path: &std::path::Path) -> Arc<ReloadContext> {
+    let running = Config::load(Some(path)).expect("config loads");
+    Arc::new(
+        ReloadContext::new(
+            path.to_path_buf(),
+            Arc::new(LiveConfig::new(running)),
+            Arc::new(crate::backend::BackendRegistry::new()),
+            crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        )
+        .expect("the registry pairs with the config"),
+    )
+}
+
+/// R6 core: writer A is paused inside its reload, after its write and
+/// before it reads the file back. Writer B (another process's path, no
+/// reload context) must wait for A to publish, then add `c` on top of A's
+/// result: the lock is held through the reload, not only the write.
+async fn a_contender_waits_out_the_reload(
+    path: &std::path::Path,
+    lock: &std::path::Path,
+    pause: Arc<super::reload_pause::Pause>,
+    a: tokio::task::JoinHandle<bool>,
+) {
+    pause.reached.notified().await;
+    let baseline = crate::fs_lock::lock_attempts(lock);
+    let b_path = path.to_path_buf();
+    let b = tokio::spawn(async move {
+        mutate_config_and_reload_with(&b_path, None, CommentLoss::Refuse, add_c)
+            .await
+            .is_ok()
+    });
+    while crate::fs_lock::lock_attempts(lock) <= baseline && !b.is_finished() {
+        tokio::task::yield_now().await;
+    }
+    let during = std::fs::read_to_string(path).expect("read");
+    assert!(
+        !during.contains("\n  c:"),
+        "writer B wrote while writer A's reload was still in progress:\n{during}"
+    );
+    pause.release.notify_one();
+    assert!(a.await.expect("writer A"), "writer A failed");
+    assert!(b.await.expect("writer B"), "writer B failed");
+    let written = std::fs::read_to_string(path).expect("read");
+    assert!(
+        written.contains("\n  b:") && written.contains("\n  c:"),
+        "both writers' changes must survive; the file is:\n{written}"
+    );
+}
+
+/// R6 for the mutation API (`mutate_and_reload_outcome`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_writer_waits_for_a_mutation_reload_to_publish() {
+    let (_dir, path, lock) = config();
+    let ctx = gateway(&path);
+    let pause = super::reload_pause::arm(&path);
+    let a_path = path.clone();
+    let a = tokio::spawn(async move {
+        matches!(
+            ctx.mutate_and_reload_outcome(&a_path, add_b).await,
+            Ok(ConfigMutation::Applied(..))
+        )
+    });
+    a_contender_waits_out_the_reload(&path, &lock, pause, a).await;
+}
+
+/// R6 for the whole-config API (`write_and_reload_outcome`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_writer_waits_for_a_whole_config_reload_to_publish() {
+    let (_dir, path, lock) = config();
+    let ctx = gateway(&path);
+    let mut with_b = Config::load_literal(Some(&path)).expect("loads");
+    add_b(&mut with_b).expect("add b");
+    let pause = super::reload_pause::arm(&path);
+    let a_path = path.clone();
+    let a =
+        tokio::spawn(async move { ctx.write_and_reload_outcome(&a_path, &with_b).await.is_ok() });
+    a_contender_waits_out_the_reload(&path, &lock, pause, a).await;
+}
