@@ -185,6 +185,7 @@ backend" and "fails a capability file" first.**
 | 158 | `audit verify --anchor <file>` checks the log against an off-host copy of its `.hwm`: a log that no longer holds the anchored record fails, and so does a wiped log. `mcp_gateway::security::transparency_log::verify_audit_log` takes a fourth parameter, `anchor: Option<&Path>`; `None` keeps the old behaviour. A log whose oldest surviving segment starts its chain from another hash than the expired boundary it links to now fails verification | Copy `<log>.hwm` off the host on your own schedule and pass it to `audit verify --anchor`. An embedder passes `None` or the anchor path |
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 | 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
+| 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`, except those on lines the change deletes (a removed backend's entry, or a field an edit drops), which the command names by line number. On a file with comments, a change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. A file without comments is rewritten as before. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1617,17 +1618,15 @@ verify can report such a gap for records that never reached disk. To verify a co
 has no `.hwm`, run `audit verify --archive <path>`, which reports tail completeness as unchecked.
 On a signed log, `.hwm` is signed too.
 
-Limitation: this detects a partial deletion, not a total one. Anyone with write access to the
+On its own, `.hwm` detects a partial deletion, not a total one. Anyone with write access to the
 whole audit directory (a compromised gateway service account, a shared volume, a log-shipping
 agent's credentials, not only full host control) can delete every segment and the `.hwm`
-together. `audit verify` on the emptied path reports that nothing exists to read; once the
-gateway restarts and starts a fresh log, verify passes on it, and nothing in the directory
-shows an earlier log existed. A log stored only in that directory cannot prove it existed.
-Forward audit records off-host: `control_plane.export` writes a local NDJSON file, and the
-protection holds only once an agent running as another account ships that file to a store (a
-SIEM, for example) where the gateway account cannot delete or alter records already landed. To
-detect a wipe or rollback, keep a copy of `<log>.hwm` off the host and verify with
-`audit verify --anchor` (item 158).
+together, and a log stored only in that directory cannot prove it existed. An off-host anchor
+can: keep a copy of `<log>.hwm` off the host and verify with `audit verify --anchor` (item 158),
+which fails on a wiped or rolled-back log. To keep the records themselves, forward them off-host:
+`control_plane.export` writes a local NDJSON file, and the protection holds only once an agent
+running as another account ships that file to a store (a SIEM, for example) where the gateway
+account cannot delete or alter records already landed.
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
@@ -4228,6 +4227,28 @@ build loads with both at 0.
 
 Library users: code that builds `EnforcerSnapshot` or `PersistedCosts` with a
 struct literal adds the two fields.
+
+## 161. CLI config writes keep comments, or refuse
+
+**Startup:** no notice
+
+`mcp-gateway add`, `remove`, `setup wizard` and `cap discover --write-config`
+(including the `--shadow` adoption) used to re-serialise `gateway.yaml`
+whenever the change was not a single block-style backend, which dropped every
+comment in the file, including the credential warning `init` writes.
+
+They now edit the file as text, one backend at a time, and write it once.
+Comments on lines the change deletes go with them (a removed backend's entry,
+or a field an edit drops), and the command names those comment lines. When a
+change cannot be written as text (a flow-style `backends:` mapping, or a
+comment inside a changed value) and the file has comments, the command writes
+nothing, exits non-zero, and names the line numbers of the comments a rewrite
+would drop. It never prints their text, which could hold a quoted secret. A
+file without comments is rewritten as before.
+
+`--force` keeps the old behaviour only for a change that cannot be written as
+text: it names the same lines, then rewrites the file without them, for
+example `mcp-gateway remove old-server --force`.
 
 ## Upgrading from 3.5.x: a walkthrough
 
