@@ -56,6 +56,7 @@ impl super::Config {
 
     /// `text` loaded as a config file is, `url` resolved, with no environment
     /// layer: what a comment-keeping write proves its edited text loads as.
+    #[allow(dead_code)] // throwaway red proof only: used by tests until the fix
     pub(crate) fn from_file_text(text: &str) -> Result<Self> {
         let file = ConfigFile {
             path: PathBuf::from("gateway.yaml"),
