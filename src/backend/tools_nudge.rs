@@ -136,6 +136,46 @@ mod tests {
         );
     }
 
+    /// `MIK-8148`: a per-user slot's catalogue is what that user's discovery
+    /// shows, so a list it stores must reach the drain like a shared one.
+    fn per_user(binding: &str) -> crate::backend::PoolKey {
+        crate::backend::PoolKey::PerUser {
+            binding: binding.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_per_user_store_nudges_the_drain() {
+        let backend = backend("a");
+        let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+        backend.attach_nudges(&feed);
+        let slot = backend
+            .pooled_entry(&per_user("idp:u1"))
+            .expect("a per-user slot is admitted");
+        slot.tools_cache.replace(Vec::new(), || ());
+        assert_eq!(
+            std::iter::from_fn(|| nudges.try_recv().ok()).count(),
+            1,
+            "one store into a per-user slot, one nudge"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_per_user_slot_opened_before_the_feed_still_nudges() {
+        let backend = backend("a");
+        let slot = backend
+            .pooled_entry(&per_user("idp:u1"))
+            .expect("a per-user slot is admitted");
+        let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+        backend.attach_nudges(&feed);
+        slot.tools_cache.replace(Vec::new(), || ());
+        assert_eq!(
+            std::iter::from_fn(|| nudges.try_recv().ok()).count(),
+            1,
+            "a slot that predates the feed is observed too"
+        );
+    }
+
     #[tokio::test]
     async fn instances_never_share_an_identity() {
         assert_ne!(backend("a").instance(), backend("a").instance());
