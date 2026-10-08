@@ -263,7 +263,7 @@ impl Shared {
             tracing::error!(record = %name, "repaired task record would exceed its owner's cap; it stays sealed");
             return;
         }
-        let Some((record, task)) = row else {
+        let Some((record, task)) = row.map(|row| *row) else {
             // Its key reads but its task does not: the key is kept, unserved.
             if !import(binding_of(&admission), id.clone()) {
                 tracing::error!(record = %name, "repaired task record's key is refused by admission; it stays sealed");

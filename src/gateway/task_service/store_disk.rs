@@ -394,7 +394,7 @@ pub(super) enum Reread {
     /// The row now names its key and its own task id: keep that key instead.
     /// The record and its task come with it when the row restores in full, so
     /// the store can serve it without a restart (MIK-8121).
-    Repaired(AdmissionRecord, String, Option<(Record, Task)>),
+    Repaired(AdmissionRecord, String, Option<Box<(Record, Task)>>),
     /// Still unreadable, or refused at the trust boundary: stays sealed. A
     /// re-read never makes the store unavailable; it only declines to unseal.
     Sealed,
@@ -466,7 +466,7 @@ pub(super) fn reread_record(
                 return Reread::Sealed;
             }
             let id = task.id().to_owned();
-            (record.admission.clone(), id, Some((record, task)))
+            (record.admission.clone(), id, Some(Box::new((record, task))))
         }
         (
             None,
