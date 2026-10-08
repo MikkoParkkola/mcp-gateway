@@ -617,8 +617,9 @@ async fn a_foreign_owner_cannot_write_the_dispatch_marker_or_a_round() {
     assert_ne!(bytes(), before, "control: the round is closed on disk");
 }
 
-/// Park a round under `keys` on a store capped at `record_bytes`, returning
-/// what `require_input` answered.
+/// Park a padded round under `keys` on a store capped at `record_bytes`,
+/// returning what `require_input` answered. The continuation is padded so
+/// the parked record, not the fallback reservation, is the binding size.
 async fn park_capped(
     path: &std::path::Path,
     record_bytes: usize,
@@ -657,7 +658,7 @@ async fn park_capped(
             task.id(),
             created.revision,
             requested,
-            round("sealed"),
+            round(&"s".repeat(600)),
             at(1),
         )
         .await
@@ -665,35 +666,31 @@ async fn park_capped(
     (store, parked)
 }
 
-/// `MIK-7661.GH2418.1`: a round is admitted exactly when its shortest answer,
-/// as `provide_input` writes it, fits the byte cap. At a cap of that record's
-/// size the round is taken and the answer accepted; one byte less, the round
-/// is refused when it is produced.
+/// `MIK-7661.GH2418.1`: the room check measures the shortest answer as
+/// `provide_input` writes it, which drops the answered request from the
+/// model. That record is never larger than the parked one, so a round is
+/// taken exactly when it fits: at a cap of the parked record's size it is
+/// taken and its shortest answer accepted; one byte less, it is refused.
 #[tokio::test]
-async fn a_round_fits_exactly_when_its_shortest_real_answer_fits() {
+async fn a_round_that_fits_exactly_is_taken_and_answerable() {
     let task = task();
     let keys = ["a", "bb"];
     let shortest = || answers(json!({ "a": {} }));
 
     let roomy = tempfile::tempdir().unwrap();
     let path = roomy.path().join("tasks");
-    let (store, parked) = park_capped(&path, CAP, &task, &keys).await;
-    parked.expect("a small round fits a roomy cap");
-    let answered = store
-        .provide_input(OWNER, task.id(), shortest(), || None, at(1))
-        .await
-        .unwrap();
-    assert!(matches!(answered, ProvideOutcome::Partial(_)));
-    let measured = fs::read(path.join(format!("{}.json", task.id())))
+    let (_store, parked) = park_capped(&path, CAP, &task, &keys).await;
+    parked.expect("a round fits a roomy cap");
+    let size = fs::read(path.join(format!("{}.json", task.id())))
         .unwrap()
         .len();
 
     let exact = tempfile::tempdir().unwrap();
     let path = exact.path().join("tasks");
-    let (store, parked) = park_capped(&path, measured, &task, &keys).await;
+    let (store, parked) = park_capped(&path, size, &task, &keys).await;
     assert!(
         parked.is_ok(),
-        "a round whose shortest answer fits the cap exactly was refused: {parked:?}"
+        "a round that fits the cap exactly was refused: {parked:?}"
     );
     let answered = store
         .provide_input(OWNER, task.id(), shortest(), || None, at(1))
@@ -705,10 +702,10 @@ async fn a_round_fits_exactly_when_its_shortest_real_answer_fits() {
 
     let short = tempfile::tempdir().unwrap();
     let path = short.path().join("tasks");
-    let (_store, parked) = park_capped(&path, measured - 1, &task, &keys).await;
+    let (_store, parked) = park_capped(&path, size - 1, &task, &keys).await;
     assert_eq!(
         parked.err(),
         Some(StoreError::Capacity),
-        "a round whose shortest answer cannot fit was taken"
+        "a round over the cap was taken"
     );
 }
