@@ -377,7 +377,7 @@ fn backend(yaml: &str) -> crate::config::BackendConfig {
     serde_yaml::from_str(yaml).expect("backend")
 }
 
-/// MIK-8029.EOL.1: editing one field leaves every other line's ending as it
+/// `MIK-8029.EOL.1`: editing one field leaves every other line's ending as it
 /// was, and the edited line keeps its own.
 #[test]
 fn an_edit_keeps_every_line_ending_of_a_mixed_file() {
@@ -387,7 +387,7 @@ fn an_edit_keeps_every_line_ending_of_a_mixed_file() {
     assert_eq!(out, MIXED.replace("command: y", "command: z"));
 }
 
-/// MIK-8029.EOL.2: a removal keeps the other lines' endings.
+/// `MIK-8029.EOL.2`: a removal keeps the other lines' endings.
 #[test]
 fn a_removal_keeps_every_other_line_ending_of_a_mixed_file() {
     let out = spliced(MIXED, |c| {
@@ -396,7 +396,7 @@ fn a_removal_keeps_every_other_line_ending_of_a_mixed_file() {
     assert_eq!(out, "backends:\n  b:\r\n    command: y\r\n");
 }
 
-/// MIK-8029.EOL.2/3: an addition keeps the file's bytes and its new lines
+/// `MIK-8029.EOL.2/3`: an addition keeps the file's bytes and its new lines
 /// take the ending of the line they follow.
 #[test]
 fn an_addition_keeps_a_mixed_file_and_follows_its_last_ending() {
@@ -411,7 +411,7 @@ fn an_addition_keeps_a_mixed_file_and_follows_its_last_ending() {
     );
 }
 
-/// MIK-8029.EOL.4: a file with no final line break keeps none.
+/// `MIK-8029.EOL.4`: a file with no final line break keeps none.
 #[test]
 fn a_file_without_a_final_line_break_keeps_none() {
     let out = spliced("backends:\n  a:\n    command: x", |c| {
