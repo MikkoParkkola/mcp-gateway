@@ -64,10 +64,12 @@ fn url_with_an_alias_is_refused_naming_both() {
 
 #[test]
 fn a_url_with_another_scheme_is_refused_naming_the_key() {
-    let message = refusal("    url: \"ftp://a.example.com/mcp\"\n");
+    // A URL can carry credentials, so the refusal names the key, never the URL.
+    let message = refusal("    url: \"ftp://a.example.com/mcp?token=canary-p2c1\"\n");
+    assert!(message.contains("b.url"), "{message}");
     assert!(
-        message.contains("b.url") && message.contains("ftp"),
-        "{message}"
+        !message.contains("canary-p2c1") && !message.contains("a.example.com"),
+        "the refusal echoed the URL: {message}"
     );
 }
 
