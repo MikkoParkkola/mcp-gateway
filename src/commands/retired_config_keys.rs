@@ -73,4 +73,24 @@ mod tests {
             assert_eq!(drop_cache_tools(text), None, "{text}");
         }
     }
+
+    #[test]
+    fn a_lookalike_line_before_the_key_does_not_hide_it() {
+        let text =
+            "meta_mcp:\n  note: |\n    cache_tools: x\n  enabled: true\n  cache_tools: false\n";
+        let (after, line) = drop_cache_tools(text).expect("removed");
+        assert_eq!(
+            after,
+            "meta_mcp:\n  note: |\n    cache_tools: x\n  enabled: true\n"
+        );
+        assert_eq!(line, 5);
+    }
+
+    #[test]
+    fn a_crlf_file_loses_the_line_and_its_ending_only() {
+        let text = "meta_mcp:\r\n  cache_tools: false\r\n  enabled: true\r\n";
+        let (after, line) = drop_cache_tools(text).expect("removed");
+        assert_eq!(after, "meta_mcp:\r\n  enabled: true\r\n");
+        assert_eq!(line, 2);
+    }
 }

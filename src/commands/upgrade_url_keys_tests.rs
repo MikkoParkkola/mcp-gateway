@@ -214,3 +214,26 @@ fn upgrade_removes_the_retired_cache_tools_key() {
         "{applied:?}"
     );
 }
+
+/// MIK-8064 AC2: a `meta_mcp.cache_tools` the rewrite cannot remove safely
+/// stays, and `upgrade` names it for deletion by hand.
+#[test]
+fn upgrade_names_a_cache_tools_key_it_cannot_remove() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let text = "meta_mcp: {cache_tools: false, enabled: true}\nbackends: {}\n";
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, text).expect("write config");
+
+    let (applied, written) = report(&path, RewriteMode::Apply);
+    assert_eq!(written, text, "the file is left as it was");
+    assert!(
+        applied
+            .iter()
+            .any(|l| l.contains("kept `meta_mcp.cache_tools`") && l.contains("delete it by hand")),
+        "{applied:?}"
+    );
+    assert!(
+        !applied.iter().any(|l| l.contains("nothing changed")),
+        "{applied:?}"
+    );
+}
