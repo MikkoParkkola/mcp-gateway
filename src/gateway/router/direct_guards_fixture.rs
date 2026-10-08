@@ -48,6 +48,8 @@ pub(crate) enum Answer {
     AskOnce,
     /// Like `AskOnce`, the question carrying no `requestState` (MIK-8078).
     AskNoState,
+    /// A completed answer that still carries a `requestState` (MIK-8078).
+    DoneWithState,
     /// Like `AskOnce`, a question `InputRequired::from_result` declines (an
     /// `inputRequests` that is not an object) beside a string state (MIK-8078).
     AskMalformed,
@@ -175,6 +177,11 @@ impl Transport for CountingBackend {
             });
         }
         match &self.answer {
+            Answer::DoneWithState => Ok(JsonRpcResponse::success(
+                id,
+                json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
+                       "requestState": "backend-state-1"}),
+            )),
             Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) => Ok(JsonRpcResponse::success(
                 id,
                 json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
