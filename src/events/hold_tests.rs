@@ -332,3 +332,31 @@ async fn the_held_listing_counts_the_queued_records() {
     assert_eq!(held["pendingRecords"], 1, "{held}");
     assert!(held["earliestExpiry"].is_string() && held["latestExpiry"].is_string());
 }
+
+/// Review G3 (second round): a held row removed while its refresh waits at
+/// the commit is not recreated unchecked. Against routes that no longer
+/// serve its filter, the refresh is refused and no row is written.
+#[tokio::test]
+async fn a_held_refresh_whose_row_goes_at_the_commit_is_checked_afresh() {
+    let (_dir, hub, _registry) = restarted(json!({"ref": "main"}), &narrower()).await;
+    let id = hub.store.subscriptions().remove(0).id;
+    let (reached, release) = hub.before_admit.arm();
+    let refreshing = tokio::spawn({
+        let hub = Arc::clone(&hub);
+        async move { subscribe(&hub, json!({"ref": "main"})).await }
+    });
+    let bound = std::time::Duration::from_secs(20);
+    tokio::time::timeout(bound, reached.notified())
+        .await
+        .expect("the refresh reached its commit");
+    let tail = crate::events::tail_policy(&hub.config);
+    let removed = hub.store.remove(&id, chrono::Utc::now(), tail);
+    release.notify_one();
+    let answer = tokio::time::timeout(bound, refreshing)
+        .await
+        .expect("the refresh finished")
+        .expect("join");
+    assert!(removed.expect("io"), "removed while the refresh waited");
+    assert!(answer.is_err(), "checked afresh and refused: {answer:?}");
+    assert!(hub.store.get(&id).is_none(), "not recreated");
+}
