@@ -93,8 +93,6 @@ pub(super) struct SketchStore {
     order: std::collections::BTreeMap<(Instant, u64), Pair>,
     next: u64,
     bytes: usize,
-    /// Sketches dropped by the per-pair or byte cap (not by expiry).
-    pub(super) evicted: u64,
 }
 
 impl SketchStore {
@@ -116,14 +114,8 @@ impl SketchStore {
             let (old, old_at, gone) = list.remove(oldest);
             self.order.remove(&(old_at, old));
             self.bytes -= gone.bytes();
-            self.evicted += 1;
         }
-        while self.bytes > SKETCH_BYTES {
-            if self.pop_oldest().is_none() {
-                break;
-            }
-            self.evicted += 1;
-        }
+        while self.bytes > SKETCH_BYTES && self.pop_oldest().is_some() {}
     }
 
     /// Drop sketches older than `window` at `now`.

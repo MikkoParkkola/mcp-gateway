@@ -6,6 +6,8 @@
 //! answer) is excused for the text it was delivered from that source, so a
 //! legitimate holder is never refused for relaying what it received.
 
+use std::fmt::Write;
+
 use serde_json::json;
 
 use super::{CollusionAction, CollusionConfig, RelayCaller};
@@ -37,7 +39,7 @@ fn filler(seed: u64, chars: usize) -> String {
         i = i
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1_442_695_040_888_963_407);
-        out.push_str(&format!("row{:x} ", i >> 40));
+        let _ = write!(out, "row{:x} ", i >> 40);
     }
     out
 }

@@ -46,7 +46,6 @@ fn a_fifth_sketch_evicts_the_oldest() {
         let more = values(20 + u64::try_from(i).unwrap_or(0), 100);
         store.insert((1, 2), Arc::new(Sketch::of(&more)), now);
     }
-    assert_eq!(store.evicted, 1);
     assert!(
         !store.holds((1, 2), first[0], now, window),
         "the oldest still excused"

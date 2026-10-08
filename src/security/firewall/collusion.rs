@@ -658,11 +658,6 @@ impl CollusionDetector {
         self.state.lock().entries.len()
     }
 
-    /// Sketches dropped by their per-holder or byte cap (`MIK-8066`).
-    pub(crate) fn sketches_evicted(&self) -> u64 {
-        self.state.lock().sketches.evicted
-    }
-
     pub(crate) fn evicted(&self) -> u64 {
         self.evicted.load(Ordering::Relaxed)
     }
