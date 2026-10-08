@@ -198,9 +198,11 @@ fn a_backend_name_with_spaces_is_rewritten() {
 
 #[test]
 fn one_unsafe_backend_rolls_back_every_rename_in_the_file() {
-    // `ok` alone would be renamed; `fs` fails the parse check, so the whole
+    // `fs` really has an `http_url`, written as an explicit `? key` the line
+    // scanner cannot see, while a line inside its quoted description looks
+    // like the key. Renaming that line fails the parse check, so the whole
     // file is left as it was and both backends are reported.
-    let text = "backends:\n  ok:\n    http_url: \"https://ok.example.com/mcp\"\n  fs:\n    description: \"first line\n    http_url: still the description\"\n    command: x\n";
+    let text = "backends:\n  ok:\n    http_url: \"https://ok.example.com/mcp\"\n  fs:\n    description: \"first line\n    http_url: still the description\"\n    ? http_url\n    : \"https://fs.example.test/mcp\"\n";
     let out = rewrite_url_aliases(text, None);
     assert_eq!(out.text, text);
     assert!(out.changed.is_empty());
@@ -237,7 +239,7 @@ fn the_scheme_table_agrees_with_the_loader() {
         let path = dir.path().join("gateway.yaml");
         mcp_gateway::gateway::test_helpers::write_owner_only(
             &path,
-            &format!("backends:\n  b:\n    url: \"{address}\"\n"),
+            format!("backends:\n  b:\n    url: \"{address}\"\n"),
         )
         .expect("write config");
         let loaded = Config::load(Some(&path))

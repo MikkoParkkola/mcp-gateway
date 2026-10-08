@@ -163,10 +163,12 @@ fn an_environment_transport_over_another_in_the_file_is_refused_naming_both() {
 }
 
 #[test]
-fn two_transport_keys_in_the_file_are_refused_naming_both() {
+fn two_transport_keys_in_one_file_get_the_unread_key_refusal() {
+    // Within one file the strict-key check names the key nothing reads, and
+    // the file; the two-transport check covers the file-plus-environment case.
     let message = refusal("    command: \"srv\"\n    http_url: \"https://a.example.com/mcp\"\n");
     assert!(
-        message.contains("backend b has both command and http_url; keep one"),
+        message.contains("backends.b.http_url") && !message.contains("backends.b.command"),
         "{message}"
     );
 }
