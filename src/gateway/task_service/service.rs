@@ -43,6 +43,8 @@ pub(crate) enum CreateOutcome {
     InFlight,
     Capacity,
     Unavailable,
+    /// New keyed tasks are sealed (MIK-8052).
+    Sealed,
 }
 
 /// Why a task-service operation could not be carried out.
@@ -71,7 +73,9 @@ pub struct TaskService {
     /// This service's own share of the caller's admission seal: its stored
     /// rows whose key nobody can read (MIK-8052). Moved by re-reads, released
     /// once at shutdown; a share another holder placed is never touched.
-    sealed: parking_lot::Mutex<usize>,
+    /// `None` once released: a re-read that finishes after shutdown cannot
+    /// put a share back (seat-2 review).
+    sealed: parking_lot::Mutex<Option<usize>>,
 }
 
 impl TaskService {
@@ -106,7 +110,7 @@ impl TaskService {
         Ok(Self {
             store,
             admission,
-            sealed: parking_lot::Mutex::new(sealed),
+            sealed: parking_lot::Mutex::new(Some(sealed)),
         })
     }
 
@@ -126,9 +130,17 @@ impl TaskService {
     /// Move this service's share of the seal to `rows`, under its own lock so
     /// two moves never interleave.
     fn move_seal(&self, rows: usize) {
-        let mut mine = self.sealed.lock();
-        self.admission.adjust_sealed(*mine, rows);
-        *mine = rows;
+        if let Some(mine) = self.sealed.lock().as_mut() {
+            self.admission.adjust_sealed(*mine, rows);
+            *mine = rows;
+        }
+    }
+
+    /// Release this service's share for good: once, and no move after it.
+    fn release_seal(&self) {
+        if let Some(mine) = self.sealed.lock().take() {
+            self.admission.adjust_sealed(mine, 0);
+        }
     }
 
     /// Seal `name` as the load would, and seal admission with it (MIK-8052).
@@ -141,6 +153,23 @@ impl TaskService {
     /// The rows the store skipped when it opened (MIK-8023).
     pub(crate) fn skipped_records(&self) -> super::store::SkippedRecords {
         self.store.skipped_records()
+    }
+
+    /// The admin `/health` view of the task store (MIK-8052): how many rows
+    /// are sealed, the exact file of each, and the one action that clears
+    /// them, so an operator never has to hunt.
+    pub(crate) fn health_view(&self) -> serde_json::Value {
+        let files: Vec<String> = self
+            .store
+            .sealed_files()
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect();
+        serde_json::json!({
+            "sealed_rows": files.len(),
+            "sealed_files": files,
+            "action": "repair or remove each file; new keyed calls resume at the next expiry sweep",
+        })
     }
 
     /// Admit, reserve a worker only for a new key, then prepare and commit.
@@ -205,6 +234,7 @@ impl TaskService {
                 }
             }
             Ok(TaskAdmission::InFlight) => Ok(CreateOutcome::InFlight),
+            Ok(TaskAdmission::Sealed) => Ok(CreateOutcome::Sealed),
             Err(Refusal::Mismatch) => Ok(CreateOutcome::Mismatch),
             Ok(TaskAdmission::Unavailable) | Err(_) => Ok(CreateOutcome::Unavailable),
         }
@@ -293,8 +323,7 @@ impl TaskService {
             .close()
             .await
             .map_err(|_| ServiceError::Unavailable);
-        // Releases this service's share once: a second shutdown moves 0 to 0.
-        self.move_seal(0);
+        self.release_seal();
         closed
     }
 

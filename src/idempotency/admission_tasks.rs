@@ -125,6 +125,8 @@ pub(crate) enum TaskAdmission {
     },
     InFlight,
     Unavailable,
+    /// See [`super::Admission::Sealed`].
+    Sealed,
 }
 
 /// Fired immediately before `admit_task` acquires the admission mutex.
@@ -306,7 +308,7 @@ impl ExecutionAdmission {
         // A stored row whose key could not be read may be this request's
         // original: no new task until that row is repaired or removed (MIK-8052).
         if state.sealed > 0 {
-            return Ok(TaskAdmission::Unavailable);
+            return Ok(TaskAdmission::Sealed);
         }
         now.checked_add(RETENTION_SECS)
             .ok_or(Refusal::ExpiryOverflow)?;

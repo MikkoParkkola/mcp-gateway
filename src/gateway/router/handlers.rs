@@ -432,7 +432,7 @@ pub(super) async fn health_handler(
             "capability_backend": capability_status
                 .as_ref()
                 .map(|s| serde_json::to_value(s).unwrap_or(json!({}))),
-            "task_store": { "sealed_rows": sealed_rows },
+            "task_store": state.tasks.health_view(),
         })
     } else {
         json!({ "status": status, "version": env!("CARGO_PKG_VERSION") })

@@ -522,7 +522,7 @@ fn a_sealed_authority_refuses_only_new_identities() {
     service.adjust_sealed(0, 1);
     assert!(matches!(
         admit(&service, "alice", "new"),
-        Ok(Admission::Unavailable)
+        Ok(Admission::Sealed)
     ));
     let round = service.admit_round(
         Request {
@@ -534,7 +534,7 @@ fn a_sealed_authority_refuses_only_new_identities() {
         },
         "round-2",
     );
-    assert!(matches!(round, Ok(Admission::Unavailable)));
+    assert!(matches!(round, Ok(Admission::Sealed)));
     assert!(
         matches!(admit(&service, "alice", "held"), Ok(Admission::InFlight)),
         "a held identity is unaffected by the seal"

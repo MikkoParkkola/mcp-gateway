@@ -133,6 +133,16 @@ impl TaskStore {
     }
 
     /// The rows the load skipped, for the startup report (MIK-8023).
+    /// The full path of each sealed row's file, for the operator (MIK-8052).
+    pub(crate) fn sealed_files(&self) -> Vec<std::path::PathBuf> {
+        let state = self.0.state();
+        state
+            .sealed
+            .iter()
+            .map(|name| self.0.dir.join(name))
+            .collect()
+    }
+
     pub(crate) fn skipped_records(&self) -> super::SkippedRecords {
         let state = self.0.state();
         super::SkippedRecords {

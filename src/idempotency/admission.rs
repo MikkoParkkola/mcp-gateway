@@ -62,7 +62,17 @@ pub(crate) enum Admission {
     InFlight,
     Replay(Arc<[u8]>),
     Unavailable,
+    /// A stored task row's key is unreadable, so no new identity is admitted
+    /// until an operator repairs or removes it (MIK-8052).
+    Sealed,
 }
+
+/// What a caller is told while new keyed calls are sealed (MIK-8052): what
+/// happened and that it clears, but never a server path (that is in the log
+/// and the admin `/health` view).
+pub(crate) const SEALED_MESSAGE: &str = "New calls with an idempotency key are paused: the \
+    gateway's task store holds a record it cannot read. They resume on their own once an \
+    operator repairs or removes it; the gateway log and the admin /health view name the file.";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Settlement {
@@ -304,7 +314,7 @@ impl ExecutionAdmission {
             });
         }
         if state.sealed > 0 {
-            return Ok(Admission::Unavailable);
+            return Ok(Admission::Sealed);
         }
         now.checked_add(RETENTION_SECS)
             .ok_or(Refusal::ExpiryOverflow)?;

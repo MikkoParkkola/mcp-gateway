@@ -67,6 +67,8 @@ pub(crate) enum BeginOutcome {
     InFlight,
     Capacity,
     Unavailable,
+    /// New keyed tasks are sealed (MIK-8052).
+    Sealed,
 }
 
 impl BeginOutcome {
@@ -95,6 +97,11 @@ impl BeginOutcome {
             Self::Capacity | Self::Unavailable => {
                 JsonRpcResponse::error(Some(id), -32603, "task store unavailable")
             }
+            Self::Sealed => JsonRpcResponse::error(
+                Some(id),
+                -32603,
+                crate::idempotency::admission::SEALED_MESSAGE,
+            ),
         }
     }
 }
