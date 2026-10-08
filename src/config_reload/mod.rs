@@ -400,6 +400,8 @@ mod c4_enable_tests;
 mod c9_file_ref_tests;
 #[cfg(test)]
 mod webhook_base_path_reload_tests;
+#[cfg(test)]
+mod writer_lock_tests;
 
 #[cfg(test)]
 mod grant_change_trigger_tests;
