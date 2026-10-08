@@ -375,7 +375,7 @@ fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
-fn sync_dir(dir: &Path) -> std::io::Result<()> {
+pub(crate) fn sync_dir(dir: &Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         crate::private_fs::sync_dir(dir)

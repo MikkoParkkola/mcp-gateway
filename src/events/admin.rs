@@ -48,17 +48,10 @@ impl ReplayRefusal {
     }
 }
 
-/// Whether `reason` names a dead-letter reason (the listing's filter).
+/// Whether `reason` names a dead-letter reason (the listing's filter): any
+/// reason a dead letter can be written with, so none is left unfilterable.
 pub(crate) fn is_dead_reason(reason: &str) -> bool {
-    [
-        DeadReason::Gone,
-        DeadReason::TooLarge,
-        DeadReason::Exhausted,
-        DeadReason::FirewallBlocked,
-        DeadReason::Budget,
-    ]
-    .iter()
-    .any(|r| r.as_str() == reason)
+    serde_json::from_value::<DeadReason>(serde_json::Value::from(reason)).is_ok()
 }
 
 impl EventsHub {
@@ -171,6 +164,7 @@ impl EventsHub {
             last_status: None,
             dead_as: None,
             firewall: Some(verdict.to_owned()),
+            replayed: true,
             ..dead.record.clone()
         };
         let (caps, dead_at) = (self.outbox_caps(), dead.dead_at);

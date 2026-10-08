@@ -59,6 +59,25 @@ impl EventsHub {
         services: &Arc<Services>,
         slots: &Arc<Semaphore>,
     ) -> Duration {
+        let (held, policy) = (self.runtime.busy.lock().clone(), self.dead_policy());
+        // Expired rows settle every tick, before the reconcile gate (MIK-8061).
+        // Each burial is receipted before the evictions it caused.
+        let due = {
+            let _ordered = self.receipts.lock().await;
+            let mut due = self
+                .blocking(move |store| store.due(Utc::now(), &held, policy))
+                .await;
+            if let Some(due) = &mut due {
+                for record in &due.buried {
+                    self.dead_lettered(services, record, DeadReason::Expired)
+                        .await;
+                }
+                services
+                    .audit_evictions(std::mem::take(&mut due.evicted))
+                    .await;
+            }
+            due
+        };
         // The catalogue is partial until the startup scan has run: a record
         // of a route removed while down must not be sent first (MIK-7772).
         if !self
@@ -68,16 +87,13 @@ impl EventsHub {
         {
             return IDLE;
         }
-        let held = self.runtime.busy.lock().clone();
-        let Some(due) = self
-            .blocking(move |store| store.due(Utc::now(), &held))
-            .await
-        else {
+        let Some(due) = due else {
             return IDLE;
         };
+        // A deadline already past (more expired records waiting) is now.
         let mut wait = due
             .next
-            .and_then(|at| (at - Utc::now()).to_std().ok())
+            .map(|at| (at - Utc::now()).to_std().unwrap_or(Duration::ZERO))
             .unwrap_or(IDLE)
             .min(IDLE);
         for record in due.ready {
@@ -201,6 +217,9 @@ impl EventsHub {
         // subscription by now: nothing is charged or sent for it. Otherwise
         // the current row signs, so a secret rotated since the claim counts.
         if self.store.signing_row(&record).is_none() {
+            // Pending again, for the next expiry pass (MIK-8061).
+            self.settle(services, &record, unsent_now("cancelled"))
+                .await;
             return;
         }
         let (Some(body), Some(url)) = (record.body(), url) else {
@@ -323,8 +342,17 @@ impl EventsHub {
         // row that signs is read after it, never before.
         let Some(current) = self.store.signing_row(record) else {
             services.audit_outcome(&ended("cancelled")).await;
+            self.settle(services, record, unsent_now("cancelled")).await;
             return;
         };
+        // An expired row kept for its burials still signs but is not sent to:
+        // unsent, and the next expiry pass settles it (MIK-8061).
+        if !current.live(Utc::now()) {
+            services.audit_outcome(&ended("subscription_expired")).await;
+            self.settle(services, record, unsent_now("subscription_expired"))
+                .await;
+            return;
+        }
         // Past its bounds after the wait for the record: dead, unsent, and the
         // record just written says how that attempt ended.
         if self.overdue(record, Utc::now()) {
@@ -504,40 +532,6 @@ impl EventsHub {
             self.dead_lettered(services, record, reason).await;
         }
         services.audit_evictions(evicted).await;
-    }
-
-    /// The governance record of a dead letter (design 3.7).
-    pub(super) async fn dead_lettered(
-        &self,
-        services: &Services,
-        record: &OutboxRecord,
-        reason: DeadReason,
-    ) {
-        // Stamped at fan-out from the subscription the record is for; a record
-        // written before the stamp existed falls back to the store.
-        let host = if record.callback_host.is_empty() {
-            self.store
-                .get(&record.subscription_id)
-                .and_then(|s| url::Url::parse(&s.url).ok())
-                .and_then(|u| u.host_str().map(str::to_owned))
-                .unwrap_or_default()
-        } else {
-            record.callback_host.clone()
-        };
-        services
-            .audit_lifecycle(
-                &super::governance::Lifecycle {
-                    action: "events.dead_letter",
-                    subscription_id: &record.subscription_id,
-                    event_name: &record.name,
-                    callback_host: &host,
-                    detail: reason.as_str(),
-                    event_id: Some(&record.event_id),
-                    failed_with: Some(-32015),
-                },
-                super::governance::Attribution::Gateway,
-            )
-            .await;
     }
 }
 
@@ -742,6 +736,14 @@ fn grant(record: &OutboxRecord) -> Option<&str> {
 
 /// Back to pending after a refusal before the POST, ending `status`: a
 /// revoked subscription's record goes with it, a held one waits.
+/// Pending again at once, the attempt not counted: nothing was sent.
+fn unsent_now(status: &'static str) -> Settle {
+    Settle::Unsent {
+        next: Utc::now(),
+        status,
+    }
+}
+
 fn refusal_retry(status: &'static str) -> Settle {
     Settle::Retry {
         next: Utc::now() + REFUSAL_RETRY,
