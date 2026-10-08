@@ -395,3 +395,25 @@ fn a_principal_one_live_key_derives_keeps_its_standing() {
         assert_eq!(name.as_deref(), Some("dev"));
     }
 }
+
+/// `MIK-8062.PREFIX.2`: the static bearer alone keeps its admin standing, also
+/// beside an expired key that shares its principal.
+#[test]
+fn the_bearer_alone_keeps_its_admin_standing() {
+    let mut expired = key("dev", "s-dev", false);
+    expired.expires_at = Some(Utc::now() - chrono::Duration::hours(1));
+    for keys in [vec![], vec![expired]] {
+        let credentials = LiveCredentials {
+            bearer_principal: Some(principal("s-dev")),
+            ..LiveCredentials::default()
+        };
+        let dir = tempfile::tempdir().expect("dir");
+        let (hub, _live) = hub_with(dir.path(), keys, credentials);
+        let standing = source(&hub).standing(&principal("s-dev"));
+        let (admin, name) = standing
+            .map(|s| (s.admin, s.key))
+            .expect("the bearer has standing");
+        assert!(admin, "the bearer is an admin");
+        assert!(name.is_none(), "the bearer holds no key");
+    }
+}
