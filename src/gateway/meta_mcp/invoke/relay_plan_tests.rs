@@ -789,3 +789,26 @@ async fn short_fields_delivered_reordered_keep_the_delivered_run() {
         "the receipt kept the step's order, not the delivered one"
     );
 }
+
+/// Diagnostic probe for MIK-8124 (throwaway only) on #3491: the crowded
+/// receipt scenario under fresh fingerprint keys with own-hash selection.
+#[tokio::test]
+async fn probe_mik8124_key_rate_on_sampling() {
+    use crate::security::firewall::collusion::PROBE_KEY;
+    const RUNS: usize = 300;
+    let mut fails = 0;
+    for _ in 0..RUNS {
+        PROBE_KEY.with(|k| *k.borrow_mut() = Some(std::hash::RandomState::new()));
+        let (meta, firewall) = relay_meta();
+        let copy = filler("rep", 25);
+        let step = json!({"a": vec![copy.as_str(); 800], "body": format!("{PROSE} {SECRET}")});
+        let answer = plan_answer(&json!({"a": copy, "body": PROSE}));
+        deliver_step(&meta, &step, &answer).await;
+        carol_holds(&firewall, "a", PROSE);
+        if refused(&firewall, "alice", PROSE) {
+            fails += 1;
+        }
+    }
+    PROBE_KEY.with(|k| *k.borrow_mut() = None);
+    assert_eq!(fails, 0, "PROBE MIK-8124 on sampling: {fails}/{RUNS} keys refused alice");
+}

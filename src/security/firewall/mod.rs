@@ -37,7 +37,7 @@ pub mod budget_guard;
 // 2a-i). Its counters and `RelayFinding::tool` have no reader until the
 // metrics increment, which is when this `expect` must be removed.
 #[cfg_attr(not(test), expect(dead_code))]
-mod collusion;
+pub(crate) mod collusion;
 mod collusion_digest;
 mod collusion_gate;
 pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
