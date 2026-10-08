@@ -138,19 +138,45 @@ fn upgrade_refuses_a_config_that_is_not_a_regular_file_at_once() {
         .expect("run mkfifo(1)");
     assert!(status.success(), "mkfifo(1) failed");
     let data = dir.path().join("data");
-    let (tx, rx) = std::sync::mpsc::channel();
-    let (probe, stamp_dir) = (path.clone(), data.clone());
-    std::thread::spawn(move || {
-        let _ = tx.send(run_upgrade_with_config(
-            true,
-            true,
-            Some(&stamp_dir),
-            Some(&probe),
-        ));
-    });
-    let code = rx
-        .recv_timeout(std::time::Duration::from_secs(5))
-        .expect("upgrade blocked on a FIFO");
-    assert_eq!(code, ExitCode::FAILURE);
-    assert!(!data.exists(), "the upgrade went ahead");
+    for dry_run in [true, false] {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (probe, stamp_dir) = (path.clone(), data.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(run_upgrade_with_config(
+                dry_run,
+                true,
+                Some(&stamp_dir),
+                Some(&probe),
+            ));
+        });
+        let code = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("upgrade blocked on a FIFO");
+        assert_eq!(code, ExitCode::FAILURE, "dry_run={dry_run}");
+        assert!(!data.exists(), "dry_run={dry_run}: the upgrade went ahead");
+    }
+}
+
+#[test]
+fn upgrade_refuses_a_directory_at_the_config_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::create_dir(&path).expect("mkdir");
+    let data = dir.path().join("data");
+    for dry_run in [true, false] {
+        let code = run_upgrade_with_config(dry_run, true, Some(&data), Some(&path));
+        assert_eq!(code, ExitCode::FAILURE, "dry_run={dry_run}");
+        assert!(!data.exists(), "dry_run={dry_run}: the upgrade went ahead");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dry_run_reads_a_config_through_a_symlink() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = config_in(dir.path());
+    let link = dir.path().join("linked.yaml");
+    std::os::unix::fs::symlink(&target, &link).expect("symlink");
+    let rewrite = rewrite_url_aliases_in(&link, RewriteMode::DryRun).expect("a symlink is read");
+    assert_eq!(rewrite.changed, vec![4, 6]);
 }
