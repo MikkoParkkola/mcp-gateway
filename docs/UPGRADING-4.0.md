@@ -4360,7 +4360,8 @@ writers lock different files. If your config lives in a git repository, add it t
 `.gitignore`. On Linux and macOS a lock file other accounts can open (one copied in or checked
 out as `0644`) is made owner-only at the next write, since any account that can open it could
 hold it and stall every save; one owned by another account is refused: stop every gateway and CLI command using that config,
-then remove it.
+then remove it. On Windows a lock file whose permissions let other accounts in (one copied in,
+restored or checked out from git) is refused with the PowerShell lines that make it private.
 
 CLI writes take the same lock for their write. One that finds it held prints
 `Waiting for gateway.yaml ...` and continues once it is free; if another writer holds it for
