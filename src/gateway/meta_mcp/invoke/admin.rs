@@ -407,6 +407,10 @@ fn cost_section(snap: &crate::cost_accounting::enforcer::EnforcerSnapshot) -> Va
     })
 }
 
+#[cfg(test)]
+#[path = "admin_reload_tests.rs"]
+mod admin_reload_tests;
+
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_section_tests {
     use super::cost_section;
