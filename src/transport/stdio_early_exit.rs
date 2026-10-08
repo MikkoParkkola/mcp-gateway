@@ -144,6 +144,18 @@ pub(super) async fn reply_or_eof<T>(
     }
 }
 
+/// Trips a start's stdout-closed latch when dropped. The reader task holds it,
+/// so the latch trips however the task ends: at EOF, on an early return, or in
+/// a panic. A handshake or request racing the latch then never waits out its
+/// timeout behind a reader that is gone, though `StartState` keeps the sender.
+pub(super) struct TripOnDrop(pub(super) std::sync::Arc<tokio::sync::watch::Sender<bool>>);
+
+impl Drop for TripOnDrop {
+    fn drop(&mut self) {
+        self.0.send_replace(true);
+    }
+}
+
 /// Per-start state: the stdout-closed latch (fresh each start, so a previous
 /// generation's exit cannot answer this one) and whether the race saw it. Tests
 /// also keep the class and needle of the last early exit.

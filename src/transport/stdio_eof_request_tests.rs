@@ -186,3 +186,17 @@ async fn a_write_the_child_never_reads_ends_at_the_request_timeout() {
     stdin_retired(&t).await;
     let _ = t.close().await;
 }
+
+/// agy review on #3531: the latch trips even when the reader task panics, so
+/// a handshake racing it fails fast instead of waiting out its timeout.
+#[test]
+fn the_latch_trips_when_the_reader_panics() {
+    let tx = Arc::new(tokio::sync::watch::channel(false).0);
+    let rx = tx.subscribe();
+    let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _latch = super::early_exit::TripOnDrop(Arc::clone(&tx));
+        panic!("the reader task died");
+    }));
+    assert!(ended.is_err());
+    assert!(*rx.borrow(), "the latch tripped on the way out");
+}

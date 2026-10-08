@@ -199,6 +199,7 @@ impl StdioTransport {
         let transport = Arc::downgrade(self);
         let max_frame = self.max_frame_bytes.load(Ordering::Relaxed);
         let stdout_reader = tokio::spawn(async move {
+            let latch = early_exit::TripOnDrop(eof_tx);
             debug!("Reader task started");
             let mut reader = BufReader::new(stdout);
             let mut frame = Vec::new();
@@ -236,7 +237,7 @@ impl StdioTransport {
 
             // Before the clear: a request that registers after it sees the
             // latch, and one that registered before it is dropped by it.
-            eof_tx.send_replace(true);
+            drop(latch);
             if let Some(transport) = transport.upgrade() {
                 transport.connected.store(false, Ordering::Relaxed);
                 // The stream is over: wake every waiting call now (its receiver
