@@ -85,11 +85,13 @@ pub(crate) struct RefreshState {
 }
 
 impl RefreshState {
-    /// What an unreadable sidecar reads as: rotating, and possibly holding a
-    /// marker for the stored token.
+    /// What an unreadable sidecar reads as: possibly holding a marker for the
+    /// stored token, and not seen either way, which [`Self::may_rotate`]
+    /// treats as rotating. Not `rotates`: a login that repairs the sidecar
+    /// writes this state back, and the damage observed nothing about rotation,
+    /// so a server that keeps its tokens is not branded rotating for good.
     fn unreadable() -> Self {
         Self {
-            rotates: true,
             damaged: true,
             ..Self::default()
         }
