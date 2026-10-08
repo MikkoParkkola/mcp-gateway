@@ -68,6 +68,9 @@ pub enum ServiceError {
 pub struct TaskService {
     pub(crate) store: TaskStore,
     admission: Arc<ExecutionAdmission>,
+    /// The seal count the caller's admission held before this store sealed
+    /// it (MIK-8052), handed back when the service gives its store back.
+    prior_sealed: usize,
 }
 
 impl TaskService {
@@ -98,7 +101,11 @@ impl TaskService {
             let _ = store.close().await;
             return Err(ServiceError::Unavailable);
         }
-        Ok(Self { store, admission })
+        Ok(Self {
+            store,
+            admission,
+            prior_sealed: prior,
+        })
     }
 
     /// Read the sealed rows again and lower the seal only after any repaired
@@ -266,13 +273,19 @@ impl TaskService {
     }
 
     /// Join in-flight writers and release the directory lease without consuming
-    /// the `Arc` the executor still holds.
+    /// the `Arc` the executor still holds. The seal this store set goes back
+    /// with it: a caller that keeps its admission authority after a startup
+    /// that failed past the open (stdio serves on without a task store) must
+    /// not keep refusing every new keyed call (MIK-8052).
     pub(crate) async fn shutdown(&self) -> Result<(), ServiceError> {
-        self.store
+        let closed = self
+            .store
             .clone()
             .close()
             .await
-            .map_err(|_| ServiceError::Unavailable)
+            .map_err(|_| ServiceError::Unavailable);
+        self.admission.set_sealed(self.prior_sealed);
+        closed
     }
 
     /// The admission authority, for read-only questions.
