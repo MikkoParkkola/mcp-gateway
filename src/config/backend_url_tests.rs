@@ -225,7 +225,8 @@ fn a_url_holding_a_variable_names_the_environment_override() {
     let message = refusal("    url: \"${FS_URL}\"\n");
     assert!(
         message.contains("MCP_GATEWAY_BACKENDS__B__HTTP_URL")
-            && message.contains("MCP_GATEWAY_BACKENDS__B__WS_URL"),
+            && message.contains("MCP_GATEWAY_BACKENDS__B__WS_URL")
+            && message.contains("delete backends.b.url"),
         "{message}"
     );
 }
