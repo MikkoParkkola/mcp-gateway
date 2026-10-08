@@ -373,3 +373,67 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
         "precondition: the reader escaped the killed group"
     );
 }
+
+/// MIK-8079 (codex P2): a transport dropped without `close()` while a write is
+/// stuck on an escaped reader still ends that write and frees stdin.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader() {
+    use crate::transport::Transport as _;
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("escaped.pid");
+    let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
+    let script = format!(
+        "while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
+         *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         esac\ndone\n",
+        pid = pidfile.display()
+    );
+    std::fs::write(dir.path().join("escape.sh"), script).unwrap();
+    let transport = super::StdioTransport::new(
+        "sh escape.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(30),
+        None,
+    );
+    transport.start().await.expect("start");
+    let writer = std::sync::Arc::clone(&transport.writer);
+    let big = serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+    let stuck = {
+        let transport = std::sync::Arc::clone(&transport);
+        tokio::spawn(async move { transport.request("tools/call", Some(big)).await })
+    };
+    let mut escaped = String::new();
+    for _ in 0..100 {
+        escaped = std::fs::read_to_string(&pidfile).unwrap_or_default();
+        if !escaped.trim().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let held = writer.try_lock().is_err();
+    stuck.abort();
+    let _ = stuck.await;
+    drop(transport);
+    let mut freed = false;
+    for _ in 0..50 {
+        if writer.try_lock().is_ok() {
+            freed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let _ = std::process::Command::new("kill")
+        .args(["-9", escaped.trim()])
+        .status();
+    assert!(held, "precondition: the write holds stdin");
+    assert!(
+        freed,
+        "a dropped transport left its stuck write holding stdin"
+    );
+}
