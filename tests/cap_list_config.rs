@@ -115,8 +115,12 @@ fn listing_with_env_file(contents: &str) -> String {
     let config = root.path().join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &config,
-        // Single-quoted YAML keeps a Windows path's backslashes literal.
-        format!("env_files:\n  - '{}'\n", env_file.display()),
+        // Single-quoted YAML keeps a Windows path's backslashes literal; an
+        // apostrophe inside it is written twice.
+        format!(
+            "env_files:\n  - '{}'\n",
+            env_file.display().to_string().replace('\'', "''")
+        ),
     )
     .expect("config");
     let output = run(
