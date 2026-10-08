@@ -348,7 +348,6 @@ impl CapabilityExecutor {
     ///
     /// Inner and outer share `{revision, profile, epoch}` plus the already-
     /// resolved outer `cache_binding`. The binding is copied, not re-hashed.
-    #[allow(clippy::unused_self)]
     pub(super) fn build_cache_key(
         &self,
         capability: &super::super::CapabilityDefinition,
@@ -371,7 +370,12 @@ impl CapabilityExecutor {
             {
                 format!(
                     "2:{}",
-                    super::mcp::principal(capability, context, false).ok()?
+                    super::mcp::principal(
+                        capability,
+                        context,
+                        self.multi_user.load(std::sync::atomic::Ordering::Acquire)
+                    )
+                    .ok()?
                 )
             }
             (_, Some(identity)) => {

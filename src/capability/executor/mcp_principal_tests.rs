@@ -93,12 +93,20 @@ async fn api_key_callers_get_their_own_children_on_a_multi_user_gateway() {
     assert_ne!(a1["cwd"], b["cwd"], "and another directory");
 }
 
-/// The credential arm's exact key: tagged and length-prefixed, the spelling
-/// the response cache uses for the same caller.
+/// The credential arm's exact key, on the owner key dispatch really produces:
+/// tagged and length-prefixed.
 #[test]
-fn a_credential_digest_keys_the_child_as_cred() {
-    let key = principal(&capability(), &api_key("abc"), true).expect("named by its digest");
-    assert_eq!(key, "cred:3:abc");
+fn a_credential_owner_keys_the_child_as_cred() {
+    let owner = api_key("credential:5e1f0a2b3c4d");
+    let key = principal(&capability(), &owner, true).expect("named by its owner key");
+    assert_eq!(key, "cred:23:credential:5e1f0a2b3c4d");
+}
+
+/// A single-user gateway keeps serving every API key the one operator child.
+#[test]
+fn a_single_user_gateway_keeps_one_child_for_every_key() {
+    let owner = api_key("credential:5e1f0a2b3c4d");
+    assert_eq!(principal(&capability(), &owner, false).unwrap(), "operator");
 }
 
 /// The arms above the credential still win, in their order.

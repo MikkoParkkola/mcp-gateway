@@ -156,10 +156,19 @@ async fn two_api_keys_reach_their_own_children_through_dispatch() {
     )
     .await
     .unwrap();
-    let (a, a_again, b) = (pid(&a), pid(&a_again), pid(&b));
+    // A background task's rebuilt caller carries its recorded owner,
+    // `credential:<principal>`, where the live call carried the bare principal.
+    let task = say(
+        &meta,
+        &caller(Some("credential:digest-a"), Authentication::Authenticated),
+    )
+    .await
+    .unwrap();
+    let (a, a_again, b, task) = (pid(&a), pid(&a_again), pid(&b), pid(&task));
     assert!(a.is_some(), "the probe reports its pid");
     assert_eq!(a, a_again, "one key reuses its child");
     assert_ne!(a, b, "another key gets another child");
+    assert_eq!(a, task, "the task a key starts reaches that key's child");
 }
 
 /// Control: a caller that presented no credential is still refused on a

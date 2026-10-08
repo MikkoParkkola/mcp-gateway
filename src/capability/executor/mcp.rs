@@ -317,8 +317,9 @@ fn stop_all(children: Vec<Child>) {
 }
 
 /// Which child a call belongs to: the dispatch binding, else the verified
-/// OIDC subject, else the caller's grant subject, else an authenticated
-/// caller's credential owner key. A caller none of these names
+/// OIDC subject, else the caller's grant subject, else, on a multi-user
+/// gateway, an authenticated caller's credential owner key. A caller none of
+/// these names
 /// shares the one child of a single-user gateway and is refused on a
 /// multi-user one, where sharing would hand it another caller's state.
 pub(crate) fn principal(
@@ -343,10 +344,13 @@ pub(crate) fn principal(
     }
     // An API-key caller named by nothing above: its credential owner key
     // (MIK-7825), the same string for a live call and the task it starts.
-    if let Some(owner) = context
-        .credential_principal
-        .as_deref()
-        .filter(|owner| !owner.is_empty())
+    // Multi-user only: a single-user gateway keeps serving every key the one
+    // operator child, as before.
+    if multi_user
+        && let Some(owner) = context
+            .credential_principal
+            .as_deref()
+            .filter(|owner| !owner.is_empty())
     {
         return Ok(format!("cred:{}:{owner}", owner.len()));
     }
