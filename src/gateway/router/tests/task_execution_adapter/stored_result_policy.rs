@@ -321,6 +321,41 @@ async fn a_plan_step_that_fails_at_the_backend_is_recorded_and_reauthorized() {
     assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
 }
 
+/// `MIK-7651.GH2470.2`: a plan step the backend answered, refused by the
+/// gateway AFTER dispatch, is still a target. A plan's targets start empty
+/// and only the step's own invocation records one. The backend asks for
+/// input a client that declared no `elicitation` cannot give, so the
+/// gateway's refusal is an `Err` out of the invocation, not a tool-error
+/// result. Mutant: only an `Ok` invocation recorded.
+#[tokio::test]
+async fn a_plan_step_refused_after_dispatch_is_recorded_and_reauthorized() {
+    let mock = MockBackend::answering(Answer::Result(super::input_round::ask(
+        "confirm",
+        super::input_round::STATE_1,
+    )));
+    let (state, _store) = state_with(&mock).await;
+    install_playbook(&state, TOOL);
+    let id = task_id(&post(&state, "key-a", playbook_call(13, "b-post-dispatch")).await);
+    let settled = poll_until_terminal(&state, "key-a", &id).await;
+    std::assert_eq!(status_of(&settled), "failed", "{settled}");
+    std::assert!(
+        settled.to_string().contains("did not declare"),
+        "the step failed on the post-dispatch input refusal: {settled}"
+    );
+    std::assert_eq!(mock.calls(), 1, "the step reached the backend");
+    let step = crate::gateway::task_service::Target {
+        server: BACKEND.to_owned(),
+        tool: TOOL.to_owned(),
+    };
+    std::assert_eq!(
+        state.task_executor.service.store.targets_for_test(&id),
+        vec![step],
+        "the dispatched step is stored"
+    );
+    withhold(&state, TOOL);
+    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+}
+
 /// The fixture's task runtime, reopened with a small per-record byte budget.
 async fn state_with_record_budget(
     mock: &Arc<MockBackend>,

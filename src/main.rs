@@ -19,7 +19,7 @@ use clap::Parser;
 use mcp_gateway::{
     cli::{AuditCommand, Cli, Command, SetupCommand, SkillsCommand},
     config::{Config, EnvOverlay},
-    config_persistence::{load_existing_or_default, write_config},
+    config_persistence::load_existing_or_default,
     gateway::Gateway,
     setup_tracing,
     validator::ValidateConfig,
@@ -174,7 +174,11 @@ async fn run(cli: Cli) -> ExitCode {
             yes,
             output,
             configure_client,
-        })) => commands::run_setup_command(yes, &output, configure_client).await,
+            force,
+        })) => {
+            let mode = commands::config_write::comment_loss(force);
+            commands::run_setup_command(yes, &output, configure_client, mode).await
+        }
         #[cfg(feature = "config-export")]
         Some(Command::Setup(SetupCommand::Export {
             target,
@@ -195,6 +199,7 @@ async fn run(cli: Cli) -> ExitCode {
             description,
             env_vars,
             config,
+            force,
             trailing_command,
         }) => {
             // Merge --command flag and trailing `-- cmd args...` (claude/codex style)
@@ -212,24 +217,41 @@ async fn run(cli: Cli) -> ExitCode {
                     description.as_deref(),
                     &env_vars,
                     &config,
+                    commands::config_write::comment_loss(force),
                 )
                 .await
             }
             #[cfg(not(feature = "webui"))]
             {
-                let _ = (name, effective_command, url, description, env_vars, config);
+                let _ = (
+                    name,
+                    effective_command,
+                    url,
+                    description,
+                    env_vars,
+                    config,
+                    force,
+                );
                 eprintln!("Error: add/remove commands require the 'webui' feature");
                 ExitCode::FAILURE
             }
         }
-        Some(Command::Remove { name, config }) => {
+        Some(Command::Remove {
+            name,
+            config,
+            force,
+        }) => {
             #[cfg(feature = "webui")]
             {
-                commands::run_remove_command(&name, &config)
+                commands::run_remove_command(
+                    &name,
+                    &config,
+                    commands::config_write::comment_loss(force),
+                )
             }
             #[cfg(not(feature = "webui"))]
             {
-                let _ = (name, config);
+                let _ = (name, config, force);
                 eprintln!("Error: add/remove commands require the 'webui' feature");
                 ExitCode::FAILURE
             }
@@ -736,6 +758,7 @@ async fn run_server(cli: Cli) -> ExitCode {
 pub fn write_discovered_to_config(
     servers: &[mcp_gateway::discovery::DiscoveredServer],
     config_path: Option<&Path>,
+    mode: crate::commands::config_write::CommentLoss,
 ) -> mcp_gateway::Result<std::path::PathBuf> {
     let path = config_path.map_or_else(
         || std::path::PathBuf::from("mcp-gateway-discovered.yaml"),
@@ -749,7 +772,7 @@ pub fn write_discovered_to_config(
         config.backends.insert(server.name.clone(), backend_config);
     }
 
-    write_config(&path, &config).map_err(mcp_gateway::Error::Config)?;
+    commands::config_write::write(&path, &config, mode).map_err(mcp_gateway::Error::Config)?;
 
     Ok(path)
 }

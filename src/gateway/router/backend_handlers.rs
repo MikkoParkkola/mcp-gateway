@@ -476,6 +476,9 @@ async fn backend_handler_inner(
         Ok(route) => route,
         Err(response) => return response,
     };
+    // MIK-7996: the call's cost is recorded under this session after the
+    // backend answers; held until this handler returns.
+    let _session = state.meta_mcp.hold_session(route.session_id);
     if envelope.method.starts_with("notifications/") {
         return direct_caller::forward_notification(state, &name, &caller, &route, envelope).await;
     }
@@ -572,7 +575,14 @@ fn settle_direct_idempotency(
         // all the scope noted is this call's reading.
         let reading =
             crate::gateway::meta_mcp::invoke::cache_reads::reading(std::collections::BTreeSet::new);
-        reservation.complete_read(result, reading);
+        // The direct route writes nothing into the answer (MIK-7991).
+        reservation.complete_read(
+            result,
+            (
+                reading,
+                crate::gateway::gateway_writes::WriteRecord::default(),
+            ),
+        );
     }
 }
 
