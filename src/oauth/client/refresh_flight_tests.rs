@@ -144,8 +144,12 @@ async fn two_live_clients_refresh_a_rotating_token_once() {
     server.arrivals(2, Duration::from_secs(2)).await;
     server.release.notify_one();
 
-    a.await.unwrap().expect("the first refresh succeeds");
-    let _ = b.await.unwrap();
+    let issued = a.await.unwrap().expect("the first refresh succeeds");
+    let adopted = b
+        .await
+        .unwrap()
+        .expect("the second client takes up the stored token");
+    assert_eq!(adopted, issued);
     assert_eq!(
         server.uses("r1"),
         1,
@@ -184,8 +188,15 @@ async fn a_cancelled_refresh_still_stores_the_rotated_token() {
         }
     })
     .await;
+    assert_eq!(
+        stored(&first).and_then(|t| t.refresh_token).as_deref(),
+        Some("r2"),
+        "the detached exchange stored the rotated token"
+    );
 
-    let _ = headless(&second).await;
+    headless(&second)
+        .await
+        .expect("the second client takes up the stored token");
     assert_eq!(
         server.uses("r1"),
         1,
@@ -448,14 +459,20 @@ async fn a_stored_rotation_that_kept_the_access_token_is_adopted() {
     assert_eq!(marker(&late), None, "an adoption marks nothing in flight");
 }
 
-/// RENEWREPLAY.4: a server never seen to rotate keeps its refresh token after
-/// an exchange whose answer was lost, and the next refresh reuses it.
+/// ROT3.3 (was RENEWREPLAY.4): a server seen not to rotate (a settled refresh
+/// kept the sent token) keeps its refresh token after an exchange whose answer
+/// was lost, and the next refresh reuses it.
 #[tokio::test]
 async fn an_uncertain_refresh_keeps_a_non_rotating_servers_token() {
-    let server = TokenServer::start(&[Answer::KeepThenBrokenBody, Answer::Keep]).await;
+    let server =
+        TokenServer::start(&[Answer::Keep, Answer::KeepThenBrokenBody, Answer::Keep]).await;
     let dir = tempfile::tempdir().unwrap();
     let late = client(dir.path(), &server);
     hold(&late, &token("a1", Some("r1"), true));
+    headless(&late)
+        .await
+        .expect("a settled refresh that keeps r1");
+    expire(&late);
 
     assert!(headless(&late).await.is_err(), "the answer was lost");
     assert_eq!(
@@ -464,7 +481,87 @@ async fn an_uncertain_refresh_keeps_a_non_rotating_servers_token() {
     );
     expire(&late);
     headless(&late).await.expect("the kept token refreshes");
-    assert_eq!(server.uses("r1"), 2);
+    assert_eq!(server.uses("r1"), 3);
+}
+
+/// ROT3.3b: a settled answer that leaves the refresh token out keeps the one
+/// sent (RFC 6749 section 6), so it shows the server does not rotate too.
+#[tokio::test]
+async fn an_answer_without_a_refresh_token_counts_as_keeping_it() {
+    let server =
+        TokenServer::start(&[Answer::Omit, Answer::KeepThenBrokenBody, Answer::Keep]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let late = client(dir.path(), &server);
+    hold(&late, &token("a1", Some("r1"), true));
+    headless(&late)
+        .await
+        .expect("a settled refresh without a refresh token");
+    expire(&late);
+
+    assert!(headless(&late).await.is_err(), "the answer was lost");
+    expire(&late);
+    headless(&late).await.expect("the kept token refreshes");
+    assert_eq!(server.uses("r1"), 3);
+}
+
+/// ROT3.5: a rotation, once seen, outranks an earlier refresh that kept the
+/// token. The server kept `r1`, then rotated it to `r3` (the fixture counts
+/// the kept answer too); the answer to `r3`'s refresh was lost, so `r3` is
+/// not sent again.
+#[tokio::test]
+async fn a_seen_rotation_outranks_an_earlier_kept_token() {
+    let server =
+        TokenServer::start(&[Answer::Keep, Answer::Rotate, Answer::RotateThenBrokenBody]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let late = client(dir.path(), &server);
+    hold(&late, &token("a1", Some("r1"), true));
+    headless(&late)
+        .await
+        .expect("a settled refresh that keeps r1");
+    expire(&late);
+    headless(&late)
+        .await
+        .expect("a settled refresh that rotates to r3");
+    expire(&late);
+    assert!(headless(&late).await.is_err(), "the answer was lost");
+    expire(&late);
+
+    let error = headless(&late).await.expect_err("a login is needed");
+    assert!(
+        matches!(error, Error::AuthorizationRequired { .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        server.uses("r3"),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+}
+
+/// ROT3.1b: a server not yet seen either way counts as rotating. Its first
+/// refresh lost its answer, so the token may be consumed: it is not sent
+/// again, and the next call asks for a login.
+#[tokio::test]
+async fn an_uncertain_first_refresh_is_not_resent() {
+    let server = TokenServer::start(&[Answer::KeepThenBrokenBody, Answer::Keep]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let late = client(dir.path(), &server);
+    hold(&late, &token("a1", Some("r1"), true));
+
+    assert!(headless(&late).await.is_err(), "the answer was lost");
+    expire(&late);
+    let error = headless(&late).await.expect_err("a login is needed");
+    assert!(
+        matches!(error, Error::AuthorizationRequired { .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        server.uses("r1"),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
 }
 
 /// FU-A.4: a marker left by a process that stopped mid-exchange, on a server
@@ -479,6 +576,7 @@ async fn a_token_marked_in_flight_on_a_rotating_server_is_not_sent() {
     let state = crate::oauth::storage::RefreshState {
         rotates: true,
         in_flight: Some(super::refresh_flight::fingerprint_hex("r1")),
+        ..Default::default()
     };
     late.storage
         .save_refresh_state(&key, RESOURCE, &state)
@@ -494,10 +592,42 @@ async fn a_token_marked_in_flight_on_a_rotating_server_is_not_sent() {
     assert_eq!(marker(&late), None, "the retired token's marker is settled");
 }
 
+/// ROT3.1: a process stopped during a credential's first refresh left its
+/// in-flight marker, before the server was seen either to rotate or to keep
+/// the token. The next start sends nothing and asks for a login.
+#[tokio::test]
+async fn a_token_marked_in_flight_before_any_settled_refresh_is_not_sent() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let late = client(dir.path(), &server);
+    hold(&late, &token("a1", Some("r1"), true));
+    let key = late.credential_key().unwrap();
+    let state = crate::oauth::storage::RefreshState {
+        in_flight: Some(super::refresh_flight::fingerprint_hex("r1")),
+        ..Default::default()
+    };
+    late.storage
+        .save_refresh_state(&key, RESOURCE, &state)
+        .unwrap();
+
+    let error = headless(&late).await.expect_err("a login is needed");
+    assert!(
+        matches!(error, Error::AuthorizationRequired { .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        server.requests(),
+        0,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+}
+
 /// RENEWREPLAY.3(d): the first rotation is seen while the storage directory
 /// refuses writes, so neither the rotation record nor the clear reaches disk.
-/// The spent set alone keeps a second client of this process from sending the
-/// possibly consumed token.
+/// A second client of this process does not send the possibly consumed token:
+/// the in-flight marker the first left retires it (the server is not yet known,
+/// so it may rotate, MIK-8145), with the in-process spent set as the backstop.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_token_spent_while_storage_refuses_writes_is_not_resent() {

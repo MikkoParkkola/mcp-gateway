@@ -42,20 +42,29 @@ that source. Per-principal controls (`firewall/mod.rs:412-499`) see A and B each
   list. The detector's own state (section 3) is bounded, in process only, and adds no store.
 
 ## 3. Definition (signals, thresholds, action)
-**Fingerprint.** Text is NFC-normalized and whitespace-collapsed, then winnowed:
+**Fingerprint.** Text is NFC-normalized and whitespace-collapsed, then sampled:
 - k = 48-char k-grams at **every offset**, 64-bit keyed hash (SipHash, per-process random key);
-  keep the minimum of each window of w = 16 hashes (standard winnowing; offset-independent).
-- Winnowing property: a shared substring of at least k + w − 1 = 63 chars yields at least one
-  common fingerprint when its k-gram hashes are distinct (no two-match floor is claimed).
-- Results keep at most 1,024 fingerprints (~8 KB of text; rest counted as `source_truncated`);
+  keep a k-gram when its hash is 0 mod 4 (MIK-8083). The decision depends on the k-gram alone, so
+  two texts sharing a k-gram keep it in both or in neither, wherever it sits: the same-source
+  excuse is exact. (Winnowing, used before, kept window minima whose choice near a copy's edge
+  depended on the surrounding text, and refused about 1 in 70 callers' own split copies.)
+- Sampling has no hard floor: a shared run of n distinct k-grams keeps fewer than the two
+  matches a finding needs with probability (3/4)^n (1 + n/3): 79 chars 1.2e-3, 87 chars 1.4e-4,
+  100 chars 4.5e-6, 127 chars 2.8e-9. The key is per process, so which k-grams are kept cannot be
+  predicted from outside.
+- Results keep at most 4,096 fingerprints per delivery (both forms of a capped split copy are
+  expected to fit, about 3,050; the rest is counted as `source_truncated`);
   egress arguments are fingerprinted in full within the request-size limit.
 
 **State.** `fp -> {tuples: [(source_id, principal_id, sensitive, last_seen)], principals: n}`,
 with the ids stored as keyed 64-bit hashes.
-- Tuples are deduplicated per (source, principal), keeping the latest time. A fingerprint holds
-  at most 8 tuples. When a 9th arrives, it becomes `Saturated`: no tuples are evicted, and it
-  never counts toward a finding (counted in a metric). Eviction could otherwise erase B's
-  same-source excuse and turn an excused copy into a block.
+- Tuples are deduplicated per (source, principal), keeping the latest time. No tuple count
+  switches a fingerprint off (MIK-8123): a caller keeps up to 64 exact tuples per fingerprint,
+  the first 8 inline and the rest from one pool of 65,536 shared by every fingerprint (at most
+  10 MiB of records). A tuple that does not fit is dropped when plain (only an excuse is lost)
+  and, when sensitive, kept as its caller's overflow: evidence for any other caller's egress of
+  that text, whatever its flows, with no same-source excuse (its source is gone). Overflow
+  expires with its own sensitive deliveries. Both are counted in a metric.
 - Once `common_principals` distinct principals hold a fingerprint, it becomes `Common` and stops
   growing.
 - At most 250,000 fingerprints: 250k × (8 + 8 × 25 + ~64) ≈ 68 MB. At the cap the oldest
@@ -76,8 +85,12 @@ arguments each satisfy, within `window`:
 - it is not held as (T, B, any) for the same T;
 - it is not `Common`.
 
+Or (MIK-8123) some caller A != B holds it as *overflow* (a sensitive tuple past A's cap or the
+pool): overflow has no source left, so no (T, B) tuple excuses it and no `allowed_flows` entry
+allows it. Do not add an excuse for overflow: it would reopen the relay a dropped tuple hid.
+
 The excuse deliberately does not cover content from another source: writing to a shared store
-and reading it back still counts. Winnowing gives **no** hard length floor. Repetitive text can
+and reading it back still counts. Sampling gives **no** hard length floor (§3). Repetitive text can
 share one hash, and short repeated matches can yield two. Row 7 therefore tests typical
 behaviour, not a bound.
 
@@ -109,15 +122,16 @@ entry; the metric is the rate to watch before `block`.
 
 ## 5. Limits and evasion (these keep ASI10 PARTIAL)
 
-- **Missed:** re-encoding, paraphrase, splits under about 63 chars, and anything past a result's
-  first 1,024 fingerprints (`source_truncated`).
+- **Missed:** re-encoding, paraphrase, splits under 48 chars, about 1 in 1,000 copies of 79 chars
+  (fewer for longer ones, §3), and anything past a delivery's first 4,096 fingerprints
+  (`source_truncated`).
 - **`Common` can be poisoned:** colluders who control `common_principals` identities can each
   receive the content and so promote it to `Common`, exempting B. This is accepted: excluding
   sensitive tuples from `Common` would bring back the boilerplate false positives.
 - **Per replica only:** A and B on different replicas are never correlated.
 - **Flush:** every delivered result is recorded, so ordinary traffic fills the 250k map; the
-  effective window is `min(window_secs, 250,000 / total fingerprint rate)`: about 244 large
-  (1,024-fingerprint) results from anyone evict the oldest evidence. Evictions are counted.
+  effective window is `min(window_secs, 250,000 / total fingerprint rate)`: about 61 large
+  (4,096-fingerprint) results from anyone evict the oldest evidence. Evictions are counted.
 - **Depends on #1785 and HARDENED increment 3.** Until both land, the direct route has a single
   identity, so the relay rule cannot fire there.
 
@@ -162,7 +176,7 @@ OWASP ASI10 row says "verbatim cross-principal relay detection (opt-in)" and sta
 | 15 | direct route (after #1785) | `direct_route_relay_detected` | wire the meta route only |
 | 16 | `action != off` with `firewall.enabled: false` refuses to start | `collusion_needs_enabled_firewall` | allow start |
 | 17 | same-source excuse holds when B's non-sensitive copy was delivered first | `excuse_holds_when_b_first` | record sensitive results only |
-| 18 | a 9th tuple saturates the fingerprint: B's excuse is not evicted, no finding | `saturated_fingerprint_never_flags` | evict the oldest tuple |
+| 18 | nine tuples stay exact: B's excuse holds, and without it A's copy witnesses B's relay | `many_holders_stay_exact` | switch the fingerprint off past 8 tuples |
 
 ## 9. Out of scope
 
@@ -193,7 +207,7 @@ could not list pairs; own dedup state [10]. Disabled firewall accepted; refused 
 cache, Admin, `openWorldHint` inferred true (`annotations.rs:103-118`) [12]; tuple overflow
 [18]; false 79-char claim [7]; sensitive-only broke excuse [17]; direct route records delivered
 value (`backend_handlers.rs:1233`) [11]. r3: read-only tools leak (`annotations.rs:39`); all
-tools egress but `non_egress` [12]. Eviction erased excuse; `Saturated` [18]. Unkeyed guard
+tools egress but `non_egress` [12]. Eviction erased excuse; exact tuples past 8 [18]. Unkeyed guard
 independent of anomaly [13]. One-match test [7]. `Common` poisoning disclosed (5). Improvements:
 `CollusionRelay` -> `-32002` on both routes (increment 2); `Common` = spread, not public; hard
 bound: nothing under 48 chars matches; ReadOnly corner moot. Seat A = first reviewer; B =
@@ -274,7 +288,7 @@ including any caller-supplied `_context_integrity`. It stops at 64 KiB of text, 
 boundary, and counts cuts in its own counter (`source_truncated` counts fingerprints, not bytes).
 Arguments get no text cap, since a cap would let a padded payload hide a relay; the request body
 limit bounds them (`server.max_body_size`, 10 MiB). Past the cut, results can relay undetected,
-and repetitive text can exhaust the 1,024-fingerprint keep limit before 64 KiB.
+and repetitive text can exhaust the 4,096-fingerprint keep limit before 64 KiB.
 
 **Startup validation (row 16).** When `action != off`, a collusion check in
 `FirewallConfig::validate`, run before its anomaly-off early return, refuses:
@@ -386,16 +400,17 @@ refusals (a fresh response with no `result`) and transport failures record nothi
 The source is `server:tool`.
 - Text: string leaves of `result`, joined with `\n`, skipping the `_context_integrity` subtree.
   Capped at 6 KiB of text: the first and last 3 KiB, each cut on a UTF-8 boundary, so a
-  tail-only excerpt still matches. The cap sits under the detector's 1,024-fingerprint keep
-  limit (about 8.7K characters, kept in text order); the 64 KiB first proposed would have
+  tail-only excerpt still matches. The cap sits under the detector's 4,096-fingerprint keep
+  limit (about 8K characters in each of a split copy's two forms, kept in text order); the
+  64 KiB first proposed would have
   dropped every tail fingerprint. Each cut is counted; the middle of a larger result is the
   known, observable residual.
 - **Evasion bound (stated for operators and the final review).** Per delivered result, only its
-  first and last 3 KiB of text are compared, at most 1,024 fingerprints. Content taken only from
+  first and last 3 KiB of text are compared, at most 4,096 fingerprints. Content taken only from
   the rest of a larger result is never detected, so a source that pads a result can move content
   out of view. The egress side has no cap: every string of the forwarded params is checked, so
   padding the relayed payload hides nothing. Below the fingerprint size nothing matches: a shared
-  run under 48 characters never counts, a run of 63 or more is guaranteed one fingerprint, and
+  run under 48 characters never counts, a longer run keeps about 1 in 4 of its k-grams (§3), and
   `min_matches` (default 2) are needed. Acceptable for `observe`; whether `block` needs sampling
   across the whole result is put to the final review.
 - Sensitive: `server:tool` matches `sources`, OR the result's gateway-attached
@@ -440,9 +455,9 @@ is lane policy (operator decision 2026-09-29), not something the workflow enforc
   U+2028/2029), then NFC and whitespace collapse. Before this, a copy interleaved with such
   characters every < 48 chars matched nothing, and sanitization then delivered the clean text to
   the backend. Applies to both recording and egress, so it covers every route.
-- **`common_principals` is at most 9.** A tracked fingerprint holds 8 tuples; the 9th saturates
-  it, so at most 9 distinct principals are ever counted. A larger value could never be met and
-  is refused at load.
+- **`common_principals` is at most 9.** The boilerplate guard stays meaningful only for text a
+  handful of callers share; every caller seen counts toward it, tuples kept or not (MIK-8123).
+  A larger value is refused at load.
 - **Delivery point.** Direct-route recording runs after `finish_direct` (scope clamp, chain
   strip and origin link), on the value the caller receives; replays record the stored value.
 - **Signing before recording.** The direct route signs, then records (`sign_and_record`). A signing

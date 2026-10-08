@@ -106,6 +106,8 @@ fn subscriptions(
                 dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
                 tls_enabled: false,
                 live_config: Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
+                // stdio has no agent middleware: nothing presents an agent token.
+                agent_auth: crate::gateway::oauth::AgentAuthState::new(false, Arc::default()),
             },
         ),
     )

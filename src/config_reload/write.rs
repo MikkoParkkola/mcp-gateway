@@ -3,8 +3,14 @@
 //! Config-file writes that reload the live gateway afterwards.
 
 use std::path::Path;
+#[cfg(feature = "webui")]
+use std::path::PathBuf;
+#[cfg(feature = "webui")]
+use std::sync::Arc;
+use std::time::Instant;
 
 use crate::config::Config;
+use crate::config_persistence::lock::lock_config;
 use crate::config_persistence::{CommentLoss, Unwritten};
 
 use super::{ReloadContext, ReloadOutcome};
@@ -33,6 +39,15 @@ impl std::fmt::Display for ConfigWriteError {
 }
 
 impl std::error::Error for ConfigWriteError {}
+
+impl From<crate::config_persistence::lock::NotLocked> for ConfigWriteError {
+    fn from(e: crate::config_persistence::lock::NotLocked) -> Self {
+        match e {
+            crate::config_persistence::lock::NotLocked::Busy => Self::Busy,
+            crate::config_persistence::lock::NotLocked::Failed(message) => Self::Failed(message),
+        }
+    }
+}
 
 impl From<String> for ConfigWriteError {
     fn from(message: String) -> Self {
@@ -120,7 +135,11 @@ pub async fn write_config_and_reload_outcome(
         return ctx.write_and_reload_outcome(path, config).await.map(Some);
     }
 
-    crate::config_persistence::write_config(path, config)?;
+    // No reload lock without a live gateway, but the config lock still
+    // orders this write against every other process's writer.
+    let held = lock_config(path, Instant::now() + super::RELOAD_LOCK_WAIT).await?;
+    crate::config_persistence::write_config_with(path, config, CommentLoss::Rewrite, &held)
+        .map_err(|e| ConfigWriteError::from(MutateError::from(e)))?;
     Ok(None)
 }
 
@@ -185,10 +204,46 @@ pub(super) fn reload_failure(e: &dyn std::fmt::Display, mode: CommentLoss) -> St
     format!("Config written but reload failed: {}", detail(e, mode))
 }
 
+/// [`mutate_config_and_reload_with`] run to the end in a task of its own
+/// (MIK-8120): what the web UI calls.
+///
+/// The listener drops a request's handler when its client disconnects. Run
+/// in the handler, a write dropped after it wrote `gateway.yaml` and before
+/// its reload published would leave the file and the running gateway on
+/// different configs. Here dropping the caller drops only the wait: the task
+/// still loads, edits, writes, reloads and publishes, then releases both
+/// locks. What it cannot outlive: the process itself (a shutdown mid-reload
+/// leaves the file for the next start to load).
+#[cfg(feature = "webui")]
+pub(crate) async fn mutate_config_and_reload_detached<T, E, F>(
+    path: PathBuf,
+    reload_context: Option<Arc<ReloadContext>>,
+    mode: CommentLoss,
+    mutate: F,
+) -> std::result::Result<ConfigMutation<T, E>, MutateError>
+where
+    F: FnOnce(&mut Config) -> std::result::Result<T, E> + Send + 'static,
+    T: Send + 'static,
+    E: Send + 'static,
+{
+    tokio::spawn(async move {
+        mutate_config_and_reload_with(&path, reload_context.as_deref(), mode, mutate).await
+    })
+    .await
+    .unwrap_or_else(|e| {
+        Err(MutateError::Write(ConfigWriteError::Failed(format!(
+            "The config write task failed: {e}"
+        ))))
+    })
+}
+
 /// [`mutate_config_and_reload`] in `mode`: the web UI refuses a write that
 /// would drop the file's comments, and a write that changes nothing writes
 /// nothing (a live gateway still reloads).
-pub(crate) async fn mutate_config_and_reload_with<T, E, F>(
+///
+/// Cancellable between its write and its reload, so private to this module:
+/// a request handler calls [`mutate_config_and_reload_detached`].
+pub(super) async fn mutate_config_and_reload_with<T, E, F>(
     path: &Path,
     reload_context: Option<&ReloadContext>,
     mode: CommentLoss,
@@ -203,13 +258,22 @@ where
             .await;
     }
 
-    // No live gateway to reload, so no reload lock exists to hold. This path is
-    // the CLI acting on a config file nothing else is serving.
+    // No live gateway to reload, so no reload lock exists to hold. The config
+    // lock is still held from the load to the write: another process (a CLI,
+    // a second gateway) may be writing the same file.
+    // A file that does not load is refused before the lock is taken, so the
+    // refusal leaves the directory as it was, no lock file added (GH462). It
+    // is loaded again under the lock: this check only decides refusal early.
+    crate::config_persistence::load_existing_or_default(path)
+        .map_err(|e| load_failure(path, &e, mode))?;
+    let held = lock_config(path, Instant::now() + super::RELOAD_LOCK_WAIT)
+        .await
+        .map_err(ConfigWriteError::from)?;
     let mut config = crate::config_persistence::load_existing_or_default(path)
         .map_err(|e| load_failure(path, &e, mode))?;
     match mutate(&mut config) {
         Ok(value) => {
-            crate::config_persistence::write_config_with(path, &config, mode)?;
+            crate::config_persistence::write_config_with(path, &config, mode, &held)?;
             Ok(ConfigMutation::Applied(value, None))
         }
         Err(rejection) => Ok(ConfigMutation::Rejected(rejection)),

@@ -162,3 +162,352 @@ async fn a_configured_smaller_limit_refuses_a_frame_the_default_accepts() {
     assert!(frames(&input).await[0].is_ok());
     assert!(frames_within(&input, 65_536).await[0].is_err());
 }
+
+/// MIK-8079: a request dropped mid-write must not leave a partial frame on the
+/// shared stdin. The backend stops reading after the handshake so a large
+/// frame blocks on the full pipe, the caller gives up, and a later message is
+/// written; once the backend reads again, every line it got must be whole JSON.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dropped_request_leaves_no_partial_frame_for_the_next_caller() {
+    use crate::transport::Transport as _;
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("frames.log");
+    let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
+    let script = format!(
+        "while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
+         *'notifications/initialized'*) sleep 2; break ;;\n\
+         esac\ndone\n\
+         while IFS= read -r line; do printf '%s\\n' \"$line\" >> \"{log}\"; done\n",
+        log = log.display()
+    );
+    std::fs::write(dir.path().join("reader.sh"), script).unwrap();
+    let transport = super::StdioTransport::new(
+        "sh reader.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(5),
+        None,
+    );
+    transport.start().await.expect("start");
+
+    // Far over a pipe buffer, so the write blocks while the backend sleeps.
+    let big = serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+    let dropped = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        transport.request("tools/call", Some(big)),
+    )
+    .await;
+    assert!(
+        dropped.is_err(),
+        "precondition: the large request was still writing"
+    );
+
+    // A caller queued behind the stuck write and then cancelled sends nothing.
+    let queued = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        transport.request("resources/list", None),
+    )
+    .await;
+    assert!(queued.is_err(), "precondition: the queued request gave up");
+
+    transport
+        .notify("notifications/roots/list_changed", None)
+        .await
+        .expect("a later message is written");
+
+    // Bounded polling for the two frames the backend should log.
+    let mut frames = String::new();
+    for _ in 0..100 {
+        frames = std::fs::read_to_string(&log).unwrap_or_default();
+        if frames.contains("notifications/roots/list_changed") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let torn: Vec<String> = frames
+        .lines()
+        .filter(|line| serde_json::from_str::<serde_json::Value>(line).is_err())
+        .map(|line| line.chars().take(80).collect())
+        .collect();
+    assert!(
+        torn.is_empty(),
+        "the backend received {} torn frame(s), e.g. {:?}",
+        torn.len(),
+        torn.first()
+    );
+    // The admitted large frame is finished first, whole; the cancelled queued
+    // request never reaches the peer; the later message follows.
+    let methods: Vec<String> = frames
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .map(|frame| frame["method"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        methods,
+        ["tools/call", "notifications/roots/list_changed"],
+        "{} bytes logged",
+        frames.len()
+    );
+}
+
+/// MIK-8079: `close()` is not held up by a write stuck on a peer that stopped
+/// reading; ending the tree breaks that write.
+#[cfg(unix)]
+#[tokio::test]
+async fn close_returns_while_a_write_is_stuck_on_a_peer_that_stopped_reading() {
+    use crate::transport::Transport as _;
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
+    let script = format!(
+        "while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
+         *'notifications/initialized'*) exec sleep 1000 ;;\n\
+         esac\ndone\n"
+    );
+    std::fs::write(dir.path().join("deaf.sh"), script).unwrap();
+    let transport = super::StdioTransport::new(
+        "sh deaf.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(30),
+        None,
+    );
+    transport.start().await.expect("start");
+    let big = serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+    let stuck = {
+        let transport = std::sync::Arc::clone(&transport);
+        tokio::spawn(async move { transport.request("tools/call", Some(big)).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!stuck.is_finished(), "precondition: the write is stuck");
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(5), transport.close()).await;
+    assert!(closed.is_ok(), "close() waited behind a stuck write");
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(5), stuck).await;
+    assert!(
+        matches!(ended, Ok(Ok(Err(_)))),
+        "the stuck request did not end in an error after close(): {ended:?}"
+    );
+}
+
+/// Kills the process whose pid the file holds, if any, when dropped.
+#[cfg(target_os = "linux")]
+struct KillEscapedOnDrop(std::path::PathBuf);
+
+#[cfg(target_os = "linux")]
+impl Drop for KillEscapedOnDrop {
+    fn drop(&mut self) {
+        let pid = std::fs::read_to_string(&self.0).unwrap_or_default();
+        if !pid.trim().is_empty() {
+            let _ = std::process::Command::new("kill")
+                .args(["-9", pid.trim()])
+                .status();
+        }
+    }
+}
+
+/// MIK-8079: `close()` returns even when a reader that escaped the process
+/// group (a daemonized descendant still holding stdin) keeps a write stuck.
+/// The pipe goes through fd 3: a background job's own stdin is `/dev/null`
+/// in a non-interactive shell, so `<&0` would not hand it the pipe.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
+    use crate::transport::Transport as _;
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("escaped.pid");
+    // Kills the escaped reader however the row ends, so a failed precondition
+    // cannot leave a `sleep 1000` behind on the host (MIK-8099.HYG.1).
+    let _reaper = KillEscapedOnDrop(pidfile.clone());
+    let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
+    let script = format!(
+        "while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
+         *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         esac\ndone\n",
+        pid = pidfile.display()
+    );
+    std::fs::write(dir.path().join("escape.sh"), script).unwrap();
+    let transport = super::StdioTransport::new(
+        "sh escape.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(30),
+        None,
+    );
+    transport.start().await.expect("start");
+    let big = serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+    let stuck = {
+        let transport = std::sync::Arc::clone(&transport);
+        tokio::spawn(async move { transport.request("tools/call", Some(big)).await })
+    };
+    // Wait until the escaped reader is running and has recorded its pid.
+    let mut escaped = String::new();
+    for _ in 0..100 {
+        escaped = std::fs::read_to_string(&pidfile).unwrap_or_default();
+        if !escaped.trim().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        !escaped.trim().is_empty(),
+        "precondition: the escaped reader started"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        transport.writer.try_lock().is_err(),
+        "precondition: the write holds stdin"
+    );
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(10), transport.close()).await;
+    let escaped_alive = std::process::Command::new("kill")
+        .args(["-0", escaped.trim()])
+        .status()
+        .is_ok_and(|s| s.success());
+    // Judged while the escaped reader still holds the pipe: killing it would
+    // end the write by itself.
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(5), stuck).await;
+    let released = transport.writer.try_lock().is_ok_and(|w| w.is_none());
+    assert!(
+        closed.is_ok(),
+        "close() hung on a write an escaped reader keeps stuck"
+    );
+    assert!(
+        matches!(ended, Ok(Ok(Err(_)))),
+        "the stuck write outlived close(): {ended:?}"
+    );
+    assert!(released, "close() left stdin held by the stuck write");
+    assert!(
+        escaped_alive,
+        "precondition: the reader escaped the killed group"
+    );
+}
+
+/// MIK-8079 (codex P2): a transport dropped without `close()` while a write is
+/// stuck on an escaped reader still ends that write and frees stdin.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader() {
+    use crate::transport::Transport as _;
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("escaped.pid");
+    // Kills the escaped reader however the row ends, so a failed precondition
+    // cannot leave a `sleep 1000` behind on the host (MIK-8099.HYG.1).
+    let _reaper = KillEscapedOnDrop(pidfile.clone());
+    let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
+    let script = format!(
+        "while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
+         *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         esac\ndone\n",
+        pid = pidfile.display()
+    );
+    std::fs::write(dir.path().join("escape.sh"), script).unwrap();
+    let transport = super::StdioTransport::new(
+        "sh escape.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(30),
+        None,
+    );
+    transport.start().await.expect("start");
+    let writer = std::sync::Arc::clone(&transport.writer);
+    let big = serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+    let stuck = {
+        let transport = std::sync::Arc::clone(&transport);
+        tokio::spawn(async move { transport.request("tools/call", Some(big)).await })
+    };
+    for _ in 0..100 {
+        if !std::fs::read_to_string(&pidfile)
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let held = writer.try_lock().is_err();
+    stuck.abort();
+    let _ = stuck.await;
+    drop(transport);
+    let mut freed = false;
+    for _ in 0..50 {
+        if writer.try_lock().is_ok() {
+            freed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(held, "precondition: the write holds stdin");
+    assert!(
+        freed,
+        "a dropped transport left its stuck write holding stdin"
+    );
+}
+
+/// `MIK-8099.ROW.1`: a write queued behind the stdin lock while the shutdown
+/// token is renewed (what `close()` then `start()` do to it) takes the NEW
+/// token: the token is read under the stdin lock, so the old token's cancel
+/// does not end it. The write is polled to pending before the renewal, and
+/// the frame (larger than a pipe) cannot finish until the row lets the peer
+/// read, so a write holding the cancelled token would end first.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_write_queued_across_a_token_renewal_takes_the_new_token() {
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let go = dir.path().join("go");
+    let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
+    let script = format!(
+        "while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
+         *'notifications/initialized'*) break ;;\n\
+         esac\ndone\n\
+         while [ ! -f \"{go}\" ]; do sleep 0.05; done\n\
+         cat >/dev/null\n",
+        go = go.display()
+    );
+    std::fs::write(dir.path().join("late.sh"), script).unwrap();
+    let transport = super::StdioTransport::new(
+        "sh late.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(30),
+        None,
+    );
+    transport.start().await.expect("start");
+    let frame = serde_json::json!({
+        "jsonrpc": "2.0", "method": "x", "params": { "blob": "a".repeat(256 * 1024) },
+    })
+    .to_string();
+    let held = transport.writer.lock().await;
+    let old = transport.shutdown.lock().clone();
+    let mut write = Box::pin(transport.write_message(frame));
+    let polled = tokio::time::timeout(std::time::Duration::from_millis(100), &mut write).await;
+    assert!(polled.is_err(), "precondition: the write waits on stdin");
+    old.cancel();
+    *transport.shutdown.lock() = tokio_util::sync::CancellationToken::new();
+    drop(held);
+    let early = tokio::time::timeout(std::time::Duration::from_millis(300), &mut write).await;
+    std::fs::write(&go, b"").unwrap();
+    let written = match early {
+        Ok(done) => Ok(done),
+        Err(_) => tokio::time::timeout(std::time::Duration::from_secs(10), write).await,
+    };
+    assert!(
+        matches!(written, Ok(Ok(()))),
+        "the old token's cancel ended a write queued before the renewal: {written:?}"
+    );
+}

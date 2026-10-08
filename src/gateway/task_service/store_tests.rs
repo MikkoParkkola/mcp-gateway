@@ -26,8 +26,11 @@ mod adapter_marker;
 mod admission;
 mod durability;
 mod fallback_room;
+mod gateway_writes;
 mod input_round;
 mod qualification;
+#[cfg(unix)]
+mod reread;
 mod sealed;
 mod skipped;
 mod support;

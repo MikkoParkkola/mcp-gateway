@@ -105,8 +105,8 @@ fn remove_keeps_hand_written_comments() {
 }
 
 #[test]
-fn a_file_another_writer_broke_is_not_spliced_into() {
-    use mcp_gateway::config::{BackendConfig, Config};
+fn a_file_another_writer_broke_is_refused_not_replaced() {
+    use mcp_gateway::config::BackendConfig;
     use mcp_gateway::config_persistence::{load_existing_or_default, write_config};
 
     let home = tempfile::tempdir().expect("home");
@@ -123,13 +123,12 @@ fn a_file_another_writer_broke_is_not_spliced_into() {
     )
     .expect("write");
 
-    write_config(&path, &config).expect("write config");
-    let written = std::fs::read_to_string(&path).expect("read");
-    let loaded = Config::load_literal(Some(&path))
-        .unwrap_or_else(|e| panic!("the written config must load: {e}\n{written}"));
-    assert!(
-        loaded.backends.contains_key("new"),
-        "the added backend is kept:\n{written}"
+    // Replacing it would erase that writer's change with `add`'s older copy.
+    let error = write_config(&path, &config).expect_err("refused");
+    assert!(error.starts_with("Failed to load"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read"),
+        "backends: {}\nnot_a_gateway_key: 1\n"
     );
 }
 

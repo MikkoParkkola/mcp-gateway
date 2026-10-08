@@ -4,7 +4,7 @@
 //! to fingerprint, and that hint's own text, shared by the unit and route
 //! tests; and (MIK-7994) prose no part of which matches another.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// A backend's tool-level failure around `prose`. The status in it makes
 /// the gateway's hint a `BackendError` one, whose advice is long enough
@@ -15,9 +15,9 @@ pub(crate) fn backend_failure(prose: &str) -> String {
 
 /// The longest text of the `recovery` hint in `answer` (its tool value,
 /// read decoded when wrapped) that is none of `backend` and long enough
-/// that a receipt holding it would be found: a shared run of
-/// `K + 2W - 1` = 79 chars meets the default `min_matches` of 2, so a
-/// "not receipted" assertion on it cannot pass for being too short.
+/// that a receipt holding it would be found: a relay of it is reported under
+/// this process's hash key (see [`detectable`]), so a "not receipted"
+/// assertion on it never passes for being too short (MIK-8083).
 pub(crate) fn own_hint_text(answer: &Value, backend: &str) -> String {
     let value = answer["content"][0]["text"]
         .as_str()
@@ -30,6 +30,7 @@ pub(crate) fn own_hint_text(answer: &Value, backend: &str) -> String {
             piece.chars().count() >= 79
                 && !backend.contains(*piece)
                 && !piece.contains(&backend[..40])
+                && detectable(piece)
         })
         .max_by_key(|piece| piece.len())
         .unwrap_or_else(|| panic!("base: the gateway attached a hint of its own: {answer}"))
@@ -57,4 +58,42 @@ pub(crate) fn distinct_prose(len: usize) -> String {
     }
     text.truncate(len);
     text
+}
+
+/// Whether a relay of `text` is found under this process's hash key: one
+/// caller holds it as a delivered result, another forwards it. Fingerprints
+/// are a keyed sample of k-grams (MIK-8083), so a short text can keep fewer
+/// than `min_matches` under some keys; such a text proves nothing as a probe.
+fn detectable(text: &str) -> bool {
+    use crate::security::firewall::{
+        CollusionAction, CollusionConfig, Firewall, FirewallConfig, RelayCaller, ScanType,
+    };
+    let fw = Firewall::from_config(
+        FirewallConfig {
+            collusion: CollusionConfig {
+                action: CollusionAction::Observe,
+                sources: vec!["probe:*".to_string()],
+                ..CollusionConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    );
+    fw.record_delivery(
+        RelayCaller::Keyed("holder"),
+        "probe",
+        "read",
+        &json!({ "text": text }),
+    );
+    let params = json!({ "name": "send", "arguments": { "text": text } });
+    fw.check_relay(
+        RelayCaller::Keyed("other"),
+        "probe",
+        "send",
+        &params,
+        ("s", "other"),
+    )
+    .findings
+    .iter()
+    .any(|f| f.scan_type == ScanType::CollusionRelay)
 }

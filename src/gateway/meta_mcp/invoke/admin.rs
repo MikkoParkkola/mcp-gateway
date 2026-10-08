@@ -306,11 +306,15 @@ impl MetaMcp {
         })?;
 
         match backend.reload().await {
-            Ok(total) => Ok(json!({
-                "status": "ok",
-                "backend": backend.name,
-                "total_capabilities": total,
-            })),
+            Ok(total) => {
+                // Listeners hear of it only if what they see changed (`MIK-8127`).
+                self.backends.nudge_catalogue(&backend.name);
+                Ok(json!({
+                    "status": "ok",
+                    "backend": backend.name,
+                    "total_capabilities": total,
+                }))
+            }
             Err(e) => Err(Error::json_rpc(-32603, format!("{e}"))),
         }
     }
@@ -366,11 +370,23 @@ impl MetaMcp {
                 .ok_or_else(|| Error::json_rpc(-32602, format!("Playbook not found: {name}")))?
         };
 
-        let invoker = MetaMcpInvoker { meta: self, caller };
+        let invoker = MetaMcpInvoker {
+            meta: self,
+            caller,
+            steps: parking_lot::Mutex::default(),
+        };
+        let output = definition.output.clone();
 
         let mut temp_engine = PlaybookEngine::new();
         temp_engine.register(definition);
         let result = temp_engine.execute(name, arguments, &invoker).await?;
+        // MIK-7993 r5: the steps' gateway notes, onto the answer as stored.
+        invoker.carry_writes(output.as_ref(), &result.steps_completed);
+        // MIK-8113: which output member each step produced, for its seams.
+        for (member, label) in &result.provenance {
+            let pointer = format!("/output/{}", super::relay::pointer_token(member));
+            super::relay::note_plan_member(pointer, *label);
+        }
 
         Ok(serde_json::to_value(&result).unwrap_or(json!(null)))
     }

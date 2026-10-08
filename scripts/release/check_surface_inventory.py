@@ -118,7 +118,12 @@ def matching_brace(mask: str, open_idx: int) -> int:
 
 def prod_scan(path: Path) -> tuple[str, str]:
     """`scan` of a file with every `#[cfg(test)]`-gated inline module blanked."""
-    code, mask = scan(path.read_text(encoding="utf-8"))
+    return prod_scan_text(path.read_text(encoding="utf-8"))
+
+
+def prod_scan_text(text: str) -> tuple[str, str]:
+    """`prod_scan` of source text already in hand."""
+    code, mask = scan(text)
     for m in reversed(list(re.finditer(r"#\[cfg\((?:all\()?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{", mask))):
         end = matching_brace(mask, m.end() - 1)
         blank = re.sub(r"[^\n]", " ", code[m.start() : end + 1])
@@ -439,7 +444,62 @@ def extract_config() -> list[Entry]:
         for t in re.finditer(r"\(\s*(&\[[^\]]*\]|\"[^\"]+\")", body):
             key = prefix + ".".join(re.findall(r'"([^"]+)"', t.group(1)))
             w.out.setdefault(key, Entry(key, rel(sk), line_of(code, m.end() + t.start()), "retired: loads with a warning"))
+    for e in annotation_rows(code, sk):
+        w.out.setdefault(e.id, e)
+    # Keys the loader resolves before any struct reads them: no field declares
+    # them, so they are anchored to the resolver.
+    for key, path, anchor in LOADER_KEYS:
+        src = SRC / path
+        text = src.read_text(encoding="utf-8")
+        at = text.find(anchor)
+        if at < 0:
+            raise SystemExit(f"{rel(src)}: loader key {key} lost its anchor {anchor!r}")
+        w.out.setdefault(key, Entry(key, rel(src), line_of(text, at), "resolved by the loader"))
     return sorted(w.out.values(), key=lambda e: e.id)
+
+
+# (key, file under src, text that marks where the loader resolves it)
+LOADER_KEYS = (("backends.<name>.url", "config/config_file.rs", "fn resolve_backend_urls"),)
+
+QUOTED = r"""(?:'[^']*'|"[^"]*")"""
+# A pure disjunction of prefix tests is the only shape `annotation_rows` can read.
+ANNOTATION_BODY = re.compile(rf"\s*key\.starts_with\({QUOTED}\)(?:\s*\|\|\s*key\.starts_with\({QUOTED}\))*\s*")
+# The two loaders that let an annotation key through: top-level keys and backend
+# keys (strict_keys.rs). Each branch is pinned whole, condition and body through
+# its closing brace, modulo
+# whitespace: any edit to either one, a narrowing, a negation or a removal, fails
+# closed and asks a human to re-read the annotation rows. Threat model (MIK-8077):
+# a careless edit, not an adversary; exact pinning ends the spelling rounds.
+ANNOTATION_BRANCHES = tuple(
+    re.compile(r"\s+".join(map(re.escape, b.split())))
+    for b in (
+        "if let KeyPath::Map { key: leaf, .. } = &key && is_annotation(leaf) { ignored.insert(path, Ignored::Annotation); } else if",
+        "} else if is_annotation(key) { ignored.insert(path, Ignored::Annotation); } else {",
+    )
+)
+
+
+def annotation_rows(code: str, path: Path) -> list[Entry]:
+    """One row per key prefix `is_annotation` lets load at any mapping level.
+
+    Fails closed: a body that is not a plain `starts_with` disjunction, or a
+    changed number of production call sites, yields a row no doc can hold.
+    """
+    code, mask = prod_scan_text(code)
+    m = re.search(r"fn is_annotation\b[^{]*\{(.*?)\n\}", code, re.S)
+    if m is None:
+        return []
+    line = line_of(code, m.start())
+    if not ANNOTATION_BODY.fullmatch(m.group(1)):
+        return [Entry("is_annotation: unrecognised body, re-read the annotation rows", rel(path), line)]
+    # Matched on the mask, so a string literal cannot stand in for a branch;
+    # each branch exactly once, and no other caller that could disagree.
+    found = [len(b.findall(mask)) for b in ANNOTATION_BRANCHES]
+    calls = len(re.findall(r"(?<!fn )\bis_annotation\(", mask))
+    if found != [1] * len(ANNOTATION_BRANCHES) or calls != len(ANNOTATION_BRANCHES):
+        return [Entry("is_annotation: accepting branches changed, re-read the annotation rows", rel(path), line)]
+    prefixes = re.findall(r"starts_with\((?:'([^']*)'|\"([^\"]*)\")\)", m.group(1))
+    return [Entry(f"{a or b}*", rel(path), line, "annotation: any mapping level, never read") for a, b in prefixes]
 
 
 # ── Surface: CLI ─────────────────────────────────────────────────────────────
@@ -476,12 +536,14 @@ class CliWalker:
                 continue
             long = attr_value(a, "arg", "long")
             short = attr_value(a, "arg", "short")
+            short_flag = None if short is None else "-" + (short.strip("'") or f.name[0])
             if long is not None:
                 flag = "--" + (long or f.name.replace("_", "-"))
-            elif short is not None:
-                flag = "-" + (short.strip("'") or f.name[0])
+            elif short_flag is not None:
+                flag = short_flag
             else:
-                flag = f"<{f.name.replace('_', '-')}>"
+                # A positional is shown by its `value_name` when it has one, as clap does.
+                flag = f"<{attr_value(a, 'arg', 'value_name') or f.name.replace('_', '-')}>"
             notes = []
             if (env := attr_value(a, "arg", "env")) is not None:
                 notes.append(f"env {env}")
@@ -490,6 +552,10 @@ class CliWalker:
             if attr_value(a, "arg", "hide") == "true":
                 notes.append("hidden")
             self.emit(f"{prefix} {flag}", file, ln, ", ".join(notes))
+            if long is not None and short_flag is not None:
+                # Its own row, so dropping the `short` attribute is a removed flag;
+                # `check` holds it to its long form's class.
+                self.emit(f"{prefix} {short_flag}", file, ln, f"alias of {flag}")
 
     def subcommands(self, item: Item, prefix: str) -> None:
         for v in item.members:
@@ -517,10 +583,27 @@ class CliWalker:
                     self.args(inner.members, inner.file, inner.line, key)
 
 
+def cli_root_rows(root: Item) -> list[Entry]:
+    """The flags clap generates from the root command's own attributes."""
+    out = []
+    if attr_value(root.attrs, "command", "version") is not None and not is_set(root.attrs, "disable_version_flag"):
+        out.append(Entry("mcp-gateway --version", rel(root.file), root.line, "clap-generated"))
+    if not is_set(root.attrs, "disable_help_flag"):
+        out.append(Entry("mcp-gateway --help", rel(root.file), root.line, "clap-generated"))
+    return out
+
+
+def is_set(attrs: str, key: str) -> bool:
+    """A boolean `command(...)` setting: bare `key` or `key = true`."""
+    return attr_value(attrs, "command", key) in ("", "true")
+
+
 def extract_cli(index: Index | None = None) -> list[Entry]:
     w = CliWalker(index or Index())
     root = w.index.resolve("Cli", SRC / "cli/mod.rs", "Parser")
     w.emit("mcp-gateway", root.file, root.line, "")
+    for e in cli_root_rows(root):
+        w.out.setdefault(e.id, e)
     w.args(root.members, root.file, root.line, "mcp-gateway")
     return sorted(w.out.values(), key=lambda e: e.id)
 
@@ -737,7 +820,9 @@ def parse_doc(text: str) -> list[Row]:
     return rows
 
 
-PLACEHOLDER_REASONS = {"na", "none", "null", "nil", "unknown"}
+# Matched against the reason's letters only, lower-cased: "N/A" is "na", "TBD." is "tbd".
+# A careless author is the threat, not an adversary, so a word list is enough (MIK-8077).
+PLACEHOLDER_REASONS = {"na", "none", "null", "nil", "unknown", "todo", "tbd", "fixme", "xxx", "later", "pending"}
 
 
 def has_reason(text: str) -> bool:
@@ -772,6 +857,12 @@ def check(doc_text: str, extracted: dict[str, list[Entry]]) -> list[str]:
             errors.append(f"{surface}: extractor returned no items")
             continue
         listed = by_surface[surface]
+        for e in entries:
+            if e.note.startswith("alias of "):
+                long_id = e.id.rsplit(" ", 1)[0] + " " + e.note.removeprefix("alias of ")
+                r, lr = listed.get(e.id), listed.get(long_id)
+                if r is not None and lr is not None and r.cls != lr.cls:
+                    errors.append(f"line {r.lineno}: alias {e.id!r} is {r.cls}, its long form {long_id!r} is {lr.cls}")
         for e in entries:
             r = listed.pop(e.id, None)
             if r is None:
