@@ -36,15 +36,21 @@ pub(crate) fn dropped_comment_lines(before: &str, after: &str) -> Vec<String> {
         .collect()
 }
 
-/// Each line's comment, if it has one. A candidate the line scanner finds
-/// counts only when the YAML parser agrees: removing it leaves the document
+/// Each line's comment, if it has one. A candidate `#` counts only when
+/// the YAML parser agrees: removing it leaves the document
 /// unchanged. So a `#` inside a quoted, tagged or block scalar's text, or a
 /// URL fragment, is never named.
 fn comments(lines: &[&str]) -> Vec<Option<String>> {
     (0..lines.len())
         .map(|i| {
-            let comment = super::splice::inline_comment(lines[i])?;
-            super::splice::parsed_as_comment(lines, i, comment).then(|| comment.trim().to_owned())
+            // Each `#` after a blank (or at the start) is a candidate, tried in
+            // order: one inside a value is rejected and the next is tried.
+            let line = lines[i];
+            line.match_indices('#')
+                .filter(|&(at, _)| at == 0 || line[..at].ends_with([' ', '\t']))
+                .map(|(at, _)| &line[line[..at].trim_end_matches([' ', '\t']).len()..])
+                .find(|comment| super::splice::parsed_as_comment(lines, i, comment))
+                .map(|comment| comment.trim().to_owned())
         })
         .collect()
 }
@@ -93,5 +99,13 @@ mod tests {
         let before = "backends:\n  a:\n    description: !!str \"old # x\"\n    note: \"one\n      # two\"\n    command: x  # why\n  b:\n    command: y\n";
         let after = "backends:\n  b:\n    command: y\n";
         assert_eq!(dropped_comment_lines(before, after), ["line 6"]);
+    }
+
+    #[test]
+    fn a_real_comment_after_a_hash_inside_a_value_is_named() {
+        let before =
+            "backends:\n  a:\n    description: !!str \"old # x\" # real\n  b:\n    command: y\n";
+        let after = "backends:\n  b:\n    command: y\n";
+        assert_eq!(dropped_comment_lines(before, after), ["line 3"]);
     }
 }
