@@ -20,6 +20,20 @@ const BACKENDS: [&str; 2] = ["alpha", "alpha-pt"];
 /// request's client capabilities, or `None` for a legacy request (which
 /// declares nothing). `extra` is merged into the params' `_meta`.
 async fn call(fx: &Fx, backend: &str, declared: Option<Value>, extra: Value) -> Value {
+    call_with(fx, backend, (declared, "read"), extra).await
+}
+
+/// [`call`] whose modern `Mcp-Name` header names `header_name`.
+async fn call_named(fx: &Fx, backend: &str, declared: Option<Value>, header_name: &str) -> Value {
+    call_with(fx, backend, (declared, header_name), json!({})).await
+}
+
+async fn call_with(
+    fx: &Fx,
+    backend: &str,
+    (declared, header_name): (Option<Value>, &str),
+    extra: Value,
+) -> Value {
     let mut meta = extra.as_object().cloned().unwrap_or_default();
     if let Some(declared) = &declared {
         meta.insert(
@@ -44,7 +58,7 @@ async fn call(fx: &Fx, backend: &str, declared: Option<Value>, extra: Value) -> 
         request = request
             .header("mcp-protocol-version", "2026-07-28")
             .header("mcp-method", "tools/call")
-            .header("mcp-name", "read");
+            .header("mcp-name", header_name);
     }
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params});
     let mut request = request
@@ -168,6 +182,19 @@ async fn g7_a_malformed_round_with_undeclared_questions_is_refused() {
     for backend in BACKENDS {
         let fx = fixture(Answer::AskBadState, |_| {}).await;
         let body = call(&fx, backend, Some(json!({})), json!({})).await;
+        let data = json!({"requiredCapabilities": ["elicitation"]});
+        assert_refused(&body, &data, backend);
+    }
+}
+
+/// G8: a modern request `/mcp` would refuse is relayed as legacy, so what it
+/// declared does not count: refused like G4. Here its `Mcp-Name` header names
+/// another tool than its body.
+#[tokio::test]
+async fn g8_a_declaration_on_a_request_relayed_as_legacy_does_not_count() {
+    for backend in BACKENDS {
+        let fx = fixture(Answer::AskOnce, |_| {}).await;
+        let body = call_named(&fx, backend, Some(form()), "other").await;
         let data = json!({"requiredCapabilities": ["elicitation"]});
         assert_refused(&body, &data, backend);
     }
