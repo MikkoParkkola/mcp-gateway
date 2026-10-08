@@ -576,6 +576,17 @@ impl Store {
         Ok(())
     }
 
+    /// Whether some subscription's expiry fell in `(after, upto]`.
+    pub(crate) fn expired_between(&self, after: DateTime<Utc>, upto: DateTime<Utc>) -> bool {
+        // ponytail: scans every row per worker tick, in memory; keep an
+        // expiry index if rows grow past the tens of thousands.
+        let state = self.state.lock();
+        state
+            .subs
+            .values()
+            .any(|s| s.expires_at.is_some_and(|at| after < at && at <= upto))
+    }
+
     /// Delete subscription `id`. Expired rows are swept first, so an
     /// unsubscribe never restarts a tail that expiry already began. When
     /// it was the pair's last, the pair's verification enters the tail,

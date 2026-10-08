@@ -45,12 +45,15 @@ async fn t11_a_held_webhook_row_releases_its_key() {
     let id = id_of(&subscribe(&hub, json!({})).await.expect("refresh"));
     assert_eq!(webhook_keys(&hub).await.len(), 1, "premise: started");
     refresh(&hub, &registry, "");
+    // One turn for the posted key reconcile; no sweep runs.
+    tokio::task::yield_now().await;
     assert!(hub.store.held(&id).is_some(), "premise: held");
     assert!(
         webhook_keys(&hub).await.is_empty(),
         "a held row keeps no key"
     );
     refresh(&hub, &registry, &full());
+    tokio::task::yield_now().await;
     assert!(hub.store.held(&id).is_none(), "premise: resumed");
     assert_eq!(webhook_keys(&hub).await.len(), 1, "started again");
 }

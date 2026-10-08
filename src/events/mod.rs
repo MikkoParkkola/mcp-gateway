@@ -70,6 +70,8 @@ use types::EventDescriptor;
 
 /// The events core: configuration, store, callback client and catalogue.
 pub(crate) struct EventsHub {
+    /// This hub, so a synchronous change can post its key reconcile.
+    me: std::sync::Weak<EventsHub>,
     config: EventsConfig,
     store: Arc<store::Store>,
     client: client::CallbackClient,
@@ -234,7 +236,8 @@ impl EventsHub {
             .map_err(|e| {
                 crate::Error::Config(format!("events store {}: {e}", store_dir.display()))
             })?;
-        Ok(Arc::new(Self {
+        Ok(Arc::new_cyclic(|me| Self {
+            me: me.clone(),
             config: config.clone(),
             store: Arc::new(store),
             client,

@@ -41,6 +41,8 @@ pub(crate) struct Runtime {
     /// Set once the stored subscriptions have been reconciled with the
     /// catalogue the startup capability scan built; no attempt starts before.
     pub reconciled: AtomicBool,
+    /// Where the worker's last expiry check ended (design r3 L5).
+    pub expiry_seen: Mutex<chrono::DateTime<chrono::Utc>>,
     dropped: AtomicU64,
     projection_failed: AtomicU64,
 }
@@ -59,6 +61,7 @@ impl Runtime {
             services: std::sync::OnceLock::new(),
             backends: std::sync::OnceLock::new(),
             reconciled: AtomicBool::new(false),
+            expiry_seen: Mutex::new(chrono::Utc::now()),
             dropped: AtomicU64::new(0),
             projection_failed: AtomicU64::new(0),
         }
