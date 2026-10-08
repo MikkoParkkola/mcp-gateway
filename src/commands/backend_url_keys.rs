@@ -200,20 +200,34 @@ fn indent(line: &str) -> Option<usize> {
     (!body.trim().is_empty() && !body.starts_with('#')).then(|| line.len() - body.len())
 }
 
-/// The key a mapping line starts with, unquoted.
-fn key_of(line: &str) -> Option<String> {
+/// The key a mapping line starts with, unquoted, and the text after its `:`.
+/// As in YAML, a quoted key ends at its closing quote and a plain one at the
+/// first `:` that a space or the line end follows, so a name may hold `:`.
+fn key_of(line: &str) -> Option<(String, &str)> {
     let body = line.trim_start();
-    let (key, _) = body.split_once(':')?;
-    let key = key.trim().trim_matches(|c| c == '"' || c == '\'');
+    let (key, rest) = match body.chars().next() {
+        Some(quote @ ('"' | '\'')) => {
+            let inner = &body[1..];
+            let end = inner.find(quote)?;
+            (&inner[..end], inner[end + 1..].trim_start())
+        }
+        _ => {
+            let (at, _) = body.char_indices().find(|&(i, c)| {
+                c == ':' && body[i + 1..].chars().next().is_none_or(char::is_whitespace)
+            })?;
+            (body[..at].trim_end(), &body[at..])
+        }
+    };
+    let rest = rest.strip_prefix(':')?;
     // A backend name may hold spaces; a list item is not a key.
-    (!key.is_empty() && !key.starts_with('-')).then(|| key.to_string())
+    (!key.is_empty() && !key.starts_with('-')).then(|| (key.to_string(), rest.trim_start()))
 }
 
 /// The entries of the top-level `backends:` block.
 fn backend_entries(lines: &[String]) -> Vec<Entry> {
     let Some(start) = lines
         .iter()
-        .position(|l| indent(l) == Some(0) && key_of(l).as_deref() == Some("backends"))
+        .position(|l| indent(l) == Some(0) && key_of(l).is_some_and(|(key, _)| key == "backends"))
     else {
         return Vec::new();
     };
@@ -227,12 +241,9 @@ fn backend_entries(lines: &[String]) -> Vec<Entry> {
         }
         let entry_level = *entry_indent.get_or_insert(depth);
         if depth == entry_level {
-            let Some(name) = key_of(line) else { continue };
-            let rest = line
-                .trim_start()
-                .split_once(':')
-                .map_or("", |(_, r)| r)
-                .trim_start();
+            let Some((name, rest)) = key_of(line) else {
+                continue;
+            };
             entries.push(Entry {
                 name,
                 flow: rest.starts_with('{'),
@@ -244,7 +255,7 @@ fn backend_entries(lines: &[String]) -> Vec<Entry> {
             && let Some(entry) = entries.last_mut()
             && depth == *field_indent.get_or_insert(depth)
         {
-            match key_of(line).as_deref() {
+            match key_of(line).as_ref().map(|(key, _)| key.as_str()) {
                 Some("url") => entry.has_url = true,
                 Some("http_url") => entry.aliases.push((at, "http_url")),
                 Some("ws_url") => entry.aliases.push((at, "ws_url")),
