@@ -15,9 +15,7 @@ impl Drop for StdioTransport {
     /// cancels `shutdown`, as `close()` does, so a write stuck on a reader
     /// outside the group ends and gives up stdin (MIK-8079).
     fn drop(&mut self) {
-        if let Some(child) = self.child.get_mut().as_mut() {
-            let _ = child.start_kill();
-        }
+        // The tree itself (`ChildTree`'s Drop) sends the one group signal.
         self.shutdown.get_mut().cancel();
     }
 }
