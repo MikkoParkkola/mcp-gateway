@@ -239,7 +239,9 @@ impl EventsHub {
     /// pending records go with them (design §9). Synchronous, inside the
     /// reload, so a later reload that restores the type cannot interleave.
     ///
-    /// `false` when a subscription could not be removed.
+    /// Only the rows judged are deleted: a row re-made under the same id
+    /// since (a new generation, design r3 G3) is left to the cause that made
+    /// it. `false` when a subscription could not be removed.
     pub(crate) fn withdraw(&self, names: &[String]) -> bool {
         let tail = super::tail_policy(&self.config);
         let now = Utc::now();
@@ -248,8 +250,11 @@ impl EventsHub {
         #[cfg(test)]
         self.before_withdraw.pause_blocking();
         for sub in judged {
+            let generation = sub.generation;
             if names.contains(&sub.name)
-                && let Err(error) = self.store.remove(&sub.id, now, tail)
+                && let Err(error) = self
+                    .store
+                    .remove_where(&sub.id, now, tail, |row| row.generation == generation)
             {
                 tracing::warn!(%error, "events: withdrawn subscription not removed");
                 all_removed = false;

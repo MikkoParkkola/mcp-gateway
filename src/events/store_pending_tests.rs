@@ -30,6 +30,7 @@ const ROOMY: DeadPolicy = DeadPolicy {
 
 fn sub(id: &str, now: DateTime<Utc>) -> Subscription {
     Subscription {
+        generation: 0,
         v: 1,
         id: id.into(),
         principal: "p".into(),

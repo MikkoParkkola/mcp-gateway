@@ -20,6 +20,7 @@ const TAIL: TailPolicy = TailPolicy {
 
 fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscription {
     Subscription {
+        generation: 0,
         v: 1,
         id: format!("sub_{principal}_{}", url.len()),
         principal: principal.into(),

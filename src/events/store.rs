@@ -236,6 +236,9 @@ pub(crate) struct Store {
     outbox_dir: PathBuf,
     dead_dir: PathBuf,
     state: Mutex<State>,
+    /// The last row generation handed out (design r3 G3); starts above every
+    /// generation loaded, so a re-made row never repeats an old one.
+    generation: std::sync::atomic::AtomicU64,
     /// Test-only: the next dead letter put in place reports its directory
     /// sync as failed, the one way a burial errors after the dead letter is
     /// in memory.
@@ -244,6 +247,16 @@ pub(crate) struct Store {
 }
 
 impl Store {
+    /// The next row generation. Checked: running out is an error, never a
+    /// wrap that could repeat a generation a judgement still holds.
+    pub(super) fn next_generation(&self) -> std::io::Result<u64> {
+        use std::sync::atomic::Ordering;
+        self.generation
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
+            .map(|n| n + 1)
+            .map_err(|_| std::io::Error::other("subscription generations exhausted"))
+    }
+
     /// Open (creating) the store at `root`, sweeping expired subscriptions
     /// and trimming the verification tail.
     pub(crate) fn open(root: &Path, now: DateTime<Utc>, tail: TailPolicy) -> std::io::Result<Self> {
@@ -276,12 +289,14 @@ impl Store {
             }
         }
         pending::load(&mut state, &outbox_dir, &dead_dir, now)?;
+        let loaded = state.subs.values().map(|s| s.generation).max().unwrap_or(0);
         let store = Self {
             subs_dir,
             verified_dir,
             outbox_dir,
             dead_dir,
             state: Mutex::new(state),
+            generation: std::sync::atomic::AtomicU64::new(loaded),
             #[cfg(test)]
             fail_next_dead_sync: std::sync::atomic::AtomicBool::new(false),
         };
@@ -470,6 +485,7 @@ impl Store {
         if let Placed::NotSynced(error) = verified_placed {
             return Err(error);
         }
+        sub.generation = self.next_generation()?;
         let name = format!("{}.json", sub.id);
         let placed = match write_record(&self.subs_dir, &name, &sub) {
             Ok(placed) => placed,
