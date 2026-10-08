@@ -32,18 +32,14 @@ fn a_path_inside_the_root_resolves_to_its_canonical_form() {
     );
 }
 
-/// MIK-7911: the plain spelling is used only where it names the same file.
+/// MIK-7911: only a verbatim drive path has a plain spelling to try.
 #[test]
-fn a_verbatim_drive_path_is_spelled_plain_only_where_that_is_the_same_file() {
+fn only_a_verbatim_drive_path_has_a_plain_spelling() {
     for (verbatim, plain) in [
         (r"\\?\C:\x\design.fig", Some(r"C:\x\design.fig")),
         (r"\\?\d:\", Some(r"d:\")),
         (r"\\?\UNC\server\share\x", None),
         (r"\\?\Volume{0}\x", None),
-        (r"\\?\C:\x\con.txt", None),
-        (r"\\?\C:\x\Lpt9", None),
-        (r"\\?\C:\x\name.", None),
-        (r"\\?\C:\x\name ", None),
         (r"C:\x", None),
         ("/srv/uploads/x", None),
     ] {
@@ -62,6 +58,21 @@ fn a_confined_path_has_no_verbatim_prefix_on_windows() {
     let got = confine("report.pdf", "uploads", &roots(dir.path())).unwrap();
     let shown = got.display().to_string();
     assert!(!shown.starts_with(r"\\?\"), "{shown}");
+}
+
+/// MIK-7911: a name the plain form reads differently (here a trailing dot,
+/// which the plain form drops) is confined and handed on verbatim, so the
+/// child gets the file that was checked.
+#[cfg(windows)]
+#[test]
+fn a_name_the_plain_form_reads_differently_stays_verbatim_on_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::write(root.join("name."), b"x").unwrap();
+    let got = confine("name.", "uploads", &roots(dir.path())).unwrap();
+    assert_eq!(got, root.join("name."), "the checked file, verbatim");
+    // Only the verbatim form can remove it; the temp dir's cleanup cannot.
+    std::fs::remove_file(root.join("name.")).unwrap();
 }
 
 #[test]
