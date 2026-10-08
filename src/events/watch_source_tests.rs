@@ -744,5 +744,31 @@ async fn a_sweep_frees_a_stale_slot_before_it_starts_a_restored_key() {
     );
 }
 
+/// MIK-8053 (review of #3406): a poller the sweep stopped while a partial
+/// catalogue left its capability unread starts again once the catalogue is
+/// whole; its row was kept throughout.
+#[tokio::test]
+async fn a_poller_stopped_during_a_partial_catalogue_restarts_after_it() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    admit(&hub, "p", "watch.weather.changed", &json!({}));
+    hub.install_watch_source(Arc::clone(&host) as Arc<dyn WatchHost>);
+    tokio::task::yield_now().await;
+    assert_eq!(hub.lifecycle.lock().await.len(), 1, "premise: started");
+    host.targets.lock().clear();
+    host.partial.store(true, Ordering::Release);
+    sweep(&hub).await;
+    assert!(
+        hub.lifecycle.lock().await.is_empty(),
+        "premise: stopped while unread"
+    );
+    assert_eq!(hub.store.subscriptions().len(), 1, "the row is kept");
+    host.partial.store(false, Ordering::Release);
+    *host.targets.lock() = vec![target("weather", true, CredentialUse::Free)];
+    sweep(&hub).await;
+    assert_eq!(hub.lifecycle.lock().await.len(), 1, "restarted once whole");
+}
+
 #[path = "watch_source_partial_tests.rs"]
 mod partial;
