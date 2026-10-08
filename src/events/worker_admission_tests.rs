@@ -6,7 +6,7 @@
 //! and returns; then the attempt resumes.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::super::{counting_callback, descriptor, logged_services, queued_with};
@@ -253,22 +253,29 @@ impl EventSource for Held {
 }
 
 /// A callback that accepts each connection and never answers, so a send
-/// stays in flight; the connections it accepted.
-async fn silent_callback() -> (u16, Arc<AtomicUsize>) {
+/// stays in flight until the client gives up; the connections it accepted,
+/// and whether a client has closed one (the send ended).
+async fn silent_callback() -> (u16, Arc<AtomicUsize>, Arc<AtomicBool>) {
+    use tokio::io::AsyncReadExt as _;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let accepted = Arc::new(AtomicUsize::new(0));
-    let seen = Arc::clone(&accepted);
+    let ended = Arc::new(AtomicBool::new(false));
+    let (seen, closed) = (Arc::clone(&accepted), Arc::clone(&ended));
     tokio::spawn(async move {
-        let mut held = Vec::new();
-        while let Ok((stream, _)) = listener.accept().await {
+        while let Ok((mut stream, _)) = listener.accept().await {
             seen.fetch_add(1, Ordering::SeqCst);
-            held.push(stream);
+            let closed = Arc::clone(&closed);
+            tokio::spawn(async move {
+                let mut buf = [0_u8; 1024];
+                while matches!(stream.read(&mut buf).await, Ok(n) if n > 0) {}
+                closed.store(true, Ordering::SeqCst);
+            });
         }
     });
-    (port, accepted)
+    (port, accepted, ended)
 }
 
 /// Polls `done` every 20 ms for up to `limit`.
@@ -301,7 +308,7 @@ async fn a_reload_waits_for_an_admission_but_not_for_the_send() {
         inside: inside_tx,
         go: parking_lot::Mutex::new(go_rx),
     }));
-    let (port, connections) = silent_callback().await;
+    let (port, connections, ended) = silent_callback().await;
     queued_with(&hub, port, "evt_held", "probe.held", |_, _| {});
     let attempt = tokio::spawn({
         let (hub, services) = (Arc::clone(&hub), Arc::clone(&services));
@@ -320,7 +327,7 @@ async fn a_reload_waits_for_an_admission_but_not_for_the_send() {
     );
     go.send(()).expect("release");
     assert!(
-        within(Duration::from_secs(5), || first.is_finished()).await,
+        within(Duration::from_secs(30), || first.is_finished()).await,
         "the reload returned once the admission ended"
     );
 
@@ -331,11 +338,17 @@ async fn a_reload_waits_for_an_admission_but_not_for_the_send() {
         .await,
         "premise: the send is in flight"
     );
+    // Judged by order, not by a deadline: a gate held across the POST would
+    // let this reload return only once the client gave up on the send
+    // (`TOTAL_TIMEOUT`, 10 s). The 30 s bound only stops a hang.
     let second = reload(Arc::clone(&services.live));
     assert!(
-        within(Duration::from_secs(2), || second.is_finished()).await,
+        within(Duration::from_secs(30), || second.is_finished()).await,
+        "a reload never returned"
+    );
+    assert!(
+        !ended.load(Ordering::SeqCst),
         "a reload waited on a send's network I/O"
     );
-    assert!(!attempt.is_finished(), "premise: the send still waits");
     attempt.abort();
 }
