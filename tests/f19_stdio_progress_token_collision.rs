@@ -60,6 +60,15 @@ while IFS= read -r line; do
 done
 "#;
 
+/// A temporary home whose path holds a space, so an unquoted path in the
+/// peer script or its `command:` line splits and the row fails.
+fn spaced_home() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("home with space ")
+        .tempdir()
+        .expect("temporary home")
+}
+
 /// A path as `sh` reads it: forward slashes, since a Windows backslash is an
 /// escape to the shell (and to a quoted YAML scalar).
 fn sh_path(path: &std::path::Path) -> String {
@@ -162,7 +171,7 @@ fn progress_of(frames: &[Value]) -> Vec<(Value, Value)> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_callers_sharing_a_progress_token_each_receive_only_their_own_progress() {
-    let home = tempfile::tempdir().expect("temporary home");
+    let home = spaced_home();
     let (state, _store_dir) = common::state(Fixture::default()).await;
     let log = register_command_backend(&state, home.path());
 
@@ -219,7 +228,7 @@ async fn two_callers_sharing_a_progress_token_each_receive_only_their_own_progre
 /// exactly its own progress.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_task_call_sharing_a_progress_token_cannot_reach_a_direct_caller() {
-    let home = tempfile::tempdir().expect("temporary home");
+    let home = spaced_home();
     let (state, _store_dir) = common::state(Fixture::default()).await;
     let log = register_command_backend(&state, home.path());
 

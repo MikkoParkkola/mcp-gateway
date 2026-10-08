@@ -34,6 +34,15 @@ while IFS= read -r line; do
 done
 "#;
 
+/// A temporary home whose path holds a space, so an unquoted path in the
+/// peer script or its `command:` line splits and the row fails.
+fn spaced_home() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("home with space ")
+        .tempdir()
+        .expect("temporary home")
+}
+
 /// A path as `sh` reads it: forward slashes, since a Windows backslash is an
 /// escape to the shell (and to the quoted YAML scalar it sits in).
 fn sh_path(path: &std::path::Path) -> String {
@@ -56,7 +65,7 @@ fn spawn_gateway(home: &std::path::Path) -> StdioSession {
 
 #[tokio::test]
 async fn a_null_method_frame_is_not_delivered_as_the_calls_result() {
-    let home = tempfile::tempdir().expect("home");
+    let home = spaced_home();
     let mut session = spawn_gateway(home.path());
     session
         .send(&json!({
