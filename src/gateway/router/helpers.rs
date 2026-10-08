@@ -220,14 +220,10 @@ pub(crate) fn extract_request_id(value: &Value) -> Option<RequestId> {
         Some(RequestId::String(value.as_str().unwrap().to_string()))
     } else if value.is_i64() {
         Some(RequestId::Number(value.as_i64().unwrap()))
-    } else if value.is_u64() {
-        // Above `i64::MAX` the id cannot be held: unrecognised, never wrapped
-        // into a different, negative id that answers some other request.
-        value
-            .as_u64()
-            .and_then(|n| i64::try_from(n).ok())
-            .map(RequestId::Number)
     } else {
+        // An unsigned id above `i64::MAX` lands here too: it cannot be held,
+        // so it is unrecognised, never wrapped into a different, negative id
+        // that would answer some other request (MIK-8189).
         None
     }
 }
