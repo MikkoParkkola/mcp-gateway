@@ -15,7 +15,7 @@ use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 const MODERN: &str = "2026-07-28";
 
 /// `params` with the modern `_meta` declaration at `version`, plus `extra`.
-fn declared(mut params: Value, version: &str, extra: Value) -> Value {
+fn declared(mut params: Value, version: &str, extra: &Value) -> Value {
     let mut meta = extra.as_object().cloned().unwrap_or_default();
     meta.insert(
         "io.modelcontextprotocol/protocolVersion".into(),
@@ -88,7 +88,7 @@ type Case<'a> = (
 /// Every class `/mcp` refuses on, with the code and status it answers
 /// (`handlers/request_checks.rs`, and the Malformed arm in `handlers.rs`).
 fn refusal_cases() -> Vec<Case<'static>> {
-    let modern_call = || declared(call(), MODERN, json!({}));
+    let modern_call = || declared(call(), MODERN, &json!({}));
     let ok = || mirrors("tools/call", Some("read"));
     let twice = |name: &'static str, value: &'static str| {
         let mut headers = ok();
@@ -96,7 +96,7 @@ fn refusal_cases() -> Vec<Case<'static>> {
         headers
     };
     let bad = StatusCode::BAD_REQUEST;
-    vec![
+    let mut cases = vec![
         ("malformed", "tools/call", call(), ok(), -32602, bad),
         (
             "unserved header",
@@ -109,7 +109,7 @@ fn refusal_cases() -> Vec<Case<'static>> {
         (
             "unsupported modern",
             "tools/call",
-            declared(call(), "2099-01-01", json!({})),
+            declared(call(), "2099-01-01", &json!({})),
             vec![],
             -32022,
             bad,
@@ -138,6 +138,17 @@ fn refusal_cases() -> Vec<Case<'static>> {
             -32020,
             bad,
         ),
+    ];
+    cases.extend(mismatch_cases());
+    cases
+}
+
+/// The rest of [`refusal_cases`]: a header that contradicts the body, and a
+/// method the revision does not serve.
+fn mismatch_cases() -> Vec<Case<'static>> {
+    let modern_call = || declared(call(), MODERN, &json!({}));
+    let bad = StatusCode::BAD_REQUEST;
+    vec![
         (
             "name mismatch",
             "tools/call",
@@ -177,7 +188,7 @@ fn refusal_cases() -> Vec<Case<'static>> {
         (
             "uri mismatch",
             "resources/read",
-            declared(json!({"uri": "res://x"}), MODERN, json!({})),
+            declared(json!({"uri": "res://x"}), MODERN, &json!({})),
             mirrors("resources/read", Some("res://y")),
             -32020,
             bad,
@@ -185,7 +196,7 @@ fn refusal_cases() -> Vec<Case<'static>> {
         (
             "undeclared capability",
             "roots/list",
-            declared(json!({}), MODERN, json!({})),
+            declared(json!({}), MODERN, &json!({})),
             mirrors("roots/list", None),
             -32021,
             bad,
@@ -193,7 +204,7 @@ fn refusal_cases() -> Vec<Case<'static>> {
         (
             "removed method",
             "logging/setLevel",
-            declared(json!({"level": "info"}), MODERN, json!({})),
+            declared(json!({"level": "info"}), MODERN, &json!({})),
             mirrors("logging/setLevel", None),
             -32601,
             StatusCode::NOT_FOUND,
@@ -226,7 +237,7 @@ async fn a_direct_request_is_refused_as_mcp_refuses_it() {
 #[tokio::test]
 async fn a_rollback_gated_modern_request_is_refused() {
     let fx = fixture_modern_off(Answer::Ok).await;
-    let params = declared(call(), MODERN, json!({}));
+    let params = declared(call(), MODERN, &json!({}));
     let headers = mirrors("tools/call", Some("read"));
     let (status, body) = raw(&fx, "/mcp/alpha", ("tools/call", Some(7), params), &headers).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
@@ -242,7 +253,7 @@ async fn well_formed_requests_are_still_dispatched() {
     let (status, body) = raw(&fx, "/mcp/alpha", ("tools/call", Some(7), call()), &[]).await;
     assert_eq!(status, StatusCode::OK, "legacy: {body}");
     assert!(body["result"]["content"].is_array(), "legacy: {body}");
-    let params = declared(call(), MODERN, json!({}));
+    let params = declared(call(), MODERN, &json!({}));
     let headers = mirrors("tools/call", Some("read"));
     let (status, body) = raw(&fx, "/mcp/alpha", ("tools/call", Some(8), params), &headers).await;
     assert_eq!(status, StatusCode::OK, "modern: {body}");
@@ -255,7 +266,7 @@ async fn well_formed_requests_are_still_dispatched() {
 #[tokio::test]
 async fn an_invalid_request_to_an_absent_backend_gets_the_request_refusal() {
     let fx = fixture(Answer::Ok, |_| {}).await;
-    let params = declared(call(), MODERN, json!({}));
+    let params = declared(call(), MODERN, &json!({}));
     let headers = mirrors("tools/call", Some("other"));
     let (status, body) = raw(&fx, "/mcp/nope", ("tools/call", Some(7), params), &headers).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
@@ -268,7 +279,7 @@ async fn an_invalid_request_to_an_absent_backend_gets_the_request_refusal() {
 async fn a_refused_modern_notification_is_not_forwarded() {
     const NOTE: &str = "notifications/cancelled";
     let fx = fixture(Answer::Ok, |_| {}).await;
-    let params = || declared(json!({"requestId": 1}), MODERN, json!({}));
+    let params = || declared(json!({"requestId": 1}), MODERN, &json!({}));
     let good = mirrors(NOTE, None);
     let (status, body) = raw(&fx, "/mcp/alpha", (NOTE, None, params()), &good).await;
     assert_eq!(status, StatusCode::ACCEPTED, "control: {body}");
@@ -282,7 +293,7 @@ async fn a_refused_modern_notification_is_not_forwarded() {
 #[tokio::test]
 async fn an_invalid_keyed_retry_is_refused_not_replayed() {
     let fx = fixture(Answer::Ok, |_| {}).await;
-    let params = || declared(call(), MODERN, json!({ IDEMPOTENCY_KEY_META: "i1" }));
+    let params = || declared(call(), MODERN, &json!({ IDEMPOTENCY_KEY_META: "i1" }));
     let good = mirrors("tools/call", Some("read"));
     let (_, first) = raw(&fx, "/mcp/alpha", ("tools/call", Some(7), params()), &good).await;
     assert!(first["result"]["content"].is_array(), "seed: {first}");
