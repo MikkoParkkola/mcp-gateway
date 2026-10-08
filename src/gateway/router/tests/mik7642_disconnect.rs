@@ -92,6 +92,12 @@ async fn a_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() {
     ));
     let transport = HttpTransport::new(&backend_url, HashMap::new(), Duration::from_secs(30), true)
         .expect("a transport");
+    // A transport that never handshook reads as not connected, and the
+    // backend would then restart from its empty config instead of using it.
+    transport
+        .initialize()
+        .await
+        .expect("the backend handshakes");
     backend.set_transport_for_test(transport as Arc<dyn crate::transport::Transport>);
     assert!(state.backends.register(backend));
     let router = super::create_router(Arc::clone(&state));
