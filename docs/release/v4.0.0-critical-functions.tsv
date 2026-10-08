@@ -83,7 +83,7 @@ src/gateway/router/backend_handlers/direct_dispatch.rs	forward_plain	1	critical	
 src/gateway/router/backend_handlers/direct_dispatch.rs	finish_response	1	critical	d	finish_response	Firewall scan, list filtering, provenance stamp, settlement and signing of what the caller receives.
 src/gateway/router/backend_handlers/direct_preflight.rs	audit_unavailable	1	standard	borderline	audit_unavailable	The generic client answer when the mint audit cannot be written (CWE-209).
 src/gateway/router/backend_handlers/direct_dispatch.rs	answer_failure	1	standard	borderline	answer_failure	Settles the idempotency reservation for a dispatched failure.
-src/gateway/router/backend_handlers/direct_dispatch.rs	deliver_tail	1	standard	borderline	deliver_tail	Signs and records a direct delivery after shaping; a miss would send it unsigned
+src/gateway/router/backend_handlers/direct_dispatch.rs	deliver_tail	1	critical	d	deliver_tail	Decides that a direct tools/call is signed when signing is on, after shaping, so the signature covers what is sent
 src/gateway/router/backend_handlers/direct_list.rs	normalize_tools_list_response	1	critical	borderline	normalize_tools_list_response	Drops unjudged entries and rebuilds the result from an allow-list (A3).
 src/gateway/router/backend_handlers.rs	resolve_passthrough_headers	1	critical	a	resolve_passthrough_headers	Fails closed when a required passthrough credential is missing or the transport cannot carry it.
 src/gateway/router/backend_handlers.rs	scan_direct_tools_list_response	1	critical	d	scan_direct_tools_list_response	Applies the response firewall to a direct tools/list result.
@@ -95,7 +95,7 @@ src/gateway/router/backend_handlers.rs	direct_route_attestation_scope	1	standard
 src/gateway/router/backend_handlers.rs	dispatch_in_scope	1	standard	d	dispatch_in_scope	Refuses methods the peer's protocol era removed before they reach the wire.
 src/gateway/router/backend_handlers.rs	is_task_method	1	standard	borderline	is_task_method	Selects which methods get the task-owner refusal.
 src/gateway/router/backend_handlers.rs	passthrough_identity_key	1	standard	borderline	passthrough_identity_key	Session bucket key from the credential digest; a collision would mix callers.
-src/gateway/router/backend_handlers.rs	sign_and_record	1	standard	borderline	sign_and_record	Signs a direct delivery and stages it for relay detection
+src/gateway/router/backend_handlers.rs	sign_and_record	1	critical	d	sign_and_record	Signs a direct delivery when a signing nonce was admitted, then stages it for relay detection
 src/gateway/router/backend_handlers/costs.rs	costs_handler	1	critical	a	costs_handler	/api/costs answers 403 unless the client is admin.
 src/gateway/router/backend_handlers/direct_audit.rs	record	1	critical	borderline	record	Withholds the answer with 503 when the audit write fails under FailClosed.
 src/gateway/router/backend_handlers/direct_audit.rs	audited_call_judged	1	critical	d	audited_call_judged	Replaces a direct answer with the audit-unavailable refusal when its delivery record fails, inside the read guard that judges it
@@ -526,7 +526,7 @@ src/transport/http/mod.rs	with_destination	1	critical	d	HttpTransport::with_dest
 src/transport/http/sse_decoder.rs	oversized	1	critical	borderline	SseDecoder::oversized	Caps pending SSE bytes from a backend.
 src/transport/http/listen.rs	read_single	1	critical	d	read_single	Caps a listen's single JSON answer from an untrusted upstream at FRAME_CAP and classifies only a complete body
 src/transport/http/listen.rs	read_stream	1	critical	d	read_stream	Caps each listen frame from the untrusted backend and ends the stream on an oversized or unreadable frame
-src/transport/http/listen.rs	unsolicited_frame	1	standard	borderline	unsolicited_frame	Admits only the three notifications from a legacy stream
+src/transport/http/listen.rs	unsolicited_frame	1	critical	d	unsolicited_frame	Admits only the three notifications from an untrusted legacy stream; everything else is dropped
 src/transport/http/listen.rs	next_events	1	critical	d	next_events	Turns an oversized frame or a read error from the untrusted backend into the end of the stream
 src/transport/stdio.rs	capture_notification	1	critical	c	StdioTransport::capture_notification	Routes only notifications/progress to the call that registered the token; drops the rest
 src/transport/stdio.rs	configure_child_environment	1	critical	d	configure_child_environment	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics) and backend env, so no secret leakage
