@@ -199,3 +199,136 @@ async fn the_cap_refusal_names_held_rows() {
         "the refusal names the held type: {refused}"
     );
 }
+
+/// Beta with `sha` no longer a filter: against the narrower routes, a
+/// refresh that drops a filter is refused (T52).
+fn narrowest() -> String {
+    narrower().replace("filters: [sha]", "filters: []")
+}
+
+/// The id a subscribe answered with.
+fn id_of(answer: &Value) -> String {
+    answer["id"].as_str().expect("id").to_owned()
+}
+
+/// Review G2: an unsubscribe ends the hold with the row. The same key
+/// subscribed again under the routes now offered is not held.
+#[tokio::test]
+async fn an_unsubscribed_held_row_leaves_no_hold_behind() {
+    let (_dir, hub, _registry) = restarted(json!({}), &narrower()).await;
+    let id = id_of(&subscribe(&hub, json!({})).await.expect("held refresh"));
+    assert!(hub.store.held(&id).is_some(), "held first");
+    let params = json!({"name": TYPE, "arguments": {}, "delivery": {"url": url("p")}});
+    hub.unsubscribe(&hooks_caller(&hub), Some(&params))
+        .await
+        .expect("unsubscribed");
+    let answer = subscribe(&hub, json!({})).await.expect("subscribed again");
+    assert!(answer.get("held").is_none(), "{answer}");
+    assert!(hub.store.held(&id).is_none(), "no hold outlives its row");
+}
+
+/// Review G3: a held refresh that waits on the commit while a reload
+/// resumes the row commits the row as it is now: no stale hold stamp.
+#[tokio::test]
+async fn a_held_refresh_racing_a_resume_keeps_no_stale_stamp() {
+    let (dir, hub, registry) = restarted(json!({"ref": "main"}), &narrower()).await;
+    let started = hub.lifecycle.lock().await;
+    // Polled first, the refresh runs until it waits on the commit's lock;
+    // then the reload resumes the row and the lock is let go.
+    let (path, hub_ref, routes) = (dir.path(), &hub, &registry);
+    let resume = async move {
+        refresh(hub_ref, routes, &full());
+        assert!(!stamped(path), "the reload resumed the row");
+        drop(started);
+    };
+    let (answer, ()) = tokio::join!(subscribe(&hub, json!({"ref": "main"})), resume);
+    answer.expect("refresh");
+    assert!(!stamped(dir.path()), "the refresh restored no stale stamp");
+}
+
+/// Review G9: an accepted held refresh reactivates a suspended row, as
+/// every refresh does.
+#[tokio::test]
+async fn a_held_refresh_reactivates_a_suspended_row() {
+    let (_dir, hub, _registry) = restarted(json!({}), &narrower()).await;
+    let id = id_of(&subscribe(&hub, json!({})).await.expect("held refresh"));
+    hub.store.suspend(&id).expect("io");
+    subscribe(&hub, json!({})).await.expect("held refresh");
+    assert!(hub.store.get(&id).expect("row").active, "reactivated");
+}
+
+/// Review G5: a refresh refused as a narrowing (T52) still judges the
+/// stored rows against the routes left live, as at a startup whose scan
+/// registered narrower routes than a row was committed with.
+#[tokio::test]
+async fn a_refused_refresh_still_holds_what_the_live_routes_do_not_carry() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let id = {
+        let (hub, _registry) = hub_with(dir.path(), &full(), &config);
+        seed_verified(&hub, &config, "p");
+        id_of(&subscribe(&hub, json!({})).await.expect("first subscribe"))
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let registry: Registry = Arc::new(parking_lot::RwLock::new(
+        crate::gateway::WebhookRegistry::new(crate::config::WebhookConfig::default()),
+    ));
+    // The capability scan registers its routes before the hub judges any.
+    let scanned = crate::capability::parse_capability(&narrower()).expect("capability");
+    registry.write().replace_capabilities(&[scanned]);
+    hub.set_webhook_registry(Arc::clone(&registry));
+    refresh(&hub, &registry, &narrowest());
+    assert!(
+        hub.store.held(&id).is_some(),
+        "the live routes do not carry ref: held"
+    );
+}
+
+/// Review G6: a hold stamp whose write fails still bounds the row in
+/// memory, and the next refresh writes it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_stamp_write_still_bounds_the_row() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, hub, registry) = restarted(json!({}), &full()).await;
+    let id = id_of(&subscribe(&hub, json!({})).await.expect("refresh"));
+    let subs = dir.path().join("subs");
+    let mode = |m| std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(m));
+    mode(0o500).expect("read-only");
+    refresh(&hub, &registry, "");
+    mode(0o700).expect("writable");
+    let row = hub.store.get(&id).expect("row");
+    assert!(row.held_until.is_some(), "bounded in memory");
+    assert!(!stamped(dir.path()), "the write failed");
+    refresh(&hub, &registry, "");
+    assert!(stamped(dir.path()), "the next refresh wrote it");
+}
+
+/// Review A1 (design-8057 r4): the admin listing names each held type with
+/// its count, earliest and latest expiry, and the records still queued.
+#[tokio::test]
+async fn the_held_listing_counts_the_queued_records() {
+    let (_dir, hub, registry) = restarted(json!({}), &full()).await;
+    let id = id_of(&subscribe(&hub, json!({})).await.expect("refresh"));
+    let now = chrono::Utc::now().to_rfc3339();
+    let record = serde_json::from_value(json!({
+        "v": 1, "event_id": "evt_q", "subscription_id": id, "name": TYPE,
+        "backend": "beta", "body_b64": "e30=", "attempt": 0,
+        "next_attempt_at": now, "first_attempt_at": null, "created_at": now,
+        "state": "pending"
+    }))
+    .expect("record");
+    let caps = crate::events::outbox::OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    hub.store.enqueue(record, caps).expect("io");
+    refresh(&hub, &registry, "");
+    let listing = hub.list_held();
+    assert_eq!(listing.len(), 1, "{listing:?}");
+    let held = &listing[0];
+    assert_eq!(held["type"], TYPE);
+    assert_eq!(held["count"], 1);
+    assert_eq!(held["pendingRecords"], 1, "{held}");
+    assert!(held["earliestExpiry"].is_string() && held["latestExpiry"].is_string());
+}
