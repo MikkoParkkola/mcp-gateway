@@ -37,18 +37,14 @@ struct Standing {
 
 /// The live standing of `principal`: the static bearer (an admin), or the
 /// one unexpired API key whose digest derives it. `None` for anyone else, and
-/// when more than one unexpired key derives it: an ambiguous principal fails
-/// closed rather than taking the first key's standing (MIK-8062).
+/// whenever more than one of those credentials derives it: an ambiguous
+/// principal fails closed rather than taking whichever matched first
+/// (MIK-8062).
 fn standing(services: &Services, principal: &str) -> Option<Standing> {
-    if services.credentials.bearer_principal.as_deref() == Some(principal) {
-        return Some(Standing {
-            admin: true,
-            key: None,
-        });
-    }
+    let bearer = services.credentials.bearer_principal.as_deref() == Some(principal);
     let now = Utc::now();
     let config = services.live.get();
-    let mut matching = config.auth.api_keys.iter().filter(|k| {
+    let mut keys = config.auth.api_keys.iter().filter(|k| {
         !k.is_expired_at(now)
             && k.key_sha256
                 .as_deref()
@@ -57,14 +53,17 @@ fn standing(services: &Services, principal: &str) -> Option<Standing> {
                     crate::gateway::auth::principal_of_digest(&digest) == principal
                 })
     });
-    let key = matching.next()?;
-    if matching.next().is_some() {
-        return None;
+    match (bearer, keys.next(), keys.next()) {
+        (true, None, _) => Some(Standing {
+            admin: true,
+            key: None,
+        }),
+        (false, Some(key), None) => Some(Standing {
+            admin: key.admin,
+            key: Some(key.name.clone()),
+        }),
+        _ => None,
     }
-    Some(Standing {
-        admin: key.admin,
-        key: Some(key.name.clone()),
-    })
 }
 
 /// The gateway operational events source.
