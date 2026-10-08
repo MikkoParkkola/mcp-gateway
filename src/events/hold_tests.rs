@@ -13,26 +13,27 @@ use crate::events::EventsHub;
 
 const TYPE: &str = "webhook.beta.push.received";
 
-/// Beta's capability: one push route mapping and filtering `ref`.
+/// Beta's capability: one push route mapping and filtering `ref` and `sha`.
 fn full() -> String {
     "name: beta\ndescription: hooks\nschema:\n  input: { type: object, properties: {} }\n  \
      output: { type: object }\nproviders: {}\nwebhooks:\n  push:\n    path: /beta/push\n    \
-     method: POST\n    transform:\n      event_type: \"beta.push\"\n      data: { ref: \"{ref}\" }\n    \
-     event:\n      description: \"A push.\"\n      filters: [ref]\n"
+     method: POST\n    transform:\n      event_type: \"beta.push\"\n      \
+     data: { ref: \"{ref}\", sha: \"{sha}\" }\n    \
+     event:\n      description: \"A push.\"\n      filters: [ref, sha]\n"
         .to_owned()
 }
 
-/// Beta with `ref` replaced by `sha`, in its fields and its filters.
+/// Beta with `ref` dropped from its fields and its filters: restoring the
+/// full shape afterwards widens it again.
 fn narrower() -> String {
-    full().replace("ref", "sha")
+    full()
+        .replace("ref: \"{ref}\", ", "")
+        .replace("filters: [ref, sha]", "filters: [sha]")
 }
 
-/// Beta with `sha` mapped beside `ref`.
+/// Beta with `tag` mapped beside `ref` and `sha`.
 fn wider() -> String {
-    full().replace(
-        "data: { ref: \"{ref}\" }",
-        "data: { ref: \"{ref}\", sha: \"{sha}\" }",
-    )
+    full().replace("sha: \"{sha}\" }", "sha: \"{sha}\", tag: \"{tag}\" }")
 }
 
 /// Beta read mid-write: valid YAML, its webhook section not written yet.

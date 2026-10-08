@@ -458,10 +458,7 @@ impl EventsHub {
         };
         let now = Utc::now();
         let id = subscription_id(&principal, url.as_str(), &descriptor.name, &arguments);
-        let caps = Caps {
-            per_principal: self.config.max_subscriptions_per_principal,
-            global: self.config.max_subscriptions,
-        };
+        let caps = self.caps();
         if self.store.get(&id).as_ref().is_none_or(|s| !s.live(now)) {
             self.store
                 .would_admit(&principal, caps, now)

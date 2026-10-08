@@ -84,10 +84,7 @@ impl EventsHub {
             expires_at: grant.expires_at(now),
             ..existing.clone()
         };
-        let caps = Caps {
-            per_principal: self.config.max_subscriptions_per_principal,
-            global: self.config.max_subscriptions,
-        };
+        let caps = self.caps();
         let tail = crate::events::tail_policy(&self.config);
         let grace = chrono::Duration::from_std(self.config.secret_rotation_grace)
             .unwrap_or_else(|_| chrono::Duration::zero());
@@ -145,6 +142,14 @@ impl EventsHub {
             });
         }
         refusal
+    }
+
+    /// The subscription caps in force.
+    pub(super) fn caps(&self) -> Caps {
+        Caps {
+            per_principal: self.config.max_subscriptions_per_principal,
+            global: self.config.max_subscriptions,
+        }
     }
 
     /// The payload fields event type `name` carries now: a webhook route's

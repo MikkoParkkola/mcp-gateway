@@ -204,6 +204,9 @@ async fn a_test_source_plugs_in_without_core_changes() {
     };
     // Through the runtime's own entry points: start, then the emit queue.
     hub.start(services());
+    // As the gateway wiring does: nothing is fanned out before the startup
+    // reconcile (MIK-8076).
+    assert!(hub.reconcile_catalogue(fanout::CatalogueScan::Complete));
     hub.emit(event);
     for _ in 0..100 {
         if outbox_files(dir.path()) == 2 {

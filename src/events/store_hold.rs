@@ -21,6 +21,10 @@ pub(crate) struct Held {
     pub key: Option<String>,
 }
 
+/// One held type in the admin listing: its name, its row count, and the
+/// earliest and latest end among them.
+pub(crate) type HeldType = (String, usize, Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+
 /// What a route refresh decided for one stored subscription.
 #[derive(Debug, Default)]
 pub(crate) struct Judged {
@@ -55,18 +59,15 @@ impl Store {
             {
                 row.payload_fields = fields;
             }
-            match judged.held {
-                Some(why) => {
-                    if row.unoffered_since.is_none() {
-                        row.unoffered_since = Some(now);
-                        row.held_until = Some(now + max_ttl);
-                    }
-                    held.insert(row.id.clone(), why);
+            if let Some(why) = judged.held {
+                if row.unoffered_since.is_none() {
+                    row.unoffered_since = Some(now);
+                    row.held_until = Some(now + max_ttl);
                 }
-                None => {
-                    row.unoffered_since = None;
-                    row.held_until = None;
-                }
+                held.insert(row.id.clone(), why);
+            } else {
+                row.unoffered_since = None;
+                row.held_until = None;
             }
             if row.payload_fields != sub.payload_fields
                 || row.unoffered_since != sub.unoffered_since
@@ -111,9 +112,7 @@ impl Store {
 
     /// Every held subscription's type, with its row count, earliest and
     /// latest end, for the admin listing.
-    pub(crate) fn held_listing(
-        &self,
-    ) -> Vec<(String, usize, Option<DateTime<Utc>>, Option<DateTime<Utc>>)> {
+    pub(crate) fn held_listing(&self) -> Vec<HeldType> {
         let state = self.state.lock();
         let mut types = std::collections::BTreeMap::<
             String,
