@@ -100,7 +100,9 @@ async fn attempt_across_a_reload(after: Config) -> usize {
     });
     hub.register_source(Arc::clone(&source) as Arc<dyn EventSource>);
     let (port, accepted) = counting_callback().await;
-    queued_with(&hub, port, "evt_gate", "probe.gate", |sub, _| {
+    queued_with(&hub, port, "evt_gate", "probe.gate", |sub, record| {
+        // The record's backend is the one the key grants.
+        record.backend = "g".into();
         sub.credential_kind = Some(crate::security::audit::CredentialKind::ApiKey);
         sub.api_key = Some(ApiKeyRef {
             name: "k".to_owned(),
