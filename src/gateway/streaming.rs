@@ -27,6 +27,10 @@ use crate::gateway::auth::live::{Audience, Delivery, HeldCredential, delivery};
 use crate::gateway::session_id::{SessionId, SessionOwner, session_fp};
 use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 
+#[path = "streaming_copy.rs"]
+mod copy;
+use copy::{CopyAudience, Unsent};
+
 /// A tagged notification event from a backend
 #[derive(Debug, Clone, Serialize)]
 pub struct TaggedNotification {
@@ -54,6 +58,8 @@ pub struct SessionFrame {
     mark: Option<Box<crate::gateway::outbound::StreamMark>>,
     /// Set on a server-to-client request: how its copies fared on the streams.
     watch: Option<Arc<DeliveryWatch>>,
+    /// Who the copy is for, judged again when the stream writes it (G6).
+    audience: CopyAudience,
 }
 
 /// How a server-to-client request's queued copies fared on their streams
@@ -203,14 +209,12 @@ impl ClientSession {
     }
 
     /// Send as `broadcast::Sender::send` does; an unopened sender has no
-    /// receiver, so it refuses exactly as an open one with none would.
-    fn send(
-        &self,
-        notification: SessionFrame,
-    ) -> std::result::Result<usize, broadcast::error::SendError<SessionFrame>> {
+    /// receiver, so it refuses exactly as an open one with none would. The
+    /// refused frame is dropped, not returned: no caller reads it.
+    fn send(&self, notification: SessionFrame) -> std::result::Result<usize, Unsent> {
         match self.tx.get() {
-            Some(tx) => tx.send(notification),
-            None => Err(broadcast::error::SendError(notification)),
+            Some(tx) => tx.send(notification).map_err(|_| Unsent),
+            None => Err(Unsent),
         }
     }
 }
@@ -300,16 +304,13 @@ impl NotificationMultiplexer {
         notification: TaggedNotification,
         hidden: Option<&crate::security::tenant_reads::ReadAttribution>,
         watch: Option<Arc<DeliveryWatch>>,
-    ) -> std::result::Result<usize, broadcast::error::SendError<SessionFrame>> {
+        audience: CopyAudience,
+    ) -> std::result::Result<usize, Unsent> {
         // No open stream: nothing to deliver, so nothing to judge, and nothing
         // is sent either, so a stream that subscribes meanwhile cannot get an
         // unjudged copy (a send with no receiver delivers nothing anyway).
         if session.tx.get().is_none_or(|tx| tx.receiver_count() == 0) {
-            return Err(broadcast::error::SendError(SessionFrame {
-                note: notification,
-                mark: None,
-                watch: None,
-            }));
+            return Err(Unsent);
         }
         let key = session.read_key.read().clone();
         let key = key.as_deref();
@@ -317,19 +318,14 @@ impl NotificationMultiplexer {
             None => None,
             Some(judge) => match judge.judge(key, &notification, hidden) {
                 Ok(mark) => mark.map(Box::new),
-                Err(()) => {
-                    return Err(broadcast::error::SendError(SessionFrame {
-                        note: notification,
-                        mark: None,
-                        watch: None,
-                    }));
-                }
+                Err(()) => return Err(Unsent),
             },
         };
         let copies = session.send(SessionFrame {
             note: notification,
             mark,
             watch: watch.clone(),
+            audience,
         })?;
         if let Some(watch) = watch {
             watch.sent(copies);
@@ -579,13 +575,20 @@ impl NotificationMultiplexer {
             .values()
             .map(|s| (Arc::clone(s), s.credential.read().clone()))
             .collect();
+        let audience = CopyAudience::Backend(Arc::from(backend));
         let mut reached = 0;
         for (session, credential) in targets {
             let verdict =
                 delivery(&authorizer, credential.as_ref(), Audience::Backend(backend)).await;
             if verdict == Delivery::Deliver
                 && self
-                    .enqueue(&session, notification.clone(), hidden.as_ref(), None)
+                    .enqueue(
+                        &session,
+                        notification.clone(),
+                        hidden.as_ref(),
+                        None,
+                        audience.clone(),
+                    )
                     .is_ok()
             {
                 reached += 1;
@@ -656,7 +659,7 @@ impl NotificationMultiplexer {
         }
         let sessions = self.sessions.read();
         if let Some(session) = sessions.get(session_id) {
-            match self.enqueue(session, notification, None, None) {
+            match self.enqueue(session, notification, None, None, CopyAudience::Any) {
                 Ok(_) => true,
                 Err(e) => {
                     debug!(session_id = %session_fp(session_id), error = %e, "Failed to send notification");
@@ -686,9 +689,15 @@ impl NotificationMultiplexer {
             commit: parking_lot::Mutex::new(commit),
             ..DeliveryWatch::default()
         });
-        self.enqueue(session, notification, None, Some(Arc::clone(&watch)))
-            .ok()
-            .map(|_| watch)
+        self.enqueue(
+            session,
+            notification,
+            None,
+            Some(Arc::clone(&watch)),
+            CopyAudience::Any,
+        )
+        .ok()
+        .map(|_| watch)
     }
 
     /// Broadcast a notification to all sessions
@@ -696,7 +705,7 @@ impl NotificationMultiplexer {
     pub fn broadcast(&self, notification: TaggedNotification) {
         let sessions = self.sessions.read();
         for session in sessions.values() {
-            let _ = self.enqueue(session, notification.clone(), None, None);
+            let _ = self.enqueue(session, notification.clone(), None, None, CopyAudience::Any);
         }
     }
 
