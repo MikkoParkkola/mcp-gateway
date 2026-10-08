@@ -391,3 +391,80 @@ fn a_restore_skips_rows_that_hold_no_spend() {
     assert!((snap.tool_daily["used"] - 0.02).abs() < 1e-9);
     assert!((snap.key_daily["used-key"] - 0.03).abs() < 1e-9);
 }
+
+/// A map full of yesterday's unbudgeted rows, with today already marked swept
+/// and the minute throttle armed: what a spend that read the day just before
+/// midnight leaves for the first spend after it (MIK-8045).
+fn swept_today_with_old_rows(
+    rows: fn(&BudgetEnforcer) -> &DashMap<String, DailyAccumulator>,
+) -> BudgetEnforcer {
+    let e = enforcer_with(true, None, &[], &[], &[]);
+    let yesterday = current_day() - 1;
+    for i in 0..MAX_UNBUDGETED_ROWS {
+        rows(&e).insert(format!("old-{i}"), DailyAccumulator::stale(yesterday, 5));
+    }
+    e.swept_day
+        .store(current_day(), std::sync::atomic::Ordering::Relaxed);
+    e.next_sweep
+        .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+    e
+}
+
+/// `MIK-STRADDLE.1`: a new tool gets its own row although the day's sweep ran
+/// before yesterday's rows went stale.
+#[test]
+fn a_new_tool_after_a_straddled_sweep_gets_its_own_row() {
+    // GIVEN: the tool map at the cap with yesterday's rows, today marked swept
+    let e = swept_today_with_old_rows(|e| &e.tool_daily);
+    // WHEN: a new tool spends
+    e.record_spend("new-today", None, 0.01);
+    // THEN: it has its own row and nothing overflowed
+    assert!(
+        e.tool_daily.contains_key("new-today"),
+        "the new tool's spend went to the overflow row"
+    );
+    let snap = e.snapshot();
+    assert!((snap.tool_daily["new-today"] - 0.01).abs() < 1e-9);
+    assert!(snap.tool_overflow_usd.abs() < 1e-12);
+}
+
+/// `MIK-STRADDLE.2`: the same for a new key.
+#[test]
+fn a_new_key_after_a_straddled_sweep_gets_its_own_row() {
+    // GIVEN: the key map at the cap with yesterday's rows, today marked swept
+    let e = swept_today_with_old_rows(|e| &e.key_daily);
+    // WHEN: a new key spends
+    e.record_spend("t", Some("new-key"), 0.01);
+    // THEN: it has its own row and nothing overflowed
+    assert!(
+        e.key_daily.contains_key("new-key"),
+        "the new key's spend went to the overflow row"
+    );
+    let snap = e.snapshot();
+    assert!((snap.key_daily["new-key"] - 0.01).abs() < 1e-9);
+    assert!(snap.key_overflow_usd.abs() < 1e-12);
+}
+
+/// `MIK-STRADDLE.3`: with the cap full of today's rows, overflowing spends do
+/// not sweep the map each time; at most one sweep a day.
+#[test]
+fn overflowing_spends_sweep_at_most_once_a_day() {
+    // GIVEN: the tool map at the cap with today's rows, and one spend past it
+    let e = enforcer_with(true, None, &[], &[], &[]);
+    for i in 0..MAX_UNBUDGETED_ROWS {
+        e.record_spend(&format!("now-{i}"), None, 0.01);
+    }
+    e.record_spend("first-over", None, 0.01);
+    // AND: a row gone stale since, with the minute throttle armed
+    let yesterday = DailyAccumulator::stale(current_day() - 1, 5);
+    e.tool_daily.insert("now-0".to_string(), yesterday);
+    e.next_sweep
+        .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+    // WHEN: another new tool spends past the cap
+    e.record_spend("second-over", None, 0.01);
+    // THEN: no second sweep ran that day
+    assert!(
+        e.tool_daily.contains_key("now-0"),
+        "an overflowing spend swept the map again the same day"
+    );
+}

@@ -26,6 +26,7 @@ use mcp_gateway::{
 use serde_json::{Value, json};
 
 mod health;
+mod hidden_keys;
 mod posture;
 mod provenance;
 mod remedy;
@@ -190,6 +191,9 @@ pub async fn run_doctor_command(
         print_results(&results, format);
         return ExitCode::FAILURE;
     };
+    if let Some(path) = resolve_config_path(config_path) {
+        results.extend(hidden_keys::check_hidden_keys(&path));
+    }
 
     // ── 2. Port and gateway runtime ────────────────────────────────────────
     results.extend(check_port_and_gateway_runtime(&config).await);
