@@ -51,7 +51,11 @@ const STABLE: Duration = Duration::from_secs(60);
 /// hourly cut of its POST (`STREAM_TIMEOUT`, 3600 s, in `http/listen.rs`).
 pub(super) const RECYCLE: Duration = Duration::from_secs(55 * 60);
 // The replacement must open and be acknowledged before the old stream's cut.
-const _: () = assert!(OPEN_LIMIT.as_secs() + ACK_DEADLINE.as_secs() < 3600 - RECYCLE.as_secs());
+// A block, not a bare `assert!` expression: Kani's toolchain rejects that form
+// under `-D warnings` (semicolon-in-expressions-from-non-local-macros).
+const _: () = {
+    assert!(OPEN_LIMIT.as_secs() + ACK_DEADLINE.as_secs() < 3600 - RECYCLE.as_secs());
+};
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
 const BACKOFF_CAP: Duration = Duration::from_secs(300);
 /// A tools refill that did not fill is retried once after this: the backend's
