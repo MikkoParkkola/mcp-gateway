@@ -247,9 +247,14 @@ fn keep_plan_receipts(
         receipts.retain(|r| !r.in_plan);
         return;
     };
-    for r in receipts.iter_mut().filter(|r| r.in_plan) {
-        let digest = std::mem::take(&mut r.digest);
-        r.digest = fw.retain_delivered(digest, &delivered);
+    // MIK-8043.SEAM.3: kept together, so the seams between steps are found.
+    let mut plan: Vec<&mut super::Receipt> = receipts.iter_mut().filter(|r| r.in_plan).collect();
+    let digests = plan
+        .iter_mut()
+        .map(|r| std::mem::take(&mut r.digest))
+        .collect();
+    for (r, digest) in plan.into_iter().zip(fw.retain_plan(digests, &delivered)) {
+        r.digest = digest;
         r.pending_retain = false;
     }
 }

@@ -13,10 +13,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::collusion::{CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams};
-use super::collusion_digest::DELIVERED_SET_CAP;
 #[cfg(test)]
 pub(super) use super::collusion_digest::delivery_leaves;
 pub(super) use super::collusion_digest::delivery_parts;
+use super::collusion_digest::{DELIVERED_SET_CAP, add_seams};
 pub(crate) use super::collusion_digest::{Delivered, DeliveryDigest};
 use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
@@ -514,6 +514,28 @@ impl Firewall {
     fn count_plan_drop(&self) {
         self.relay.plan_drop.fetch_add(1, Ordering::Relaxed);
         telemetry_metrics::counter!(PLAN_DROP_METRIC).increment(1);
+    }
+
+    /// A plan's step `digests` kept to what `delivered` carries, then the
+    /// seams between steps added (`MIK-8043.SEAM.3`), then each deferred cap
+    /// applied, so the cap bounds seam fingerprints too; unchanged with relay
+    /// detection off.
+    pub(crate) fn retain_plan(
+        &self,
+        digests: Vec<DeliveryDigest>,
+        delivered: &Delivered<'_>,
+    ) -> Vec<DeliveryDigest> {
+        let Some(detector) = self.relay_detector() else {
+            return digests;
+        };
+        let mut kept: Vec<DeliveryDigest> = digests
+            .into_iter()
+            .map(|digest| digest.retaining(detector, delivered))
+            .collect();
+        add_seams(&mut kept, detector, delivered);
+        kept.into_iter()
+            .map(|digest| self.capped(&digest).unwrap_or(digest))
+            .collect()
     }
 
     /// `digest` kept to what `delivered` carries; unchanged with relay

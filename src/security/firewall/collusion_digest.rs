@@ -11,7 +11,7 @@
 //! delivered leaf or across adjacent kept leaves.
 
 use std::cell::OnceCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
@@ -475,6 +475,93 @@ fn run_forms(run: &[&Segment]) -> Vec<String> {
         .iter()
         .filter(|s| !s.key)
         .map(|s| s.text.as_str())
+        .collect();
+    let mut forms = vec![joined];
+    if values.len() > 1 {
+        forms.push(values.concat());
+    }
+    forms
+}
+
+/// `MIK-8043.SEAM.3`: the fingerprints across a seam between plan steps. A
+/// delivered leaf is owned when it is at most as frequent in the answer as
+/// the kept whole segments holding it across `digests` (engine text equal to
+/// a step leaf then breaks a run instead of joining one). A maximal sequence
+/// of owned leaves is a run the caller received contiguously, made only of
+/// backend text; the fingerprints of its forms (see [`run_forms`]) that are
+/// no k-gram of an owner's own runs cross a seam, and each owner of the run
+/// retains them. A seam fingerprint joins text two backends produced and the
+/// caller received side by side; it never joins engine text.
+pub(super) fn add_seams(
+    digests: &mut [DeliveryDigest],
+    detector: &CollusionDetector,
+    delivered: &Delivered<'_>,
+) {
+    let mut added: Vec<Vec<u64>> = vec![Vec::new(); digests.len()];
+    {
+        let mut owners: HashMap<(&str, bool), Vec<usize>> = HashMap::new();
+        for (i, digest) in digests.iter().enumerate() {
+            for s in digest.segments.iter().filter(|s| s.whole) {
+                owners.entry((s.text.as_str(), s.key)).or_default().push(i);
+            }
+        }
+        let parts: Vec<(&str, bool)> = delivered
+            .all
+            .iter()
+            .enumerate()
+            .map(|(i, leaf)| (*leaf, i >= delivered.values_len))
+            .collect();
+        let mut seen: HashMap<(&str, bool), usize> = HashMap::new();
+        for part in &parts {
+            *seen.entry(*part).or_default() += 1;
+        }
+        let own: Vec<HashSet<u64>> = digests.iter().map(|d| d.run_kgrams(detector)).collect();
+        let owned = |part: &(&str, bool)| {
+            owners
+                .get(part)
+                .filter(|o| seen.get(part).is_some_and(|&n| n <= o.len()))
+        };
+        let mut run: Vec<(&str, bool)> = Vec::new();
+        let mut run_owners: Vec<usize> = Vec::new();
+        for part in parts.iter().map(Some).chain([None]) {
+            if let Some(p) = part
+                && let Some(o) = owned(p)
+            {
+                run.push(*p);
+                run_owners.extend(o);
+                continue;
+            }
+            run_owners.sort_unstable();
+            run_owners.dedup();
+            if run.len() > 1 && run_owners.len() > 1 {
+                let seams: Vec<u64> = seam_forms(&run)
+                    .iter()
+                    .flat_map(|text| detector.fingerprints(text))
+                    .filter(|fp| !run_owners.iter().any(|&r| own[r].contains(fp)))
+                    .collect();
+                for &r in &run_owners {
+                    added[r].extend(&seams);
+                }
+            }
+            run.clear();
+            run_owners.clear();
+        }
+    }
+    for (digest, seams) in digests.iter_mut().zip(added) {
+        let mut seen: HashSet<u64> = digest.retained.iter().copied().collect();
+        digest
+            .retained
+            .extend(seams.into_iter().filter(|fp| seen.insert(*fp)));
+    }
+}
+
+/// [`run_forms`] for a run of delivered parts (text, whether a key).
+fn seam_forms(run: &[(&str, bool)]) -> Vec<String> {
+    let joined = run.iter().map(|(t, _)| *t).collect::<Vec<_>>().join("\n");
+    let values: Vec<&str> = run
+        .iter()
+        .filter(|(_, key)| !key)
+        .map(|(t, _)| *t)
         .collect();
     let mut forms = vec![joined];
     if values.len() > 1 {
