@@ -57,6 +57,10 @@ pub(crate) enum Answer {
     AskBig,
     /// Like `AskOnce`, the question and a `content` text carrying this text.
     AskWith(&'static str),
+    /// Like `AskOnce`, the question carrying a `_meta` that is not an object.
+    AskBadMeta,
+    /// The backend cannot be reached: nothing was sent (`TransportConnect`).
+    Unreachable,
     /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
     /// `resultType`, `ttlMs` (5000) and `cacheScope` itself, and every other
     /// answer a `ttlMs` of 3000 (MIK-8022).
@@ -90,6 +94,9 @@ fn question(answer: Answer) -> Value {
     }
     if matches!(answer, Answer::AskBig) {
         asked["requestState"] = json!("s".repeat(16 * 1024));
+    }
+    if matches!(answer, Answer::AskBadMeta) {
+        asked["_meta"] = json!(5);
     }
     if let Answer::AskWith(text) = answer {
         asked["inputRequests"]["k1"]["params"]["message"] = json!(text);
@@ -162,6 +169,7 @@ impl Transport for CountingBackend {
                 | Answer::AskMalformed
                 | Answer::AskBig
                 | Answer::AskWith(_)
+                | Answer::AskBadMeta
         ) {
             return Ok(if n == 0 {
                 JsonRpcResponse::success(id, question(self.answer))
@@ -204,11 +212,13 @@ impl Transport for CountingBackend {
                 "rate limit exceeded",
             )),
             Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
+            Answer::Unreachable => Err(crate::Error::TransportConnect("no route".to_string())),
             Answer::AskOnce
             | Answer::AskNoState
             | Answer::AskMalformed
             | Answer::AskBig
-            | Answer::AskWith(_) => {
+            | Answer::AskWith(_)
+            | Answer::AskBadMeta => {
                 unreachable!("answered above")
             }
             Answer::Text(text) => Ok(JsonRpcResponse::success(

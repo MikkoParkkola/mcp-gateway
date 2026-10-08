@@ -16,7 +16,7 @@ use super::direct_guards_fixture::{Answer, Fx, fixture, post_meta_invoke};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 
-const BACKENDS: [&str; 2] = ["alpha", "alpha-pt"];
+pub(super) const BACKENDS: [&str; 2] = ["alpha", "alpha-pt"];
 /// The state the fixture backend issues with its question.
 const BACKEND_STATE: &str = "backend-state-1";
 
@@ -32,7 +32,12 @@ fn identity(subject: &str) -> VerifiedIdentity {
 
 /// `tools/call read` on `/mcp/{backend}` as key `k-std`, carrying `subject`'s
 /// verified identity when one is given, with `extra` merged into the params.
-async fn call(fx: &Fx, backend: &str, subject: Option<&str>, extra: Value) -> (StatusCode, Value) {
+pub(super) async fn call(
+    fx: &Fx,
+    backend: &str,
+    subject: Option<&str>,
+    extra: Value,
+) -> (StatusCode, Value) {
     call_as(fx, "k-std", backend, subject, extra).await
 }
 
@@ -67,7 +72,7 @@ async fn call_as(
     (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
 }
 
-fn code(body: &Value) -> Option<i64> {
+pub(super) fn code(body: &Value) -> Option<i64> {
     body.get("error")
         .and_then(|e| e.get("code"))
         .and_then(Value::as_i64)
@@ -85,7 +90,7 @@ fn state_of(body: &Value) -> String {
         .to_owned()
 }
 
-fn dispatched(fx: &Fx) -> usize {
+pub(super) fn dispatched(fx: &Fx) -> usize {
     fx.calls.load(std::sync::atomic::Ordering::SeqCst)
 }
 
@@ -448,7 +453,7 @@ async fn a1_a3_an_api_key_caller_keeps_its_round_on_the_direct_route() {
 
 /// `tools/call gateway_invoke` of `backend`/`read` on `/mcp` as `key`, a
 /// modern request declaring form elicitation, with `extra` beside `name`.
-async fn meta_call(fx: &Fx, key: &str, backend: &str, extra: Value) -> Value {
+pub(super) async fn meta_call(fx: &Fx, key: &str, backend: &str, extra: Value) -> Value {
     let mut params = json!({
         "name": "gateway_invoke",
         "arguments": {"server": backend, "tool": "read", "arguments": {}},
@@ -554,7 +559,7 @@ async fn a4_a_shared_key_still_separates_callers_the_guard_separates() {
 }
 
 /// Exchanges this gateway still holds open.
-async fn held(fx: &Fx) -> usize {
+pub(super) async fn held(fx: &Fx) -> usize {
     let now = crate::protocol::continuation::now_unix_secs();
     fx.state.meta_mcp.continuation().in_flight().len(now).await
 }
@@ -610,7 +615,7 @@ async fn r17_a_question_refused_after_its_seal_gives_its_slot_back() {
 
 /// `tools/call read` on `/mcp/{backend}` as `key`, a hardened modern request that
 /// declares form elicitation and carries `nonce`, with `extra` in the params.
-async fn signed_call(
+pub(super) async fn signed_call(
     fx: &Fx,
     (key, backend): (&str, &str),
     nonce: &str,
@@ -729,8 +734,7 @@ async fn r20_a_spend_refusal_consumes_no_nonce() {
     }
 }
 
-/// A chained backend's transport that asks the fixture's question with no
-/// chain receipt, counting every request.
+/// A chained backend asking the fixture's question with no receipt, counted.
 struct AskUnsigned(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
 #[async_trait::async_trait]
@@ -759,9 +763,8 @@ impl crate::transport::Transport for AskUnsigned {
 }
 
 /// R21: an answer whose chain receipt fails is refused before it is read as a
-/// question, so its idempotency key stays settled and a retry under that key
-/// does not reach the backend again. Mutant: the key released on an interim
-/// claim before the receipt is checked.
+/// question, so its key stays settled and a same-key retry does not reach the
+/// backend again. Mutant: the key released before the receipt is checked.
 #[tokio::test]
 async fn r21_a_failed_receipt_keeps_the_key_settled() {
     use crate::config::{BackendConfig, ChainEmit, ChainMode, FailsafeConfig};
