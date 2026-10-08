@@ -110,3 +110,17 @@ fn upgrade_keeps_an_alias_that_is_not_an_address_of_its_scheme_and_says_so() {
         "{said}"
     );
 }
+
+#[test]
+fn upgrade_refuses_a_named_config_that_does_not_exist() {
+    // A typo in `--config` must not read as a finished upgrade: nothing is
+    // migrated and no version stamp is written.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("gatway.yaml");
+    let data = dir.path().join("data");
+    for dry_run in [false, true] {
+        let code = run_upgrade_with_config(dry_run, true, Some(&data), Some(&missing));
+        assert_eq!(code, ExitCode::FAILURE, "dry_run={dry_run}");
+        assert!(!data.exists(), "dry_run={dry_run}: the upgrade went ahead");
+    }
+}

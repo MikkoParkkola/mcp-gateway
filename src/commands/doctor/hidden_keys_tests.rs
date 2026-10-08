@@ -326,3 +326,22 @@ fn an_older_url_key_holding_a_variable_names_no_upgrade() {
         row.detail
     );
 }
+
+#[test]
+fn an_older_url_key_upgrade_cannot_edit_names_no_upgrade() {
+    // `upgrade` reports a flow-style backend for a hand edit instead of
+    // rewriting it, so doctor does not suggest running it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends: {fs: {http_url: \"https://fs.example.test/mcp\"}}\n",
+    )
+    .expect("write config");
+    let row = check_hidden_keys(&path).expect("an older url key is listed");
+    assert!(
+        row.detail.contains("backends.<name>.http_url") && !row.detail.contains("upgrade"),
+        "{}",
+        row.detail
+    );
+}

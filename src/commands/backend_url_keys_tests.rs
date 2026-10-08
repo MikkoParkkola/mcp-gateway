@@ -268,3 +268,26 @@ fn a_line_that_is_not_a_key_is_skipped_while_another_backend_is_rewritten() {
         out.text
     );
 }
+
+#[test]
+fn a_flow_style_backends_map_is_reported_not_missed() {
+    // The whole `backends:` map on one line: the line scan sees no entry,
+    // so the parsed file decides which backends hold an older key.
+    let text = "backends: {svc: {http_url: \"https://svc.example.test/mcp\"}}\n";
+    let out = rewrite_url_aliases(text, None);
+    assert_eq!(out.text, text);
+    assert!(out.changed.is_empty());
+    assert_eq!(out.skipped, vec!["svc".to_string()]);
+    assert!(out.kept.is_empty(), "{:?}", out.kept);
+}
+
+#[test]
+fn a_flow_style_backend_that_is_not_an_address_of_its_scheme_is_kept() {
+    // A hand edit to `url` would be refused (`${X}`) or switch transport
+    // (a ws address under `http_url`), so neither is sent to a hand edit.
+    let text = "backends:\n  fs: { http_url: \"${FS_URL}\" }\n  odd: { http_url: \"wss://odd.example.test/mcp\" }\n";
+    let out = rewrite_url_aliases(text, None);
+    assert_eq!(out.text, text);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(out.kept, vec!["fs".to_string(), "odd".to_string()]);
+}
