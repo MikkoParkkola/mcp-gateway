@@ -195,7 +195,8 @@ backend.
 
 - `localhost` can be repointed by DNS or `/etc/hosts`. Accepted by the board.
 - `::ffff:127.0.0.1` (IPv4-mapped IPv6) is not `Ipv6Addr::is_loopback()` and is
-  refused. Not chased; an operator who hits it writes `127.0.0.1`.
+  refused by design (MIK-8059): it fails closed, a test pins it, and an operator
+  who hits it writes `127.0.0.1`.
 - A backend whose plain-`http` non-loopback URL carries a benign query or a benign
   header now needs the opt-in line. Accepted, knowingly: that is the cost of the strict
   reading, and it is one line in the stanza that already declares the URL.
