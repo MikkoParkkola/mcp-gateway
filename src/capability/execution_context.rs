@@ -102,6 +102,7 @@ pub struct CapabilityExecutionContext {
     /// `Credential`. An MCP child is keyed on it when nothing above names the
     /// caller. Crate-visible: an embedder must not assert it.
     // ci-allow-secret-debug: a digest of the validated secret, never the secret; the response cache keys on the same value.
+    #[allow(dead_code)] // red rows only: the child key reads it next
     pub(crate) credential_principal: Option<String>,
 }
 
