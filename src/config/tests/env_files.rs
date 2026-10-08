@@ -436,10 +436,10 @@ fn the_scanner_ignores_what_dotenvy_leaves_alone() {
     ];
 
     // The first case expands `A`, which the file never assigns, so an `A` in
-    // the process environment would fill it.
+    // the process environment would fill it. No case reads another name: an
+    // exported `A_B` is never read and must not fail the test.
     assert_not_in_process_env("A");
     for (key, file, unexpanded_key, unexpanded_value) in cases {
-        assert_not_in_process_env(key);
         let parsed: std::collections::HashMap<String, String> =
             dotenvy::from_read_iter(std::io::Cursor::new(file.as_bytes()))
                 .collect::<std::result::Result<Vec<_>, _>>()

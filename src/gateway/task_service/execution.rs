@@ -67,6 +67,8 @@ pub(crate) enum BeginOutcome {
     InFlight,
     Capacity,
     Unavailable,
+    /// New keyed tasks are sealed (MIK-8052).
+    Sealed,
 }
 
 impl BeginOutcome {
@@ -94,6 +96,11 @@ impl BeginOutcome {
             ),
             Self::Capacity | Self::Unavailable => {
                 JsonRpcResponse::error(Some(id), -32603, "task store unavailable")
+            }
+            // The code the synchronous path gives a sealed call, so a client
+            // sees one refusal for it on either path.
+            Self::Sealed => {
+                JsonRpcResponse::error(Some(id), 409, crate::idempotency::admission::SEALED_MESSAGE)
             }
         }
     }
