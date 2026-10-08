@@ -11,11 +11,14 @@ use crate::{Error, Result};
 
 impl Drop for StdioTransport {
     /// A dropped transport ends the whole tree. `KillOnDrop` only kills the
-    /// group leader, so `npx`/`uvx` descendants would outlive it.
+    /// group leader, so `npx`/`uvx` descendants would outlive it. It also
+    /// cancels `shutdown`, as `close()` does, so a write stuck on a reader
+    /// outside the group ends and gives up stdin (MIK-8079).
     fn drop(&mut self) {
         if let Some(child) = self.child.get_mut().as_mut() {
             let _ = child.start_kill();
         }
+        self.shutdown.get_mut().cancel();
     }
 }
 
