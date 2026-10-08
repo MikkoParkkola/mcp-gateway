@@ -39,6 +39,7 @@ fn row(task: &Task, version: u32, upstream: Option<UpstreamRecord>) -> Record {
         backend: "sdk".to_owned(),
         revision: 1,
         model: task.snapshot(),
+        gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
     }
 }
 
@@ -129,6 +130,7 @@ fn a_row_serves_backend_output_by_status() {
         output_free,
         error_author: None,
         owner_digest: String::new(),
+        gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
     };
     let working = Task::create("t");
     let mut completed = working.clone();
