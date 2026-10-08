@@ -374,8 +374,13 @@ impl OAuthClient {
                 .storage
                 .save_refresh_state(&key, &self.resource_url, &repaired)
             {
+                // The login stands: refusing it over a state file would leave
+                // the user with nothing. The next refresh still fails closed;
+                // the path names what to remove so the repair can happen.
                 let backend = self.backend_name.as_str();
-                warn!(backend = %backend, %error, "Could not repair the refresh state after a login");
+                let path = self.storage.refresh_state_path(&key, &self.resource_url);
+                let path = path.display();
+                warn!(backend = %backend, path = %path, %error, "Could not repair the refresh state after a login; remove this file so the next login can");
             }
         }
         Ok(())

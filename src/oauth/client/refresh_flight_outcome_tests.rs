@@ -483,3 +483,22 @@ async fn a_login_repairs_a_damaged_refresh_state() {
     let state = owned.storage.load_refresh_state(&key, RESOURCE);
     assert!(!state.damaged, "the login rewrote the sidecar");
 }
+
+/// A login stands when the damaged sidecar cannot be rewritten (here a
+/// directory in its place): the user keeps the token the login issued, and
+/// its refresh still fails closed until the path is cleared.
+#[tokio::test]
+async fn a_login_stands_when_the_sidecar_cannot_be_repaired() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut owned = client(dir.path(), &server);
+    if let Some(meta) = owned.auth_metadata.as_mut() {
+        meta.grant_types_supported = vec!["client_credentials".to_string()];
+    }
+    let key = owned.credential_key().unwrap();
+    std::fs::create_dir(owned.storage.refresh_state_path(&key, RESOURCE)).unwrap();
+
+    let access = owned.try_client_credentials().await.expect("logged in");
+    assert_eq!(stored(&owned).map(|t| t.access_token), Some(access));
+    assert!(owned.storage.load_refresh_state(&key, RESOURCE).damaged);
+}
