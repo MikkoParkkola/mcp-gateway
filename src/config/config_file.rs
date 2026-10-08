@@ -63,6 +63,53 @@ impl Provider for ConfigFile {
     }
 
     fn data(&self) -> figment::Result<Map<Profile, Dict>> {
-        Yaml::string(&self.text).data()
+        let mut data = Yaml::string(&self.text).data()?;
+        for dict in data.values_mut() {
+            resolve_backend_urls(dict)?;
+        }
+        Ok(data)
     }
+}
+
+/// The keys that each pick a backend's transport; `url` stands for one of them.
+const TRANSPORT_KEYS: &[&str] = &["command", "http_url", "ws_url", "a2a_url"];
+
+/// Turn each backend's `url` into the key its scheme selects (`http_url` or
+/// `ws_url`), once, before anything reads the backend. A refusal names the
+/// keys and never the URL, which can carry a credential.
+fn resolve_backend_urls(dict: &mut Dict) -> figment::Result<()> {
+    let Some(figment::value::Value::Dict(_, backends)) = dict.get_mut("backends") else {
+        return Ok(());
+    };
+    for (name, backend) in backends.iter_mut() {
+        let figment::value::Value::Dict(_, fields) = backend else {
+            continue;
+        };
+        let Some(url) = fields.remove("url") else {
+            continue;
+        };
+        if let Some(other) = TRANSPORT_KEYS.iter().find(|k| fields.contains_key(*k)) {
+            return Err(format!(
+                "backends.{name}.url and backends.{name}.{other} both choose how to reach the \
+                 backend; keep `url` and delete `{other}`."
+            )
+            .into());
+        }
+        let figment::value::Value::String(tag, address) = url else {
+            return Err(format!("backends.{name}.url must be a string.").into());
+        };
+        let lower = address.to_ascii_lowercase();
+        let key = if lower.starts_with("http://") || lower.starts_with("https://") {
+            "http_url"
+        } else if lower.starts_with("ws://") || lower.starts_with("wss://") {
+            "ws_url"
+        } else {
+            return Err(format!(
+                "backends.{name}.url must start with http://, https://, ws:// or wss://."
+            )
+            .into());
+        };
+        fields.insert(key.to_string(), figment::value::Value::String(tag, address));
+    }
+    Ok(())
 }

@@ -47,9 +47,37 @@ pub fn run_upgrade_with_config(
 /// What a rewrite did, one line per fact, naming line numbers and backend
 /// names only: a URL can carry a credential, so none is printed.
 pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -> Vec<String> {
-    // Red-proof stub: reports nothing.
-    let _ = (path, &rewrite.changed, &rewrite.skipped, mode);
-    Vec::new()
+    let at = path.display();
+    let mut out = Vec::new();
+    if rewrite.changed.is_empty() {
+        if rewrite.skipped.is_empty() {
+            out.push(format!(
+                "{at}: no `http_url` or `ws_url` to rewrite; nothing changed."
+            ));
+        }
+    } else {
+        let lines: Vec<String> = rewrite
+            .changed
+            .iter()
+            .map(|n| format!("line {n}"))
+            .collect();
+        let verb = match mode {
+            RewriteMode::Apply => "rewrote",
+            RewriteMode::DryRun => "upgrade would rewrite",
+        };
+        out.push(format!(
+            "{at}: {verb} `http_url`/`ws_url` as `url` on {}.",
+            lines.join(", ")
+        ));
+    }
+    if !rewrite.skipped.is_empty() {
+        out.push(format!(
+            "{at}: not rewritten, change these to `url` by hand (written in flow style, or \
+             holding both `http_url` and `ws_url`): backends {}.",
+            rewrite.skipped.join(", ")
+        ));
+    }
+    out
 }
 
 #[cfg(test)]

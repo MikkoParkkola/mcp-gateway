@@ -110,6 +110,8 @@ const KNOWN_BACKEND_KEYS: &[&str] = &[
     "http_url",
     "streamable_http",
     "ws_url",
+    // The one-key spelling the loader resolves to `http_url` or `ws_url`.
+    "url",
 ];
 
 /// `TransportConfig::A2a` fields, which exist only with the `a2a` feature.

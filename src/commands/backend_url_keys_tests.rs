@@ -132,3 +132,41 @@ fn a_cli_write_saves_a_new_backend_with_url() {
     );
     assert!(text.contains("# kept"), "{text}");
 }
+
+#[test]
+fn a_cli_write_keeps_url_on_a_backend_that_already_had_it() {
+    use mcp_gateway::config::BackendConfig;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &path,
+        "backends:\n  kept:\n    url: \"https://kept.example.com/mcp\"\n",
+    )
+    .expect("write config");
+    let mut config =
+        mcp_gateway::config_persistence::load_existing_or_default(&path).expect("config loads");
+    config.backends.insert(
+        "other".to_string(),
+        BackendConfig {
+            transport: mcp_gateway::config::TransportConfig::Stdio {
+                command: "true".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            ..Default::default()
+        },
+    );
+    super::super::config_write::write(
+        &path,
+        &config,
+        super::super::config_write::CommentLoss::Refuse,
+    )
+    .expect("write succeeds");
+    let text = std::fs::read_to_string(&path).expect("read back");
+    assert!(
+        !text.contains("http_url"),
+        "url was turned back into http_url: {text}"
+    );
+    assert!(text.contains("url:"), "{text}");
+}

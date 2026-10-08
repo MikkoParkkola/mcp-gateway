@@ -225,18 +225,31 @@ pub(super) fn check_hidden_keys(path: &Path) -> Option<CheckResult> {
     if set.is_empty() {
         return None;
     }
+    let named: Vec<String> = set
+        .iter()
+        .map(|key| {
+            if URL_ALIASES.contains(key) {
+                format!("{key} (run mcp-gateway upgrade to rewrite it as url)")
+            } else {
+                (*key).to_string()
+            }
+        })
+        .collect();
     Some(
         CheckResult::pass(
             "Advanced settings",
             format!(
                 "{} sets {}. Each value is applied; these keys are not in the configuration reference.",
                 path.display(),
-                set.join(", ")
+                named.join(", ")
             ),
         )
         .with_category("config"),
     )
 }
+
+/// The older spellings of a backend's `url`, which `mcp-gateway upgrade` rewrites.
+const URL_ALIASES: &[&str] = &["backends.<name>.http_url", "backends.<name>.ws_url"];
 
 #[cfg(test)]
 #[path = "hidden_keys_tests.rs"]

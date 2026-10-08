@@ -70,47 +70,55 @@ pub fn write(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), Stri
     write_new_backends_as_url(path, &before, &after, config)
 }
 
-/// A backend this write added is saved with `url`, not the older `http_url`
-/// or `ws_url` the serialiser emits. Backends already in the file are left as
-/// the operator wrote them; `mcp-gateway upgrade` rewrites those.
+/// A backend this write added, or one the file already gave a `url`, is saved
+/// with `url`, not the older `http_url` or `ws_url` the serialiser emits.
+/// Other backends are left as the operator wrote them; `mcp-gateway upgrade`
+/// rewrites those.
 fn write_new_backends_as_url(
     path: &Path,
     before: &str,
     after: &str,
     config: &Config,
 ) -> Result<(), String> {
-    let existing = backend_names(before);
-    let added: BTreeSet<String> = config
+    let (existing, with_url) = backend_names(before);
+    let as_url: BTreeSet<String> = config
         .backends
         .keys()
-        .filter(|name| !existing.contains(*name))
+        .filter(|name| !existing.contains(*name) || with_url.contains(*name))
         .cloned()
         .collect();
-    if added.is_empty() {
+    if as_url.is_empty() {
         return Ok(());
     }
-    let rewrite = rewrite_url_aliases(after, Some(&added));
+    let rewrite = rewrite_url_aliases(after, Some(&as_url));
     if rewrite.changed.is_empty() {
         return Ok(());
     }
     write_config_text(path, &rewrite.text)
 }
 
-/// The backend names a config text declares; none when it does not parse.
-fn backend_names(text: &str) -> BTreeSet<String> {
-    serde_yaml::from_str::<serde_yaml::Value>(text)
+/// The backend names a config text declares, and those of them written with
+/// `url`; both empty when the text does not parse.
+fn backend_names(text: &str) -> (BTreeSet<String>, BTreeSet<String>) {
+    let backends = serde_yaml::from_str::<serde_yaml::Value>(text)
         .ok()
         .and_then(|v| {
             v.get("backends")
                 .and_then(serde_yaml::Value::as_mapping)
                 .cloned()
         })
-        .map(|m| {
-            m.keys()
-                .filter_map(|k| k.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let mut names = BTreeSet::new();
+    let mut with_url = BTreeSet::new();
+    for (key, fields) in &backends {
+        if let Some(name) = key.as_str() {
+            names.insert(name.to_string());
+            if fields.get("url").is_some() {
+                with_url.insert(name.to_string());
+            }
+        }
+    }
+    (names, with_url)
 }
 
 /// Whether a rewrite saves the file or only reports what it would change.

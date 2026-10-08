@@ -6,7 +6,7 @@
 
 use std::fmt::Write as _;
 
-use mcp_gateway::registry::server_registry::{self, HttpFlavor, Transport};
+use mcp_gateway::registry::server_registry::{self, Transport};
 
 /// The `backends:` block for the starter set, and one line per entry left out
 /// because its launcher (`npx`, `uvx`) is not on PATH: a backend written
@@ -37,14 +37,12 @@ pub(super) fn starter_backends(launcher_present: impl Fn(&str) -> bool) -> (Stri
                 }
                 format!("    command: {}\n", quoted(entry.command))
             }
-            Transport::Http {
-                default_url,
-                flavor,
-            } => format!(
-                "    http_url: {}\n    streamable_http: {}\n",
-                quoted(default_url),
-                flavor == HttpFlavor::Streamable
-            ),
+            // `url` only: the transport is detected at connect (POST first,
+            // the SSE handshake on a 4xx), so the registry's flavour is not
+            // written as the hidden `streamable_http` key.
+            Transport::Http { default_url, .. } => {
+                format!("    url: {}\n", quoted(default_url))
+            }
         };
         // Writing to a String cannot fail.
         let _ = write!(
@@ -88,7 +86,7 @@ mod tests {
         match &config.backends["context7"].transport {
             TransportConfig::Http {
                 streamable_http, ..
-            } => assert_eq!(*streamable_http, Some(true)),
+            } => assert_eq!(*streamable_http, None, "detected at connect, not pinned"),
             other => panic!("context7 is http, got {other:?}"),
         }
     }
