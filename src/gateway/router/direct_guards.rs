@@ -47,7 +47,7 @@ impl DirectRouteGuards {
             Option<&crate::mtls::CertIdentity>,
         ),
         nonce: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<Option<AdmittedNonce>> {
         let authorizer = super::authorization::RouterAuthorizer {
             state,
             client,
@@ -59,7 +59,27 @@ impl DirectRouteGuards {
             "anonymous",
             crate::gateway::auth::QuotaPrincipal::as_store_key,
         );
-        state.meta_mcp.admit_signing_nonce(nonce, principal)
+        let stamp = state.meta_mcp.admit_signing_nonce(nonce, principal)?;
+        Ok(stamp.zip(nonce).map(|(stamp, nonce)| AdmittedNonce {
+            nonce: nonce.to_owned(),
+            principal: principal.to_owned(),
+            stamp,
+        }))
+    }
+
+    /// Give back the nonce a call admitted when it is refused before its
+    /// backend runs, so a refused call consumes none (MIK-7698).
+    pub(crate) fn release_nonce(state: &AppState, admitted: Option<AdmittedNonce>) {
+        if let Some(admitted) = admitted {
+            let AdmittedNonce {
+                nonce,
+                principal,
+                stamp,
+            } = admitted;
+            state
+                .meta_mcp
+                .release_signing_nonce(&nonce, &principal, stamp);
+        }
     }
 
     /// S2 spend, once, immediately before an actual backend dispatch (after
@@ -71,13 +91,19 @@ impl DirectRouteGuards {
         meta.admit_spend_for(call)
     }
 
-    /// S3 accounting on every dispatch; on an answered call, S4 payload gates,
-    /// the S2 warnings, the response firewall verdict and client accounting.
-    /// A transport failure is returned unchanged for the caller's failure arm.
-    pub(crate) fn after_dispatch(
+    /// S3 accounting on every dispatch; on an answered call, the interim
+    /// seal, S4 payload gates, the S2 warnings, the response firewall verdict
+    /// and client accounting. A transport failure is returned unchanged for
+    /// the caller's failure arm.
+    ///
+    /// `seal` is the caller's verified identity and the params as sent: what
+    /// an interim answer's continuation is bound to (MIK-8078). `sealed`
+    /// receives the sealed envelope and its hold key; the delivery tail gives
+    /// the slot back unless the answer that leaves still carries it.
+    pub(crate) async fn after_dispatch(
         state: &AppState,
-        (call, challenge): (&BackendCall<'_>, Option<&str>),
-        client: Option<&AuthenticatedClient>,
+        ((call, challenge), (who, sent)): ((&BackendCall<'_>, Option<&str>), Seal<'_>),
+        (client, sealed): (Option<&AuthenticatedClient>, &mut Option<(String, String)>),
         admission: &Admission,
         forward: Result<JsonRpcResponse>,
     ) -> Result<JsonRpcResponse> {
@@ -92,6 +118,19 @@ impl DirectRouteGuards {
             meta.chain_receive_for(call.server, result, challenge, &slot)?;
         }
         let receipt = std::mem::take(&mut *slot.lock());
+        // MIK-8078 (MRTR.2a): the backend's state is sealed after the raw
+        // receipt is checked and before any gate reads or rewrites the answer,
+        // the meta route's order, so no gate can copy the raw state into what
+        // the client receives.
+        if let Some(result) = response.result.as_mut() {
+            match meta
+                .seal_direct_interim(who, (call.server, sent), result)
+                .await
+            {
+                Ok(minted) => *sealed = minted,
+                Err(e) => return Ok(refusal(response.id.clone(), &e)),
+            }
+        }
         let mut warned = false;
         if let Some(result) = response.result.take() {
             match meta.gate_payload(call, result) {
@@ -145,6 +184,28 @@ impl DirectRouteGuards {
         Ok(response)
     }
 }
+
+/// The signing nonce a direct call registered: what a refusal before dispatch
+/// gives back (`DirectRouteGuards::release_nonce`).
+pub(crate) struct AdmittedNonce {
+    nonce: String,
+    principal: String,
+    stamp: std::time::Instant,
+}
+
+/// What an interim answer's continuation is bound to (MIK-8078): the caller's
+/// verified identity and the params as the client sent them.
+pub(crate) type Seal<'a> = (
+    (
+        Option<&'a crate::key_server::oidc::VerifiedIdentity>,
+        (
+            Option<&'a str>,
+            Option<&'a crate::identity_grants::GrantSubject>,
+        ),
+        Option<&'a crate::gateway::auth::AuthenticatedClient>,
+    ),
+    Option<&'a serde_json::Value>,
+);
 
 /// The JSON-RPC error a direct-route refusal answers with (HTTP 200). A
 /// firewall refusal carries the delivery-refusal projection, as on meta.
