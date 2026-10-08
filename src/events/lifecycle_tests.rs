@@ -496,5 +496,9 @@ async fn a_test_source_event_reaches_a_receiver() {
     );
 }
 
+#[path = "hold_tests.rs"]
+mod hold;
+
+#[cfg(test)]
 #[path = "subscribe_order_tests.rs"]
 mod subscribe_order;
