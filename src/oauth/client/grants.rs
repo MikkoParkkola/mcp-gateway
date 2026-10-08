@@ -251,94 +251,27 @@ impl OAuthClient {
     /// record, or one without a refresh token (spent, or never issued), needs a
     /// login, and an in-memory copy is never a fallback.
     pub(super) async fn refresh_token(&self) -> Result<String> {
-        use super::refresh_flight::{Exchange, Flight, Outcome, fingerprint_hex, retire_unsettled};
-        let auth_meta = self
-            .auth_metadata
-            .as_ref()
-            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
-        // A local, so each log line's head names only a plain binding.
-        let backend = self.backend_name.as_str();
+        use super::refresh_flight::{Refreshed, StoredCredential, refresh_stored};
+        if self.auth_metadata.is_none() {
+            return Err(Error::OAuth("OAuth not initialized".to_string()));
+        }
         let key = self.credential_key()?;
-        let token_path = self.storage.token_path(&key, &self.resource_url);
-        let flight = Flight::of(&token_path);
-        let guard = std::sync::Arc::clone(&flight.lock).lock_owned().await;
-        let across = super::refresh_flight::hold_across_processes(&token_path).await?;
-
-        let stored = self.storage.load(&key, &self.resource_url);
-        if let Some(access) = self.adopt_if_fresher(stored.as_ref()) {
-            return Ok(access);
-        }
-        let required = || Error::AuthorizationRequired {
-            backend: self.backend_name.clone(),
+        let at = StoredCredential {
+            storage: &self.storage,
+            key: &key,
+            resource_url: &self.resource_url,
+            label: &self.backend_name,
+            rotation: super::refresh_flight::Rotation::Observed,
         };
-        let Some(sent) = stored
-            .as_ref()
-            .and_then(|record| record.refresh_token.clone())
-        else {
-            warn!(backend = %backend, "No stored refresh token; a login is needed");
-            return Err(required());
-        };
-        if flight.is_spent(&sent) {
-            warn!(backend = %backend, "Refusing to resend a spent refresh token");
-            return Err(required());
-        }
-        let mut state = self.storage.load_refresh_state(&key, &self.resource_url);
-        let marker = fingerprint_hex(&sent);
-        // A damaged sidecar may have held this token's marker (MIK-8091).
-        if state.rotates && (state.damaged || state.in_flight.as_deref() == Some(marker.as_str())) {
-            if state.damaged {
-                warn!(backend = %backend, "Refresh state unreadable; retiring the stored token");
-            }
-            let at = (key.as_str(), self.resource_url.as_str());
-            retire_unsettled(&flight, &self.storage, at, backend, &sent, state);
-            return Err(required());
-        }
-        self.reload_registered_client_id(&key);
-        let client_id = self
-            .client_id
-            .read()
-            .clone()
-            .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
-        let params = self.refresh_params(&sent, &client_id);
-        let http = self.refresh_client_for(&auth_meta.token_endpoint)?;
-        // Written before sending, so a process that stops mid-exchange leaves
-        // a mark the next refresh reads (FU-A.4). Without it, nothing is sent.
-        state.in_flight = Some(marker);
-        if let Err(error) = self
-            .storage
-            .save_refresh_state(&key, &self.resource_url, &state)
-        {
-            warn!(backend = %backend, %error, "Could not mark the refresh in flight; not refreshing");
-            return Err(error);
-        }
-        let exchange = Exchange {
-            guard,
-            flight,
-            http,
-            endpoint: auth_meta.token_endpoint.clone(),
-            params,
-            sent,
-            storage: std::sync::Arc::clone(&self.storage),
-            key,
-            resource_url: self.resource_url.clone(),
-            backend: self.backend_name.clone(),
-            state,
-            destination: self.destination,
-            route: self.refresh_route,
-            across,
-        };
-        let outcome = exchange
-            .spawn()
-            .await
-            .map_err(|e| Error::OAuth(format!("Token refresh task failed: {e}")))?;
-        match outcome {
-            Outcome::Refreshed(token) => {
+        match refresh_stored(self, at).await? {
+            Refreshed::Adopted(access) => Ok(access),
+            Refreshed::Exchanged(token) => {
                 let access = token.access_token.clone();
                 *self.current_token.write() = Some(token);
-                info!(backend = %backend, "Token refreshed successfully");
+                info!(backend = %self.backend_name, "Token refreshed successfully");
                 Ok(access)
             }
-            Outcome::Rejected { status, body } => {
+            Refreshed::Rejected { status, body } => {
                 self.purge_client_id_if_invalid(&body);
                 Err(Error::OAuth(safe_oauth_http_error(
                     "Token refresh failed",
@@ -346,7 +279,9 @@ impl OAuthClient {
                     &body,
                 )))
             }
-            Outcome::NotSent(error) | Outcome::Uncertain(error) => Err(error),
+            Refreshed::LoginRequired => Err(Error::AuthorizationRequired {
+                backend: self.backend_name.clone(),
+            }),
         }
     }
 
@@ -670,5 +605,38 @@ impl OAuthClient {
         *self.current_token.write() = Some(token.clone());
 
         Ok(token.access_token)
+    }
+}
+
+/// The MCP backend's side of a refresh under the credential's flight.
+impl super::refresh_flight::RefreshCaller for OAuthClient {
+    fn adopt(&self, stored: Option<&TokenInfo>) -> Option<String> {
+        self.adopt_if_fresher(stored)
+    }
+
+    fn request(
+        &self,
+        _stored: &TokenInfo,
+        sent: &str,
+    ) -> Result<super::refresh_flight::RefreshRequest> {
+        let auth_meta = self
+            .auth_metadata
+            .as_ref()
+            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
+        let key = self.credential_key()?;
+        self.reload_registered_client_id(&key);
+        let client_id = self
+            .client_id
+            .read()
+            .clone()
+            .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
+        Ok(super::refresh_flight::RefreshRequest {
+            params: self.refresh_params(sent, &client_id),
+            http: self.refresh_client_for(&auth_meta.token_endpoint)?,
+            endpoint: auth_meta.token_endpoint.clone(),
+            destination: self.destination,
+            route: self.refresh_route,
+            finish: Box::new(std::convert::identity),
+        })
     }
 }
