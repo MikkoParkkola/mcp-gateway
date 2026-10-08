@@ -180,3 +180,37 @@ fn a_dry_run_reads_a_config_through_a_symlink() {
     let rewrite = rewrite_url_aliases_in(&link, RewriteMode::DryRun).expect("a symlink is read");
     assert_eq!(rewrite.changed, vec![4, 6]);
 }
+
+/// MIK-8064 AC2: `upgrade` deletes `meta_mcp.cache_tools`, which nothing
+/// read, in its one rewrite, and names the line.
+#[test]
+fn upgrade_removes_the_retired_cache_tools_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let text = "# mine\nmeta_mcp:\n  enabled: true\n  cache_tools: false  # off\nbackends: {}\n";
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, text).expect("write config");
+
+    let (dry, kept) = report(&path, RewriteMode::DryRun);
+    assert_eq!(kept, text, "a dry run writes nothing");
+    assert!(
+        dry.iter()
+            .any(|l| l.contains("would remove `meta_mcp.cache_tools`") && l.contains("line 4")),
+        "{dry:?}"
+    );
+
+    let (applied, written) = report(&path, RewriteMode::Apply);
+    assert_eq!(
+        written,
+        "# mine\nmeta_mcp:\n  enabled: true\nbackends: {}\n"
+    );
+    assert!(
+        applied
+            .iter()
+            .any(|l| l.contains("removed `meta_mcp.cache_tools`") && l.contains("line 4")),
+        "{applied:?}"
+    );
+    assert!(
+        !applied.iter().any(|l| l.contains("nothing changed")),
+        "{applied:?}"
+    );
+}
