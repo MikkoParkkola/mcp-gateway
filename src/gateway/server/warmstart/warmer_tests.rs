@@ -204,3 +204,34 @@ async fn boot_warm_is_refused_after_the_shutdown_broadcast() {
     );
     assert!(guard.abort_handles().is_empty());
 }
+
+#[tokio::test]
+async fn a_failed_warm_attempt_reports_its_instance_settled() {
+    // `MIK-8127`: an instance whose first attempt stored nothing shows nothing,
+    // and listeners told of its predecessor's tools must hear that.
+    use crate::backend::tools_nudge::{NudgeKind, ToolsNudge};
+    let backends = Arc::new(BackendRegistry::new());
+    let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+    backends.set_change_feed(feed);
+    let backend = unreachable("a");
+    let instance = backend.instance();
+    assert!(backends.register(backend));
+    let guard = WarmerGuard::new(&backends, WarmStartMode::Http, None);
+    assert_eq!(guard.warm(vec!["a".to_string()]), ["a"]);
+    let settled = async {
+        while let Some(nudge) = nudges.recv().await {
+            if nudge
+                == (ToolsNudge::Backend {
+                    name: "a".to_string(),
+                    instance,
+                    kind: NudgeKind::Resolved,
+                })
+            {
+                return;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), settled)
+        .await
+        .expect("a refused attempt reports the instance settled");
+}

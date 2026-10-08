@@ -46,6 +46,15 @@ impl CapabilityWatcher {
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         changes: Option<CatalogueChanged>,
     ) -> Result<Self> {
+        if let Some(changes) = &changes {
+            // Before any early return: without a file watcher the catalogue
+            // can still change (a manual reload), so its baseline is needed.
+            Self::report_startup_scan(
+                Arc::clone(&backend),
+                shutdown_rx.resubscribe(),
+                Arc::clone(changes),
+            );
+        }
         let directories = backend.watched_directories();
         debug!(directories = ?directories, "Starting capability watcher");
 
@@ -123,6 +132,31 @@ impl CapabilityWatcher {
     }
 
     /// Spawn the background reload task with debouncing
+    /// Report the catalogue once its startup scan completes: that result is
+    /// the baseline every later reload is compared with (`MIK-8127`).
+    fn report_startup_scan(
+        backend: Arc<CapabilityBackend>,
+        mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+        changes: CatalogueChanged,
+    ) {
+        tokio::spawn(async move {
+            // ponytail: polled at the reload task's own 100 ms tick, since the
+            // scan has no completion signal; add one if this ever matters.
+            let mut tick = tokio::time::interval(Duration::from_millis(100));
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx.recv() => return,
+                    _ = tick.tick() => {
+                        if backend.initial_scan_complete() {
+                            changes(&backend.name);
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     fn spawn_reload_task(
         backend: Arc<CapabilityBackend>,
         mut event_rx: mpsc::Receiver<()>,
@@ -134,9 +168,6 @@ impl CapabilityWatcher {
             const DEBOUNCE_MS: u64 = 500;
             let mut last_event: Option<Instant> = None;
             let mut pending_reload = false;
-            // The startup scan runs in the background; its result is the
-            // baseline every later reload is compared with.
-            let mut scan_reported = changes.is_none();
 
             let mut interval = tokio::time::interval(Duration::from_millis(100));
 
@@ -147,12 +178,6 @@ impl CapabilityWatcher {
                         pending_reload = true;
                     }
                     _ = interval.tick() => {
-                        if !scan_reported && backend.initial_scan_complete() {
-                            scan_reported = true;
-                            if let Some(changes) = &changes {
-                                changes(&backend.name);
-                            }
-                        }
                         // Check if we should trigger reload
                         if pending_reload
                             && let Some(last) = last_event
