@@ -4323,7 +4323,8 @@ what it wrote, for every web UI backend add, edit and delete. The lock is a hidd
 writers lock different files. If your config lives in a git repository, add it to
 `.gitignore`. On Linux and macOS a lock file other accounts can open (one copied in or checked
 out as `0644`) is made owner-only at the next write, since any account that can open it could
-hold it and stall every save; one owned by another account is refused until you remove it.
+hold it and stall every save; one owned by another account is refused: stop every gateway and CLI command using that config,
+then remove it.
 
 CLI writes take the same lock for their write. One that finds it held prints
 `Waiting for gateway.yaml ...` and continues once it is free; if another writer holds it for

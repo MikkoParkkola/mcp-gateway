@@ -114,7 +114,7 @@ fn keep_private(lock: &Path) -> io::Result<()> {
     if meta.uid() != me && me != 0 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "it belongs to another user and others can open it; remove it",
+            "it belongs to another user and others can open it; stop every gateway and CLI command using this config, then remove it",
         ));
     }
     file.set_permissions(std::fs::Permissions::from_mode(0o600))
