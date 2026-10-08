@@ -41,17 +41,14 @@ async fn surfaced_state_with(
     mock: &Arc<MockBackend>,
     kernel: Option<crate::context_integrity::ContextIntegrityKernel>,
 ) -> (Arc<AppState>, tempfile::TempDir) {
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec![format!("{BACKEND}:{TOOL}")],
-                ..CollusionConfig::default()
-            },
-            ..FirewallConfig::default()
+    let config = FirewallConfig {
+        collusion: CollusionConfig {
+            action: CollusionAction::Block,
+            sources: vec![format!("{BACKEND}:{TOOL}")],
+            ..CollusionConfig::default()
         },
-        None,
-    ));
+        ..FirewallConfig::default()
+    };
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,
@@ -60,7 +57,11 @@ async fn surfaced_state_with(
                 server: BACKEND.to_string(),
                 tool: TOOL.to_string(),
             }]);
-            meta.set_firewall(Some(firewall));
+            // As the gateway's own: its minted continuations are not read as
+            // credentials (#2210, MIK-8092).
+            let firewall =
+                Firewall::from_config(config, None).with_continuations(meta.continuation());
+            meta.set_firewall(Some(Arc::new(firewall)));
             match kernel {
                 Some(kernel) => meta.with_context_integrity_kernel(kernel),
                 None => meta,
@@ -343,4 +344,58 @@ fn hint_text(read: &Value) -> String {
 
 fn text_ok() -> Value {
     json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
+}
+
+/// MIK-8092: the suite's response firewall knows the keyring its gateway
+/// mints continuations with, as the gateway's own does (#2210). Random
+/// ciphertext holds a credential shape about once in 3,000 interim handles;
+/// without the keyring the redactor rewrites it, and the interim answer is
+/// refused instead of delivered.
+#[tokio::test]
+async fn the_suites_firewall_delivers_a_minted_continuation() {
+    use crate::gateway::meta_mcp::response_security::{
+        DeliveryInspection, ResponseDeliveryContext,
+    };
+    use crate::security::firewall::response_tests::minted_value::mint_credential_shaped;
+    use crate::security::response_policy::{
+        ResponseCorrelation, ResponseMutationPolicy, ResponsePolicyTarget,
+    };
+
+    let mock = MockBackend::answering(Answer::Sequence(vec![text_ok()]));
+    let (state, _store) = surfaced_state(&mock).await;
+    let token = mint_credential_shaped(state.meta_mcp.continuation().keyring());
+    let answer = json!({
+        "resultType": "input_required",
+        "inputRequests": {"q1": {"params": {"message": "Choose"}}},
+        "requestState": token,
+    });
+    let targets = [ResponsePolicyTarget {
+        server: BACKEND.to_string(),
+        tool: TOOL.to_string(),
+    }];
+    let context = ResponseDeliveryContext {
+        method: "tools/call",
+        targets: &targets,
+        correlation: ResponseCorrelation {
+            session_id: "",
+            caller: "key-a",
+            external_server: BACKEND,
+            external_tool: TOOL,
+            subject: None,
+        },
+        mutation: ResponseMutationPolicy::PreserveInputRequired,
+        signing: None,
+        chain_source: crate::protocol::ChainSource::default(),
+        chain_nonce: None,
+    };
+    let response =
+        crate::protocol::JsonRpcResponse::success(crate::protocol::RequestId::Number(1), answer);
+    let delivered =
+        state
+            .meta_mcp
+            .finalize_content(response, &context, DeliveryInspection::Required);
+    assert!(
+        delivered.error.is_none(),
+        "the minted handle was refused: {delivered:?}"
+    );
 }

@@ -790,6 +790,22 @@ def extract_all() -> dict[str, list[Entry]]:
     return out
 
 
+HIDDEN_TABLE = SRC / "commands" / "doctor" / "hidden_keys.rs"
+
+
+def check_hidden_table(doc_text: str, table_src: str) -> list[str]:
+    """`doctor`'s hidden-key table must list exactly the INTERNAL and AUTO config rows."""
+    m = re.search(r"HIDDEN_CONFIG_KEYS: &\[&str\] = &\[(.*?)\];", table_src, re.S)
+    if m is None:
+        return [f"{rel(HIDDEN_TABLE)}: no HIDDEN_CONFIG_KEYS table"]
+    table = re.findall(r'"([^"]+)"', m.group(1))
+    want = {r.id for r in parse_doc(doc_text) if r.surface == "config" and r.cls in {"INTERNAL", "AUTO"}}
+    errors = [f"hidden-key table lists {k!r} twice" for k in sorted({k for k in table if table.count(k) > 1})]
+    errors += [f"hidden-key table misses {k!r} (an INTERNAL or AUTO config row)" for k in sorted(want - set(table))]
+    errors += [f"hidden-key table lists {k!r}, which is not an INTERNAL or AUTO config row" for k in sorted(set(table) - want)]
+    return errors
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--list", choices=SURFACES, help="print one surface's extracted items")
@@ -812,6 +828,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     extracted = extract_all()
     errors = check(args.doc.read_text(encoding="utf-8"), extracted)
+    errors += check_hidden_table(args.doc.read_text(encoding="utf-8"), HIDDEN_TABLE.read_text(encoding="utf-8"))
     for line in errors:
         print(line, file=sys.stderr)
     counts = ", ".join(f"{s} {len(v)}" for s, v in extracted.items())

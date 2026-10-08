@@ -36,6 +36,7 @@ pub(crate) mod listen;
 mod metadata;
 mod oauth_client;
 mod ops;
+mod package_cache;
 mod pool;
 mod probe;
 mod registry;
@@ -291,13 +292,44 @@ impl Backend {
     }
 
     /// Whether this backend's transports connect under its destination
-    /// policy. A stdio child reaches no network destination of its own.
+    /// policy. A stdio child reaches no network destination of its own; every
+    /// other transport does, an A2A agent included (MIK-8063).
     pub(crate) fn destination_bound(&self) -> bool {
-        matches!(
+        !matches!(
             self.config.transport,
-            crate::config::TransportConfig::Http { .. }
-                | crate::config::TransportConfig::WebSocket { .. }
+            crate::config::TransportConfig::Stdio { .. }
         )
+    }
+
+    /// Start the outbound A2A bridge (MIK-8063) under `destination`: the agent
+    /// becomes one tool behind the same funnel as every backend. Like the HTTP
+    /// arm, the configured address is checked before anything connects and
+    /// every request goes through the guarded client. An agent has no
+    /// server-initiated stream, so the caller sets no listener. The caller has
+    /// marked the backend connecting and passed `begin_connecting` first.
+    #[cfg(feature = "a2a")]
+    async fn start_a2a(
+        &self,
+        destination: crate::security::ssrf::DestinationPolicy,
+    ) -> crate::Result<Arc<crate::a2a::transport::A2aTransport>> {
+        let crate::config::TransportConfig::A2a {
+            a2a_url,
+            a2a_agent_card_path,
+        } = &self.config.transport
+        else {
+            return Err(crate::Error::Config(format!(
+                "backend '{}' is not an A2A backend",
+                self.name
+            )));
+        };
+        crate::a2a::transport::A2aTransport::start(
+            a2a_url,
+            a2a_agent_card_path.as_deref(),
+            &self.config.headers,
+            self.config.timeout,
+            destination,
+        )
+        .await
     }
 
     /// Start a WebSocket transport under `destination`, the policy the start

@@ -103,7 +103,8 @@ impl ClientChannel for Silent {
 
 static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
 
-/// The legacy caller every row runs as.
+/// The legacy caller every row runs as: no caller key, as on stdio or HTTP
+/// with auth off.
 fn context(retry: &crate::protocol::mrtr::RetryFields) -> MetaMcpCallerContext<'_> {
     let declared = classify_request(None, None).declared_capabilities();
     MetaMcpCallerContext {
@@ -160,6 +161,15 @@ fn invoke_args() -> Value {
     json!({"server": "svc", "tool": "act", "arguments": {}})
 }
 
+/// MIK-7997: the A/B arm and the prefetch hints key on the caller key only.
+/// A session id, legacy or stdio, never stands in for a missing key, so the
+/// key takes no session at all.
+#[test]
+fn a_keyless_caller_has_no_experiment_key_under_any_session() {
+    let retry = crate::protocol::mrtr::RetryFields::default();
+    assert_eq!(context(&retry).experiment_key(), None);
+}
+
 #[tokio::test]
 async fn a_call_in_flight_when_its_session_ends_leaves_no_state_after_the_grace_pass() {
     let wire = Arc::new(Parked::default());
@@ -191,7 +201,11 @@ async fn a_call_in_flight_when_its_session_ends_leaves_no_state_after_the_grace_
 
     let cost = || meta.cost_tracker.session_snapshot(SESSION).is_some();
     assert!(cost(), "the call wrote its cost under the ended session");
-    assert_eq!(tracker.key_count(), 1, "and its last tool");
+    assert_eq!(
+        tracker.key_count(),
+        0,
+        "a keyless caller records no last tool"
+    );
     #[cfg(feature = "spec-preview")]
     assert!(
         meta.session_promoted.contains_key(SESSION),
@@ -273,10 +287,10 @@ impl Wired {
         self.lifecycle.reap(now_unix() + END_GRACE.as_secs() + 1);
     }
 
-    /// Writes all five session-keyed stores under `SESSION` through the tail:
-    /// the profile, the workflow state, then one backend call (cost, last
-    /// tool and, under spec-preview, a promoted tool). The backend call is
-    /// let through at once.
+    /// Writes the session-keyed stores under `SESSION` through the tail: the
+    /// profile, the workflow state, then one backend call (cost and, under
+    /// spec-preview, a promoted tool; no last tool, since the caller has no
+    /// key, MIK-7997). The backend call is let through at once.
     async fn write_all_five(&self) {
         for (tool, args) in [
             ("gateway_set_profile", json!({"profile": "focus"})),
@@ -373,7 +387,11 @@ async fn a_live_session_keeps_what_its_calls_wrote() {
         meta.cost_tracker.session_snapshot(SESSION).is_some(),
         "cost"
     );
-    assert_eq!(w.tracker.key_count(), 1, "last tool");
+    assert_eq!(
+        w.tracker.key_count(),
+        0,
+        "a keyless caller records no last tool (MIK-7997)"
+    );
     assert_eq!(meta.session_profiles.len(), 1, "profile");
     assert_eq!(meta.session_state.len(), 1, "workflow state");
     #[cfg(feature = "spec-preview")]

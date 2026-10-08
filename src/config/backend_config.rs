@@ -212,8 +212,9 @@ pub(super) fn default_true() -> bool {
 
 // ── Transport ─────────────────────────────────────────────────────────────────
 
-/// Transport configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Transport configuration. Its `Debug` (in `backend_debug.rs`) redacts
+/// URLs and commands, which can carry credentials.
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum TransportConfig {
     /// Stdio transport (subprocess).
@@ -252,9 +253,11 @@ pub enum TransportConfig {
     },
     /// A2A (`Agent2Agent`) transport.
     ///
-    /// The gateway fetches the Agent Card from `<a2a_url>/.well-known/agent.json`
-    /// (or a custom path), converts A2A skills to MCP tools, and proxies
-    /// `tools/call` invocations as A2A `message/send` requests.
+    /// Outbound delegation to an A2A 1.0 agent (JSON-RPC binding). The gateway
+    /// fetches the Agent Card from `<a2a_url>/.well-known/agent-card.json` (or
+    /// `a2a_agent_card_path`), exposes the agent as one tool, `send_message`,
+    /// and sends each call as an A2A `SendMessage` to the card's JSON-RPC
+    /// endpoint, which must share the origin of `a2a_url`.
     ///
     /// Requires the `a2a` Cargo feature (enabled by default).
     ///
@@ -272,7 +275,7 @@ pub enum TransportConfig {
         a2a_url: String,
         /// Custom path for the Agent Card.
         ///
-        /// Defaults to `/.well-known/agent.json` when absent.
+        /// Defaults to `/.well-known/agent-card.json` when absent.
         #[serde(default)]
         a2a_agent_card_path: Option<String>,
     },
@@ -318,16 +321,11 @@ impl TransportConfig {
     /// but is evaluated statically from config alone, so the
     /// identity-propagation dispatch gate can refuse a `required` backend
     /// BEFORE its transport is started (and before any credential is
-    /// minted) rather than after. Keep the two in sync: only the transport
-    /// backing [`Self::Http`] (`HttpTransport`) applies `extra_headers` to
-    /// the wire today.
+    /// minted) rather than after. Keep the two in sync: `HttpTransport` and
+    /// the A2A transport (MIK-8063) apply `extra_headers` to the wire; stdio
+    /// and WebSocket carry no per-request header channel.
     #[must_use]
     pub fn carries_identity_headers(&self) -> bool {
-        match self {
-            Self::Http { .. } => true,
-            Self::Stdio { .. } | Self::WebSocket { .. } => false,
-            #[cfg(feature = "a2a")]
-            Self::A2a { .. } => false,
-        }
+        !matches!(self, Self::Stdio { .. } | Self::WebSocket { .. })
     }
 }

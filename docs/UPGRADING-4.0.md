@@ -186,6 +186,10 @@ backend" and "fails a capability file" first.**
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 | 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
 | 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`, except those on lines the change deletes (a removed backend's entry, or a field an edit drops), which the command names by line number. On a file with comments, a change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. A file without comments is rewritten as before. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
+| 162 | An A2A backend (`transport: a2a`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public | None for gateway operators. Library users: configure the agent as a `transport: a2a` backend, or use your own A2A client to poll or cancel tasks |
+| 163 | With gateway authentication off and agent authentication on, each agent owns its tasks apart, keyed on the `client_id` its token validates as (a renewed token for the same agent keeps them); every agent had shared one task owner | None. Tasks an agent created before the upgrade stay under the old shared owner, so the agent no longer finds them under its own |
+| 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept, a removed one released); restart to read a repaired task; probes (`/livez`, `/readyz`) are unaffected |
+| 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4249,6 +4253,96 @@ file without comments is rewritten as before.
 `--force` keeps the old behaviour only for a change that cannot be written as
 text: it names the same lines, then rewrites the file without them, for
 example `mcp-gateway remove old-server --force`.
+
+## 162. A2A backends start, and the A2A module is crate-private
+
+**Startup:** no notice
+
+A backend with `transport: a2a` and `a2a_url` failed at its first use in 3.x. It now starts and
+exposes the agent as one tool, `send_message`, which delegates to an A2A 1.0 agent over the
+JSON-RPC binding (the `a2a` Cargo feature, on by default):
+
+```yaml
+backends:
+  travel-agent:
+    transport: a2a
+    a2a_url: "https://travel-agent.internal"
+```
+
+An agent that offers only A2A 0.3 is refused at start, and the error names the versions its card
+offers.
+
+`mcp_gateway::a2a` was a public module in 3.x and is now crate-private. A program that used it to
+send messages to an agent can configure the agent as a backend, as above. A program that also
+polled or cancelled tasks itself (`get_task`, `cancel_task`), or continued a conversation by its
+`context_id`, needs its own A2A client: each `send_message` call to the backend starts a new
+conversation with the agent and answers with the task's final result.
+
+## 163. Agent tokens own their tasks apart when gateway authentication is off
+
+**Startup:** no notice
+
+With gateway authentication off and agent authentication on, every caller
+holding a valid agent token shared one task owner, so one agent could read,
+update, cancel or replay another agent's task and listen to its
+notifications. Each agent now owns its own tasks, keyed on the `client_id`
+its token validated as, so a renewed token for the same agent keeps them.
+With agent authentication off nothing changes: callers share the one auth-off
+pool, as before. (With it on, a request without an agent token is refused.)
+
+Tasks an agent created before the upgrade were stored under the shared owner,
+so they stay in that pool: the agent that created them no longer finds them
+under its own owner.
+
+## 164. A task row with an unreadable key refuses new keyed calls
+
+**Startup:** no notice
+
+A stored task row whose idempotency key cannot be read unambiguously (damage
+before or inside its `admission` block, or a second copy of it) used to release
+that key, so a client retry was admitted as new work and its backend ran again.
+Now, while any such row is in the task store:
+
+- Every NEW keyed call, task or synchronous, is refused with code 409 and a
+  message saying new keyed calls are paused until an operator repairs or
+  removes a record. It never names the file. Keys already held and unkeyed
+  calls work as before.
+- The log names each file at startup and on every expiry sweep, the
+  `mcp_task_store_skipped_records{class="sealed"}` gauge counts the rows, and
+  `/health` reads `degraded` (503). The admin view adds
+  `task_store.sealed_rows`, `task_store.sealed_files` (full paths) and
+  `task_store.action`.
+
+It clears without a restart, at the next expiry sweep. Removing the file
+releases its key, so a retry of that call runs again. Repairing the file keeps
+its key, so a retry never runs again: until the next restart that retry is
+refused, and after a restart a task retry finds its task.
+
+The one step: repair or remove the file; restart to read a repaired task.
+Until a restart a repaired task stays unreadable (a known gap).
+
+A record-named FIFO in the task store is now refused as unsafe at startup
+instead of hanging it.
+
+## 165. A refused config reload answers 409, not 500
+
+**Startup:** no notice
+
+A config reload that failed always answered `POST /ui/api/reload` with 500,
+so a monitor read an operator's refused file as a gateway crash. Now the status
+says whose fault it is:
+
+- 409 Conflict when the network-posture policy refuses the file: it would
+  leave the tools reachable without a credential, or send credentials over
+  plain HTTP. Fix the file (revert the `public_url`, close the tool paths, or
+  put TLS in front).
+- 503 Service Unavailable when shutdown stopped the reload.
+- 500 for anything else, such as a file that does not parse or a change that
+  needs a restart.
+
+The `gateway_reload_config` meta-tool answers that refusal with JSON-RPC
+-32600 (it was -32603) and keeps -32603 otherwise. The message text is
+unchanged on both.
 
 ## Upgrading from 3.5.x: a walkthrough
 
