@@ -433,7 +433,7 @@ async fn egress_a_refused_question_frees_only_its_own_slot() {
         let other = continuation
             .begin_exchange("other".into(), None, "fp".into(), "digest".into(), now)
             .await;
-        assert!(other.is_some(), "an unrelated exchange holds a slot");
+        let other = other.expect("an unrelated exchange holds a slot");
         let (uri, sent, params) = request(route, "tools/call", Part::InterimQuestion);
         let body = post_as(&fx, (uri, sent), &params, Some("alice")).await;
         if !refused(&body) {
@@ -444,6 +444,51 @@ async fn egress_a_refused_question_frees_only_its_own_slot() {
             failures.push(format!(
                 "{route:?}: {held} slots held, want the unrelated one"
             ));
+        }
+        let routing = continuation.in_flight().route(&other.hold_key, now).await;
+        if routing != crate::protocol::continuation::Routing::Here {
+            failures.push(format!("{route:?}: the unrelated exchange lost its slot"));
+        }
+    }
+    report(&failures);
+}
+
+/// A key refusal lists the backend's own parameter names, which no dispatch
+/// gate read: with no firewall, the content checks alone keep a
+/// credential-shaped name out of it, on both routes. The harmless name is the
+/// control that the refusal does list the backend's names.
+#[tokio::test]
+async fn egress_a_key_refusal_meets_the_content_checks() {
+    let leak = secret();
+    let mut failures = Vec::new();
+    for route in ROUTES {
+        for (name, planted) in [
+            ("credential", leak.clone()),
+            ("control", "harmless_key".into()),
+        ] {
+            let backend = Arc::new(Planted::with_text(
+                "tools/call",
+                Part::SchemaKey,
+                planted.clone(),
+            ));
+            let fx = fixture_inspecting_on(backend).await;
+            let (uri, sent, mut params) = request(route, "tools/call", Part::SchemaKey);
+            let undeclared = json!({"undeclared_key": 1});
+            match route {
+                Route::Meta => params["arguments"]["arguments"] = undeclared,
+                Route::Direct => params["arguments"] = undeclared,
+            }
+            let body = post(&fx, uri, sent, &params).await;
+            let at = format!("{route:?} {name}");
+            if !body.contains("undeclared_key") && !refused(&body) {
+                failures.push(format!("{at}: no key refusal: {body}"));
+            }
+            if name == "control" && !body.contains("harmless_key") {
+                failures.push(format!("{at}: refusal does not list the names: {body}"));
+            }
+            if name == "credential" && body.contains(&leak) {
+                failures.push(format!("{at}: credential-shaped name delivered: {body}"));
+            }
         }
     }
     report(&failures);

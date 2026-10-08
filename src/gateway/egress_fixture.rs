@@ -49,6 +49,10 @@ pub(crate) enum Part {
     Progress,
     /// A backend-defined notification streamed before the answer.
     CustomNote,
+    /// A parameter name in the tool's input schema: a call with an undeclared
+    /// key is refused with a text listing the declared names. Not in
+    /// [`Part::ALL`]: the call never reaches the backend.
+    SchemaKey,
 }
 
 impl Part {
@@ -207,6 +211,7 @@ impl Planted {
                 )]);
                 JsonRpcResponse::success(id, clean())
             }
+            Part::SchemaKey => JsonRpcResponse::success(id, clean()),
             Part::CustomNote => {
                 crate::transport::notification_sink::publish(vec![notification(
                     "notifications/backend_note",
@@ -221,6 +226,12 @@ impl Planted {
 #[async_trait::async_trait]
 impl crate::transport::Transport for Planted {
     async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+        if self.part == Part::SchemaKey && method == "tools/list" {
+            let mut list = shaped(method, "ok");
+            list["tools"][0]["inputSchema"]["properties"][self.text.as_str()] =
+                json!({"type": "string"});
+            return Ok(JsonRpcResponse::success(RequestId::Number(1), list));
+        }
         if method != self.method {
             return Ok(JsonRpcResponse::success(
                 RequestId::Number(1),
