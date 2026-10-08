@@ -77,6 +77,12 @@ fn doctor_adds_no_hidden_settings_row_for_a_fresh_init_config() {
         for with_examples in [true, false] {
             let path = dir.path().join(format!("{profile}-{with_examples}.yaml"));
             let config = crate::commands::build_init_config(with_examples, profile, "");
+            let parsed: serde_yaml::Value = serde_yaml::from_str(&config)
+                .unwrap_or_else(|e| panic!("init --profile {profile} writes invalid YAML: {e}"));
+            assert!(
+                parsed.is_mapping(),
+                "init --profile {profile} writes a non-mapping"
+            );
             std::fs::write(&path, &config).expect("write init config");
             assert!(
                 check_hidden_keys(&path).is_none(),
@@ -126,4 +132,37 @@ fn a_malformed_config_produces_no_row_and_no_parse_text() {
     std::fs::write(&path, format!("auth:\n  bearer_token: \"{SECRET}\n  : [\n"))
         .expect("write config");
     assert!(check_hidden_keys(&path).is_none());
+}
+
+/// The keys a row names, read back from its detail ("<path> sets a, b").
+fn named_keys(row: &CheckResult) -> Vec<String> {
+    row.detail
+        .split_once(" sets ")
+        .map(|(_, keys)| keys.split(", ").map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_repeated_key_is_read_the_way_the_loader_reads_it() {
+    // The loader's YAML reader keeps the last of two equal keys; a reader
+    // that rejects the file would hide every hidden key it sets.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "meta_mcp:\n  projection_mode: false\nmeta_mcp:\n  projection_mode: true\n",
+    )
+    .expect("write config");
+    let row = check_hidden_keys(&path).expect("a row for a file the loader accepts");
+    assert_eq!(named_keys(&row), vec!["meta_mcp.projection_mode"]);
+}
+
+#[test]
+fn a_parent_key_is_not_listed_beside_its_child() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, "accounts:\n  limits:\n    authority_bytes: 4096\n")
+        .expect("write config");
+    let row = check_hidden_keys(&path).expect("a row when a hidden key is set");
+    assert_eq!(named_keys(&row), vec!["accounts.limits.authority_bytes"]);
 }
