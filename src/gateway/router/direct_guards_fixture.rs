@@ -298,6 +298,12 @@ pub(crate) async fn fixture_relayed(answer: Answer) -> Fx {
     fx
 }
 
+/// A key whose name the response redactor reads as a GitHub token (a fake,
+/// split so no scanner reads the source as one), so text naming it (a
+/// per-key cost warning) is redacted on the way out.
+#[cfg(feature = "firewall")]
+pub(crate) const CREDENTIAL_KEY: &str = concat!("ghp_", "abcdefghijklmnopqrstuvwxyz1234567890");
+
 /// [`fixture`] under the default posture with `server.modern_protocol: false`,
 /// the rollback gate that turns the 2026-07-28 revision off.
 pub(crate) async fn fixture_modern_off(answer: Answer) -> Fx {

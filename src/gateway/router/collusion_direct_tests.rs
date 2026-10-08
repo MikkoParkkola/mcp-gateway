@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::create_router;
+use super::direct_guards_fixture::CREDENTIAL_KEY;
 use crate::backend::Backend;
 use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
 use crate::gateway::meta_mcp::MetaMcp;
@@ -250,7 +251,11 @@ fn key(secret: &[u8], name: &str) -> ApiKeyConfig {
 async fn fixture(setup: Setup) -> Fixture {
     let auth = AuthConfig {
         enabled: setup.auth,
-        api_keys: vec![key(b"a", "alice"), key(b"b", "bob")],
+        api_keys: vec![
+            key(b"a", "alice"),
+            key(b"b", "bob"),
+            key(b"c", CREDENTIAL_KEY),
+        ],
         public_paths: vec!["/health".to_string()],
         ..AuthConfig::default()
     };
