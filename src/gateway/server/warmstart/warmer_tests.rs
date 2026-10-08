@@ -162,3 +162,29 @@ async fn a_warmer_never_touches_a_newer_instance() {
         "the old warmer kept retrying against a newer instance"
     );
 }
+
+#[tokio::test]
+async fn nothing_is_admitted_after_the_shutdown_broadcast() {
+    // `MIK-8128`: a reload past its last stop check still reaches the hook, and
+    // a warmer subscribed after the broadcast never hears it, so admission
+    // itself must close once shutdown has been announced.
+    let backends = registry(&["a", "b"]);
+    let (shutdown, _) = tokio::sync::broadcast::channel(1);
+    let guard = WarmerGuard::new(&backends, WarmStartMode::Http, Some(&shutdown));
+    assert_eq!(
+        guard.warm(vec!["a".to_string()]),
+        ["a"],
+        "control: a warmer is admitted before shutdown"
+    );
+    shutdown.send(()).expect("a live receiver");
+    let late = guard.0.apply(&change(&["b"], &[]), &selecting(&[]));
+    assert!(
+        late.is_empty(),
+        "a reload after the broadcast scheduled {late:?}"
+    );
+    let booted = guard.warm(vec!["b".to_string()]);
+    assert!(
+        booted.is_empty(),
+        "warm after the broadcast scheduled {booted:?}"
+    );
+}
