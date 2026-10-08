@@ -116,18 +116,18 @@ providers:
     )
 }
 
-fn capability() -> CapabilityDefinition {
+pub(super) fn capability() -> CapabilityDefinition {
     parse_capability(&capability_yaml()).expect("probe parses")
 }
 
-fn caller(subject: &str) -> CapabilityExecutionContext {
+pub(super) fn caller(subject: &str) -> CapabilityExecutionContext {
     CapabilityExecutionContext {
         caller_identity: Some(GrantSubject::new("test", subject, None)),
         ..CapabilityExecutionContext::default()
     }
 }
 
-async fn call(
+pub(super) async fn call(
     executor: &CapabilityExecutor,
     cap: &CapabilityDefinition,
     params: Value,

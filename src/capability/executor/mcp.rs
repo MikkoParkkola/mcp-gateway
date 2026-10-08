@@ -757,6 +757,10 @@ mod tests;
 #[path = "shipped_capability_tests.rs"]
 mod shipped_capability_tests;
 
+#[cfg(test)]
+#[path = "mcp_principal_tests.rs"]
+mod principal_tests;
+
 impl super::CapabilityExecutor {
     /// Stop every MCP child of one capability, mid-call included (its
     /// definition was replaced; MIK-7814).

@@ -778,3 +778,6 @@ mod ask_expiry_budget_tests;
 
 #[cfg(test)]
 mod tracing_target_tests;
+
+#[cfg(test)]
+mod mcp_credential_principal_tests;
