@@ -254,8 +254,9 @@ fn an_add_on_an_earlier_day_never_resets_backward() {
     assert_eq!(acc.current(), 705, "the newer day's spend is still counted");
 }
 
-/// A positive cost below one micro-USD reserves nothing, so neither a settle
-/// nor a dropped hold leaves a zero-valued tool or key row behind.
+/// A positive cost below one micro-USD reserves one whole micro-USD
+/// (MIK-8081), and both a settle and a dropped hold give it back, so no tool
+/// or key row stays behind.
 #[test]
 fn a_cost_below_one_micro_leaves_no_ledger_rows() {
     // GIVEN: a tool priced below one micro-USD, under a per-key budget
