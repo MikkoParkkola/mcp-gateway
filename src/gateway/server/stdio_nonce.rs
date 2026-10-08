@@ -96,7 +96,7 @@ mod tests {
         let rebuilt = caller.with_retry(&crate::protocol::mrtr::NO_RETRY);
         let expected = fingerprint(StdioNonce::process());
         assert_eq!(
-            source_fingerprint(rebuilt.principal_source(None)).as_deref(),
+            source_fingerprint(rebuilt.principal_source()).as_deref(),
             Some(expected.as_str())
         );
     }

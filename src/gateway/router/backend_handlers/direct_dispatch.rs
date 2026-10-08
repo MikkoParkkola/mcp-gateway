@@ -275,13 +275,8 @@ async fn forward_sanitized(
         }
     };
     if preflight.retry.is_retry()
-        && let Err(refused) = redeem_retry(
-            (scope, propagation),
-            envelope,
-            &mut admitted,
-            &mut sanitized_params,
-        )
-        .await
+        && let Err(refused) =
+            redeem_retry(scope, envelope, &mut admitted, &mut sanitized_params).await
     {
         // Not dispatched: the spend reservation is given back on drop.
         drop(admission);
@@ -303,17 +298,7 @@ async fn forward_sanitized(
     let client = caller.client.as_ref();
     release_if_interim(&forward, &mut admitted);
     let seen = (&admitted.call, preflight.challenge.as_deref());
-    let seal = (
-        (
-            caller.verified_identity.as_ref(),
-            (
-                propagation.identity_key.as_deref(),
-                caller.grant_subject.as_ref(),
-            ),
-            caller.client.as_ref(),
-        ),
-        envelope.params.as_ref(),
-    );
+    let seal = (caller.verified_identity.as_ref(), envelope.params.as_ref());
     let forward =
         DirectRouteGuards::after_dispatch(state, (seen, seal), client, &admission, forward).await;
     // The spend is settled; an unsettled reservation is given back here.
@@ -389,17 +374,7 @@ async fn forward_plain(
     let answered = if method == "tools/call" {
         release_if_interim(&forward, admitted);
         let seen = (&admitted.call, preflight.challenge.as_deref());
-        let seal = (
-            (
-                caller.verified_identity.as_ref(),
-                (
-                    propagation.identity_key.as_deref(),
-                    caller.grant_subject.as_ref(),
-                ),
-                caller.client.as_ref(),
-            ),
-            envelope.params.as_ref(),
-        );
+        let seal = (caller.verified_identity.as_ref(), envelope.params.as_ref());
         DirectRouteGuards::after_dispatch(state, (seen, seal), client, &admission, forward).await
     } else {
         forward.inspect(|_| super::record_client_success(state, client))
@@ -522,24 +497,17 @@ fn deliver_tail(
 /// as on the meta route. Refused before dispatch, so the key is released: the
 /// backend has not acted.
 async fn redeem_retry(
-    (scope, propagation): (Scope<'_>, &Propagation),
+    scope: Scope<'_>,
     envelope: &Envelope,
     admitted: &mut Admitted<'_>,
     outbound: &mut Value,
 ) -> Result<(), Rejection> {
-    let who = (
-        scope.caller.verified_identity.as_ref(),
-        (
-            propagation.identity_key.as_deref(),
-            scope.caller.grant_subject.as_ref(),
-        ),
-        scope.caller.client.as_ref(),
-    );
+    let identity = scope.caller.verified_identity.as_ref();
     let sent = (scope.name, envelope.params.as_ref());
     let redeemed = scope
         .state
         .meta_mcp
-        .redeem_direct_retry(who, sent, outbound)
+        .redeem_direct_retry(identity, sent, outbound)
         .await;
     redeemed.map_err(|e| {
         if let Some(reservation) = admitted.idem_reservation.as_mut() {

@@ -79,7 +79,7 @@ impl DirectRouteGuards {
     /// an interim answer's continuation is bound to (MIK-8078).
     pub(crate) async fn after_dispatch(
         state: &AppState,
-        ((call, challenge), (who, sent)): ((&BackendCall<'_>, Option<&str>), Seal<'_>),
+        ((call, challenge), (identity, sent)): ((&BackendCall<'_>, Option<&str>), Seal<'_>),
         client: Option<&AuthenticatedClient>,
         admission: &Admission,
         forward: Result<JsonRpcResponse>,
@@ -101,7 +101,7 @@ impl DirectRouteGuards {
         // the client receives.
         if let Some(result) = response.result.as_mut()
             && let Err(e) = meta
-                .seal_direct_interim(who, (call.server, sent), result)
+                .seal_direct_interim(identity, (call.server, sent), result)
                 .await
         {
             return Ok(refusal(response.id.clone(), &e));
@@ -156,14 +156,7 @@ impl DirectRouteGuards {
 /// What an interim answer's continuation is bound to (MIK-8078): the caller's
 /// verified identity and the params as the client sent them.
 pub(crate) type Seal<'a> = (
-    (
-        Option<&'a crate::key_server::oidc::VerifiedIdentity>,
-        (
-            Option<&'a str>,
-            Option<&'a crate::identity_grants::GrantSubject>,
-        ),
-        Option<&'a crate::gateway::auth::AuthenticatedClient>,
-    ),
+    Option<&'a crate::key_server::oidc::VerifiedIdentity>,
     Option<&'a serde_json::Value>,
 );
 

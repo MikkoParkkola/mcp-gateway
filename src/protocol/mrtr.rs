@@ -490,16 +490,10 @@ pub enum Refusal {
 /// spelled by any text. The variant being public is not the control, though —
 /// the control is the caller-context field that selects it, which only the two
 /// stdio context builders set (`gateway::server`).
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum PrincipalSource<'a> {
     /// A caller bound by its verified identity, when it has one.
     Credential(Option<&'a crate::key_server::oidc::VerifiedIdentity>),
-    /// A caller with no verified identity, bound by the validated credential
-    /// it presented: the principal text the idempotency guard already keys
-    /// that caller's calls on (`caller_cache_principal`), built by the gateway,
-    /// never read from a request (MIK-8078). One key is one principal, so
-    /// everyone holding a shared key is one caller here too.
-    Key(String),
     /// The one client of this stdio process, named by a nonce drawn once per
     /// process from the OS RNG. Never persisted, never logged.
     Stdio {
@@ -513,7 +507,6 @@ impl std::fmt::Debug for PrincipalSource<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Credential(identity) => f.debug_tuple("Credential").field(identity).finish(),
-            Self::Key(_) => f.write_str("Key(<principal>)"),
             Self::Stdio { .. } => f.write_str("Stdio { nonce: <redacted> }"),
         }
     }
@@ -536,18 +529,15 @@ impl std::fmt::Debug for PrincipalSource<'_> {
 /// principal unique to the process is a complete binding. A nonce rather than
 /// a constant, because continuations share a keyring across processes and a
 /// constant would be the one shared non-identity every stdio process on a
-/// config holds. An API-key caller binds on the principal the gateway already
-/// owns its sessions, grants, journals and tasks by (MIK-8078, lead ruling A):
-/// the truncated 48-bit digest of its key. Short, but it is not a credential
-/// and is never chosen by a caller: a redeemer must present a validated key,
-/// and two configured keys can never share a principal
-/// (`refuse_shared_principals`, MIK-7973). So one key cannot redeem another's
-/// continuation, and every holder of one shared key is one caller. The
-/// client-certificate scheme is not yet reachable at the mint site (its DER is
-/// read and dropped before the caller context is built); its callers are
-/// refused rather than bound weakly.
+/// config holds. The API-key and client-certificate schemes the design names
+/// are not yet reachable at the mint site: the presented API key is not
+/// retained past validation, and only a truncated 48-bit digest of it survives
+/// — hashing that again does not restore the entropy the truncation dropped —
+/// and the client certificate's DER is read and dropped before the caller
+/// context is built. Both arrive with the credential plumbing that retains
+/// them, and until then their callers are refused rather than bound weakly.
 ///
-/// Scheme-tagged (`agent:`, `key:`, `stdio:`) so two schemes can never collide on one
+/// Scheme-tagged (`agent:`, `stdio:`) so two schemes can never collide on one
 /// value, and derived from `VerifiedIdentity::stable_actor_id` rather than a
 /// second length-prefixed encoding of the same pair: a second spelling of an
 /// unambiguous encoding is how one caller acquires two fingerprints.
@@ -556,9 +546,6 @@ pub fn source_fingerprint(source: PrincipalSource<'_>) -> Option<String> {
     match source {
         PrincipalSource::Credential(identity) => Some(crate::hashing::sha256_hex(
             format!("agent:{}", identity?.stable_actor_id()).as_bytes(),
-        )),
-        PrincipalSource::Key(principal) => Some(crate::hashing::sha256_hex(
-            format!("key:{principal}").as_bytes(),
         )),
         PrincipalSource::Stdio { nonce } => Some(crate::hashing::sha256_hex_chunks([
             b"stdio:".as_slice(),

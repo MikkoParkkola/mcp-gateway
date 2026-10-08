@@ -186,7 +186,6 @@ backend" and "fails a capability file" first.**
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 | 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
 | 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`, except those on lines the change deletes (a removed backend's entry, or a field an edit drops), which the command names by line number. On a file with comments, a change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. A file without comments is rewritten as before. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
-| 162 | On the per-backend route `POST /mcp/{name}`, a backend's `requestState` is sealed into a gateway continuation, as on `/mcp`; a retry must send that continuation back once. Callers with an API key and no verified identity now keep multi-round tool calls on both routes, bound to their key | None. A client that already echoes `requestState` as received keeps working. A client that wrote its own `requestState`, reused one, or sent it from another key gets -32602. Holders of one shared key count as one caller |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4250,27 +4249,6 @@ file without comments is rewritten as before.
 `--force` keeps the old behaviour only for a change that cannot be written as
 text: it names the same lines, then rewrites the file without them, for
 example `mcp-gateway remove old-server --force`.
-
-## 162. The per-backend route seals a backend's input-round state
-
-**Startup:** no notice
-
-What you lose: on `POST /mcp/{name}`, the client no longer sees the backend's
-own `requestState` when a tool asks for input, and the backend no longer
-accepts a `requestState` the client wrote. A client that sends back a state it
-was not given, one it already used, or one issued to another key is refused
-with -32602 before the backend is called.
-
-What you gain: the route now behaves like `/mcp`. The gateway seals the
-backend's state into a continuation bound to the caller and to the call, and
-gives it back to the backend only on that caller's retry, once. A caller that
-authenticates with an API key and has no verified identity keeps its input
-rounds on both routes; before, `/mcp` refused them (-32003). Everyone who holds
-one shared key counts as one caller, as for that key's sessions and tasks.
-
-What to do: nothing, if the client echoes `requestState` exactly as received.
-A client that built or stored its own state for this route must echo the
-gateway's instead.
 
 ## Upgrading from 3.5.x: a walkthrough
 

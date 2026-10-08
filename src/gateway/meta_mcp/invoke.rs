@@ -429,10 +429,7 @@ impl MetaMcp {
         let mut bridge_account_credential = account_credential.clone();
         let outbound_retry = match redeem_retry(
             &self.continuation,
-            (
-                caller.principal_source(dispatch_binding.as_deref()),
-                caller.retry,
-            ),
+            (caller.principal_source(), caller.retry),
             server,
             tool,
             &arguments,
@@ -621,7 +618,7 @@ impl MetaMcp {
         if let Some(interim) = interim {
             let Some(envelope) = mint_continuation(
                 &self.continuation,
-                caller.principal_source(dispatch_binding.as_deref()),
+                caller.principal_source(),
                 server,
                 tool,
                 &arguments,

@@ -402,34 +402,6 @@ pub(super) fn withhold_unsealed_state(result: &mut Value) {
     }
 }
 
-/// Who a direct-route call comes from, as its idempotency guard reads it
-/// (`direct_route_idempotency`): the verified identity, the propagated
-/// identity binding, the grant subject and the authenticated client.
-pub(crate) type DirectCaller<'a> = (
-    Option<&'a crate::key_server::oidc::VerifiedIdentity>,
-    (
-        Option<&'a str>,
-        Option<&'a crate::identity_grants::GrantSubject>,
-    ),
-    Option<&'a crate::gateway::auth::AuthenticatedClient>,
-);
-
-/// What a direct-route continuation binds its caller to: the meta route's
-/// rule (`principal_source`), from the same idempotency-guard inputs the
-/// direct route keys the caller's calls on (`direct_route_idempotency`).
-fn direct_source<'a>(
-    (identity, guard, client): DirectCaller<'a>,
-) -> crate::protocol::mrtr::PrincipalSource<'a> {
-    if identity.is_some() {
-        return crate::protocol::mrtr::PrincipalSource::Credential(identity);
-    }
-    crate::gateway::meta_mcp::support::key_binding(
-        guard,
-        client.map(|client| client.principal.as_str()),
-        crate::gateway::meta_mcp::Authentication::of(client),
-    )
-}
-
 /// The tool and the argument object a direct-route `tools/call` names: the two
 /// parts of the request a continuation is bound to (MIK-8078). Read from the
 /// params as the client sent them, at the mint and at the redeem alike, so a
@@ -465,13 +437,13 @@ impl crate::gateway::meta_mcp::MetaMcp {
     /// answers that present none.
     pub(crate) async fn redeem_direct_retry(
         &self,
-        who: DirectCaller<'_>,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         (server, sent): (&str, Option<&Value>),
         outbound: &mut Value,
     ) -> Result<()> {
         let retry = crate::protocol::mrtr::RetryFields::from_params(sent);
         let (tool, arguments) = direct_call_parts(sent);
-        let source = direct_source(who);
+        let source = crate::protocol::mrtr::PrincipalSource::Credential(identity);
         let redeemed = redeem_retry(
             &self.continuation,
             (source, &retry),
@@ -505,7 +477,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
     /// is refused: the backend's own state is never sent in its place.
     pub(crate) async fn seal_direct_interim(
         &self,
-        who: DirectCaller<'_>,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         (server, sent): (&str, Option<&Value>),
         result: &mut Value,
     ) -> Result<()> {
@@ -514,7 +486,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
             return Ok(());
         };
         let (tool, arguments) = direct_call_parts(sent);
-        let source = direct_source(who);
+        let source = crate::protocol::mrtr::PrincipalSource::Credential(identity);
         let Some(envelope) = mint_continuation(
             &self.continuation,
             source,
