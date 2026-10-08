@@ -19,6 +19,9 @@ mod common;
 mod input_rounds;
 #[path = "a2a_outbound/stub.rs"]
 mod stub;
+#[cfg(feature = "firewall")]
+#[path = "a2a_outbound/untrusted.rs"]
+mod untrusted;
 
 use stub::{Agent, Answer};
 

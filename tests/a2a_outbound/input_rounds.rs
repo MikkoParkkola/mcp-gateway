@@ -352,7 +352,7 @@ async fn a2a_8_an_input_round_through_the_gateway_funnel() {
 
 /// POST `body` to `uri` as the bearer `key` and/or the verified `subject`
 /// (the extension the identity layer would insert).
-async fn post_as(
+pub(super) async fn post_as(
     state: &std::sync::Arc<super::common::AppState>,
     uri: &str,
     body: &Value,

@@ -1,7 +1,7 @@
 # ADR-001: Inter-Agent Message Signing
 
 **Date**: 2026-04-16
-**Status**: Proposed
+**Status**: Accepted (shipped opt-in: HMAC-SHA256 response signing with nonce replay protection, `src/security/message_signing.rs`; off by default)
 **Deciders**: Mikko Parkkola
 **OWASP Reference**: ASI07 (Insecure Inter-Agent Communication)
 

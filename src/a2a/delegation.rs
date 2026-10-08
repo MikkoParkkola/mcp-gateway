@@ -184,16 +184,16 @@ fn fresh_token() -> Option<String> {
 /// At most this many `CancelTask`s of one backend are on the wire at once;
 /// later ones wait their turn instead of being dropped.
 const MAX_CANCELS: usize = 64;
-/// Live guards plus queued and running cancels of one backend. Past it a new
-/// cancel is skipped and logged.
+/// Live guards, parked questions, and queued and running cancels of one
+/// backend. Past it a new cancel is skipped and logged.
 /// ponytail: one fixed ceiling per backend; add per-caller fairness if a
 /// single caller can fill it.
 const MAX_OUTSTANDING: usize = 4096;
 /// One `CancelTask` waits no longer than this, whatever the backend timeout.
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// One unit of cancel work `close` waits for: a live [`CancelGuard`] or a
-/// queued or running cancel.
+/// One unit of cancel work `close` waits for: a live [`CancelGuard`], a parked
+/// question, or a queued or running cancel.
 pub(crate) struct Busy(Arc<watch::Sender<usize>>);
 
 impl Busy {
@@ -278,8 +278,8 @@ impl Canceller {
         });
     }
 
-    /// Wait, for at most `budget`, until no guard is live and no cancel is
-    /// queued or running.
+    /// Wait, for at most `budget`, until nothing is owed: no live guard, no
+    /// parked question and no queued or running cancel.
     pub(crate) async fn settle(&self, budget: Duration) {
         let mut work = self.work.subscribe();
         if tokio::time::timeout(budget, work.wait_for(|n| *n == 0))
