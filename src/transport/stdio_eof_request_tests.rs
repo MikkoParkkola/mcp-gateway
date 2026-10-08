@@ -241,8 +241,15 @@ async fn a_request_queued_behind_a_blocked_write_ends_pre_send() {
         let t = Arc::clone(&t);
         tokio::spawn(async move { t.request("tools/list", Some(big_params())).await })
     };
-    // Let the first call take the writer lock before the second queues.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // The first call holds stdin (its frame cannot finish) before the second
+    // queues; observed, not assumed from a sleep.
+    tokio::time::timeout(ROW_LIMIT, async {
+        while t.writer.try_lock().is_ok() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the blocked call takes stdin");
     let queued = tokio::time::timeout(ROW_LIMIT, t.request("tools/list", None))
         .await
         .expect("the queued call ends within its deadline")
