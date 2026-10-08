@@ -125,16 +125,19 @@ pub(super) fn stage_direct_delivery(
     let (Some(fw), Some(result)) = (state.firewall.as_ref(), result) else {
         return;
     };
+    // No collector without relay detection: skip the copy (MIK-7832).
+    if !fw.relay_active() {
+        return;
+    }
     let (key, keyed) = direct_caller(auth, &format!("direct:{server}"));
     let who = crate::gateway::meta_mcp::invoke::relay::RelayKey::new(&key, keyed);
-    // The gateway's own stamps are not backend text (MIK-8022, MIK-7939).
-    let staged = if stamps == GatewayStamps::Modern {
-        let mut copy = result.clone();
-        crate::gateway::meta_mcp::invoke::relay::strip_gateway_stamps(&mut copy, stamps);
-        std::borrow::Cow::Owned(copy)
-    } else {
-        std::borrow::Cow::Borrowed(result)
-    };
+    // The gateway's own stamps, its signature and its chain link are not
+    // backend text (MIK-8022, MIK-7939, MIK-8025); `stage_with` leaves out
+    // its value-layer notes (cost warnings, provenance).
+    let mut staged = result.clone();
+    crate::gateway::meta_mcp::invoke::relay::strip_gateway_stamps(&mut staged, stamps);
+    crate::gateway::gateway_writes::strip_noted(&mut staged);
+    crate::security::signature_chain::strip_chain(&mut staged);
     crate::gateway::meta_mcp::invoke::relay::stage_with(fw, who, (server, tool), &staged);
 }
 
