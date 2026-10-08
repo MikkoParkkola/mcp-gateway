@@ -85,7 +85,7 @@ def owned_at(fd):
             return False
         try:
             state = json.loads(marker.read())
-        except ValueError:
+        except (OSError, ValueError):
             return False
     return isinstance(state, dict) and state.get("owner") == OWNER
 
