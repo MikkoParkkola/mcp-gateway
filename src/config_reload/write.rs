@@ -3,8 +3,10 @@
 //! Config-file writes that reload the live gateway afterwards.
 
 use std::path::Path;
+use std::time::Instant;
 
 use crate::config::Config;
+use crate::config_persistence::lock::lock_config;
 use crate::config_persistence::{CommentLoss, Unwritten};
 
 use super::{ReloadContext, ReloadOutcome};
@@ -33,6 +35,15 @@ impl std::fmt::Display for ConfigWriteError {
 }
 
 impl std::error::Error for ConfigWriteError {}
+
+impl From<crate::config_persistence::lock::NotLocked> for ConfigWriteError {
+    fn from(e: crate::config_persistence::lock::NotLocked) -> Self {
+        match e {
+            crate::config_persistence::lock::NotLocked::Busy => Self::Busy,
+            crate::config_persistence::lock::NotLocked::Failed(message) => Self::Failed(message),
+        }
+    }
+}
 
 impl From<String> for ConfigWriteError {
     fn from(message: String) -> Self {
@@ -120,7 +131,11 @@ pub async fn write_config_and_reload_outcome(
         return ctx.write_and_reload_outcome(path, config).await.map(Some);
     }
 
-    crate::config_persistence::write_config(path, config)?;
+    // No reload lock without a live gateway, but the config lock still
+    // orders this write against every other process's writer.
+    let held = lock_config(path, Instant::now() + super::RELOAD_LOCK_WAIT).await?;
+    crate::config_persistence::write_config_with(path, config, CommentLoss::Rewrite, &held)
+        .map_err(|e| ConfigWriteError::from(MutateError::from(e)))?;
     Ok(None)
 }
 
@@ -203,13 +218,17 @@ where
             .await;
     }
 
-    // No live gateway to reload, so no reload lock exists to hold. This path is
-    // the CLI acting on a config file nothing else is serving.
+    // No live gateway to reload, so no reload lock exists to hold. The config
+    // lock is still held from the load to the write: another process (a CLI,
+    // a second gateway) may be writing the same file.
+    let held = lock_config(path, Instant::now() + super::RELOAD_LOCK_WAIT)
+        .await
+        .map_err(ConfigWriteError::from)?;
     let mut config = crate::config_persistence::load_existing_or_default(path)
         .map_err(|e| load_failure(path, &e, mode))?;
     match mutate(&mut config) {
         Ok(value) => {
-            crate::config_persistence::write_config_with(path, &config, mode)?;
+            crate::config_persistence::write_config_with(path, &config, mode, &held)?;
             Ok(ConfigMutation::Applied(value, None))
         }
         Err(rejection) => Ok(ConfigMutation::Rejected(rejection)),

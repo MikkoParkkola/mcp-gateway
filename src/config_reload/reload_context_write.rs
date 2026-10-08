@@ -3,11 +3,14 @@
 //! The config write half of [`ReloadContext`]: write or mutate `gateway.yaml`,
 //! then reload, all under the reload lock (moved from `reload_context.rs`).
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::config_persistence::CommentLoss;
-use crate::config_reload::{ConfigMutation, ConfigWriteError, RELOAD_LOCK_WAIT, ReloadOutcome};
+use crate::config_persistence::lock::lock_config;
+use crate::config_reload::{
+    ConfigMutation, ConfigWriteError, MutateError, RELOAD_LOCK_WAIT, ReloadOutcome,
+};
 
 use super::ReloadContext;
 
@@ -51,8 +54,13 @@ impl ReloadContext {
         wait: Duration,
         config: &Config,
     ) -> std::result::Result<ReloadOutcome, ConfigWriteError> {
+        // One deadline for both locks: the in-process reload lock, then the
+        // cross-process config lock, both held through the reload.
+        let deadline = Instant::now() + wait;
         let _reload_guard = self.lock_reload_within(wait).await?;
-        crate::config_persistence::write_config(path, config)?;
+        let held = lock_config(path, deadline).await?;
+        crate::config_persistence::write_config_with(path, config, CommentLoss::Rewrite, &held)
+            .map_err(|e| ConfigWriteError::from(MutateError::from(e)))?;
         self.reload_outcome_locked()
             .await
             .map_err(|e| ConfigWriteError::Failed(format!("Config written but reload failed: {e}")))
@@ -117,7 +125,14 @@ impl ReloadContext {
     where
         F: FnOnce(&mut Config) -> std::result::Result<T, E>,
     {
+        let deadline = Instant::now() + wait;
         let _reload_guard = self.lock_reload_within(wait).await?;
+        // The config lock is held from the load through the reload, so another
+        // process's write can neither land between this load and this write
+        // nor between this write and the reload that reads it back.
+        let held = lock_config(path, deadline)
+            .await
+            .map_err(ConfigWriteError::from)?;
         let mut config = crate::config_persistence::load_existing_or_default(path)
             .map_err(|e| crate::config_reload::write::load_failure(path, &e, mode))?;
         let value = match mutate(&mut config) {
@@ -126,7 +141,7 @@ impl ReloadContext {
         };
         // A write that changes nothing still reloads: a retry after a failed
         // reload finds its value on disk and must not leave the runtime stale.
-        crate::config_persistence::write_config_with(path, &config, mode)?;
+        crate::config_persistence::write_config_with(path, &config, mode, &held)?;
         let outcome = self
             .reload_outcome_locked()
             .await

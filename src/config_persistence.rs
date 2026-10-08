@@ -5,8 +5,10 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::config::Config;
+use crate::fs_lock::ExclusiveFileLock;
 
 /// Gateway state directory, honoring the existing operator override.
 #[must_use]
@@ -71,14 +73,38 @@ pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
 /// # Errors
 ///
 /// Returns `Err` on validation, serialisation, or I/O failure.
+///
+/// Takes the cross-process config lock first ([`lock`]), waiting up to
+/// [`CLI_LOCK_WAIT`] while another writer holds it; this blocks the calling
+/// thread, so an async caller uses the reload module's write API instead.
 pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
-    write_config_with(path, config, CommentLoss::Rewrite).map_err(|e| match e {
+    let held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |_| {})
+        .map_err(|e| not_locked(path, e))?;
+    write_config_with(path, config, CommentLoss::Rewrite, &held).map_err(|e| match e {
         Unwritten::Failed(message) | Unwritten::CommentLoss(message) => message,
     })
 }
 
 #[path = "config_persistence_splice.rs"]
 mod splice;
+
+#[path = "config_persistence_lock.rs"]
+pub(crate) mod lock;
+
+/// How long a synchronous writer (the CLI) waits for another writer's
+/// config lock: long enough to outlast a gateway's write and reload.
+pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(30);
+
+/// A lock that was not taken, as a message ready to print.
+fn not_locked(path: &Path, e: lock::NotLocked) -> String {
+    match e {
+        lock::NotLocked::Busy => format!(
+            "Not saved: {} is locked by another writer; retry.",
+            path.display()
+        ),
+        lock::NotLocked::Failed(message) => format!("Not saved: {message}"),
+    }
+}
 
 /// What a write does when it cannot keep the file's comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,10 +147,14 @@ impl From<String> for Unwritten {
 ///
 /// [`Unwritten::CommentLoss`] when `mode` refuses a write that would drop
 /// comments; [`Unwritten::Failed`] on validation, serialisation or I/O failure.
+///
+/// `_held` is the config lock ([`lock`]) the caller took before it loaded:
+/// the load, the edit and this write are one critical section.
 pub(crate) fn write_config_with(
     path: &Path,
     config: &Config,
     mode: CommentLoss,
+    _held: &ExclusiveFileLock,
 ) -> Result<(), Unwritten> {
     write_spliced(path, config, mode, Splice::One)
 }
@@ -143,6 +173,14 @@ pub(crate) fn write_config_with(
 /// The refusal, which starts with `Not saved:`, or a validation,
 /// serialisation or I/O failure, as a message ready to print.
 pub fn write_config_preserving(path: &Path, config: &Config) -> Result<(), String> {
+    let _held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
+        eprintln!(
+            "Waiting for {} (another writer holds {})...",
+            path.display(),
+            lock.display()
+        );
+    })
+    .map_err(|e| not_locked(path, e))?;
     write_spliced(path, config, CommentLoss::Refuse, Splice::NoRemoval).map_err(|e| match e {
         Unwritten::CommentLoss(message) => message,
         Unwritten::Failed(message) => format!("Failed to write {}: {message}", path.display()),
