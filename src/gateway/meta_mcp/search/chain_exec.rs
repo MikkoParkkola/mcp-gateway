@@ -88,7 +88,16 @@ impl MetaMcp {
                 &crate::protocol::mrtr::NO_RETRY
             });
 
-            match plan_step(self.invoke_tool(&invoke_args, session_id, &step_caller)).await {
+            // Labelled by its execution index, as the chain's answer names it
+            // (`results[i].step`), so a resumed chain's results keep their
+            // steps (MIK-8113).
+            let label = u32::try_from(idx).ok();
+            match plan_step(
+                label,
+                self.invoke_tool(&invoke_args, session_id, &step_caller),
+            )
+            .await
+            {
                 // A tool error in the success channel is still an error.
                 Ok(result) => chain_step_result(idx, &tool_ref, result),
                 // A refusal stays a refusal. Flattening it into -32603 told
@@ -147,7 +156,22 @@ impl MetaMcp {
                 .map_err(|error| Error::json_rpc(-32603, error.to_string()))
         };
 
-        super::super::chain_interim::drive_chain(&chain, start_step, &mut run_step, seal_stop).await
+        let answer =
+            super::super::chain_interim::drive_chain(&chain, start_step, &mut run_step, seal_stop)
+                .await?;
+        // MIK-8113: each result is its step's, by the execution index the
+        // chain wrote beside it, so a resumed chain's results keep theirs.
+        let results = answer.get("results").and_then(Value::as_array);
+        for (i, done) in results.into_iter().flatten().enumerate() {
+            if let Some(label) = done.get("step").and_then(Value::as_u64) {
+                let label = u32::try_from(label).unwrap_or(u32::MAX);
+                crate::gateway::meta_mcp::invoke::relay::note_plan_member(
+                    format!("/results/{i}/result"),
+                    label,
+                );
+            }
+        }
+        Ok(answer)
     }
 }
 

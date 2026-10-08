@@ -50,6 +50,9 @@ impl CollusionDetector {
     }
 
     /// One form's seam fingerprints, each with the steps of every occurrence.
+    /// Two slides of the window: the first finds the seam k-grams and the
+    /// winnowed fingerprints among them, the second collects steps only for
+    /// those, so an answer with few seams allocates for few.
     fn form_seams(
         &self,
         parts: &[(&str, Option<u32>)],
@@ -58,53 +61,41 @@ impl CollusionDetector {
         let Some((norm, tags)) = self.tagged_form(parts, separator) else {
             return Vec::new();
         };
+        let chars = tags.len();
+        if chars < K {
+            return Vec::new();
+        }
         let bounds: Vec<usize> = norm
             .char_indices()
             .map(|(i, _)| i)
             .chain(std::iter::once(norm.len()))
             .collect();
-        let chars = tags.len();
-        if chars < K {
-            return Vec::new();
-        }
         let mut hashes = Vec::with_capacity(chars - K + 1);
-        let mut union: HashMap<u64, BTreeSet<u32>> = HashMap::new();
         let mut seam: HashSet<u64> = HashSet::new();
-        let mut window: HashMap<u32, usize> = HashMap::new();
-        for owner in tags[..K].iter().flatten() {
-            *window.entry(*owner).or_default() += 1;
-        }
-        for i in 0..=chars - K {
-            if i > 0 {
-                if let Some(gone) = tags[i - 1] {
-                    if let Some(n) = window.get_mut(&gone) {
-                        *n -= 1;
-                        if *n == 0 {
-                            window.remove(&gone);
-                        }
-                    }
-                }
-                if let Some(came) = tags[i + K - 1] {
-                    *window.entry(came).or_default() += 1;
-                }
-            }
+        slide(&tags, |i, window| {
             let hash = key().hash_one(&norm[bounds[i]..bounds[i + K]]);
             hashes.push(hash);
-            if !window.is_empty() {
-                union
-                    .entry(hash)
-                    .or_default()
-                    .extend(window.keys().copied());
-            }
             if window.len() >= 2 {
                 seam.insert(hash);
             }
-        }
-        winnow(&hashes)
+        });
+        let selected: HashSet<u64> = winnow(&hashes)
             .into_iter()
             .filter(|fp| seam.contains(fp))
-            .map(|fp| (fp, union.remove(&fp).unwrap_or_default()))
-            .collect()
+            .collect();
+        if selected.is_empty() {
+            return Vec::new();
+        }
+        let mut union: HashMap<u64, BTreeSet<u32>> = HashMap::new();
+        slide(&tags, |i, window| {
+            if selected.contains(&hashes[i]) {
+                union
+                    .entry(hashes[i])
+                    .or_default()
+                    .extend(window.keys().copied());
+            }
+        });
+        union.into_iter().collect()
     }
 
     /// The form's text normalized as [`Self::kgram_hashes`] normalizes it,
@@ -153,5 +144,30 @@ impl CollusionDetector {
             .collect::<Vec<_>>()
             .join(separator);
         (self.normalized(&joined) == norm).then_some((norm, tags))
+    }
+}
+
+/// Slide a `K`-char window over `tags`, calling `at` with each start and the
+/// count of each step's chars inside the window.
+fn slide(tags: &[Option<u32>], mut at: impl FnMut(usize, &HashMap<u32, usize>)) {
+    let mut window: HashMap<u32, usize> = HashMap::new();
+    for owner in tags[..K].iter().flatten() {
+        *window.entry(*owner).or_default() += 1;
+    }
+    for i in 0..=tags.len() - K {
+        if i > 0 {
+            if let Some(gone) = tags[i - 1]
+                && let Some(n) = window.get_mut(&gone)
+            {
+                *n -= 1;
+                if *n == 0 {
+                    window.remove(&gone);
+                }
+            }
+            if let Some(came) = tags[i + K - 1] {
+                *window.entry(came).or_default() += 1;
+            }
+        }
+        at(i, &window);
     }
 }

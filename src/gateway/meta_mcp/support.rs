@@ -410,11 +410,10 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
         // step they could run directly, which is a regression rather than a
         // control: a playbook is not a way AROUND a check, so it faces the same
         // one — now including the scope checks, at the chokepoint.
-        let outcome = crate::gateway::meta_mcp::invoke::relay::plan_step(self.meta.invoke_tool(
-            &args,
-            None,
-            self.caller,
-        ))
+        let outcome = crate::gateway::meta_mcp::invoke::relay::plan_step(
+            crate::playbook::current_step(),
+            self.meta.invoke_tool(&args, None, self.caller),
+        )
         .await;
         // A refused step's reason names an operator-defined target the caller
         // may not reach, so it is replaced with a neutral one (A3). Decided

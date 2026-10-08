@@ -234,19 +234,27 @@ struct Receipt {
     /// A plan receipt whose answer changed and has not yet been kept to the
     /// final answer: never committed so (MIK-7887.RECEIPT.2).
     pending_retain: bool,
+    /// The plan step that staged it, as the plan labels its steps (a
+    /// playbook's step index, a chain's execution index): which answer
+    /// members it may own (`MIK-8113`). `None` outside a labelled step.
+    step: Option<u32>,
+    /// The seam fingerprints of the plan's answer, rebuilt each time the
+    /// step receipts are kept to it (`MIK-8113`).
+    seam: bool,
 }
 
 tokio::task_local! {
     /// The receipts of the delivery this task owns (§13.3 "Recording").
     static RELAY_RECEIPTS: RefCell<Vec<Receipt>>;
     static RELAY_STAGED: Cell<usize>; // What it staged so far (MIK-7992).
-    /// Set while one step of a plan dispatches.
-    static PLAN_STEP: ();
+    /// Set while one step of a plan dispatches, with the step's label.
+    static PLAN_STEP: Option<u32>;
 }
 
-/// Run one plan step's dispatch: the receipts it stages are a plan's.
-pub(crate) async fn plan_step<F: std::future::Future>(step: F) -> F::Output {
-    PLAN_STEP.scope((), step).await
+/// Run one plan step's dispatch: the receipts it stages are a plan's, under
+/// `label`, the step as the plan's answer names it (`MIK-8113`).
+pub(crate) async fn plan_step<F: std::future::Future>(label: Option<u32>, step: F) -> F::Output {
+    PLAN_STEP.scope(label, step).await
 }
 
 /// Run `delivery` with a receipt collector: the HTTP and stdio dispatches
@@ -256,7 +264,10 @@ pub(crate) async fn collecting<F: std::future::Future>(delivery: F) -> F::Output
     RELAY_RECEIPTS
         .scope(
             RefCell::new(Vec::new()),
-            RELAY_STAGED.scope(Cell::new(0), super::gateway_writes::scope(delivery)),
+            RELAY_STAGED.scope(
+                Cell::new(0),
+                super::gateway_writes::scope(seams::scope(delivery)),
+            ),
         )
         .await
 }
@@ -368,7 +379,7 @@ impl MetaMcp {
     ) -> (F::Output, StagedReceipts) {
         let (output, receipts) = RELAY_RECEIPTS
             .scope(RefCell::new(Vec::new()), async {
-                let writes = super::gateway_writes::scope(delivery);
+                let writes = super::gateway_writes::scope(seams::scope(delivery));
                 let output = RELAY_STAGED.scope(Cell::new(0), writes).await;
                 let staged = RELAY_RECEIPTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
                 (output, staged)
@@ -554,7 +565,8 @@ fn receipt_with(
     // MIK-7994: without this call's gateway members; plan receipts are never rebuilt.
     let mut value = value.clone();
     super::gateway_writes::strip(&mut value, super::gateway_writes::Layer::Value);
-    let in_plan = PLAN_STEP.try_with(|()| ()).is_ok();
+    let plan = PLAN_STEP.try_with(|label| *label);
+    let in_plan = plan.is_ok();
     let digest =
         RELAY_STAGED.with(|s| fw.receipt_digest(server, tool, &value, in_plan.then_some(s)))?;
     Some(Receipt {
@@ -565,6 +577,8 @@ fn receipt_with(
         digest,
         in_plan,
         pending_retain: false,
+        step: plan.ok().flatten(),
+        seam: false,
     })
 }
 
@@ -680,6 +694,9 @@ impl crate::gateway::input_bridge::ClientChannel for RecordingChannel<'_> {
 mod catalogue;
 #[path = "relay_delivered.rs"]
 mod delivered;
+#[path = "relay_seams.rs"]
+mod seams;
+pub(crate) use seams::{note_plan_member, pointer_token};
 
 pub(crate) use catalogue::{CatalogueCaller, as_caller};
 #[cfg(feature = "firewall")]

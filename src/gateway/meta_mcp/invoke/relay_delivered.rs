@@ -143,6 +143,8 @@ impl MetaMcp {
                     digest,
                     in_plan: false,
                     pending_retain: false,
+                    step: None,
+                    seam: false,
                 });
             }
             #[cfg(not(feature = "firewall"))]
@@ -244,7 +246,7 @@ fn keep_plan_receipts(
     // were dropped at staging and are dropped again here counts once.
     let staged = super::RELAY_STAGED.try_with(|s| fw.delivered_for_plan(answer, Some(s)));
     let Some(delivered) = staged.unwrap_or_else(|_| fw.delivered_for_plan(answer, None)) else {
-        receipts.retain(|r| !r.in_plan);
+        receipts.retain(|r| !r.in_plan && !r.seam);
         return;
     };
     for r in receipts.iter_mut().filter(|r| r.in_plan) {
@@ -252,6 +254,7 @@ fn keep_plan_receipts(
         r.digest = fw.retain_delivered(digest, &delivered);
         r.pending_retain = false;
     }
+    super::seams::add_seams(fw, receipts, answer);
 }
 
 /// MIK-7998: the single staged receipt kept to a wrapper the gateway's own
