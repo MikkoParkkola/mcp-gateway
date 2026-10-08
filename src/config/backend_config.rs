@@ -212,8 +212,9 @@ pub(super) fn default_true() -> bool {
 
 // ── Transport ─────────────────────────────────────────────────────────────────
 
-/// Transport configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Transport configuration. Its `Debug` (in `backend_debug.rs`) redacts
+/// URLs and commands, which can carry credentials.
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum TransportConfig {
     /// Stdio transport (subprocess).

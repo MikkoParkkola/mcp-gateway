@@ -109,9 +109,18 @@ fn the_card_sits_at_the_origin_whatever_a2a_url_carries() {
     );
 }
 
+fn authorization(client: &A2aClient) -> Vec<&str> {
+    client
+        .headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        .map(|(_, value)| value.as_str())
+        .collect()
+}
+
 #[test]
-fn credentials_in_a2a_url_ride_the_endpoint_and_never_print() {
-    let userinfo = ["operator", "hunter2-secret"].join(":");
+fn url_credentials_become_one_basic_header_and_leave_every_url() {
+    let userinfo = ["operator", "s3cret"].join(":");
     let configured = A2aClient::new(
         &format!("https://{userinfo}@agent.invalid"),
         None,
@@ -119,30 +128,48 @@ fn credentials_in_a2a_url_ride_the_endpoint_and_never_print() {
         reqwest::Client::new(),
     )
     .unwrap();
+    // base64("operator:s3cret")
+    assert_eq!(authorization(&configured), ["Basic b3BlcmF0b3I6czNjcmV0"]);
+    assert!(
+        !configured.card_url.contains("s3cret"),
+        "{}",
+        configured.card_url
+    );
     let chosen = configured
         .endpoint(&card(&json!([
-            {"url": "https://agent.invalid/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
+            {"url": "https://intruder:x@agent.invalid/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
         ])))
         .unwrap();
-    assert!(
-        chosen.url.contains(&userinfo),
-        "the endpoint authenticates as the card does"
+    assert_eq!(
+        chosen.url, "https://agent.invalid/a2a",
+        "no userinfo on the wire URL"
     );
-    assert!(!configured.target().contains("hunter2-secret"));
-    assert!(
-        !format!("{chosen:?}").contains("hunter2-secret"),
-        "{chosen:?}"
-    );
+}
 
-    let own = configured
-        .endpoint(&card(&json!([
-            {"url": "https://other:own@agent.invalid/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
-        ])))
-        .unwrap();
-    assert!(
-        own.url.contains("other:own") && !own.url.contains("hunter2-secret"),
-        "credentials the card names are its own"
-    );
+#[test]
+fn an_explicit_authorization_header_wins_over_url_credentials() {
+    let explicit = vec![("authorization".to_owned(), "Bearer configured".to_owned())];
+    let configured = A2aClient::new(
+        "https://operator:pw@agent.invalid",
+        None,
+        explicit,
+        reqwest::Client::new(),
+    )
+    .unwrap();
+    assert_eq!(authorization(&configured), ["Bearer configured"]);
+}
+
+#[test]
+fn a_password_only_url_still_authenticates() {
+    let configured = A2aClient::new(
+        "https://:only-pw@agent.invalid",
+        None,
+        Vec::new(),
+        reqwest::Client::new(),
+    )
+    .unwrap();
+    // base64(":only-pw")
+    assert_eq!(authorization(&configured), ["Basic Om9ubHktcHc="]);
 }
 
 fn response(body: Vec<u8>) -> reqwest::Response {

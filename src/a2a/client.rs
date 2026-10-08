@@ -56,10 +56,10 @@ impl A2aClient {
     pub(crate) fn new(
         a2a_url: &str,
         card_path: Option<&str>,
-        headers: Vec<(String, String)>,
+        mut headers: Vec<(String, String)>,
         http: reqwest::Client,
     ) -> Result<Self> {
-        let origin = Url::parse(a2a_url).map_err(|e| {
+        let mut origin = Url::parse(a2a_url).map_err(|e| {
             Error::Config(format!(
                 "a2a_url {} is not a URL: {e}",
                 diagnostic_url(a2a_url)
@@ -70,6 +70,22 @@ impl A2aClient {
             return Err(Error::Config(format!(
                 "a2a_agent_card_path must be a path starting with '/', got {path:?}"
             )));
+        }
+        // Credentials written into `a2a_url`, as curl takes them, become one
+        // configured `Authorization: Basic` header and leave every URL. As a
+        // header they follow the precedence rule in `with_headers`: an
+        // explicit configured `Authorization` wins over them, and a per-request
+        // (propagated) one replaces them, so an agent never sees two.
+        if !origin.username().is_empty() || origin.password().is_some() {
+            let basic = url_basic_auth(&http, &origin);
+            let _ = origin.set_username("");
+            let _ = origin.set_password(None);
+            let explicit = headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("authorization"));
+            if let Some(basic) = basic.filter(|_| !explicit) {
+                headers.push(("Authorization".to_owned(), basic));
+            }
         }
         // The card lives at a path on the agent's origin, whatever path,
         // query or fragment `a2a_url` itself carries.
@@ -139,7 +155,7 @@ impl A2aClient {
             )));
         }
         Ok(Endpoint {
-            url: with_credentials(&interface.url, &self.origin),
+            url: without_credentials(&interface.url),
             tenant: interface.tenant.clone(),
         })
     }
@@ -215,20 +231,24 @@ impl A2aClient {
     }
 }
 
-/// `endpoint` with the credentials `a2a_url` carries, when it carries none
-/// of its own. The HTTP client sends URL credentials as `Authorization:
-/// Basic`, so an operator who writes them into `a2a_url`, as curl takes them,
-/// authenticates the card and the calls alike. The endpoint already shares
-/// the configured origin, so the credentials go nowhere else.
-fn with_credentials(endpoint: &str, origin: &Url) -> String {
+/// The `Authorization: Basic` value for the credentials in `url`, computed by
+/// the HTTP client itself (it decodes the userinfo exactly as it would send
+/// it) on a request that is built and never sent.
+fn url_basic_auth(http: &reqwest::Client, url: &Url) -> Option<String> {
+    let request = http.get(url.as_str()).build().ok()?;
+    let value = request.headers().get(reqwest::header::AUTHORIZATION)?;
+    value.to_str().ok().map(str::to_owned)
+}
+
+/// `endpoint` without userinfo: the client would turn it into a second
+/// `Authorization` header beside the configured one. Credentials come only
+/// from the configuration.
+fn without_credentials(endpoint: &str) -> String {
     let Ok(mut url) = Url::parse(endpoint) else {
         return endpoint.to_owned();
     };
-    if url.username().is_empty() && url.password().is_none() && !origin.username().is_empty() {
-        // Same origin: setting userinfo on it cannot fail.
-        let _ = url.set_username(origin.username());
-        let _ = url.set_password(origin.password());
-    }
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
     url.to_string()
 }
 

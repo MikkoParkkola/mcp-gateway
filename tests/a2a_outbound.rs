@@ -535,3 +535,53 @@ async fn a2a_6_url_credentials_authenticate_the_card_and_the_calls() {
         "every request carries the credentials: {seen:?}"
     );
 }
+
+/// A2A.6/A2A.7: a propagated credential replaces the `a2a_url` credentials
+/// on its request; the agent never sees two `Authorization` headers.
+#[tokio::test]
+async fn a2a_7_a_propagated_credential_replaces_url_credentials() {
+    let (base, log) = stub::serve(Agent::answering(stub::completed_task(
+        json!([{"text": "one identity"}]),
+    )))
+    .await;
+    let userinfo = ["operator", "s3cret"].join(":");
+    let url = base.replacen("http://", &format!("http://{userinfo}@"), 1);
+    let backend = backend(&url, None, &[]);
+    let params = json!({"name": TOOL, "arguments": {"message": "hi"}});
+    let user = [("authorization".to_owned(), "Bearer user-1".to_owned())];
+    backend
+        .request_with_headers("tools/call", Some(params), &user, Some("user-1"))
+        .await
+        .expect("the call succeeds");
+    let sent: Vec<String> = stub::sends(&log)[0]
+        .headers
+        .get_all("authorization")
+        .iter()
+        .filter_map(|v| v.to_str().ok().map(str::to_owned))
+        .collect();
+    assert_eq!(sent, ["Bearer user-1"], "exactly the propagated credential");
+}
+
+/// Check 3: with credentials in `a2a_url`, a redirect to another origin is
+/// refused, so the other origin never receives them.
+#[tokio::test]
+async fn a2a_3a_a_cross_origin_redirect_never_carries_url_credentials() {
+    let (elsewhere, tripped) = stub::tripwire().await;
+    let mut agent = Agent::answering(Value::Null);
+    agent.answer = Answer::Redirect(format!("{elsewhere}/steal"));
+    let (base, log) = stub::serve(agent).await;
+    let userinfo = ["operator", "s3cret"].join(":");
+    let url = base.replacen("http://", &format!("http://{userinfo}@"), 1);
+    let outcome = call(&backend(&url, None, &[]), "hi").await;
+    assert_eq!(
+        stub::sends(&log).len(),
+        1,
+        "the agent was reached: {outcome:?}"
+    );
+    let error = outcome.expect_err("a redirected call does not succeed");
+    assert!(!error.contains("s3cret"), "{error}");
+    assert!(
+        tripped.lock().expect("log").is_empty(),
+        "the other origin never received a request, credentials or not"
+    );
+}
