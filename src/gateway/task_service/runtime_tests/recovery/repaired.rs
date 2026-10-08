@@ -6,8 +6,8 @@
 
 use super::*;
 
-/// `MIK-8121.READ.1` and `.READ.2`: repair a sealed in-flight row and a sealed
-/// settled row while the sweep runs. Both are then readable by their owner,
+/// `MIK-8121.READ.1` and `.READ.2`: repair a sealed in-flight row, a sealed
+/// abandoned input round and a sealed settled row while the sweep runs. Both are then readable by their owner,
 /// the in-flight one settled exactly as startup recovery would settle it, and
 /// each key still answers as its own row.
 #[tokio::test]
@@ -20,7 +20,12 @@ async fn a_repaired_row_is_readable_without_a_restart() {
             &dir,
             rows()
                 .into_iter()
-                .filter(|(key, ..)| matches!(*key, "x6b-dispatched" | "x6e-terminal"))
+                .filter(|(key, ..)| {
+                    matches!(
+                        *key,
+                        "x6b-dispatched" | "x6d-input-required" | "x6e-terminal"
+                    )
+                })
                 .collect(),
         ),
     )
@@ -59,7 +64,7 @@ async fn a_repaired_row_is_readable_without_a_restart() {
     .await
     .expect("startup does not hang")
     .expect("sealed rows never stop startup");
-    assert_eq!(restored.skipped_records().sealed, 2);
+    assert_eq!(restored.skipped_records().sealed, 3);
 
     let sweep = executor
         .start_expiry(Duration::from_millis(50))

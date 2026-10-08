@@ -236,6 +236,17 @@ impl Shared {
             }
             Reread::Repaired(admission, id, row) => (admission, id, row),
         };
+        // Every check below holds until the row is applied: a concurrent
+        // re-read or mutation cannot move it in between.
+        let _order = self.order();
+        {
+            let state = self.state();
+            // A closed or poisoned store writes and serves nothing more; a row
+            // another re-read already applied is not applied twice.
+            if !state.ready || !state.sealed.contains(name) {
+                return;
+            }
+        }
         // The load's per-principal cap holds for a repaired row too: a seal
         // never lifts over a directory startup would refuse.
         let held = {
@@ -264,12 +275,14 @@ impl Shared {
             state.reserved.push((admission, id));
             return;
         };
-        let _order = self.order();
-        // A closed or poisoned store writes and serves nothing more.
-        if !self.state().ready {
-            return;
-        }
-        if super::reject_duplicate(&self.state(), &id, &record).is_err() {
+        let duplicate = {
+            let state = self.state();
+            super::reject_duplicate(&state, &id, &record).is_err()
+                || state.reserved.iter().any(|(kept, kept_id)| {
+                    kept_id == &id || kept.identity_digest == admission.identity_digest
+                })
+        };
+        if duplicate {
             tracing::error!(record = %name, "repaired task record duplicates a served task or key; it stays sealed");
             return;
         }
@@ -282,7 +295,17 @@ impl Shared {
                 (event, None, ErrorAuthor::Gateway),
                 Utc::now(),
             ),
-            None => super::disk::sync_record(&self.dir, name).map(|()| self.publish(task, record)),
+            // Written again through the commit every write takes (temp file,
+            // sync, rename, directory sync), so it is durable before it is
+            // served on every platform.
+            None => super::serialize(&record)
+                .and_then(|bytes| {
+                    if bytes.len() > self.limits.record_bytes {
+                        return Err(StoreError::Capacity);
+                    }
+                    self.commit(name, &bytes)
+                })
+                .map(|()| self.publish(task, record)),
         };
         let Ok(committed) = published else {
             tracing::error!(record = %name, "repaired task record could not be made durable; it stays sealed");

@@ -493,14 +493,6 @@ pub(super) fn reread_record(
     Reread::Repaired(admission, task_id, row)
 }
 
-/// Make a repaired row's current bytes durable before it is served
-/// (MIK-8121): the file and its directory entry are synced, never rewritten.
-pub(super) fn sync_record(dir: &Path, name: &str) -> Result<(), StoreError> {
-    let file = open_record(&dir.join(name))?;
-    sync_file(&file).map_err(|_| StoreError::Storage)?;
-    sync_dir(dir).map_err(|_| StoreError::Storage)
-}
-
 /// The record and its task, when both read and the version is one this build
 /// loads. Why one does not is logged here, the file named, never its content.
 fn restore(bytes: &[u8], shown_path: &std::path::Display<'_>) -> Option<(Record, Task)> {
