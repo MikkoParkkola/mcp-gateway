@@ -244,13 +244,15 @@ async fn egress_warn_redacts_an_answer_and_refuses_a_question() {
                 seen.body
             ));
         }
+        // An identified caller: the gateway seals a question only for a caller
+        // it can bind the continuation to, so only then does it reach delivery.
         let part = Part::InterimQuestion;
-        let seen = cell(Setup::Warn, route, "tools/call", part, leak.clone()).await;
-        if seen.body.contains(&leak) || rewritten(&seen.body) || !refused(&seen.body) {
-            failures.push(format!(
-                "{route:?} question not refused whole: {}",
-                seen.body
-            ));
+        let backend = Arc::new(Planted::new("tools/call", part));
+        let fx = fixture_firewalled_on(backend, Some(FirewallAction::Warn)).await;
+        let (uri, sent, params) = request(route, "tools/call", part);
+        let body = post_as(&fx, (uri, sent), &params, Some("alice")).await;
+        if body.contains(&leak) || rewritten(&body) || !refused(&body) {
+            failures.push(format!("{route:?} question not refused whole: {body}"));
         }
     }
     report(&failures);
