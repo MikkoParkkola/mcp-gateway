@@ -335,6 +335,26 @@ impl EventsHub {
         }
         #[cfg(test)]
         self.before_send.pause().await;
+        // MIK-7907 WINDOW.1: admitted under the live config's gate, with no
+        // await inside, so a reload that has returned is always seen. A
+        // backend name no source offers any more is not admitted, as in
+        // `source_verdict`. Not admitted: unsent and held, keeping the send
+        // allowance; the next attempt reads a fresh verdict.
+        let admitted = services
+            .live
+            .admit(|| match self.source_offering(&record.name) {
+                Some(source) => source.admits_now(&record.name),
+                None => !record.name.starts_with(super::backend_source::NAME_PREFIX),
+            });
+        if !admitted {
+            services.audit_outcome(&ended(HELD)).await;
+            let held = Settle::Unsent {
+                next: Utc::now() + REFUSAL_RETRY,
+                status: HELD,
+            };
+            self.settle(services, record, held).await;
+            return;
+        }
         // Charged once the attempt is on record, so a retry after an audit
         // outage is not charged for an attempt that never left. A type its
         // source exempts (a budget event) is never charged.
