@@ -663,13 +663,13 @@ fn receipt_with(
     (server, tool): (&str, &str),
     value: &Value,
 ) -> Option<Receipt> {
-    let staged = RELAY_STAGED.try_with(Cell::get).ok()?;
+    RELAY_STAGED.try_with(|_| ()).ok()?;
     // MIK-7994: without this call's gateway members; plan receipts are never rebuilt.
     let mut value = value.clone();
     super::gateway_writes::strip(&mut value, super::gateway_writes::Layer::Value);
     let in_plan = PLAN_STEP.try_with(|()| ()).is_ok();
-    let digest = fw.receipt_digest(server, tool, &value, in_plan.then_some(staged))?;
-    RELAY_STAGED.with(|s| s.set(staged + digest.staged_len()));
+    let digest =
+        RELAY_STAGED.with(|s| fw.receipt_digest(server, tool, &value, in_plan.then_some(s)))?;
     Some(Receipt {
         key: who.key.to_owned(),
         keyed: who.keyed,

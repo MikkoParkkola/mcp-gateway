@@ -132,3 +132,38 @@ async fn a_removed_backend_owes_no_tools_notice() {
         "a removed backend still owed a tools refill"
     );
 }
+
+/// MIK-8043.ORDER.5: while a finished refill's change waits to be announced,
+/// the next due refill is not taken, so the cache the hub announces is not
+/// emptied first; it is taken once the change is announced.
+#[tokio::test]
+async fn a_due_refill_waits_for_the_last_change_to_be_announced() {
+    let dir = tempfile::tempdir().expect("dir");
+    let reload = Reload::new(dir.path());
+    reload.to(true).await;
+    let backend = reload.registry.get("b").expect("b registered");
+    let shared = shared();
+    let mut state = State::new(&shared, Era::Modern);
+    backend.fill_tools_for_test().await;
+    *shared.tools.lock() = ToolsDebt {
+        due: Some(Instant::now()),
+        retrying: false,
+        unannounced: true,
+    };
+    state.tools_pending = true;
+    assert!(
+        start_due_refill(&mut state, &backend).is_none(),
+        "a refill started before the last change was announced"
+    );
+    assert!(
+        backend.has_cached_tools(),
+        "the announced cache was emptied"
+    );
+    assert!(
+        shared.tools.lock().due.is_some(),
+        "the notice is still owed"
+    );
+    state.tools_pending = false;
+    assert!(start_due_refill(&mut state, &backend).is_some(), "then due");
+    assert!(!backend.has_cached_tools(), "the notice's refill drops it");
+}

@@ -407,7 +407,9 @@ pub(super) async fn health_handler(
     // startup scan (MIK-7268) count here. None configured is healthy (`all` of nothing).
     let capability_status = state.meta_mcp.get_capabilities().map(|c| c.status());
     let capability_healthy = capability_status.iter().all(|s| s.healthy && s.loaded);
-    let healthy = backends_overall_healthy(&statuses) && capability_healthy;
+    // MIK-8052: a sealed task row degrades health; probes read `/livez`.
+    let sealed_rows = state.tasks.skipped_records().sealed;
+    let healthy = backends_overall_healthy(&statuses) && capability_healthy && sealed_rows == 0;
 
     // Admin is a grant, not a name. Comparing against "public"/"anonymous"
     // gave full backend detail to every authenticated non-admin key the moment
@@ -430,16 +432,14 @@ pub(super) async fn health_handler(
             "capability_backend": capability_status
                 .as_ref()
                 .map(|s| serde_json::to_value(s).unwrap_or(json!({}))),
+            "task_store": state.tasks.health_view(),
         })
     } else {
         json!({ "status": status, "version": env!("CARGO_PKG_VERSION") })
     };
 
-    if healthy {
-        (StatusCode::OK, Json(response))
-    } else {
-        (StatusCode::SERVICE_UNAVAILABLE, Json(response))
-    }
+    let code = [StatusCode::SERVICE_UNAVAILABLE, StatusCode::OK][usize::from(healthy)];
+    (code, Json(response))
 }
 
 /// Meta-MCP handler (POST /mcp).
