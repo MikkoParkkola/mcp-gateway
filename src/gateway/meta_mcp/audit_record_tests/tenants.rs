@@ -470,3 +470,179 @@ async fn a_replayed_refused_receipt_is_recorded_as_a_cached_delivery() {
     assert_eq!(hit["tenants"], sorted(&["cust-1"]), "{hit}");
     assert!(hit.get("data_classes").is_none(), "{hit}");
 }
+
+/// MIK-7991 r4 (cleanup row): over HTTP and stdio the sync admission answers
+/// every keyed re-issue before this invoke-path guard (`idempotency/admission.rs`
+/// pins that its entry outlives this one), so only an in-process caller of
+/// `invoke_tool` reaches the guard's replay arm. This pins what that arm does
+/// today, so a production caller that starts reaching it shows up here: the
+/// stored answer is served again without the backend running twice.
+#[tokio::test]
+async fn an_in_process_keyed_repeat_is_replayed_by_the_invoke_path_guard() {
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "alpha",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    backend.set_transport_for_test(Arc::new(CountedReply(
+        Arc::clone(&calls),
+        reply_naming("cust-9", ""),
+    )));
+    let _ = registry.register(Arc::clone(&backend));
+    let meta = idempotent(MetaMcp::new(registry));
+    let who = api_key_caller();
+    let retry = keyed("in-process-replay");
+    let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        retry: &retry,
+        ..context(&AllowAll, &who)
+    };
+    let mut answers = Vec::new();
+    for _ in 0..2 {
+        answers.push(
+            meta.invoke_tool(&args_for(Some("cust-1")), None, &ctx)
+                .await
+                .expect("answered"),
+        );
+    }
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the guard's replay reached the backend"
+    );
+    assert!(
+        answers[1].to_string().contains("cust-9"),
+        "the replay serves the stored answer: {}",
+        answers[1]
+    );
+}
+
+/// A backend whose every `tools/call` round is lost after the send, counting
+/// the calls that reach it.
+struct CountedLost(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for CountedLost {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/call" {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        super::Scripted(Err("stream lost".into()))
+            .request(method, params)
+            .await
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// MIK-7991 (F1): a keyed call whose round is lost settles its key with the
+/// gateway's uncertainty notice. The sync admission's clock is whole wall
+/// seconds, so truncation or a forward step can expire its entry before this
+/// guard's, and the re-issue
+/// then reaches this guard, which replays the notice. That is the gateway's own
+/// text, so the replay stages no receipt and another caller may send it.
+#[tokio::test]
+async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
+    use crate::security::firewall::{CollusionAction, CollusionConfig, RelayCaller};
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "alpha",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    backend.set_transport_for_test(Arc::new(CountedLost(Arc::clone(&calls))));
+    let _ = registry.register(Arc::clone(&backend));
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+            collusion: CollusionConfig {
+                action: CollusionAction::Block,
+                sources: vec!["alpha:*".to_string()],
+                ..CollusionConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let mut meta = MetaMcp::new(registry);
+    meta.set_firewall(Some(Arc::clone(&firewall)));
+    let meta = idempotent(meta);
+    let who = api_key_caller();
+    let retry = keyed("lost-round-notice");
+    // Keyed for relay detection, which refuses an unkeyed caller under `block`.
+    let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        retry: &retry,
+        caller_key: Some("lost-round-caller"),
+        ..context(&AllowAll, &who)
+    };
+    let mut answers = Vec::new();
+    for _ in 0..2 {
+        let (answer, staged) = meta
+            .collecting_staged(meta.invoke_tool(&args_for(None), None, &ctx))
+            .await;
+        staged.commit(true);
+        answers.push(answer.expect("answered"));
+    }
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the backend ran other than once (0: first round never sent; 2: the replay re-ran it)"
+    );
+    let notice = answers[1]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        notice.contains("may have reached the backend"),
+        "base: the replay serves the notice: {}",
+        answers[1]
+    );
+    let params = json!({"name": "read", "arguments": {"text": notice}});
+    let verdict = firewall.check_relay(
+        RelayCaller::Keyed("other-caller"),
+        "alpha",
+        "read",
+        &params,
+        ("s", "other"),
+    );
+    assert!(
+        verdict.allowed,
+        "the replayed notice is in a receipt: {}",
+        answers[1]
+    );
+    // Control: receipted, the same notice is refused to the other caller, so
+    // the allowed verdict above is not relay detection being idle.
+    firewall.record_delivery(
+        RelayCaller::Keyed("lost-round-caller"),
+        "alpha",
+        "read",
+        &answers[1],
+    );
+    let verdict = firewall.check_relay(
+        RelayCaller::Keyed("other-caller"),
+        "alpha",
+        "read",
+        &params,
+        ("s", "other"),
+    );
+    assert!(
+        !verdict.allowed,
+        "a receipted notice was allowed: {}",
+        answers[1]
+    );
+}

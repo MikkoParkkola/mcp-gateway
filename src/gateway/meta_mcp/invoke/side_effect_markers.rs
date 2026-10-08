@@ -59,6 +59,13 @@ pub(super) fn uncertain_side_effect() -> Value {
     })
 }
 
+/// Whether a stored result is one of the notices above: the gateway's own
+/// text, which a replay serving it receipts as no read (MIK-7991). A backend
+/// answer equal to one carries nothing a relay could leak.
+pub(super) fn is_gateway_notice(value: &Value) -> bool {
+    *value == withheld_side_effect() || *value == uncertain_side_effect()
+}
+
 /// How a route stores a lost round under its key.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum LostRoundRoute {
