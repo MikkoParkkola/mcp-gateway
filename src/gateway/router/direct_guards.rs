@@ -132,14 +132,18 @@ impl DirectRouteGuards {
             {
                 Ok(minted) => *sealed = minted,
                 // The meta route's serializer: a capability refusal keeps the
-                // `data` that names what to declare (MIK-8089).
+                // `data` that names what to declare (MIK-8089). The upstream id
+                // is replaced by the caller's own on delivery, so an id-less
+                // backend answer still gets the data-keeping serializer.
                 Err(e) => {
-                    return Ok(match response.id.clone() {
-                        Some(id) => {
-                            crate::gateway::meta_mcp::error_response_preserving_status(id, &e)
-                        }
-                        None => refusal(None, &e),
-                    });
+                    let id = response.id.clone();
+                    let placeholder = crate::protocol::RequestId::Number(0);
+                    let mut refused = crate::gateway::meta_mcp::error_response_preserving_status(
+                        id.clone().unwrap_or(placeholder),
+                        &e,
+                    );
+                    refused.id = id;
+                    return Ok(refused);
                 }
             }
         }
