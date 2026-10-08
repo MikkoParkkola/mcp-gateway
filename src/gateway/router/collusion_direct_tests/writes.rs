@@ -244,7 +244,6 @@ fn warn_credential_key(meta: MetaMcp) -> MetaMcp {
     use crate::cost_accounting::config::CostGovernanceConfig;
     use crate::cost_accounting::enforcer::BudgetEnforcer;
     use crate::cost_accounting::registry::CostRegistry;
-    use crate::gateway::router::direct_guards_fixture::CREDENTIAL_KEY;
     let mut cfg = CostGovernanceConfig {
         enabled: true,
         ..Default::default()
@@ -258,33 +257,27 @@ fn warn_credential_key(meta: MetaMcp) -> MetaMcp {
     meta.with_cost_governance(enforcer, registry)
 }
 
-/// MIK-8011 (design RED.3): the response scan redacts the warning in place;
-/// the note binds the text the caller got, so the redacted warning is still
-/// left out of the receipt and the backend's text stays in.
+/// MIK-8011 (design RED.3): the response scan redacts the warning naming the
+/// credential-like key in place; the note binds the text the caller got, so
+/// the redacted warning is still left out of the receipt and the backend's
+/// text stays in.
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_redacted_direct_cost_warning_stays_out_of_the_receipt() {
-    use crate::gateway::router::direct_guards_fixture::{
-        Answer, CREDENTIAL_KEY, fixture_relayed_built, post_direct,
-    };
-    let fx = fixture_relayed_built(Answer::Text(PROSE), warn_credential_key).await;
-    let (_, first) = post_direct(&fx, "alpha", CREDENTIAL_KEY, "read", json!({}), None, None).await;
-    let warnings = &first["result"]["_cost_warnings"];
+    let fx = fixture(Setup {
+        arm: warn_credential_key,
+        ..Setup::default()
+    })
+    .await;
+    let body = fx.read(Some("c")).await;
+    let warnings = &envelope(&body)["result"]["_cost_warnings"];
     let delivered = warnings.to_string();
     assert!(
         delivered.contains("[REDACTED:credential]") && !delivered.contains(CREDENTIAL_KEY),
-        "base: the scan redacted the warning: {first}"
+        "base: the scan redacted the warning: {body}"
     );
-    let text = leaf_run(warnings);
-    let args = json!({ "cmd": text });
-    let (_, sent) = post_direct(&fx, "alpha", "k-std", "read", args, None, None).await;
-    assert!(
-        sent.get("error").is_none(),
-        "the warning was receipted: {sent}"
-    );
-    let args = json!({ "cmd": PROSE });
-    let (_, relay) = post_direct(&fx, "alpha", "k-std", "read", args, None, None).await;
-    assert_eq!(relay["error"]["code"], -32002, "{relay}");
+    assert_sent(&fx, &fx.send(Some("b"), &leaf_run(warnings)).await, 1);
+    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 1);
 }
 
 /// Every eligible answer carries the gateway's signature-chain link.
