@@ -290,6 +290,16 @@ pub(crate) async fn fixture_firewalled_with(
     fx
 }
 
+/// [`fixture_firewalled`] with `transport` answering for both backends in
+/// place of the scripted one (the egress matrix's planted backend).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_on(transport: Arc<dyn Transport>) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    let fx = fixture_inner(Answer::Ok, true, |meta| meta).await;
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 
 /// The fixture under `security.posture: hardened` (personal keys) with message
@@ -368,6 +378,9 @@ pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
 thread_local! {
     static HARDENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// A transport that replaces the scripted backend (the egress matrix).
+    static TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(feature = "firewall")]
@@ -441,11 +454,11 @@ async fn fixture_inner(
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         ));
-        let transport = CountingBackend {
+        let counting: Arc<dyn Transport> = Arc::new(CountingBackend {
             calls: Arc::clone(&calls),
             answer,
-        };
-        backend.set_transport_for_test(Arc::new(transport));
+        });
+        backend.set_transport_for_test(TRANSPORT.with(|t| t.borrow().clone()).unwrap_or(counting));
         assert!(state_mut.backends.register(backend), "fixture registration");
     }
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
