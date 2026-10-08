@@ -11,12 +11,14 @@
 use std::path::Path;
 use std::process::ExitCode;
 
+use super::config_write::CommentLoss;
+
 use mcp_gateway::{
     config::TransportConfig,
     config_persistence::load_existing_or_default,
     gateway::ui::backend_ops::{
         self, BackendUpdate, add_backend, get_backend, list_backends, parse_env_vars,
-        remove_backend, resolve_backend, update_backend, write_config,
+        remove_backend, resolve_backend, update_backend,
     },
     gateway::ui::backends::RegistryEntryJson,
     registry::server_registry,
@@ -41,6 +43,7 @@ pub async fn run_add_command(
     desc: Option<&str>,
     env_vars: &[String],
     config: &Path,
+    mode: CommentLoss,
 ) -> ExitCode {
     // ── Build env map ──────────────────────────────────────────────────────
     let env = match parse_env_vars(env_vars) {
@@ -89,8 +92,8 @@ pub async fn run_add_command(
     };
 
     // ── Write config ───────────────────────────────────────────────────────
-    if let Err(e) = write_config(config, &gateway_config) {
-        eprintln!("Error: Failed to write {}: {e}", config.display());
+    if let Err(e) = super::config_write::write(config, &gateway_config, mode) {
+        eprintln!("Error: {e}");
         return ExitCode::FAILURE;
     }
 
@@ -124,7 +127,7 @@ pub async fn run_add_command(
 // ── remove ────────────────────────────────────────────────────────────────────
 
 /// Run `mcp-gateway remove`.
-pub fn run_remove_command(name: &str, config: &Path) -> ExitCode {
+pub fn run_remove_command(name: &str, config: &Path, mode: CommentLoss) -> ExitCode {
     let mut gateway_config = backend_ops::load_config_or_default(config);
 
     if let Err(msg) = remove_backend(&mut gateway_config, name) {
@@ -132,8 +135,8 @@ pub fn run_remove_command(name: &str, config: &Path) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    if let Err(e) = write_config(config, &gateway_config) {
-        eprintln!("Error: Failed to write {}: {e}", config.display());
+    if let Err(e) = super::config_write::write(config, &gateway_config, mode) {
+        eprintln!("Error: {e}");
         return ExitCode::FAILURE;
     }
 
@@ -281,7 +284,8 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
 pub fn run_update_backend(name: &str, update: BackendUpdate, config: &Path) -> Result<(), String> {
     let mut gateway_config = backend_ops::load_config_or_default(config);
     update_backend(&mut gateway_config, name, update)?;
-    write_config(config, &gateway_config)
+    // No `--force` reaches here: an edit that would drop comments is refused.
+    super::config_write::write(config, &gateway_config, CommentLoss::Refuse)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -306,7 +310,8 @@ mod tests {
         let (_dir, path) = temp_config();
 
         // WHEN: adding a backend by registry name
-        let code = run_add_command("tavily", None, None, None, &[], &path).await;
+        let code =
+            run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
         assert_eq!(code, ExitCode::SUCCESS, "add should succeed");
 
         // THEN: it appears in the config
@@ -317,7 +322,7 @@ mod tests {
         );
 
         // WHEN: removing it
-        let code = run_remove_command("tavily", &path);
+        let code = run_remove_command("tavily", &path, CommentLoss::Refuse);
         assert_eq!(code, ExitCode::SUCCESS, "remove should succeed");
 
         // THEN: it is gone
@@ -341,6 +346,7 @@ mod tests {
             Some("My custom server"),
             &["API_KEY=secret123".to_string()],
             &path,
+            CommentLoss::Refuse,
         )
         .await;
         assert_eq!(code, ExitCode::SUCCESS);
@@ -359,10 +365,11 @@ mod tests {
     async fn add_duplicate_returns_failure() {
         // GIVEN: a config that already has "tavily"
         let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path).await;
+        run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
 
         // WHEN: adding again
-        let code = run_add_command("tavily", None, None, None, &[], &path).await;
+        let code =
+            run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
 
         // THEN: failure
         assert_eq!(code, ExitCode::FAILURE);
@@ -371,7 +378,7 @@ mod tests {
     #[test]
     fn remove_nonexistent_backend_returns_failure() {
         let (_dir, path) = temp_config();
-        let code = run_remove_command("does-not-exist", &path);
+        let code = run_remove_command("does-not-exist", &path, CommentLoss::Refuse);
         assert_eq!(code, ExitCode::FAILURE);
     }
 
@@ -388,6 +395,7 @@ mod tests {
             None,
             &[],
             &path,
+            CommentLoss::Refuse,
         )
         .await;
         assert_eq!(code, ExitCode::SUCCESS);
@@ -408,7 +416,7 @@ mod tests {
     #[tokio::test]
     async fn get_existing_backend_returns_success() {
         let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path).await;
+        run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
         let code = run_get_command("tavily", &path);
         assert_eq!(code, ExitCode::SUCCESS);
     }
@@ -432,7 +440,7 @@ mod tests {
     #[tokio::test]
     async fn list_json_returns_success_with_backends() {
         let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path).await;
+        run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
         let code = run_list_command(true, &path);
         assert_eq!(code, ExitCode::SUCCESS);
     }
@@ -442,7 +450,7 @@ mod tests {
     #[tokio::test]
     async fn update_existing_backend_succeeds() {
         let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path).await;
+        run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
 
         let result = run_update_backend(
             "tavily",
@@ -456,6 +464,22 @@ mod tests {
 
         let config = Config::load(Some(&path)).unwrap();
         assert_eq!(config.backends["tavily"].description, "updated desc");
+    }
+
+    /// `MIK-CLI-COMMENTS.SILENT.1`: an update that cannot keep the comments
+    /// is refused and leaves the file as it was.
+    #[test]
+    fn update_that_would_drop_comments_is_refused() {
+        let (_dir, path) = temp_config();
+        let flow = "# keep\nbackends: {a: {command: x}}\n";
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, flow).unwrap();
+        let update = BackendUpdate {
+            description: Some("new".into()),
+            ..BackendUpdate::default()
+        };
+        let error = run_update_backend("a", update, &path).unwrap_err();
+        assert!(error.contains("line 1"), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), flow);
     }
 
     #[test]
@@ -483,7 +507,10 @@ mod tests {
             (metadata.dev(), metadata.ino())
         };
 
-        assert_eq!(run_remove_command("original", &path), ExitCode::FAILURE);
+        assert_eq!(
+            run_remove_command("original", &path, CommentLoss::Refuse),
+            ExitCode::FAILURE
+        );
         assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
         // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
         #[cfg(unix)]

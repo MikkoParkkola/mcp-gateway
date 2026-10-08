@@ -422,11 +422,11 @@ fn apply_delta(raw: &mut Mapping, old: &Mapping, new: &Mapping) {
     }
 }
 
-/// The one backend that differs between `before` and `config`: added,
-/// removed, or edited in place.
-pub(super) fn changed_backend(before: &Config, config: &Config) -> Option<String> {
+/// Every backend that differs between `before` and `config` (added, removed,
+/// or edited in place), sorted so a multi-backend splice is deterministic.
+pub(super) fn changed_backends(before: &Config, config: &Config) -> Vec<String> {
     let value = |b: &crate::config::BackendConfig| serde_json::to_value(b).ok();
-    let mut changed = before
+    let changed = before
         .backends
         .iter()
         .filter(|(name, b)| {
@@ -442,8 +442,49 @@ pub(super) fn changed_backend(before: &Config, config: &Config) -> Option<String
                 .keys()
                 .filter(|name| !before.backends.contains_key(*name)),
         );
-    let name = changed.next()?.clone();
-    changed.next().is_none().then_some(name)
+    let mut names: Vec<String> = changed.cloned().collect();
+    names.sort();
+    names
+}
+
+/// `text` with every backend that differs between `before` and `config`
+/// spliced in one at a time, each step through [`with_backend_edited`] and
+/// its proof. `None` when a step cannot be spliced, when several backends
+/// differ and `scope` is `Splice::One` or one of them is a removal, or
+/// when `config` differs from `before` outside `backends`.
+pub(super) fn with_backends_edited(
+    text: &str,
+    before: &Config,
+    config: &Config,
+    scope: super::Splice,
+) -> Option<String> {
+    let names = changed_backends(before, config);
+    // Several changes are spliced only under `Splice::NoRemoval` and only when
+    // none is a removal (setup and discovery add backends, and discovery
+    // replaces a same-named one). A removal among several is what a stale
+    // `config` looks like after another writer added a backend, and under
+    // `Splice::One` an extra addition is what it looks like after another
+    // writer removed one. Either takes the ordinary path:
+    // refused when comments would be lost, otherwise the full rewrite, last
+    // writer wins (MIK-8042 tracks a base-revision check).
+    if names.len() > 1
+        && (scope == super::Splice::One || names.iter().any(|n| !config.backends.contains_key(n)))
+    {
+        return None;
+    }
+    let mut text = text.to_owned();
+    let mut done = before.clone();
+    for name in names {
+        let mut next = done.clone();
+        match config.backends.get(&name) {
+            Some(backend) => next.backends.insert(name.clone(), backend.clone()),
+            None => next.backends.remove(&name),
+        };
+        text = with_backend_edited(&text, &done, &next, &name)?;
+        done = next;
+    }
+    let value = |c: &Config| serde_json::to_value(c).ok();
+    matches!((value(&done), value(config)), (Some(a), Some(b)) if a == b).then_some(text)
 }
 
 /// The refusal for a write that would drop the comments in `text`. Any `#`
@@ -467,7 +508,8 @@ pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
     format!(
         "Not saved: this edit cannot be written into {} as a text change (flow style, or a \
          comment inside the changed value), and a full rewrite would drop its comments: {}{more}. \
-         Edit the file by hand, or use `mcp-gateway add` / `remove`.",
+         Edit the file by hand, or use the CLI with `--force` to rewrite the file \
+         without its comments.",
         path.display(),
         comments[..comments.len().min(SHOWN)].join("; ")
     )
@@ -685,6 +727,60 @@ mod tests {
         assert_eq!(
             edited(original, "timeout: 5s\n", "timeout:\n  secs: 9\n"),
             Some("backends:\n  svc:\n    timeout:  # slow host\n      secs: 9\n".to_owned())
+        );
+    }
+
+    /// The web UI loaded `a` and `b`, another writer then removed `b`, and the
+    /// UI now adds `c`. Two differences on a commented file are refused: a
+    /// splice of both would put `b` back.
+    #[test]
+    fn a_web_ui_write_after_a_concurrent_removal_is_refused() {
+        use crate::config::Config;
+        use crate::config_persistence::{CommentLoss, Unwritten, write_config_with};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        let current = "backends:\n  a:  # kept by hand\n    command: a\n";
+        crate::gateway::test_helpers::write_owner_only(&path, current).expect("write");
+        let stale: Config = serde_yaml::from_str(
+            "backends:\n  a: {command: a}\n  b: {command: b}\n  c: {command: c}\n",
+        )
+        .expect("config");
+        let result = write_config_with(&path, &stale, CommentLoss::Refuse);
+        assert!(
+            matches!(result, Err(Unwritten::CommentLoss(_))),
+            "{result:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), current);
+    }
+
+    /// The one public writer: `Ok` when it keeps the comments, otherwise the
+    /// refusal as `Err`, naming the lines and leaving the file untouched.
+    #[test]
+    fn the_preserving_writer_reports_each_outcome() {
+        use crate::config::Config;
+        use crate::config_persistence::write_config_preserving;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        // Owner-only, as the loader requires (CONFIG.2): a file it refuses to
+        // load would be refused for that reason, not the one under test.
+        let write = crate::gateway::test_helpers::write_owner_only;
+        let flow = "backends: {a: {command: a}}  # kept by hand\n";
+        write(&path, flow).expect("write");
+        let two: Config = serde_yaml::from_str("backends:\n  a: {command: a}\n  b: {command: b}\n")
+            .expect("config");
+        let refusal = write_config_preserving(&path, &two).expect_err("refused");
+        assert!(
+            refusal.starts_with("Not saved:") && refusal.contains("line 1"),
+            "{refusal}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), flow);
+        let block = "backends:\n  a:  # kept by hand\n    command: a\n";
+        write(&path, block).expect("write");
+        assert_eq!(write_config_preserving(&path, &two), Ok(()));
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("read")
+                .contains("# kept by hand")
         );
     }
 }

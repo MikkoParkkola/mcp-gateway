@@ -402,6 +402,10 @@ impl TaskExecutor {
                 Ok(ProvideOutcome::Resumed { task, round, slot }) => {
                     let revision = task.revision;
                     executor.published(&task, &id);
+                    // The row now reads `working` and this task keeps the
+                    // handoff for the resume: a losing update parked on it
+                    // re-reads the row now, not at its deadline.
+                    handoff.row_moved();
                     let _ = tx.send(InputOutcome::Accepted);
                     resume(
                         Resume {

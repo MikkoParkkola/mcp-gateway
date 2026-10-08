@@ -581,6 +581,8 @@ impl super::MetaMcp {
         shape: super::ResultShape,
         confirmed_in_band: bool,
     ) -> JsonRpcResponse {
+        // MIK-7996: held to this dispatch's last write, on every exit path.
+        let _session = self.hold_session(target.session_id);
         let (logger, id) = (self.transparency_logger.as_ref(), target.id.clone());
         let answer: Pin<Box<dyn Future<Output = JsonRpcResponse> + Send + '_>> =
             Box::pin(self.dispatch_below_gate_shaped_in_slot(target, shape, confirmed_in_band));

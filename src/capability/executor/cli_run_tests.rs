@@ -580,8 +580,8 @@ fn a_digit_credential_with_leading_zeros_is_redacted_as_a_number() {
     assert_eq!(value["b"], "[redacted]", "{value}");
     assert_eq!(value["z"], "[redacted]", "{value}");
 
-    // The floor applies to the needle as given; once its zeros go, a short
-    // value matches only a number equal to it, never one that contains it.
+    // Once its zeros go, a short value matches only a number equal to it,
+    // never one that contains it.
     let mut value = json!({"n": 7, "m": 1_771, "z": 0});
     super::super::cli::redact_value(&mut value, &["0007".to_owned(), "0000".to_owned()]);
     assert_eq!(value["n"], "[redacted]", "{value}");
@@ -596,10 +596,12 @@ fn a_digit_credential_with_leading_zeros_is_redacted_as_a_number() {
     assert_eq!(value["e"], "[redacted]", "{value}");
     assert_eq!(value["near"], 12_346, "{value}");
 
-    // Below the floor, numbers are left alone even on an exact value.
+    // Any length: a short credential is matched by value too (MIK-8065 ruling:
+    // a leak is worse than blanking an equal number; the floor was meant for
+    // caller values, which never reach this function).
     let mut value = json!({"n": 7});
     super::super::cli::redact_value(&mut value, &["007".to_owned()]);
-    assert_eq!(value["n"], 7, "{value}");
+    assert_eq!(value["n"], "[redacted]", "{value}");
 }
 
 /// A credential injected in number form other than plain digits, such as a
@@ -650,9 +652,9 @@ fn a_large_integer_credential_redacts_only_its_own_value() {
     );
 }
 
-/// "+1e5" is 4 characters as injected, so unlike "1e5" it is looked for.
+/// A signed exponent form ("+1e5") is looked for by value, as "1e5" is.
 #[test]
-fn a_four_character_number_form_credential_is_redacted() {
+fn a_signed_number_form_credential_is_redacted() {
     let mut value: Value = serde_json::from_str(r#"{"n": 1e5}"#).unwrap();
     super::super::cli::redact_value(&mut value, &["+1e5".to_owned()]);
     assert_eq!(value["n"], "[redacted]", "{value}");
@@ -728,10 +730,10 @@ fn every_covered_number_form_redacts_only_its_own_value() {
     );
 }
 
-/// Below the 4-character floor a needle is matched by exact JSON equality
-/// only: "1e5" redacts the float 1e5 (MIK-7954), never 100000 or 1e50.
+/// A short number-form needle matches its own value only: "1e5" redacts the
+/// float 1e5 (MIK-7954), never 1e50.
 #[test]
-fn a_number_form_credential_below_the_floor_matches_its_exact_value() {
+fn a_short_number_form_credential_matches_only_its_value() {
     let mut value: Value = serde_json::from_str(r#"{"n": 1e5, "m": 1e50}"#).unwrap();
     super::super::cli::redact_value(&mut value, &["1e5".to_owned()]);
     assert_eq!(value["n"], "[redacted]", "{value}");
