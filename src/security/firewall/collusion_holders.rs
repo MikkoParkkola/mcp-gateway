@@ -52,8 +52,10 @@ pub(super) enum Added {
 
 impl Tracked {
     /// Pool records this fingerprint holds.
+    /// Charged by allocated capacity, not length, so storage a removal
+    /// left behind still counts until it is freed.
     pub(super) fn pool_records(&self) -> usize {
-        self.records.len().saturating_sub(INLINE_RECORDS)
+        self.records.capacity().saturating_sub(INLINE_RECORDS)
     }
 
     /// Distinct callers seen inside the window.
@@ -65,6 +67,10 @@ impl Tracked {
     pub(super) fn expire(&mut self, now: Instant, window: Duration) {
         let live = |at: Instant| now.saturating_duration_since(at) <= window;
         self.records.retain(|r| live(r.copies.latest()));
+        if self.records.capacity() > INLINE_RECORDS {
+            self.records
+                .shrink_to(self.records.len().max(INLINE_RECORDS));
+        }
         self.callers.retain(|(_, at)| live(*at));
         self.overflow.retain(|(_, copies)| live(copies.latest()));
     }
@@ -100,7 +106,15 @@ impl Tracked {
             .count();
         let fits = mine < MAX_RECORDS_PER_CALLER && self.records.len() < INLINE_RECORDS + room;
         if fits {
+            // Past the inline records, grow by one: the pool is charged by
+            // capacity, so doubling would spend slots no record uses.
+            if self.records.len() >= INLINE_RECORDS {
+                self.records.reserve_exact(1);
+            }
             self.records.push(new);
+            if self.pool_records() > room {
+                self.records.shrink_to_fit();
+            }
             return Added::Kept;
         }
         let Some(sensitive) = new.sensitive else {
@@ -108,7 +122,9 @@ impl Tracked {
         };
         // A plain record of the same caller gives way to a sensitive one.
         let plain = |r: &Holder| {
-            r.principal == new.principal && !r.sensitive.is_some_and(|c| c.held(now, window))
+            r.principal == new.principal
+                && r.sensitive
+                    .is_none_or(|c| now.saturating_duration_since(c.latest()) > window)
         };
         if let Some(i) = self.records.iter().position(plain) {
             self.records[i] = new;

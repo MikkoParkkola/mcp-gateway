@@ -231,3 +231,51 @@ fn the_pool_is_bounded_in_bytes() {
     assert!(record <= 160, "a holder record grew to {record} bytes");
     assert!(super::holders::EXTRA_RECORD_POOL * 160 <= 10 * 1024 * 1024);
 }
+
+/// `MIK-8123`: calls reach the lock out of time order, so a sensitive copy
+/// stamped after the delivery being added is not plain: it never gives way,
+/// and the record that does not fit becomes overflow, still evidence.
+#[test]
+fn a_later_stamped_sensitive_record_never_gives_way() {
+    let d = detector();
+    let now = Instant::now();
+    let text = passage();
+    d.record_delivery_flows_at(
+        RESTRICTED,
+        CAROL,
+        (true, 0),
+        &text,
+        now + Duration::from_secs(5),
+    );
+    for i in 0..64 {
+        d.record_delivery_flows_at(&source(i), CAROL, (true, 1), &text, now);
+    }
+    assert!(
+        d.check_egress_flows_at(BOB, (EGRESS, 1), &text, now)
+            .is_some(),
+        "a later-stamped restriction gave way"
+    );
+}
+
+/// `MIK-8123`: pool records are charged while held and released when the
+/// text turns `Common`, then reused by other text.
+#[test]
+fn the_pool_is_released_when_text_turns_common() {
+    let mut d = detector();
+    d.set_pool_capacity(4);
+    let now = Instant::now();
+    let text = passage();
+    for i in 0..12 {
+        d.record_delivery_at(&source(i), CAROL, true, &text, now);
+    }
+    assert_eq!(d.pool_in_use(), 4, "premise: the pool is full");
+    for i in 1..5 {
+        d.record_delivery_at(&source(i), &format!("caller-{i}"), false, &text, now);
+    }
+    assert_eq!(d.pool_in_use(), 0, "common text kept its pool records");
+    let other = text.replace('w', "v");
+    for i in 0..12 {
+        d.record_delivery_at(&source(i), DAVE, true, &other, now);
+    }
+    assert!(d.pool_in_use() > 0, "released records were not reused");
+}
