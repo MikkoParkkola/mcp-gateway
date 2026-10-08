@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-7772: a restart reconciles stored subscriptions with the catalogue
-//! the capability scan then builds, so a route removed while the gateway was
-//! down takes its subscriptions and pending retries with it.
+//! MIK-7772 under MIK-8057: a restart reconciles stored subscriptions with
+//! the catalogue the capability scan then builds. A webhook route removed
+//! while the gateway was down holds its subscriptions (nothing is sent, and
+//! nothing is deleted on a read); a removed backend takes its subscriptions.
 //!
 //! Linux-only for `SSL_CERT_FILE`.
 #![cfg(all(unix, not(target_vendor = "apple")))]
@@ -36,9 +37,6 @@ fn subs_on_disk(root: &Path) -> usize {
     })
 }
 
-/// Debug builds' override of the startup webhook withdraw's grace period.
-const GRACE_ENV: &str = "MCP_GATEWAY_TEST_EVENTS_WITHDRAW_GRACE_MS";
-
 /// A subscription with one retry pending, the gateway stopped, then started
 /// again with `change` applied to its directory and config.
 async fn restart_after(
@@ -52,8 +50,7 @@ async fn restart_after(
         &json!({"retry_base": "30s", "retry_max_attempts": 5, "retry_window": "15m"}),
     );
     let (k, v) = rx.trust_env();
-    // The startup webhook withdraw waits out no grace period (MIK-8027).
-    let env = [(k, v.as_str()), (GRACE_ENV, "0")];
+    let env = [(k, v.as_str())];
     let mut gw = Gateway::start_with_env(&root, cfg, &env).await;
     gw.event_names(Some(ALICE), Some(gateway::EVENT)).await;
     rx.event_default(EventReply::Status(503));
@@ -72,33 +69,25 @@ async fn restart_after(
     (dir, rx, gw, posts)
 }
 
-/// AC1, AC3: the route is gone when the gateway comes back. Once the scan
-/// has run, the subscription and its pending retry are gone and nothing more
-/// is posted.
+/// AC1, AC3 as amended by MIK-8057: the route is gone when the gateway
+/// comes back. The subscription is held, not deleted, and nothing more is
+/// posted for it.
 #[tokio::test]
-async fn a_route_removed_while_down_takes_its_subscription_and_retry() {
+async fn a_route_removed_while_down_holds_its_subscription() {
     let (_dir, rx, gw, posts) = restart_after(|gw| {
         std::fs::remove_file(gw.root().join("caps/github.yaml")).expect("remove the route");
     })
     .await;
     let root = gw.root().to_path_buf();
-    assert!(
-        wait_until(DEADLINE, || subs_on_disk(&root) == 0).await,
-        "the orphaned subscription is withdrawn after the scan; {}",
-        gw.stall_report()
-    );
-    assert!(
-        records(&root, "outbox").is_empty(),
-        "its pending retry is cancelled"
-    );
     tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(subs_on_disk(&root), 1, "held, not withdrawn");
     assert_eq!(rx.events().len(), posts, "nothing is sent for it");
 }
 
-/// AC1: events on with webhooks off offers no webhook event types, so the
-/// subscriptions to them are withdrawn too.
+/// AC1 as amended by MIK-8057: events on with webhooks off offers no webhook
+/// event types, so the subscriptions to them are held until they lapse.
 #[tokio::test]
-async fn webhooks_off_withdraws_webhook_subscriptions() {
+async fn webhooks_off_holds_webhook_subscriptions() {
     let (_dir, _rx, gw, _posts) = restart_after(|gw| {
         let mut cfg = gw.config().clone();
         cfg["webhooks"]["enabled"] = json!(false);
@@ -106,9 +95,11 @@ async fn webhooks_off_withdraws_webhook_subscriptions() {
     })
     .await;
     let root = gw.root().to_path_buf();
-    assert!(
-        wait_until(DEADLINE, || subs_on_disk(&root) == 0).await,
-        "the webhook subscription is withdrawn; {}",
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        subs_on_disk(&root),
+        1,
+        "held, not withdrawn; {}",
         gw.stall_report()
     );
 }

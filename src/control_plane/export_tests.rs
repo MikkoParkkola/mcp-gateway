@@ -641,3 +641,74 @@ fn export_rejects_open_record_whose_link_disagrees_after_expiry() {
         "{r:?}"
     );
 }
+
+fn tail_entry(c: u64) -> ExportEntry {
+    ExportEntry {
+        source: ExportSource::Governance,
+        counter: c,
+        entry_hash: format!("sha256:{c:064x}"),
+        prev_entry_hash: "sha256:prev".to_string(),
+        checkpoint: "genesis".to_string(),
+        raw: serde_json::json!({ "counter": c }),
+    }
+}
+
+/// `MIK-8130.TAIL.1`: a process that died inside a write left a partial last
+/// line. The next delivery drops that fragment instead of gluing its first
+/// record to it, so every line stays complete NDJSON.
+#[test]
+fn a_torn_last_line_is_dropped_before_the_next_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink_path = dir.path().join("siem.ndjson");
+    let whole = serde_json::to_string(&tail_entry(1)).unwrap();
+    std::fs::write(&sink_path, format!("{whole}\n{{\"source\":\"gov")).unwrap();
+    let sink = FileExportSink::open(sink_path.clone()).unwrap();
+
+    sink.deliver(&[tail_entry(2)]).unwrap();
+
+    let contents = std::fs::read_to_string(&sink_path).unwrap();
+    assert!(contents.ends_with('\n'));
+    let counters: Vec<u64> = contents
+        .lines()
+        .map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).expect("a complete JSON line");
+            v["counter"].as_u64().unwrap()
+        })
+        .collect();
+    assert_eq!(counters, vec![1, 2]);
+}
+
+/// A file that is nothing but a fragment loses the fragment, keeping the batch.
+#[test]
+fn a_file_holding_only_a_fragment_keeps_only_the_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink_path = dir.path().join("siem.ndjson");
+    std::fs::write(&sink_path, "{\"source\":").unwrap();
+    let sink = FileExportSink::open(sink_path.clone()).unwrap();
+
+    sink.deliver(&[tail_entry(7)]).unwrap();
+
+    let line = serde_json::to_string(&tail_entry(7)).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&sink_path).unwrap(),
+        format!("{line}\n")
+    );
+}
+
+/// `MIK-8130.TAIL.3`: a file that ends in a newline is appended to as it is.
+#[test]
+fn a_clean_file_is_appended_to_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink_path = dir.path().join("siem.ndjson");
+    let first = serde_json::to_string(&tail_entry(1)).unwrap();
+    std::fs::write(&sink_path, format!("{first}\n")).unwrap();
+    let sink = FileExportSink::open(sink_path.clone()).unwrap();
+
+    sink.deliver(&[tail_entry(2)]).unwrap();
+
+    let second = serde_json::to_string(&tail_entry(2)).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&sink_path).unwrap(),
+        format!("{first}\n{second}\n")
+    );
+}

@@ -24,20 +24,26 @@ use crate::{Error, Result};
 /// close the mint budget is to being spent.
 ///
 /// The exchange is opened on this replica before the envelope is sealed, so the
-/// handle that goes out names a slot this process is holding (MRTR.8).
+/// handle that goes out names a slot this process is holding (MRTR.8). A mint
+/// the keyring refuses gives that slot back at once: no envelope names it, so
+/// held until it expired it would only take capacity from other exchanges.
+///
+/// `Some((envelope, hold_key))`: the hold key lets a caller give the slot
+/// back ([`release_unless_carried`]) when a later step keeps the envelope from
+/// the client.
 pub(super) async fn mint_continuation(
     continuation: &crate::protocol::continuation::ContinuationState,
-    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    source: crate::protocol::mrtr::PrincipalSource<'_>,
     server: &str,
     tool: &str,
     arguments: &Value,
     backend_request_state: Option<String>,
-) -> Option<String> {
+) -> Option<(String, String)> {
     let Some(payload) = continuation
         .begin_exchange(
             server.to_string(),
             backend_request_state,
-            crate::protocol::mrtr::source_fingerprint(caller.principal_source())?,
+            crate::protocol::mrtr::source_fingerprint(source)?,
             crate::protocol::mrtr::original_request_digest(server, tool, arguments),
             crate::protocol::continuation::now_unix_secs(),
         )
@@ -50,13 +56,48 @@ pub(super) async fn mint_continuation(
     match continuation.keyring().mint(&payload) {
         Ok(envelope) => {
             record_continuation_mint("ok");
-            Some(envelope)
+            Some((envelope, payload.hold_key))
         }
         Err(error) => {
             warn!(server, tool, %error, "Continuation mint refused");
             record_continuation_mint(continuation_error_reason(&error));
+            release_unsent(continuation, Some(payload.hold_key.as_str())).await;
             None
         }
+    }
+}
+
+/// Give back the slot of a sealed question that will not reach its client
+/// (MIK-8078). Its envelope never leaves, so nothing can redeem the slot, and
+/// held until it expired it would only take capacity from other exchanges.
+async fn release_unsent(
+    continuation: &crate::protocol::continuation::ContinuationState,
+    hold_key: Option<&str>,
+) {
+    if let Some(hold_key) = hold_key {
+        let now = crate::protocol::continuation::now_unix_secs();
+        continuation.in_flight().complete(hold_key, now).await;
+    }
+}
+
+/// Keep a sealed question's slot only if `delivered`, the answer that leaves,
+/// still carries its envelope (MIK-8078). A step after the seal that refused
+/// the answer, or replaced it (a tool error in its place), took the question
+/// from the client, so its slot is given back.
+pub(crate) async fn release_unless_carried(
+    continuation: &crate::protocol::continuation::ContinuationState,
+    sealed: Option<(String, String)>,
+    delivered: Option<&Value>,
+) {
+    let Some((envelope, hold_key)) = sealed else {
+        return;
+    };
+    let carried = delivered
+        .and_then(|result| result.get("requestState"))
+        .and_then(Value::as_str)
+        == Some(envelope.as_str());
+    if !carried {
+        release_unsent(continuation, Some(hold_key.as_str())).await;
     }
 }
 
@@ -260,15 +301,18 @@ pub(in crate::gateway::meta_mcp) fn retry_origin_backend(
 /// exists to close.
 pub(super) async fn redeem_retry(
     continuation: &crate::protocol::continuation::ContinuationState,
-    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    (source, retry): (
+        crate::protocol::mrtr::PrincipalSource<'_>,
+        &crate::protocol::mrtr::RetryFields,
+    ),
     server: &str,
     tool: &str,
     arguments: &Value,
 ) -> Result<OutboundRetry> {
     use crate::protocol::continuation::ContinuationError;
 
-    let input_responses = caller.retry.solicited_input_responses()?;
-    let Some(token) = caller.retry.request_state.as_deref() else {
+    let input_responses = retry.solicited_input_responses()?;
+    let Some(token) = retry.request_state.as_deref() else {
         return Ok(OutboundRetry {
             request_state: None,
             input_responses,
@@ -305,12 +349,11 @@ pub(super) async fn redeem_retry(
         })?;
 
     // The same fingerprint the mint bound to, derived the same way — both read
-    // `caller.principal_source()`. A caller the gateway cannot name cannot match
+    // the caller's `principal_source()`. A caller the gateway cannot name cannot match
     // one it could: `source_fingerprint` returns `None` for exactly the
     // credential schemes no continuation is ever minted for, so there is no
     // handle here for such a caller to hold.
-    let Some(fingerprint) = crate::protocol::mrtr::source_fingerprint(caller.principal_source())
-    else {
+    let Some(fingerprint) = crate::protocol::mrtr::source_fingerprint(source) else {
         warn!(
             server,
             tool, "Retry from a caller no continuation can be bound to"
@@ -380,4 +423,193 @@ pub(super) async fn redeem_retry(
         request_state: payload.backend_request_state,
         input_responses,
     })
+}
+
+/// MRTR.2a for any result that is not a usable round
+/// (`InputRequired::from_result` declines it): a completed answer, or one
+/// claiming `input_required` that is malformed (a bad `inputRequests`, a
+/// non-string state, neither question nor state). No continuation is minted
+/// for it, so a `requestState` the backend put on it must not travel with it.
+///
+/// On a result claiming `input_required`, blanked to `null`, not removed: a
+/// present state that is not a string keeps the round unusable everywhere it
+/// is read again. Removed, a malformed state would leave a valid state-less
+/// round, which the task path parks instead of settling (#2416). On any other
+/// result it is removed: `requestState` is an optional string, and a present
+/// one marks an answer as interim to every reader downstream.
+pub(super) fn withhold_unsealed_state(result: &mut Value) {
+    use crate::protocol::mrtr::InputRequired;
+    if InputRequired::from_result(result).is_some() {
+        return;
+    }
+    if InputRequired::claims_input_required(result) {
+        if let Some(state) = result.get_mut("requestState") {
+            *state = Value::Null;
+        }
+    } else if let Some(object) = result.as_object_mut() {
+        object.remove("requestState");
+    }
+}
+
+/// Who a direct-route call comes from, as its idempotency guard reads it
+/// (`direct_route_idempotency`): the verified identity, the propagated
+/// identity binding, the grant subject and the authenticated client.
+pub(crate) type DirectCaller<'a> = (
+    Option<&'a crate::key_server::oidc::VerifiedIdentity>,
+    (
+        Option<&'a str>,
+        Option<&'a crate::identity_grants::GrantSubject>,
+    ),
+    Option<&'a crate::gateway::auth::AuthenticatedClient>,
+);
+
+/// What a direct-route continuation binds its caller to: the meta route's
+/// rule (`principal_source`), from the same idempotency-guard inputs the
+/// direct route keys the caller's calls on (`direct_route_idempotency`), in
+/// the guard's order: a propagated binding first, then the verified identity.
+fn direct_source(
+    (identity, guard, client): DirectCaller<'_>,
+) -> crate::protocol::mrtr::PrincipalSource<'_> {
+    if identity.is_some() && guard.0.is_none() {
+        return crate::protocol::mrtr::PrincipalSource::Credential(identity);
+    }
+    crate::gateway::meta_mcp::support::key_binding(
+        guard,
+        client.map(|client| client.principal.as_str()),
+        crate::gateway::meta_mcp::Authentication::of(client),
+    )
+}
+
+/// The tool and the argument object a direct-route `tools/call` names: the two
+/// parts of the request a continuation is bound to (MIK-8078). Read from the
+/// params as the client sent them, at the mint and at the redeem alike, so a
+/// sanitized copy can never make the two digests disagree.
+fn direct_call_parts(params: Option<&Value>) -> (&str, Value) {
+    let tool = params
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let arguments = params
+        .and_then(|p| p.get("arguments"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    (tool, arguments)
+}
+
+impl crate::gateway::meta_mcp::MetaMcp {
+    /// MRTR.1 and MRTR.3-6 on the direct route `POST /mcp/{name}` (MIK-8078):
+    /// open the continuation a `tools/call` presents and put the backend's own
+    /// state in `outbound` in its place.
+    ///
+    /// The same checks, in the same order, as the meta route's
+    /// [`redeem_retry`]: authentic, sealed for a backend input round, bound to
+    /// this caller and this call, still held here, and spent once. A call with
+    /// neither retry field is left as it is.
+    ///
+    /// `sent` is the params as the client sent them; `outbound` is what goes
+    /// upstream (the sanitized copy, or a copy of `sent`).
+    ///
+    /// # Errors
+    ///
+    /// `-32602` for a continuation this gateway will not redeem, or for
+    /// answers that present none.
+    pub(crate) async fn redeem_direct_retry(
+        &self,
+        who: DirectCaller<'_>,
+        (server, sent): (&str, Option<&Value>),
+        outbound: &mut Value,
+    ) -> Result<()> {
+        let retry = crate::protocol::mrtr::RetryFields::from_params(sent);
+        let (tool, arguments) = direct_call_parts(sent);
+        let source = direct_source(who);
+        let redeemed = redeem_retry(
+            &self.continuation,
+            (source, &retry),
+            server,
+            tool,
+            &arguments,
+        )
+        .await?;
+        if retry.request_state.is_some()
+            && let Some(object) = outbound.as_object_mut()
+        {
+            // The client's envelope never travels upstream: the backend gets
+            // the state it issued, or none if it kept none. Only the state is
+            // replaced: `outbound` already carries the answers, sanitized.
+            object.remove("requestState");
+            if let Some(state) = redeemed.request_state {
+                object.insert("requestState".to_owned(), json!(state));
+            }
+        }
+        Ok(())
+    }
+
+    /// MRTR.2 on the direct route `POST /mcp/{name}` (MIK-8078): seal an
+    /// interim answer's state into a continuation bound to this caller and this
+    /// call, as the meta route does. An answer that is not interim is left as
+    /// it is.
+    ///
+    /// Returns the sealed envelope and its hold key, for
+    /// [`Self::release_direct_hold`] once the answer that leaves is known.
+    ///
+    /// # Errors
+    ///
+    /// `-32003` when no continuation can be bound to this caller, or the mint
+    /// is refused: the backend's own state is never sent in its place.
+    pub(crate) async fn seal_direct_interim(
+        &self,
+        who: DirectCaller<'_>,
+        (server, sent): (&str, Option<&Value>),
+        result: &mut Value,
+    ) -> Result<Option<(String, String)>> {
+        let Some(interim) = crate::protocol::mrtr::InputRequired::from_result(result) else {
+            withhold_unsealed_state(result);
+            return Ok(None);
+        };
+        let (tool, arguments) = direct_call_parts(sent);
+        let source = direct_source(who);
+        let Some((envelope, hold_key)) = mint_continuation(
+            &self.continuation,
+            source,
+            server,
+            tool,
+            &arguments,
+            interim.request_state,
+        )
+        .await
+        else {
+            warn!(
+                server,
+                tool, "Cannot mint a continuation for this direct-route caller; refusing"
+            );
+            return Err(unbindable_continuation(server, tool));
+        };
+        result["requestState"] = json!(&envelope);
+        super::gateway_writes::note(
+            super::gateway_writes::Layer::Value,
+            super::gateway_writes::REQUEST_STATE,
+            result,
+        );
+        Ok(Some((envelope, hold_key)))
+    }
+
+    /// Test-only: replace the continuation store (MIK-8078).
+    #[cfg(test)]
+    pub(crate) fn set_continuation_for_test(
+        &mut self,
+        state: crate::protocol::continuation::ContinuationState,
+    ) {
+        self.continuation = std::sync::Arc::new(state);
+    }
+
+    /// Give back the slot of a question sealed on the direct route unless
+    /// `delivered`, the answer that leaves, still carries it
+    /// ([`release_unless_carried`]).
+    pub(crate) async fn release_direct_hold(
+        &self,
+        sealed: Option<(String, String)>,
+        delivered: Option<&Value>,
+    ) {
+        release_unless_carried(&self.continuation, sealed, delivered).await;
+    }
 }

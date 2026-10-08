@@ -14,8 +14,8 @@ use super::helpers::{
     EventStream, ReleasedOnDrop, assert_only_its_own_task, assert_receives_nothing, expect_message,
 };
 
-const AGENT_A: &str = "agent-a";
-const AGENT_B: &str = "agent-b";
+pub(super) const AGENT_A: &str = "agent-a";
+pub(super) const AGENT_B: &str = "agent-b";
 
 /// Gateway authentication off, with every other field the suite's own.
 fn auth_off() -> AuthConfig {
@@ -26,7 +26,19 @@ fn auth_off() -> AuthConfig {
 }
 
 /// Register `client_id` in `registry` and return a JWT it validates.
-fn agent_token(registry: &crate::gateway::oauth::AgentRegistry, client_id: &str) -> String {
+pub(super) fn agent_token(
+    registry: &crate::gateway::oauth::AgentRegistry,
+    client_id: &str,
+) -> String {
+    agent_token_for(registry, client_id, 3600)
+}
+
+/// [`agent_token`] whose `exp` is `lifetime` seconds from now.
+pub(super) fn agent_token_for(
+    registry: &crate::gateway::oauth::AgentRegistry,
+    client_id: &str,
+    lifetime: i64,
+) -> String {
     let secret = format!("{client_id}-task-owner-secret-0123456789");
     registry.register(crate::gateway::oauth::AgentDefinition {
         client_id: client_id.to_string(),
@@ -40,23 +52,32 @@ fn agent_token(registry: &crate::gateway::oauth::AgentRegistry, client_id: &str)
     let now = chrono::Utc::now().timestamp();
     jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
-        &json!({ "sub": client_id, "exp": now + 3600, "iat": now, "aud": "task-owner" }),
+        &json!({ "sub": client_id, "exp": now + lifetime, "iat": now, "aud": "task-owner" }),
         &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
     )
     .expect("sign agent token")
 }
 
 /// Gateway auth off, agent auth on with two agents; returns their tokens.
-async fn agent_gateway(
+pub(super) async fn agent_gateway(
     mock: &Arc<MockBackend>,
 ) -> (Arc<AppState>, tempfile::TempDir, String, String) {
-    let (mut state, store) = fixture_state(&auth_off()).await;
+    agent_gateway_expiring(mock, 3600).await
+}
+
+/// [`agent_gateway`] with agent A's token valid for `a_lifetime` seconds.
+pub(super) async fn agent_gateway_expiring(
+    mock: &Arc<MockBackend>,
+    a_lifetime: i64,
+) -> (Arc<AppState>, tempfile::TempDir, String, String) {
     let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
-    let token_a = agent_token(&registry, AGENT_A);
+    let token_a = agent_token_for(&registry, AGENT_A, a_lifetime);
     let token_b = agent_token(&registry, AGENT_B);
-    Arc::get_mut(&mut state)
-        .expect("no other state handle")
-        .agent_auth = crate::gateway::oauth::AgentAuthState::new(true, registry);
+    let (state, store) = agent_fixture_state(
+        &auth_off(),
+        crate::gateway::oauth::AgentAuthState::new(true, registry),
+    )
+    .await;
     register(&state, BACKEND, mock);
     (state, store, token_a, token_b)
 }
@@ -166,7 +187,12 @@ async fn an_agent_reusing_another_agents_idempotency_key_gets_its_own_task() {
 }
 
 /// A listen presenting `bearer`, with its acknowledgement consumed.
-async fn listen_as(state: &Arc<AppState>, bearer: &str, id: i64, params: Value) -> EventStream {
+pub(super) async fn listen_as(
+    state: &Arc<AppState>,
+    bearer: &str,
+    id: i64,
+    params: Value,
+) -> EventStream {
     let body = task_method(id, "subscriptions/listen", params);
     let request = axum::http::Request::builder()
         .method("POST")

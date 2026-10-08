@@ -41,6 +41,9 @@ fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscription {
         failed_since: None,
         last_delivery_at: None,
         last_error: None,
+        payload_fields: Vec::new(),
+        unoffered_since: None,
+        held_until: None,
     }
 }
 
@@ -444,7 +447,14 @@ fn the_grant_is_fixed_at_the_commit_instant() {
         until: None,
     };
     let (_, answered) = store
-        .admit_granted(s.clone(), grant, true, (CAPS, grace(), TAIL), asked)
+        .admit_granted(
+            s.clone(),
+            grant,
+            true,
+            (CAPS, grace(), TAIL),
+            asked,
+            crate::events::store::HoldCommit::End,
+        )
         .expect("io")
         .expect("admitted");
     let row = store.get(&s.id).expect("row");

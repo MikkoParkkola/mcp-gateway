@@ -103,6 +103,9 @@ fn is_comment_refusal(refusal: &str) -> bool {
 /// and tail), so a repeated line elsewhere cannot stand in for a removed one,
 /// and an edited line that keeps its comment does not count. Line numbers
 /// only: a `#` inside a quoted value can be a secret.
+// ponytail: a copy of the library's `config_persistence::comments`, which the
+// binary cannot call (crate-private). Delete it when MIK-8042's API change
+// lands: the library then returns this note from the locked write itself.
 fn dropped_comments(before: &str, after: &str) -> Vec<String> {
     let (b, a): (Vec<&str>, Vec<&str>) = (before.lines().collect(), after.lines().collect());
     let head = b.iter().zip(&a).take_while(|(x, y)| x == y).count();
@@ -112,24 +115,52 @@ fn dropped_comments(before: &str, after: &str) -> Vec<String> {
         .zip(a[head..].iter().rev())
         .take_while(|(x, y)| x == y)
         .count();
-    let comment = |line: &str| line.find('#').map(|at| line[at..].trim_end().to_owned());
-    let mut kept: Vec<String> = a[head..a.len() - tail]
-        .iter()
-        .copied()
-        .filter_map(comment)
-        .collect();
+    // Only the changed region is classified: each candidate costs two parses.
+    let (cb, ca) = (
+        comments(&b, head..b.len() - tail),
+        comments(&a, head..a.len() - tail),
+    );
+    let mut kept: Vec<String> = ca.into_iter().flatten().collect();
     (head..b.len() - tail)
         .filter(|&i| {
-            comment(b[i]).is_some_and(|c| match kept.iter().position(|k| *k == c) {
-                Some(at) => {
-                    kept.swap_remove(at);
-                    false
-                }
-                None => true,
-            })
+            cb[i - head]
+                .as_ref()
+                .is_some_and(|c| match kept.iter().position(|k| k == c) {
+                    Some(at) => {
+                        kept.swap_remove(at);
+                        false
+                    }
+                    None => true,
+                })
         })
         .map(|i| format!("line {}", i + 1))
         .collect()
+}
+
+/// The comment of each line in `region`, if it has one. A candidate `#`
+/// counts only when the YAML parser agrees (removing it leaves the document
+/// unchanged), so a `#` inside a quoted, tagged or block scalar, or a URL
+/// fragment, is never named.
+fn comments(lines: &[&str], region: std::ops::Range<usize>) -> Vec<Option<String>> {
+    region
+        .map(|i| {
+            let line = lines[i];
+            line.match_indices('#')
+                .filter(|&(at, _)| at == 0 || line[..at].ends_with([' ', '\t']))
+                .map(|(at, _)| &line[line[..at].trim_end_matches([' ', '\t']).len()..])
+                .find(|comment| parsed_as_comment(lines, i, comment))
+                .map(|comment| comment.trim().to_owned())
+        })
+        .collect()
+}
+
+/// Whether the parser reads `comment`, the tail of `lines[line]`, as a
+/// comment: the document parses the same with and without it.
+fn parsed_as_comment(lines: &[&str], line: usize, comment: &str) -> bool {
+    let parse = |text: &[&str]| serde_yaml::from_str::<serde_yaml::Value>(&text.join("\n")).ok();
+    let mut cut = lines.to_vec();
+    cut[line] = &lines[line][..lines[line].len() - comment.len()];
+    matches!((parse(lines), parse(&cut)), (Some(with), Some(without)) if with == without)
 }
 
 #[cfg(test)]
@@ -168,6 +199,35 @@ mod tests {
             error.starts_with("Failed to load") && !error.contains(super::REFUSAL),
             "{error}"
         );
+    }
+
+    /// MIK-8051: a `#` the parser keeps as text (a URL fragment, a block
+    /// scalar line, a tagged or multi-line quoted value) is never named; a
+    /// real comment after one is.
+    #[test]
+    fn a_hash_the_parser_keeps_as_text_is_not_a_comment() {
+        let after = "backends:\n  b:\n    command: y\n";
+        let rows = [
+            (
+                "backends:\n  a:\n    http_url: \"http://h/#q\"\n    command: x#y\n  b:\n    command: y\n",
+                vec![],
+            ),
+            (
+                "backends:\n  a:\n    description: |\n      step # one\n      # not a comment\n    command: x  # why\n  b:\n    command: y\n",
+                vec!["line 6"],
+            ),
+            (
+                "backends:\n  a:\n    description: !!str \"old # x\"\n    note: \"one\n      # two\"\n    command: x  # why\n  b:\n    command: y\n",
+                vec!["line 6"],
+            ),
+            (
+                "backends:\n  a:\n    description: !!str \"old # x\" # real\n  b:\n    command: y\n",
+                vec!["line 3"],
+            ),
+        ];
+        for (before, want) in rows {
+            assert_eq!(dropped_comments(before, after), want, "{before}");
+        }
     }
 
     #[test]

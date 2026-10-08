@@ -10,24 +10,9 @@ use std::time::{Duration, Instant};
 use crate::config::Config;
 use crate::fs_lock::ExclusiveFileLock;
 
-/// Gateway state directory, honoring the existing operator override.
-#[must_use]
-pub fn gateway_data_dir() -> PathBuf {
-    resolve_gateway_data_dir(
-        std::env::var("MCP_GATEWAY_CONFIG_DIR").ok(),
-        crate::home_dir::home_dir(),
-    )
-}
-
-fn resolve_gateway_data_dir(configured: Option<String>, home: Option<PathBuf>) -> PathBuf {
-    configured.map_or_else(
-        || {
-            home.unwrap_or_else(|| PathBuf::from("."))
-                .join(".mcp-gateway")
-        },
-        PathBuf::from,
-    )
-}
+#[path = "config_persistence_data_dir.rs"]
+mod data_dir;
+pub use data_dir::gateway_data_dir;
 
 /// Load config tolerantly, returning defaults when the file is absent or unloadable.
 ///
@@ -92,6 +77,12 @@ mod url_spelling;
 
 #[path = "config_persistence_lock.rs"]
 pub(crate) mod lock;
+
+// Only the web UI names a write's dropped comments from the library; the
+// CLI keeps its own copy until MIK-8042's API change (MIK-8051).
+#[cfg(feature = "webui")]
+#[path = "config_persistence_comments.rs"]
+pub(crate) mod comments;
 
 /// How long a synchronous writer (the CLI) waits for another writer's
 /// config lock: long enough to outlast a gateway's write and reload.
@@ -183,6 +174,22 @@ pub(crate) fn write_config_with(
     _held: &ExclusiveFileLock,
 ) -> Result<(), Unwritten> {
     write_spliced(path, config, mode, Splice::One)
+}
+
+/// The comment lines (as `line N`) that [`write_config_with`] writing
+/// `config` to `path` would drop, from the same single read and the same
+/// one-backend splice the write makes. Call it inside the locked edit, so
+/// the answer is about this write and not one another writer made since.
+/// Empty when the write would not splice: a file with comments is then
+/// refused, and one without has none to drop.
+#[cfg(feature = "webui")]
+pub(crate) fn comments_a_write_drops(path: &Path, config: &Config) -> Vec<String> {
+    let Ok((before, text)) = Config::load_literal_with_text(path) else {
+        return Vec::new();
+    };
+    splice::with_backends_edited(&text, &before, config, Splice::One)
+        .map(|after| comments::dropped_comment_lines(&text, &after))
+        .unwrap_or_default()
 }
 
 /// Write `config` to `path` for a CLI command, keeping the file's comments.
