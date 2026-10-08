@@ -784,3 +784,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "config_persistence_splice_url_tests.rs"]
+mod url_tests;

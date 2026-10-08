@@ -53,6 +53,18 @@ impl super::Config {
         )?;
         Ok((evaluated.config, file.text))
     }
+
+    /// `text` loaded as a config file is, `url` resolved, with no environment
+    /// layer: what a comment-keeping write proves its edited text loads as.
+    pub(crate) fn from_file_text(text: &str) -> Result<Self> {
+        let file = ConfigFile {
+            path: PathBuf::from("gateway.yaml"),
+            text: text.to_owned(),
+        };
+        figment::Figment::from(file)
+            .extract()
+            .map_err(|e| crate::Error::Config(e.to_string()))
+    }
 }
 
 /// Parses the bytes already read, but reports them as the file they came from,
