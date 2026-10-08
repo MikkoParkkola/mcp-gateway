@@ -479,12 +479,16 @@ fn a_sub_micro_tool_exhausts_a_budget_of_n_micros() {
     // that fits N micro-USD and refuses the next
     let limit = (f64::from(N) + 0.5) * 1e-6;
     let e = enforcer_with(true, None, &[("cheap", limit)], &[], &[("cheap", 1e-7)]);
-    // WHEN: N calls are admitted and recorded
+    // WHEN: N calls are admitted and recorded at the configured price
     for call in 0..N {
         let verdict = e.check("cheap", None);
         assert!(verdict.allowed, "call {call} of {N} is admitted");
-        e.settle(verdict.hold.as_deref(), "cheap", None, verdict.cost_usd);
+        e.settle(verdict.hold.as_deref(), "cheap", None, 1e-7);
     }
+    assert!(
+        (e.snapshot().tool_daily["cheap"] - f64::from(N) * 1e-6).abs() < 1e-12,
+        "each recorded call counts one whole micro-USD"
+    );
     // THEN: the budget is spent, and the next call is refused
     assert!(
         !e.check("cheap", None).allowed,

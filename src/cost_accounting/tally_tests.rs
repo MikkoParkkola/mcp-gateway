@@ -165,5 +165,7 @@ fn a_positive_cost_rounds_up_to_whole_micro_usd() {
     // 0.07 * 1e6 is 70000.00000000001 in f64: it must not become 70001.
     assert_eq!(micro(0.07), 70_000);
     assert_eq!(micro(0.01), 10_000);
+    // A genuine fraction of a micro-USD on a large price still rounds up.
+    assert_eq!(micro(500.000_000_1), 500_000_001);
     assert_eq!(micro(0.0), 0);
 }
