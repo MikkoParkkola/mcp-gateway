@@ -119,6 +119,24 @@ mod tests {
         response.result.expect("a success keeps its result")["ttlMs"].clone()
     }
 
+    /// MIK-8047 KEEP.1: the gateway's own discovery document already carries
+    /// the pair, and shaping it as a discover leaves the pair as it was.
+    #[test]
+    fn the_gateways_own_discovery_keeps_its_pair() {
+        let mut document = serde_json::json!({"resultType": "complete"});
+        crate::protocol::cacheable::write_cache_hints(
+            document.as_object_mut().expect("an object"),
+            "server/discover",
+            LIST_TTL_MS,
+        );
+        let mut response = JsonRpcResponse::success(RequestId::Number(1), document.clone());
+        shape_modern_response(&mut response, "server/discover");
+        let shaped = response.result.expect("a result");
+        for key in ["resultType", "ttlMs", "cacheScope"] {
+            assert_eq!(shaped[key], document[key], "{key}: {shaped}");
+        }
+    }
+
     /// MIK-8009 review: a backend hint is kept when shorter, capped when
     /// longer, and the gateway's window applies only where none was sent.
     #[test]
