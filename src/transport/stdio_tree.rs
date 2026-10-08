@@ -56,11 +56,15 @@ pub(super) async fn write_frame(
     writer: &std::sync::Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdin>>>,
     shutdown: &parking_lot::Mutex<tokio_util::sync::CancellationToken>,
     message: &str,
+    began: &std::sync::atomic::AtomicBool,
 ) -> Result<()> {
     let frame = [message.as_bytes(), b"\n"].concat();
     let mut writer = std::sync::Arc::clone(writer).lock_owned().await;
     // Taken under the stdin lock: the token belongs to the stdin it guards.
     let shutdown = shutdown.lock().clone();
+    // From here the frame goes out whole even if the caller is dropped, so the
+    // call is no longer pre-send (MIK-7979).
+    began.store(true, std::sync::atomic::Ordering::Relaxed);
     tokio::spawn(async move {
         let Some(stdin) = writer.as_mut() else {
             return Err(Error::TransportConnect("Not connected".to_string()));

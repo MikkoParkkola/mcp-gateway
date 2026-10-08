@@ -17,8 +17,11 @@ use super::records::{
     write_record,
 };
 
+#[path = "store_hold.rs"]
+mod hold;
 #[path = "store_pending.rs"]
 mod pending;
+pub(crate) use hold::{Held, Judged};
 pub(crate) use pending::{Claim, Claimed, Revived, Settle};
 
 /// Bounds on verification records whose last subscription has ended.
@@ -76,9 +79,24 @@ pub(crate) enum CapHit {
     /// The caller skipped the challenge on a cached opt-in that is gone or
     /// past its tail by commit time: it must verify again.
     Unverified,
+    /// A held row's refresh found the row gone or expired at the commit.
+    HeldRowGone,
     /// The key's expired row still holds records the worker has not yet
     /// buried or dropped: retry shortly.
     Settling,
+}
+
+/// How a commit treats the hold of the row it replaces (MIK-8057,
+/// MIK-8076), decided under the store lock with the commit itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HoldCommit {
+    /// A held row's refresh: keeps the live row's hold and payload fields;
+    /// [`CapHit::HeldRowGone`] when that row is gone or expired.
+    Keep,
+    /// Checked against the routes at the commit: a hold of the key ends
+    /// with the row put in place, unless the live row is held at the
+    /// commit, which keeps its hold and committed fields.
+    End,
 }
 
 /// A `(principal, url)` pair, the unit a verification belongs to.
@@ -93,6 +111,13 @@ struct State {
     outbox: HashMap<String, OutboxRecord>,
     /// Dead letters with their file size, keyed by event id.
     dead: HashMap<String, (DeadLetter, u64)>,
+    /// Webhook subscriptions the routes do not offer or serve now, and why
+    /// (MIK-8057, MIK-8076): they take no record. Recomputed by every route
+    /// refresh, never persisted.
+    held: HashMap<String, Held>,
+    /// Rows whose hold stamp is in memory but whose write failed: written
+    /// again by the next route refresh.
+    hold_unsynced: HashSet<String>,
 }
 
 /// Per-pair facts over every subscription, built in one pass so tail
@@ -103,6 +128,40 @@ struct PairIndex {
 }
 
 impl State {
+    /// Remove row `id`, with its hold: no hold outlives its row, so the same
+    /// key subscribed again is judged afresh (MIK-8057).
+    fn drop_row(&mut self, id: &str) {
+        self.subs.remove(id);
+        self.held.remove(id);
+        self.hold_unsynced.remove(id);
+    }
+
+    /// Decided under the store lock that writes the row: a row held now
+    /// keeps its hold and the fields it was committed with, whatever the
+    /// commit was checked against and however its refresh began. `Ok(true)`
+    /// when this commit ends a stale hold.
+    fn carry_hold(
+        &self,
+        sub: &mut Subscription,
+        at: DateTime<Utc>,
+        hold: HoldCommit,
+    ) -> Result<bool, CapHit> {
+        let live = self.subs.get(&sub.id).filter(|s| s.live(at));
+        let held_live = live.is_some() && self.held.contains_key(&sub.id);
+        let keep = hold == HoldCommit::Keep || held_live;
+        match live {
+            Some(old) if keep => {
+                sub.payload_fields.clone_from(&old.payload_fields);
+                sub.unoffered_since = old.unoffered_since;
+                sub.held_until = old.held_until;
+                sub.watch_class = old.watch_class;
+            }
+            None if hold == HoldCommit::Keep => return Err(CapHit::HeldRowGone),
+            _ => {}
+        }
+        Ok(hold == HoldCommit::End && !held_live)
+    }
+
     fn index(&self, now: DateTime<Utc>) -> PairIndex {
         let mut index = PairIndex {
             live: HashSet::new(),
@@ -110,7 +169,7 @@ impl State {
         };
         for sub in self.subs.values() {
             let pair = (sub.principal.clone(), sub.url.clone());
-            if let Some(at) = sub.expires_at {
+            if let Some(at) = sub.effective_expiry() {
                 let slot = index.latest_expiry.entry(pair.clone()).or_insert(at);
                 *slot = (*slot).max(at);
             }
@@ -140,7 +199,7 @@ impl State {
             .subs
             .values()
             .filter(|s| s.principal == principal && s.url == url)
-            .filter_map(|s| s.expires_at)
+            .filter_map(Subscription::effective_expiry)
             .max();
         let ended = record
             .last_subscription_ended_at
@@ -198,6 +257,17 @@ impl Store {
         }
         let mut state = State::default();
         for (_, sub) in load_records::<Subscription>(&subs_dir) {
+            // A row stamped held stays held until its own source judges it
+            // again, so a restart neither resumes nor loses it (MIK-8122).
+            if sub.unoffered_since.is_some() {
+                state.held.insert(
+                    sub.id.clone(),
+                    Held {
+                        reason: "held before a restart; judged again at the next complete read",
+                        key: None,
+                    },
+                );
+            }
             state.subs.insert(sub.id.clone(), sub);
         }
         for (path, record) in load_records::<Verified>(&verified_dir) {
@@ -254,7 +324,7 @@ impl Store {
                 continue;
             }
             remove_record(&self.subs_dir, &format!("{id}.json"))?;
-            state.subs.remove(&id);
+            state.drop_row(&id);
         }
         Ok(())
     }
@@ -271,7 +341,7 @@ impl Store {
         self.stamp_ended_tails(state, now)?;
         for id in ids {
             remove_record(&self.subs_dir, &format!("{id}.json"))?;
-            state.subs.remove(id);
+            state.drop_row(id);
         }
         Ok(())
     }
@@ -333,10 +403,15 @@ impl Store {
         verified_now: bool,
         (caps, grace, tail): (Caps, chrono::Duration, TailPolicy),
         now: DateTime<Utc>,
+        hold: HoldCommit,
     ) -> std::io::Result<Result<Admitted, CapHit>> {
         let mut state = self.state.lock();
         let at = Utc::now().max(now);
         self.sweep(&mut state, at)?;
+        let ends_hold = match state.carry_hold(&mut sub, at, hold) {
+            Ok(ends_hold) => ends_hold,
+            Err(hit) => return Ok(Err(hit)),
+        };
         // A tail over the cap in force is gone before it can vouch.
         self.trim_tails(&mut state, at, tail)?;
         // An expired row kept for its records' burials: a new row over it
@@ -422,8 +497,14 @@ impl Store {
         // In place: memory follows the disk even when the directory sync
         // failed, and that failure is then reported.
         let expires_at = sub.expires_at;
-        state.subs.insert(sub.id.clone(), sub);
+        let id = sub.id.clone();
+        if ends_hold {
+            state.held.remove(&id);
+        }
+        state.subs.insert(id.clone(), sub);
         placed.durable()?;
+        // Durable: the row on disk carries its current stamps.
+        state.hold_unsynced.remove(&id);
         self.trim_tails(&mut state, at, tail)?;
         let admission = if refreshed {
             Admission::Refreshed
@@ -448,7 +529,8 @@ impl Store {
             ttl: None,
             until: sub.expires_at,
         };
-        self.admit_granted(sub, grant, verified_now, (caps, grace, tail), now)
+        let policy = (caps, grace, tail);
+        self.admit_granted(sub, grant, verified_now, policy, now, HoldCommit::End)
             .map(|admitted| admitted.map(|(admission, _)| admission))
     }
 
@@ -511,7 +593,7 @@ impl Store {
         // this subscription once the removal returns (design §6.4).
         self.cancel_pending(&mut state, id)?;
         remove_record(&self.subs_dir, &format!("{id}.json"))?;
-        state.subs.remove(id);
+        state.drop_row(id);
         // An expired row kept for its burials keeps the expiry stamp the
         // sweep gave its pair: removing it never restarts the tail (MIK-8061).
         if sub.live(now) && !state.pair_live(&sub.principal, &sub.url, now) {

@@ -41,6 +41,10 @@ fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscription {
         failed_since: None,
         last_delivery_at: None,
         last_error: None,
+        payload_fields: Vec::new(),
+        unoffered_since: None,
+        held_until: None,
+        watch_class: None,
     }
 }
 
@@ -444,7 +448,14 @@ fn the_grant_is_fixed_at_the_commit_instant() {
         until: None,
     };
     let (_, answered) = store
-        .admit_granted(s.clone(), grant, true, (CAPS, grace(), TAIL), asked)
+        .admit_granted(
+            s.clone(),
+            grant,
+            true,
+            (CAPS, grace(), TAIL),
+            asked,
+            crate::events::store::HoldCommit::End,
+        )
         .expect("io")
         .expect("admitted");
     let row = store.get(&s.id).expect("row");
@@ -456,4 +467,44 @@ fn the_grant_is_fixed_at_the_commit_instant() {
     );
     assert!(expires > Utc::now(), "live after the commit: {expires}");
     assert_eq!(expires - row.granted_at, chrono::Duration::hours(1));
+}
+
+/// MIK-8122 (design D7): a held refresh never rewrites a watch row's class.
+/// The refresh carries no class of its own, and the committed row keeps the
+/// class it was admitted under.
+#[test]
+fn a_held_refresh_keeps_the_rows_watch_class() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let mut s = sub("p", "https://h/a", now);
+    s.watch_class = Some(crate::events::records::WatchClass::Free);
+    store
+        .admit(s.clone(), true, CAPS, grace(), now, TAIL)
+        .expect("io")
+        .expect("admitted");
+    let refresh = Subscription {
+        watch_class: None,
+        ..s.clone()
+    };
+    let grant = Grant {
+        ttl: Some(chrono::Duration::hours(1)),
+        until: None,
+    };
+    store
+        .admit_granted(
+            refresh,
+            grant,
+            false,
+            (CAPS, grace(), TAIL),
+            now,
+            crate::events::store::HoldCommit::Keep,
+        )
+        .expect("io")
+        .expect("refreshed");
+    assert_eq!(
+        store.get(&s.id).expect("row").watch_class,
+        Some(crate::events::records::WatchClass::Free),
+        "the row's class is kept"
+    );
 }
