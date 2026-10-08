@@ -839,10 +839,10 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway cap pin <file>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:33 |
 | `mcp-gateway cap registry-list` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:160 |
 | `mcp-gateway cap registry-list --capabilities` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:160 |
-| `mcp-gateway cap registry-list -c` | KEEP | short alias of `--capabilities` | - | src/cli/subcommands.rs:160 |
+| `mcp-gateway cap registry-list -C` | KEEP | short alias of `--capabilities` | - | src/cli/subcommands.rs:160 |
 | `mcp-gateway cap search` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:148 |
 | `mcp-gateway cap search --capabilities` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:148 |
-| `mcp-gateway cap search -c` | KEEP | short alias of `--capabilities` | - | src/cli/subcommands.rs:148 |
+| `mcp-gateway cap search -C` | KEEP | short alias of `--capabilities` | - | src/cli/subcommands.rs:148 |
 | `mcp-gateway cap search <query>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:148 |
 | `mcp-gateway cap test` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:72 |
 | `mcp-gateway cap test --args` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:72 |
