@@ -193,6 +193,7 @@ backend" and "fails a capability file" first.**
 | 166 | A running gateway's web UI backend edits (add, edit, delete) load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still undo that writer's change | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
 | 167 | On a multi-user gateway, an API-key or admin-bearer caller with no other identity gets its own `mcp` capability child, named by its credential, instead of a refusal. An `mcp` capability's cached answer is read back only by the caller whose child produced it | None. Callers who share one API key share one child |
 | 168 | Once its shutdown steps return, an HTTP gateway (`serve`, or no subcommand) waits at most 10 more seconds for disk work still running, then exits and logs at ERROR that it gave up waiting; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running after 10 seconds points at the storage to check |
+| 169 | `/.well-known/oauth-protected-resource` answers 404 when the gateway names no authorization server (auth off, API keys only, or agent auth); it answered 200 with a document naming none, or 503 on a wildcard bind without `server.public_url` | None. A client that probes the path now uses the API key it was given instead of attempting an OAuth sign-in that could not complete. With `key_server.delegated_bearer` on, the document is served as before |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4414,6 +4415,24 @@ Work that finishes within the 10 seconds completes as before. When the wait
 runs the full 10 seconds, one ERROR line says the gateway exited with blocking
 work still running. That is a timeout, not a diagnosis: check the storage
 behind the task store and the audit log.
+
+## 169. No protected-resource metadata without an authorization server
+
+**Startup:** no notice
+
+`GET /.well-known/oauth-protected-resource` (RFC 9728) now answers `404` when
+the gateway has no authorization server to name: with auth off, with API keys
+only, or with agent auth. Before, it answered `200` with a document that named
+none, which told an OAuth-capable MCP client this was a protected resource it
+could sign in to, with no way to get a token. On a wildcard bind without
+`server.public_url` it answered `503` and asked for a `public_url` the
+deployment did not need.
+
+With `auth.enabled`, `key_server.enabled` and `key_server.delegated_bearer`
+on (and agent auth off), the document names your OIDC issuers and is served
+as before. Nothing to change: clients of an API-key gateway keep sending the
+key, and a `404` is what a standards-following client expects from a resource
+with no OAuth sign-in.
 
 ## Upgrading from 3.5.x: a walkthrough
 
