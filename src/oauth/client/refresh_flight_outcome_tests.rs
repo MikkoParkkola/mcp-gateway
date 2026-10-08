@@ -26,7 +26,7 @@ fn rotating(client: &OAuthClient) {
     let key = client.credential_key().unwrap();
     let state = RefreshState {
         rotates: true,
-        in_flight: None,
+        ..RefreshState::default()
     };
     client
         .storage
@@ -245,6 +245,24 @@ fn an_unreadable_refresh_state_reads_as_rotating() {
     assert_eq!(state.in_flight, None);
 }
 
+/// ROT3.4: a sidecar an earlier build wrote has no `keeps`. Its
+/// `rotates: false` meant only "not seen to rotate", so it reads as not seen
+/// either way, which may rotate; a recorded rotation still does; only a
+/// settled refresh that kept its token clears it (MIK-8145).
+#[test]
+fn an_earlier_builds_refresh_state_reads_as_not_yet_seen() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+    let read = |json: &str| {
+        std::fs::write(storage.refresh_state_path(BACKEND, RESOURCE), json).unwrap();
+        storage.load_refresh_state(BACKEND, RESOURCE).may_rotate()
+    };
+    assert!(read(r#"{"rotates":false,"in_flight":null}"#));
+    assert!(read(r#"{"rotates":true,"in_flight":null}"#));
+    assert!(read(r#"{"rotates":true,"keeps":true}"#));
+    assert!(!read(r#"{"rotates":false,"keeps":true}"#));
+}
+
 /// A token marked in flight by an exchange that never settled is retired at
 /// the next start, and nothing is sent even when storage refuses to clear
 /// it: the token is spent in this process and both records are left as they
@@ -267,6 +285,7 @@ async fn a_marked_token_that_cannot_be_cleared_is_not_sent() {
     let state = RefreshState {
         rotates: true,
         in_flight: Some(fingerprint.clone()),
+        ..RefreshState::default()
     };
     owned
         .storage

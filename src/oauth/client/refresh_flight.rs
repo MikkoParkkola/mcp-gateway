@@ -120,19 +120,6 @@ pub(crate) struct StoredCredential<'a> {
     pub(crate) key: &'a str,
     pub(crate) resource_url: &'a str,
     pub(crate) label: &'a str,
-    pub(crate) rotation: Rotation,
-}
-
-/// Whether a credential's server is treated as rotating refresh tokens.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Rotation {
-    /// Once a refresh answer is seen to replace the refresh token. Until
-    /// then, a refresh whose outcome is not known is retried (MCP backends).
-    Observed,
-    /// From the first refresh: a refresh that did not settle is never sent
-    /// again, and its token needs a new authorization (capability providers,
-    /// whose servers are not known in advance).
-    Assumed,
 }
 
 /// A client of a stored credential: the MCP backend's `OAuthClient` or a
@@ -187,7 +174,6 @@ pub(crate) async fn refresh_stored(
         key,
         resource_url,
         label,
-        rotation,
     } = at;
     let token_path = storage.token_path(key, resource_url);
     let flight = Flight::of(&token_path);
@@ -210,11 +196,8 @@ pub(crate) async fn refresh_stored(
         return Ok(Refreshed::LoginRequired);
     }
     let mut state = storage.load_refresh_state(key, resource_url);
-    if rotation == Rotation::Assumed {
-        state.rotates = true;
-    }
     let marker = fingerprint_hex(&sent);
-    if state.rotates && state.in_flight.as_deref() == Some(marker.as_str()) {
+    if state.may_rotate() && state.in_flight.as_deref() == Some(marker.as_str()) {
         retire_unsettled(&flight, storage, (key, resource_url), label, &sent, state);
         return Ok(Refreshed::LoginRequired);
     }
@@ -327,7 +310,7 @@ impl Exchange {
             Outcome::Rejected { .. } => self.route == RefreshRoute::Supplied,
             Outcome::Refreshed(_) | Outcome::NotSent(_) => false,
         };
-        let retired = !(possibly_consumed && self.state.rotates) || self.spend();
+        let retired = !(possibly_consumed && self.state.may_rotate()) || self.spend();
         if retired {
             self.state.in_flight = None;
         }
@@ -399,6 +382,12 @@ impl Exchange {
                 warn!(backend = %self.backend, %error, "Could not record that the server rotates");
                 return Outcome::Uncertain(error);
             }
+        } else {
+            // The answer kept the sent token: this server does not rotate, so
+            // a later exchange with an unknown outcome leaves it usable
+            // (MIK-8145). Saved when the exchange settles; lost, the server
+            // only reads as not yet seen, which retires rather than resends.
+            self.state.keeps = true;
         }
         let token = (self.finish)(TokenInfo::from_response(
             answer.access_token,
@@ -499,7 +488,7 @@ pub(super) fn spend(
 const REDIRECT_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// An exchange with `sent` never settled (the process stopped mid-exchange)
-/// on a server that rotates: it may be consumed, so it is spent. The marker in
+/// on a server that may rotate: it may be consumed, so it is spent. The marker in
 /// `state` stays unless storage no longer holds `sent`, so a later start
 /// retires it again rather than sending it.
 pub(super) fn retire_unsettled(
