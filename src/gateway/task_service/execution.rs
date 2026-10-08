@@ -97,11 +97,11 @@ impl BeginOutcome {
             Self::Capacity | Self::Unavailable => {
                 JsonRpcResponse::error(Some(id), -32603, "task store unavailable")
             }
-            Self::Sealed => JsonRpcResponse::error(
-                Some(id),
-                -32603,
-                crate::idempotency::admission::SEALED_MESSAGE,
-            ),
+            // The code the synchronous path gives a sealed call, so a client
+            // sees one refusal for it on either path.
+            Self::Sealed => {
+                JsonRpcResponse::error(Some(id), 409, crate::idempotency::admission::SEALED_MESSAGE)
+            }
         }
     }
 }

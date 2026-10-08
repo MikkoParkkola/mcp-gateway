@@ -160,6 +160,9 @@ struct Shared {
     order: Mutex<()>,
     state: Mutex<State>,
     lease: Mutex<Option<ExclusiveFileLock>>,
+    /// The store directory's identity at open, so a re-read can tell a removed
+    /// record from a directory that moved away or was replaced (MIK-8052).
+    dir_id: Option<platform::DirId>,
     #[cfg(test)]
     seams: input::TestSeams,
     temp: AtomicU64,
@@ -172,9 +175,10 @@ impl TaskStore {
     pub(super) async fn open(path: &Path, limits: StoreLimits) -> Result<Self, StoreError> {
         let dir = path.to_owned();
         let opened = dir.clone();
-        let (lease, loaded) = tokio::task::spawn_blocking(move || open_blocking(&opened, limits))
-            .await
-            .map_err(|_| StoreError::Storage)??;
+        let (lease, loaded, dir_id) =
+            tokio::task::spawn_blocking(move || open_blocking(&opened, limits))
+                .await
+                .map_err(|_| StoreError::Storage)??;
         for (class, count) in [
             ("reserved", loaded.reserved.len()),
             ("sealed", loaded.sealed.len()),
@@ -194,6 +198,7 @@ impl TaskStore {
                 sealed: loaded.sealed,
             }),
             lease: Mutex::new(Some(lease)),
+            dir_id,
             #[cfg(test)]
             seams: input::TestSeams::default(),
             temp: AtomicU64::new(0),

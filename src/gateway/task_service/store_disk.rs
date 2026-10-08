@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::platform::{
-    create_private_dir, has_mode, judge_store_dir, open_new_private, open_record, rename, sync_dir,
-    sync_file,
+    DirId, create_private_dir, dir_identity, has_mode, judge_store_dir, open_new_private,
+    open_record, rename, sync_dir, sync_file,
 };
 use super::{
     CommitHook, CommitStage, Entry, LEASE, RECORD_MODE, STORE_MODE, StoreError, StoreLimits,
@@ -26,10 +26,18 @@ use crate::protocol::tasks::Task;
 pub(super) fn open_blocking(
     dir: &Path,
     limits: StoreLimits,
-) -> Result<(ExclusiveFileLock, Loaded), StoreError> {
+) -> Result<(ExclusiveFileLock, Loaded, Option<DirId>), StoreError> {
     let pin = prepare_dir(dir)?;
+    // Taken before the rows are read and confirmed after, so the identity a
+    // re-read checks is the directory those rows came from (MIK-8052).
+    let dir_id = dir_identity(dir);
     let lease = acquire_lease(&dir.join(LEASE))?.pinning(pin);
-    Ok((lease, load(dir, limits)?))
+    let loaded = load(dir, limits)?;
+    if dir_id.is_none() || dir_identity(dir) != dir_id {
+        tracing::warn!(path = %dir.display(), "task store directory changed while it was opened");
+        return Err(StoreError::Storage);
+    }
+    Ok((lease, loaded, dir_id))
 }
 
 fn prepare_dir(dir: &Path) -> Result<DirPin, StoreError> {
@@ -392,11 +400,36 @@ pub(super) enum Reread {
 
 /// Read one sealed row again by the same rules `load` applies, without ever
 /// blocking on what the name now points at (the open is non-blocking).
-pub(super) fn reread_record(dir: &Path, name: &str, limits: StoreLimits) -> Reread {
+pub(super) fn reread_record(
+    dir: &Path,
+    name: &str,
+    limits: StoreLimits,
+    dir_id: Option<DirId>,
+) -> Reread {
     let path = dir.join(name);
     let shown_path = path.display();
+    // Only the directory the store opened answers for its rows: one moved
+    // away, unmounted or replaced may still hold the damaged row where it
+    // went. So nothing read through the name counts unless the name leads to
+    // that directory both before and after the read.
+    let in_custody = || {
+        let held = dir_id.is_some() && dir_identity(dir) == dir_id;
+        if !held {
+            tracing::error!(path = %shown_path, "task store directory is not the one opened; the sealed record stays sealed");
+        }
+        held
+    };
+    if !in_custody() {
+        return Reread::Sealed;
+    }
     match fs::symlink_metadata(&path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Reread::Gone,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return if in_custody() {
+                Reread::Gone
+            } else {
+                Reread::Sealed
+            };
+        }
         Err(_) => return Reread::Sealed,
         Ok(_) => {}
     }
@@ -422,7 +455,16 @@ pub(super) fn reread_record(dir: &Path, name: &str, limits: StoreLimits) -> Rere
         return Reread::Sealed;
     }
     let (admission, task_id) = match (restore(&bytes, &shown_path), envelope) {
-        (Some((record, task)), _) => (record.admission, task.id().to_owned()),
+        (Some((record, task)), _) => {
+            // As at load: a row with no room for the bounded failure it may
+            // settle as would make the next startup refuse the store (MIK-7651).
+            let needed = super::targets::fallback_bytes(&task, &record, chrono::Utc::now());
+            if !needed.is_ok_and(|needed| needed <= limits.record_bytes) {
+                tracing::error!(path = %shown_path, "repaired task record leaves no room for its bounded failure; raise max_record_bytes or remove the row; it stays sealed");
+                return Reread::Sealed;
+            }
+            (record.admission, task.id().to_owned())
+        }
         (
             None,
             Envelope {
@@ -440,6 +482,9 @@ pub(super) fn reread_record(dir: &Path, name: &str, limits: StoreLimits) -> Rere
     };
     if record_name(&task_id) != name {
         tracing::error!(path = %shown_path, "sealed task record names another task; it stays sealed");
+        return Reread::Sealed;
+    }
+    if !in_custody() {
         return Reread::Sealed;
     }
     Reread::Repaired(admission, task_id)
