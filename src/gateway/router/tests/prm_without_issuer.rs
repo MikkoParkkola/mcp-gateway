@@ -19,14 +19,14 @@ async fn metadata_status(state: Arc<AppState>) -> StatusCode {
         .status()
 }
 
-/// MIK-8158.PRM.1, auth off: there is no protected resource at all.
+/// `MIK-8158.PRM.1`, auth off: there is no protected resource at all.
 #[tokio::test]
 async fn no_metadata_without_auth() {
     let (state, _store) = test_router_app_state().await;
     assert_eq!(metadata_status(state).await, StatusCode::NOT_FOUND);
 }
 
-/// MIK-8158.PRM.1, API keys only: a static key is the credential, and no
+/// `MIK-8158.PRM.1`, API keys only: a static key is the credential, and no
 /// authorization server can issue one.
 #[tokio::test]
 async fn no_metadata_for_an_api_key_only_gateway() {
