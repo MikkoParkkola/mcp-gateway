@@ -15,7 +15,7 @@ use crate::capability::executor::CapabilityExecutor;
 use crate::capability::{CapabilityDefinition, CapabilityExecutionContext, parse_capability};
 use crate::identity_grants::GrantSubject;
 
-fn python() -> String {
+pub(super) fn python() -> String {
     let name = if cfg!(windows) { "python" } else { "python3" };
     let path = std::env::var_os("PATH");
     let pathext = std::env::var_os("PATHEXT");

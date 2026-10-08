@@ -7,14 +7,19 @@
 //! PRINCIPAL.2: an API-key caller on a multi-user gateway, named by nothing but
 //! its credential digest, gets its own child instead of a refusal.
 
+use std::path::Path;
 use std::sync::atomic::Ordering;
 
 use serde_json::json;
 
-use super::tests::{call, caller, capability, capability_yaml};
+use super::tests::{call, caller, capability, capability_yaml, python};
 use super::{MAX_CHILDREN_PER_CAPABILITY, principal};
 use crate::capability::executor::CapabilityExecutor;
-use crate::capability::{CapabilityExecutionContext, parse_capability};
+use crate::capability::{
+    CapabilityDefinition, CapabilityExecutionContext, compute_capability_hash,
+    parse_capability_file, rewrite_with_pin,
+};
+use crate::config::{CapabilityConfig, ProcessCommand};
 use crate::identity_grants::GrantSubject;
 use crate::identity_propagation::CallerProvenance;
 
@@ -143,18 +148,51 @@ fn a_verified_identity_beats_the_credential_owner() {
     );
 }
 
-/// D7: a cached MCP answer is read back only by the caller whose child gave
-/// it. Two API keys, the same arguments: the second key gets its own child's
-/// answer, not the first key's cached one.
-#[tokio::test]
-async fn a_cached_mcp_answer_is_served_only_to_the_key_that_produced_it() {
-    let executor = multi_user();
+/// An executor that admits the fixture server, as `capabilities.process_commands`
+/// does for an operator who lists it, on a multi-user gateway.
+fn admitting_multi_user() -> CapabilityExecutor {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cap_exec/fake_mcp.py")
+        .display()
+        .to_string();
+    let executor = CapabilityExecutor::for_config(&CapabilityConfig {
+        process_commands: Some(vec![ProcessCommand {
+            command: python(),
+            args_prefix: vec![script],
+        }]),
+        ..CapabilityConfig::default()
+    });
+    executor.multi_user.store(true, Ordering::Release);
+    executor
+}
+
+/// The probe with a cache block, loaded from a pinned file as an operator's
+/// would be: a process capability runs only from a file whose pin matched.
+async fn pinned_cacheable_probe(dir: &Path) -> CapabilityDefinition {
     let yaml = capability_yaml().replacen(
         "description: MCP probe.\n",
         "description: MCP probe.\ncache:\n  ttl: 60\n  strategy: memory\n",
         1,
     );
-    let cap = parse_capability(&yaml).expect("cacheable probe parses");
+    let path = dir.join("mcp_probe.yaml");
+    std::fs::write(
+        &path,
+        rewrite_with_pin(&yaml, &compute_capability_hash(&yaml)),
+    )
+    .unwrap();
+    parse_capability_file(&path)
+        .await
+        .expect("pinned probe loads")
+}
+
+/// D7: a cached MCP answer is read back only by the caller whose child gave
+/// it. The same key is served from cache even after its child stopped; another
+/// key with the same arguments gets its own child's answer.
+#[tokio::test]
+async fn a_cached_mcp_answer_is_served_only_to_the_key_that_produced_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = admitting_multi_user();
+    let cap = pinned_cacheable_probe(dir.path()).await;
     assert!(cap.is_cacheable(), "premise: the probe caches");
     let say = json!({"operation": "say", "text": "x"});
     let run =
@@ -162,12 +200,15 @@ async fn a_cached_mcp_answer_is_served_only_to_the_key_that_produced_it() {
     let first = run("credential:1d2c3b4a5f6e")
         .await
         .expect("first key served");
+    assert!(first["pid"].is_i64(), "the probe reports its pid: {first}");
+    // A cache hit needs no child: stop it, and the same key still reads the
+    // first answer back.
+    executor.stop_mcp(&cap.name);
     let again = run("credential:1d2c3b4a5f6e").await.unwrap();
+    assert_eq!(first, again, "one key reads its own answer from the cache");
     let other = run("credential:9e8d7c6b5a4f")
         .await
         .expect("second key served");
-    assert_eq!(first, again, "one key reads its own answer back");
-    assert!(first["pid"].is_i64(), "the probe reports its pid: {first}");
     assert_ne!(
         first["pid"], other["pid"],
         "another key never reads the first key's answer"

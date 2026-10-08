@@ -47,11 +47,21 @@ async fn multi_user_meta() -> (MetaMcp, TempDir) {
         script.display()
     );
     let dir = TempDir::new().unwrap();
-    std::fs::write(dir.path().join("mcp_probe.yaml"), yaml).unwrap();
-    let backend = Arc::new(CapabilityBackend::new(
-        "caps",
-        Arc::new(CapabilityExecutor::new()),
-    ));
+    // A process capability runs only from a file whose pin matched, and only a
+    // command the operator listed: the fixture is both.
+    let pinned = crate::capability::rewrite_with_pin(
+        &yaml,
+        &crate::capability::compute_capability_hash(&yaml),
+    );
+    std::fs::write(dir.path().join("mcp_probe.yaml"), pinned).unwrap();
+    let executor = CapabilityExecutor::for_config(&crate::config::CapabilityConfig {
+        process_commands: Some(vec![crate::config::ProcessCommand {
+            command: python().display().to_string(),
+            args_prefix: vec![script.display().to_string()],
+        }]),
+        ..crate::config::CapabilityConfig::default()
+    });
+    let backend = Arc::new(CapabilityBackend::new("caps", Arc::new(executor)));
     let loaded = backend
         .load_from_directory(dir.path().to_str().unwrap())
         .await
