@@ -77,7 +77,7 @@ mod degraded;
 #[path = "transparency_log_lease.rs"]
 mod lease;
 #[cfg(test)]
-pub(crate) use degraded::HEAL_BOUND_FOR_TEST;
+pub(crate) use degraded::until_recovered;
 pub(crate) use lease::is_lease_held;
 // D6 segment files, rotation and recovery, multi-segment verify.
 #[path = "transparency_log_append.rs"]

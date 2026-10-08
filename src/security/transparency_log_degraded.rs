@@ -83,21 +83,12 @@ impl TransparencyLogger {
         self.fail_appends.store(on, Ordering::Release);
     }
 
-    /// Clear the injected failure, then wait until a probe admits a call. On
-    /// a loaded runner the first probe can overrun [`AUDIT_PROBE_TIMEOUT`]
-    /// and answer stalled until its write lands, so one probe proves nothing
-    /// (MIK-8171). Panics past [`HEAL_BOUND_FOR_TEST`].
+    /// Clear the injected failure, then wait until a probe admits a call
+    /// (see [`until_recovered`], MIK-8171).
     #[cfg(test)]
     pub(crate) async fn heal_for_test(self: &std::sync::Arc<Self>) {
         self.set_append_failure_for_test(false);
-        let deadline = tokio::time::Instant::now() + HEAL_BOUND_FOR_TEST;
-        while self.admit().await.is_err() {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "the audit log did not recover within {HEAL_BOUND_FOR_TEST:?}"
-            );
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        until_recovered(self, || self.admit()).await;
     }
 
     /// Count a failed append, and under `FailClosed` mark the logger degraded;
@@ -217,6 +208,39 @@ impl TransparencyLogger {
             Ok(()) => Ok(()),
             Err(_) => Err(crate::Error::AuditUnavailable),
         }
+    }
+}
+
+/// Run `attempt` until it succeeds, for at most [`HEAL_BOUND_FOR_TEST`]; its
+/// value. After a heal, the first probe can overrun [`AUDIT_PROBE_TIMEOUT`]
+/// on a loaded runner and answer "stalled" until its write lands, so one try
+/// proves nothing (MIK-8171). A failure is retried only while it is such a
+/// stall: `log` has counted no failed append since the first try. A write
+/// error fails at once, naming the answer, so the two are told apart.
+#[cfg(test)]
+pub(crate) async fn until_recovered<T, E, F, Fut>(log: &TransparencyLogger, mut attempt: F) -> T
+where
+    E: std::fmt::Debug,
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+{
+    let failures = log.append_failures();
+    let deadline = tokio::time::Instant::now() + HEAL_BOUND_FOR_TEST;
+    loop {
+        let answer = match attempt().await {
+            Ok(value) => return value,
+            Err(answer) => answer,
+        };
+        assert_eq!(
+            log.append_failures(),
+            failures,
+            "an append failed, not a stall: {answer:?}"
+        );
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "not recovered within {HEAL_BOUND_FOR_TEST:?}: {answer:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
