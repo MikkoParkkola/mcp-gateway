@@ -190,7 +190,7 @@ backend" and "fails a capability file" first.**
 | 163 | With gateway authentication off and agent authentication on, each agent owns its tasks apart, keyed on the `client_id` its token validates as (a renewed token for the same agent keeps them); every agent had shared one task owner | None. Tasks an agent created before the upgrade stay under the old shared owner, so the agent no longer finds them under its own |
 | 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept, a removed one released); restart to read a repaired task; probes (`/livez`, `/readyz`) are unaffected |
 | 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
-| 166 | Once its shutdown steps finish (bounded by `server.shutdown_timeout`), an HTTP gateway (`serve`, or no subcommand) waits at most 10 more seconds for disk work still running, then exits and logs at ERROR that it gave up waiting; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running after 10 seconds points at the storage to check |
+| 166 | Once its shutdown steps return, an HTTP gateway (`serve`, or no subcommand) waits at most 10 more seconds for disk work still running, then exits and logs at ERROR that it gave up waiting; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running after 10 seconds points at the storage to check |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4349,9 +4349,9 @@ unchanged on both.
 
 **Startup:** no notice
 
-An HTTP gateway's shutdown steps (draining requests, closing the task store)
-are bounded by `server.shutdown_timeout`. After they finish, the gateway now
-waits at most 10 more seconds for disk work still running (a task-store or
+After an HTTP gateway's shutdown steps return (draining requests and closing
+the task store, under `server.shutdown_timeout`), the gateway now waits at
+most 10 more seconds for disk work still running (a task-store or
 audit write) and then exits. Before, it waited for that work without limit, so
 a write stuck on a stalled NFS or FUSE mount kept the process alive forever and
 an orchestrator had to kill it. `serve --stdio` already exited this way.
