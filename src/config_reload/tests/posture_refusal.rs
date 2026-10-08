@@ -363,6 +363,35 @@ async fn the_watcher_recognises_a_posture_refusal_and_not_as_a_broken_file() {
     );
 }
 
+/// MIK-8058: every refusal is the operator's config refused, and both shutdown
+/// paths are the gateway unavailable. The refusal texts are the ones
+/// `security/posture.rs` (`reload_refusal`) and this module's signing check
+/// write; anything else is internal.
+#[test]
+fn reload_failures_are_classified_by_cause() {
+    for refused in [
+        "config reload refused: security.hardened requires restart",
+        "config reload refused: security.message_signing.key requires restart",
+    ] {
+        assert_eq!(
+            reload_failure(refused),
+            ReloadFailure::ConfigRefused,
+            "{refused}"
+        );
+    }
+    for stopped in [SHUTDOWN_ABORTED_ERROR, reload_context::STOPPED] {
+        assert_eq!(
+            reload_failure(stopped),
+            ReloadFailure::ShuttingDown,
+            "{stopped}"
+        );
+    }
+    assert_eq!(
+        reload_failure("failed to parse config file: invalid YAML at line 3"),
+        ReloadFailure::Internal
+    );
+}
+
 #[tokio::test]
 async fn a_reload_is_not_refused_for_a_state_it_did_not_cause() {
     // GIVEN: a gateway already running in the refusable state — wide bind, no

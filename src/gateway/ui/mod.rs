@@ -587,7 +587,7 @@ async fn reload(
             // is the operator's config, a shutdown is the gateway unavailable.
             use crate::config_reload::{ReloadFailure, reload_failure};
             let status = match reload_failure(&error) {
-                ReloadFailure::PostureRefused => StatusCode::CONFLICT,
+                ReloadFailure::ConfigRefused => StatusCode::CONFLICT,
                 ReloadFailure::ShuttingDown => StatusCode::SERVICE_UNAVAILABLE,
                 ReloadFailure::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             };

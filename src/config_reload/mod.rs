@@ -103,20 +103,25 @@ fn is_posture_refusal(error: &str) -> bool {
 /// Why a reload failed, for a caller that answers with a status (MIK-8058).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReloadFailure {
-    /// The posture policy refused the file: the operator's config, not a fault.
-    PostureRefused,
-    /// Shutdown began and the registry refused the reload's backends.
+    /// The file was refused: the operator's config, not a server fault. Every
+    /// refusal carries [`POSTURE_REFUSED_PREFIX`]: the network posture, a
+    /// changed account binding, and a security field that needs a restart.
+    ConfigRefused,
+    /// Shutdown began: the reload was stopped by the shutdown signal, or the
+    /// registry refused its backends.
     ShuttingDown,
     /// Anything else: an unreadable file, a failed apply.
     Internal,
 }
 
 /// Classify a `reload_outcome` error. The error stays a `String` (a public
-/// shape), so the class is read from the shared prefix and literal.
+/// shape), so the class is read from the shared prefix and literals.
 pub(crate) fn reload_failure(error: &str) -> ReloadFailure {
     if is_posture_refusal(error) {
-        ReloadFailure::PostureRefused
-    } else if error.starts_with(SHUTDOWN_ABORTED_ERROR) {
+        ReloadFailure::ConfigRefused
+    } else if error.starts_with(SHUTDOWN_ABORTED_ERROR)
+        || error.starts_with(reload_context::STOPPED)
+    {
         ReloadFailure::ShuttingDown
     } else {
         ReloadFailure::Internal
