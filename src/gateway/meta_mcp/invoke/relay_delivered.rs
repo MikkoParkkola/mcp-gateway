@@ -253,7 +253,11 @@ fn keep_plan_receipts(
         .iter_mut()
         .map(|r| std::mem::take(&mut r.digest))
         .collect();
-    for (r, digest) in plan.into_iter().zip(fw.retain_plan(digests, &delivered)) {
+    let engine = super::super::gateway_writes::is_engine_text;
+    for (r, digest) in plan
+        .into_iter()
+        .zip(fw.retain_plan(digests, &delivered, &engine))
+    {
         r.digest = digest;
         r.pending_retain = false;
     }

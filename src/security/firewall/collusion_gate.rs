@@ -517,13 +517,15 @@ impl Firewall {
     }
 
     /// A plan's step `digests` kept to what `delivered` carries, then the
-    /// seams between steps added (`MIK-8043.SEAM.3`), then each deferred cap
+    /// seams between steps added (`MIK-8043.SEAM.3`; `engine` names the text
+    /// the gateway wrote, which no seam joins), then each deferred cap
     /// applied, so the cap bounds seam fingerprints too; unchanged with relay
     /// detection off.
     pub(crate) fn retain_plan(
         &self,
         digests: Vec<DeliveryDigest>,
         delivered: &Delivered<'_>,
+        engine: &dyn Fn(&str) -> bool,
     ) -> Vec<DeliveryDigest> {
         let Some(detector) = self.relay_detector() else {
             return digests;
@@ -532,7 +534,7 @@ impl Firewall {
             .into_iter()
             .map(|digest| digest.retaining(detector, delivered))
             .collect();
-        add_seams(&mut kept, detector, delivered);
+        add_seams(&mut kept, detector, delivered, engine);
         kept.into_iter()
             .map(|digest| self.capped(&digest).unwrap_or(digest))
             .collect()

@@ -484,9 +484,10 @@ fn run_forms(run: &[&Segment]) -> Vec<String> {
 }
 
 /// `MIK-8043.SEAM.3`: the fingerprints across a seam between plan steps. A
-/// delivered leaf is owned when it is at most as frequent in the answer as
-/// the kept whole segments holding it across `digests` (engine text equal to
-/// a step leaf then breaks a run instead of joining one). A maximal sequence
+/// delivered leaf is owned when `engine` (text the gateway wrote into the
+/// answer) does not claim it and it is at most as frequent in the answer as
+/// the kept whole segments holding it across `digests`; any other leaf
+/// breaks a run. A maximal sequence
 /// of owned leaves is a run the caller received contiguously, made only of
 /// backend text; the fingerprints of its forms (see [`run_forms`]) that are
 /// no k-gram of an owner's own runs cross a seam, and each owner of the run
@@ -496,6 +497,7 @@ pub(super) fn add_seams(
     digests: &mut [DeliveryDigest],
     detector: &CollusionDetector,
     delivered: &Delivered<'_>,
+    engine: &dyn Fn(&str) -> bool,
 ) {
     let mut added: Vec<Vec<u64>> = vec![Vec::new(); digests.len()];
     {
@@ -519,6 +521,7 @@ pub(super) fn add_seams(
         let owned = |part: &(&str, bool)| {
             owners
                 .get(part)
+                .filter(|_| !engine(part.0))
                 .filter(|o| seen.get(part).is_some_and(|&n| n <= o.len()))
         };
         let mut run: Vec<(&str, bool)> = Vec::new();

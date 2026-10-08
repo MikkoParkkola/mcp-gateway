@@ -363,8 +363,18 @@ impl MetaMcp {
         let mut temp_engine = PlaybookEngine::new();
         temp_engine.register(definition);
         let result = temp_engine.execute(name, arguments, &invoker).await?;
-
-        Ok(serde_json::to_value(&result).unwrap_or(json!(null)))
+        let answer = serde_json::to_value(&result).unwrap_or(json!(null));
+        // MIK-8043.SEAM.3: everything but the step output is the engine's
+        // text, and so is a mapping's fallback; a seam never joins it.
+        for (key, member) in answer.as_object().into_iter().flatten() {
+            if key != "output" {
+                super::gateway_writes::note_engine_text(member);
+            }
+        }
+        for prop in &result.fallbacks {
+            super::gateway_writes::note_engine_text(&answer["output"][prop.as_str()]);
+        }
+        Ok(answer)
     }
 }
 

@@ -545,6 +545,8 @@ async fn execute_output_with_fallback() {
     assert_eq!(result.output["found"], json!("found_it"));
     assert_eq!(result.output["missing"], json!("default_value"));
     assert_eq!(result.output["null_no_fallback"], Value::Null);
+    // MIK-8043.SEAM.3: only the property a fallback filled is engine text.
+    assert_eq!(result.fallbacks, ["missing"]);
 }
 
 #[tokio::test]
@@ -648,6 +650,7 @@ fn build_output_no_mapping_returns_all_results() {
     ctx.step_results
         .insert("s1".to_string(), json!({"data": 1}));
 
-    let output = build_output(&def, &ctx);
+    let (output, fallbacks) = build_output(&def, &ctx);
     assert_eq!(output["s1"], json!({"data": 1}));
+    assert!(fallbacks.is_empty(), "no mapping, no fallback");
 }

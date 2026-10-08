@@ -44,6 +44,10 @@ struct Written {
 struct Writes {
     next: u64,
     list: Vec<Written>,
+    /// Digests of string leaves the gateway itself wrote into a plan answer
+    /// (`MIK-8043.SEAM.3`): never a step's text, so a seam never joins them.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    engine: Vec<u64>,
 }
 
 impl Writes {
@@ -225,6 +229,30 @@ pub(crate) fn note(layer: Layer, path: &'static [&'static str], value: &Value) {
             seq: 0,
         });
     });
+}
+
+/// Note every string leaf of `value` as text the gateway wrote into a plan
+/// answer (`MIK-8043.SEAM.3`). A no-op outside a delivery scope.
+pub(crate) fn note_engine_text(value: &Value) {
+    fn leaves(value: &Value, out: &mut Vec<u64>) {
+        match value {
+            Value::String(_) => out.push(digest(value)),
+            Value::Array(items) => items.iter().for_each(|v| leaves(v, out)),
+            Value::Object(map) => map.values().for_each(|v| leaves(v, out)),
+            _ => {}
+        }
+    }
+    let _ = GATEWAY_WRITES.try_with(|writes| leaves(value, &mut writes.borrow_mut().engine));
+}
+
+/// Whether `text` is a string leaf the gateway wrote into a plan answer on
+/// this call.
+#[cfg(feature = "firewall")]
+pub(super) fn is_engine_text(text: &str) -> bool {
+    let digest = digest(&Value::String(text.to_owned()));
+    GATEWAY_WRITES
+        .try_with(|writes| writes.borrow().engine.contains(&digest))
+        .unwrap_or(false)
 }
 
 /// The member a task envelope the gateway built is known by: the task id
