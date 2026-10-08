@@ -97,12 +97,7 @@ fn resolve_backend_urls(dict: &mut Dict) -> std::result::Result<(), String> {
         let figment::value::Value::String(tag, address) = url else {
             return Err(format!("backends.{name}.url must be a string."));
         };
-        let lower = address.to_ascii_lowercase();
-        let key = if lower.starts_with("http://") || lower.starts_with("https://") {
-            "http_url"
-        } else if lower.starts_with("ws://") || lower.starts_with("wss://") {
-            "ws_url"
-        } else {
+        let Some(key) = super::backend_transport::transport_key_for(&address) else {
             return Err(format!(
                 "backends.{name}.url must start with http://, https://, ws:// or wss://."
             ));

@@ -301,14 +301,7 @@ fn unread_backend_keys(raw: &str, ignored: &mut IgnoredKeys) -> BackendFindings 
         let by_url = fields
             .get("url")
             .and_then(serde_yaml::Value::as_str)
-            .map(|url| {
-                let url = url.to_ascii_lowercase();
-                if url.starts_with("ws://") || url.starts_with("wss://") {
-                    "ws_url"
-                } else {
-                    "http_url"
-                }
-            });
+            .and_then(super::backend_transport::transport_key_for);
         let selected = TRANSPORTS
             .iter()
             .filter(|(selector, ..)| is_backend_key(selector))

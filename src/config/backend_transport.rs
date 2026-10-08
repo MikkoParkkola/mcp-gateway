@@ -33,6 +33,20 @@ pub(super) fn refuse_backend_url(dict: &Dict) -> std::result::Result<(), String>
 /// The keys that each pick a backend's transport; `url` stands for one of them.
 pub(super) const TRANSPORT_KEYS: &[&str] = &["command", "http_url", "ws_url", "a2a_url"];
 
+/// The transport key a backend `url` stands for, chosen by its scheme, or
+/// `None` for a scheme no transport reads. The loader and the strict-key
+/// check both ask here, so they cannot disagree.
+pub(super) fn transport_key_for(url: &str) -> Option<&'static str> {
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        Some("http_url")
+    } else if lower.starts_with("ws://") || lower.starts_with("wss://") {
+        Some("ws_url")
+    } else {
+        None
+    }
+}
+
 /// A backend reached by more than one transport key is refused. The file and
 /// environment layers merge key by key, and the transport enum takes the first
 /// key present, so before 4.0 an environment `__WS_URL` over a file
