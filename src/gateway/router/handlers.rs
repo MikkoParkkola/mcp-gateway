@@ -2148,10 +2148,11 @@ mod cacheable_field_tests {
     async fn every_cacheable_method_gets_both_fields() {
         // "All five" is half the claim; iterating the constant alone would
         // still pass if a method were dropped from it.
+        // Five from the criterion, plus a relayed `server/discover` (MIK-8047).
         assert_eq!(
             CACHEABLE_METHODS.len(),
-            5,
-            "the criterion names five methods: {CACHEABLE_METHODS:?}"
+            6,
+            "five cacheable methods and discovery: {CACHEABLE_METHODS:?}"
         );
         for method in CACHEABLE_METHODS {
             let response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
@@ -2178,7 +2179,7 @@ mod cacheable_field_tests {
     #[tokio::test]
     async fn a_non_cacheable_method_gets_neither_field() {
         let response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
-        let built = build_modern_response(response, StatusCode::OK, "server/discover");
+        let built = build_modern_response(response, StatusCode::OK, "tools/call");
         let bytes = axum::body::to_bytes(built.into_body(), usize::MAX)
             .await
             .expect("the builder produces a complete in-memory body");
@@ -2186,5 +2187,23 @@ mod cacheable_field_tests {
 
         assert!(body["result"].get("ttlMs").is_none(), "{body}");
         assert!(body["result"].get("cacheScope").is_none(), "{body}");
+    }
+
+    /// MIK-8047 KEEP.1: the gateway's own discovery document already carries
+    /// the pair, and shaping it as a discover leaves the pair as it was.
+    #[test]
+    fn the_gateways_own_discovery_keeps_its_pair() {
+        let mut document = serde_json::json!({"resultType": "complete"});
+        crate::protocol::cacheable::write_cache_hints(
+            document.as_object_mut().expect("an object"),
+            "server/discover",
+            crate::protocol::cacheable::LIST_TTL_MS,
+        );
+        let mut response = JsonRpcResponse::success(RequestId::Number(1), document.clone());
+        super::modern_response::shape_modern_response(&mut response, "server/discover");
+        let shaped = response.result.expect("a result");
+        for key in ["resultType", "ttlMs", "cacheScope"] {
+            assert_eq!(shaped[key], document[key], "{key}: {shaped}");
+        }
     }
 }

@@ -301,6 +301,18 @@ mod tests {
         assert!(!is_error(&json!({"isError": 1})));
         assert!(!is_error(&json!([true])));
     }
+
+    /// MIK-8047: a discovery document carries `cacheScope` on both routes, so
+    /// its scope is decided in the table rather than defaulted.
+    #[test]
+    fn discovery_has_an_assessed_row() {
+        assert!(
+            super::assessed_methods()
+                .iter()
+                .any(|(name, _)| *name == "server/discover"),
+            "server/discover is emitted with a cacheScope but has no assessed row"
+        );
+    }
 }
 
 #[cfg(test)]
