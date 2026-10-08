@@ -188,7 +188,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | Item | Decision |
 |---|---|
 | A2A | Operator decision 2026-10-07: the outbound A2A bridge is finished for 4.0 (MIK-8063). `backends.<name>.a2a_url` is KEEP; `a2a_agent_card_path` is a hidden key defaulting to the spec's well-known path; the `a2a` module and default feature stay. Inbound A2A is out of scope. |
-| A2A card path default | Known follow-up: A2A 1.0, pinned in a2a-1's MIK-8063 design (round 2), puts the card at `/.well-known/agent-card.json`; the 0.3 path `/.well-known/agent.json` is the current default. a2a-1's PR updates the `a2a_agent_card_path` row and the default. |
+| A2A card path default | Done in MIK-8063 PR1 (#3401): A2A 1.0 is pinned, and the card is read from `/.well-known/agent-card.json` unless `a2a_agent_card_path` is set. |
 | `meta_mcp.cache_tools` | REMOVE (MIK-8064). |
 | Capability `trawl_extract` and the `cisco_scanner` operation `scan_mcp_server` | Held until 4.1 (MIK-7788): the gateway cannot confine where these tools connect. Capability files are outside the five surfaces, so they have no table row. Class INTERNAL: the definitions stay in the tree, refuse to run and are not offered to clients; they leave the user docs until 4.1. |
 
@@ -315,7 +315,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `auth.public_paths` | KEEP | `vec!["/health".to_string()]` | who may call the gateway | - | src/config/features/auth.rs:29 |
 | `auth.single_user` | KEEP | `false` | who may call the gateway | - | src/config/features/auth.rs:45 |
 | `backends` | KEEP | `type default` | how a user declares a backend and its credentials | - | src/config/mod.rs:105 |
-| `backends.<name>.a2a_agent_card_path` | INTERNAL | `see impl Default` | unset: the A2A spec's `/.well-known/agent.json` under `a2a_url` (src/a2a/client.rs:35); an override only for a non-standard agent | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:270 |
+| `backends.<name>.a2a_agent_card_path` | INTERNAL | `see impl Default` | unset: the A2A 1.0 well-known path `/.well-known/agent-card.json` on the origin of `a2a_url` (src/a2a/types.rs:14); an override only for a non-standard agent | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:270 |
 | `backends.<name>.a2a_url` | KEEP | `see impl Default` | outbound A2A backend endpoint; operator decision 2026-10-07: the outbound bridge ships in 4.0 (MIK-8063) | - | src/config/backend_config.rs:270 |
 | `backends.<name>.account` | KEEP | `None` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:99 |
 | `backends.<name>.allow_cleartext_credentials` | KEEP | `false` | per-backend security opt-out; stays explicit | - | src/config/backend_config.rs:83 |
@@ -1168,7 +1168,6 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp_gateway::OfflineInitError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
 | `mcp_gateway::OfflineMigrationError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
 | `mcp_gateway::Result` | INTERNAL | bin 1, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:104 |
-| `mcp_gateway::a2a` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature a2a); the outbound A2A bridge ships in 4.0 (MIK-8063); inbound A2A is out of scope | `pub(crate)`; no caller outside the crate | src/lib.rs:31 |
 | `mcp_gateway::attestation` | INTERNAL | bin 1, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:32 |
 | `mcp_gateway::autotag` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:33 |
 | `mcp_gateway::backend` | INTERNAL | bin 0, tests 52, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:34 |

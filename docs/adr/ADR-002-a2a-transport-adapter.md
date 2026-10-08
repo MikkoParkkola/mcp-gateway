@@ -5,6 +5,22 @@
 **Deciders**: Mikko Parkkola
 **References**: [AP2/Galileo Evaluation](../evaluations/AP2_AND_GALILEO_EVALUATION.md), [A2A Specification](https://a2a-protocol.org/latest/specification/)
 
+## Amendment 2026-10-07 (MIK-8063): what 4.0.0 ships
+
+This amendment supersedes the body below wherever the two disagree.
+
+- **Outbound only.** An MCP client delegates to an A2A agent through the gateway. The gateway-as-A2A-server phase (Phase 2 below) is not built: A2A-native frameworks already consume MCP directly, so it adds no access or governance they lack.
+- **A `Transport`, not a `Provider`.** An `a2a_url` backend starts in `Backend::start` as `A2aTransport`, so each delegation passes the same invoke path, pool, budgets, audit, firewall, relay detection and response gates as any tool call. A separate provider path would have bypassed them. The `A2aProvider` sketched below was never wired, and is removed.
+- **Pinned wire: A2A 1.0, JSON-RPC binding** (specification tag v1.0.1).
+  - The card is read at `/.well-known/agent-card.json`. The endpoint is the first JSONRPC 1.x entry in the card's `supportedInterfaces`.
+  - Calls use `SendMessage` with a fresh `messageId`, a `ROLE_USER` role, `A2A-Version: 1.0`, and `TASK_STATE_*` states.
+  - The `agent.json` path and `message/send` method below are pre-1.0 vocabulary.
+- **One tool per agent** (`send_message`). `SendMessage` cannot address a skill, so the skills become description text.
+- **Outbound policy.**
+  - Requests use the backend HTTP client: pinned resolution, and every redirect same-origin and SSRF-checked.
+  - The endpoint the card advertises must share the origin of `a2a_url`, so configured credentials never leave the configured origin.
+- **No caller-supplied `context_id`.** One caller could otherwise name another caller's conversation at the agent.
+
 ---
 
 ## Context

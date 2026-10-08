@@ -353,7 +353,8 @@ async fn only_read_only_rest_capabilities_are_watch_targets() {
     let mut watched: Vec<String> = fx
         .state
         .meta_mcp
-        .watch_targets()
+        .watch_catalogue()
+        .targets
         .into_iter()
         .map(|t| t.capability)
         .collect();

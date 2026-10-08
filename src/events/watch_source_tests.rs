@@ -22,6 +22,13 @@ struct Fake {
     denied: parking_lot::Mutex<Vec<String>>,
     answers: parking_lot::Mutex<VecDeque<Value>>,
     calls: parking_lot::Mutex<Vec<(String, Charge)>>,
+    /// Completeness answered before `partial`, one per catalogue read.
+    partial_script: parking_lot::Mutex<VecDeque<bool>>,
+    /// Some directory was not read (MIK-8037).
+    partial: AtomicBool,
+    /// Whether the generation moves after each catalogue read, as a reload
+    /// landing between the read and a later check (MIK-8037).
+    moves: AtomicBool,
 }
 
 #[async_trait::async_trait]
@@ -31,6 +38,27 @@ impl WatchHost for Fake {
             .lock()
             .pop_front()
             .unwrap_or_else(|| self.targets.lock().clone())
+    }
+    fn catalogue(&self) -> Catalogue {
+        let targets = self.targets();
+        let partial = self
+            .partial_script
+            .lock()
+            .pop_front()
+            .unwrap_or_else(|| self.partial.load(Ordering::Acquire));
+        Catalogue {
+            present: targets.iter().map(|t| t.capability.clone()).collect(),
+            targets,
+            complete: !partial,
+            generation: 7,
+        }
+    }
+    fn catalogue_generation(&self) -> u64 {
+        if self.moves.load(Ordering::Acquire) {
+            8
+        } else {
+            7
+        }
     }
     fn may_invoke(&self, holder: &Holder, _target: &Target) -> bool {
         !self.denied.lock().contains(&holder.principal)
@@ -649,3 +677,6 @@ async fn a_holder_that_joins_during_the_poll_keeps_the_poller() {
     );
     assert!(!poller.stop.load(Ordering::Acquire), "not stopped");
 }
+
+#[path = "watch_source_partial_tests.rs"]
+mod partial;

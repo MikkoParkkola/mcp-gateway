@@ -405,6 +405,10 @@ impl MetaMcp {
                 409,
                 "Secured execution result is unavailable",
             )),
+            Ok(Admission::Sealed) => Err(Error::json_rpc(
+                409,
+                crate::idempotency::admission::SEALED_MESSAGE,
+            )),
             Err(Refusal::Mismatch) => Err(Error::json_rpc(
                 409,
                 "Idempotency key belongs to another execution or representation",

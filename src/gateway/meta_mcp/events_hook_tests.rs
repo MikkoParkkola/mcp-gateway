@@ -346,6 +346,179 @@ async fn a_partial_reload_withdraws_a_route_a_read_capability_dropped() {
     );
 }
 
+/// MIK-8037 `WATCHGONE.3`: the watch catalogue reads completeness with its
+/// contents: incomplete until the startup scan completes, incomplete after a
+/// reload that could not read a directory (and without that directory's
+/// capabilities), complete once every directory loads again. `present` names
+/// every capability read, REST-served or not.
+#[tokio::test]
+async fn the_watch_catalogue_reports_a_partial_load() {
+    let root = tempfile::tempdir().expect("root");
+    let store = tempfile::tempdir().expect("store");
+    let (d1, d2) = (root.path().join("d1"), root.path().join("d2"));
+    for (dir, cap) in [(&d1, "alpha"), (&d2, "beta")] {
+        std::fs::create_dir_all(dir).expect("dir");
+        std::fs::write(dir.join(format!("{cap}.yaml")), capability(cap)).expect("write");
+    }
+    let (caps, _registry, meta) = wired(&[&d1, &d2], store.path()).await;
+    assert!(
+        !meta.watch_catalogue().complete,
+        "the scan is still running"
+    );
+    caps.mark_initial_scan_complete();
+    let whole = meta.watch_catalogue();
+    assert!(whole.complete, "every directory read");
+    assert!(whole.present.contains("alpha") && whole.present.contains("beta"));
+    std::fs::remove_dir_all(&d2).expect("make d2 unreadable");
+    caps.reload().await.expect("partial reload");
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(partial.present.contains("alpha") && !partial.present.contains("beta"));
+    std::fs::create_dir_all(&d2).expect("dir");
+    std::fs::write(d2.join("beta.yaml"), capability("beta")).expect("write");
+    caps.reload().await.expect("complete reload");
+    assert!(
+        meta.watch_catalogue().complete,
+        "every directory read again"
+    );
+}
+
+/// MIK-8037: every catalogue write moves the generation the watch source
+/// compares before it revokes: a reload, an unload and a registration.
+#[tokio::test]
+async fn every_catalogue_write_moves_the_generation() {
+    let root = tempfile::tempdir().expect("root");
+    let store = tempfile::tempdir().expect("store");
+    std::fs::write(root.path().join("alpha.yaml"), capability("alpha")).expect("write");
+    let (caps, _registry, _meta) = wired(&[root.path()], store.path()).await;
+    let start = caps.catalogue_generation();
+    caps.reload().await.expect("reload");
+    let reloaded = caps.catalogue_generation();
+    assert!(reloaded > start, "a reload");
+    assert!(caps.unload_capability("alpha"), "unloaded");
+    let unloaded = caps.catalogue_generation();
+    assert!(unloaded > reloaded, "an unload");
+    caps.load_from_directory(root.path().to_str().expect("utf8"))
+        .await
+        .expect("register");
+    assert!(caps.catalogue_generation() > unloaded, "a registration");
+}
+
+/// `capability(name)` with an account the gate cannot resolve: its directory
+/// reads, and the admission gate refuses it.
+fn refused(name: &str) -> String {
+    format!("{}auth:\n  account: missing\n", capability(name))
+}
+
+/// A backend whose `d1` holds `alpha`, and whose `d2` holds `beta` and the
+/// refused `gamma`, after a complete startup scan; and its watch view.
+async fn with_refused(root: &std::path::Path) -> (Arc<CapabilityBackend>, MetaMcp) {
+    let (d1, d2) = (root.join("d1"), root.join("d2"));
+    for dir in [&d1, &d2] {
+        std::fs::create_dir_all(dir).expect("dir");
+    }
+    std::fs::write(d1.join("alpha.yaml"), capability("alpha")).expect("write");
+    std::fs::write(d2.join("beta.yaml"), capability("beta")).expect("write");
+    std::fs::write(d2.join("gamma.yaml"), refused("gamma")).expect("write");
+    let accounts = Arc::new(crate::identity_propagation::AccountStrategyRegistry::default());
+    let executor = CapabilityExecutor::new().with_account_strategies(accounts);
+    let caps = Arc::new(CapabilityBackend::new("hooks", Arc::new(executor)));
+    caps.begin_initial_scan();
+    for dir in [&d1, &d2] {
+        let dir = dir.to_str().expect("utf8");
+        caps.load_from_directory(dir).await.expect("load");
+    }
+    caps.mark_initial_scan_complete();
+    assert!(!caps.has_capability("gamma"), "the gate refused it");
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_capabilities(Arc::clone(&caps));
+    (caps, meta)
+}
+
+/// MIK-8037 (review of #3406): a capability the startup load read but the
+/// account gate refused is read, not unread, so its absence is confirmed.
+#[tokio::test]
+async fn a_capability_refused_at_load_counts_as_read() {
+    let root = tempfile::tempdir().expect("root");
+    let (_caps, meta) = with_refused(root.path()).await;
+    assert!(meta.watch_catalogue().present.contains("gamma"), "read");
+}
+
+/// MIK-8037 (review of #3406): a partial reload counts as read what the gate
+/// refused in a directory it read, and only that: a capability refused
+/// earlier in the directory it could not read is unread again.
+#[tokio::test]
+async fn a_capability_refused_at_a_partial_reload_counts_as_read() {
+    let root = tempfile::tempdir().expect("root");
+    let (caps, meta) = with_refused(root.path()).await;
+    let d1 = root.path().join("d1");
+    std::fs::write(d1.join("delta.yaml"), refused("delta")).expect("write");
+    std::fs::remove_dir_all(root.path().join("d2")).expect("make d2 unreadable");
+    caps.reload().await.expect("partial reload");
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(partial.present.contains("delta"), "read, then refused");
+    assert!(!partial.present.contains("beta"), "unread");
+    assert!(
+        !partial.present.contains("gamma"),
+        "refused before, unread now"
+    );
+}
+
+/// MIK-8037 (review of #3406): an unload, a rug-pull quarantine's for one,
+/// is a confirmed removal: a partial catalogue counts the unloaded capability
+/// as read, so its subscriptions end rather than wait for a complete load.
+/// An unload of a name not loaded marks nothing.
+#[tokio::test]
+async fn an_unloaded_capability_counts_as_read_in_a_partial_catalogue() {
+    let root = tempfile::tempdir().expect("root");
+    let (caps, meta) = with_refused(root.path()).await;
+    std::fs::remove_dir_all(root.path().join("d2")).expect("make d2 unreadable");
+    caps.reload().await.expect("partial reload");
+    assert!(caps.unload_capability("alpha"), "unloaded");
+    assert!(
+        !caps.unload_capability("beta"),
+        "not loaded: nothing to unload"
+    );
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(partial.present.contains("alpha"), "removed, not unread");
+    assert!(!partial.present.contains("beta"), "still unread");
+}
+
+/// MIK-8037 (review of #3406): a rug-pull quarantine unloads a capability and
+/// the reload that follows cannot load its file back; when that reload is
+/// partial, the unload still counts as read.
+#[tokio::test]
+async fn an_unload_survives_a_partial_reload_that_cannot_restore_it() {
+    let root = tempfile::tempdir().expect("root");
+    let (caps, meta) = with_refused(root.path()).await;
+    let d1 = root.path().join("d1");
+    assert!(caps.unload_capability("alpha"), "unloaded");
+    std::fs::remove_file(d1.join("alpha.yaml")).expect("its file no longer loads");
+    std::fs::remove_dir_all(root.path().join("d2")).expect("make d2 unreadable");
+    caps.reload().await.expect("partial reload");
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(partial.present.contains("alpha"), "unloaded, not unread");
+}
+
+/// MIK-8037 (review of #3406): admitting a name again clears its unload mark,
+/// so once its own directory goes unread it is unread like any other.
+#[tokio::test]
+async fn an_admission_clears_the_unload_mark() {
+    let root = tempfile::tempdir().expect("root");
+    let (caps, meta) = with_refused(root.path()).await;
+    assert!(caps.unload_capability("alpha"), "unloaded");
+    caps.reload().await.expect("complete reload");
+    assert!(caps.has_capability("alpha"), "admitted again");
+    std::fs::remove_dir_all(root.path().join("d1")).expect("make d1 unreadable");
+    caps.reload().await.expect("partial reload");
+    let partial = meta.watch_catalogue();
+    assert!(!partial.complete, "a directory was not read");
+    assert!(!partial.present.contains("alpha"), "unread, not unloaded");
+}
+
 /// Alpha scanned, a beta subscription stored, and the startup reconcile's
 /// first pass over: where every grace-period row (MIK-8027) starts.
 async fn after_first_pass() -> (
@@ -556,3 +729,6 @@ async fn a_route_removed_before_the_first_pass_is_withdrawn_by_it() {
     );
     assert!(subscribed(store.path(), "alpha"), "and nothing else");
 }
+
+#[path = "events_hook_shape_tests.rs"]
+mod shape_tests;
