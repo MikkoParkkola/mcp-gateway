@@ -54,7 +54,7 @@ fn write_config(dir: &Path, backends: &str) -> std::path::PathBuf {
     // Owner-only: config loading refuses a file other users can read.
     crate::gateway::test_helpers::write_owner_only(
         &path,
-        &format!(
+        format!(
             "meta_mcp:\n  enabled: true\ntasks:\n  store_dir: \"{}\"\nbackends:{backends}\n",
             tasks.display()
         ),

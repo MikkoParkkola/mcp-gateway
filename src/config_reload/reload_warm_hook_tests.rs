@@ -14,14 +14,17 @@ fn yaml(backends: &str, warm: &str) -> String {
     format!("meta_mcp:\n  warm_start: [{warm}]\nbackends:{backends}\n")
 }
 
+/// A reported change and the published `meta_mcp.warm_start`.
+type Seen = (RegisteredChange, Vec<String>);
+
 const ONE: &str = "\n  x:\n    http_url: \"http://127.0.0.1:1/mcp\"\n";
 
 #[tokio::test]
 async fn a_watched_reload_reports_its_backends_to_the_hook() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join("gateway.yaml");
-    write_owner_only(&cfg, &yaml(" {}", "")).unwrap();
-    let seen: Arc<Mutex<Vec<(RegisteredChange, Vec<String>)>>> = Arc::default();
+    write_owner_only(&cfg, yaml(" {}", "")).unwrap();
+    let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
     let hook: OnRegistered = {
         let seen = Arc::clone(&seen);
         Arc::new(move |change: &RegisteredChange, config: &Config| {
@@ -47,7 +50,7 @@ async fn a_watched_reload_reports_its_backends_to_the_hook() {
     )
     .expect("the watcher starts");
 
-    write_owner_only(&cfg, &yaml(ONE, "x")).unwrap();
+    write_owner_only(&cfg, yaml(ONE, "x")).unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let reported = loop {
         if let Some(entry) = seen.lock().unwrap().first().cloned() {
