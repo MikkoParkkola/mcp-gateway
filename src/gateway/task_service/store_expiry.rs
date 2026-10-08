@@ -136,10 +136,15 @@ impl TaskStore {
     /// The full path of each sealed row's file, for the operator (MIK-8052).
     pub(crate) fn sealed_files(&self) -> Vec<std::path::PathBuf> {
         let state = self.0.state();
+        // Absolute even when `tasks.store_dir` is relative, so the operator is
+        // never left to resolve it against the gateway's working directory.
         state
             .sealed
             .iter()
-            .map(|name| self.0.dir.join(name))
+            .map(|name| {
+                let path = self.0.dir.join(name);
+                std::path::absolute(&path).unwrap_or(path)
+            })
             .collect()
     }
 

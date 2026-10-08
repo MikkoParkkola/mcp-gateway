@@ -40,7 +40,6 @@ fn a_sealed_start_says_what_happened_without_a_path() {
         "{}",
         error.message
     );
-    assert!("{}", error.message);
     assert!(
         !error.message.contains(".json"),
         "no file is named: {}",
