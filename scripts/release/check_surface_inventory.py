@@ -453,12 +453,17 @@ QUOTED = r"""(?:'[^']*'|"[^"]*")"""
 # A pure disjunction of prefix tests is the only shape `annotation_rows` can read.
 ANNOTATION_BODY = re.compile(rf"\s*key\.starts_with\({QUOTED}\)(?:\s*\|\|\s*key\.starts_with\({QUOTED}\))*\s*")
 # The two loaders that let an annotation key through: top-level keys and backend
-# keys (strict_keys.rs). Each is pinned by shape: the bare test as the whole
-# condition tail, its body recording the key as an annotation. A removed,
-# negated or narrowed branch stops matching. Threat model (MIK-8077): a careless
-# edit, not an adversary; this is the stop line for further spellings.
-ANNOTATION_BRANCH = re.compile(r"(?:&&|\bif)\s+is_annotation\(\w+\)\s*\{\s*ignored\.insert\(path,\s*Ignored::Annotation\);")
-ANNOTATION_CALL_SITES = 2
+# keys (strict_keys.rs). Each branch is pinned whole, condition and body, modulo
+# whitespace: any edit to either one, a narrowing, a negation or a removal, fails
+# closed and asks a human to re-read the annotation rows. Threat model (MIK-8077):
+# a careless edit, not an adversary; exact pinning ends the spelling rounds.
+ANNOTATION_BRANCHES = tuple(
+    re.compile(r"\s+".join(map(re.escape, b.split())))
+    for b in (
+        "if let KeyPath::Map { key: leaf, .. } = &key && is_annotation(leaf) { ignored.insert(path, Ignored::Annotation);",
+        "} else if is_annotation(key) { ignored.insert(path, Ignored::Annotation);",
+    )
+)
 
 
 def annotation_rows(code: str, path: Path) -> list[Entry]:
@@ -474,10 +479,12 @@ def annotation_rows(code: str, path: Path) -> list[Entry]:
     line = line_of(code, m.start())
     if not ANNOTATION_BODY.fullmatch(m.group(1)):
         return [Entry("is_annotation: unrecognised body, re-read the annotation rows", rel(path), line)]
-    # Matched on the mask, so a string literal cannot stand in for a branch.
-    calls = len(ANNOTATION_BRANCH.findall(mask))
-    if calls != ANNOTATION_CALL_SITES:
-        return [Entry(f"is_annotation: {calls} accepting branches, expected {ANNOTATION_CALL_SITES}", rel(path), line)]
+    # Matched on the mask, so a string literal cannot stand in for a branch;
+    # each branch exactly once, and no other caller that could disagree.
+    found = [len(b.findall(mask)) for b in ANNOTATION_BRANCHES]
+    calls = len(re.findall(r"(?<!fn )\bis_annotation\(", mask))
+    if found != [1] * len(ANNOTATION_BRANCHES) or calls != len(ANNOTATION_BRANCHES):
+        return [Entry("is_annotation: accepting branches changed, re-read the annotation rows", rel(path), line)]
     prefixes = re.findall(r"starts_with\((?:'([^']*)'|\"([^\"]*)\")\)", m.group(1))
     return [Entry(f"{a or b}*", rel(path), line, "annotation: any mapping level, never read") for a, b in prefixes]
 

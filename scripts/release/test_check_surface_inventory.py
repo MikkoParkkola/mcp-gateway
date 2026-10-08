@@ -343,10 +343,13 @@ def test_annotation_keys_are_config_rows() -> None:
         code.replace("} else if is_annotation(key) {", "} else if is_annotation(key) && key.len() > 9 {", 1),
         code.replace("} else if is_annotation(key) {", '} else if "is_annotation(key) {".is_empty() {', 1),
         code.replace("            && is_annotation(leaf)\n", "            && is_annotation(leaf)\n            && leaf.len() > 9\n", 1),
+        # Review d3: a narrowing predicate before the call, in either loader.
+        code.replace("            && is_annotation(leaf)\n", "            && leaf.len() > 9\n            && is_annotation(leaf)\n", 1),
+        code.replace("} else if is_annotation(key) {", "} else if key.len() > 9 && is_annotation(key) {", 1),
     ):
         assert mutated != code
         got = [e.id for e in rows(mutated, sk)]
-        assert got and got[0].startswith("is_annotation: 1 accepting branches"), got
+        assert got == ["is_annotation: accepting branches changed, re-read the annotation rows"], got
 
 
 def test_generated_flag_settings_are_read() -> None:
