@@ -355,3 +355,6 @@ fn a_resource_update_matches_only_its_uri() {
     let listed = event("backend.x.resources_changed", serde_json::json!({}));
     assert!(source.matches("p", &serde_json::json!({}), &listed));
 }
+
+#[path = "reconcile_table_backend_tests.rs"]
+mod reconcile_table;
