@@ -220,3 +220,122 @@ fn a_backend_source_admits_by_presence_and_eligibility() {
         assert_eq!(source.admits_now(name), admitted, "{name}");
     }
 }
+
+/// A source whose admission blocks, inside the live config's gate, until the
+/// test lets it go: the pause point `W1.3` needs, since the gate is held only
+/// by a synchronous call.
+struct Held {
+    inside: std::sync::mpsc::SyncSender<()>,
+    go: parking_lot::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+#[async_trait::async_trait]
+impl EventSource for Held {
+    fn kind(&self) -> SourceKind {
+        SourceKind::RestWatch
+    }
+    fn descriptors(&self) -> Vec<crate::events::types::EventDescriptor> {
+        vec![descriptor("probe.held", SourceKind::RestWatch)]
+    }
+    fn matches(
+        &self,
+        _principal: &str,
+        _arguments: &serde_json::Value,
+        _event: &crate::events::fanout::SourceEvent,
+    ) -> bool {
+        true
+    }
+    fn admits_now(&self, _name: &str) -> bool {
+        let _ = self.inside.send(());
+        let _ = self.go.lock().recv_timeout(Duration::from_secs(20));
+        true
+    }
+}
+
+/// A callback that accepts each connection and never answers, so a send
+/// stays in flight; the connections it accepted.
+async fn silent_callback() -> (u16, Arc<AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&accepted);
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            seen.fetch_add(1, Ordering::SeqCst);
+            held.push(stream);
+        }
+    });
+    (port, accepted)
+}
+
+/// Polls `done` every 20 ms for up to `limit`.
+async fn within(limit: Duration, done: impl Fn() -> bool) -> bool {
+    let until = tokio::time::Instant::now() + limit;
+    while !done() {
+        if tokio::time::Instant::now() >= until {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    true
+}
+
+/// `WINDOW.1` `W1.3`: a reload that starts while a send is being admitted
+/// returns only after that admission, and no reload waits on a send's
+/// network I/O: the gate is released before the POST.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reload_waits_for_an_admission_but_not_for_the_send() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = Arc::new(logged_services(dir.path()));
+    let (inside_tx, inside) = std::sync::mpsc::sync_channel(1);
+    let (go, go_rx) = std::sync::mpsc::channel();
+    hub.register_source(Arc::new(Held {
+        inside: inside_tx,
+        go: parking_lot::Mutex::new(go_rx),
+    }));
+    let (port, connections) = silent_callback().await;
+    queued_with(&hub, port, "evt_held", "probe.held", |_, _| {});
+    let attempt = tokio::spawn({
+        let (hub, services) = (Arc::clone(&hub), Arc::clone(&services));
+        async move { hub.attempt(&services, "evt_held").await }
+    });
+    tokio::task::spawn_blocking(move || inside.recv_timeout(Duration::from_secs(20)))
+        .await
+        .expect("join")
+        .expect("the attempt reached its admission");
+
+    let reload = |live: Arc<LiveConfig>| std::thread::spawn(move || live.set(Config::default()));
+    let first = reload(Arc::clone(&services.live));
+    assert!(
+        !within(Duration::from_millis(300), || first.is_finished()).await,
+        "a reload returned while a send was being admitted"
+    );
+    go.send(()).expect("release");
+    assert!(
+        within(Duration::from_secs(5), || first.is_finished()).await,
+        "the reload returned once the admission ended"
+    );
+
+    assert!(
+        within(Duration::from_secs(10), || connections
+            .load(Ordering::SeqCst)
+            >= 1)
+        .await,
+        "premise: the send is in flight"
+    );
+    let second = reload(Arc::clone(&services.live));
+    assert!(
+        within(Duration::from_secs(2), || second.is_finished()).await,
+        "a reload waited on a send's network I/O"
+    );
+    assert!(!attempt.is_finished(), "premise: the send still waits");
+    attempt.abort();
+}
