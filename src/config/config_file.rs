@@ -112,12 +112,17 @@ fn resolve_backend_urls(dict: &mut Dict) -> std::result::Result<(), String> {
             return Err(format!("backends.{name}.url must be a string."));
         };
         let Some(key) = super::backend_transport::transport_key_for(&address) else {
-            // `url` is resolved here, before variables expand, so a reference
-            // cannot pick a transport; the aliases expand later and can.
+            // Backend addresses are never expanded, so a reference is not an
+            // address; the environment supplies one through the override keys.
+            let var = format!(
+                "{}BACKENDS__{}",
+                super::OverlayEnv::PREFIX,
+                name.to_uppercase()
+            );
             return Err(if address.contains("${") || address.starts_with("env:") {
                 format!(
-                    "backends.{name}.url must be a literal address; for one from the \
-                     environment keep http_url or ws_url."
+                    "backends.{name}.url is not expanded, so it must be the address itself; \
+                     to take it from the environment set {var}__HTTP_URL or {var}__WS_URL."
                 )
             } else {
                 format!("backends.{name}.url must start with http://, https://, ws:// or wss://.")

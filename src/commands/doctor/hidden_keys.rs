@@ -252,9 +252,8 @@ pub(super) fn check_hidden_keys(path: &Path) -> Option<CheckResult> {
 /// The older spellings of a backend's `url`, which `mcp-gateway upgrade` rewrites.
 const URL_ALIASES: &[&str] = &["backends.<name>.http_url", "backends.<name>.ws_url"];
 
-/// Whether some backend holds the alias `key` names as a literal address of
-/// its scheme, the only kind `upgrade` rewrites (not `${VAR}`). The value is
-/// tested, never shown.
+/// Whether some backend holds the alias `key` names as an address of its
+/// scheme, the only kind `upgrade` rewrites. The value is tested, never shown.
 fn upgrade_rewrites(dict: &Dict, key: &str) -> bool {
     let alias = key.rsplit('.').next().unwrap_or(key);
     let Some(Value::Dict(_, backends)) = dict.get("backends") else {

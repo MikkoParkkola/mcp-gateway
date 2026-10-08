@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 
 /// The result of a rewrite: the new text, the 1-based numbers of the lines
 /// it changed, the backends it could not edit, and the backends it left on
-/// their alias because the address is not a literal of that key's scheme
-/// (an address from the environment, `${VAR}`, cannot be `url`).
+/// their alias because the value is not an address of that key's scheme
+/// (renaming would switch transport, or leave a `url` that does not load).
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct UrlRewrite {
     pub text: String,
@@ -60,7 +60,7 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
                 .and_then(|d| d.get("backends")?.get(entry.name.as_str())?.get(alias))
                 .and_then(serde_yaml::Value::as_str);
             if value.and_then(transport_key_for) != Some(alias) {
-                // Renaming would not load (`${VAR}`) or would switch transport.
+                // Renaming would switch transport or would not load.
                 kept.push(entry.name);
                 continue;
             }

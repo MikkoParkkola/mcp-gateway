@@ -80,9 +80,9 @@ pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -
     }
     if !rewrite.kept.is_empty() {
         out.push(format!(
-            "{at}: kept `http_url`/`ws_url` for backends {}: `url` takes only a literal \
-             http(s):// or ws(s):// address of that key, and these hold another value \
-             (such as ${{VAR}}).",
+            "{at}: kept `http_url`/`ws_url` for backends {}: their value is not an \
+             http(s):// address under `http_url` or a ws(s):// address under `ws_url`, \
+             so `url` would change what they do.",
             rewrite.kept.join(", ")
         ));
     }

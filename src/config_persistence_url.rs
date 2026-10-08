@@ -9,9 +9,9 @@ use serde_yaml::{Mapping, Value};
 use crate::config::{Config, transport_key_for};
 
 /// Move a serialised backend's `http_url` or `ws_url` to `url`, when its
-/// value is a literal address of that transport. An address from the
-/// environment (`${VAR}`) keeps its alias: the loader resolves `url` before
-/// it expands variables, so `url: ${VAR}` would not load.
+/// value is an address of that key's scheme. Any other value keeps its
+/// alias: as `url`, a ws address under `http_url` would switch transport,
+/// and a value with no scheme would not load.
 pub(super) fn spell_as_url(entry: &mut Mapping) {
     for alias in ["http_url", "ws_url"] {
         let literal = entry
