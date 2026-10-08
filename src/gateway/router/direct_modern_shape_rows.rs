@@ -433,3 +433,39 @@ async fn a_direct_receipt_is_built_without_the_gateway_stamp() {
     let read = modern(&fx, "alpha", "resources/read", json!({"uri": "res://x"})).await;
     unstamped("catalogue", &read);
 }
+
+/// `MIK-8025.SHAPE.1`: through the route, a modern answer is delivered with
+/// the members the shaper wrote (`resultType`, and on a catalogue read the
+/// cache hints), and the receipt is built without them, live and on a
+/// replay, which is shaped again for its own request.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_direct_receipt_is_built_without_the_shapers_members() {
+    use super::super::direct_guards_fixture::fixture_relayed;
+    use crate::gateway::meta_mcp::invoke::relay::take_staged_for_test;
+    let unshaped = |label: &str, delivered: &Value, members: &[&str]| {
+        let staged = take_staged_for_test();
+        assert!(!staged.is_empty(), "{label}: nothing staged");
+        for member in members {
+            assert!(
+                delivered["result"].get(*member).is_some(),
+                "{label}: base: {member} not delivered: {delivered}"
+            );
+            for copy in &staged {
+                assert!(copy.get(*member).is_none(), "{label}: {member} in {copy}");
+            }
+        }
+    };
+    for backend in BACKENDS {
+        let fx = fixture_relayed(Answer::Ok).await;
+        let _ = take_staged_for_test();
+        let first = keyed(&fx, backend, (true, 1), "shaped").await;
+        unshaped(&format!("{backend} fresh"), &first, &["resultType"]);
+        let again = keyed(&fx, backend, (true, 2), "shaped").await;
+        unshaped(&format!("{backend} replay"), &again, &["resultType"]);
+    }
+    let fx = fixture_relayed(Answer::Ok).await;
+    let _ = take_staged_for_test();
+    let read = modern(&fx, "alpha", "resources/read", json!({"uri": "res://x"})).await;
+    unshaped("catalogue", &read, &["resultType", "cacheScope"]);
+}

@@ -520,4 +520,33 @@ mod tests {
             "the gateway's final stamps stay a wrapper"
         );
     }
+
+    /// `MIK-8025.SHAPE.1`: what the modern shaper writes (`resultType` when it
+    /// supplies one, the cache hints on a cacheable method) is the gateway's,
+    /// so a receipt copy leaves it out; a backend's own `resultType` stays.
+    #[tokio::test]
+    async fn a_copy_leaves_out_what_the_shaper_wrote() {
+        use crate::gateway::meta_mcp::invoke::gateway_writes::scope;
+        use crate::gateway::router::shape_modern_response;
+        use crate::protocol::{JsonRpcResponse, RequestId};
+        scope(async {
+            let body = json!({"contents": [{"uri": "res://x", "text": "body"}]});
+            let mut shaped = JsonRpcResponse::success(RequestId::Number(1), body);
+            let stamps = shape_modern_response(&mut shaped, "resources/read");
+            let result = shaped.result.as_ref().expect("a result");
+            assert_eq!(result["resultType"], "complete", "base: shaped {result}");
+            assert!(result.get("cacheScope").is_some(), "base: shaped {result}");
+            let copy = receipt_copy(result, stamps, AnswerShape::Literal).expect("a copy");
+            for member in ["resultType", "cacheScope", "ttlMs"] {
+                assert!(copy.get(member).is_none(), "{member} kept: {copy}");
+            }
+            let own = json!({"content": [], "resultType": "input_required"});
+            let mut backend = JsonRpcResponse::success(RequestId::Number(2), own);
+            let stamps = shape_modern_response(&mut backend, "tools/call");
+            let result = backend.result.as_ref().expect("a result");
+            let copy = receipt_copy(result, stamps, AnswerShape::Literal).expect("a copy");
+            assert_eq!(copy["resultType"], "input_required", "{copy}");
+        })
+        .await;
+    }
 }
