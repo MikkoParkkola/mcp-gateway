@@ -578,12 +578,23 @@ impl MetaMcp {
 }
 
 impl MetaMcp {
-    /// The question this gateway sealed into `response` (its envelope and its
-    /// in-flight slot), if any. Read before delivery, so a refusal there can
-    /// give the slot back (MIK-8131): an envelope that never leaves can never
-    /// be redeemed. Only an envelope this keyring opens is the gateway's.
-    pub(crate) fn sealed_question(&self, response: &JsonRpcResponse) -> Option<(String, String)> {
-        let envelope = response.result.as_ref()?.get("requestState")?.as_str()?;
+    /// The question this gateway sealed into a `tools/call` interim answer
+    /// (its envelope and its in-flight slot), if any. Read before delivery, so
+    /// a refusal there can give the slot back (MIK-8131): an envelope that
+    /// never leaves can never be redeemed. Only an interim `tools/call` answer
+    /// carries one the gateway wrote (it replaces the backend's own state with
+    /// its envelope); an envelope quoted in any other answer, even an authentic
+    /// one, belongs to some other exchange and frees nothing.
+    pub(crate) fn sealed_question(
+        &self,
+        method: &str,
+        response: &JsonRpcResponse,
+    ) -> Option<(String, String)> {
+        let result = response.result.as_ref()?;
+        if method != "tools/call" || result.get("inputRequests").is_none() {
+            return None;
+        }
+        let envelope = result.get("requestState")?.as_str()?;
         let now = crate::protocol::continuation::now_unix_secs();
         let payload = self.continuation.keyring().open(envelope, now).ok()?;
         Some((envelope.to_owned(), payload.hold_key))

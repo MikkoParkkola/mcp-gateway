@@ -266,7 +266,8 @@ async fn run_dispatched(
         .await;
     } else {
         drop(key_hold);
-        let response = inspect_settled(&state, &call, &id, response);
+        let mut response = inspect_settled(&state, &call, &id, response);
+        state.meta_mcp().release_unsent_hold(&mut response).await; // MIK-8131
         Settling::new(
             &executor,
             &state,
@@ -530,6 +531,9 @@ pub(super) fn inspect_settled(
     if response.error.is_some() || response.egress_scanned {
         return response;
     }
+    // MIK-8131: a sealed question this refuses gives its slot back (the async
+    // caller releases it).
+    let sealed = state.meta_mcp().sealed_question("tools/call", &response);
     let Some(result) = response.result.as_mut() else {
         return response;
     };
@@ -563,6 +567,7 @@ pub(super) fn inspect_settled(
             -32600,
             "Response blocked by security firewall",
         );
+        response.unsent_hold = sealed.map(|(_, hold_key)| hold_key);
     }
     response
 }

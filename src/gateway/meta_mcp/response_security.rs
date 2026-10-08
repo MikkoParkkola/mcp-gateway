@@ -190,7 +190,7 @@ impl super::MetaMcp {
     ) -> crate::protocol::JsonRpcResponse {
         use crate::protocol::JsonRpcResponse;
 
-        let sealed = self.sealed_question(&response);
+        let sealed = self.sealed_question(context.method, &response);
         // One egress scan, every method and every part (MIK-8139 family):
         // a frame another pass already screened carries the mark.
         let at = super::invoke::egress::Egress {
