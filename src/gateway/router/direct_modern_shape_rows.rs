@@ -142,6 +142,31 @@ async fn a_relayed_modern_discover_gains_the_result_type() {
     assert_eq!(body["result"]["resultType"], "complete", "{body}");
 }
 
+/// MIK-8047 DISC.1: a relayed modern discover carries the cache pair when the
+/// backend omits it, and keeps a backend hint under the gateway cap.
+#[tokio::test]
+async fn a_relayed_modern_discover_carries_the_cache_pair() {
+    for (answer, want) in [
+        (Answer::Ok, crate::protocol::cacheable::LIST_TTL_MS),
+        (Answer::ModernList, 3000),
+    ] {
+        let fx = fixture(answer, |_| {}).await;
+        let body = modern(&fx, "alpha", "server/discover", json!({})).await;
+        assert_eq!(body["result"]["ttlMs"], want, "{body}");
+        assert_eq!(body["result"]["cacheScope"], "private", "{body}");
+    }
+}
+
+/// MIK-8047 KEEP.1: a legacy discover relayed to a backend gains neither.
+#[tokio::test]
+async fn a_relayed_legacy_discover_gains_no_cache_pair() {
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    let body = legacy(&fx, "alpha", "server/discover", json!({})).await;
+    for key in ["resultType", "ttlMs", "cacheScope"] {
+        assert!(body["result"].get(key).is_none(), "gained {key}: {body}");
+    }
+}
+
 /// The drain keeps the shortest valid hint across pages; an absent hint
 /// erases nothing, `0` survives, and the shaper caps an over-long hint.
 #[tokio::test]
