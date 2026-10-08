@@ -126,6 +126,39 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), [])
 
+    def test_a_multiline_trait_declaration_needs_no_row(self) -> None:
+        self.repo.write(
+            "src/oauth/mod.rs",
+            "pub fn existing() {}\npub trait Caller {\n    fn adopt(\n        &self,\n    ) -> u8;\n}\n",
+        )
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), [])
+
+    def test_a_semicolon_in_an_array_return_type_is_not_a_declaration(self) -> None:
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn key(\n) -> [u8; 16] {\n    [0; 16]\n}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["key"])
+
+    def test_cfg_all_with_test_is_test_only_and_not_test_is_not(self) -> None:
+        self.repo.write(
+            "src/oauth/mod.rs",
+            "pub fn existing() {}\n#[cfg(all(unix, test))]\nfn probe() {}\n"
+            "#[cfg(all(unix, not(test)))]\nfn live() {}\n",
+        )
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["live"])
+
+    def test_an_extern_function_is_seen(self) -> None:
+        self.repo.write("src/oauth/mod.rs", 'pub fn existing() {}\npub extern "C" fn hook() {}\n')
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["hook"])
+
+    def test_an_unenforcing_row_without_a_reason_does_not_count(self) -> None:
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn a() {}\nfn b() {}\n")
+        self.repo.write(rows.UNENFORCING, "src/oauth/mod.rs\ta\t1\t\nsrc/oauth/mod.rs\tb\t1\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["a", "b"])
+
     def test_a_private_top_level_function_is_seen(self) -> None:
         # The wave-4 sweep's pattern missed `fn` with nothing before it.
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn helper() {}\n")

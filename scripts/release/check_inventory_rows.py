@@ -44,7 +44,7 @@ PREFIXES = (
     "src/identity_propagation/",
 )
 
-FN = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+([A-Za-z_]\w*)")
+FN = re.compile(r'^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+(?:"[^"]*"\s+)?)?fn\s+([A-Za-z_]\w*)')
 TEST_FILE = re.compile(r"(^|/)tests?(/|\.rs$)|_tests?\.rs$|_tests/")
 
 
@@ -61,6 +61,27 @@ def code(line: str) -> str:
     return line.split("//", 1)[0]
 
 
+def test_only(text: str) -> bool:
+    """`#[cfg(test)]`, or a `cfg(all(...))` with `test` as an operand outside a `not(...)`."""
+    if text.startswith("#[cfg(test)]"):
+        return True
+    if not text.startswith("#[cfg(all("):
+        return False
+    return re.search(r"\btest\b", re.sub(r"not\([^()]*\)", "", text)) is not None
+
+
+def bodyless(lines: list[str], line: int) -> bool:
+    """The signature at 1-based `line` ends in `;` before any `{`: a trait
+    declaration, which has no lines of its own to cover."""
+    square = 0  # a `;` inside `[u8; 16]` does not end the signature
+    for raw in lines[line - 1 :]:
+        for ch in code(raw):
+            square += (ch == "[") - (ch == "]")
+            if ch == "{" or (ch == ";" and square == 0):
+                return ch == ";"
+    return False
+
+
 def test_lines(lines: list[str]) -> set[int]:
     """1-based line numbers inside a `#[cfg(test)]` item (a module, fn or impl)."""
     inside: set[int] = set()
@@ -71,7 +92,7 @@ def test_lines(lines: list[str]) -> set[int]:
         text = code(raw).strip()
         if start_depth is not None:
             inside.add(n)
-        elif text.startswith("#[cfg(test)]") or text.startswith("#[cfg(all(test"):
+        elif test_only(text):
             pending = True
         elif pending and text and not text.startswith("#["):
             inside.add(n)
@@ -100,7 +121,9 @@ def rows(rev: str, path: str) -> set[tuple[str, str, int]]:
     out = set()
     for line in (show(rev, path) or "").splitlines():
         cells = line.split("\t")
-        if len(cells) >= 3 and not line.startswith("#") and cells[2].isdigit():
+        # An unenforcing row counts only with its reason: that is what was reviewed.
+        reasoned = path != UNENFORCING or (len(cells) > 3 and cells[3].strip())
+        if len(cells) >= 3 and not line.startswith("#") and cells[2].isdigit() and reasoned:
             out.add((cells[0], cells[1], int(cells[2])))
     return out
 
@@ -183,9 +206,7 @@ def added_functions(base: str, head: str) -> list[tuple[str, str, int, int]]:
             new_line = int(re.match(r"@@ -\S+ \+(\d+)", line).group(1))
         elif line.startswith("+") and path:
             match = FN.match(line[1:])
-            # A bodyless trait declaration has no lines of its own to cover.
-            bodyless = code(line[1:]).rstrip().endswith(";")
-            if match and not bodyless and new_line not in tests:
+            if match and new_line not in tests and not bodyless(lines, new_line):
                 name = match.group(1)
                 found.append((path, name, new_line, occurrence(lines, name, new_line)))
             new_line += 1
