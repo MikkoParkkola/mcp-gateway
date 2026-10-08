@@ -36,13 +36,7 @@ impl EventsHub {
         loop {
             if swept.is_none_or(|at| at.elapsed() >= SWEEP_EVERY) {
                 swept = Some(Instant::now());
-                self.sweep_dead_letters(services).await;
-                // Gone subscriptions take their rate and failure state along.
-                let held = self.store.live_subscription_ids(Utc::now());
-                self.runtime.rates.retain(&held);
-                self.runtime.failures.retain(&held);
-                // Expiry removes subscriptions without a call of its own.
-                self.reconcile_stops().await;
+                self.sweep(services).await;
             }
             let wait = self.dispatch(services, &slots).await;
             tokio::select! {
@@ -50,6 +44,24 @@ impl EventsHub {
                 () = tokio::time::sleep(wait) => {}
             }
         }
+    }
+
+    /// The worker's periodic housekeeping, every [`SWEEP_EVERY`].
+    pub(super) async fn sweep(&self, services: &Services) {
+        self.sweep_dead_letters(services).await;
+        // Gone subscriptions take their rate and failure state along.
+        let held = self.store.live_subscription_ids(Utc::now());
+        self.runtime.rates.retain(&held);
+        self.runtime.failures.retain(&held);
+        // Expiry removes subscriptions without a call of its own.
+        self.reconcile_stops().await;
+        // After the stops, so freed slots are free: a watch key whose
+        // capability is offered again (the startup scan finished, a reload
+        // restored it) starts here, whatever changed the catalogue
+        // (MIK-8053). Watch only: its start is local, while another source's
+        // may reach a backend, and those are not retried every sweep.
+        self.replay_starts_of(|kind| kind == super::types::SourceKind::RestWatch)
+            .await;
     }
 
     /// Start every attempt that is due, has a token and a slot; how long to

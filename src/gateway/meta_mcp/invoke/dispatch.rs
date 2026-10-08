@@ -90,8 +90,9 @@ impl MetaMcp {
         arm_key: Option<&str>,
         caller_identity: Option<&GrantSubject>,
         // The VERIFIED end-user identity, carried for the capability route
-        // whose account boundary is inside the executor. Pass-through only.
-        caller_proof: CallerProof<'_>,
+        // whose account boundary is inside the executor, and the credential
+        // owner key that names an MCP child (MIK-7825). Pass-through only.
+        (caller_proof, credential_owner): (CallerProof<'_>, Option<&str>),
         propagated_headers: &[(String, String)],
         cache_binding: Option<&str>,
         // The capability route's account credential, resolved once above the
@@ -123,7 +124,7 @@ impl MetaMcp {
                 session_id,
                 arm_key,
                 caller_identity,
-                caller_proof,
+                (caller_proof, credential_owner),
                 propagated_headers,
                 cache_binding,
                 account_credential,
@@ -210,8 +211,9 @@ impl MetaMcp {
         // one it is checked against.
         caller_identity: Option<&GrantSubject>,
         // What the request PROVED about its caller, for the capability route
-        // whose account boundary is inside the executor. Pass-through only.
-        caller_proof: CallerProof<'_>,
+        // whose account boundary is inside the executor, and the credential
+        // owner key (`support::credential_owner`). Pass-through only.
+        (caller_proof, credential_owner): (CallerProof<'_>, Option<&str>),
         // Pre-resolved per-user propagation headers (empty = none). Resolved
         // once in `invoke_tool_traced` so the cache key and this dispatch share
         // one credential (MIK-6734); dispatch never mints.
@@ -265,6 +267,7 @@ impl MetaMcp {
                     // and again before egress.
                     account_credential,
                     mcp_generation: None,
+                    credential_principal: credential_owner.map(str::to_owned),
                 },
             )
             .await?;
