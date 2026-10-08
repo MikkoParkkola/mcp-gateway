@@ -12,7 +12,12 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use tracing::debug;
 
+mod session_hold;
+pub(crate) use session_hold::SessionHold;
+
 type CleanupFn = Box<dyn Fn(&str) + Send + Sync>;
+/// Whether the multiplexer still has a session; see `SessionLifecycle::liveness`.
+type LivenessFn = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// Registry of session disconnect callbacks.
 ///
@@ -60,6 +65,12 @@ pub struct SessionLifecycle {
     /// snapshot and its turn.
     #[cfg(test)]
     between_keys: parking_lot::Mutex<Option<Box<dyn FnMut() + Send>>>,
+    /// Session ids a running call holds, and whether the session ended under
+    /// them (MIK-7996, [`SessionHold`]). A leaf lock, never held with another.
+    session_holds: parking_lot::Mutex<std::collections::HashMap<String, session_hold::Held>>,
+    /// Whether the multiplexer still has a session, installed by the reaper
+    /// that pairs the two. None: every id counts as live.
+    liveness: std::sync::OnceLock<LivenessFn>,
 }
 
 /// A running call's claim on its caller key; see [`SessionLifecycle::hold`].
@@ -87,9 +98,9 @@ impl Drop for KeyHold {
     }
 }
 
-/// How long after a session ends its in-flight calls may still write state
-/// under its id. Longer than the backend request timeout, so a call that began
-/// before the end has finished by the second cleanup pass.
+/// When the second cleanup pass runs after a session ends. A backstop only:
+/// a call that writes after the end, however long it runs, holds the session
+/// and reruns the end handlers itself when it finishes ([`SessionHold`]).
 pub const END_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// How long an identity's derived state outlives its last observed request.
@@ -139,6 +150,13 @@ impl SessionLifecycle {
 
     /// Register a handler for state keyed by a session id. It fires on a real
     /// session end only; see the `ended` field for why not on idle reclaim.
+    ///
+    /// It runs more than once per id: at the end, when the last call still
+    /// holding the session finishes ([`SessionHold`]), and at the grace pass,
+    /// and a re-run can race the grace pass on another thread. A handler must
+    /// therefore be idempotent and safe to run concurrently with itself. It
+    /// must not block either: a re-run happens where the last call's hold
+    /// drops, on whatever runtime thread that is.
     pub fn register_session_end(
         &self,
         name: impl Into<String>,
@@ -172,6 +190,9 @@ impl SessionLifecycle {
 
     /// Run the session-end handlers for `session_id`.
     fn fire_ended(&self, session_id: &str) {
+        // Marked first, so a call still holding the session runs these
+        // again after its last write (MIK-7996).
+        self.mark_ended(session_id);
         for (name, cb) in self.ended.read().iter() {
             cb(session_id);
             debug!(
@@ -254,8 +275,9 @@ impl SessionLifecycle {
     /// many were reclaimed.
     ///
     /// Each key fires the handlers exactly once and is then forgotten: these
-    /// callbacks free things, and a handler that runs twice for one key is its
-    /// own defect. The count is the keys removed, not the keys examined, so a
+    /// callbacks free things, and a cleanup handler that runs twice for one
+    /// key is its own defect. (Session-end handlers are the exception: see
+    /// [`Self::register_session_end`].) The count is the keys removed, not the keys examined, so a
     /// caller logging a sweep can tell an idle sweep from a busy one.
     pub fn reap(&self, now: u64) -> usize {
         // The second pass for sessions that ended a grace period ago.
@@ -351,6 +373,7 @@ pub fn wire_meta_session_cleanup(
     lifecycle: &Arc<SessionLifecycle>,
     meta: &Arc<crate::gateway::meta_mcp::MetaMcp>,
 ) {
+    meta.attach_session_lifecycle(lifecycle);
     let ended = Arc::downgrade(meta);
     lifecycle.register_session_end("meta-session-state", move |key| {
         if let Some(meta) = ended.upgrade() {

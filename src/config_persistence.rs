@@ -83,10 +83,11 @@ mod splice;
 /// What a write does when it cannot keep the file's comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommentLoss {
-    /// Re-serialise the whole file (CLI, setup import).
+    /// Re-serialise the whole file (a CLI write given `--force`, and the
+    /// reload module's public write API).
     Rewrite,
-    /// Write nothing and say what would be lost (web UI backend edits), and
-    /// skip a write that would change nothing.
+    /// Write nothing and say what would be lost (web UI backend edits and
+    /// CLI writes), and skip a write that would change nothing.
     Refuse,
 }
 
@@ -115,10 +116,56 @@ impl From<String> for Unwritten {
 /// another writer changed into something more than one backend away, is
 /// rewritten in full, or refused. An edit landing after that read is
 /// overwritten by the rename, as the full rewrite overwrites it.
+///
+/// # Errors
+///
+/// [`Unwritten::CommentLoss`] when `mode` refuses a write that would drop
+/// comments; [`Unwritten::Failed`] on validation, serialisation or I/O failure.
 pub(crate) fn write_config_with(
     path: &Path,
     config: &Config,
     mode: CommentLoss,
+) -> Result<(), Unwritten> {
+    write_spliced(path, config, mode, Splice::One)
+}
+
+/// Write `config` to `path` for a CLI command, keeping the file's comments.
+///
+/// The file's text is edited in place when `config` differs from it in
+/// `backends` alone: one backend added, removed or edited, or several added or
+/// edited (setup and discovery import). A write that would drop comments is
+/// refused, and the refusal names the comment lines; [`write_config`] (the
+/// CLI's `--force`) rewrites the file in full when it cannot splice. A `config`
+/// that is what the file already loads as writes nothing.
+///
+/// # Errors
+///
+/// The refusal, which starts with `Not saved:`, or a validation,
+/// serialisation or I/O failure, as a message ready to print.
+pub fn write_config_preserving(path: &Path, config: &Config) -> Result<(), String> {
+    write_spliced(path, config, CommentLoss::Refuse, Splice::NoRemoval).map_err(|e| match e {
+        Unwritten::CommentLoss(message) => message,
+        Unwritten::Failed(message) => format!("Failed to write {}: {message}", path.display()),
+    })
+}
+
+/// How many backends one splice may change.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Splice {
+    /// Exactly one: the web UI and the reload write API change one backend
+    /// per write, so two differences mean another writer got in between.
+    One,
+    /// Several when none is a removal (CLI setup and discovery import, which
+    /// adds backends and replaces a same-named one).
+    NoRemoval,
+}
+
+/// [`write_config_with`] with the splice limited to `scope`.
+fn write_spliced(
+    path: &Path,
+    config: &Config,
+    mode: CommentLoss,
+    scope: Splice,
 ) -> Result<(), Unwritten> {
     config
         .validate_with_env(&config.env_overlay())
@@ -129,9 +176,7 @@ pub(crate) fn write_config_with(
         if mode == CommentLoss::Refuse && value(before) == value(config) {
             return Ok(());
         }
-        if let Some(edited) = splice::changed_backend(before, config)
-            .and_then(|name| splice::with_backend_edited(text, before, config, &name))
-        {
+        if let Some(edited) = splice::with_backends_edited(text, before, config, scope) {
             return Ok(write_yaml(path, &edited)?);
         }
     }
