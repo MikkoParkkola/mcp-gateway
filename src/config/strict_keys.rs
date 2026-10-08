@@ -515,6 +515,8 @@ mod tests {
         if cfg!(feature = "a2a") {
             listed.extend(A2A_BACKEND_KEYS.iter().map(|k| (*k).to_owned()));
         }
+        // `url` never reaches the struct: the loader resolves it first.
+        listed.remove("url");
         assert_eq!(
             serialized, listed,
             "KNOWN_BACKEND_KEYS drifted from BackendConfig"
