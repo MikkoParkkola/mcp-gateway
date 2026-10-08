@@ -74,9 +74,9 @@ impl TaskStore {
     /// Read every sealed row again (MIK-8052), off the runtime, and apply what
     /// it found: a removed file leaves the seal; a repaired row whose binding
     /// `import` accepts is kept. A row that restores in full is served again
-    /// (MIK-8121): a live one is first settled by `recover`, the decision
-    /// startup recovery makes, so it is never visible before that settlement
-    /// is durable; `None` from `recover` leaves it working, as a managed
+    /// (MIK-8121): each row is written durably, its key imported, and only
+    /// then published, a live one settled first by `recover`, the decision
+    /// startup recovery makes; `None` from `recover` leaves it working, as a managed
     /// deferral at startup does. Returns how many rows stay sealed, for the
     /// caller to hand to admission AFTER the imports, and the rows settled here,
     /// for the caller to announce as startup recovery does.

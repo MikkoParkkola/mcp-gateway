@@ -676,7 +676,24 @@ async fn a_refused_repair_is_withdrawn_and_stays_sealed() {
     let (path, rows, _admission, service) = sealed_service(dir.path(), &["k-refused"]).await;
     let (id, original) = &rows[0];
     std::fs::write(path.join(format!("{id}.json")), original).unwrap();
-    let (sealed, settled) = service.store.reread_sealed(|_, _| false, |_| None).await;
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (store, during) = (service.store.clone(), Arc::clone(&seen));
+    let (sealed, settled) = service
+        .store
+        .reread_sealed(
+            move |binding, task_id| {
+                let visible = store.get(&binding.principal_digest, &task_id).is_ok();
+                during.lock().unwrap().push(visible);
+                false
+            },
+            |_| None,
+        )
+        .await;
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [false],
+        "the repaired row was readable before its key was imported"
+    );
     assert_eq!(sealed, 1, "a refused repair lifted the seal");
     assert!(settled.is_empty());
     assert!(
