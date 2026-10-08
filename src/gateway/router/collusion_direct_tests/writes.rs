@@ -6,8 +6,12 @@
 
 use super::*;
 
-/// `alice` (bearer `a`) has a 1.1 daily budget and `read` costs 1.0, so her
-/// first read is answered with the gateway's `_cost_warnings` (91 %).
+/// A copy needs a shared run of `K + 2W - 1` = 79 chars to reach the
+/// default two matching fingerprints, so each probe is at least that long.
+const PROBE: usize = 79;
+
+/// `read` costs 1.0 against a 1.1 budget per tool, overall and for `alice`
+/// (bearer `a`), so her first read is answered with three gateway warnings.
 #[cfg(feature = "cost-governance")]
 fn warn_alice(meta: MetaMcp) -> MetaMcp {
     use crate::cost_accounting::config::CostGovernanceConfig;
@@ -18,6 +22,8 @@ fn warn_alice(meta: MetaMcp) -> MetaMcp {
         ..Default::default()
     };
     cfg.tool_costs.insert("read".to_string(), 1.0);
+    cfg.budgets.daily = Some(1.1);
+    cfg.budgets.per_tool.insert("read".to_string(), 1.1);
     cfg.budgets.per_key.insert("alice".to_string(), 1.1);
     let registry = Arc::new(CostRegistry::new(&cfg));
     let enforcer = Arc::new(BudgetEnforcer::new(cfg, Arc::clone(&registry)));
@@ -34,34 +40,37 @@ fn stamp(mut meta: MetaMcp) -> MetaMcp {
     meta
 }
 
-/// The first cost warning in a delivered body; long enough that a receipt
-/// holding it would catch a copy (48 chars and more).
-#[cfg(feature = "cost-governance")]
-fn warning(body: &str) -> String {
-    let text = envelope(body)["result"]["_cost_warnings"][0]
-        .as_str()
-        .unwrap_or_else(|| panic!("base: no gateway cost warning: {body}"))
-        .to_string();
-    assert!(text.len() >= 48, "base: too short to digest: {text}");
-    text
-}
-
-/// The longest string in the gateway's `_meta.provenance` stamp.
-fn provenance_text(body: &str) -> String {
-    fn longest(value: &Value, best: &mut String) {
+/// The string leaves of `value` in the order a delivery digest walks them,
+/// newline-joined as it joins them; long enough to be caught.
+fn leaf_run(value: &Value) -> String {
+    fn visit<'v>(value: &'v Value, out: &mut Vec<&'v str>) {
         match value {
-            Value::String(s) if s.len() > best.len() => best.clone_from(s),
-            Value::Array(items) => items.iter().for_each(|v| longest(v, best)),
-            Value::Object(map) => map.values().for_each(|v| longest(v, best)),
+            Value::String(s) => out.push(s),
+            Value::Array(items) => items.iter().for_each(|v| visit(v, out)),
+            Value::Object(map) => map.values().for_each(|v| visit(v, out)),
             _ => {}
         }
     }
+    let mut leaves = Vec::new();
+    visit(value, &mut leaves);
+    let run = leaves.join("\n");
+    assert!(run.len() >= PROBE, "base: too short to be caught: {value}");
+    run
+}
+
+/// The gateway's cost warnings in a delivered body, as one probe.
+#[cfg(feature = "cost-governance")]
+fn warning(body: &str) -> String {
+    let warnings = &envelope(body)["result"]["_cost_warnings"];
+    assert!(warnings.is_array(), "base: no gateway cost warning: {body}");
+    leaf_run(warnings)
+}
+
+/// The gateway's `_meta.provenance` stamp in a delivered body, as one probe.
+fn provenance_text(body: &str) -> String {
     let stamp = &envelope(body)["result"]["_meta"]["provenance"];
     assert!(stamp.is_object(), "base: no provenance stamp: {body}");
-    let mut best = String::new();
-    longest(stamp, &mut best);
-    assert!(best.len() >= 48, "base: too short to digest: {stamp}");
-    best
+    leaf_run(stamp)
 }
 
 /// `read` with an idempotency key, as `who`.
