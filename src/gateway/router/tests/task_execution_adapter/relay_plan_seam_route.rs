@@ -469,3 +469,65 @@ async fn a_short_field_between_large_ones_keeps_its_seam() {
         "a capped step lost the seam beside its short field"
     );
 }
+
+/// `MIK-8113` (ownership): step one's field carries a credential the
+/// router's response pass redacts, so the field delivered is no longer step
+/// one's text. It joins no seam: bob relaying it beside step two's field,
+/// as delivered, is not refused.
+#[tokio::test]
+async fn a_redacted_field_is_no_steps_text() {
+    let canary = concat!("ghp", "_abcdefghijklmnopqrstuvwxyz1234567890");
+    let field = format!("north slope {canary}");
+    let mock = backend(&[&field, FIELD_B]);
+    let router = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            enabled: true,
+            scan_responses: true,
+            scan_requests: false,
+            credential_redaction: true,
+            rules: vec![crate::security::firewall::FirewallRule {
+                tool_match: "*".to_string(),
+                action: crate::security::firewall::FirewallAction::Allow,
+                reason: None,
+                scan: Vec::new(),
+            }],
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let relay = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            collusion: blocking(&[BACKEND]),
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let definition: crate::playbook::PlaybookDefinition = serde_yaml::from_str(&playbook(
+        "    a:\n      path: $s1.content[0].text\n    b:\n      path: $s2.content[0].text\n",
+    ))
+    .expect("playbook fixture must parse");
+    let (state, _store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
+        &two_principal_auth(),
+        None,
+        Some(router),
+        |mut meta| {
+            meta.set_firewall(Some(relay));
+            let mut engine = crate::playbook::PlaybookEngine::new();
+            engine.register(definition);
+            meta.set_playbook_engine(engine);
+            meta
+        },
+    )
+    .await;
+    register(&state, BACKEND, &mock);
+    let output = run_seam(&state, json!({})).await;
+    let delivered = output["a"].as_str().unwrap_or_default().to_owned();
+    assert!(
+        !delivered.contains(canary) && !delivered.is_empty(),
+        "premise: the field was redacted: {output}"
+    );
+    assert!(
+        !refused(&state, "key-b", 2, &format!("{delivered}{FIELD_B}")).await,
+        "a redacted field was credited to its step"
+    );
+}
