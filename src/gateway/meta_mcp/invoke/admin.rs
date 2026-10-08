@@ -277,7 +277,15 @@ impl MetaMcp {
                 "restart_required": outcome.restart_required,
                 "restart_reason": outcome.restart_reason,
             })),
-            Err(e) => Err(Error::json_rpc(-32603, e)),
+            // A posture refusal is the caller's config refused, as the admin
+            // API's 409 says (MIK-8058); anything else is an internal error.
+            Err(e) => Err(Error::json_rpc(
+                match crate::config_reload::reload_failure(&e) {
+                    crate::config_reload::ReloadFailure::PostureRefused => -32600,
+                    _ => -32603,
+                },
+                e,
+            )),
         }
     }
 

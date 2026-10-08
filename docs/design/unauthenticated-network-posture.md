@@ -493,10 +493,12 @@ stays private; it is re-exported as `next_start_refusal` so the call site names
 the question it asks, which is what the module's one-way-to-ask rule was
 protecting. Decision C itself is **MIK-7254**.
 
-`reload_outcome`'s error reaches the admin API as a 500. It is a policy refusal
-rather than an internal fault, so the status is generous; the text is what the
-operator reads, and narrowing the status means giving `Err(String)` a shape it
-does not have. Stated rather than fixed.
+`reload_outcome`'s error reaches the admin API as 409 Conflict and the
+`gateway_reload_config` meta-tool as -32600: it is the operator's config
+refused, not an internal fault (MIK-8058). A reload cut short by shutdown is
+503, and any other failure stays 500 (-32603 on the meta-tool). The error stays
+a `String`; `config_reload::reload_failure` reads the class from the shared
+prefix, so the text the operator reads is unchanged.
 
 ### Test plan
 

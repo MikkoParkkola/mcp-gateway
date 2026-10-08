@@ -93,12 +93,34 @@ const POSTURE_REFUSED_PREFIX: &str = "config reload refused:";
 
 /// `true` when `error` is the refusal [`POSTURE_REFUSED_PREFIX`] describes.
 ///
-/// One predicate rather than a bare `starts_with`, so the day a second consumer
-/// needs to tell this apart there is one place that decides. The file watcher is
-/// the only one today; the meta-tool and the admin API forward the message
-/// whole, and it carries the prefix.
+/// One predicate rather than a bare `starts_with`, so every consumer that
+/// needs to tell this apart asks one place: the file watcher, and through
+/// [`reload_failure`] the admin API and the meta-tool.
 fn is_posture_refusal(error: &str) -> bool {
     error.starts_with(POSTURE_REFUSED_PREFIX)
+}
+
+/// Why a reload failed, for a caller that answers with a status (MIK-8058).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReloadFailure {
+    /// The posture policy refused the file: the operator's config, not a fault.
+    PostureRefused,
+    /// Shutdown began and the registry refused the reload's backends.
+    ShuttingDown,
+    /// Anything else: an unreadable file, a failed apply.
+    Internal,
+}
+
+/// Classify a `reload_outcome` error. The error stays a `String` (a public
+/// shape), so the class is read from the shared prefix and literal.
+pub(crate) fn reload_failure(error: &str) -> ReloadFailure {
+    if is_posture_refusal(error) {
+        ReloadFailure::PostureRefused
+    } else if error.starts_with(SHUTDOWN_ABORTED_ERROR) {
+        ReloadFailure::ShuttingDown
+    } else {
+        ReloadFailure::Internal
+    }
 }
 
 /// How long a config write waits for the reload lock before reporting busy.
