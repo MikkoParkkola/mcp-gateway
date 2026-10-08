@@ -588,6 +588,11 @@ pub(in crate::oauth) mod tests {
         }
         served_where_advertised("::1", "[::1]").await;
         served_where_advertised("[::1]", "[::1]").await;
+        // MIK-7739: the redirect URI keeps the configured spelling. A provider
+        // compares it as a string, so `[::1]` would not match a registered
+        // `[0:0:0:0:0:0:0:1]`.
+        served_where_advertised("0:0:0:0:0:0:0:1", "[0:0:0:0:0:0:0:1]").await;
+        served_where_advertised("[0:0:0:0:0:0:0:1]", "[0:0:0:0:0:0:0:1]").await;
     }
 
     /// Any other host keeps today's behaviour: the redirect URI names
