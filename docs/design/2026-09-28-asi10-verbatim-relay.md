@@ -85,6 +85,10 @@ arguments each satisfy, within `window`:
 - it is not held as (T, B, any) for the same T;
 - it is not `Common`.
 
+Or (MIK-8123) some caller A != B holds it as *overflow* (a sensitive tuple past A's cap or the
+pool): overflow has no source left, so no (T, B) tuple excuses it and no `allowed_flows` entry
+allows it. Do not add an excuse for overflow: it would reopen the relay a dropped tuple hid.
+
 The excuse deliberately does not cover content from another source: writing to a shared store
 and reading it back still counts. Sampling gives **no** hard length floor (§3). Repetitive text can
 share one hash, and short repeated matches can yield two. Row 7 therefore tests typical

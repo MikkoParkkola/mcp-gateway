@@ -46,6 +46,9 @@ pub(super) enum Added {
     Kept,
     /// A plain record did not fit: dropped.
     PlainDropped,
+    /// A sensitive record took the place of the caller's plain one, whose
+    /// excuse is gone.
+    PlainReplaced,
     /// A sensitive record did not fit: kept as its caller's overflow.
     Overflowed,
 }
@@ -107,15 +110,20 @@ impl Tracked {
         let fits = mine < MAX_RECORDS_PER_CALLER && self.records.len() < INLINE_RECORDS + room;
         if fits {
             // Past the inline records, grow by one: the pool is charged by
-            // capacity, so doubling would spend slots no record uses.
+            // capacity, so doubling would spend slots no record uses. The
+            // record goes in only once its storage fits the pool, so the
+            // bound holds whatever spare capacity the allocator returns.
             if self.records.len() >= INLINE_RECORDS {
                 self.records.reserve_exact(1);
+                if self.pool_records() > room {
+                    self.records.shrink_to_fit();
+                }
             }
-            self.records.push(new);
-            if self.pool_records() > room {
-                self.records.shrink_to_fit();
+            if self.pool_records() <= room {
+                self.records.push(new);
+                return Added::Kept;
             }
-            return Added::Kept;
+            self.records.shrink_to_fit();
         }
         let Some(sensitive) = new.sensitive else {
             return Added::PlainDropped;
@@ -128,7 +136,7 @@ impl Tracked {
         };
         if let Some(i) = self.records.iter().position(plain) {
             self.records[i] = new;
-            return Added::Kept;
+            return Added::PlainReplaced;
         }
         match self.overflow.iter_mut().find(|(p, _)| *p == new.principal) {
             Some((_, copies)) => copies.add(&sensitive, window),

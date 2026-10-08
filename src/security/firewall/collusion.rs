@@ -526,7 +526,9 @@ impl CollusionDetector {
         tracked.expire(now, window);
         match tracked.add(new, now, window, room) {
             holders::Added::Kept => {}
-            holders::Added::PlainDropped | holders::Added::Overflowed => {
+            holders::Added::PlainDropped
+            | holders::Added::PlainReplaced
+            | holders::Added::Overflowed => {
                 self.capped.fetch_add(1, Ordering::Relaxed);
             }
         }
