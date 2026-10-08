@@ -286,3 +286,31 @@ async fn a_redacted_direct_cost_warning_stays_out_of_the_receipt() {
     let (_, relay) = post_direct(&fx, "alpha", "k-std", "read", args, None, None).await;
     assert_eq!(relay["error"]["code"], -32002, "{relay}");
 }
+
+/// Every eligible answer carries the gateway's signature-chain link.
+fn link(mut meta: MetaMcp) -> MetaMcp {
+    meta.set_chain_signer(
+        crate::security::signature_chain::ChainSigner::from_seed(&[7; 32], "gw-test")
+            .expect("signer"),
+        crate::config::ChainEmit::Always,
+    );
+    meta
+}
+
+/// `MIK-8025.NOTE.1` (chain): the origin link the gateway adds to a live
+/// direct answer is the gateway's, so A's receipt leaves it out (B may send
+/// it) and keeps the backend's text (B is refused).
+#[tokio::test]
+async fn a_direct_chain_link_stays_out_of_the_receipt() {
+    let fx = fixture(Setup {
+        arm: link,
+        ..Setup::default()
+    })
+    .await;
+    let body = fx.read(Some("a")).await;
+    let chain = &envelope(&body)["result"]["_meta"][crate::security::signature_chain::CHAIN_META];
+    assert!(!chain.is_null(), "base: no chain link: {body}");
+    let text = leaf_run(chain);
+    assert_sent(&fx, &fx.send(Some("b"), &text).await, 1);
+    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 1);
+}
