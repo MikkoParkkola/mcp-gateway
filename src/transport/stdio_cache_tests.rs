@@ -219,15 +219,16 @@ async fn a_non_utf8_assigned_cache_reaches_the_child_byte_for_byte() {
         .join(std::ffi::OsStr::from_bytes(b"caf\xe9-pkg-cache"));
     let seen = dir.path().join("seen");
     // The environment as production builds it: the string form of the path.
-    let env = HashMap::from([(
-        "npm_config_cache".to_string(),
-        assigned.to_string_lossy().into_owned(),
-    )]);
-    let transport = StdioTransport::new_with_assigned_cache(
-        &format!(
-            "sh -c 'printf %s \"$npm_config_cache\" > {}; exit 3'",
-            seen.display()
+    // The capture path travels as a variable, never as shell text.
+    let env = HashMap::from([
+        (
+            "npm_config_cache".to_string(),
+            assigned.to_string_lossy().into_owned(),
         ),
+        ("SEEN".to_string(), seen.to_string_lossy().into_owned()),
+    ]);
+    let transport = StdioTransport::new_with_assigned_cache(
+        "sh -c 'printf %s \"$npm_config_cache\" > \"$SEEN\"; exit 3'",
         env,
         None,
         std::time::Duration::from_secs(10),
