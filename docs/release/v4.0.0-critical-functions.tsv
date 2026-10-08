@@ -349,6 +349,7 @@ src/oauth/storage.rs	create_secret_tmp	1	standard	borderline	TokenStorage::creat
 src/oauth/storage.rs	save	1	standard	borderline	TokenStorage::save	Atomic 0600 write of the token file
 src/oauth/storage.rs	load_refresh_state	1	critical	d	TokenStorage::load_refresh_state	A refresh state that cannot be read or parsed reads as rotating, so an unsettled exchange retires the token instead of resending it
 src/oauth/storage.rs	save_refresh_state	1	standard	borderline	TokenStorage::save_refresh_state	Atomic 0600 write of the refresh state
+src/oauth/storage.rs	unreadable	1	critical	d	RefreshState::unreadable	The fail-closed reading of a refresh state that cannot be read: rotating, so an unsettled token is retired rather than resent
 src/oauth/token_file.rs	read	1	critical	d	read	Refuses a token file whose mode lets other users read it
 src/personal_accounts/commit.rs	claim_forced_refresh	1	critical	b	claim_forced_refresh	Checks the live grant version; one forced refresh per claim
 src/personal_accounts/commit.rs	refresh_tokens	1	critical	d	refresh_tokens	Refuses version rollback; CAS refuses non-Connected (revoked) grants
