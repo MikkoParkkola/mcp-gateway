@@ -190,6 +190,7 @@ backend" and "fails a capability file" first.**
 | 163 | With gateway authentication off and agent authentication on, each agent owns its tasks apart, keyed on the `client_id` its token validates as (a renewed token for the same agent keeps them); every agent had shared one task owner | None. Tasks an agent created before the upgrade stay under the old shared owner, so the agent no longer finds them under its own |
 | 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept, a removed one released); restart to read a repaired task; probes (`/livez`, `/readyz`) are unaffected |
 | 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
+| 166 | A running gateway's web UI backend edits (add, edit, delete) load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still undo that writer's change | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4343,6 +4344,43 @@ says whose fault it is:
 The `gateway_reload_config` meta-tool answers that refusal with JSON-RPC
 -32600 (it was -32603) and keeps -32603 otherwise. The message text is
 unchanged on both.
+
+## 166. Config writers take a lock
+
+**Startup:** no notice
+
+Two writers editing `gateway.yaml` at the same moment (the web UI saving while a CLI command
+runs, or two gateways on one config) could lose a change: each loaded the file, edited its copy
+and wrote it, and the later write erased the earlier one while both reported success.
+
+A running gateway now holds one lock from loading the file through writing it and reloading
+what it wrote, for every web UI backend add, edit and delete. The lock is a hidden file,
+`.gateway.yaml.lock`, next to the config. It stays there by design: deleting it would let two
+writers lock different files. If your config lives in a git repository, add it to
+`.gitignore`. On Linux and macOS a lock file other accounts can open (one copied in or checked
+out as `0644`) is made owner-only at the next write, since any account that can open it could
+hold it and stall every save; one owned by another account is refused: stop every gateway and CLI command using that config,
+then remove it. On Windows a lock file whose permissions let other accounts in (one copied in,
+restored or checked out from git) is refused with the PowerShell lines that make it private.
+
+CLI writes take the same lock for their write. One that finds it held prints
+`Waiting for gateway.yaml ...` and continues once it is free; if another writer holds it for
+30 seconds, the command writes nothing and exits non-zero with "Not saved: ... locked by
+another writer; retry." A config directory where the lock file cannot be created (a
+read-only mount) refuses the write instead of writing unlocked. A CLI write whose config
+does not load is refused and leaves the file unchanged, including a config that another
+program broke while the command waited for the lock.
+
+One case is not covered yet. A CLI command reads `gateway.yaml` before it takes the lock. If
+another program (the web UI, another CLI command, a second gateway) saves the file in the
+moment between that read and the CLI's write, the CLI can write parts of its older copy back:
+a backend the other program removed can come back, its edit can be undone, or a backend it
+added can disappear. Sometimes the CLI refuses instead, with a message about comments it
+would drop. Until this is closed, do not run a CLI config write while the web UI or another
+command is saving, and check the config after one that overlapped; run a refused one again.
+
+Editors such as vim do not take the lock; avoid editing the file by hand while a CLI command
+or the web UI is saving it.
 
 ## Upgrading from 3.5.x: a walkthrough
 
