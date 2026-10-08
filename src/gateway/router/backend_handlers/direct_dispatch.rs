@@ -20,6 +20,8 @@ use super::direct_failure::DirectFailure;
 use super::direct_preflight::{Preflight, Propagation};
 use super::{BackendAuthContext, sign_and_record};
 use crate::gateway::meta_mcp::invoke::dispatch_guards::{Admission, BackendCall};
+use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
+use crate::protocol::meta::Era;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// What every stage after routing needs to name the request it serves.
@@ -231,17 +233,11 @@ pub(super) async fn admit<'a>(
     match guarded {
         Some(crate::idempotency::GuardOutcome::CachedResult(cached)) => {
             crate::gateway::meta_mcp::invoke::audit::note_cached();
-            // A replay is a delivery too: it renews this caller's own copy.
-            let mut response = JsonRpcResponse::success(id.clone(), cached);
-            let nonce = preflight.signs.then_some(&preflight.signing_nonce);
-            sign_and_record(
-                state,
-                admitted.auth,
-                (name, admitted.call.tool),
-                &mut response,
-                nonce,
-            );
-            return Err(build_http_response(&response, StatusCode::OK));
+            // A replay is a delivery too: it renews this caller's own copy,
+            // shaped for this request's era (MIK-8022).
+            let response = JsonRpcResponse::success(id.clone(), cached);
+            let auth = (admitted.auth, admitted.call.tool);
+            return Err(deliver_tail(scope, envelope, preflight, auth, response));
         }
         Some(crate::idempotency::GuardOutcome::CachedError(error)) => {
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
@@ -266,10 +262,10 @@ async fn forward_sanitized(
 ) -> Rejection {
     let Scope {
         state,
-        name,
         caller,
         route,
         id,
+        ..
     } = scope;
     let call = &admitted.call;
     let admission = match DirectRouteGuards::before_dispatch(&state.meta_mcp, call) {
@@ -293,37 +289,13 @@ async fn forward_sanitized(
     .await;
     let client = caller.client.as_ref();
     let seen = (&admitted.call, preflight.challenge.as_deref());
-    let forward =
-        DirectRouteGuards::after_dispatch(state, seen, client, &admission.warnings, forward);
-    // The spend is recorded: give the reservation back.
+    let forward = DirectRouteGuards::after_dispatch(state, seen, client, &admission, forward);
+    // The spend is settled; an unsettled reservation is given back here.
     drop(admission);
     match forward {
-        Ok(mut response) => {
-            // Restore the caller's ID over the transport's own.
-            response.id = Some(id.clone());
-            super::stamp_direct_provenance(
-                state,
-                name,
-                envelope.params.as_ref(),
-                client,
-                &mut response,
-            );
-            super::settle_direct_idempotency(admitted.idem_reservation.as_mut(), &response);
-            let nonce = preflight.chain_nonce.as_deref();
-            state
-                .meta_mcp
-                .finish_direct(&mut response, &envelope.method, nonce);
-            // What the caller receives: after every gate and the finish.
-            let nonce = preflight.signs.then_some(&preflight.signing_nonce);
-            sign_and_record(
-                state,
-                admitted.auth,
-                (name, admitted.call.tool),
-                &mut response,
-                nonce,
-            );
-            build_http_response(&response, StatusCode::OK)
-        }
+        // The same delivery as a plain answer: one tail, so a modern
+        // sanitized call is shaped like any other (MIK-8022).
+        Ok(response) => finish_response(scope, envelope, preflight, (&mut admitted, response)),
         // Settled as terminal unless raised before dispatch
         // (ADR-012 consequence 1; see `settle_direct_failure`).
         Err(e) => answer_failure(admitted, e).await,
@@ -390,11 +362,11 @@ async fn forward_plain(
     .await;
     let answered = if method == "tools/call" {
         let seen = (&admitted.call, preflight.challenge.as_deref());
-        DirectRouteGuards::after_dispatch(state, seen, client, &admission.warnings, forward)
+        DirectRouteGuards::after_dispatch(state, seen, client, &admission, forward)
     } else {
         forward.inspect(|_| super::record_client_success(state, client))
     };
-    // The spend is recorded: give the reservation back.
+    // The spend is settled; an unsettled reservation is given back here.
     drop(admission);
     Ok(answered)
 }
@@ -445,26 +417,63 @@ fn finish_response(
             &mut response,
         );
     }
+    // Settled before shaping: the cache holds no era-specific member, so a
+    // replay is shaped for its own request's era (MIK-8022).
     super::settle_direct_idempotency(admitted.idem_reservation.as_mut(), &response);
+    if method == "tools/list"
+        && envelope.era != Era::Modern
+        && let Some(result) = response.result.as_mut().and_then(Value::as_object_mut)
+    {
+        // The backend hint carried through the rebuild is for the modern
+        // shaper alone; a legacy listing stays byte-identical.
+        result.remove("ttlMs");
+    }
+    deliver_tail(
+        scope,
+        envelope,
+        preflight,
+        (admitted.auth, admitted.call.tool),
+        response,
+    )
+}
+
+/// The tail every success shares, a cached replay included: the 2026-07-28
+/// shape for a modern request, the clamp and chain finish, then (for
+/// `tools/call`) the signature, or the catalogue receipt. Shaping comes before
+/// the finish and the signature, as on `/mcp`, so both cover what is sent; the
+/// stamps tell the receipt which members the gateway wrote.
+///
+/// MIK-8025/MIK-8011 (secE) wrap this tail and the fresh steps in a
+/// `gateway_writes` scope.
+fn deliver_tail(
+    scope: Scope<'_>,
+    envelope: &Envelope,
+    preflight: &Preflight,
+    (auth, tool): (BackendAuthContext<'_>, &str),
+    mut response: JsonRpcResponse,
+) -> Rejection {
+    let (state, name) = (scope.state, scope.name);
+    let method = envelope.method.as_str();
+    let stamps = if envelope.era == Era::Modern {
+        crate::gateway::router::shape_modern_response(&mut response, method)
+    } else {
+        GatewayStamps::Legacy
+    };
+    // A replay's cached answer is not chain-eligible, so no new origin link.
     let nonce = preflight.chain_nonce.as_deref();
     state.meta_mcp.finish_direct(&mut response, method, nonce);
     if method == "tools/call" {
         let nonce = preflight.signs.then_some(&preflight.signing_nonce);
-        sign_and_record(
-            state,
-            admitted.auth,
-            (name, admitted.call.tool),
-            &mut response,
-            nonce,
-        );
+        sign_and_record(state, auth, (name, tool), &mut response, (nonce, stamps));
     } else if matches!(method, "prompts/get" | "resources/read") && response.error.is_none() {
         // MIK-7765: what a catalogue read delivers is a relay source too.
         #[cfg(feature = "firewall")]
         super::stage_direct_catalogue(
             state,
-            admitted.auth,
+            auth,
             (name, method),
             response.result.as_ref(),
+            stamps,
         );
     }
     build_http_response(&response, StatusCode::OK)

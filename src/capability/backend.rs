@@ -370,6 +370,9 @@ impl CapabilityBackend {
 
         let mut all_caps = Vec::new();
         let mut total = 0;
+        // A directory that could not be read leaves the catalogue partial:
+        // its capabilities are missing from this load, not deleted (MIK-8028).
+        let mut partial = false;
 
         for dir in &dirs {
             match CapabilityLoader::load_directory(dir).await {
@@ -378,6 +381,7 @@ impl CapabilityBackend {
                     all_caps.extend(loaded);
                 }
                 Err(e) => {
+                    partial = true;
                     warn!(backend = %self.name, directory = %dir, error = %e, "Failed to reload directory");
                 }
             }
@@ -420,6 +424,9 @@ impl CapabilityBackend {
                 }
             }
             caps.replace_all(admitted);
+            // With the swap, under the same lock: `catalogue_snapshot` never
+            // sees one without the other.
+            self.set_catalogue_partial(partial);
             self.executor.bump_policy_epoch();
             self.executor.stop_unloaded_mcp(&|name| {
                 !revoked.contains(name) && caps.index.contains_key(name)
