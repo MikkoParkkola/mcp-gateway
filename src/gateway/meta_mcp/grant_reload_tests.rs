@@ -686,3 +686,56 @@ async fn r_a_restored_backup_reports_a_negative_revocation_delta() {
         "R premise: the backup re-granted"
     );
 }
+
+// MIK-8058.STATUS.3: `gateway_reload_config` classifies a failed reload as
+// the admin API does. A posture refusal is the operator's config refused
+// (-32600, invalid request), not an internal error; anything else keeps
+// -32603. The text is unchanged.
+
+/// A reload context over `file`, with no grant sink, against `registry`.
+fn plain_ctx(dir: &tempfile::TempDir, file: &str, registry: Arc<BackendRegistry>) -> ReloadContext {
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, file).expect("write config");
+    ReloadContext::new(
+        path,
+        Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
+        registry,
+        crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(300),
+    )
+    .expect("the registry pairs with the config")
+}
+
+#[tokio::test]
+async fn a_posture_refusal_is_an_invalid_request_on_the_meta_tool() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let meta = meta();
+    let file = "server:\n  public_url: \"https://gw.example.com\"\n";
+    meta.set_reload_context(Arc::new(plain_ctx(
+        &dir,
+        file,
+        Arc::new(BackendRegistry::new()),
+    )));
+
+    let err = meta.reload_config().await.expect_err("a refused reload");
+
+    assert_eq!(err.to_rpc_code(), -32600, "{err}");
+    assert!(err.to_string().contains("config reload refused:"), "{err}");
+}
+
+#[tokio::test]
+async fn a_reload_cut_short_by_shutdown_keeps_the_internal_code_on_the_meta_tool() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let meta = meta();
+    let registry = Arc::new(BackendRegistry::new());
+    registry.stop_all().await;
+    let file = "backends:\n  added:\n    command: \"true\"\n";
+    meta.set_reload_context(Arc::new(plain_ctx(&dir, file, registry)));
+
+    let err = meta.reload_config().await.expect_err("an aborted reload");
+
+    assert_eq!(err.to_rpc_code(), -32603, "{err}");
+    assert!(err.to_string().contains("shutting down"), "{err}");
+}
