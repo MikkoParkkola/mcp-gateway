@@ -79,10 +79,19 @@ pub(crate) fn task_to_result(task: &Task) -> Value {
     let state = task.status.state;
     match state {
         TaskState::Completed => {
+            // The artifacts, then the agent's closing status message: an agent
+            // may answer in either, and dropping one loses part of the answer.
             let parts: Vec<Part> = task
                 .artifacts
                 .iter()
-                .flat_map(|artifact| artifact.parts.iter().cloned())
+                .flat_map(|artifact| artifact.parts.iter())
+                .chain(
+                    task.status
+                        .message
+                        .iter()
+                        .flat_map(|message| message.parts.iter()),
+                )
+                .cloned()
                 .collect();
             parts_to_result(&task.id, &parts)
         }
@@ -188,9 +197,10 @@ fn parts_to_result(owner: &str, parts: &[Part]) -> Value {
     // MCP `structuredContent` is an object: promoted only when the reply's one
     // data part is one.
     if data_parts == 1
-        && let [object] = objects.as_slice()
+        && objects.len() == 1
+        && let Some(object) = objects.pop()
     {
-        result["structuredContent"] = Value::Object(object.clone());
+        result["structuredContent"] = Value::Object(object);
     }
     result
 }
