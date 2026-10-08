@@ -97,6 +97,11 @@ impl Need {
         self.filter() != before
     }
 
+    /// Whether a live key watches `uri`.
+    pub(crate) fn watches(&self, uri: &str) -> bool {
+        self.uris.contains_key(uri)
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.resources_changed == 0
             && self.prompts_changed == 0
@@ -201,6 +206,9 @@ impl Snapshot {
         }
     }
 }
+
+#[path = "upstream_ledger.rs"]
+pub(crate) mod ledger;
 
 #[cfg(test)]
 #[path = "upstream_need_tests.rs"]
