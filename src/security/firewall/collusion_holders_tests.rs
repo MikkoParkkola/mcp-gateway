@@ -8,12 +8,15 @@
 //! makes that caller's copy count conservatively instead of switching the
 //! fingerprint off.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::{CollusionDetector, RelayAction, RelayParams};
 
 const BOB: &str = "principal-bob";
 const CAROL: &str = "principal-carol";
+const DAVE: &str = "principal-dave";
+/// A source no `allowed_flows` entry lets leave.
+const RESTRICTED: &str = "vault:read_secret";
 const EGRESS: &str = "backend:post_message";
 
 fn detector() -> CollusionDetector {
@@ -91,22 +94,75 @@ fn plain_records_go_before_a_sensitive_one() {
     );
 }
 
-/// `MIK-8123`: a sensitive record past the cap is never silently lost. Carol
-/// got the passage first from a source no flow lets leave, then from many
-/// sources whose flow allows the egress; bob relaying it through that flow
-/// is still a finding.
+/// Carol received `text` as sensitive from 64 sources whose flow (entry 1)
+/// lets it leave, at `at`, then from one more source no flow lets leave: one
+/// record past her cap.
+fn overflowed(d: &CollusionDetector, text: &str, at: Instant) {
+    for i in 0..64 {
+        d.record_delivery_flows_at(&source(i), CAROL, (true, 1), text, at);
+    }
+    d.record_delivery_flows_at(RESTRICTED, CAROL, (true, 0), text, at);
+}
+
+/// `MIK-8123`: a sensitive record past the cap is never silently lost: the
+/// restriction it carried still holds. Bob relaying through a flow every
+/// kept record allows is a finding.
 #[test]
 fn a_restriction_past_the_cap_still_holds() {
     let d = detector();
     let now = Instant::now();
     let text = passage();
-    d.record_delivery_flows_at(&source(0), CAROL, (true, 0), &text, now);
-    for i in 1..=80 {
-        d.record_delivery_flows_at(&source(i), CAROL, (true, 1), &text, now);
-    }
+    overflowed(&d, &text, now);
     assert!(
         d.check_egress_flows_at(BOB, (EGRESS, 1), &text, now)
             .is_some(),
         "a restriction past the cap was lost"
+    );
+}
+
+/// `MIK-8123`: what a record past the cap carried has no source left, so no
+/// exact copy excuses it: dave, who holds his own copy from the restricted
+/// source, relaying it is still a finding.
+#[test]
+fn an_exact_copy_does_not_excuse_what_overflowed() {
+    let d = detector();
+    let now = Instant::now();
+    let text = passage();
+    overflowed(&d, &text, now);
+    d.record_delivery_flows_at(RESTRICTED, DAVE, (false, 0), &text, now);
+    assert!(
+        d.check_egress_flows_at(DAVE, (EGRESS, 1), &text, now)
+            .is_some(),
+        "an exact copy excused what overflowed"
+    );
+}
+
+/// `MIK-8123`: what overflowed is held as long as its own sensitive
+/// delivery, never extended by later plain ones: inside the window bob's
+/// relay is a finding, past it none, though carol kept receiving it plainly.
+#[test]
+fn what_overflowed_expires_with_its_own_delivery() {
+    let d = detector();
+    let t0 = Instant::now();
+    let text = passage();
+    overflowed(&d, &text, t0);
+    for i in 100..110 {
+        d.record_delivery_at(
+            &source(i),
+            CAROL,
+            false,
+            &text,
+            t0 + Duration::from_secs(500),
+        );
+    }
+    assert!(
+        d.check_egress_flows_at(BOB, (EGRESS, 1), &text, t0 + Duration::from_secs(300))
+            .is_some(),
+        "control: inside the window it is a finding"
+    );
+    assert!(
+        d.check_egress_flows_at(BOB, (EGRESS, 1), &text, t0 + Duration::from_secs(650))
+            .is_none(),
+        "plain deliveries extended what overflowed"
     );
 }
