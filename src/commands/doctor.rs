@@ -686,7 +686,7 @@ fn format_badge(status: &CheckStatus, color: bool) -> &'static str {
 
 // ── Utility helpers ────────────────────────────────────────────────────────────
 
-fn resolve_config_path(explicit: Option<&Path>) -> Option<PathBuf> {
+pub(super) fn resolve_config_path(explicit: Option<&Path>) -> Option<PathBuf> {
     if let Some(p) = explicit {
         return Some(p.to_path_buf());
     }

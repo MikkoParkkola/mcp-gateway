@@ -12,6 +12,7 @@ mod backend_add;
 mod backend_config;
 mod backend_debug;
 mod backend_ownership;
+mod backend_transport;
 mod config_file;
 mod env_overlay;
 mod features;
@@ -43,6 +44,7 @@ use crate::mtls::MtlsConfig;
 use crate::routing_profile::RoutingProfileConfig;
 use crate::security::{posture, verify_remote_server_provenance};
 use crate::{Error, Result};
+pub(crate) use backend_transport::transport_key_for;
 use config_file::ConfigFile;
 
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
@@ -265,6 +267,7 @@ impl Provider for OverlayEnv<'_> {
             }
             Self::insert_nested(&mut dict, &parts, value);
         }
+        backend_transport::refuse_backend_url(&dict).map_err(figment::Error::from)?;
         Ok(Profile::Default.collect(dict))
     }
 }
@@ -570,6 +573,8 @@ impl Config {
         // Before any validation, so a misspelt key is reported rather than the
         // validation error its absence causes.
         strict_keys::refuse_unrecognised_keys(path, &figment)?;
+        // After the file-only strict check: this catches a pair the env makes.
+        backend_transport::refuse_two_transports(&figment)?;
         // ORDER MATTERS, AND IT DID NOT BEFORE.
         //
         // `expand_env_vars` below INLINES `auth.bearer_token` and
@@ -760,6 +765,8 @@ pub mod humantime_serde;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+mod backend_url_tests;
 #[cfg(test)]
 mod secret_file_ref_tests;
 #[cfg(test)]
