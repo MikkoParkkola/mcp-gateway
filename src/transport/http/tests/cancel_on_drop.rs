@@ -131,3 +131,77 @@ async fn a_dropped_modern_request_sends_no_notification() {
     assert!(received(&seen, "slow"), "precondition: it was sent");
     assert!(cancels.is_empty(), "{cancels:?}");
 }
+
+/// R1: the session-recovery resend is its own exchange. Its first POST was
+/// answered (session not found), so only the resend, dropped mid-call, is
+/// cancelled: once, on the fresh session.
+#[tokio::test]
+async fn a_dropped_recovery_resend_is_cancelled_once_on_the_fresh_session() {
+    use crate::transport::Transport as _;
+    let seen = Seen::default();
+    let record = Arc::clone(&seen);
+    let app = axum::Router::new().fallback(move |headers: HeaderMap, body: String| {
+        let record = Arc::clone(&record);
+        async move {
+            let message: Value = serde_json::from_str(&body).unwrap_or_default();
+            let session = headers
+                .get("mcp-session-id")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            record
+                .lock()
+                .unwrap()
+                .push((message.clone(), session.clone()));
+            let Some(id) = message.get("id").cloned() else {
+                return axum::http::StatusCode::ACCEPTED.into_response();
+            };
+            if message["method"] == "initialize" {
+                let body = json!({"jsonrpc": "2.0", "id": id, "result": {
+                    "protocolVersion": crate::protocol::PROTOCOL_VERSION,
+                    "capabilities": {}, "serverInfo": {"name": "r1", "version": "0"}}});
+                return ([("mcp-session-id", "fresh")], axum::Json(body)).into_response();
+            }
+            if session.as_deref() != Some("fresh") {
+                let body = json!({"jsonrpc": "2.0", "id": id,
+                    "error": {"code": -32015, "message": "Session not found"}});
+                return axum::Json(body).into_response();
+            }
+            tokio::time::sleep(SLOW).await;
+            axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}})).into_response()
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await });
+
+    let transport = super::make_transport(&format!("http://{addr}/mcp"));
+    super::set_default_session(&transport, "stale");
+    let _ = tokio::time::timeout(
+        Duration::from_secs(2),
+        transport.request("tools/list", None),
+    )
+    .await;
+    tokio::time::sleep(ARRIVAL).await;
+
+    let messages = seen.lock().unwrap().clone();
+    let lists: Vec<_> = messages
+        .iter()
+        .filter(|(m, _)| m["method"] == "tools/list")
+        .collect();
+    assert_eq!(
+        lists.len(),
+        2,
+        "precondition: the call was resent: {messages:?}"
+    );
+    let cancels: Vec<_> = messages
+        .iter()
+        .filter(|(m, _)| m["method"] == "notifications/cancelled")
+        .collect();
+    assert_eq!(cancels.len(), 1, "exactly one cancel: {messages:?}");
+    assert_eq!(cancels[0].0["params"]["requestId"], lists[1].0["id"]);
+    assert_eq!(
+        cancels[0].1.as_deref(),
+        Some("fresh"),
+        "on the fresh session"
+    );
+}
