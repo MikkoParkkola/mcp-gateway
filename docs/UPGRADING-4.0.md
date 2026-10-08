@@ -4329,7 +4329,8 @@ one shared key counts as one caller, as for that key's sessions and tasks.
 
 What to do: nothing, if the client echoes `requestState` exactly as received.
 A client that built or stored its own state for this route must echo the
-gateway's instead.
+gateway's instead. Behind identity propagation, a retry must carry the same
+backend credential as the question it answers.
 
 ## Upgrading from 3.5.x: a walkthrough
 

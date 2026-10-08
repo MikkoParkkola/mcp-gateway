@@ -485,12 +485,28 @@ impl super::MetaMcp {
 
     /// Admit `nonce` for `principal` in the one replay store both routes share,
     /// or refuse: a nonce seen within the window, or none when one is required.
+    /// The stamp of the registration made, if one was, is what
+    /// [`Self::release_signing_nonce`] takes back.
     pub(crate) fn admit_signing_nonce(
         &self,
         nonce: Option<&str>,
         principal: &str,
-    ) -> crate::Result<()> {
-        self.admit_signing_nonce_stamped(nonce, principal).map(drop)
+    ) -> crate::Result<Option<std::time::Instant>> {
+        self.admit_signing_nonce_stamped(nonce, principal)
+    }
+
+    /// Give back a nonce [`Self::admit_signing_nonce`] registered for a call
+    /// refused before its backend ran, so its retry may carry it again
+    /// (MIK-7698). Only that registration: see `release_unused`.
+    pub(crate) fn release_signing_nonce(
+        &self,
+        nonce: &str,
+        principal: &str,
+        stamp: std::time::Instant,
+    ) {
+        if let Some(store) = &self.nonce_store {
+            store.release_unused(nonce, principal, stamp);
+        }
     }
 
     /// [`Self::admit_signing_nonce`], with the stamp of the registration it made.

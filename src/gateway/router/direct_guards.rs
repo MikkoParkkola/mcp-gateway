@@ -46,7 +46,7 @@ impl DirectRouteGuards {
             Option<&crate::mtls::CertIdentity>,
         ),
         nonce: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<Option<AdmittedNonce>> {
         let authorizer = super::authorization::RouterAuthorizer {
             state,
             client,
@@ -58,7 +58,27 @@ impl DirectRouteGuards {
             "anonymous",
             crate::gateway::auth::QuotaPrincipal::as_store_key,
         );
-        state.meta_mcp.admit_signing_nonce(nonce, principal)
+        let stamp = state.meta_mcp.admit_signing_nonce(nonce, principal)?;
+        Ok(stamp.zip(nonce).map(|(stamp, nonce)| AdmittedNonce {
+            nonce: nonce.to_owned(),
+            principal: principal.to_owned(),
+            stamp,
+        }))
+    }
+
+    /// Give back the nonce a call admitted when it is refused before its
+    /// backend runs, so a refused call consumes none (MIK-7698).
+    pub(crate) fn release_nonce(state: &AppState, admitted: Option<AdmittedNonce>) {
+        if let Some(admitted) = admitted {
+            let AdmittedNonce {
+                nonce,
+                principal,
+                stamp,
+            } = admitted;
+            state
+                .meta_mcp
+                .release_signing_nonce(&nonce, &principal, stamp);
+        }
     }
 
     /// S2 spend, once, immediately before an actual backend dispatch (after
@@ -99,12 +119,15 @@ impl DirectRouteGuards {
         // receipt is checked and before any gate reads or rewrites the answer,
         // the meta route's order, so no gate can copy the raw state into what
         // the client receives.
-        if let Some(result) = response.result.as_mut()
-            && let Err(e) = meta
+        let mut sealed = None;
+        if let Some(result) = response.result.as_mut() {
+            match meta
                 .seal_direct_interim(who, (call.server, sent), result)
                 .await
-        {
-            return Ok(refusal(response.id.clone(), &e));
+            {
+                Ok(hold_key) => sealed = hold_key,
+                Err(e) => return Ok(refusal(response.id.clone(), &e)),
+            }
         }
         let mut warned = false;
         if let Some(result) = response.result.take() {
@@ -141,6 +164,11 @@ impl DirectRouteGuards {
             use crate::gateway::gateway_writes::{Layer, note};
             note(Layer::Value, &["_cost_warnings"], result);
         }
+        // A sealed question a gate refused never reaches the client, so its
+        // slot is given back rather than held until it expires.
+        if response.error.is_some() {
+            meta.release_direct_hold(sealed.as_deref()).await;
+        }
         // Success only on an answered result, as on meta (`handlers.rs`): a
         // gate refusal must not reset a breaker the caller had tripped.
         if response.error.is_none()
@@ -151,6 +179,14 @@ impl DirectRouteGuards {
         }
         Ok(response)
     }
+}
+
+/// The signing nonce a direct call registered: what a refusal before dispatch
+/// gives back (`DirectRouteGuards::release_nonce`).
+pub(crate) struct AdmittedNonce {
+    nonce: String,
+    principal: String,
+    stamp: std::time::Instant,
 }
 
 /// What an interim answer's continuation is bound to (MIK-8078): the caller's
