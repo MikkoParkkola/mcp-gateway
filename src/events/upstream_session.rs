@@ -256,9 +256,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             }
             Ev::Wake | Ev::Tick => {}
         }
-        // Not while a finished refill's change is still unannounced: invalidating
-        // now would have the hub announce it over an emptied cache.
-        if refill.is_none() && !state.tools_pending {
+        if refill.is_none() {
             refill = start_due_refill(&mut state, backend);
         }
         if !backend_still_current(backend, &target.handle) {
@@ -496,10 +494,12 @@ impl<'a> State<'a> {
         }
     }
 
-    /// Take the tools refill when one is due, with the notices it serves.
+    /// Take the tools refill when one is due, with the notices it serves;
+    /// none while a finished refill's change is unannounced, as invalidating
+    /// then would have the hub announce it over an emptied cache.
     fn take_due_refill(&mut self) -> bool {
         let mut debt = self.shared.tools.lock();
-        if debt.due.is_none_or(|due| Instant::now() < due) {
+        if self.tools_pending || debt.due.is_none_or(|due| Instant::now() < due) {
             return false;
         }
         debt.due = None;

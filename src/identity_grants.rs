@@ -183,6 +183,26 @@ async fn read_off_runtime(
         .map_err(|_| std::io::Error::other("identity grants read thread ended without a result"))?
 }
 
+/// The read `read_identity_grants_file` performs.
+type GrantsReader = fn(&Path, crate::config::CheckedFile) -> std::io::Result<String>;
+
+#[cfg(test)]
+thread_local! {
+    /// A stand-in read for the calling thread, so a test drives the public
+    /// reader itself and not only its helper (`MIK-8052.AC2`).
+    static TEST_READER: std::cell::Cell<Option<GrantsReader>> = const { std::cell::Cell::new(None) };
+}
+
+/// The checked file read; under test, a stand-in installed on the calling
+/// thread. Taken BEFORE the read moves to its own thread.
+fn grants_reader() -> GrantsReader {
+    #[cfg(test)]
+    if let Some(read) = TEST_READER.with(std::cell::Cell::get) {
+        return read;
+    }
+    crate::config::read_checked_file
+}
+
 /// Read a local identity-grants file as persisted rows.
 ///
 /// # Errors
@@ -195,7 +215,8 @@ pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile,
         path.to_path_buf(),
         crate::config::CheckedFile::IdentityGrants,
     );
-    let content = read_off_runtime(move || crate::config::read_checked_file(&owned, what))
+    let read = grants_reader();
+    let content = read_off_runtime(move || read(&owned, what))
         .await
         .map_err(|e| {
             format!(

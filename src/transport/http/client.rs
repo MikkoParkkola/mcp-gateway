@@ -22,7 +22,7 @@ use crate::{Error, Result};
 /// An `http://` loopback origin is never proxied under any policy: cleartext
 /// (an OAuth bearer included) is allowed there only because it never leaves
 /// the machine, and an inherited `HTTP_PROXY` would carry it off.
-pub(super) fn build(
+pub(crate) fn build(
     base_origin: Url,
     timeout: Duration,
     destination: DestinationPolicy,

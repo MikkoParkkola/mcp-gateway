@@ -132,6 +132,9 @@ fn finish(failure: Option<ServiceError>) -> Result<(), ServiceError> {
 /// report success over a directory it could not delete from.
 async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     let service = Arc::clone(&executor.service);
+    // Sealed rows first: a repaired or removed row lifts the seal on new keyed
+    // calls without a restart (MIK-8052). It never fails the sweep.
+    service.reread_sealed().await;
     // The deletion snapshot is taken FIRST, so a round cancelled below is
     // deleted by a later pass, never in the same one.
     let candidates = service.store.expired_candidates(Utc::now());
