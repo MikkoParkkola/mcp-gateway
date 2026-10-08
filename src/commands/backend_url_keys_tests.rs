@@ -1,0 +1,134 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+use std::collections::BTreeSet;
+
+use super::*;
+
+/// Two backends, one on each older key, with comments around and inside them.
+const TWO_BACKENDS: &str = "\
+# my gateway
+server:
+  port: 39400
+backends:
+  # the files server
+  fs:
+    http_url: \"https://fs.example.com/mcp\"  # primary
+    headers:
+      X-Note: \"http_url: is not a key here\"
+  rt:
+    # realtime
+    ws_url: \"wss://rt.example.com/mcp\"
+    timeout: 30s
+";
+
+#[test]
+fn both_aliases_across_two_backends_become_url_and_comments_stay() {
+    let out = rewrite_url_aliases(TWO_BACKENDS, None);
+    let expected = TWO_BACKENDS
+        .replace("    http_url: \"https://fs", "    url: \"https://fs")
+        .replace("    ws_url: \"wss://rt", "    url: \"wss://rt");
+    assert_eq!(out.text, expected);
+    assert_eq!(out.changed, vec![7, 12]);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+}
+
+#[test]
+fn a_second_run_changes_nothing() {
+    let first = rewrite_url_aliases(TWO_BACKENDS, None);
+    let second = rewrite_url_aliases(&first.text, None);
+    assert_eq!(second.text, first.text);
+    assert!(second.changed.is_empty());
+}
+
+#[test]
+fn only_the_named_backends_are_rewritten() {
+    let only: BTreeSet<String> = ["rt".to_string()].into();
+    let out = rewrite_url_aliases(TWO_BACKENDS, Some(&only));
+    assert!(
+        out.text.contains("    http_url: \"https://fs"),
+        "{}",
+        out.text
+    );
+    assert!(out.text.contains("    url: \"wss://rt"), "{}", out.text);
+    assert_eq!(out.changed, vec![12]);
+}
+
+#[test]
+fn a_key_that_is_not_a_backend_field_is_left_alone() {
+    let text = "\
+# http_url: in a comment
+meta_mcp:
+  http_url: \"not a backend\"
+backends:
+  fs:
+    env:
+      http_url: \"https://env.example.com\"
+";
+    let out = rewrite_url_aliases(text, None);
+    assert_eq!(out.text, text);
+    assert!(out.changed.is_empty());
+}
+
+#[test]
+fn a_backend_that_already_has_url_is_left_for_the_loader_to_refuse() {
+    let text = "backends:\n  fs:\n    url: \"https://a.example.com\"\n    http_url: \"https://b.example.com\"\n";
+    let out = rewrite_url_aliases(text, None);
+    assert_eq!(out.text, text);
+    assert!(out.changed.is_empty());
+}
+
+#[test]
+fn a_flow_style_backend_is_reported_not_edited() {
+    let text = "backends:\n  fs: { http_url: \"https://a.example.com\" }\n  rt:\n    ws_url: \"wss://b.example.com\"\n";
+    let out = rewrite_url_aliases(text, None);
+    assert_eq!(out.skipped, vec!["fs".to_string()]);
+    assert!(out.text.contains("  fs: { http_url:"), "{}", out.text);
+    assert!(out.text.contains("    url: \"wss://b"), "{}", out.text);
+}
+
+#[test]
+fn a_cli_write_saves_a_new_backend_with_url() {
+    use mcp_gateway::config::{BackendConfig, TransportConfig};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &path,
+        "# kept\nbackends:\n  old:\n    http_url: \"https://old.example.com/mcp\"\n",
+    )
+    .expect("write config");
+    let mut config =
+        mcp_gateway::config_persistence::load_existing_or_default(&path).expect("config loads");
+    config.backends.insert(
+        "new".to_string(),
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: "https://new.example.com/mcp".to_string(),
+                streamable_http: None,
+                protocol_version: None,
+            },
+            ..Default::default()
+        },
+    );
+    super::super::config_write::write(
+        &path,
+        &config,
+        super::super::config_write::CommentLoss::Refuse,
+    )
+    .expect("write succeeds");
+    let text = std::fs::read_to_string(&path).expect("read back");
+    assert!(
+        text.contains("url: https://new.example.com/mcp")
+            || text.contains("url: \"https://new.example.com/mcp\""),
+        "{text}"
+    );
+    assert!(
+        !text.contains("http_url: https://new") && !text.contains("http_url: \"https://new"),
+        "{text}"
+    );
+    assert!(
+        text.contains("http_url: \"https://old.example.com/mcp\""),
+        "an existing backend was rewritten: {text}"
+    );
+    assert!(text.contains("# kept"), "{text}");
+}

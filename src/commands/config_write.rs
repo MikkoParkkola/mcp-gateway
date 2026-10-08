@@ -4,10 +4,13 @@
 //! refusing a write that would drop comments unless `--force` is given
 //! (MIK-8017).
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use mcp_gateway::config::Config;
-use mcp_gateway::config_persistence::{write_config, write_config_preserving};
+use mcp_gateway::config_persistence::{write_config, write_config_preserving, write_config_text};
+
+use super::backend_url_keys::{UrlRewrite, rewrite_url_aliases};
 
 /// What a CLI write does when it cannot keep the file's comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,7 +54,8 @@ pub fn write(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), Stri
             "Warning: --force rewrites {} in full. Without it this write is refused:\n  {refusal}",
             path.display()
         );
-        return Ok(());
+        let after = std::fs::read_to_string(path).unwrap_or_default();
+        return write_new_backends_as_url(path, &before, &after, config);
     }
     let after = std::fs::read_to_string(path).unwrap_or_default();
     let gone = dropped_comments(&before, &after);
@@ -63,7 +67,72 @@ pub fn write(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), Stri
             gone.join("; ")
         );
     }
-    Ok(())
+    write_new_backends_as_url(path, &before, &after, config)
+}
+
+/// A backend this write added is saved with `url`, not the older `http_url`
+/// or `ws_url` the serialiser emits. Backends already in the file are left as
+/// the operator wrote them; `mcp-gateway upgrade` rewrites those.
+fn write_new_backends_as_url(
+    path: &Path,
+    before: &str,
+    after: &str,
+    config: &Config,
+) -> Result<(), String> {
+    let existing = backend_names(before);
+    let added: BTreeSet<String> = config
+        .backends
+        .keys()
+        .filter(|name| !existing.contains(*name))
+        .cloned()
+        .collect();
+    if added.is_empty() {
+        return Ok(());
+    }
+    let rewrite = rewrite_url_aliases(after, Some(&added));
+    if rewrite.changed.is_empty() {
+        return Ok(());
+    }
+    write_config_text(path, &rewrite.text)
+}
+
+/// The backend names a config text declares; none when it does not parse.
+fn backend_names(text: &str) -> BTreeSet<String> {
+    serde_yaml::from_str::<serde_yaml::Value>(text)
+        .ok()
+        .and_then(|v| {
+            v.get("backends")
+                .and_then(serde_yaml::Value::as_mapping)
+                .cloned()
+        })
+        .map(|m| {
+            m.keys()
+                .filter_map(|k| k.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a rewrite saves the file or only reports what it would change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RewriteMode {
+    /// Save the rewritten file when a line changed.
+    Apply,
+    /// Report only (`upgrade --dry-run`).
+    DryRun,
+}
+
+/// Rewrite every backend's `http_url` or `ws_url` in the config at `path` as
+/// `url`, saving only when a line changed and `mode` applies. The error is a
+/// message ready to print.
+pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<UrlRewrite, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    let rewrite = rewrite_url_aliases(&text, None);
+    if mode == RewriteMode::Apply && !rewrite.changed.is_empty() {
+        write_config_text(path, &rewrite.text)?;
+    }
+    Ok(rewrite)
 }
 
 /// The lines of `before` whose comment `after` no longer has, as `line N`.

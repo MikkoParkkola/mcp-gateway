@@ -82,7 +82,13 @@ fn doctor_adds_no_hidden_settings_row_for_a_fresh_init_config() {
     for profile in [InitProfile::Local, InitProfile::Minimal] {
         for with_examples in [true, false] {
             let path = dir.path().join(format!("{profile}-{with_examples}.yaml"));
-            let config = crate::commands::build_init_config(with_examples, profile, "");
+            // The starter backends init writes when every launcher is present.
+            let starter = if with_examples && profile == InitProfile::Local {
+                crate::commands::init_backends::starter_backends(|_| true).0
+            } else {
+                String::new()
+            };
+            let config = crate::commands::build_init_config(with_examples, profile, &starter);
             let parsed: Dict = Yaml::from_str(&config)
                 .unwrap_or_else(|e| panic!("init --profile {profile} writes invalid YAML: {e}"));
             std::fs::write(&path, &config).expect("write init config");
@@ -286,4 +292,22 @@ fn a_config_linked_to_a_fifo_returns_at_once_with_no_row() {
     std::os::unix::fs::symlink(&fifo, &link).expect("symlink");
     let row = answers_within(&link, std::time::Duration::from_secs(5));
     assert!(row.is_none(), "a FIFO produced a row");
+}
+
+#[test]
+fn an_older_url_key_names_the_command_that_rewrites_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        "backends:\n  fs:\n    http_url: \"https://fs.example.com/mcp\"\n",
+    )
+    .expect("write config");
+    let row = check_hidden_keys(&path).expect("an older url key is listed");
+    assert!(
+        row.detail
+            .contains("backends.<name>.http_url (run mcp-gateway upgrade to rewrite it as url)"),
+        "{}",
+        row.detail
+    );
 }
