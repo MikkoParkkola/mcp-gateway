@@ -157,3 +157,65 @@ async fn a_symlinked_lock_sidecar_refuses_the_write() {
         "untouched"
     );
 }
+
+/// R3: the lost update itself. Writer A loads, and while its edit runs,
+/// writer B adds `c`. B must not land inside A's load-edit-write window: it
+/// waits for A's lock and then edits A's result, so both changes survive.
+///
+/// Synchronised without sleeps: A's edit waits until B has either finished
+/// (an unlocked writer) or tried the lock (`fs_lock::lock_attempts` counts
+/// every attempt on the sidecar).
+#[tokio::test]
+async fn a_concurrent_writer_lands_after_the_edit_not_inside_it() {
+    let (_dir, path, lock) = config();
+    let b_path = path.clone();
+
+    let result =
+        mutate_config_and_reload_with(&path, None, CommentLoss::Refuse, |config: &mut Config| {
+            let baseline = crate::fs_lock::lock_attempts(&lock);
+            let b = std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime for writer B");
+                runtime.block_on(mutate_config_and_reload_with(
+                    &b_path,
+                    None,
+                    CommentLoss::Refuse,
+                    |config: &mut Config| {
+                        let backend = config.backends["a"].clone();
+                        config.backends.insert("c".to_string(), backend);
+                        Ok::<(), String>(())
+                    },
+                ))
+            });
+            while !b.is_finished() && crate::fs_lock::lock_attempts(&lock) <= baseline {
+                std::thread::yield_now();
+            }
+            add_b(config)?;
+            // Writer B is joined after A writes, so it is not leaked: hand it to
+            // a thread that waits for it.
+            std::thread::spawn(move || drop(b.join()));
+            Ok::<(), String>(())
+        })
+        .await;
+    assert!(
+        matches!(result, Ok(ConfigMutation::Applied(..))),
+        "writer A failed: {}",
+        outcome(&result)
+    );
+
+    // Writer B finishes once A's lock is released.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let written = loop {
+        let text = std::fs::read_to_string(&path).expect("read");
+        if text.contains("\n  c:") || std::time::Instant::now() > deadline {
+            break text;
+        }
+        tokio::task::yield_now().await;
+    };
+    assert!(
+        written.contains("\n  b:") && written.contains("\n  c:"),
+        "both writers' changes must survive; the file is:\n{written}"
+    );
+}
