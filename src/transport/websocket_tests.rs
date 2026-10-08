@@ -380,12 +380,12 @@ async fn send_message_errors_when_not_connected() {
 #[tokio::test]
 async fn send_message_succeeds_with_live_channel() {
     let t = test_transport("ws://localhost:9999");
-    let (tx, mut rx) = channel::<Message>(8);
+    let (tx, mut rx) = channel::<Outbound>(8);
     *t.inner.outbound_tx.lock().await = Some(tx);
 
     t.send_message(Message::Text("hello".into())).await.unwrap();
 
-    let msg = rx.try_recv().unwrap();
+    let (msg, _) = rx.try_recv().unwrap();
     assert_eq!(msg, Message::Text("hello".into()));
 }
 
@@ -398,8 +398,8 @@ async fn request_times_out_when_the_outbound_queue_is_full() {
         None,
     );
     // A stalled writer: capacity 1, filled, and never drained.
-    let (tx, _rx) = channel::<Message>(1);
-    tx.try_send(Message::Text("fill".into())).unwrap();
+    let (tx, _rx) = channel::<Outbound>(1);
+    tx.try_send((Message::Text("fill".into()), None)).unwrap();
     *t.inner.outbound_tx.lock().await = Some(tx);
 
     // The outer bound turns a hang into a failure instead of a stuck suite.
@@ -424,8 +424,8 @@ async fn close_does_not_wait_behind_a_blocked_send() {
         None,
     );
     // A stalled writer: capacity 1, filled, never drained.
-    let (tx, _rx) = channel::<Message>(1);
-    tx.try_send(Message::Text("fill".into())).unwrap();
+    let (tx, _rx) = channel::<Outbound>(1);
+    tx.try_send((Message::Text("fill".into()), None)).unwrap();
     *t.inner.outbound_tx.lock().await = Some(tx);
 
     let sender = Arc::clone(&t);
