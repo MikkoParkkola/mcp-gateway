@@ -332,3 +332,13 @@ fn a_repeated_alias_is_judged_by_its_last_value() {
     let out = rewrite_url_aliases(&last_variable, None);
     assert_eq!(out.kept, vec!["fs".to_string()], "{:?}", out.skipped);
 }
+
+#[test]
+fn a_backend_name_holding_a_colon_is_rewritten() {
+    // YAML ends a key at the `:` that a space or the line end follows, and a
+    // quoted key at its closing quote, so neither name is cut at its colon.
+    let text = "backends:\n  \"team:svc\":\n    http_url: \"https://a.example.test/mcp\"\n  team:ops:\n    ws_url: \"wss://b.example.test/mcp\"\n";
+    let out = rewrite_url_aliases(text, None);
+    assert_eq!(out.changed, vec![3, 5], "{:?} {:?}", out.skipped, out.kept);
+    assert!(out.skipped.is_empty() && out.kept.is_empty(), "{out:?}");
+}
