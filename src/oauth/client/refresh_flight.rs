@@ -113,6 +113,147 @@ pub(super) fn fingerprint_hex(refresh_token: &str) -> String {
     hex::encode(fingerprint(refresh_token))
 }
 
+/// The stored credential a refresh renews: where it is kept, and the name
+/// logs give it.
+pub(crate) struct StoredCredential<'a> {
+    pub(crate) storage: &'a Arc<TokenStorage>,
+    pub(crate) key: &'a str,
+    pub(crate) resource_url: &'a str,
+    pub(crate) label: &'a str,
+    pub(crate) rotation: Rotation,
+}
+
+/// Whether a credential's server is treated as rotating refresh tokens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Rotation {
+    /// Once a refresh answer is seen to replace the refresh token. Until
+    /// then, a refresh whose outcome is not known is retried (MCP backends).
+    Observed,
+    /// From the first refresh: a refresh that did not settle is never sent
+    /// again, and its token needs a new authorization (capability providers,
+    /// whose servers are not known in advance).
+    Assumed,
+}
+
+/// A client of a stored credential: the MCP backend's `OAuthClient` or a
+/// capability provider (MIK-8020). Both run under the credential's flight.
+pub(crate) trait RefreshCaller: Sync {
+    /// The access token of a fresher stored record another client wrote,
+    /// taken up instead of refreshing; `None` to refresh.
+    fn adopt(&self, stored: Option<&TokenInfo>) -> Option<String>;
+    /// The request that renews `sent`, built from `stored`, the record
+    /// re-read under the flight.
+    fn request(&self, stored: &TokenInfo, sent: &str) -> crate::Result<RefreshRequest>;
+}
+
+/// One refresh request, as its caller sends it.
+pub(crate) struct RefreshRequest {
+    pub(crate) http: reqwest::Client,
+    pub(crate) endpoint: String,
+    pub(crate) params: Vec<(&'static str, String)>,
+    pub(crate) destination: DestinationPolicy,
+    pub(crate) route: RefreshRoute,
+    /// What the caller keeps beside the issued token, filled in before the
+    /// save.
+    pub(crate) finish: Box<dyn Fn(TokenInfo) -> TokenInfo + Send + Sync>,
+}
+
+/// What [`refresh_stored`] settled to.
+pub(crate) enum Refreshed {
+    /// Another client had stored a fresher token: nothing was sent.
+    Adopted(String),
+    /// The server issued a token, and it is saved.
+    Exchanged(TokenInfo),
+    /// The server refused with an OAuth error.
+    Rejected {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    /// No refresh token may be sent (none stored, spent, or possibly
+    /// consumed by an exchange that never settled): a login is needed.
+    LoginRequired,
+}
+
+/// Refresh the credential at `at`: at most one exchange per stored credential
+/// across this process and others sharing its storage, with the stored
+/// refresh token, never one an earlier exchange may have consumed (MIK-8018).
+/// A stored record is the only source of the refresh token.
+pub(crate) async fn refresh_stored(
+    caller: &impl RefreshCaller,
+    at: StoredCredential<'_>,
+) -> crate::Result<Refreshed> {
+    let StoredCredential {
+        storage,
+        key,
+        resource_url,
+        label,
+        rotation,
+    } = at;
+    let token_path = storage.token_path(key, resource_url);
+    let flight = Flight::of(&token_path);
+    let guard = Arc::clone(&flight.lock).lock_owned().await;
+    let across = hold_across_processes(&token_path).await?;
+
+    let stored = storage.load(key, resource_url);
+    if let Some(access) = caller.adopt(stored.as_ref()) {
+        return Ok(Refreshed::Adopted(access));
+    }
+    let Some((stored, sent)) = stored.and_then(|record| {
+        let sent = record.refresh_token.clone()?;
+        Some((record, sent))
+    }) else {
+        warn!(backend = %label, "No stored refresh token; a login is needed");
+        return Ok(Refreshed::LoginRequired);
+    };
+    if flight.is_spent(&sent) {
+        warn!(backend = %label, "Refusing to resend a spent refresh token");
+        return Ok(Refreshed::LoginRequired);
+    }
+    let mut state = storage.load_refresh_state(key, resource_url);
+    if rotation == Rotation::Assumed {
+        state.rotates = true;
+    }
+    let marker = fingerprint_hex(&sent);
+    if state.rotates && state.in_flight.as_deref() == Some(marker.as_str()) {
+        retire_unsettled(&flight, storage, (key, resource_url), label, &sent, state);
+        return Ok(Refreshed::LoginRequired);
+    }
+    let request = caller.request(&stored, &sent)?;
+    // Written before sending, so a process that stops mid-exchange leaves
+    // a mark the next refresh reads (FU-A.4). Without it, nothing is sent.
+    state.in_flight = Some(marker);
+    if let Err(error) = storage.save_refresh_state(key, resource_url, &state) {
+        warn!(backend = %label, %error, "Could not mark the refresh in flight; not refreshing");
+        return Err(error);
+    }
+    let exchange = Exchange {
+        guard,
+        flight,
+        http: request.http,
+        endpoint: request.endpoint,
+        params: request.params,
+        sent,
+        storage: Arc::clone(storage),
+        key: key.to_string(),
+        resource_url: resource_url.to_string(),
+        backend: label.to_string(),
+        state,
+        destination: request.destination,
+        route: request.route,
+        finish: request.finish,
+        across,
+    };
+    let outcome = exchange
+        .spawn()
+        .await
+        .map_err(|e| Error::OAuth(format!("Token refresh task failed: {e}")))?;
+    match outcome {
+        Outcome::Refreshed(token) => Ok(Refreshed::Exchanged(token)),
+        Outcome::Rejected { status, body } => Ok(Refreshed::Rejected { status, body }),
+        Outcome::NotSent(error) | Outcome::Uncertain(error) => Err(error),
+    }
+}
+
 /// What one refresh exchange settled to.
 pub(super) enum Outcome {
     /// The server answered with a token, and it is saved.
@@ -149,6 +290,8 @@ pub(super) struct Exchange {
     pub(super) state: RefreshState,
     pub(super) destination: DestinationPolicy,
     pub(super) route: RefreshRoute,
+    /// Fills what the caller keeps beside the issued token (MIK-8020).
+    pub(super) finish: Box<dyn Fn(TokenInfo) -> TokenInfo + Send + Sync>,
     /// The flight's other half: other gateway processes sharing the storage
     /// directory wait on it too.
     pub(super) across: ExclusiveFileLock,
@@ -257,14 +400,14 @@ impl Exchange {
                 return Outcome::Uncertain(error);
             }
         }
-        let token = TokenInfo::from_response(
+        let token = (self.finish)(TokenInfo::from_response(
             answer.access_token,
             answer.token_type,
             // No new refresh token means keep the one sent (RFC 6749 section 6).
             answer.refresh_token.or_else(|| Some(self.sent.clone())),
             answer.expires_in,
             answer.scope,
-        );
+        ));
         #[cfg(test)]
         {
             let gate = self.flight.save_gate.lock().clone();

@@ -108,7 +108,8 @@ fn keep_private(lock: &Path) -> io::Result<()> {
     };
     let meta = file.metadata()?;
     let me = rustix::process::geteuid().as_raw();
-    if !meta.is_file() || meta.mode() & 0o077 == 0 {
+    let shared = meta.mode() & 0o077 != 0;
+    if !meta.is_file() || !shared {
         return Ok(());
     }
     if meta.uid() != me && me != 0 {
