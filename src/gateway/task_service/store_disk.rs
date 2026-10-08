@@ -392,7 +392,9 @@ pub(super) enum Reread {
     /// The file is gone: nothing to protect any more.
     Gone,
     /// The row now names its key and its own task id: keep that key instead.
-    Repaired(AdmissionRecord, String),
+    /// The record and its task come with it when the row restores in full, so
+    /// the store can serve it without a restart (MIK-8121).
+    Repaired(AdmissionRecord, String, Option<Box<(Record, Task)>>),
     /// Still unreadable, or refused at the trust boundary: stays sealed. A
     /// re-read never makes the store unavailable; it only declines to unseal.
     Sealed,
@@ -454,7 +456,7 @@ pub(super) fn reread_record(
         tracing::error!(path = %shown_path, "sealed task record was written by a newer gateway; it stays sealed");
         return Reread::Sealed;
     }
-    let (admission, task_id) = match (restore(&bytes, &shown_path), envelope) {
+    let (admission, task_id, row) = match (restore(&bytes, &shown_path), envelope) {
         (Some((record, task)), _) => {
             // As at load: a row with no room for the bounded failure it may
             // settle as would make the next startup refuse the store (MIK-7651).
@@ -463,7 +465,8 @@ pub(super) fn reread_record(
                 tracing::error!(path = %shown_path, "repaired task record leaves no room for its bounded failure; raise max_record_bytes or remove the row; it stays sealed");
                 return Reread::Sealed;
             }
-            (record.admission, task.id().to_owned())
+            let id = task.id().to_owned();
+            (record.admission.clone(), id, Some(Box::new((record, task))))
         }
         (
             None,
@@ -476,7 +479,7 @@ pub(super) fn reread_record(
             // As at load: the id the row names, else the file name.
             let named =
                 task_id.unwrap_or_else(|| name.strip_suffix(".json").unwrap_or(name).to_owned());
-            (admission, named)
+            (admission, named, None)
         }
         _ => return Reread::Sealed,
     };
@@ -487,7 +490,7 @@ pub(super) fn reread_record(
     if !in_custody() {
         return Reread::Sealed;
     }
-    Reread::Repaired(admission, task_id)
+    Reread::Repaired(admission, task_id, row)
 }
 
 /// The record and its task, when both read and the version is one this build

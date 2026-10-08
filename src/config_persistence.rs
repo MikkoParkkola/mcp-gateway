@@ -72,6 +72,8 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
 
 #[path = "config_persistence_splice.rs"]
 mod splice;
+#[path = "config_persistence_url.rs"]
+mod url_spelling;
 
 #[path = "config_persistence_lock.rs"]
 pub(crate) mod lock;
@@ -243,16 +245,15 @@ fn write_spliced(
             return Ok(write_yaml(path, &edited)?);
         }
     }
-    if mode == CommentLoss::Refuse {
-        let text = current
-            .map(|(_, text)| text)
-            .or_else(|| std::fs::read_to_string(path).ok());
-        if let Some(text) = text.filter(|t| t.contains('#')) {
-            return Err(Unwritten::CommentLoss(splice::comment_loss(path, &text)));
-        }
+    let existing = current
+        .map(|(_, text)| text)
+        .or_else(|| std::fs::read_to_string(path).ok());
+    if mode == CommentLoss::Refuse
+        && let Some(text) = existing.as_ref().filter(|t| t.contains('#'))
+    {
+        return Err(Unwritten::CommentLoss(splice::comment_loss(path, text)));
     }
-    let yaml =
-        serde_yaml::to_string(config).map_err(|e| format!("Failed to serialize config: {e}"))?;
+    let yaml = url_spelling::render(config, existing.as_deref())?;
     Ok(write_yaml(path, &yaml)?)
 }
 

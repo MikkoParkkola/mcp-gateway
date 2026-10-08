@@ -8,10 +8,13 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use super::super::record::{InterruptedTask, MARKER_VERSION, UPSTREAM_VERSION};
+use super::super::record::{
+    CommittedTask, ErrorAuthor, InterruptedTask, MARKER_VERSION, Record, UPSTREAM_VERSION,
+};
+use super::disk::Reread;
 use super::platform::sync_dir;
 use super::{CommitStage, Shared, StoreError, TaskStore, fire, record_name};
-use crate::protocol::tasks::TaskStatus;
+use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
 
 /// The admission binding a stored admission block describes.
 fn binding_of(
@@ -24,6 +27,27 @@ fn binding_of(
         representation: admission.representation_digest.clone(),
         metadata_bytes: admission.metadata_bytes,
     }
+}
+
+/// `id`'s row as startup recovery sees it, or `None` when it is not live.
+fn interrupted_of(id: &str, task: &Task, record: &Record) -> Option<InterruptedTask> {
+    let status = task.status();
+    matches!(status, TaskStatus::Working | TaskStatus::InputRequired).then(|| InterruptedTask {
+        id: id.to_owned(),
+        owner_digest: record.admission.principal_digest.clone(),
+        revision: record.revision,
+        never_dispatched: status == TaskStatus::Working
+            && record.version >= MARKER_VERSION
+            && !record.dispatched,
+        is_working: status == TaskStatus::Working,
+        // Only a v3+ row whose descriptor still names this record's admitted
+        // operation is offered as recoverable. Everything else reads as
+        // absent and takes the unchanged I3 table.
+        upstream: (record.version >= UPSTREAM_VERSION)
+            .then(|| record.upstream.clone())
+            .flatten()
+            .filter(|upstream| upstream.consistent_with(&record.admission)),
+    })
 }
 
 /// The S1 store surface: restart enumeration and the conditional durable expiry
@@ -49,67 +73,34 @@ impl TaskStore {
 
     /// Read every sealed row again (MIK-8052), off the runtime, and apply what
     /// it found: a removed file leaves the seal; a repaired row whose binding
-    /// `import` accepts joins the reserved rows. `import` runs outside the
-    /// store's lock. Returns how many rows stay sealed, for the caller to hand to
-    /// admission AFTER any import, so a repaired key is never left unguarded.
+    /// `import` accepts is kept. A row that restores in full is served again
+    /// (MIK-8121): each row is written durably, its key imported, and only
+    /// then published, a live one settled first by `recover`, the decision
+    /// startup recovery makes; `None` from `recover` leaves it working, as a managed
+    /// deferral at startup does. Returns how many rows stay sealed, for the
+    /// caller to hand to admission AFTER the imports, and the rows settled here,
+    /// for the caller to announce as startup recovery does.
     pub(in crate::gateway::task_service) async fn reread_sealed(
         &self,
-        import: impl Fn(crate::idempotency::admission::RestoredBinding, String) -> bool,
-    ) -> usize {
+        import: impl Fn(crate::idempotency::admission::RestoredBinding, String) -> bool + Send + 'static,
+        recover: impl Fn(&InterruptedTask) -> Option<TaskTransition> + Send + 'static,
+    ) -> (usize, Vec<CommittedTask>) {
         let names: Vec<String> = self.0.state().sealed.iter().cloned().collect();
         if names.is_empty() {
-            return 0;
+            return (0, Vec::new());
         }
         let shared = Arc::clone(&self.0);
-        let found = tokio::task::spawn_blocking(move || {
-            names
-                .into_iter()
-                .map(|name| {
-                    let outcome = super::disk::reread_record(
-                        &shared.dir,
-                        &name,
-                        shared.limits,
-                        shared.dir_id,
-                    );
-                    (name, outcome)
-                })
-                .collect::<Vec<_>>()
+        let settled = tokio::task::spawn_blocking(move || {
+            let mut settled = Vec::new();
+            for name in names {
+                let outcome =
+                    super::disk::reread_record(&shared.dir, &name, shared.limits, shared.dir_id);
+                shared.apply_reread(&name, outcome, &import, &recover, &mut settled);
+            }
+            settled
         })
         .await
         .unwrap_or_default();
-        for (name, outcome) in found {
-            let kept = match outcome {
-                super::disk::Reread::Sealed => continue,
-                super::disk::Reread::Gone => None,
-                super::disk::Reread::Repaired(admission, id) => {
-                    // The load's per-principal cap holds for a repaired row too:
-                    // a seal never lifts over a directory startup would refuse.
-                    let held = {
-                        let state = self.0.state();
-                        state
-                            .entries
-                            .values()
-                            .map(|entry| &entry.record.admission)
-                            .chain(state.reserved.iter().map(|(kept, _)| kept))
-                            .filter(|kept| kept.principal_digest == admission.principal_digest)
-                            .count()
-                    };
-                    if held >= self.0.limits.per_principal {
-                        tracing::error!(record = %name, "repaired task record would exceed its owner's cap; it stays sealed");
-                        continue;
-                    }
-                    if !import(binding_of(&admission), id.clone()) {
-                        tracing::error!(record = %name, "repaired task record's key is refused by admission; it stays sealed");
-                        continue;
-                    }
-                    Some((admission, id))
-                }
-            };
-            tracing::warn!(record = %name, repaired = kept.is_some(), "sealed task record cleared");
-            let mut state = self.0.state();
-            state.sealed.remove(&name);
-            state.reserved.extend(kept);
-        }
         let (sealed, reserved) = {
             let state = self.0.state();
             if !state.sealed.is_empty() {
@@ -127,7 +118,7 @@ impl TaskStore {
             telemetry_metrics::gauge!("mcp_task_store_skipped_records", "class" => class)
                 .set(count as f64);
         }
-        sealed
+        (sealed, settled)
     }
 
     /// Mark `name` sealed as though the load had found its key unreadable, for
@@ -169,28 +160,7 @@ impl TaskStore {
         state
             .entries
             .iter()
-            .filter(|(_, entry)| {
-                matches!(
-                    entry.task.status(),
-                    TaskStatus::Working | TaskStatus::InputRequired
-                )
-            })
-            .map(|(id, entry)| InterruptedTask {
-                id: id.clone(),
-                owner_digest: entry.record.admission.principal_digest.clone(),
-                revision: entry.record.revision,
-                never_dispatched: entry.task.status() == TaskStatus::Working
-                    && entry.record.version >= MARKER_VERSION
-                    && !entry.record.dispatched,
-                is_working: entry.task.status() == TaskStatus::Working,
-                // Only a v3+ row whose descriptor still names this record's
-                // admitted operation is offered as recoverable. Everything else
-                // reads as absent and takes the unchanged I3 table.
-                upstream: (entry.record.version >= UPSTREAM_VERSION)
-                    .then(|| entry.record.upstream.clone())
-                    .flatten()
-                    .filter(|upstream| upstream.consistent_with(&entry.record.admission)),
-            })
+            .filter_map(|(id, entry)| interrupted_of(id, &entry.task, &entry.record))
             .collect()
     }
 
@@ -245,6 +215,120 @@ impl TaskStore {
 }
 
 impl Shared {
+    /// Apply one sealed row's re-read (MIK-8052, MIK-8121). A row that restores
+    /// is served again under the ordering lock, which every mutation takes, so
+    /// nothing reaches it by id before it is settled, published and its key
+    /// imported; a refused import takes it back out and it stays sealed.
+    fn apply_reread(
+        &self,
+        name: &str,
+        outcome: Reread,
+        import: &impl Fn(crate::idempotency::admission::RestoredBinding, String) -> bool,
+        recover: &impl Fn(&InterruptedTask) -> Option<TaskTransition>,
+        settled: &mut Vec<CommittedTask>,
+    ) {
+        let (admission, id, row) = match outcome {
+            Reread::Sealed => return,
+            Reread::Gone => {
+                tracing::warn!(record = %name, repaired = false, "sealed task record cleared");
+                self.state().sealed.remove(name);
+                return;
+            }
+            Reread::Repaired(admission, id, row) => (admission, id, row),
+        };
+        // Every check below holds until the row is applied: a concurrent
+        // re-read or mutation cannot move it in between.
+        let _order = self.order();
+        {
+            let state = self.state();
+            // A closed or poisoned store writes and serves nothing more; a row
+            // another re-read already applied is not applied twice.
+            if !state.ready || !state.sealed.contains(name) {
+                return;
+            }
+        }
+        // The load's per-principal cap holds for a repaired row too: a seal
+        // never lifts over a directory startup would refuse.
+        let held = {
+            let state = self.state();
+            state
+                .entries
+                .values()
+                .map(|entry| &entry.record.admission)
+                .chain(state.reserved.iter().map(|(kept, _)| kept))
+                .filter(|kept| kept.principal_digest == admission.principal_digest)
+                .count()
+        };
+        if held >= self.limits.per_principal {
+            tracing::error!(record = %name, "repaired task record would exceed its owner's cap; it stays sealed");
+            return;
+        }
+        let Some((record, task)) = row.map(|row| *row) else {
+            // Its key reads but its task does not: the key is kept, unserved.
+            if !import(binding_of(&admission), id.clone()) {
+                tracing::error!(record = %name, "repaired task record's key is refused by admission; it stays sealed");
+                return;
+            }
+            tracing::warn!(record = %name, repaired = true, "sealed task record cleared");
+            let mut state = self.state();
+            state.sealed.remove(name);
+            state.reserved.push((admission, id));
+            return;
+        };
+        let duplicate = {
+            let state = self.state();
+            super::reject_duplicate(&state, &id, &record).is_err()
+                || state.reserved.iter().any(|(kept, kept_id)| {
+                    kept_id == &id || kept.identity_digest == admission.identity_digest
+                })
+        };
+        if duplicate {
+            tracing::error!(record = %name, "repaired task record duplicates a served task or key; it stays sealed");
+            return;
+        }
+        // Durable first, visible last: the row is written (a live one settled
+        // through the bounded settle, any other written again through the
+        // commit every write takes, so it is durable on every platform), then
+        // its key imported, and only then published. A refused import leaves
+        // nothing visible; a key imported a moment before its row is published
+        // reads as a reserved row's does (MIK-8023).
+        let recovered = interrupted_of(&id, &task, &record).and_then(|live| recover(&live));
+        let was_live = recovered.is_some();
+        let written = match recovered {
+            Some(event) => self.settle_durable(
+                &task,
+                &record,
+                (
+                    event,
+                    None,
+                    ErrorAuthor::Gateway,
+                    crate::gateway::gateway_writes::WriteRecord::default(),
+                ),
+                Utc::now(),
+            ),
+            None => super::serialize(&record).and_then(|bytes| {
+                if bytes.len() > self.limits.record_bytes {
+                    return Err(StoreError::Capacity);
+                }
+                self.commit(name, &bytes).map(|()| Some((task, record)))
+            }),
+        };
+        let Ok(Some((task, record))) = written else {
+            tracing::error!(record = %name, "repaired task record could not be made durable; it stays sealed");
+            return;
+        };
+        if !import(binding_of(&admission), id) {
+            tracing::error!(record = %name, "repaired task record's key is refused by admission; it stays sealed");
+            return;
+        }
+        let committed = self.publish(task, record);
+        tracing::warn!(record = %name, recovered = was_live, "sealed task record served again");
+        self.state().sealed.remove(name);
+        if was_live {
+            settled.push(committed);
+        }
+    }
+
     /// The expiry transaction. The admission guard is opened AFTER the store's
     /// ordering lock and BEFORE the deletion, and held across the COMPLETE
     /// deletion commit — unlink, directory sync, readable-state removal — and
