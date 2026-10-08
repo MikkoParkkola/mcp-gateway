@@ -148,6 +148,13 @@ fn write_config(gateway: &HttpGateway, config: &Value) {
     .expect("rewrite config");
 }
 
+fn drop_backend(config: &mut Value, name: &str) {
+    config["backends"]
+        .as_object_mut()
+        .expect("map")
+        .remove(name);
+}
+
 #[tokio::test]
 async fn every_tool_set_change_reaches_both_eras_once() {
     let alpha = BackendFixture::start(json!({"content": []})).await;
@@ -203,10 +210,7 @@ async fn every_tool_set_change_reaches_both_eras_once() {
     // replacement lists the same tool, so discovery shows the same set.
     expect("config reload modifies a backend", 0).await;
 
-    config["backends"]
-        .as_object_mut()
-        .expect("map")
-        .remove("beta");
+    drop_backend(&mut config, "beta");
     write_config(&gateway, &config);
     expect("config reload removes a backend", 1).await;
 
@@ -216,10 +220,7 @@ async fn every_tool_set_change_reaches_both_eras_once() {
         json!({ "http_url": "http://127.0.0.1:1/mcp", "streamable_http": true });
     write_config(&gateway, &config);
     expect("config reload adds a backend that never lists tools", 0).await;
-    config["backends"]
-        .as_object_mut()
-        .expect("map")
-        .remove("delta");
+    drop_backend(&mut config, "delta");
     write_config(&gateway, &config);
     expect("config reload removes a backend that never listed tools", 0).await;
 
