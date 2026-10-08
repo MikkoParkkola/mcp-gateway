@@ -150,6 +150,10 @@ impl DirectRouteGuards {
 pub(crate) type Seal<'a> = (
     (
         Option<&'a crate::key_server::oidc::VerifiedIdentity>,
+        (
+            Option<&'a str>,
+            Option<&'a crate::identity_grants::GrantSubject>,
+        ),
         Option<&'a crate::gateway::auth::AuthenticatedClient>,
     ),
     Option<&'a serde_json::Value>,
