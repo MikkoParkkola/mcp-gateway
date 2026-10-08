@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, watch};
 
 use super::client::{A2aClient, Endpoint, Reply};
 
@@ -175,20 +175,42 @@ fn fresh_token() -> Option<String> {
     Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
-/// At most this many `CancelTask`s of one backend are in flight. Past it a
-/// cancel is skipped and logged: callers that abandon calls faster than the
-/// agent answers cancels cannot pile up gateway tasks and connections.
-const MAX_CANCELS: u32 = 64;
+/// At most this many `CancelTask`s of one backend are on the wire at once;
+/// later ones wait their turn instead of being dropped.
+const MAX_CANCELS: usize = 64;
+/// Live guards plus queued and running cancels of one backend. Past it a new
+/// cancel is skipped and logged.
+/// ponytail: one fixed ceiling per backend; add per-caller fairness if a
+/// single caller can fill it.
+const MAX_OUTSTANDING: usize = 4096;
 /// One `CancelTask` waits no longer than this, whatever the backend timeout.
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Sends best-effort `CancelTask`s for one backend, bounded in number and in
-/// time, and lets `close` wait for the ones in flight.
+/// One unit of cancel work `close` waits for: a live [`CancelGuard`] or a
+/// queued or running cancel.
+struct Busy(Arc<watch::Sender<usize>>);
+
+impl Busy {
+    fn new(work: &Arc<watch::Sender<usize>>) -> Self {
+        work.send_modify(|n| *n += 1);
+        Self(Arc::clone(work))
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.send_modify(|n| *n = n.saturating_sub(1));
+    }
+}
+
+/// Sends best-effort `CancelTask`s for one backend, bounded in concurrency
+/// and in time, and lets `close` wait for every one it still owes.
 #[derive(Clone)]
 pub(crate) struct Canceller {
     client: A2aClient,
     endpoint: Endpoint,
     permits: Arc<Semaphore>,
+    work: Arc<watch::Sender<usize>>,
 }
 
 impl Canceller {
@@ -196,28 +218,33 @@ impl Canceller {
         Self {
             client,
             endpoint,
-            permits: Arc::new(Semaphore::new(MAX_CANCELS as usize)),
+            permits: Arc::new(Semaphore::new(MAX_CANCELS)),
+            work: Arc::new(watch::channel(0).0),
         }
     }
 
-    /// Send one `CancelTask` without waiting for it, never retried. A failure
-    /// is logged without the agent's text or ids: an agent can echo a
+    /// Queue one `CancelTask` without waiting for it, never retried. A
+    /// failure is logged without the agent's text or ids: an agent can echo a
     /// caller's credential into either.
     pub(crate) fn spawn(&self, task_id: String, headers: Vec<(String, String)>) {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             tracing::warn!("no runtime to cancel an abandoned A2A task on");
             return;
         };
-        let Ok(permit) = Arc::clone(&self.permits).try_acquire_owned() else {
+        if *self.work.borrow() >= MAX_OUTSTANDING {
             tracing::warn!(
-                limit = MAX_CANCELS,
-                "too many A2A cancellations in flight; an abandoned task is left to the agent"
+                limit = MAX_OUTSTANDING,
+                "too many A2A cancellations outstanding; an abandoned task is left to the agent"
             );
             return;
-        };
+        }
+        let busy = Busy::new(&self.work);
         let this = self.clone();
         runtime.spawn(async move {
-            let _permit = permit;
+            let _busy = busy;
+            let Ok(_permit) = this.permits.acquire().await else {
+                return;
+            };
             let sent = tokio::time::timeout(
                 CANCEL_TIMEOUT,
                 this.client.cancel_task(&this.endpoint, &task_id, &headers),
@@ -234,9 +261,19 @@ impl Canceller {
         });
     }
 
-    /// Wait until no `CancelTask` is in flight, for at most `budget`.
+    /// Wait, for at most `budget`, until no guard is live and no cancel is
+    /// queued or running.
     pub(crate) async fn settle(&self, budget: Duration) {
-        let _ = tokio::time::timeout(budget, self.permits.acquire_many(MAX_CANCELS)).await;
+        let mut work = self.work.subscribe();
+        if tokio::time::timeout(budget, work.wait_for(|n| *n == 0))
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                outstanding = *work.borrow(),
+                "an A2A backend closed with cancellations still outstanding"
+            );
+        }
     }
 }
 
@@ -247,14 +284,19 @@ pub(crate) struct CancelGuard {
     canceller: Canceller,
     headers: Vec<(String, String)>,
     task_id: Option<String>,
+    /// Dropped after `drop` has queued any cancel, so `close` never sees
+    /// zero work between the two.
+    _busy: Busy,
 }
 
 impl CancelGuard {
     pub(crate) fn new(canceller: Canceller, headers: Vec<(String, String)>) -> Self {
+        let busy = Busy::new(&canceller.work);
         Self {
             canceller,
             headers,
             task_id: None,
+            _busy: busy,
         }
     }
 
