@@ -35,6 +35,7 @@ fn finished_task() -> CommittedTask {
         output_free: false,
         error_author: None,
         owner_digest: String::new(),
+        gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
     }
 }
 

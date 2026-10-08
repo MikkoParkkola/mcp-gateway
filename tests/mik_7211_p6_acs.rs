@@ -133,6 +133,9 @@ mod source_checks {
             // the write record names the path to strip it; neither writes it.
             "src/gateway/router/handlers/modern_response.rs",
             "src/gateway/meta_mcp/invoke/gateway_writes.rs",
+            // MIK-7993: the write record's tests, moved out of that module;
+            // its round trip puts the key in a fixture to note and strip it.
+            "src/gateway/meta_mcp/invoke/gateway_writes_tests.rs",
             "src/gateway/meta_mcp/chain_emission_tests.rs",
             // MIK-7910: pins that a bridged prompt reaches the client with its
             // scope clamped; it writes the key only into a test prompt.
