@@ -6,10 +6,13 @@
 //! after the gates `direct_continuation_tests` covers.
 
 use axum::http::StatusCode;
-use serde_json::json;
+use serde_json::{Value, json};
 
-use super::direct_continuation_tests::{BACKENDS, call, dispatched, held, meta_call, signed_call};
+use super::direct_continuation_tests::{
+    BACKEND_STATE, BACKENDS, call, dispatched, held, meta_call, signed_call,
+};
 use super::direct_guards_fixture::{Answer, fixture};
+use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 
 /// R22 (both routes): a question the context-integrity kernel withholds (a
 /// tool error in its place, carrying no continuation) gives its slot back.
@@ -128,4 +131,76 @@ async fn r24b_a_failure_after_sending_keeps_the_nonce() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{backend}: {again}");
         assert_eq!(dispatched(&fx), 1, "{backend}: re-dispatched");
     }
+}
+
+/// A chained backend that lists `read` and asks the fixture's question with
+/// no chain receipt, counting every `tools/call`.
+struct AskUnsigned(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for AskUnsigned {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/list" {
+            let tools = json!({"tools": [{"name": "read", "inputSchema": {"type": "object"}}]});
+            return Ok(crate::protocol::JsonRpcResponse::success(
+                crate::protocol::RequestId::Number(1),
+                tools,
+            ));
+        }
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let asked = json!({"resultType": "input_required", "requestState": BACKEND_STATE,
+            "inputRequests": {"k1": {"method": "elicitation/create",
+                "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}}}});
+        let id = crate::protocol::RequestId::Number(1);
+        Ok(crate::protocol::JsonRpcResponse::success(id, asked))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// R21: an answer whose chain receipt fails is refused before it is read as a
+/// question, so its key stays settled and a same-key retry does not reach the
+/// backend again. Mutant: the key released before the receipt is checked.
+#[tokio::test]
+async fn r21_a_failed_receipt_keeps_the_key_settled() {
+    use crate::config::{BackendConfig, ChainEmit, ChainMode, FailsafeConfig};
+    let fx = fixture(Answer::Ok, |meta| {
+        meta.set_chain_signer(
+            crate::gateway::chain_test_support::signer(),
+            ChainEmit::OnRequest,
+        );
+    })
+    .await;
+    let reached = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let backend = std::sync::Arc::new(crate::backend::Backend::new(
+        "alpha-chain",
+        BackendConfig {
+            signature_chain: ChainMode::Require,
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(std::sync::Arc::new(AskUnsigned(reached.clone())));
+    assert!(fx.state.backends.register(backend), "fixture registration");
+    let opening = json!({"_meta": { IDEMPOTENCY_KEY_META: "k-8078-receipt" }});
+    let (_, first) = call(&fx, "alpha-chain", Some("alice"), opening.clone()).await;
+    assert!(first.get("error").is_some(), "{first}");
+    let (_, again) = call(&fx, "alpha-chain", Some("alice"), opening).await;
+    assert_eq!(
+        reached.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the key was released: {again}"
+    );
 }
