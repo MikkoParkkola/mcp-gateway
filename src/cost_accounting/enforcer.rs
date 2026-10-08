@@ -454,9 +454,10 @@ impl BudgetEnforcer {
             };
         }
 
-        // The same conversion `record_spend` applies to this cost.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let cost_micro = (cost * 1_000_000.0) as u64;
+        // The same conversion `record_spend` applies to this cost, and the
+        // amount every projection below counts (MIK-8081).
+        let cost_micro = super::tally::micro(cost);
+        let cost = usd(cost_micro);
 
         // One step from here to the reservation below. Nothing in it waits or
         // writes a log: alerts are recorded and emitted after the lock is gone.
@@ -600,8 +601,7 @@ impl BudgetEnforcer {
         if cost_usd == 0.0 {
             return;
         }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let micro = (cost_usd * 1_000_000.0) as u64;
+        let micro = super::tally::micro(cost_usd);
 
         let budgets = &self.config.budgets;
         // Before the adds, so the first spend of a day never finds yesterday's
