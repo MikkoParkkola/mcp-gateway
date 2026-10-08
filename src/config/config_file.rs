@@ -122,7 +122,8 @@ fn resolve_backend_urls(dict: &mut Dict) -> std::result::Result<(), String> {
             return Err(if address.contains("${") || address.starts_with("env:") {
                 format!(
                     "backends.{name}.url is not expanded, so it must be the address itself; \
-                     to take it from the environment set {var}__HTTP_URL or {var}__WS_URL."
+                     to take it from the environment, delete backends.{name}.url and set \
+                     {var}__HTTP_URL or {var}__WS_URL."
                 )
             } else {
                 format!("backends.{name}.url must start with http://, https://, ws:// or wss://.")
