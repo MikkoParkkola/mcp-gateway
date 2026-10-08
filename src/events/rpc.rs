@@ -140,6 +140,17 @@ impl EventsHub {
     /// The one exception: an upstream-notification event of a backend the
     /// caller may see but which cannot offer it is refused with the reason
     /// (I5 design §11 D2/D3), so the subscription is never silently dead.
+    /// Under the catalogue gate: whether `record`'s type is still offered and
+    /// its arguments still valid against the descriptor offered now.
+    fn still_admits(&self, record: &Subscription) -> Result<(), RpcError> {
+        let descriptor = self
+            .catalogue()
+            .into_iter()
+            .find(|d| d.name == record.name)
+            .ok_or_else(RpcError::not_found)?;
+        checked_arguments(&descriptor, Some(&record.arguments)).map(|_| ())
+    }
+
     fn visible(&self, caller: &Caller, name: &str) -> Result<EventDescriptor, RpcError> {
         if let Some(found) = self
             .catalogue()
@@ -551,10 +562,25 @@ impl EventsHub {
                 &record.arguments,
             )
             .await?;
+        let hub = Arc::clone(self);
         let outcome = blocking(self, move |store| {
-            store.admit_granted(attempt, grant, fresh, policy, now)
+            // Under the catalogue gate, then the store lock (the order every
+            // withdraw takes): a reload that removed or narrowed the type
+            // while the callback was challenged refuses the commit, so no
+            // subscription is stored that its route can no longer serve
+            // (MIK-8038).
+            let _gate = hub.catalogue_lock();
+            if let Err(refused) = hub.still_admits(&attempt) {
+                return Ok(Err(refused));
+            }
+            #[cfg(test)]
+            tokio::runtime::Handle::current().block_on(hub.before_admit.pause());
+            store
+                .admit_granted(attempt, grant, fresh, policy, now)
+                .map(Ok)
         })
-        .await;
+        .await
+        .and_then(|checked| checked);
         if !matches!(outcome, Ok(Ok(_)))
             && let Some(key) = begun
         {
