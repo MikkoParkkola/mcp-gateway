@@ -102,6 +102,11 @@ impl Need {
         self.uris.contains_key(uri)
     }
 
+    /// Whether a live key watches any URI.
+    pub(crate) fn watches_any(&self) -> bool {
+        !self.uris.is_empty()
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.resources_changed == 0
             && self.prompts_changed == 0
