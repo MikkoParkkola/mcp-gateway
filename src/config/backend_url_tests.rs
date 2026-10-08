@@ -232,3 +232,37 @@ fn a_url_holding_a_variable_names_the_environment_override() {
         "{message}"
     );
 }
+
+/// A pair made by the environment alone, over a file that names no transport
+/// for the backend, is refused naming both keys.
+#[test]
+fn a_transport_pair_from_the_environment_alone_is_refused_naming_both() {
+    for (lines, keys) in [
+        (
+            "MCP_GATEWAY_BACKENDS__B__HTTP_URL=https://h.example.test/mcp\nMCP_GATEWAY_BACKENDS__B__WS_URL=wss://w.example.test/mcp\n",
+            "http_url and ws_url",
+        ),
+        (
+            "MCP_GATEWAY_BACKENDS__B__COMMAND=srv\nMCP_GATEWAY_BACKENDS__B__HTTP_URL=https://h.example.test/mcp\n",
+            "command and http_url",
+        ),
+    ] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = dir.path().join("gw.env");
+        crate::gateway::test_helpers::write_owner_only(&env, lines).expect("write env file");
+        let message = match load(
+            dir.path(),
+            &format!(
+                "env_files: ['{}']\nbackends:\n  b:\n    description: from the environment\n",
+                env.display()
+            ),
+        ) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("{keys}: a transport pair loaded; one was silently dropped"),
+        };
+        assert!(
+            message.contains(&format!("backend b has both {keys}; keep one")),
+            "{message}"
+        );
+    }
+}

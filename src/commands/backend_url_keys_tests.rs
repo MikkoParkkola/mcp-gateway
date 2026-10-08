@@ -252,3 +252,19 @@ fn the_scheme_table_agrees_with_the_loader() {
         assert_eq!(transport_key_for(address), loaded, "{address}");
     }
 }
+
+#[test]
+fn a_line_that_is_not_a_key_is_skipped_while_another_backend_is_rewritten() {
+    // `fs` has no real alias (the line is inside its description), so it is
+    // reported for a hand edit; `ok` is still rewritten in the same pass.
+    let text = "backends:\n  ok:\n    http_url: \"https://ok.example.test/mcp\"\n  fs:\n    description: \"first line\n    http_url: still the description\"\n    command: x\n";
+    let out = rewrite_url_aliases(text, None);
+    assert_eq!(out.changed, vec![3], "{}", out.text);
+    assert_eq!(out.skipped, vec!["fs".to_string()]);
+    assert!(out.kept.is_empty());
+    assert!(
+        out.text.contains("    url: \"https://ok") && out.text.contains("still the description"),
+        "{}",
+        out.text
+    );
+}
