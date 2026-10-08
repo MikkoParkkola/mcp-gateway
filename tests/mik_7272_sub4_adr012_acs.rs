@@ -410,12 +410,25 @@ fn keyed_call(id: u32, key: &str) -> Value {
 }
 
 /// POST to the direct backend route and read the status and body back.
-async fn post_direct(state: &Arc<AppState>, body: Value) -> (StatusCode, Value) {
+async fn post_direct(state: &Arc<AppState>, mut body: Value) -> (StatusCode, Value) {
+    // A modern request as `/mcp` requires it, which the direct route now
+    // requires too (MIK-8040): the revision and capabilities in `_meta`, and
+    // the method and name headers echoing the body.
+    let meta = &mut body["params"]["_meta"];
+    meta["io.modelcontextprotocol/protocolVersion"] = json!("2026-07-28");
+    meta["io.modelcontextprotocol/clientCapabilities"] = json!({});
+    let method = body["method"].as_str().unwrap_or_default().to_owned();
+    let name = body["params"]["name"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
     let request = axum::http::Request::builder()
         .method("POST")
         .uri(format!("/mcp/{ROUTE_BACKEND}"))
         .header("content-type", "application/json")
         .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", method)
+        .header("mcp-name", name)
         .body(axum::body::Body::from(
             serde_json::to_vec(&body).expect("frame serializes"),
         ))
