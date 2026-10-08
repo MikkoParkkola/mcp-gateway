@@ -325,7 +325,7 @@ impl MetaMcp {
             });
             let before = artifact.clone();
             let verdict = firewall.check_response(
-                &format!("error:{}", call.server),
+                call.session_id.unwrap_or(call.trace_id),
                 call.server,
                 call.tool,
                 &mut artifact,
@@ -337,9 +337,11 @@ impl MetaMcp {
                 return ErrorScreen::Blocked;
             }
             if artifact != before {
-                if let Some(message) = artifact["message"].as_str() {
-                    message.clone_into(&mut error.message);
-                }
+                // A redaction that leaves no text message fails closed.
+                let Some(message) = artifact["message"].as_str() else {
+                    return ErrorScreen::Blocked;
+                };
+                message.clone_into(&mut error.message);
                 if error.data.is_some() {
                     error.data = Some(artifact["data"].take());
                 }
