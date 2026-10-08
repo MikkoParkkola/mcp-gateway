@@ -322,3 +322,25 @@ fn a_starter_decomposing_to_marks_is_not_a_cut() {
         "a seam fingerprint no relay of the delivered text computes"
     );
 }
+
+/// A leading jamo composes with the trailing jamo of the field before it
+/// (two starters): that boundary is normalized as one piece, so every seam
+/// fingerprint is one a relay of the delivered text computes.
+#[test]
+fn composing_jamo_across_fields_keep_seams_exact() {
+    let det = detector();
+    let parts = [
+        (FIELD_A, Some(0)),
+        ("south terrace rows one to six \u{1100}", Some(1)),
+        ("\u{1161}\u{11A8} early quinces", Some(2)),
+    ];
+    let texts: Vec<&str> = parts.iter().map(|(t, _)| *t).collect();
+    let mut egress = det.fingerprints(&texts.join("\n"));
+    egress.extend(det.fingerprints(&texts.concat()));
+    let seams = seam_fps(&det, &parts);
+    assert!(!seams.is_empty(), "premise: seams across the fields");
+    assert!(
+        seams.iter().all(|fp| egress.contains(fp)),
+        "a seam fingerprint no relay of the delivered text computes"
+    );
+}
