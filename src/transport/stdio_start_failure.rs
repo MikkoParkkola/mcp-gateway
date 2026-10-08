@@ -103,12 +103,22 @@ impl StdioTransport {
         self.assigned_cache.as_deref()
     }
 
-    /// The cache directory the child is given, whoever chose it. An assigned
+    /// The cache directory the child is given, whoever chose it. The assigned
     /// cache is set from the path itself at spawn, so it is the one reported.
     pub(crate) fn package_cache_dir(&self) -> Option<PathBuf> {
-        self.assigned_cache
-            .clone()
+        self.exact_assigned_cache()
+            .map(Path::to_path_buf)
             .or_else(|| self.env.get(CACHE_ENV).map(PathBuf::from))
+    }
+
+    /// The assigned cache, when the environment still carries the gateway's own
+    /// rendering of it: then spawn hands the child the path itself (MIK-7990).
+    /// Any other value, or none, is left as the environment says, so the repair
+    /// still clears only a cache the child was actually given.
+    pub(super) fn exact_assigned_cache(&self) -> Option<&Path> {
+        let dir = self.assigned_cache.as_deref()?;
+        (self.env.get(CACHE_ENV).map(String::as_str) == Some(&*dir.to_string_lossy()))
+            .then_some(dir)
     }
 
     /// How the child exited, if a failed start saw it exit.

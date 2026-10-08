@@ -145,7 +145,7 @@ impl StdioTransport {
         // a data directory that is not valid UTF-8 would otherwise hand the
         // child a lossy copy, a different directory from the one the repair
         // inspects (MIK-7990).
-        if let Some(dir) = &self.assigned_cache {
+        if let Some(dir) = self.exact_assigned_cache() {
             cmd.env(cache::CACHE_ENV, dir);
         }
 
