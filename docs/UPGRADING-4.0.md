@@ -196,7 +196,8 @@ backend" and "fails a capability file" first.**
 | 169 | On the per-backend route `POST /mcp/{name}`, a backend's `requestState` is sealed into a gateway continuation, as on `/mcp`; a retry must send that continuation back once. Callers with an API key and no verified identity now keep multi-round tool calls on both routes, bound to their key | None. A client that already echoes `requestState` as received keeps working. A client that wrote its own `requestState`, reused one, or sent it from another key gets -32602. Holders of one shared key count as one caller |
 | 170 | `cap search` and `cap registry-list` take `-C` for `--capabilities`, as every other command does; `-c` there now means the global `--config`. A debug build panicked on both commands, and a release build read `-c` as `--capabilities` | Scripts that passed `-c <dir>` to these two commands: use `-C <dir>` or `--capabilities <dir>` |
 | 171 | With agent authentication on, a listen or GET /mcp stream opened with an agent token is checked again at every delivery and ends, with no closing message, once the token expires, the agent leaves the registry or its key changes. A GET /mcp stream also checks each queued notification when it writes it, for every credential kind. With gateway authentication on, a valid agent token can listen on a public `/mcp`. `AuthState` gains `agent_auth` | Clients: re-subscribe with a fresh token when a stream ends. Library users building `AuthState` with a struct literal set `agent_auth` to the `AgentAuthState` the router's agent middleware uses (or `AgentAuthState::new(false, ...)` without agent auth) |
-| 172 | Every frame a backend's text reaches a client in passes one screen (content inspection, context integrity, response firewall) on every route. Over HTTP `/mcp` an interim question the firewall would rewrite is refused (-32600), as over stdio, instead of delivered redacted; backend errors, `prompts/get` and `resources/read` bodies, catalogue listings and notifications streamed during a call can now arrive redacted or be refused | None by default. To allow flagged text in a prompt, resource or listing, add a firewall rule whose `tool_match` names the method (`prompts/get`, `resources/read`, ...) |
+| 172 | `/.well-known/oauth-protected-resource` answers 404 when the gateway names no authorization server (auth off, API keys only, or agent auth); it answered 200 with a document naming none, or 503 on a wildcard bind without `server.public_url` | None. A client that probes the path now uses the API key it was given instead of attempting an OAuth sign-in that could not complete. With `key_server.delegated_bearer` on, the document is served as before |
+| 173 | Every frame a backend's text reaches a client in passes one screen (content inspection, context integrity, response firewall) on every route. Over HTTP `/mcp` an interim question the firewall would rewrite is refused (-32600), as over stdio, instead of delivered redacted; backend errors, `prompts/get` and `resources/read` bodies, catalogue listings and notifications streamed during a call can now arrive redacted or be refused | None by default. To allow flagged text in a prompt, resource or listing, add a firewall rule whose `tool_match` names the method (`prompts/get`, `resources/read`, ...) |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4482,8 +4483,25 @@ authentication on. Now:
 Library users: `AuthState` has a new public field, `agent_auth`. Code that
 builds `AuthState` with a struct literal sets it to the same `AgentAuthState`
 the router's agent middleware uses, so delivery checks the same registry.
+## 172. No protected-resource metadata without an authorization server
 
-## 172. Every frame a backend sends passes the response firewall
+**Startup:** no notice
+
+`GET /.well-known/oauth-protected-resource` (RFC 9728) now answers `404` when
+the gateway has no authorization server to name: with auth off, with API keys
+only, or with agent auth. Before, it answered `200` with a document that named
+none, which told an OAuth-capable MCP client this was a protected resource it
+could sign in to, with no way to get a token. On a wildcard bind without
+`server.public_url` it answered `503` and asked for a `public_url` the
+deployment did not need.
+
+With `auth.enabled`, `key_server.enabled` and `key_server.delegated_bearer`
+on (and agent auth off), the document names your OIDC issuers and is served
+as before. Nothing to change: clients of an API-key gateway keep sending the
+key, and a `404` is what a standards-following client expects from a resource
+with no OAuth sign-in.
+
+## 173. Every frame a backend sends passes the response firewall
 
 **Startup:** no notice
 
