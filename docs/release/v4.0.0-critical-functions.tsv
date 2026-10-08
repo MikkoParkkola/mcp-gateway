@@ -130,6 +130,7 @@ src/gateway/router/handlers/tasks.rs	tasks_get	1	standard	borderline	tasks_get	W
 src/gateway/router/handlers/tasks.rs	update_caller	1	standard	borderline	update_caller	Resume caller must be the live update requester, not the creator
 src/gateway/router/handlers/tasks.rs	with_policy_caller	1	standard	borderline	with_policy_caller	Builds the live policy context; carrying signing would skip the policy recheck
 src/gateway/router/handlers/tasks.rs	task_owner_key	1	critical	c	task_owner_key	Task owner key: a proven subject splits a shared credential; no credential owns nothing (MIK-7967)
+src/gateway/router/handlers/tasks.rs	agent_task_owner	1	critical	c	agent_task_owner	Derives an agent's task owner from the SHA-256 of its client_id, prefixed apart from every other owner kind, so no client_id spells another's owner
 src/gateway/router/hardened_elicitation.rs	declares_elicitation	1	critical	a	declares_elicitation	Decides whether an initialize declares elicitation, the condition the hardened refusal rests on
 src/gateway/router/hardened_elicitation.rs	direct_refusal	1	critical	a,d	direct_refusal	Hardened posture: refuses on the direct route any legacy request but a declaring initialize
 src/gateway/router/hardened_elicitation.rs	is_hardened	1	standard	borderline	is_hardened	Reads the hardened posture; a wrong answer silently disables the elicitation refusal
@@ -237,6 +238,9 @@ src/gateway/task_service/service.rs	create_targeted	1	standard	borderline	TaskSe
 src/gateway/task_service/service.rs	open	1	standard	borderline	TaskService::open	Imports persisted owner bindings into admission before serving
 src/gateway/task_service/service.rs	refused	1	standard	borderline	refused	Narrows store errors so a foreign task is indistinguishable from an absent one
 src/gateway/task_service/service.rs	update	1	standard	c	TaskService::update	task/update acknowledgement is gated on the owner-scoped get
+src/gateway/task_service/service.rs	reread_sealed	1	critical	d	TaskService::reread_sealed	Lowers the seal only after a repaired row's key is imported, so that key is never admitted as new in between (MIK-8052)
+src/gateway/task_service/service.rs	move_seal	1	standard	borderline	TaskService::move_seal	Moves this service's share of the admission seal
+src/gateway/task_service/service.rs	release_seal	1	standard	borderline	TaskService::release_seal	Releases this service's share of the admission seal once
 src/gateway/task_service/store_disk.rs	acquire_lease	1	critical	d	acquire_lease	Refuses a lease file that is not a private regular file (or, on Windows, has a non-private DACL)
 src/gateway/task_service/store.rs	admit	1	critical	d	admit	Per-principal task quota and record-size limit
 src/gateway/task_service/store.rs	admits_upstream_descriptor	1	critical	c	TaskStore::admits_upstream_descriptor	Reads the candidate record only through the owner filter
@@ -250,17 +254,22 @@ src/gateway/task_service/store.rs	operation_digest_of	1	critical	borderline	Task
 src/gateway/task_service/store.rs	owned	1	critical	c	owned	Core owner filter: entry visible only if principal_digest equals owner, else NotFound
 src/gateway/task_service/store_disk.rs	prepare_dir	1	critical	d	prepare_dir	Refuses a store directory that is not private (mode/type) with UnsafeStore
 src/gateway/task_service/store_disk.rs	read_bounded	1	critical	d	read_bounded	Refuses an oversized persisted task record (disk trust boundary)
-src/gateway/task_service/store_disk.rs	visit_map	1	critical	d	Members::visit_map	Disk trust boundary: keeps the highest version a damaged record names, so load refuses a newer build's row, and the first readable key
+src/gateway/task_service/store_disk.rs	visit_map	2	critical	d	Members::visit_map	Disk trust boundary: keeps the highest version a damaged record names, so load refuses a newer build's row, and the first readable key
 src/gateway/task_service/store_disk.rs	restore	1	critical	d	restore	Refuses a record whose version this build does not load, or whose task does not restore
 src/gateway/task_service/store_disk.rs	read	1	standard	borderline	Envelope::read	Builds the envelope load refuses on; a wrong builder would skip the downgrade refusal
 src/gateway/task_service/store_disk.rs	create_temp	1	standard	borderline	create_temp	Claims a private (0600/DACL) temp file for a task record write
+src/gateway/task_service/store_disk.rs	visit_map	1	critical	d	AdmissionCopyVisitor::visit_map	Disk trust boundary: a repeated field in a stored admission block reads as no admission, so a later copy never replaces the one written
+src/gateway/task_service/store_disk.rs	reread_record	1	critical	d	reread_record	Re-reads a sealed row by load's rules, only from the directory the store opened, without blocking on what the name now points at
 src/gateway/task_service/store.rs	reject_duplicate	1	critical	c	reject_duplicate	Refuses a record that would replace a live task id or duplicate an admission identity
 src/gateway/task_service/store.rs	upstream_of	1	critical	c	TaskStore::upstream_of	Owner-scoped descriptor read; inconsistent descriptors filtered out
 src/gateway/task_service/store_unix.rs	create_private_dir	1	standard	borderline	create_private_dir	Creates the store directory 0700; wrong mode exposes records
 src/gateway/task_service/store_unix.rs	force_owner_only	1	standard	borderline	force_owner_only	Forces record file permissions to owner-only
 src/gateway/task_service/store_unix.rs	judge_store_dir	1	standard	borderline	judge_store_dir	Unix no-op; privacy rests entirely on the has_mode check
 src/gateway/task_service/store_unix.rs	open_new_private	1	standard	borderline	open_new_private	Creates temp records owner-only regardless of umask
+src/gateway/task_service/store_unix.rs	dir_identity	1	standard	borderline	dir_identity	Identity of the store directory a re-read must still match (unix)
 src/gateway/task_service/store_expiry.rs	restored_bindings	1	standard	borderline	TaskStore::restored_bindings	Supplies persisted principal digests to admission at startup
+src/gateway/task_service/store_expiry.rs	reread_sealed	1	standard	borderline	TaskStore::reread_sealed	Re-reads sealed rows and imports repaired bindings; the seal ordering is enforced by TaskService::reread_sealed
+src/gateway/task_service/store_expiry.rs	binding_of	1	standard	borderline	binding_of	Builds the admission binding a stored admission block describes
 src/gateway/task_service/store_input.rs	close_round_blocking	1	critical	c	Shared::close_round_blocking	Requires ownership before cancelling an input round
 src/gateway/task_service/store_input.rs	closed_at	1	critical	d	closed_at	Continuation expiry: decides when no further answers are accepted
 src/gateway/task_service/store_input.rs	fits_cap	1	critical	d	fits_cap	Refuses an input-round record over the storage bound
@@ -271,11 +280,14 @@ src/gateway/task_service/store_targets.rs	add_targets_blocking	1	critical	c	Shar
 src/gateway/task_service/store_targets.rs	settle_bounded_blocking	1	critical	c	Shared::settle_bounded_blocking	Transition for cancel/settle, scoped to the owner via `owned` with a revision check
 src/gateway/task_service/store_targets.rs	settle_attempt	1	critical	d	Shared::settle_attempt	Refuses a settlement whose record exceeds the per-record byte budget and records only the peer's authorship.
 src/gateway/task_service/store_targets.rs	keep_provenance	1	critical	borderline	keep_provenance	Leaves a legacy row's error unattributed when it has no stored call to keep (fail closed).
+src/gateway/task_service/store_targets.rs	fallback_bytes	1	critical	d	fallback_bytes	The bytes the record-budget check refuses on: room every live record keeps for the bounded failure
+src/gateway/task_service/store_targets.rs	settled	1	standard	borderline	settled	Builds the settled record settle_attempt and fallback_bytes measure
 src/gateway/task_service/store_windows.rs	judge_store_dir	1	critical	d	judge_store_dir	Windows: refuses a store directory whose DACL, reparse point or locality is not private
 src/gateway/task_service/store_windows.rs	open_record	1	critical	d	open_record	Windows: opens without following reparse points; refuses a record that is not private
 src/gateway/task_service/store_windows.rs	create_private_dir	1	standard	borderline	create_private_dir	Creates the store directory and its ancestors private on Windows
 src/gateway/task_service/store_windows.rs	has_mode	1	standard	borderline	has_mode	Always true on Windows; privacy deferred to the handle judges
 src/gateway/task_service/store_windows.rs	open_new_private	1	standard	borderline	open_new_private	Exclusive private file creation on Windows
+src/gateway/task_service/store_windows.rs	dir_identity	1	standard	borderline	dir_identity	Identity of the store directory a re-read must still match (Windows)
 src/identity_propagation/account_strategies.rs	declared_installed	1	critical	a	AccountStrategyRegistry::declared_installed	Refuses an undeclared descriptor or an auth_key/provider mismatch; refuses a missing install
 src/identity_propagation/account_strategies.rs	mint	1	critical	a	AccountStrategyRegistry::mint	An external descriptor mints only for a verified caller
 src/identity_propagation/account_strategies.rs	principal	1	critical	a	AccountStrategyRegistry::principal	Who a dispatch is made as; external needs a verified identity
@@ -540,3 +552,4 @@ src/transport/stdio.rs	drop	1	critical	c	ProgressRegistrationGuard::drop	Deregis
 src/transport/stdio.rs	handle_response	1	critical	d	StdioTransport::handle_response	Refuses a peer request on the response stream; delivers a response only to the pending id
 src/transport/stdio.rs	register_progress_token	1	critical	c	StdioTransport::register_progress_token	Fails closed on a colliding token, so one call's progress cannot reach another call
 src/transport/stdio.rs	start	1	critical	d	StdioTransport::start	Refuses invalid quoting or an empty command before spawn; applies the scrubbed environment
+src/transport/stdio.rs	spawn_command	1	critical	d	StdioTransport::spawn_command	Refuses invalid quoting or an empty command before spawn; builds the child with the scrubbed environment
