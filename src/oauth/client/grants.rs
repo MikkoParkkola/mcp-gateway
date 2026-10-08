@@ -286,6 +286,9 @@ impl OAuthClient {
         let marker = fingerprint_hex(&sent);
         // A damaged sidecar may have held this token's marker (MIK-8091).
         if state.rotates && (state.damaged || state.in_flight.as_deref() == Some(marker.as_str())) {
+            if state.damaged {
+                warn!(backend = %backend, "Refresh state unreadable; retiring the stored token");
+            }
             let at = (key.as_str(), self.resource_url.as_str());
             retire_unsettled(&flight, &self.storage, at, backend, &sent, state);
             return Err(required());

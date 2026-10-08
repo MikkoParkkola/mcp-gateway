@@ -368,6 +368,17 @@ async fn a_damaged_refresh_state_retires_the_token_instead_of_sending_it() {
     );
     assert!(flight_of(&owned).is_spent("r2"));
     assert_eq!(stored(&owned).and_then(|t| t.refresh_token), None);
+    // Retirement rewrites a clean sidecar, and a fresh login's token refreshes.
+    let state = owned.storage.load_refresh_state(&key, RESOURCE);
+    assert!(state.rotates && !state.damaged && state.in_flight.is_none());
+    hold(&owned, &token("a9", Some("r9"), true));
+    headless(&owned).await.expect("a fresh token refreshes");
+    assert_eq!(
+        server.uses("r9"),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
 }
 
 /// `MIK-8091.FAILCLOSED.2`: an absent sidecar is no damage: the token is sent.
