@@ -59,18 +59,22 @@ impl EventsHub {
         services: &Arc<Services>,
         slots: &Arc<Semaphore>,
     ) -> Duration {
-        let held = self.runtime.busy.lock().clone();
+        let (held, policy) = (self.runtime.busy.lock().clone(), self.dead_policy());
         // Expired rows settle every tick, before the reconcile gate (MIK-8061).
+        // Each burial is receipted before the evictions it caused.
         let due = {
             let _ordered = self.receipts.lock().await;
-            let due = self
-                .blocking(move |store| store.due(Utc::now(), &held))
+            let mut due = self
+                .blocking(move |store| store.due(Utc::now(), &held, policy))
                 .await;
-            if let Some(due) = &due {
+            if let Some(due) = &mut due {
                 for record in &due.buried {
                     self.dead_lettered(services, record, DeadReason::Expired)
                         .await;
                 }
+                services
+                    .audit_evictions(std::mem::take(&mut due.evicted))
+                    .await;
             }
             due
         };
@@ -527,40 +531,6 @@ impl EventsHub {
             self.dead_lettered(services, record, reason).await;
         }
         services.audit_evictions(evicted).await;
-    }
-
-    /// The governance record of a dead letter (design 3.7).
-    pub(super) async fn dead_lettered(
-        &self,
-        services: &Services,
-        record: &OutboxRecord,
-        reason: DeadReason,
-    ) {
-        // Stamped at fan-out from the subscription the record is for; a record
-        // written before the stamp existed falls back to the store.
-        let host = if record.callback_host.is_empty() {
-            self.store
-                .get(&record.subscription_id)
-                .and_then(|s| url::Url::parse(&s.url).ok())
-                .and_then(|u| u.host_str().map(str::to_owned))
-                .unwrap_or_default()
-        } else {
-            record.callback_host.clone()
-        };
-        services
-            .audit_lifecycle(
-                &super::governance::Lifecycle {
-                    action: "events.dead_letter",
-                    subscription_id: &record.subscription_id,
-                    event_name: &record.name,
-                    callback_host: &host,
-                    detail: reason.as_str(),
-                    event_id: Some(&record.event_id),
-                    failed_with: Some(-32015),
-                },
-                super::governance::Attribution::Gateway,
-            )
-            .await;
     }
 }
 

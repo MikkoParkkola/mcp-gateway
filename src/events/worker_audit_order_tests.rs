@@ -38,7 +38,7 @@ fn assert_burial_first(dir: &std::path::Path, event_id: &str) {
 fn pending(hub: &EventsHub, event_id: &str) -> crate::events::outbox::OutboxRecord {
     let later = Utc::now() + chrono::Duration::minutes(5);
     hub.store
-        .due(later, &std::collections::HashSet::new())
+        .due(later, &std::collections::HashSet::new(), hub.dead_policy())
         .expect("io")
         .ready
         .into_iter()

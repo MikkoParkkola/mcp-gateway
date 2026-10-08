@@ -38,7 +38,9 @@ fn a_replay_frozen_by_a_suspension_is_buried_at_expiry() {
         Revived::Written
     );
     store.suspend("s1").expect("io");
-    store.due(past_expiry(now), &HashSet::new()).expect("io");
+    store
+        .due(past_expiry(now), &HashSet::new(), ROOMY)
+        .expect("io");
     assert_eq!(
         dead_reason(&store, "e1").as_deref(),
         Some("subscription_expired"),
@@ -60,7 +62,9 @@ fn a_tried_record_is_buried_at_expiry() {
     };
     store.enqueue(tried, OUTBOX).expect("io");
     store.suspend("s1").expect("io");
-    store.due(past_expiry(now), &HashSet::new()).expect("io");
+    store
+        .due(past_expiry(now), &HashSet::new(), ROOMY)
+        .expect("io");
     assert_eq!(
         dead_reason(&store, "e1").as_deref(),
         Some("subscription_expired")
@@ -84,7 +88,7 @@ fn an_expiry_found_at_open_is_buried_by_the_first_due() {
     let reopened = Store::open(dir.path(), later, TAIL).expect("reopen");
     assert_eq!(dead_reason(&reopened, "e1"), None, "nothing buried at open");
     assert!(reopened.has_due("s1", later), "still pending after open");
-    reopened.due(later, &HashSet::new()).expect("io");
+    reopened.due(later, &HashSet::new(), ROOMY).expect("io");
     assert_eq!(
         dead_reason(&reopened, "e1").as_deref(),
         Some("subscription_expired")
@@ -126,7 +130,7 @@ fn a_resubscribe_over_a_kept_expired_row_waits_for_its_burials() {
         early.is_err(),
         "refused while the expired row's burial is unfinished"
     );
-    store.due(later, &HashSet::new()).expect("io");
+    store.due(later, &HashSet::new(), ROOMY).expect("io");
     store
         .admit(
             renewed(),
@@ -181,7 +185,7 @@ fn a_row_removed_by_the_worker_stamps_its_tail_at_expiry() {
     store.enqueue(tried, OUTBOX).expect("io");
     let expiry = now + chrono::Duration::hours(1);
     let removal = expiry + chrono::Duration::minutes(50);
-    store.due(removal, &HashSet::new()).expect("io");
+    store.due(removal, &HashSet::new(), ROOMY).expect("io");
     assert!(store.get("s1").is_none(), "the worker removed the row");
     let within = expiry + chrono::Duration::minutes(55);
     assert!(
@@ -212,7 +216,7 @@ fn an_unfinished_expiry_burial_is_not_evicted() {
         .fail_next_dead_sync
         .store(true, std::sync::atomic::Ordering::SeqCst);
     let later = past_expiry(now);
-    store.due(later, &HashSet::new()).expect("io");
+    store.due(later, &HashSet::new(), ROOMY).expect("io");
     assert!(store.has_due("s1", later), "the outbox copy stays");
     let tight = DeadPolicy {
         max_records: 0,
@@ -223,11 +227,44 @@ fn an_unfinished_expiry_burial_is_not_evicted() {
         evicted.iter().all(|e| e.event_id != "e1"),
         "an unfinished burial is not evicted"
     );
-    store.due(later, &HashSet::new()).expect("io");
+    store.due(later, &HashSet::new(), ROOMY).expect("io");
     assert_eq!(
         dead_reason(&store, "e1").as_deref(),
         Some("subscription_expired"),
         "the next tick completes the burial"
+    );
+}
+
+/// An expiry burial keeps the dead-letter caps as every burial does: at a
+/// one-record cap, the same call evicts the older dead letter and names it
+/// for its receipt.
+#[test]
+fn an_expiry_burial_keeps_the_dead_letter_caps() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1", "s2"]);
+    store
+        .dead_letter(record("old", "s2", now), DeadReason::Exhausted, now, ROOMY)
+        .expect("io");
+    let tried = OutboxRecord {
+        attempt: 1,
+        ..record("e1", "s1", now)
+    };
+    store.enqueue(tried, OUTBOX).expect("io");
+    let one = DeadPolicy {
+        max_records: 1,
+        retention: Duration::from_secs(86_400),
+        ..ROOMY
+    };
+    let due = store
+        .due(past_expiry(now), &HashSet::new(), one)
+        .expect("io");
+    assert_eq!(due.buried.len(), 1, "the tried record is buried");
+    let evicted: Vec<&str> = due.evicted.iter().map(|e| e.event_id.as_str()).collect();
+    assert_eq!(evicted, ["old"], "the cap evicted the older letter at once");
+    assert!(
+        store.dead_letter_by_id("old").is_none(),
+        "gone from the store"
     );
 }
 
@@ -248,7 +285,7 @@ fn a_record_of_a_gone_subscription_is_dropped_not_buried() {
         std::fs::remove_file(entry.expect("entry").path()).expect("row gone");
     }
     let reopened = Store::open(dir.path(), now, TAIL).expect("reopen");
-    reopened.due(now, &HashSet::new()).expect("io");
+    reopened.due(now, &HashSet::new(), ROOMY).expect("io");
     assert!(!reopened.has_due("s1", now), "dropped");
     assert_eq!(dead_reason(&reopened, "e1"), None, "never buried");
 }

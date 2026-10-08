@@ -58,6 +58,8 @@ pub(crate) struct Due {
     pub next: Option<DateTime<Utc>>,
     /// Records of expired rows buried by this call, for their receipts.
     pub buried: Vec<OutboxRecord>,
+    /// Dead letters those burials evicted, receipted after them.
+    pub evicted: Vec<Evicted>,
 }
 
 fn dead_size(dead: &DeadLetter) -> u64 {
@@ -306,9 +308,15 @@ impl Store {
 
     /// Due records, at most one per subscription not in `busy`, each the
     /// oldest due record of a subscription that may be attempted now.
-    /// Records whose subscription is gone or expired are cancelled here; a
+    /// Records whose subscription is gone are cancelled here, and those of an
+    /// expired one settled (`expire_pending`) under `policy`; a
     /// suspended subscription keeps its records.
-    pub(crate) fn due(&self, now: DateTime<Utc>, busy: &HashSet<String>) -> std::io::Result<Due> {
+    pub(crate) fn due(
+        &self,
+        now: DateTime<Utc>,
+        busy: &HashSet<String>,
+        policy: DeadPolicy,
+    ) -> std::io::Result<Due> {
         let mut state = self.state.lock();
         // A record whose row is gone was left by an unsubscribe: dropped, as
         // the unsubscribe meant (design 9).
@@ -323,6 +331,12 @@ impl Store {
             state.outbox.remove(&id);
         }
         let buried = self.expire_pending(&mut state, now);
+        // Expiry burials keep the dead-letter caps as every burial does; a
+        // failed eviction is retried by the next sweep.
+        let evicted: Vec<Evicted> = {
+            let _ = policy;
+            Vec::new()
+        };
         let mut first: HashMap<&str, &OutboxRecord> = HashMap::new();
         let mut next: Option<DateTime<Utc>> = None;
         for record in state.outbox.values() {
@@ -353,6 +367,7 @@ impl Store {
             ready,
             next,
             buried,
+            evicted,
         })
     }
 

@@ -46,7 +46,7 @@ async fn an_unoffered_type_is_held_then_sent_once_offered() {
         let later = Utc::now() + chrono::Duration::minutes(5);
         let due = hub
             .store
-            .due(later, &std::collections::HashSet::new())
+            .due(later, &std::collections::HashSet::new(), hub.dead_policy())
             .expect("io");
         assert_eq!(due.ready.len(), 1, "{name}: still pending");
         assert_eq!(
