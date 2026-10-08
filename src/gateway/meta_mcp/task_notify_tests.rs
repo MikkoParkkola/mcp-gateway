@@ -115,6 +115,7 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
         output_free: false,
         error_author: None,
         owner_digest: String::new(),
+        gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
     };
 
     let pending = meta
