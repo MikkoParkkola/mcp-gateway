@@ -317,11 +317,13 @@ async fn a_dropped_write_still_publishes_its_reload() {
     let pause = super::reload_pause::arm(&path);
     let (a_ctx, a_path) = (Arc::clone(&ctx), path.clone());
     let a = tokio::spawn(async move {
-        mutate_config_and_reload_with(&a_path, Some(&*a_ctx), CommentLoss::Refuse, add_b)
+        mutate_config_and_reload_detached(a_path, Some(a_ctx), CommentLoss::Refuse, add_b)
             .await
             .is_ok()
     });
-    pause.reached.notified().await;
+    tokio::time::timeout(Duration::from_secs(10), pause.reached.notified())
+        .await
+        .expect("the write reached its reload");
     a.abort();
     let _ = a.await;
     assert!(
@@ -340,4 +342,12 @@ async fn a_dropped_write_still_publishes_its_reload() {
         );
         tokio::task::yield_now().await;
     }
+    // Both locks were released when the detached write finished: the next
+    // write goes through instead of reporting Busy.
+    let next = mutate_config_and_reload_with(&path, Some(&*ctx), CommentLoss::Refuse, add_c).await;
+    assert!(
+        matches!(next, Ok(ConfigMutation::Applied(..))),
+        "the next write after the detached one: {}",
+        outcome(&next)
+    );
 }
