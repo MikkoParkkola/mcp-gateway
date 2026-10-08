@@ -4485,7 +4485,7 @@ the router's agent middleware uses, so delivery checks the same registry.
 
 ## 172. `meta_mcp.cache_tools` is retired
 
-**Startup:** no notice
+**Startup:** no notice; a config that sets the key logs one warning at load
 
 `meta_mcp.cache_tools` was parsed but never read: tool lists were cached the same way
 whether it said `true` or `false`, so setting it to turn caching off did nothing.
