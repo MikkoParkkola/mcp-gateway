@@ -4327,8 +4327,9 @@ CLI writes take the same lock for their write. One that finds it held prints
 `Waiting for gateway.yaml ...` and continues once it is free; if another writer holds it for
 30 seconds, the command writes nothing and exits non-zero with "Not saved: ... locked by
 another writer; retry." A config directory where the lock file cannot be created (a
-read-only mount) refuses the write instead of writing unlocked. A write refused because the
-existing file does not load leaves the directory as it was.
+read-only mount) refuses the write instead of writing unlocked. A CLI write whose config
+does not load is refused and leaves the file unchanged, including a config that another
+program broke while the command waited for the lock.
 
 One case is not covered yet. A CLI command reads `gateway.yaml` before it takes the lock. If
 another program (the web UI, another CLI command, a second gateway) saves the file in the

@@ -130,9 +130,9 @@ mod tests {
         );
     }
 
-    /// An I/O failure under `--force` comes back as that failure, not as a
-    /// comment warning over a rewrite (a directory where the file goes makes
-    /// the rename fail on every platform).
+    /// A failure under `--force` comes back as that failure, not as a comment
+    /// warning over a rewrite (a directory where the file goes fails the
+    /// load under the lock on every platform).
     #[test]
     fn an_io_failure_under_force_is_reported_as_itself() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -141,7 +141,7 @@ mod tests {
         let config = mcp_gateway::config::Config::default();
         let error = super::write(&path, &config, super::CommentLoss::Rewrite).expect_err("fails");
         assert!(
-            error.starts_with("Failed to write") && !error.contains(super::REFUSAL),
+            error.starts_with("Failed to load") && !error.contains(super::REFUSAL),
             "{error}"
         );
     }
