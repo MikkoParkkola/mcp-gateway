@@ -90,7 +90,7 @@ fn playbook(properties: &str) -> String {
 /// A playbook of one step per server in `servers`, named `s1`, `s2`, ...
 /// in order, whose output maps `properties`.
 fn playbook_on(servers: &[&str], properties: &str) -> String {
-    let steps: String = servers
+    let steps = servers
         .iter()
         .enumerate()
         .map(|(i, server)| {
@@ -99,7 +99,8 @@ fn playbook_on(servers: &[&str], properties: &str) -> String {
                 i + 1
             )
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .concat();
     format!(
         "name: seam\ndescription: plan steps\non_error: continue\ninputs: {{}}\nsteps:\n\
          {steps}output:\n  type: object\n  properties:\n{properties}"
@@ -110,7 +111,8 @@ fn playbook_on(servers: &[&str], properties: &str) -> String {
 fn each_step(steps: usize) -> String {
     (1..=steps)
         .map(|i| format!("    p{i}:\n      path: $s{i}.content[0].text\n"))
-        .collect()
+        .collect::<Vec<_>>()
+        .concat()
 }
 
 /// Run the `seam` playbook as `key-a` and return its `output`, parsed.
@@ -448,7 +450,8 @@ async fn a_short_field_between_large_ones_keeps_its_seam() {
     let large = |tag: &str| {
         (0..700)
             .map(|i| format!("{tag}{i:04} "))
-            .collect::<String>()
+            .collect::<Vec<_>>()
+            .concat()
     };
     let (head, tail) = (large("h"), large("t"));
     let blocks = json!({"content": [

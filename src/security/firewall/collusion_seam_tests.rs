@@ -187,7 +187,7 @@ fn a_run_over_many_short_leaves_is_seamed_throughout() {
 fn many_tiny_leaves_are_read_in_one_pass() {
     let det = detector();
     let chars: Vec<String> = (0..10_000)
-        .map(|i| char::from(b'a' + (i * 7 % 26) as u8).to_string())
+        .map(|i| char::from(b'a' + u8::try_from(i * 7 % 26).unwrap_or(0)).to_string())
         .collect();
     let parts: Vec<(&str, Option<u32>)> = chars
         .iter()

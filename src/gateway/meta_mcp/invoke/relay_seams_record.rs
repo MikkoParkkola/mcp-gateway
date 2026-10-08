@@ -14,8 +14,14 @@ use serde_json::Value;
 
 use crate::security::firewall::{DeliveryDigest, Firewall};
 
-use super::super::Receipt;
+use super::super::{Kind, Receipt};
 use super::PLAN_MEMBERS;
+
+/// Contributing sources, as (server, tool).
+type Sources = BTreeSet<(String, String)>;
+
+/// A seam's flow policy: its sensitivity and its distinct flow masks.
+type Policy = (bool, Vec<u64>);
 
 /// Composite receipts per delivery, by contributing-source set; the rest are
 /// grouped by policy (sensitivity and the contributors' flow masks).
@@ -40,7 +46,7 @@ struct Group {
 /// Rebuild the seam receipts of `receipts`, the delivery's plan step
 /// receipts already kept to `answer`, the plan's decoded final answer.
 pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, answer: &Value) {
-    receipts.retain(|r| !r.seam);
+    receipts.retain(|r| r.kind != Kind::Seam);
     let members = PLAN_MEMBERS
         .try_with(|m| m.borrow().clone())
         .unwrap_or_default();
@@ -96,7 +102,7 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
     let (key, keyed) = (caller.key.clone(), caller.keyed);
     // Grouped by contributing sources AND sensitivity, so a fingerprint is
     // sensitive only when its own contributors are.
-    let mut groups: BTreeMap<(BTreeSet<(String, String)>, bool), Vec<u64>> = BTreeMap::new();
+    let mut groups: BTreeMap<(Sources, bool), Vec<u64>> = BTreeMap::new();
     for (fp, labels) in seams {
         let mut sources = BTreeSet::new();
         let mut sensitive = false;
@@ -117,10 +123,10 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
         in_plan: false,
         pending_retain: false,
         step: None,
-        seam: true,
+        kind: Kind::Seam,
     };
     let mut composites = 0;
-    let mut overflow: BTreeMap<(bool, Vec<u64>), (BTreeSet<String>, Vec<u64>)> = BTreeMap::new();
+    let mut overflow: BTreeMap<Policy, (BTreeSet<String>, Vec<u64>)> = BTreeMap::new();
     for ((sources, sensitive), fps) in groups {
         let group = Group { sensitive, fps };
         if let [(server, tool)] = sources.iter().collect::<Vec<_>>().as_slice() {

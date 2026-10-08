@@ -322,10 +322,6 @@ impl CollusionDetector {
     /// Every `K`-char k-gram hash of `text`, normalised as
     /// [`Self::fingerprints`] reads it, before winnowing: a fingerprint is
     /// one of these.
-    #[expect(
-        clippy::unused_self,
-        reason = "the key is per process; a method keeps callers from hashing with any other"
-    )]
     pub(crate) fn kgram_hashes(&self, text: &str) -> Vec<u64> {
         let norm = self.normalized(text);
         let bounds: Vec<usize> = norm

@@ -238,9 +238,18 @@ struct Receipt {
     /// playbook's step index, a chain's execution index): which answer
     /// members it may own (`MIK-8113`). `None` outside a labelled step.
     step: Option<u32>,
-    /// The seam fingerprints of the plan's answer, rebuilt each time the
-    /// step receipts are kept to it (`MIK-8113`).
-    seam: bool,
+    /// What it records.
+    kind: Kind,
+}
+
+/// What a staged receipt records.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// A result as delivered (or a plan step's, kept to the plan's answer).
+    Delivered,
+    /// The seam fingerprints of a plan's answer, rebuilt each time the step
+    /// receipts are kept to it (`MIK-8113`).
+    Seam,
 }
 
 tokio::task_local! {
@@ -578,7 +587,7 @@ fn receipt_with(
         in_plan,
         pending_retain: false,
         step: plan.ok().flatten(),
-        seam: false,
+        kind: Kind::Delivered,
     })
 }
 

@@ -159,19 +159,23 @@ impl MetaMcp {
         let answer =
             super::super::chain_interim::drive_chain(&chain, start_step, &mut run_step, seal_stop)
                 .await?;
-        // MIK-8113: each result is its step's, by the execution index the
-        // chain wrote beside it, so a resumed chain's results keep theirs.
-        let results = answer.get("results").and_then(Value::as_array);
-        for (i, done) in results.into_iter().flatten().enumerate() {
-            if let Some(label) = done.get("step").and_then(Value::as_u64) {
-                let label = u32::try_from(label).unwrap_or(u32::MAX);
-                crate::gateway::meta_mcp::invoke::relay::note_plan_member(
-                    format!("/results/{i}/result"),
-                    label,
-                );
-            }
-        }
+        note_chain_members(&answer);
         Ok(answer)
+    }
+}
+
+/// MIK-8113: each result of a chain's answer is its step's, by the execution
+/// index the chain wrote beside it, so a resumed chain's results keep theirs.
+fn note_chain_members(answer: &Value) {
+    let results = answer.get("results").and_then(Value::as_array);
+    for (i, done) in results.into_iter().flatten().enumerate() {
+        if let Some(label) = done.get("step").and_then(Value::as_u64) {
+            let label = u32::try_from(label).unwrap_or(u32::MAX);
+            crate::gateway::meta_mcp::invoke::relay::note_plan_member(
+                format!("/results/{i}/result"),
+                label,
+            );
+        }
     }
 }
 
