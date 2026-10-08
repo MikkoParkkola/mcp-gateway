@@ -517,3 +517,107 @@ async fn a2a_9_an_abandoned_retry_still_cancels_the_task() {
     }
     assert_eq!(stub::calls(&log, "CancelTask")[0]["params"]["id"], "task-2");
 }
+
+/// MIK-8063 with #3451: on `/mcp` through `gateway_invoke`, an API-key caller
+/// gets the agent's question as an input round bound to its key. Another key
+/// holding the token is refused before the agent sees it, a replay of the
+/// redeemed token is refused, and the asked key resumes the agent's task.
+#[tokio::test]
+async fn a2a_8_an_api_key_caller_keeps_its_round_through_gateway_invoke() {
+    use super::common;
+    let (base, log) = stub::serve(asking_then("for alice via invoke")).await;
+    let mut alice = common::api_key("key-alice", 0, None);
+    alice.name = "alice".into();
+    let mut bob = common::api_key("key-bob", 0, None);
+    bob.name = "bob".into();
+    let fixture = common::Fixture {
+        auth: common::auth_with(vec![alice, bob], None),
+        ..common::Fixture::default()
+    };
+    let (state, _store) = common::state(fixture).await;
+    assert!(
+        state
+            .backends
+            .register(std::sync::Arc::new(backend(&base, None, &[])))
+    );
+    let frame = |extra: &[(&str, Value)], key: &str| {
+        let mut params = json!({"name": "gateway_invoke", "arguments": {
+            "server": "agent", "tool": TOOL, "arguments": {"message": "weather?"}}});
+        for (name, value) in extra {
+            params[*name] = value.clone();
+        }
+        params["_meta"] = json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {"elicitation": {}},
+            "io.modelcontextprotocol/clientInfo": {"name": "a2a-rows", "version": "1"},
+        });
+        params["_meta"][mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
+    };
+
+    let asked = post_as(
+        &state,
+        "/mcp",
+        &frame(&[], "inv-ask"),
+        Some("key-alice"),
+        None,
+    )
+    .await;
+    assert_eq!(asked["result"]["resultType"], "input_required", "{asked}");
+    let token = asked["result"]["requestState"].clone();
+    assert!(token.is_string(), "{asked}");
+    let accept = json!({ ASK_KEY: {"action": "accept", "content": {"reply": "Helsinki"}} });
+    let answer = [("requestState", token), ("inputResponses", accept)];
+
+    let stolen = post_as(
+        &state,
+        "/mcp",
+        &frame(&answer, "inv-bob"),
+        Some("key-bob"),
+        None,
+    )
+    .await;
+    assert!(
+        !stolen.to_string().contains("for alice via invoke"),
+        "another key is refused: {stolen}"
+    );
+    assert_eq!(
+        stub::sends(&log).len(),
+        1,
+        "the refused retry never reached the agent"
+    );
+
+    let resumed = post_as(
+        &state,
+        "/mcp",
+        &frame(&answer, "inv-alice"),
+        Some("key-alice"),
+        None,
+    )
+    .await;
+    assert!(
+        resumed.to_string().contains("for alice via invoke"),
+        "the asked key resumes: {resumed}"
+    );
+    let sends = stub::sends(&log);
+    assert_eq!(sends.len(), 2, "{resumed}");
+    assert_eq!(sends[1].body["params"]["message"]["taskId"], "task-2");
+
+    let replayed = post_as(
+        &state,
+        "/mcp",
+        &frame(&answer, "inv-replay"),
+        Some("key-alice"),
+        None,
+    )
+    .await;
+    assert!(
+        !replayed.to_string().contains("for alice via invoke"),
+        "a redeemed token is one-shot: {replayed}"
+    );
+    assert_eq!(
+        stub::sends(&log).len(),
+        2,
+        "the replay never reached the agent"
+    );
+}
