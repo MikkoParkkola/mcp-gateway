@@ -195,12 +195,19 @@ pub fn write_config_preserving<T>(
     mode: CommentLoss,
     edit: impl FnOnce(&mut Config) -> Result<T, String>,
 ) -> Result<(T, Option<String>), String> {
+    let load = || {
+        load_existing_or_default(path)
+            .map_err(|e| format!("Failed to load {}: {e}", path.display()))
+    };
+    // A file that does not load is refused before the lock is taken, so the
+    // refusal leaves the directory as it was, no lock file added (GH462). It
+    // is loaded again under the lock: this check only decides refusal early.
+    load()?;
     let _held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
         say_waiting(path, lock);
     })
     .map_err(|e| not_locked(path, e))?;
-    let mut config = load_existing_or_default(path)
-        .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
+    let mut config = load()?;
     let value = edit(&mut config)?;
     let failed = |message: String| format!("Failed to write {}: {message}", path.display());
     match write_spliced(path, &config, CommentLoss::Refuse, Splice::NoRemoval) {
@@ -312,15 +319,19 @@ const SCRATCH_ATTEMPTS: u64 = 8;
 /// Returns an error when `path` already exists, the lock cannot be taken, or
 /// the file cannot be created.
 pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
+    let absent = || match std::fs::symlink_metadata(path) {
+        Ok(_) => Err(format!("{} already exists", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("Cannot inspect {}: {error}", path.display())),
+    };
+    // Checked before the lock too, so refusing an existing file adds no lock
+    // file next to it (GH462); checked again under the lock, which decides.
+    absent()?;
     let _held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
         say_waiting(path, lock);
     })
     .map_err(|e| not_locked(path, e))?;
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => return Err(format!("{} already exists", path.display())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("Cannot inspect {}: {error}", path.display())),
-    }
+    absent()?;
     write_yaml(path, yaml)
 }
 
