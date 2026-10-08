@@ -168,16 +168,32 @@ async fn a_replayed_direct_provenance_stamp_stays_out_of_the_receipt() {
     assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 1);
 }
 
-/// A direct `read` as `key` on the signed, relayed fixture; with `cmd`, the
-/// text a relay check reads.
+/// A modern-era direct `read` as `key` on the signed, relayed fixture (the
+/// hardened posture serves the direct route no legacy `tools/call`); with
+/// `cmd`, the text a relay check reads.
 async fn signed_read(
     fx: &crate::gateway::router::direct_guards_fixture::Fx,
     key: &str,
     cmd: Option<&str>,
 ) -> (axum::http::StatusCode, Value) {
+    use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
     let args = cmd.map_or_else(|| json!({}), |cmd| json!({ "cmd": cmd }));
-    crate::gateway::router::direct_guards_fixture::post_direct(
-        fx, "alpha", key, "read", args, None, None,
+    let params = json!({"name": "read", "arguments": args, "_meta": {
+        KEY_PROTOCOL_VERSION: MODERN_VERSIONS[0],
+        KEY_CLIENT_CAPABILITIES: {},
+    }});
+    crate::gateway::router::direct_guards_fixture::send_with_headers(
+        fx,
+        "/mcp/alpha",
+        key,
+        "tools/call",
+        params,
+        None,
+        &[
+            ("mcp-protocol-version", MODERN_VERSIONS[0]),
+            ("mcp-method", "tools/call"),
+            ("mcp-name", "read"),
+        ],
     )
     .await
 }
