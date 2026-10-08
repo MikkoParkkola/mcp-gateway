@@ -119,10 +119,16 @@ impl TaskService {
     /// (MIK-8052). Runs on every expiry sweep; a store with nothing sealed
     /// returns at once.
     pub(crate) async fn reread_sealed(&self) {
-        let admission = Arc::clone(&self.admission);
+        // Imported under the share's lock, and only while this service still
+        // holds a share: once shutdown released it, custody is gone and no key
+        // is published on the caller's authority. Lock order is share, then
+        // admission, as in `move_seal` and `release_seal`.
         let sealed = self
             .store
-            .reread_sealed(|binding, id| admission.import_tasks(&[(binding, id)]).is_ok())
+            .reread_sealed(|binding, id| {
+                let share = self.sealed.lock();
+                share.is_some() && self.admission.import_tasks(&[(binding, id)]).is_ok()
+            })
             .await;
         self.move_seal(sealed);
     }
@@ -168,7 +174,7 @@ impl TaskService {
         serde_json::json!({
             "sealed_rows": files.len(),
             "sealed_files": files,
-            "action": "repair or remove each file; new keyed calls resume at the next expiry sweep",
+            "action": "repair or remove each file; new keyed calls resume at the next expiry sweep; restart to read a repaired task",
         })
     }
 

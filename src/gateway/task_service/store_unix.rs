@@ -13,6 +13,18 @@ use crate::fs_lock::DirPin;
 
 pub(super) use std::fs::rename;
 
+/// A directory's identity: its device and inode.
+pub(super) type DirId = (u64, u64);
+
+/// The identity of the directory at `dir`, or `None` when nothing is there.
+pub(super) fn dir_identity(dir: &Path) -> Option<DirId> {
+    use std::os::unix::fs::MetadataExt as _;
+    fs::symlink_metadata(dir)
+        .ok()
+        .filter(fs::Metadata::is_dir)
+        .map(|meta| (meta.dev(), meta.ino()))
+}
+
 /// Open a record without following a symlink, so the thing judged and the thing
 /// read are the same file. Non-blocking, so a FIFO wearing a record's name is
 /// judged and refused instead of waiting for a writer (`MIK-8052.AC4`); the flag

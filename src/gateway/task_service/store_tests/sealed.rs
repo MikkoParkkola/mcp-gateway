@@ -640,7 +640,7 @@ async fn a_repair_read_after_shutdown_imports_nothing() {
 async fn a_replacement_directory_with_a_readable_copy_keeps_the_seal() {
     use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().unwrap();
-    let (path, rows, _admission, service) = sealed_service(dir.path(), &["k-swap"]).await;
+    let (path, rows, admission, service) = sealed_service(dir.path(), &["k-swap"]).await;
     std::fs::rename(&path, dir.path().join("moved")).unwrap();
     std::fs::create_dir(&path).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -653,5 +653,9 @@ async fn a_replacement_directory_with_a_readable_copy_keeps_the_seal() {
         service.skipped_records().sealed,
         1,
         "a replacement directory's copy lifted the seal"
+    );
+    assert!(
+        !is_new_owner(&admission, "k-new"),
+        "a new keyed call was admitted while the seal holds"
     );
 }

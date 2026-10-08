@@ -13,6 +13,19 @@ use crate::private_fs::{self, Share};
 
 pub(super) use crate::private_fs::{replace as rename, sync_dir, sync_file};
 
+/// A directory's identity. The store's directory is pinned open without delete
+/// sharing for its whole custody, so it cannot be renamed or swapped: present
+/// is enough.
+pub(super) type DirId = ();
+
+/// `Some` when a directory is at `dir`.
+pub(super) fn dir_identity(dir: &Path) -> Option<DirId> {
+    fs::symlink_metadata(dir)
+        .ok()
+        .filter(fs::Metadata::is_dir)
+        .map(|_| ())
+}
+
 /// T1/T2: the store directory and lease are judged on an open handle.
 pub(super) fn has_mode(_meta: &fs::Metadata, _expected: u32) -> bool {
     true

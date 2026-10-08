@@ -65,7 +65,12 @@ impl TaskStore {
             names
                 .into_iter()
                 .map(|name| {
-                    let outcome = super::disk::reread_record(&shared.dir, &name, shared.limits);
+                    let outcome = super::disk::reread_record(
+                        &shared.dir,
+                        &name,
+                        shared.limits,
+                        shared.dir_id,
+                    );
                     (name, outcome)
                 })
                 .collect::<Vec<_>>()
