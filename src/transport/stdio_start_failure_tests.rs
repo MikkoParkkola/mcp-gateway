@@ -198,5 +198,7 @@ async fn a_retried_start_sends_the_new_child_exactly_one_initialize() {
         .filter(|line| line.contains(r#""method":"initialize""#))
         .count();
     assert_eq!(initializes, 1, "the second child read:\n{lines}");
-    transport.close().await.expect("close");
+    crate::transport::Transport::close(&*transport)
+        .await
+        .expect("close");
 }
