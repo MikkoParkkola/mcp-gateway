@@ -105,6 +105,31 @@ fn a_callers_own_split_copy_is_never_a_relay() {
     );
 }
 
+/// MIK-8083: B was delivered the copy after a short heading, so every k-gram
+/// of the text sits at another offset than in A's copy; B forwarding the bare
+/// text is still its own copy. A selection by position would keep different
+/// k-grams for B than for the forward, and report it.
+#[test]
+fn a_callers_own_copy_at_another_offset_is_never_a_relay() {
+    let fw = observing();
+    let refused: Vec<usize> = (0..TEXTS)
+        .filter(|&i| {
+            let (text, tool, b) = (text(i), format!("read{i}"), format!("b{i}"));
+            deliver(&fw, &format!("a{i}"), &tool, &text, false);
+            deliver(&fw, &b, &tool, &format!("Note {i}: {text}"), false);
+            assert!(
+                reported(&fw, &format!("c{i}"), &text),
+                "text {i} undetectable"
+            );
+            reported(&fw, &b, &text)
+        })
+        .collect();
+    assert!(
+        refused.is_empty(),
+        "own copies reported as relays: {refused:?}"
+    );
+}
+
 /// MIK-8083 controls: a caller holding nothing from the source, or only the
 /// first half of the text, forwarding the whole text is still a relay.
 #[test]
