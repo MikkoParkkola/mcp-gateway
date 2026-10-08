@@ -33,7 +33,8 @@ impl EventsHub {
 
     /// May an event of type `name` be sent now (MIK-7907)? Its source
     /// answers; a backend name no source offers any more is not admitted,
-    /// as in `source_verdict`.
+    /// as in `source_verdict`. Call it inside `LiveConfig::admit`, without
+    /// awaiting, so a reload that has returned is always seen.
     pub(super) fn admits_now(&self, name: &str) -> bool {
         match self.source_offering(name) {
             Some(source) => source.admits_now(name),
