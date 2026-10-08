@@ -7,23 +7,30 @@
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::admission::{services, settled_task};
 use super::support::*;
 
 /// `name` sealed, then read again: how many rows stay sealed, and the task
-/// ids the re-read handed to import.
+/// ids the re-read handed to import. No row here restores in full, so
+/// `recover` (MIK-8121) is never asked.
 async fn reread_open(store: &super::super::store::TaskStore, name: &str) -> (usize, Vec<String>) {
     store.seal_for_test(name);
-    let imported = Mutex::new(Vec::new());
-    let sealed = store
-        .reread_sealed(|_, task_id| {
-            imported.lock().unwrap().push(task_id);
-            true
-        })
+    let imported = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&imported);
+    let (sealed, settled) = store
+        .reread_sealed(
+            move |_, task_id| {
+                sink.lock().unwrap().push(task_id);
+                true
+            },
+            |_| None,
+        )
         .await;
-    (sealed, imported.into_inner().unwrap())
+    assert!(settled.is_empty(), "no row here is served again");
+    let imported = imported.lock().unwrap().clone();
+    (sealed, imported)
 }
 
 fn private(path: &Path) {

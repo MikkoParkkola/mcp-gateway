@@ -326,6 +326,9 @@ pub fn write_text_atomic(path: &Path, text: &str) -> Result<(), String> {
 }
 
 fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
+    // Replace the config itself, not a symlink naming it: renaming onto the
+    // link would detach the config from its target (MIK-8153).
+    let path = &crate::identity_grants::journal::resolved(path);
     let (mut file, tmp_path) = create_scratch_exclusive(path, next_scratch_seed())?;
 
     // Leave no debris behind on any failure. The scratch name is unique per
