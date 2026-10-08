@@ -186,6 +186,16 @@ pub(super) struct RelayGate {
 }
 
 impl RelayGate {
+    /// See [`super::Firewall::keeping_every_kgram`].
+    #[cfg(test)]
+    pub(super) fn keep_every_kgram(&mut self) {
+        if let Some(detector) = self.detector.as_mut() {
+            Arc::get_mut(detector)
+                .expect("a gate just built shares its detector with no one")
+                .keep_every_kgram();
+        }
+    }
+
     pub(super) fn from_config(config: &CollusionConfig) -> Self {
         let compile = |patterns: &[String]| {
             patterns

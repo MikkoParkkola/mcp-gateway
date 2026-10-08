@@ -201,6 +201,16 @@ impl Firewall {
         self
     }
 
+    /// Relay detection keeps every k-gram instead of a keyed sample, so a
+    /// test row always checks the fingerprints its text holds, under any
+    /// hash key (MIK-8083). Call it on a firewall just built.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn keeping_every_kgram(mut self) -> Self {
+        self.relay.keep_every_kgram();
+        self
+    }
+
     /// Create a new firewall from config.
     ///
     /// Compiles all rules, initialises scanners, and opens the audit log if

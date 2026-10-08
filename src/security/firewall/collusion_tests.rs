@@ -137,7 +137,7 @@ fn every_span_keeps_only_the_documents_fingerprints() {
 #[test]
 fn sample_keeps_each_multiple_once_in_order() {
     let hashes = [SAMPLE, 1, 2 * SAMPLE, SAMPLE, 3, 0, SAMPLE + 1, 2 * SAMPLE];
-    assert_eq!(sample(&hashes), vec![SAMPLE, 2 * SAMPLE, 0]);
+    assert_eq!(sample(&hashes, SAMPLE), vec![SAMPLE, 2 * SAMPLE, 0]);
 }
 
 // Row 4 ────────────────────────────────────────────────────────────────────
@@ -492,7 +492,10 @@ fn short_text_has_no_fingerprints() {
     // A fingerprint is a sampled k-gram, so whether one k-gram is kept
     // depends on its hash alone.
     for text in [secret()[..48].to_string(), "\u{e9}".repeat(48)] {
-        assert_eq!(d.fingerprints(&text), sample(&d.kgram_hashes(&text)));
+        assert_eq!(
+            d.fingerprints(&text),
+            sample(&d.kgram_hashes(&text), SAMPLE)
+        );
     }
 }
 

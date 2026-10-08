@@ -52,21 +52,24 @@ async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDi
         },
         None,
     ));
-    let relay = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                // One shared fingerprint. Sampling keeps one k-gram in four,
-                // so a run of n k-grams keeps none with odds (3/4)^n: the
-                // probes below are long enough to make a miss negligible.
-                min_matches: 1,
-                sources: vec![format!("{BACKEND}:*")],
-                ..CollusionConfig::default()
+    // Every k-gram kept: any 48-char run holds a fingerprint under any hash
+    // key, so with one shared fingerprint a relay of the URL or the advice
+    // is always refused if receipted (MIK-8083).
+    let relay = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    min_matches: 1,
+                    sources: vec![format!("{BACKEND}:*")],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keeping_every_kgram(),
+    );
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
         &two_principal_auth(),
         None,
@@ -138,9 +141,9 @@ fn note() -> String {
         .join("\n")
 }
 
-/// A database URL of 80 k-grams, so a receipt that kept it would match a
-/// relay of it under all but about 1e-10 of hash keys (MIK-8083).
-const DSN: &str = "postgres://ledger:pw@db.local/orchard-archive-of-the-north-slope-pear-rows-and-the-south-terrace-quince-rows-kept-by-the-estate";
+/// A database URL longer than a k-gram, so a receipt that kept it would
+/// match a relay of it.
+const DSN: &str = "postgres://ledger:pw@db.local/orchard-archive-of-the-north-slope-pear-rows";
 
 /// The gateway's recovery advice for a tool error it reads as a parameter
 /// problem: the gateway's text, longer than a k-gram.
@@ -220,11 +223,10 @@ async fn a_rewritten_tool_error_keeps_the_gateways_advice_out_of_its_receipt() {
     );
 }
 
-/// Two short text blocks, each one char under a k-gram, so every
-/// fingerprint across them spans the two backend leaves, and the about 48
-/// k-grams across them all go unsampled under about 1e-6 of keys (MIK-8083).
-const FIELD_X: &str = "north slope rows seven to twelve, late pears ok";
-const FIELD_Y: &str = "south terrace rows one to six, early quinces ok";
+/// Two short text blocks, each under a k-gram, so every fingerprint across
+/// them spans the two backend leaves.
+const FIELD_X: &str = "north slope rows seven to twelve, pears";
+const FIELD_Y: &str = "south terrace rows one to six, quinces";
 
 /// `MIK-8043.JOIN.4`: a rewritten wrapper is read member by member, so two
 /// short backend fields the caller got intact keep the receipt across them.

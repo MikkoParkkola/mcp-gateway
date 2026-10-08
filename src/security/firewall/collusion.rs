@@ -211,20 +211,23 @@ impl State {
     }
 }
 
-/// The hashes kept as fingerprints: those 0 mod [`SAMPLE`], distinct, in
-/// position order.
-fn sample(hashes: &[u64]) -> Vec<u64> {
+/// The hashes kept as fingerprints: those 0 mod `every` ([`SAMPLE`]),
+/// distinct, in position order.
+fn sample(hashes: &[u64], every: u64) -> Vec<u64> {
     let mut seen = HashSet::new();
     hashes
         .iter()
         .copied()
-        .filter(|h| h % SAMPLE == 0 && seen.insert(*h))
+        .filter(|h| h % every == 0 && seen.insert(*h))
         .collect()
 }
 
 /// Relay detector state for one gateway process.
 pub(crate) struct CollusionDetector {
     params: RelayParams,
+    /// One k-gram in this many is kept: [`SAMPLE`], or 1 in a test that
+    /// must not depend on the hash key.
+    sample: u64,
     state: Mutex<State>,
     evicted: AtomicU64,
     saturated: AtomicU64,
@@ -246,6 +249,7 @@ impl CollusionDetector {
     pub(crate) fn new(params: RelayParams) -> Self {
         Self {
             params,
+            sample: SAMPLE,
             state: Mutex::new(State::default()),
             evicted: AtomicU64::new(0),
             saturated: AtomicU64::new(0),
@@ -273,7 +277,14 @@ impl CollusionDetector {
     /// Scratch memory is linear in `text`; callers bound it with the request
     /// and response size limits, not this function.
     pub(crate) fn fingerprints(&self, text: &str) -> Vec<u64> {
-        sample(&self.kgram_hashes(text))
+        sample(&self.kgram_hashes(text), self.sample)
+    }
+
+    /// Keep every k-gram, so whether a text has fingerprints no longer
+    /// depends on the per-process hash key (tests only).
+    #[cfg(test)]
+    pub(crate) fn keep_every_kgram(&mut self) {
+        self.sample = 1;
     }
 
     /// Every `K`-char k-gram hash of `text`, normalised as
