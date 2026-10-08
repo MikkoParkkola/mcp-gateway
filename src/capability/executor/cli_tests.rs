@@ -32,6 +32,19 @@ fn a_path_inside_the_root_resolves_to_its_canonical_form() {
     );
 }
 
+/// MIK-7911: on Windows a confined path reaches the child in the plain drive
+/// form, not the verbatim one `canonicalize` returns, so a server that
+/// resolves only one side of its prefix check still agrees.
+#[cfg(windows)]
+#[test]
+fn a_confined_path_has_no_verbatim_prefix_on_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("report.pdf"), b"x").unwrap();
+    let got = confine("report.pdf", "uploads", &roots(dir.path())).unwrap();
+    let shown = got.display().to_string();
+    assert!(!shown.starts_with(r"\\?\"), "{shown}");
+}
+
 #[test]
 fn escapes_and_lookalike_siblings_are_refused() {
     let parent = tempfile::tempdir().unwrap();
