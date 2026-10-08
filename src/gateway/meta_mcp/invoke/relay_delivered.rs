@@ -535,11 +535,21 @@ mod tests {
             let stamps = shape_modern_response(&mut shaped, "resources/read");
             let result = shaped.result.as_ref().expect("a result");
             assert_eq!(result["resultType"], "complete", "base: shaped {result}");
-            assert!(result.get("cacheScope").is_some(), "base: shaped {result}");
+            let written = result.as_object().map_or(0, serde_json::Map::len);
+            assert_eq!(written, 5, "base: the shaper wrote three members: {result}");
             let copy = receipt_copy(result, stamps, AnswerShape::Literal).expect("a copy");
-            for member in ["resultType", "cacheScope", "ttlMs"] {
-                assert!(copy.get(member).is_none(), "{member} kept: {copy}");
-            }
+            let mut kept: Vec<&str> = copy
+                .as_object()
+                .expect("an object")
+                .keys()
+                .map(String::as_str)
+                .collect();
+            kept.sort_unstable();
+            assert_eq!(
+                kept,
+                ["_meta", "contents"],
+                "the shaper's members kept: {copy}"
+            );
             let own = json!({"content": [], "resultType": "input_required"});
             let mut backend = JsonRpcResponse::success(RequestId::Number(2), own);
             let stamps = shape_modern_response(&mut backend, "tools/call");
