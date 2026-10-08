@@ -172,7 +172,7 @@ async fn two_api_keys_reach_their_own_children_through_dispatch() {
 }
 
 /// Control: a caller that presented no credential is still refused on a
-/// multi-user gateway, and so is one whose digest is empty.
+/// multi-user gateway, and so is one whose digest is empty: no child runs.
 #[tokio::test]
 async fn a_caller_with_no_credential_digest_is_still_refused() {
     let (meta, _dir) = multi_user_meta().await;
@@ -180,8 +180,14 @@ async fn a_caller_with_no_credential_digest_is_still_refused() {
         caller(None, Authentication::Anonymous),
         caller(Some(""), Authentication::Authenticated),
     ] {
-        let err = say(&meta, &caller).await.unwrap_err().to_string();
-        assert!(err.contains("identified caller"), "{err}");
+        // Dispatch answers a capability's refusal as an error result.
+        let answer = say(&meta, &caller).await;
+        let text = match &answer {
+            Ok(result) => result.to_string(),
+            Err(error) => error.to_string(),
+        };
+        assert!(text.contains("identified caller"), "{text}");
+        assert!(!answer.as_ref().is_ok_and(|result| pid(result).is_some()));
     }
 }
 
