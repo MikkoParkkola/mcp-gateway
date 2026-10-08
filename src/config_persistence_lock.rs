@@ -55,12 +55,15 @@ pub(crate) enum NotLocked {
 /// on Windows, and refuses on platforms with no file locking. The sidecar
 /// sits in a directory the user chose, so a planted link must not be
 /// followed.
-fn try_once(lock: &Path) -> Result<Option<ExclusiveFileLock>, NotLocked> {
+/// A failure names `config` first: that is the file the user selected, and
+/// the sidecar is a detail of how it is locked.
+fn try_once(config: &Path, lock: &Path) -> Result<Option<ExclusiveFileLock>, NotLocked> {
     match ExclusiveFileLock::try_acquire(lock) {
         Ok(held) => Ok(Some(held)),
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
         Err(error) => Err(NotLocked::Failed(format!(
-            "cannot lock {}: {error}",
+            "cannot lock {} (lock file {}): {error}",
+            config.display(),
             lock.display()
         ))),
     }
@@ -75,7 +78,7 @@ pub(crate) async fn lock_config(
 ) -> Result<ExclusiveFileLock, NotLocked> {
     let lock = lock_path(config);
     loop {
-        if let Some(held) = try_once(&lock)? {
+        if let Some(held) = try_once(config, &lock)? {
             return Ok(held);
         }
         if Instant::now() >= deadline {
@@ -96,7 +99,7 @@ pub(crate) fn lock_config_blocking(
     let lock = lock_path(config);
     let mut on_wait = Some(on_wait);
     loop {
-        if let Some(held) = try_once(&lock)? {
+        if let Some(held) = try_once(config, &lock)? {
             return Ok(held);
         }
         if let Some(say) = on_wait.take() {
