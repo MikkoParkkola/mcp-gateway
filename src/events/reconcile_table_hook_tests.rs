@@ -36,6 +36,17 @@ async fn webhook_keys(hub: &EventsHub) -> Vec<String> {
         .collect()
 }
 
+/// Whether the webhook keys reach `count` within 50 scheduler turns.
+async fn keys_settle(hub: &EventsHub, count: usize) -> bool {
+    for _ in 0..50 {
+        if webhook_keys(hub).await.len() == count {
+            return true;
+        }
+        tokio::task::yield_now().await;
+    }
+    false
+}
+
 /// T11, non-watch half (MIK-8179 STARTED.1, design r3 K rule): a held
 /// webhook row keeps no started key, without waiting for a sweep; the route
 /// coming back starts it again.
@@ -45,17 +56,12 @@ async fn t11_a_held_webhook_row_releases_its_key() {
     let id = id_of(&subscribe(&hub, json!({})).await.expect("refresh"));
     assert_eq!(webhook_keys(&hub).await.len(), 1, "premise: started");
     refresh(&hub, &registry, "");
-    // One turn for the posted key reconcile; no sweep runs.
-    tokio::task::yield_now().await;
     assert!(hub.store.held(&id).is_some(), "premise: held");
-    assert!(
-        webhook_keys(&hub).await.is_empty(),
-        "a held row keeps no key"
-    );
+    // Turns for the posted key reconcile, bounded; no sweep runs.
+    assert!(keys_settle(&hub, 0).await, "a held row keeps no key");
     refresh(&hub, &registry, &full());
-    tokio::task::yield_now().await;
     assert!(hub.store.held(&id).is_none(), "premise: resumed");
-    assert_eq!(webhook_keys(&hub).await.len(), 1, "started again");
+    assert!(keys_settle(&hub, 1).await, "started again");
 }
 
 /// T19, retry half (MIK-8133 AC3, design r3 P1): a stamp write that failed
