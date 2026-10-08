@@ -46,6 +46,23 @@ pub(crate) enum Answer {
     /// The first `tools/call` asks the client a question (`input_required`);
     /// every later call succeeds. Drives a bridged input round (T3c).
     AskOnce,
+    /// Like `AskOnce`, the question carrying no `requestState` (MIK-8078).
+    AskNoState,
+    /// A completed answer that still carries a `requestState` (MIK-8078).
+    DoneWithState,
+    /// Like `AskOnce`, a question `InputRequired::from_result` declines (an
+    /// `inputRequests` that is not an object) beside a string state (MIK-8078).
+    AskMalformed,
+    /// Like `AskOnce`, its state longer than a continuation can seal.
+    AskBig,
+    /// Like `AskOnce`, the question and a `content` text carrying this text.
+    AskWith(&'static str),
+    /// Like `AskOnce`, the question carrying a `_meta` that is not an object.
+    AskBadMeta,
+    /// A response carrying both the question and a JSON-RPC `error`.
+    AskAndError,
+    /// The backend cannot be reached: nothing was sent (`TransportConnect`).
+    Unreachable,
     /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
     /// `resultType`, `ttlMs` (5000) and `cacheScope` itself, and every other
     /// answer a `ttlMs` of 3000 (MIK-8022).
@@ -62,12 +79,96 @@ pub(crate) enum Answer {
     PublicScope,
 }
 
+/// The question an `Ask*` answer opens with.
+fn question(answer: Answer) -> Value {
+    let mut asked = json!({
+        "resultType": "input_required",
+        "inputRequests": {
+            "k1": {
+                "method": "elicitation/create",
+                "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
+            }
+        },
+        "requestState": "backend-state-1"
+    });
+    if matches!(answer, Answer::AskNoState) {
+        asked.as_object_mut().unwrap().remove("requestState");
+    }
+    if matches!(answer, Answer::AskMalformed) {
+        asked["inputRequests"] = json!("surprise");
+    }
+    if matches!(answer, Answer::AskBig) {
+        asked["requestState"] = json!("s".repeat(16 * 1024));
+    }
+    if matches!(answer, Answer::AskBadMeta) {
+        asked["_meta"] = json!(5);
+    }
+    if let Answer::AskWith(text) = answer {
+        asked["inputRequests"]["k1"]["params"]["message"] = json!(text);
+        asked["content"] = json!([{"type": "text", "text": text}]);
+    }
+    asked
+}
+
+/// What the backend answers a `tools/call` with, past the question rounds.
+fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRpcResponse> {
+    match answer {
+        Answer::DoneWithState => Ok(JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
+                   "requestState": "backend-state-1"}),
+        )),
+        Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) | Answer::NonNumeric(_) => {
+            Ok(JsonRpcResponse::success(
+                id,
+                json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+            ))
+        }
+        Answer::ModernList => Ok(JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": "ok"}], "isError": false, "ttlMs": 3000}),
+        )),
+        Answer::PublicScope => Ok(JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
+                   "cacheScope": "public"}),
+        )),
+        Answer::IsError => Ok(JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": "backend says no"}], "isError": true}),
+        )),
+        Answer::RpcError(code) => Ok(JsonRpcResponse::error(Some(id), code, "backend says no")),
+        Answer::RateLimited => Ok(JsonRpcResponse::error(
+            Some(id),
+            -32000,
+            "rate limit exceeded",
+        )),
+        Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
+        Answer::Unreachable => Err(crate::Error::TransportConnect("no route".to_string())),
+        Answer::AskOnce
+        | Answer::AskNoState
+        | Answer::AskMalformed
+        | Answer::AskBig
+        | Answer::AskWith(_)
+        | Answer::AskBadMeta
+        | Answer::AskAndError => {
+            unreachable!("answered above")
+        }
+        Answer::Text(text) => Ok(JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": text}], "isError": false}),
+        )),
+    }
+}
+
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
 /// and counting every `tools/call`. `tools/list` names the one tool the rows
 /// call, `read`, so the direct route's listing check (F13) admits it; a
 /// listing never counts as a call.
 struct CountingBackend {
     calls: Arc<AtomicUsize>,
+    /// The params of every `tools/call`, in order (MIK-8078).
+    seen: Arc<std::sync::Mutex<Vec<Value>>>,
     answer: Answer,
 }
 
@@ -129,22 +230,31 @@ impl Transport for CountingBackend {
                 listing(self.answer, params.as_ref()),
             ));
         }
+        self.seen
+            .lock()
+            .unwrap()
+            .push(params.clone().unwrap_or(Value::Null));
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
-        if matches!(self.answer, Answer::AskOnce) {
+        if matches!(
+            self.answer,
+            Answer::AskOnce
+                | Answer::AskNoState
+                | Answer::AskMalformed
+                | Answer::AskBig
+                | Answer::AskWith(_)
+                | Answer::AskBadMeta
+                | Answer::AskAndError
+        ) {
             return Ok(if n == 0 {
-                JsonRpcResponse::success(
-                    id,
-                    json!({
-                        "resultType": "input_required",
-                        "inputRequests": {
-                            "k1": {
-                                "method": "elicitation/create",
-                                "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
-                            }
-                        },
-                        "requestState": "backend-state-1"
-                    }),
-                )
+                let mut asked = JsonRpcResponse::success(id, question(self.answer));
+                if matches!(self.answer, Answer::AskAndError) {
+                    asked.error = Some(crate::protocol::JsonRpcError {
+                        code: -32000,
+                        message: "backend failed".to_string(),
+                        data: None,
+                    });
+                }
+                asked
             } else {
                 JsonRpcResponse::success(
                     id,
@@ -152,41 +262,7 @@ impl Transport for CountingBackend {
                 )
             });
         }
-        match &self.answer {
-            Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) | Answer::NonNumeric(_) => {
-                Ok(JsonRpcResponse::success(
-                    id,
-                    json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
-                ))
-            }
-            Answer::ModernList => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "ok"}], "isError": false, "ttlMs": 3000}),
-            )),
-            Answer::PublicScope => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
-                       "cacheScope": "public"}),
-            )),
-            Answer::IsError => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "backend says no"}], "isError": true}),
-            )),
-            Answer::RpcError(code) => {
-                Ok(JsonRpcResponse::error(Some(id), *code, "backend says no"))
-            }
-            Answer::RateLimited => Ok(JsonRpcResponse::error(
-                Some(id),
-                -32000,
-                "rate limit exceeded",
-            )),
-            Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
-            Answer::AskOnce => unreachable!("answered above"),
-            Answer::Text(text) => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": text}], "isError": false}),
-            )),
-        }
+        call_answer(self.answer, id)
     }
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
         Ok(())
@@ -207,6 +283,8 @@ pub(crate) struct Fx {
     pub state: Arc<super::AppState>,
     pub router: axum::Router,
     pub calls: Arc<AtomicUsize>,
+    /// The params every `tools/call` reached the backend with.
+    pub seen: Arc<std::sync::Mutex<Vec<Value>>>,
     _store: tempfile::TempDir,
 }
 
@@ -278,8 +356,17 @@ pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef
 /// The fixture under `security.posture: hardened` (personal keys) with message
 /// signing armed, so the direct route signs every `tools/call` it serves.
 pub(crate) async fn fixture_hardened_signed(answer: Answer, require_nonce: bool) -> Fx {
+    fixture_hardened_signed_built(answer, require_nonce, |meta| meta).await
+}
+
+/// [`fixture_hardened_signed`], arming the signed `MetaMcp` with `build`.
+pub(crate) async fn fixture_hardened_signed_built(
+    answer: Answer,
+    require_nonce: bool,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
     HARDENED.with(|h| h.set(true));
-    let fx = fixture_inner(answer, false, |meta| signing(meta, require_nonce)).await;
+    let fx = fixture_inner(answer, false, |meta| build(signing(meta, require_nonce))).await;
     HARDENED.with(|h| h.set(false));
     fx
 }
@@ -412,7 +499,7 @@ async fn fixture_inner(
     } else {
         test_router_app_state_with_auth(&auth).await
     };
-    let calls = Arc::new(AtomicUsize::new(0));
+    let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {
         let backend = Arc::new(Backend::new(
@@ -426,6 +513,7 @@ async fn fixture_inner(
         ));
         let transport = CountingBackend {
             calls: Arc::clone(&calls),
+            seen: Arc::clone(&seen),
             answer,
         };
         backend.set_transport_for_test(Arc::new(transport));
@@ -491,6 +579,7 @@ async fn fixture_inner(
         state,
         router,
         calls,
+        seen,
         _store: store,
     }
 }

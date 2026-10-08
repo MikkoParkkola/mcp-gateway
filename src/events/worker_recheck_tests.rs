@@ -441,3 +441,6 @@ async fn a_subscription_expiring_during_the_second_verdict_is_not_sent() {
         }
     }
 }
+
+#[path = "worker_admission_tests.rs"]
+mod admission;

@@ -191,6 +191,43 @@ pub(crate) fn confine_paths(
     Ok(params)
 }
 
+/// `path` canonicalized (symlinks followed), spelled as a program writes it.
+pub(crate) fn canonical(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    std::fs::canonicalize(path).map(spelled)
+}
+
+/// A canonical path in its plain spelling where one names the same file.
+/// On Windows `canonicalize` returns the verbatim form (`\\?\C:\x`); a server
+/// that resolves only one side of a prefix check reads that as another path
+/// (MIK-7911). The plain form is used only when it resolves back to exactly
+/// this path, so a name the plain form reads differently (a device name such
+/// as `con.txt`, a trailing dot or space) keeps the verbatim form. Elsewhere
+/// the path is returned unchanged.
+fn spelled(resolved: std::path::PathBuf) -> std::path::PathBuf {
+    match resolved
+        .to_str()
+        .and_then(plain)
+        .map(std::path::PathBuf::from)
+    {
+        Some(spelling) if std::fs::canonicalize(&spelling).is_ok_and(|again| again == resolved) => {
+            spelling
+        }
+        _ => resolved,
+    }
+}
+
+/// The plain spelling of a verbatim drive path (`\\?\C:\x` to `C:\x`), or
+/// `None` for any other verbatim path (UNC, volume, device) and for a path
+/// that is not verbatim. Whether it names the same file is [`spelled`]'s
+/// check. Length is not limited: root and path take the same form, and
+/// long-path handling stays with the server.
+fn plain(verbatim: &str) -> Option<&str> {
+    let rest = verbatim.strip_prefix(r"\\?\")?;
+    let drive =
+        rest.starts_with(|c: char| c.is_ascii_alphabetic()) && rest.get(1..3) == Some(r":\");
+    drive.then_some(rest)
+}
+
 /// `value` canonicalized (symlinks followed) and checked to lie inside the
 /// root, component by component, so `/srv/uploads_evil` is not inside
 /// `/srv/uploads`.
@@ -215,7 +252,8 @@ pub(crate) fn confine(
     if resolved.strip_prefix(&root).is_err() {
         return Err(format!("is outside capabilities.files.{root_name}"));
     }
-    Ok(resolved)
+    // Checked in the verbatim form, handed on in the form the root takes.
+    Ok(spelled(resolved))
 }
 
 /// The child's answer as a result, or a redacted error.

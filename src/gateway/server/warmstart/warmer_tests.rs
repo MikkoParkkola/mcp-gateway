@@ -162,3 +162,76 @@ async fn a_warmer_never_touches_a_newer_instance() {
         "the old warmer kept retrying against a newer instance"
     );
 }
+
+#[tokio::test]
+async fn nothing_is_admitted_after_the_shutdown_broadcast() {
+    // `MIK-8128`: a reload past its last stop check still reaches the hook, and
+    // a warmer subscribed after the broadcast never hears it, so admission
+    // itself must close once shutdown has been announced.
+    let backends = registry(&["a", "b"]);
+    let (shutdown, _) = tokio::sync::broadcast::channel(1);
+    let guard = WarmerGuard::new(&backends, WarmStartMode::Http, Some(&shutdown));
+    assert_eq!(
+        guard.warm(vec!["a".to_string()]),
+        ["a"],
+        "control: a warmer is admitted before shutdown"
+    );
+    shutdown.send(()).expect("a live receiver");
+    let late = guard.0.apply(&change(&["b"], &[]), &selecting(&[]));
+    assert!(
+        late.is_empty(),
+        "a reload after the broadcast scheduled {late:?}"
+    );
+    let booted = guard.warm(vec!["b".to_string()]);
+    assert!(
+        booted.is_empty(),
+        "warm after the broadcast scheduled {booted:?}"
+    );
+}
+
+#[tokio::test]
+async fn boot_warm_is_refused_after_the_shutdown_broadcast() {
+    // A fresh guard, so nothing earlier has sealed it: `warm` reads the
+    // broadcast itself rather than inheriting a seal set by `apply`.
+    let backends = registry(&["a"]);
+    let (shutdown, _) = tokio::sync::broadcast::channel(1);
+    let guard = WarmerGuard::new(&backends, WarmStartMode::Http, Some(&shutdown));
+    shutdown.send(()).expect("a live receiver");
+    let booted = guard.warm(vec!["a".to_string()]);
+    assert!(
+        booted.is_empty(),
+        "warm after the broadcast scheduled {booted:?}"
+    );
+    assert!(guard.abort_handles().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_warm_attempt_reports_its_instance_settled() {
+    // `MIK-8127`: an instance whose first attempt stored nothing shows nothing,
+    // and listeners told of its predecessor's tools must hear that.
+    use crate::backend::tools_nudge::{NudgeKind, ToolsNudge};
+    let backends = Arc::new(BackendRegistry::new());
+    let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+    backends.set_change_feed(feed);
+    let backend = unreachable("a");
+    let instance = backend.instance();
+    assert!(backends.register(backend));
+    let guard = WarmerGuard::new(&backends, WarmStartMode::Http, None);
+    assert_eq!(guard.warm(vec!["a".to_string()]), ["a"]);
+    let settled = async {
+        while let Some(nudge) = nudges.recv().await {
+            if nudge
+                == (ToolsNudge::Backend {
+                    name: "a".to_string(),
+                    instance,
+                    kind: NudgeKind::Resolved,
+                })
+            {
+                return;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), settled)
+        .await
+        .expect("a refused attempt reports the instance settled");
+}

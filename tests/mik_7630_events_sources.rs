@@ -42,6 +42,8 @@ const IDEMPOTENCY_META: &str = "io.mcp-gateway/idempotency-key";
 struct Mock {
     url: String,
     permits: Arc<Semaphore>,
+    /// The description `tools/list` gives its one tool.
+    listed: Arc<std::sync::Mutex<&'static str>>,
     server: tokio::task::JoinHandle<()>,
 }
 
@@ -56,13 +58,21 @@ impl Mock {
         self.permits.add_permits(1);
     }
 
+    /// Change what `tools/list` answers, so the next listing is a new tool set.
+    fn change_tools(&self) {
+        *self.listed.lock().expect("listed") = "changed marker";
+    }
+
     async fn start() -> Self {
         let permits = Arc::new(Semaphore::new(0));
         let held = Arc::clone(&permits);
+        let listed = Arc::new(std::sync::Mutex::new("fixed marker"));
+        let description = Arc::clone(&listed);
         let app = axum::Router::new().route(
             "/mcp",
             axum::routing::post(move |axum::Json(req): axum::Json<Value>| {
                 let held = Arc::clone(&held);
+                let description = *description.lock().expect("listed");
                 async move {
                     let method = req["method"].as_str().unwrap_or_default().to_owned();
                     let Some(id) = req.get("id").filter(|i| !i.is_null()).cloned() else {
@@ -76,7 +86,7 @@ impl Mock {
                             "capabilities": {"tools": {}},
                             "serverInfo": {"name": "mock", "version": "0"}}),
                         "tools/list" => json!({"tools": [{
-                            "name": "echo", "description": "fixed marker",
+                            "name": "echo", "description": description,
                             "inputSchema": {"type": "object", "properties": {}},
                             "annotations": {"title": "Echo", "readOnlyHint": true,
                                 "destructiveHint": false, "idempotentHint": true,
@@ -107,6 +117,7 @@ impl Mock {
         Self {
             url,
             permits,
+            listed,
             server,
         }
     }
@@ -182,8 +193,10 @@ async fn events_list_carries_backend_and_task_events_per_visibility() {
     );
 }
 
-/// T38 (SOURCE.1): a backend whose tool set changes (config reload of the
-/// backend) becomes exactly one `backend.<x>.tools_changed` event. The burst
+/// T38 (SOURCE.1): a backend whose tool set changes (it lists a changed tool,
+/// picked up by a config reload of the backend) becomes exactly one
+/// `backend.<x>.tools_changed` event. A reload that lists the same tools is no
+/// change and becomes none (`MIK-8127`). The burst
 /// clause is the in-crate debounce row: the config watcher already merges
 /// writes, so a black-box burst could not fail.
 #[tokio::test]
@@ -206,6 +219,7 @@ async fn backend_tool_changes_become_events() {
         last = now;
     }
     let baseline = last;
+    mock.change_tools();
     let mut changed = cfg;
     changed["backends"]["mock"]["description"] = json!("changed tool set");
     gw.rewrite_config(changed);

@@ -429,8 +429,12 @@ impl MetaMcp {
         // the backend with the credential the first round used, and an `Arc` clone
         // is that same credential rather than a second resolution of it.
         let mut bridge_account_credential = account_credential.clone();
+        let source = (
+            caller.principal_source(dispatch_binding.as_deref()),
+            caller.retry,
+        );
         let outbound_retry =
-            match redeem_retry(&self.continuation, caller, server, tool, &arguments).await {
+            match redeem_retry(&self.continuation, source, server, tool, &arguments).await {
                 Ok(retry) => retry,
                 Err(error) => {
                     // Refused before the backend was reached, so it has not
@@ -610,10 +614,11 @@ impl MetaMcp {
         // may be asked at all: a continuation for a question the client will
         // never be shown is a redeemable envelope for an exchange that cannot
         // happen.
+        let mut sealed = None;
         if let Some(interim) = interim {
-            let Some(envelope) = mint_continuation(
+            let Some((envelope, hold_key)) = mint_continuation(
                 &self.continuation,
-                caller,
+                caller.principal_source(dispatch_binding.as_deref()),
                 server,
                 tool,
                 &arguments,
@@ -627,7 +632,8 @@ impl MetaMcp {
                 );
                 return Err(unbindable_continuation(server, tool));
             };
-            result["requestState"] = json!(envelope);
+            result["requestState"] = json!(&envelope);
+            sealed = Some((envelope, hold_key));
             // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
             // must not take the receipt's capped budget from the backend's
             // prompt. Noted at the value layer: `tool_value` still reads
@@ -637,6 +643,9 @@ impl MetaMcp {
                 gateway_writes::REQUEST_STATE,
                 &result,
             );
+        } else {
+            // MRTR.2a holds for an unusable round too (MIK-8078).
+            continuation::withhold_unsealed_state(&mut result);
         }
 
         let call = dispatch_guards::BackendCall {
@@ -647,7 +656,10 @@ impl MetaMcp {
             trace_id,
             caller_key: None,
         };
-        let (gated, effect) = self.gate_payload(&call, result)?;
+        let gated = self.gate_payload(&call, result);
+        let kept = gated.as_ref().ok().map(|(gated, _)| gated);
+        continuation::release_unless_carried(&self.continuation, sealed, kept).await;
+        let (gated, effect) = gated?;
         result = gated;
         self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
         // A chained backend is eligible only with a checked upstream outcome.

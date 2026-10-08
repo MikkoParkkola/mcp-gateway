@@ -84,6 +84,7 @@ async fn call_protected(config: ResolvedAuthConfig, bearer: &str) -> (StatusCode
         live_config: Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
         )),
+        agent_auth: crate::gateway::oauth::AgentAuthState::new(false, std::sync::Arc::default()),
     };
     let mut router = axum::Router::new()
         .route(

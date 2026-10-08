@@ -154,6 +154,7 @@ impl State {
                 sub.payload_fields.clone_from(&old.payload_fields);
                 sub.unoffered_since = old.unoffered_since;
                 sub.held_until = old.held_until;
+                sub.watch_class = old.watch_class;
             }
             None if hold == HoldCommit::Keep => return Err(CapHit::HeldRowGone),
             _ => {}
@@ -256,6 +257,17 @@ impl Store {
         }
         let mut state = State::default();
         for (_, sub) in load_records::<Subscription>(&subs_dir) {
+            // A row stamped held stays held until its own source judges it
+            // again, so a restart neither resumes nor loses it (MIK-8122).
+            if sub.unoffered_since.is_some() {
+                state.held.insert(
+                    sub.id.clone(),
+                    Held {
+                        reason: "held before a restart; judged again at the next complete read",
+                        key: None,
+                    },
+                );
+            }
             state.subs.insert(sub.id.clone(), sub);
         }
         for (path, record) in load_records::<Verified>(&verified_dir) {
