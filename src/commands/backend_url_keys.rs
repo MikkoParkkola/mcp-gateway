@@ -41,7 +41,7 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
     let mut skipped = Vec::new();
     let mut kept = Vec::new();
     let mut renamed: Vec<(String, &'static str)> = Vec::new();
-    let doc: Option<serde_yaml::Value> = serde_yaml::from_str(text).ok();
+    let doc = loader_view(text);
     for entry in backend_entries(&lines) {
         if only.is_some_and(|names| !names.contains(&entry.name)) {
             continue;
@@ -107,6 +107,15 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
         skipped,
         kept,
     }
+}
+
+/// The file as the gateway's loader reads it, where a repeated key keeps its
+/// last value. It only decides what to report and which values to test; every
+/// edit is still proved against the strict parse in [`only_renamed`].
+fn loader_view(text: &str) -> Option<serde_yaml::Value> {
+    use figment::providers::Format as _;
+    let dict = figment::providers::Yaml::from_str::<figment::value::Dict>(text).ok()?;
+    serde_yaml::to_value(dict).ok()
 }
 
 /// Report each backend the parsed file gives an older key that the line scan

@@ -227,10 +227,11 @@ pub(super) fn check_hidden_keys(path: &Path) -> Option<CheckResult> {
     if set.is_empty() {
         return None;
     }
+    let rewrite = super::super::backend_url_keys::rewrite_url_aliases(&text, None);
     let named: Vec<String> = set
         .iter()
         .map(|key| {
-            if URL_ALIASES.contains(key) && upgrade_rewrites(&text, key) {
+            if URL_ALIASES.contains(key) && upgrade_rewrites(&text, &rewrite, key) {
                 format!("{key} (run mcp-gateway upgrade to rewrite it as url)")
             } else {
                 (*key).to_string()
@@ -256,9 +257,12 @@ const URL_ALIASES: &[&str] = &["backends.<name>.http_url", "backends.<name>.ws_u
 /// Whether `mcp-gateway upgrade` would rewrite the alias `key` names on some
 /// line. The note follows what `upgrade` does, so a backend it keeps or leaves
 /// for a hand edit gets none. Nothing from the file is shown.
-fn upgrade_rewrites(text: &str, key: &str) -> bool {
+fn upgrade_rewrites(
+    text: &str,
+    rewrite: &super::super::backend_url_keys::UrlRewrite,
+    key: &str,
+) -> bool {
     let alias = key.rsplit('.').next().unwrap_or(key);
-    let rewrite = super::super::backend_url_keys::rewrite_url_aliases(text, None);
     let lines: Vec<&str> = text.lines().collect();
     rewrite.changed.iter().any(|&n| {
         lines.get(n - 1).is_some_and(|line| {
