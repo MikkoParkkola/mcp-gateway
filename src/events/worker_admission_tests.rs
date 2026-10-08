@@ -195,9 +195,10 @@ async fn a_backend_removed_before_the_send_sends_nothing() {
 
 /// `BackendSource::admits_now`: a removed backend admits nothing; an
 /// ineligible one still admits `tools_changed`, which the gateway announces
-/// itself, but not the upstream kinds.
-#[test]
-fn a_backend_source_admits_by_presence_and_eligibility() {
+/// itself, but not the upstream kinds. A removed backend is also refused at
+/// `authorize`, so its subscription ends instead of being held forever.
+#[tokio::test]
+async fn a_backend_source_admits_by_presence_and_eligibility() {
     use crate::events::backend_source::{BackendSource, Ineligible, Upstream};
     let ineligible: Ineligible = Arc::new(|| std::iter::once("i".to_owned()).collect());
     let source = BackendSource {
@@ -221,6 +222,11 @@ fn a_backend_source_admits_by_presence_and_eligibility() {
     ] {
         assert_eq!(source.admits_now(name), admitted, "{name}");
     }
+    let none = serde_json::json!({});
+    let present = source.authorize("p", "backend.e.tools_changed", &none);
+    assert!(present.await.is_ok(), "present");
+    let removed = source.authorize("p", "backend.gone.tools_changed", &none);
+    assert!(removed.await.is_err(), "removed");
 }
 
 /// A source whose admission blocks, inside the live config's gate, until the
