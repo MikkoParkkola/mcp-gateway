@@ -113,7 +113,7 @@ async fn eof_during_a_blocked_write_ends_the_call() {
     // The child closes stdout only once the request's first byte arrives, so
     // the EOF lands while the write is in flight, never before the call.
     let (_w, t) = started("head -c 1 >/dev/null\nexec 1>&-\nsleep 60").await;
-    let err = fails_fast(&t, big_params()).await;
+    let err = fails_fast(&t, Some(big_params())).await;
     assert!(
         matches!(&err, Error::Transport(message) if message.contains("stdout closed")),
         "{err:?}"
@@ -137,8 +137,8 @@ async fn stdin_retired(transport: &StdioTransport) {
 
 /// Larger than any pipe buffer, so its write cannot complete on a child that
 /// does not read stdin.
-fn big_params() -> Option<Value> {
-    Some(serde_json::json!({ "pad": "x".repeat(1 << 20) }))
+fn big_params() -> Value {
+    serde_json::json!({ "pad": "x".repeat(1 << 20) })
 }
 
 /// A write cut off mid-frame retires stdin: the next write fails instead of
@@ -148,7 +148,7 @@ async fn a_cancelled_write_retires_stdin() {
     let (_w, t) = started("sleep 60").await;
     let cut = tokio::time::timeout(
         Duration::from_millis(300),
-        t.request("tools/list", big_params()),
+        t.request("tools/list", Some(big_params())),
     )
     .await;
     assert!(cut.is_err(), "the write cannot complete: {cut:?}");
@@ -181,7 +181,7 @@ while IFS= read -r l; do :; done"#,
 #[tokio::test]
 async fn a_write_the_child_never_reads_ends_at_the_request_timeout() {
     let (_w, t) = started_with_timeout("sleep 60", Duration::from_millis(500)).await;
-    let err = tokio::time::timeout(ROW_LIMIT, t.request("tools/list", big_params()))
+    let err = tokio::time::timeout(ROW_LIMIT, t.request("tools/list", Some(big_params())))
         .await
         .expect("the request timeout bounds the write")
         .expect_err("nothing reads the request");
@@ -216,4 +216,29 @@ fn an_unanswered_call_is_pre_send_only_before_its_first_byte() {
     let sent = super::write::unsent_or(&AtomicBool::new(true), "stdout closed", Error::Transport);
     assert!(!sent.is_pre_dispatch(), "{sent:?}");
     assert!(matches!(sent, Error::Transport(_)), "{sent:?}");
+}
+
+/// gpt review on #3531: a request queued behind a blocked write never sends a
+/// byte, so whichever way it ends (its own deadline, or stdin retired by the
+/// first call's) it is pre-send and a keyed retry may run.
+#[tokio::test]
+async fn a_request_queued_behind_a_blocked_write_ends_pre_send() {
+    let (_w, t) = started_with_timeout("sleep 60", Duration::from_millis(500)).await;
+    let blocked = {
+        let t = Arc::clone(&t);
+        tokio::spawn(async move { t.request("tools/list", Some(big_params())).await })
+    };
+    // Let the first call take the writer lock before the second queues.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let queued = tokio::time::timeout(ROW_LIMIT, t.request("tools/list", None))
+        .await
+        .expect("the queued call ends within its deadline")
+        .expect_err("nothing reads either request");
+    assert!(queued.is_pre_dispatch(), "{queued:?}");
+    let first = blocked
+        .await
+        .expect("task")
+        .expect_err("the blocked call fails");
+    assert!(!first.is_pre_dispatch(), "{first:?}");
+    let _ = t.close().await;
 }
