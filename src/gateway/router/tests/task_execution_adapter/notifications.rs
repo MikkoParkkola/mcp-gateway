@@ -69,6 +69,10 @@ mod listen_nested;
 #[path = "listen_payload.rs"]
 mod listen_payload;
 
+// MIK-8031: agent-JWT callers own their tasks apart when gateway auth is off.
+#[path = "agent_task_owner.rs"]
+mod agent_task_owner;
+
 use helpers::{
     ReleasedOnDrop, SUBSCRIPTION_ID_META, TASK_NOTIFICATION, assert_only_its_own_task,
     assert_receives_nothing, expect_message, open_listen, task_notification,

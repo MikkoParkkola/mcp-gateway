@@ -949,6 +949,7 @@ async fn meta_mcp_dispatch(
     let owner = tasks::route_task_owner(
         &state,
         verified_identity.as_ref(),
+        oauth_agent_identity.as_ref(),
         &tasks::task_owner_key(
             grant_subject.as_ref(),
             cert_identity.as_ref(),
@@ -961,10 +962,9 @@ async fn meta_mcp_dispatch(
     // caller would own every other one's tasks. `/mcp` is public in the shipped
     // presets: exactly where credentialled and unattributed callers meet.
     //
-    // Auth DISABLED is the other case and it is not a defect: there are no
-    // identities to keep apart, and `anonymous_client` documents one shared
-    // caller as the operator's own choice. Refusing there would take tasks away
-    // from every single-user gateway to protect a boundary nobody drew.
+    // Auth DISABLED is not a defect: a validated agent JWT owns its tasks apart
+    // (`route_task_owner`) and every other caller shares one pool, the
+    // operator's own choice (`anonymous_client`) that a refusal would break.
     let unattributed = owner.is_empty() && state.auth_config.enabled;
 
     // The refusal names nothing. An unattributed caller must not be able to
