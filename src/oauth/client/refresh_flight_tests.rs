@@ -493,6 +493,40 @@ async fn an_answer_without_a_refresh_token_counts_as_keeping_it() {
     assert_eq!(server.uses("r1"), 3);
 }
 
+/// ROT3.5: a rotation, once seen, outranks an earlier refresh that kept the
+/// token. The server kept `r1`, then rotated it to `r2`; the answer to `r2`'s
+/// refresh was lost, so `r2` is not sent again.
+#[tokio::test]
+async fn a_seen_rotation_outranks_an_earlier_kept_token() {
+    let server =
+        TokenServer::start(&[Answer::Keep, Answer::Rotate, Answer::RotateThenBrokenBody]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let late = client(dir.path(), &server);
+    hold(&late, &token("a1", Some("r1"), true));
+    headless(&late)
+        .await
+        .expect("a settled refresh that keeps r1");
+    expire(&late);
+    headless(&late)
+        .await
+        .expect("a settled refresh that rotates to r2");
+    expire(&late);
+    assert!(headless(&late).await.is_err(), "the answer was lost");
+    expire(&late);
+
+    let error = headless(&late).await.expect_err("a login is needed");
+    assert!(
+        matches!(error, Error::AuthorizationRequired { .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        server.uses("r2"),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+}
+
 /// ROT3.1b: a server not yet seen either way counts as rotating. Its first
 /// refresh lost its answer, so the token may be consumed: it is not sent
 /// again, and the next call asks for a login.
