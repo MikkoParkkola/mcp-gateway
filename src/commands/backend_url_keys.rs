@@ -7,6 +7,7 @@
 //! field of an entry under `backends:` and that entry has no `url` already.
 //! A backend written in flow style (`name: { ... }`) is reported, not edited.
 
+#![allow(dead_code)] // throwaway red proof only: used by tests until the fix
 use std::collections::BTreeSet;
 
 /// The result of a rewrite: the new text, the 1-based numbers of the lines
