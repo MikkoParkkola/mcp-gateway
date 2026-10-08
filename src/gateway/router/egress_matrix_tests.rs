@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::direct_guards_fixture::{
-    Fx, fixture_firewalled_on, fixture_inspecting_on, meta_firewall,
+    Fx, fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on, meta_firewall,
 };
 use crate::gateway::egress_fixture::{BACKEND_METHODS, NAME, Part, Planted, URI, secret};
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
@@ -370,4 +370,29 @@ fn egress_every_dispatched_method_is_a_matrix_row_or_gateway_own() {
         missing.is_empty(),
         "dispatched methods outside the matrix: {missing:?}"
     );
+}
+
+/// MIK-8161: a notification verdict names the authenticated caller, bound by
+/// the dispatch once it knows it, not a transport label.
+#[tokio::test]
+async fn egress_a_notification_verdict_names_the_authenticated_caller() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("firewall.ndjson");
+    let backend = Arc::new(Planted::new("tools/call", Part::CustomNote));
+    let fx = fixture_audited_on(backend, path.clone()).await;
+    let (uri, sent, params) = request(Route::Meta, "tools/call", Part::CustomNote);
+    let body = post(&fx, uri, sent, &params).await;
+    let log = std::fs::read_to_string(&path).unwrap_or_default();
+    let verdicts: Vec<Value> = log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["artifact_kind"] == "notification")
+        .collect();
+    assert!(
+        !verdicts.is_empty(),
+        "no notification verdict: {log} / {body}"
+    );
+    for verdict in verdicts {
+        assert_eq!(verdict["caller"], "k-std", "{verdict}");
+    }
 }

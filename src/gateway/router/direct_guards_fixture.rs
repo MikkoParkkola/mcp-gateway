@@ -327,6 +327,19 @@ pub(crate) async fn fixture_firewalled_on(
     fx
 }
 
+/// [`fixture_firewalled_on`] with both firewalls writing their verdicts to
+/// the audit log at `audit`.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_audited_on(
+    transport: Arc<dyn Transport>,
+    audit: std::path::PathBuf,
+) -> Fx {
+    AUDIT_LOG.with(|a| *a.borrow_mut() = Some(audit));
+    let fx = fixture_firewalled_on(transport, None).await;
+    AUDIT_LOG.with(|a| *a.borrow_mut() = None);
+    fx
+}
+
 /// `transport` behind no firewall, with response inspection in action mode:
 /// only the content inspection can withhold what it answers.
 pub(crate) async fn fixture_inspecting_on(transport: Arc<dyn Transport>) -> Fx {
@@ -439,6 +452,8 @@ thread_local! {
     static RELAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static META_FIREWALL: std::cell::RefCell<Option<Arc<crate::security::firewall::Firewall>>> =
         const { std::cell::RefCell::new(None) };
+    static AUDIT_LOG: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// The auth the fixture serves: four keys, plus a client breaker when asked.
@@ -469,6 +484,17 @@ fn fixture_auth() -> AuthConfig {
         });
     }
     auth
+}
+
+/// The transport both fixture backends answer with: a planted one when a
+/// cell set it, the scripted one otherwise.
+fn backend_transport(calls: &Arc<AtomicUsize>, answer: Answer) -> Arc<dyn Transport> {
+    TRANSPORT.with(|t| t.borrow().clone()).unwrap_or_else(|| {
+        Arc::new(CountingBackend {
+            calls: Arc::clone(calls),
+            answer,
+        })
+    })
 }
 
 async fn fixture_inner(
@@ -503,11 +529,7 @@ async fn fixture_inner(
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         ));
-        let counting: Arc<dyn Transport> = Arc::new(CountingBackend {
-            calls: Arc::clone(&calls),
-            answer,
-        });
-        backend.set_transport_for_test(TRANSPORT.with(|t| t.borrow().clone()).unwrap_or(counting));
+        backend.set_transport_for_test(backend_transport(&calls, answer));
         assert!(state_mut.backends.register(backend), "fixture registration");
     }
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
@@ -543,6 +565,7 @@ async fn fixture_inner(
             scan_responses: true,
             credential_redaction: true,
             rules,
+            audit_log: AUDIT_LOG.with(|a| a.borrow().clone()),
             anomaly_detection: anomaly,
             anomaly_threshold: 0.7,
             anomaly_block_threshold: anomaly.then_some(0.9),
