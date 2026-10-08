@@ -198,13 +198,19 @@ impl Backend {
     /// Resolve the era of a freshly started peer, probing at most once.
     ///
     /// Awaited on the start path so the first request already knows which
-    /// dialect to speak.
+    /// dialect to speak. Returns the era this start's own probe decided, for
+    /// its handshake: the shared cache may already hold another slot's verdict
+    /// by the time the caller reads it (MIK-8056).
     ///
     /// NOTE (lock order): callers hold the slot's `start_lock`, so this takes
     /// `start_lock` -> era mutex. Anything holding the era mutex must therefore
     /// use a transport handle it already owns and must never call back into
     /// `ensure_entry_started`, which would invert the order.
-    pub(super) async fn resolve_era(&self, transport: &Arc<dyn Transport>, entry: &PooledEntry) {
+    pub(super) async fn resolve_era(
+        &self,
+        transport: &Arc<dyn Transport>,
+        entry: &PooledEntry,
+    ) -> crate::protocol::era::Era {
         let timeout = self.probe_timeout();
         // A start hands over a transport to a process that has only just come
         // up. Any era already determined describes the peer that came before
@@ -219,7 +225,7 @@ impl Backend {
                 || probe(transport, timeout),
                 |step| unless_retired(entry, step),
             )
-            .await;
+            .await
     }
 
     /// Re-probe when an ordinary response contradicts the cached verdict.

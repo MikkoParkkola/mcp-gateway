@@ -460,19 +460,15 @@ impl Backend {
                 // `Backend::resolve_era` and `EraCache`. This path chooses when
                 // to ask, never what the answer means.
                 let peer: Arc<dyn Transport> = transport.clone();
-                self.resolve_era(&peer, entry).await;
+                let era = self.resolve_era(&peer, entry).await;
                 #[cfg(test)]
                 self.hold_at_era_decision().await;
                 // Only a determined `Modern` skips the handshake. A legacy
-                // answer, an unrecognised error and silence all read as `None`
-                // or `Legacy` here, which is the fallback the RFC requires —
-                // and is the same fallback `outbound_era` will apply to every
-                // later request, so shaping and startup cannot disagree.
-                let era = self
-                    .era
-                    .cached()
-                    .await
-                    .unwrap_or(crate::protocol::era::Era::Legacy);
+                // answer, an unrecognised error and silence all read as
+                // `Legacy`, the fallback the RFC requires. The era is this
+                // start's own probe result, not the shared cache: another
+                // slot's start or re-probe may have written that since, and
+                // its verdict is about a different peer (MIK-8056).
                 transport.finish_startup(era).await?;
                 warn_if_configured_transport_refused(&self.name, *streamable_http, &transport);
                 listen = Some(super::listen::handle_of(&transport));
