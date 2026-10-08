@@ -242,3 +242,29 @@ async fn an_expired_hold_drops_its_step_digest() {
         "an abandoned chain's digest stayed"
     );
 }
+
+/// `MIK-8060` x `MIK-8168`: with the reclaim walk skipped when nothing can be
+/// expired, a step recorded for an exchange no longer held (a bind that raced
+/// its hold's reclaim) must still not be returned.
+#[tokio::test]
+async fn a_step_digest_is_returned_only_while_its_hold_exists() {
+    let (table, key) = held_until_t(4).await;
+    let orphan = "backend:no-longer-held".to_string();
+    table
+        .steps
+        .lock()
+        .insert(orphan.clone(), "orphan-digest".to_string());
+    table
+        .steps
+        .lock()
+        .insert(key.clone(), "live-digest".to_string());
+    assert_eq!(
+        table.step_digest(&key, T).await.as_deref(),
+        Some("live-digest")
+    );
+    assert_eq!(
+        table.step_digest(&orphan, T).await,
+        None,
+        "an orphan step leaked"
+    );
+}
