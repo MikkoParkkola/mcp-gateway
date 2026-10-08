@@ -239,18 +239,30 @@ async fn a_dropped_request_leaves_no_partial_frame_for_the_next_caller() {
         torn.len(),
         torn.first()
     );
-    // The admitted large frame is finished first, whole; the cancelled queued
-    // request never reaches the peer; the later message follows.
-    let methods: Vec<String> = frames
+    // The admitted large frame is finished first, whole, and its dropped caller
+    // cancels it by its id (`MIK-7642.PR.B`); the queued request never reaches
+    // the peer, so it has no cancel; the later message follows.
+    let parsed: Vec<serde_json::Value> = frames
         .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .map(|frame| frame["method"].as_str().unwrap_or_default().to_owned())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let methods: Vec<&str> = parsed
+        .iter()
+        .map(|frame| frame["method"].as_str().unwrap_or_default())
         .collect();
     assert_eq!(
         methods,
-        ["tools/call", "notifications/roots/list_changed"],
+        [
+            "tools/call",
+            "notifications/cancelled",
+            "notifications/roots/list_changed"
+        ],
         "{} bytes logged",
         frames.len()
+    );
+    assert_eq!(
+        parsed[1]["params"]["requestId"], parsed[0]["id"],
+        "the cancel names the dropped call"
     );
 }
 

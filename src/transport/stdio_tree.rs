@@ -7,6 +7,8 @@ use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::process::Command;
 
 use super::StdioTransport;
+use crate::protocol::{JsonRpcRequest, RequestId};
+use crate::transport::write_claim::WriteClaim;
 use crate::{Error, Result};
 
 impl Drop for StdioTransport {
@@ -56,9 +58,15 @@ pub(super) async fn write_frame(
     writer: &std::sync::Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdin>>>,
     shutdown: &parking_lot::Mutex<tokio_util::sync::CancellationToken>,
     message: &str,
+    claim: Option<&WriteClaim>,
 ) -> Result<()> {
     let frame = [message.as_bytes(), b"\n"].concat();
     let mut writer = std::sync::Arc::clone(writer).lock_owned().await;
+    // Admitted: from here the frame goes out whole, so a caller dropped
+    // after this point has a written request to cancel (`MIK-7642.PR.B`).
+    if let Some(claim) = claim {
+        claim.claim_write();
+    }
     // Taken under the stdin lock: the token belongs to the stdin it guards.
     let shutdown = shutdown.lock().clone();
     tokio::spawn(async move {
@@ -78,6 +86,65 @@ pub(super) async fn write_frame(
     })
     .await
     .map_err(|e| Error::Transport(e.to_string()))?
+}
+
+/// `MIK-7642.PR.B`: a request dropped before its answer cancels the backend's
+/// call, if its frame was written, by the id the backend received. The cancel
+/// goes through [`write_frame`], so it waits for the request frame's stdin
+/// lock and can never land ahead of it or inside it.
+pub(super) struct CancelUnanswered<'a> {
+    transport: &'a StdioTransport,
+    key: String,
+    id: RequestId,
+    claim: std::sync::Arc<WriteClaim>,
+    armed: bool,
+}
+
+impl<'a> CancelUnanswered<'a> {
+    /// Never armed for `initialize`, which the protocol forbids cancelling.
+    pub(super) fn arm(
+        transport: &'a StdioTransport,
+        request: &JsonRpcRequest,
+        claim: &std::sync::Arc<WriteClaim>,
+    ) -> Self {
+        Self {
+            transport,
+            key: request.id.to_string(),
+            id: request.id.clone(),
+            claim: std::sync::Arc::clone(claim),
+            armed: request.method != "initialize",
+        }
+    }
+
+    /// Finished, answered or failed: a transport timeout is not a cancel.
+    pub(super) fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CancelUnanswered<'_> {
+    fn drop(&mut self) {
+        // Removing the entry is the arbitration with the reader, which removes
+        // it before delivering: exactly one of {answer, cancel} wins.
+        if !self.armed
+            || self.transport.pending.remove(&self.key).is_none()
+            || !self.claim.abandon()
+        {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            tracing::debug!("stdio: cancel not sent; the backend finishes the call");
+            return;
+        };
+        let writer = std::sync::Arc::clone(&self.transport.writer);
+        let shutdown = parking_lot::Mutex::new(self.transport.shutdown.lock().clone());
+        let message = serde_json::json!({
+            "jsonrpc": "2.0", "method": "notifications/cancelled",
+            "params": {"requestId": self.id, "reason": "the gateway's caller abandoned the request"},
+        })
+        .to_string();
+        runtime.spawn(async move { drop(write_frame(&writer, &shutdown, &message, None).await) });
+    }
 }
 
 /// How long `close()` waits for a write it could not stop to give up stdin.
