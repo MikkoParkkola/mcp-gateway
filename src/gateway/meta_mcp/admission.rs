@@ -669,6 +669,20 @@ pub(crate) struct UnkeyedPolicy {
 }
 
 impl MetaMcp {
+    /// Test-only: admit against `admission`, as production shares one
+    /// authority between this surface and the task runtime
+    /// (`server/task_runtime.rs`). A fixture that rebuilds the surface must
+    /// keep the store the task runtime already holds.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_execution_admission(
+        mut self,
+        admission: std::sync::Arc<crate::idempotency::admission::ExecutionAdmission>,
+    ) -> Self {
+        self.execution_admission = admission;
+        self
+    }
+
     pub(crate) fn set_idempotency_key_mode(&self, mode: crate::config::IdempotencyKeyMode) {
         *self.unkeyed.mode.write() = mode;
     }

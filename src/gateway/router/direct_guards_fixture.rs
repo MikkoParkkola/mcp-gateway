@@ -61,6 +61,9 @@ pub(crate) enum Answer {
     AskBadMeta,
     /// A response carrying both the question and a JSON-RPC `error`.
     AskAndError,
+    /// The first `tools/call` succeeds, the second asks, every later one
+    /// succeeds: a chain whose second step asks (MIK-8137 P1 G4).
+    AskSecond,
     /// The backend cannot be reached: nothing was sent (`TransportConnect`).
     Unreachable,
     /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
@@ -151,7 +154,8 @@ fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRpcResponse> 
         | Answer::AskBig
         | Answer::AskWith(_)
         | Answer::AskBadMeta
-        | Answer::AskAndError => {
+        | Answer::AskAndError
+        | Answer::AskSecond => {
             unreachable!("answered above")
         }
         Answer::Text(text) => Ok(JsonRpcResponse::success(
@@ -244,8 +248,10 @@ impl Transport for CountingBackend {
                 | Answer::AskWith(_)
                 | Answer::AskBadMeta
                 | Answer::AskAndError
+                | Answer::AskSecond
         ) {
-            return Ok(if n == 0 {
+            let asks_now = n == usize::from(matches!(self.answer, Answer::AskSecond));
+            return Ok(if asks_now {
                 let mut asked = JsonRpcResponse::success(id, question(self.answer));
                 if matches!(self.answer, Answer::AskAndError) {
                     asked.error = Some(crate::protocol::JsonRpcError {
@@ -545,7 +551,11 @@ async fn fixture_inner(
         backend.set_transport_for_test(Arc::new(transport));
         assert!(state_mut.backends.register(backend), "fixture registration");
     }
-    let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
+    // The task runtime was opened over the state's admission authority, as
+    // production wires it (`server/task_runtime.rs`); the rebuilt surface
+    // keeps it, so sync calls and tasks share one store.
+    let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends))
+        .with_execution_admission(Arc::clone(state_mut.meta_mcp.execution_admission()));
     meta.enable_idempotency(
         Arc::new(crate::idempotency::IdempotencyCache::new()),
         Duration::from_secs(300),
