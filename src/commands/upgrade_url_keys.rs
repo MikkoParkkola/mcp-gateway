@@ -23,6 +23,15 @@ pub fn run_upgrade_with_config(
     data_dir: Option<&Path>,
     config: Option<&Path>,
 ) -> ExitCode {
+    // A named file that is missing is a typo, not "no config": going on would
+    // stamp the version and report success with nothing migrated.
+    if let Some(named) = config.filter(|p| !p.exists()) {
+        eprintln!(
+            "Error: {} not found; nothing was upgraded.",
+            named.display()
+        );
+        return ExitCode::FAILURE;
+    }
     if let Some(path) = super::super::doctor::resolve_config_path(config).filter(|p| p.exists()) {
         let mode = if dry_run {
             RewriteMode::DryRun

@@ -184,7 +184,7 @@ fn is_set(map: &Dict, path: &[&str]) -> bool {
 /// in since the first read can still be read; only its key names are
 /// reported. Every error is dropped unformatted, because a parser message can
 /// quote a line.
-fn read_key_names(path: &Path) -> Option<Dict> {
+fn read_key_names(path: &Path) -> Option<(String, Dict)> {
     use std::io::Read as _;
 
     let mut file = open_nonblocking(path).ok()?;
@@ -194,7 +194,8 @@ fn read_key_names(path: &Path) -> Option<Dict> {
     let mut text = String::new();
     file.read_to_string(&mut text).ok()?;
     // The loader's own reader: two equal keys keep the last, as the gateway does.
-    Yaml::from_str::<Dict>(&text).ok()
+    let dict = Yaml::from_str::<Dict>(&text).ok()?;
+    Some((text, dict))
 }
 
 #[cfg(unix)]
@@ -221,7 +222,7 @@ fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
 /// `None` when the file cannot be read or parsed (the configuration check
 /// already reports that) or when it sets no such key.
 pub(super) fn check_hidden_keys(path: &Path) -> Option<CheckResult> {
-    let dict = read_key_names(path)?;
+    let (text, dict) = read_key_names(path)?;
     let set = set_hidden_keys(&dict);
     if set.is_empty() {
         return None;
@@ -229,7 +230,7 @@ pub(super) fn check_hidden_keys(path: &Path) -> Option<CheckResult> {
     let named: Vec<String> = set
         .iter()
         .map(|key| {
-            if URL_ALIASES.contains(key) && upgrade_rewrites(&dict, key) {
+            if URL_ALIASES.contains(key) && upgrade_rewrites(&text, key) {
                 format!("{key} (run mcp-gateway upgrade to rewrite it as url)")
             } else {
                 (*key).to_string()
@@ -252,20 +253,19 @@ pub(super) fn check_hidden_keys(path: &Path) -> Option<CheckResult> {
 /// The older spellings of a backend's `url`, which `mcp-gateway upgrade` rewrites.
 const URL_ALIASES: &[&str] = &["backends.<name>.http_url", "backends.<name>.ws_url"];
 
-/// Whether some backend holds the alias `key` names as an address of its
-/// scheme, the only kind `upgrade` rewrites. The value is tested, never shown.
-fn upgrade_rewrites(dict: &Dict, key: &str) -> bool {
+/// Whether `mcp-gateway upgrade` would rewrite the alias `key` names on some
+/// line. The note follows what `upgrade` does, so a backend it keeps or leaves
+/// for a hand edit gets none. Nothing from the file is shown.
+fn upgrade_rewrites(text: &str, key: &str) -> bool {
     let alias = key.rsplit('.').next().unwrap_or(key);
-    let Some(Value::Dict(_, backends)) = dict.get("backends") else {
-        return false;
-    };
-    backends.values().any(|backend| match backend {
-        Value::Dict(_, fields) => matches!(
-            fields.get(alias),
-            Some(Value::String(_, address))
-                if super::super::backend_url_keys::transport_key_for(address) == Some(alias)
-        ),
-        _ => false,
+    let rewrite = super::super::backend_url_keys::rewrite_url_aliases(text, None);
+    let lines: Vec<&str> = text.lines().collect();
+    rewrite.changed.iter().any(|&n| {
+        lines.get(n - 1).is_some_and(|line| {
+            line.trim_start()
+                .trim_start_matches(['"', '\''])
+                .starts_with(alias)
+        })
     })
 }
 

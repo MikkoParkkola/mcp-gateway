@@ -46,7 +46,11 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
         if only.is_some_and(|names| !names.contains(&entry.name)) {
             continue;
         }
-        if entry.flow || entry.aliases.len() > 1 {
+        if entry.flow {
+            // Placed below from the parsed file, by its value.
+            continue;
+        }
+        if entry.aliases.len() > 1 {
             skipped.push(entry.name);
             continue;
         }
@@ -75,6 +79,16 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
             renamed.push((entry.name, alias));
         }
     }
+    if let Some(doc) = &doc {
+        let placed: BTreeSet<String> = renamed
+            .iter()
+            .map(|(name, _)| name)
+            .chain(&skipped)
+            .chain(&kept)
+            .cloned()
+            .collect();
+        report_unplaced(doc, &placed, only, &mut skipped, &mut kept);
+    }
     let rewritten = lines.concat();
     if !changed.is_empty() && !only_renamed(text, &rewritten, &renamed) {
         // A line that looked like a key was text inside a value. Nothing is
@@ -92,6 +106,47 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
         changed,
         skipped,
         kept,
+    }
+}
+
+/// Report each backend the parsed file gives an older key that the line scan
+/// did not place (a flow-style entry, or a flow-style `backends:` map). None
+/// is edited: one whose value is not an address of its key's scheme is kept,
+/// as a hand edit to `url` would be refused or switch transport; any other is
+/// left for a hand edit.
+fn report_unplaced(
+    doc: &serde_yaml::Value,
+    placed: &BTreeSet<String>,
+    only: Option<&BTreeSet<String>>,
+    skipped: &mut Vec<String>,
+    kept: &mut Vec<String>,
+) {
+    let Some(backends) = doc.get("backends").and_then(serde_yaml::Value::as_mapping) else {
+        return;
+    };
+    for (name, fields) in backends {
+        let (Some(name), Some(fields)) = (name.as_str(), fields.as_mapping()) else {
+            continue;
+        };
+        if placed.contains(name)
+            || only.is_some_and(|names| !names.contains(name))
+            || fields.contains_key("url")
+        {
+            // `url` beside an alias is the loader's to refuse, naming both.
+            continue;
+        }
+        let aliases: Vec<(&str, Option<&str>)> = ["http_url", "ws_url"]
+            .into_iter()
+            .filter_map(|alias| fields.get(alias).map(|v| (alias, v.as_str())))
+            .collect();
+        match aliases.as_slice() {
+            [] => {}
+            [(alias, Some(value))] if transport_key_for(value) == Some(*alias) => {
+                skipped.push(name.to_string());
+            }
+            [_] => kept.push(name.to_string()),
+            _ => skipped.push(name.to_string()),
+        }
     }
 }
 
