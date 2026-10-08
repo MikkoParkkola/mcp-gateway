@@ -72,16 +72,14 @@ pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
 ///
 /// # Errors
 ///
-/// Returns `Err` on validation, serialisation, or I/O failure.
+/// Returns `Err` on validation, serialisation, or I/O failure, or when the
+/// existing file no longer loads.
 ///
 /// Takes the cross-process config lock first ([`lock`]), waiting up to
 /// [`CLI_LOCK_WAIT`] while another writer holds it; this blocks the calling
 /// thread, so an async caller uses the reload module's write API instead.
 pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
-    let held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
-        say_waiting(path, lock);
-    })
-    .map_err(|e| not_locked(path, e))?;
+    let held = lock_for_cli(path)?;
     write_config_with(path, config, CommentLoss::Rewrite, &held).map_err(|e| match e {
         Unwritten::Failed(message) | Unwritten::CommentLoss(message) => message,
     })
@@ -96,6 +94,21 @@ pub(crate) mod lock;
 /// How long a synchronous writer (the CLI) waits for another writer's
 /// config lock: long enough to outlast a gateway's write and reload.
 pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(30);
+
+/// Take the config lock for a CLI write, then load the file again under it.
+///
+/// The command loaded the file before it waited for the lock, so a file that
+/// no longer loads was changed meanwhile: it is refused, not replaced by the
+/// command's older copy. A missing file is still created.
+fn lock_for_cli(path: &Path) -> Result<ExclusiveFileLock, String> {
+    let held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
+        say_waiting(path, lock);
+    })
+    .map_err(|e| not_locked(path, e))?;
+    load_existing_or_default(path)
+        .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
+    Ok(held)
+}
 
 /// Tell a CLI user, once, why their command is not finishing yet.
 fn say_waiting(config: &Path, lock: &Path) {
@@ -181,13 +194,11 @@ pub(crate) fn write_config_with(
 ///
 /// # Errors
 ///
-/// The refusal, which starts with `Not saved:`, or a validation,
-/// serialisation or I/O failure, as a message ready to print.
+/// The refusal, which starts with `Not saved:`; an existing file that no
+/// longer loads; or a validation, serialisation or I/O failure. Each is a
+/// message ready to print.
 pub fn write_config_preserving(path: &Path, config: &Config) -> Result<(), String> {
-    let _held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
-        say_waiting(path, lock);
-    })
-    .map_err(|e| not_locked(path, e))?;
+    let _held = lock_for_cli(path)?;
     write_spliced(path, config, CommentLoss::Refuse, Splice::NoRemoval).map_err(|e| match e {
         Unwritten::CommentLoss(message) => message,
         Unwritten::Failed(message) => format!("Failed to write {}: {message}", path.display()),
