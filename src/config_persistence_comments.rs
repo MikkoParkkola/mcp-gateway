@@ -36,41 +36,17 @@ pub(crate) fn dropped_comment_lines(before: &str, after: &str) -> Vec<String> {
         .collect()
 }
 
-/// Each line's comment, if it has one. A `#` inside a quoted value, a URL
-/// fragment, or a block scalar's text (the lines under `key: |` or `key: >`)
-/// is not a comment.
+/// Each line's comment, if it has one. A candidate the line scanner finds
+/// counts only when the YAML parser agrees: removing it leaves the document
+/// unchanged. So a `#` inside a quoted, tagged or block scalar's text, or a
+/// URL fragment, is never named.
 fn comments(lines: &[&str]) -> Vec<Option<String>> {
-    // The indent of the open block scalar's header line, while inside one.
-    let mut block: Option<usize> = None;
-    lines
-        .iter()
-        .map(|line| {
-            let depth = line.len() - line.trim_start().len();
-            if let Some(header) = block {
-                if line.trim().is_empty() || depth > header {
-                    return None;
-                }
-                block = None;
-            }
-            let comment = super::splice::inline_comment(line);
-            let code = line[..line.len() - comment.map_or(0, str::len)].trim_end();
-            if opens_block_scalar(code) {
-                block = Some(depth);
-            }
-            comment.map(|c| c.trim().to_owned())
+    (0..lines.len())
+        .map(|i| {
+            let comment = super::splice::inline_comment(lines[i])?;
+            super::splice::parsed_as_comment(lines, i, comment).then(|| comment.trim().to_owned())
         })
         .collect()
-}
-
-/// Whether `code` (a line without its comment) ends in a block scalar
-/// header: `key: |`, `- >-`, `key: |2+` and the like.
-fn opens_block_scalar(code: &str) -> bool {
-    let (before, last) = code.rsplit_once([' ', '\t']).unwrap_or(("", code));
-    let mut chars = last.chars();
-    matches!(chars.next(), Some('|' | '>'))
-        && last.len() <= 3
-        && chars.all(|c| c == '+' || c == '-' || c.is_ascii_digit())
-        && matches!(before.trim_end().chars().last(), Some(':' | '-'))
 }
 
 #[cfg(test)]
@@ -108,6 +84,13 @@ mod tests {
     #[test]
     fn a_hash_inside_a_block_scalar_is_not_a_comment() {
         let before = "backends:\n  a:\n    description: |\n      step # one\n      # not a comment\n    command: x  # why\n  b:\n    command: y\n";
+        let after = "backends:\n  b:\n    command: y\n";
+        assert_eq!(dropped_comment_lines(before, after), ["line 6"]);
+    }
+
+    #[test]
+    fn a_hash_inside_a_tagged_or_multiline_quoted_value_is_not_a_comment() {
+        let before = "backends:\n  a:\n    description: !!str \"old # x\"\n    note: \"one\n      # two\"\n    command: x  # why\n  b:\n    command: y\n";
         let after = "backends:\n  b:\n    command: y\n";
         assert_eq!(dropped_comment_lines(before, after), ["line 6"]);
     }
