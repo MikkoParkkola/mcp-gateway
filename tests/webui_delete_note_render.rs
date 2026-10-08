@@ -48,7 +48,7 @@ console.log(JSON.stringify([note.textContent, note.style.display]));
     let output = Command::new("node")
         .args(["--input-type=module", "-e", &script])
         .output()
-        .expect("run node");
+        .expect("node is required: this test runs the dashboard's own JavaScript");
     assert!(
         output.status.success(),
         "node failed: {}",
