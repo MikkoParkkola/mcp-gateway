@@ -90,19 +90,26 @@ impl EventsHub {
         let Some(source) = self.source(event.kind) else {
             return;
         };
-        let matching: Vec<Subscription> = self
-            .store
-            .subscriptions()
-            .into_iter()
-            .filter(|s| s.name == event.name && s.live(now))
-            // A keyed occurrence belongs to its key's holders alone (MIK-7811).
-            .filter(|s| {
-                event.lifecycle_key.as_deref().is_none_or(|key| {
-                    source.lifecycle_key(&s.principal, &s.name, &s.arguments) == key
+        // Matched under the catalogue gate a route refresh holds while it
+        // swaps the routes and judges the held set: no match against new
+        // routes reaches a subscription they hold (MIK-8076). No I/O and no
+        // await under it.
+        let matching: Vec<Subscription> = {
+            let _gate = self.catalogue_lock();
+            self.store
+                .subscriptions()
+                .into_iter()
+                .filter(|s| s.name == event.name && s.live(now))
+                .filter(|s| self.store.held(&s.id).is_none())
+                // A keyed occurrence belongs to its key's holders alone (MIK-7811).
+                .filter(|s| {
+                    event.lifecycle_key.as_deref().is_none_or(|key| {
+                        source.lifecycle_key(&s.principal, &s.name, &s.arguments) == key
+                    })
                 })
-            })
-            .filter(|s| source.matches(&s.principal, &s.arguments, event))
-            .collect();
+                .filter(|s| source.matches(&s.principal, &s.arguments, event))
+                .collect()
+        };
         for sub in matching {
             if !services
                 .admits_subscription(&sub, event.scope.grant_backend())
@@ -245,21 +252,14 @@ impl EventsHub {
     }
 
     /// Once the startup capability scan has registered the webhook routes:
-    /// delete the subscriptions to webhook event types the catalogue no
-    /// longer offers (a route removed while the gateway was down, or webhooks
-    /// turned off), their pending records with them, and let the worker start.
-    /// Before this the webhook catalogue is partial, so no webhook type is
-    /// withdrawn and nothing is sent (MIK-7772); backend types are complete
-    /// from the start and are withdrawn whatever the scan did (MIK-7803). `false`, with the worker still held, when
-    /// a removal failed: the caller retries.
-    /// It runs as the deferred startup pass does, after the grace period
-    /// (MIK-8027).
+    /// withdraw the subscriptions of backends removed while the gateway was
+    /// down (MIK-7803), hold the webhook subscriptions the routes do not offer
+    /// or serve (MIK-8057; nothing is sent to them, nothing deleted), and let
+    /// the worker start. `false`, with the worker still held, when a removal
+    /// failed: the caller retries.
     #[cfg(test)]
     pub(crate) fn reconcile_catalogue(&self, scan: CatalogueScan) -> bool {
-        self.reconcile_catalogue_after(&|| {
-            self.arm_webhook_withdrawals();
-            scan
-        })
+        self.reconcile_catalogue_after(&|| scan)
     }
 
     /// [`Self::reconcile_catalogue`], with the scan given by `refresh`, run
@@ -287,32 +287,26 @@ impl EventsHub {
         if !self.withdraw(&self.absent_backend_names(&offered)) {
             return false;
         }
+        if !webhooks_on {
+            // No route can be offered: every webhook row is held until it
+            // lapses (MIK-8057).
+            self.hold_unserved(&std::collections::BTreeMap::new());
+        }
         if scan == CatalogueScan::Partial && webhooks_on {
             tracing::warn!(
                 "events: the startup catalogue is partial (a capability directory could not \
-                 be read) or its webhook refresh was refused; stored subscriptions are kept \
-                 and reconciled at the next capability reload"
+                 be read) or its webhook refresh was refused; webhook subscriptions it does \
+                 not serve are held, and resume when a reload serves them"
             );
-            return self.release_worker();
         }
-        // The first startup pass leaves unoffered webhook types to the
-        // deferred pass: a reload the scan did not see may be about to offer
-        // them (MIK-8027). With webhooks off none can come back.
-        if webhooks_on && !self.webhook_withdrawals_armed() {
-            let held = self
-                .absent_names(super::webhook_source::NAME_PREFIX, &offered)
-                .len();
-            if held > 0 {
-                tracing::info!(
-                    held,
-                    "events: webhook subscriptions to unoffered types are held until the \
-                     deferred startup pass"
-                );
-            }
-            return self.release_worker();
-        }
-        if !self.withdraw_unoffered_webhooks(&|_| false) {
-            return false;
+        let held = self.store.held_listing();
+        if !held.is_empty() {
+            let types: Vec<(&str, usize)> =
+                held.iter().map(|t| (t.name.as_str(), t.count)).collect();
+            tracing::info!(
+                ?types,
+                "events: webhook subscriptions held: their type is not offered or served now"
+            );
         }
         self.release_worker()
     }
@@ -354,39 +348,6 @@ impl EventsHub {
         }
     }
 
-    /// Under the catalogue gate the caller holds: delete the stored webhook
-    /// subscriptions whose type the catalogue no longer offers, except names
-    /// `kept` (a capability a partial load could not read; MIK-8028). Computed
-    /// from the stored state, so a retry after a failed removal repeats it.
-    /// `false` when a removal failed.
-    pub(crate) fn withdraw_unoffered_webhooks(&self, kept: &dyn Fn(&str) -> bool) -> bool {
-        let offered: std::collections::HashSet<String> =
-            self.catalogue().into_iter().map(|d| d.name).collect();
-        let gone: Vec<String> = self
-            .absent_names(super::webhook_source::NAME_PREFIX, &offered)
-            .into_iter()
-            .filter(|name| !kept(name))
-            .collect();
-        if !gone.is_empty() {
-            tracing::info!(types = ?gone, "events: withdrawing unoffered webhook event types");
-        }
-        self.withdraw(&gone)
-    }
-
-    /// Stored subscriptions' event names under `prefix` that `offered` lacks.
-    fn absent_names(
-        &self,
-        prefix: &str,
-        offered: &std::collections::HashSet<String>,
-    ) -> Vec<String> {
-        self.store
-            .subscriptions()
-            .into_iter()
-            .map(|sub| sub.name)
-            .filter(|name| name.starts_with(prefix) && !offered.contains(name))
-            .collect()
-    }
-
     /// Stored `backend.<x>.<kind>` names whose backend `x` is gone. A backend
     /// always offers `tools_changed`, so its absence is the test; the upstream
     /// kinds depend on a listener that is not up yet at startup and are not
@@ -416,48 +377,47 @@ impl EventsHub {
     }
 
     /// Under the catalogue gate the caller holds: re-register the webhook
-    /// routes of `capabilities` ([`super::reload::refresh_webhooks`]),
-    /// judging a restore against the retired shapes of the types stored
-    /// subscriptions still name (MIK-8038).
+    /// routes of `capabilities` ([`super::reload::refresh_webhooks`]), then
+    /// hold every stored webhook subscription they do not offer or serve and
+    /// resume every one they serve again (MIK-8057, MIK-8076). Nothing is
+    /// deleted.
     ///
     /// # Errors
-    /// The event type the reload would narrow; nothing changes.
+    /// The live event type the reload would narrow (T52); the routes stay
+    /// as they were, and the stored rows are judged against them.
     pub(crate) fn refresh_webhooks(
         &self,
         registry: &Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>,
         capabilities: &[crate::capability::CapabilityDefinition],
-    ) -> Result<Vec<String>, String> {
-        let subscribed: std::collections::BTreeSet<String> = self
-            .store
-            .subscriptions()
-            .into_iter()
-            .map(|sub| sub.name)
-            .collect();
-        super::reload::refresh_webhooks(
-            registry,
-            capabilities,
-            &mut self.retired.lock(),
-            &subscribed,
-        )
+    ) -> Result<(), String> {
+        match super::reload::refresh_webhooks(registry, capabilities) {
+            Ok(shapes) => {
+                self.hold_unserved(&shapes);
+                Ok(())
+            }
+            // The routes left live may be ones no row was judged against yet,
+            // as when a startup scan registered them: judge against those.
+            Err(narrowed) => {
+                self.hold_unserved(&super::reload::live_shapes(registry));
+                Err(narrowed)
+            }
+        }
+    }
+
+    /// Judge every stored webhook subscription against `shapes`; a stamp
+    /// that could not be written is logged and written by the next refresh.
+    fn hold_unserved(&self, shapes: &std::collections::BTreeMap<String, super::reload::Shape>) {
+        let max_ttl =
+            chrono::Duration::from_std(self.config.max_ttl).unwrap_or(chrono::Duration::days(1));
+        let judge = |sub: &Subscription| super::reload::judge(sub, shapes).unwrap_or_default();
+        if let Err(error) = self.store.apply_holds(&judge, Utc::now(), max_ttl) {
+            tracing::warn!(%error, "events: a held subscription's stamp was not written; retried at the next refresh");
+        }
     }
 
     /// Serializes startup reconciliation with capability reloads.
     pub(crate) fn catalogue_lock(&self) -> parking_lot::MutexGuard<'_, ()> {
         self.catalogue_gate.lock()
-    }
-
-    /// From now on a webhook type the catalogue does not offer may be
-    /// withdrawn for that alone (MIK-8027). Called under the catalogue gate
-    /// by the deferred startup pass; never undone within a run.
-    pub(crate) fn arm_webhook_withdrawals(&self) {
-        self.webhook_withdrawals
-            .store(true, std::sync::atomic::Ordering::Release);
-    }
-
-    /// Whether [`Self::arm_webhook_withdrawals`] has run.
-    pub(crate) fn webhook_withdrawals_armed(&self) -> bool {
-        self.webhook_withdrawals
-            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Delete subscription `refused`, the snapshot the access check refused,
