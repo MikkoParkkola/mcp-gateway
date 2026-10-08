@@ -46,10 +46,10 @@ def problems(doc: dict, ci: dict) -> list[str]:
     if any(str(e).startswith("pull_request") for e in events):
         out.append("has a pull_request trigger: it must be post-merge only")
     push = on.get("push") if isinstance(on, dict) else None
-    if not isinstance(push, dict) or RELEASE_LINE not in (push.get("branches") or []):
-        out.append(f"does not run on push to {RELEASE_LINE}")
-    elif push.get("paths") or push.get("paths-ignore"):
-        out.append("push trigger is path-filtered: a breach can arrive through any file")
+    if not isinstance(push, dict) or push != {"branches": [RELEASE_LINE]}:
+        # Exactly this branch, nothing else: a path filter, an exclusion
+        # pattern or a tag list can each stop a release-line push from running.
+        out.append(f"push trigger is not exactly branches: [{RELEASE_LINE}]")
     if "concurrency" in doc or any("concurrency" in j for j in doc["jobs"].values()):
         out.append("has a concurrency group: a later merge would cancel an earlier one's run")
     if doc.get("permissions") != {"contents": "read"}:
@@ -71,6 +71,11 @@ def problems(doc: dict, ci: dict) -> list[str]:
             out.append(f"no step runs exactly `{command}`")
     if checkout_pin(doc) != checkout_pin(ci) or not checkout_pin(doc):
         out.append("checkout is not pinned to the same SHA as ci.yml")
+    for job in doc["jobs"].values():
+        for step in job.get("steps", []):
+            ref = (step.get("with") or {}).get("ref")
+            if str(step.get("uses", "")).startswith("actions/checkout@") and ref not in (None, "${{ github.sha }}"):
+                out.append("checkout overrides ref: a queued run would judge another commit than its merge")
     return out
 
 
@@ -82,9 +87,17 @@ def main() -> int:
     doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     errors = problems(doc, ci)
     # The check must be able to fail: each mutation of the real file is caught.
+    def on(d):
+        return d[True] if True in d else d["on"]
+
     mutations = {
-        "pull_request added": lambda d: d[True].update({"pull_request": {}}),
-        "push trigger dropped": lambda d: d[True].pop("push"),
+        "pull_request added": lambda d: on(d).update({"pull_request": {}}),
+        "push trigger dropped": lambda d: on(d).pop("push"),
+        "branch exclusion added": lambda d: on(d)["push"]["branches"].append("!docs/**"),
+        "path filter added": lambda d: on(d)["push"].update({"paths": ["src/**"]}),
+        "checkout ref overridden": lambda d: next(iter(d["jobs"].values()))["steps"][0].update(
+            {"with": {"ref": "docs/ranking-1-release-line"}}
+        ),
         "concurrency added": lambda d: d.update({"concurrency": {"group": "x"}}),
         "permissions widened": lambda d: d.update({"permissions": {"contents": "write"}}),
         "gate step dropped": lambda d: next(iter(d["jobs"].values()))["steps"].pop(),
