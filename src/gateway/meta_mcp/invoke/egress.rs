@@ -388,7 +388,11 @@ impl MetaMcp {
             if artifact == fields {
                 return EgressOutcome::Delivered;
             }
-            notification.params = artifact.as_object_mut().and_then(|a| a.remove("params"));
+            // JSON-RPC omits absent params rather than sending `null`.
+            notification.params = artifact
+                .as_object_mut()
+                .and_then(|a| a.remove("params"))
+                .filter(|params| !params.is_null());
             return EgressOutcome::Rewritten;
         }
         EgressOutcome::Delivered
@@ -538,5 +542,37 @@ impl MetaMcp {
             return Err(crate::Error::ResponseFirewallRefused);
         }
         Ok(())
+    }
+}
+
+impl MetaMcp {
+    /// The content checks on a value the gateway built from a backend's text
+    /// before dispatch (a key refusal naming its schema's parameters), which
+    /// no dispatch gate reads.
+    pub(crate) fn content_refuses_value(
+        &self,
+        (server, tool): (&str, &str),
+        session_id: Option<&str>,
+        value: &Value,
+    ) -> bool {
+        let targets = [ResponsePolicyTarget {
+            server: server.to_owned(),
+            tool: tool.to_owned(),
+        }];
+        let correlation = ResponseCorrelation {
+            session_id: session_id.unwrap_or(tool),
+            caller: "gateway",
+            external_server: server,
+            external_tool: tool,
+            subject: None,
+        };
+        let at = Egress {
+            content: ContentChecks::Here,
+            targets: &targets,
+            correlation: &correlation,
+            api_key_name: None,
+            firewall: self.firewall.as_deref(),
+        };
+        self.content_refuses(&at, value)
     }
 }
