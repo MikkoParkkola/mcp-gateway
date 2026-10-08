@@ -67,9 +67,10 @@ fn a_tried_record_is_buried_at_expiry() {
     );
 }
 
-/// L5: the expiry found when the store opens buries as a live sweep does.
+/// L5: a store opened after the expiry keeps the tried record pending (the
+/// open sweep buries nothing); the first `due` buries it.
 #[test]
-fn an_expiry_found_at_open_buries_a_tried_record() {
+fn an_expiry_found_at_open_is_buried_by_the_first_due() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
     let store = open_with(dir.path(), now, &["s1"]);
@@ -79,9 +80,70 @@ fn an_expiry_found_at_open_buries_a_tried_record() {
     };
     store.enqueue(tried, OUTBOX).expect("io");
     drop(store);
-    let reopened = Store::open(dir.path(), past_expiry(now), TAIL).expect("reopen");
+    let later = past_expiry(now);
+    let reopened = Store::open(dir.path(), later, TAIL).expect("reopen");
+    assert_eq!(dead_reason(&reopened, "e1"), None, "nothing buried at open");
+    assert!(reopened.has_due("s1", later), "still pending after open");
+    reopened.due(later, &HashSet::new()).expect("io");
     assert_eq!(
         dead_reason(&reopened, "e1").as_deref(),
+        Some("subscription_expired")
+    );
+    assert!(!reopened.has_due("s1", later), "the outbox copy is gone");
+}
+
+/// L12 pin (the B08b invariant): a re-subscribe of the same key over an
+/// expired row still holding a tried record is refused until its burial
+/// finishes, then admitted clean: no inherited secret, grace or record.
+#[test]
+fn a_resubscribe_over_a_kept_expired_row_waits_for_its_burials() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let tried = OutboxRecord {
+        attempt: 1,
+        ..record("e1", "s1", now)
+    };
+    store.enqueue(tried, OUTBOX).expect("io");
+    let later = past_expiry(now);
+    let renewed = || Subscription {
+        secret: "whsec_second".into(),
+        granted_at: later,
+        expires_at: Some(later + chrono::Duration::hours(1)),
+        ..sub("s1", later)
+    };
+    let early = store
+        .admit(
+            renewed(),
+            true,
+            CAPS,
+            chrono::Duration::hours(1),
+            later,
+            TAIL,
+        )
+        .expect("io");
+    assert!(
+        early.is_err(),
+        "refused while the expired row's burial is unfinished"
+    );
+    store.due(later, &HashSet::new()).expect("io");
+    store
+        .admit(
+            renewed(),
+            true,
+            CAPS,
+            chrono::Duration::hours(1),
+            later,
+            TAIL,
+        )
+        .expect("io")
+        .expect("admitted once the burial finished");
+    let row = store.get("s1").expect("row");
+    assert_eq!(row.secret, "whsec_second");
+    assert_eq!(row.previous_secret, None, "no grace from the expired row");
+    assert!(!store.has_due("s1", later), "no inherited record");
+    assert_eq!(
+        dead_reason(&store, "e1").as_deref(),
         Some("subscription_expired")
     );
 }
