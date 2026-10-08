@@ -37,11 +37,11 @@ fn a_token_is_redeemed_once_by_its_identity() {
         "the token says nothing about the task"
     );
 
-    let Ok(taken) = parked.take(&token, Some("u1"), now) else {
+    let Ok(redeemed) = parked.take(&token, Some("u1"), now) else {
         panic!("the owner redeems");
     };
-    assert_eq!(taken.task_id, "task-1");
-    assert_eq!(taken.context_id.as_deref(), Some("ctx-1"));
+    assert_eq!(redeemed.task_id, "task-1");
+    assert_eq!(redeemed.context_id.as_deref(), Some("ctx-1"));
     assert!(parked.take(&token, Some("u1"), now).is_err(), "one-shot");
 }
 

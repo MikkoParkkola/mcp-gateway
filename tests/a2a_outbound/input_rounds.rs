@@ -626,6 +626,21 @@ async fn a2a_8_an_api_key_caller_keeps_its_round_through_gateway_invoke() {
     );
 }
 
+/// A modern request from a client that can be asked for input and that
+/// declares the MCP tasks extension; `key` is the idempotency key.
+fn task_frame(id: i64, method: &str, mut params: Value, key: Option<&str>) -> Value {
+    params["_meta"] = json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {
+            "elicitation": {}, "extensions": {"io.modelcontextprotocol/tasks": {}}},
+        "io.modelcontextprotocol/clientInfo": {"name": "a2a-rows", "version": "1"},
+    });
+    if let Some(key) = key {
+        params["_meta"][mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    }
+    json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+}
+
 /// MIK-8063 through MCP tasks: a task-augmented `gateway_invoke` whose agent
 /// asks shows `input_required` on `tasks/get`; `tasks/update` with the answer
 /// resumes the SAME agent task and the task completes with the agent's answer.
@@ -645,19 +660,7 @@ async fn a2a_8_an_input_round_through_an_mcp_task() {
             .backends
             .register(std::sync::Arc::new(backend(&base, None, &[])))
     );
-    let frame = |id: i64, method: &str, params: Value, key: Option<&str>| {
-        let mut params = params;
-        params["_meta"] = json!({
-            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-            "io.modelcontextprotocol/clientCapabilities": {
-                "elicitation": {}, "extensions": {"io.modelcontextprotocol/tasks": {}}},
-            "io.modelcontextprotocol/clientInfo": {"name": "a2a-rows", "version": "1"},
-        });
-        if let Some(key) = key {
-            params["_meta"][mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
-        }
-        json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
-    };
+    let frame = task_frame;
     let get = |id: &str| frame(9_000, "tasks/get", json!({"taskId": id}), None);
 
     let created = post_as(
@@ -679,18 +682,21 @@ async fn a2a_8_an_input_round_through_an_mcp_task() {
         .unwrap_or_else(|| panic!("a task handle: {created}"))
         .to_owned();
 
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-    let waiting = loop {
-        let seen = post_as(&state, "/mcp", &get(&task), Some("key-alice"), None).await;
-        if seen["result"]["status"] == "input_required" {
-            break seen;
+    let poll = |until: fn(&str) -> bool| {
+        let (state, get) = (&state, get(&task));
+        async move {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let seen = post_as(state, "/mcp", &get, Some("key-alice"), None).await;
+                if until(seen["result"]["status"].as_str().unwrap_or_default()) {
+                    return seen;
+                }
+                assert!(tokio::time::Instant::now() < deadline, "stuck: {seen}");
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "never asked: {seen}"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     };
+    let waiting = poll(|status| status == "input_required").await;
     assert!(
         waiting
             .pointer(&format!("/result/inputRequests/{ASK_KEY}"))
@@ -717,20 +723,7 @@ async fn a2a_8_an_input_round_through_an_mcp_task() {
         "the answer is accepted: {acked}"
     );
 
-    let settled = loop {
-        let seen = post_as(&state, "/mcp", &get(&task), Some("key-alice"), None).await;
-        if matches!(
-            seen["result"]["status"].as_str(),
-            Some("completed" | "failed" | "cancelled")
-        ) {
-            break seen;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "never settled: {seen}"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    };
+    let settled = poll(|status| matches!(status, "completed" | "failed" | "cancelled")).await;
     assert_eq!(settled["result"]["status"], "completed", "{settled}");
     assert!(
         settled.to_string().contains("sunny via a task"),
