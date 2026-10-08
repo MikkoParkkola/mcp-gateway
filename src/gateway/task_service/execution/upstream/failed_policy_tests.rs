@@ -468,3 +468,34 @@ async fn a_recovered_result_keeps_the_gateways_write_record() {
         "the recovered row did not record the gateway's findings: {stored}"
     );
 }
+
+/// MIK-7993: a result recovered on its owner's read is stored with the record
+/// of what the gateway wrote into it on the way (here the response contract's
+/// annotations), so a later read's receipt leaves those members out. Run in a
+/// write scope, as `tasks/get` runs with relay detection on.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_recovered_result_is_stored_with_the_gateways_writes() {
+    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_response_contract(crate::config::ResponseContractConfig {
+        enabled: true,
+        action_mode: false,
+        fail_closed: true,
+        ..Default::default()
+    });
+    let (committed, _directory) = crate::gateway::meta_mcp::invoke::relay::collecting(
+        recover_committed(Reply::Completed, meta),
+    )
+    .await;
+    let record = serde_json::to_value(&committed.gateway_writes).expect("the record serializes");
+    let dests: Vec<&Value> = record
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|entry| &entry["dest"])
+        .collect();
+    assert!(
+        dests.contains(&&json!(["_contract_violation"])),
+        "the recovered row does not record the contract annotation: {record}"
+    );
+}
