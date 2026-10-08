@@ -424,7 +424,6 @@ impl Backend {
         let rate_limited =
             super::fill_check::record_request_failure(entry, &error.to_string(), latency);
         if rate_limited {
-            // The code only: the error's text can be the backend's own.
             tracing::warn!(
                 code = error.to_rpc_code(),
                 latency_ms = latency.as_millis(),
