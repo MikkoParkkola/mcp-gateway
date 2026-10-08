@@ -492,3 +492,4 @@ fn judge(row: &Seeded, task: &crate::gateway::task_service::Task, revision: u64)
 }
 
 mod cases;
+mod repaired;
