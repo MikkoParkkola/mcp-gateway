@@ -94,9 +94,7 @@ async fn a_task_frame_that_cannot_be_logged_is_withheld_when_fail_closed() {
 
 /// `MIK-7858.FRAMES.1`: a frame carries the task as it is when the frame is
 /// built, never a mix. A notification published while the task was working,
-/// delivered after it completed, is sent as the completed task, whole; the
-/// later frame for the completion repeats it, so a reader never sees the task
-/// go back.
+/// delivered after it completed, is sent as the completed task, whole.
 #[tokio::test]
 async fn a_frame_carries_the_task_as_it_is_at_delivery() {
     let dir = tempfile::tempdir().expect("tempdir");
