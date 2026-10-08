@@ -190,6 +190,7 @@ backend" and "fails a capability file" first.**
 | 163 | With gateway authentication off and agent authentication on, each agent owns its tasks apart, keyed on the `client_id` its token validates as (a renewed token for the same agent keeps them); every agent had shared one task owner | None. Tasks an agent created before the upgrade stay under the old shared owner, so the agent no longer finds them under its own |
 | 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept, a removed one released); restart to read a repaired task; probes (`/livez`, `/readyz`) are unaffected |
 | 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
+| 166 | An HTTP gateway (`serve`, or no subcommand) waits at most 10 seconds after it stops serving for disk work still running, then exits and logs at ERROR that it left blocking work behind; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit naming blocking work left running points at the storage to check |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4343,6 +4344,21 @@ says whose fault it is:
 The `gateway_reload_config` meta-tool answers that refusal with JSON-RPC
 -32600 (it was -32603) and keeps -32603 otherwise. The message text is
 unchanged on both.
+
+## 166. An HTTP gateway exits within 10 seconds of stopping
+
+**Startup:** no notice
+
+After an HTTP gateway stops serving, it now waits at most 10 seconds for disk
+work still running (a task-store or audit write) and then exits. Before, it
+waited for that work without limit, so a write stuck on a stalled NFS or FUSE
+mount kept the process alive forever and an orchestrator had to kill it.
+`serve --stdio` already exited this way.
+
+Work that finishes within the 10 seconds completes as before: on a healthy disk
+what is left at that point is a few writes of a millisecond each. When the
+bound runs out, one ERROR line says the gateway exited with blocking work still
+running; check the storage behind the task store and the audit log.
 
 ## Upgrading from 3.5.x: a walkthrough
 
