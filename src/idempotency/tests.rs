@@ -6,6 +6,15 @@ use super::*;
 use serde_json::json;
 use std::thread;
 
+/// Move the cache's clock forward by `by`. An entry stored before the move
+/// is that much older; one stored after is fresh (MIK-8070: no past `Instant`
+/// is ever built, so no test depends on how long ago the host booted).
+fn advance(cache: &IdempotencyCache, by: Duration) {
+    cache
+        .ahead
+        .fetch_add(by.as_secs(), std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The marker is the gateway's own word, so nothing a backend sends may
 /// mint it. The other writer of a cached error body serializes a
 /// `JsonRpcError`, and this pins that that serialization has no field
@@ -317,11 +326,8 @@ fn eviction_never_removes_a_fresh_entry_that_replaced_an_expired_one() {
     let cache = Arc::new(IdempotencyCache::new());
     let stop = Arc::new(AtomicBool::new(false));
     let lost = Arc::new(AtomicUsize::new(0));
-    let expired_at = Instant::now()
-        .checked_sub(COMPLETED_TTL)
-        .unwrap()
-        .checked_sub(Duration::from_secs(1))
-        .unwrap();
+    let expired_at = cache.now();
+    advance(&cache, COMPLETED_TTL + Duration::from_secs(1));
 
     // WHEN: the background evictor runs against that churn
     let evictor = {
@@ -342,7 +348,7 @@ fn eviction_never_removes_a_fresh_entry_that_replaced_an_expired_one() {
         );
         cache.entries.insert(
             "k".to_string(),
-            Entry::new(IdempotencyState::InFlight(Instant::now()), ""),
+            Entry::new(IdempotencyState::InFlight(cache.now()), ""),
         );
         if !cache.entries.contains_key("k") {
             lost.fetch_add(1, Ordering::Relaxed);
@@ -365,22 +371,11 @@ fn evict_expired_removes_only_stale_entries() {
     // WHEN: calling evict_expired
     // THEN: only the stale entry is removed
     let cache = IdempotencyCache::new();
+    cache.mark_in_flight("stale");
+    cache.mark_completed("stale", json!(2));
+    advance(&cache, COMPLETED_TTL + Duration::from_secs(1));
     cache.mark_in_flight("fresh");
     cache.mark_completed("fresh", json!(1));
-    cache.entries.insert(
-        "stale".to_string(),
-        Entry::new(
-            IdempotencyState::Completed(
-                json!(2),
-                Instant::now()
-                    .checked_sub(COMPLETED_TTL)
-                    .unwrap()
-                    .checked_sub(Duration::from_secs(1))
-                    .unwrap(),
-            ),
-            "",
-        ),
-    );
 
     cache.evict_expired();
 
@@ -395,13 +390,9 @@ fn evict_expired_removes_only_stale_entries() {
 #[test]
 fn a_completed_entry_still_replays_one_second_before_the_day_ends() {
     let cache = IdempotencyCache::new();
-    let stored = Instant::now()
-        .checked_sub(Duration::from_secs(24 * 60 * 60 - 1))
-        .unwrap();
-    cache.entries.insert(
-        "k".to_string(),
-        Entry::new(IdempotencyState::Completed(json!(1), stored), ""),
-    );
+    cache.mark_in_flight("k");
+    cache.mark_completed("k", json!(1));
+    advance(&cache, Duration::from_secs(24 * 60 * 60 - 1));
     assert!(
         matches!(cache.check("k"), CheckOutcome::Completed(_)),
         "a retry inside the day re-executed instead of replaying"
@@ -515,20 +506,9 @@ async fn spawn_cleanup_task_evicts_expired_entries() {
     // A stale entry is evicted. On the paused clock the task's ticks run
     // before the virtual wait returns, however loaded the host (#1821).
     let cache = Arc::new(IdempotencyCache::new());
-    cache.entries.insert(
-        "stale".to_string(),
-        Entry::new(
-            IdempotencyState::Completed(
-                json!(null),
-                Instant::now()
-                    .checked_sub(COMPLETED_TTL)
-                    .unwrap()
-                    .checked_sub(Duration::from_secs(1))
-                    .unwrap(),
-            ),
-            "",
-        ),
-    );
+    cache.mark_in_flight("stale");
+    cache.mark_completed("stale", json!(null));
+    advance(&cache, COMPLETED_TTL + Duration::from_secs(1));
 
     spawn_cleanup_task(Arc::clone(&cache), Duration::from_millis(10));
 

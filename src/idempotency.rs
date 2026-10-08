@@ -156,6 +156,10 @@ impl IdempotencyState {
 #[derive(Debug, Default)]
 pub struct IdempotencyCache {
     entries: DashMap<String, Entry>,
+    /// Seconds the cache's clock runs ahead of the process clock (MIK-8070):
+    /// tests age entries forward, never by building a past `Instant`.
+    #[cfg(test)]
+    ahead: std::sync::atomic::AtomicU64,
 }
 
 /// The liveness token an in-flight entry is judged against.
@@ -213,9 +217,9 @@ impl Entry {
     }
 
     /// An in-flight entry published on behalf of a live reservation.
-    fn in_flight(fingerprint: &str, owner: &Arc<OwnerToken>) -> Self {
+    fn in_flight(fingerprint: &str, owner: &Arc<OwnerToken>, started: Instant) -> Self {
         Self {
-            state: IdempotencyState::InFlight(Instant::now()),
+            state: IdempotencyState::InFlight(started),
             fingerprint: fingerprint.to_string(),
             owner: Arc::downgrade(owner),
             read: None,
@@ -325,19 +329,20 @@ pub(crate) enum AdmitOutcome {
 /// dead". Aged *and* ownerless is stale; the timeout then "does what it was
 /// introduced for — reclaiming entries whose owner is gone — and nothing else".
 #[must_use]
-fn classify(entry: &Entry) -> CacheEntryStatus {
+fn classify(entry: &Entry, now: Instant) -> CacheEntryStatus {
+    let age = |at: &Instant| now.saturating_duration_since(*at);
     match &entry.state {
         IdempotencyState::InFlight(started)
-            if entry.owner_is_live() || started.elapsed() <= IN_FLIGHT_TIMEOUT =>
+            if entry.owner_is_live() || age(started) <= IN_FLIGHT_TIMEOUT =>
         {
             CacheEntryStatus::LiveInFlight
         }
         IdempotencyState::InFlight(_) => CacheEntryStatus::StaleInFlight,
-        IdempotencyState::Completed(_, stored) if stored.elapsed() <= COMPLETED_TTL => {
+        IdempotencyState::Completed(_, stored) if age(stored) <= COMPLETED_TTL => {
             CacheEntryStatus::LiveCompleted
         }
         IdempotencyState::Completed(_, _) => CacheEntryStatus::ExpiredCompleted,
-        IdempotencyState::Failed(_, stored) if stored.elapsed() <= COMPLETED_TTL => {
+        IdempotencyState::Failed(_, stored) if age(stored) <= COMPLETED_TTL => {
             CacheEntryStatus::LiveFailed
         }
         IdempotencyState::Failed(_, _) => CacheEntryStatus::ExpiredFailed,
@@ -360,9 +365,18 @@ impl IdempotencyCache {
     /// Create a new, empty cache.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            entries: DashMap::new(),
-        }
+        Self::default()
+    }
+
+    /// Every entry is stamped and aged on this clock, so a test that moves it
+    /// forward ages all of them alike.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        let ahead = self.ahead.load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(test))]
+        let ahead = 0;
+        Instant::now() + Duration::from_secs(ahead)
     }
 
     /// Check the cache state for `key` and return what the caller should do.
@@ -384,7 +398,7 @@ impl IdempotencyCache {
             };
         };
 
-        let status = classify(entry.value());
+        let status = classify(entry.value(), self.now());
 
         let (decision, evict) = decide_check_plan(status);
         if evict {
@@ -430,13 +444,14 @@ impl IdempotencyCache {
         // the guard's scope deadlocks. The count can therefore grow by at most
         // the number of callers racing admission of distinct new keys.
         let at_capacity = self.entries.len() >= MAX_ENTRIES;
+        let now = self.now();
 
         match self.entries.entry(key.to_string()) {
             MapEntry::Occupied(mut occupied) => {
                 // Before the state: a live entry for another request must be
                 // refused whether it is in flight or already completed, and a
                 // stale one is replaced by this request anyway.
-                let (plan, evict) = decide_check_plan(classify(occupied.get()));
+                let (plan, evict) = decide_check_plan(classify(occupied.get(), now));
                 if !matches!(plan, CheckPlan::Proceed) && !occupied.get().matches(fingerprint) {
                     return AdmitOutcome::Mismatch;
                 }
@@ -462,7 +477,7 @@ impl IdempotencyCache {
                         debug_assert!(evict, "an occupied entry only proceeds after eviction");
                         // Replacing in place keeps the entry count flat, so a
                         // stale entry never costs a caller its admission.
-                        occupied.insert(Entry::in_flight(fingerprint, owner));
+                        occupied.insert(Entry::in_flight(fingerprint, owner, now));
                         debug!(key, "Replaced stale idempotency entry");
                         AdmitOutcome::Proceed
                     }
@@ -472,7 +487,7 @@ impl IdempotencyCache {
                 if at_capacity {
                     return AdmitOutcome::AtCapacity;
                 }
-                vacant.insert(Entry::in_flight(fingerprint, owner));
+                vacant.insert(Entry::in_flight(fingerprint, owner, now));
                 AdmitOutcome::Proceed
             }
         }
@@ -482,7 +497,7 @@ impl IdempotencyCache {
     pub fn mark_in_flight(&self, key: &str) {
         self.entries.insert(
             key.to_string(),
-            Entry::new(IdempotencyState::InFlight(Instant::now()), ""),
+            Entry::new(IdempotencyState::InFlight(self.now()), ""),
         );
     }
 
@@ -538,10 +553,7 @@ impl IdempotencyCache {
             debug!(key, "Refused to cache a non-final result");
             return false;
         }
-        let mut entry = Entry::new(
-            IdempotencyState::Completed(result, Instant::now()),
-            fingerprint,
-        );
+        let mut entry = Entry::new(IdempotencyState::Completed(result, self.now()), fingerprint);
         entry.read = read;
         entry.writes = writes;
         self.entries.insert(key.to_string(), entry);
@@ -558,7 +570,7 @@ impl IdempotencyCache {
     pub(crate) fn mark_failed_bound(&self, key: &str, error: Value, fingerprint: &str) {
         self.entries.insert(
             key.to_string(),
-            Entry::new(IdempotencyState::Failed(error, Instant::now()), fingerprint),
+            Entry::new(IdempotencyState::Failed(error, self.now()), fingerprint),
         );
     }
 
@@ -578,8 +590,9 @@ impl IdempotencyCache {
     /// being narrowed.
     pub fn evict_expired(&self) {
         let before = self.entries.len();
+        let now = self.now();
         self.entries
-            .retain(|_, entry| !is_reclaimable(classify(entry)));
+            .retain(|_, entry| !is_reclaimable(classify(entry, now)));
         let count = before.saturating_sub(self.entries.len());
         if count > 0 {
             debug!(count, "Evicted stale idempotency entries");
