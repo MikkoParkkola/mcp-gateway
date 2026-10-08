@@ -51,11 +51,12 @@ async fn mock(tool: &'static str) -> String {
 fn write_config(dir: &Path, backends: &str) -> std::path::PathBuf {
     let path = dir.join("gateway.yaml");
     let tasks = dir.join("tasks");
-    // Owner-only: config loading refuses a file other users can read.
+    // Owner-only: config loading refuses a file other users can read. The
+    // path is single-quoted YAML, so a Windows path's backslashes stay literal.
     crate::gateway::test_helpers::write_owner_only(
         &path,
         format!(
-            "meta_mcp:\n  enabled: true\ntasks:\n  store_dir: \"{}\"\nbackends:{backends}\n",
+            "meta_mcp:\n  enabled: true\ntasks:\n  store_dir: '{}'\nbackends:{backends}\n",
             tasks.display()
         ),
     )
