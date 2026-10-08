@@ -47,10 +47,15 @@ const KINDS: [&str; 4] = [
 
 /// Admit `p`'s row for `backend.x.<kind>`.
 fn admit_kind(hub: &EventsHub, kind: &str) {
+    admit_on(hub, "x", kind);
+}
+
+/// Admit `p`'s row for `backend.<backend>.<kind>`.
+fn admit_on(hub: &EventsHub, backend: &str, kind: &str) {
     let config = crate::config::EventsConfig::default();
     let row: records::Subscription = serde_json::from_value(serde_json::json!({
-        "v": 1, "id": format!("sub_{kind}"), "principal": "p", "url": "https://h/x",
-        "name": format!("backend.x.{kind}"), "arguments": {}, "secret": "whsec_x",
+        "v": 1, "id": format!("sub_{backend}_{kind}"), "principal": "p", "url": "https://h/x",
+        "name": format!("backend.{backend}.{kind}"), "arguments": {}, "secret": "whsec_x",
         "previous_secret": null, "previous_until": null,
         "granted_at": chrono::Utc::now(), "expires_at": null, "active": true,
         "failed_since": null, "last_delivery_at": null, "last_error": null
@@ -100,4 +105,55 @@ async fn t01_a_removed_backend_withdraws_every_kind_and_its_keys() {
         .collect();
     assert!(left.is_empty(), "withdrawn with the backend: {left:?}");
     assert!(hub.lifecycle.lock().await.is_empty(), "their keys released");
+}
+
+/// A registered backend `b` that never answers.
+fn silent_backend() -> Arc<crate::backend::Backend> {
+    let config = crate::config::BackendConfig {
+        transport: crate::config::TransportConfig::Http {
+            http_url: "http://127.0.0.1:9/mcp".to_owned(),
+            streamable_http: Some(true),
+            protocol_version: None,
+        },
+        timeout: std::time::Duration::from_secs(1),
+        ..crate::config::BackendConfig::default()
+    };
+    Arc::new(crate::backend::Backend::new(
+        "b",
+        config,
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ))
+}
+
+/// T02 (MIK-7897 LIFE.2, design r3 L2, finding #7): a held row of a backend
+/// that was not registered gets its upstream listener within a second of the
+/// backend's registration announce, not at the 30 s revive sweep.
+#[tokio::test(start_paused = true)]
+async fn t02_a_re_added_backend_is_listened_to_at_once() {
+    let (hub, _dir) = hub();
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let none: backend_source::Ineligible = Arc::new(std::collections::BTreeSet::new);
+    hub.install_backend_source_with_upstream(
+        Arc::new(|| vec!["b".to_owned()]),
+        Arc::clone(&registry),
+        none,
+    );
+    admit_on(&hub, "b", "resources_changed");
+    hub.replay_starts().await;
+    let source = hub
+        .source(types::SourceKind::BackendNotification)
+        .expect("source");
+    assert_eq!(source.upstream_starts(), 0, "premise: b is not registered");
+    assert!(registry.register(silent_backend()));
+    // What the registry's announce drives (tools_changed.rs drain).
+    hub.backend_tools_changed("b");
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+        source.upstream_starts(),
+        1,
+        "listened to within a second of the re-add"
+    );
 }

@@ -131,7 +131,7 @@ pub(crate) struct UpstreamListeners {
     /// Tasks `start` has spawned: a task started wrongly for a refused
     /// backend cancels itself at once, so its entry alone cannot show it.
     #[cfg(test)]
-    starts: std::sync::atomic::AtomicUsize,
+    pub(super) starts: std::sync::atomic::AtomicUsize,
     me: Weak<UpstreamListeners>,
 }
 
