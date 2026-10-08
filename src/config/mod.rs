@@ -12,6 +12,7 @@ mod backend_add;
 mod backend_config;
 mod backend_debug;
 mod backend_ownership;
+mod backend_transport;
 mod config_file;
 mod env_overlay;
 mod features;
@@ -265,60 +266,9 @@ impl Provider for OverlayEnv<'_> {
             }
             Self::insert_nested(&mut dict, &parts, value);
         }
-        refuse_backend_url(&dict).map_err(figment::Error::from)?;
+        backend_transport::refuse_backend_url(&dict).map_err(figment::Error::from)?;
         Ok(Profile::Default.collect(dict))
     }
-}
-
-/// An environment `url` for a backend is refused, never ignored. The file and
-/// the environment merge key by key, so `MCP_GATEWAY_BACKENDS__<NAME>__URL`
-/// could not replace a `http_url` the file sets; the variables that can are
-/// named instead. The value is not echoed: a URL can carry a credential.
-fn refuse_backend_url(dict: &Dict) -> std::result::Result<(), String> {
-    let Some(figment::value::Value::Dict(_, backends)) = dict.get("backends") else {
-        return Ok(());
-    };
-    for (name, fields) in backends {
-        if let figment::value::Value::Dict(_, fields) = fields
-            && fields.contains_key("url")
-        {
-            let var = format!("{}BACKENDS__{}", OverlayEnv::PREFIX, name.to_uppercase());
-            return Err(format!(
-                "{var}__URL is not read: set {var}__HTTP_URL or {var}__WS_URL instead."
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// The keys that each pick a backend's transport; `url` stands for one of them.
-const TRANSPORT_KEYS: &[&str] = &["command", "http_url", "ws_url", "a2a_url"];
-
-/// A backend reached by more than one transport key is refused. The file and
-/// environment layers merge key by key, and the transport enum takes the first
-/// key present, so before 4.0 an environment `__WS_URL` over a file
-/// `http_url` was dropped without a word. Keys only, never values.
-fn refuse_two_transports(figment: &Figment) -> Result<()> {
-    let Ok(figment::value::Value::Dict(_, backends)) = figment.find_value("backends") else {
-        return Ok(());
-    };
-    for (name, fields) in &backends {
-        let figment::value::Value::Dict(_, fields) = fields else {
-            continue;
-        };
-        let held: Vec<&str> = TRANSPORT_KEYS
-            .iter()
-            .copied()
-            .filter(|k| fields.contains_key(*k))
-            .collect();
-        if held.len() > 1 {
-            return Err(Error::Config(format!(
-                "backend {name} has both {}; keep one.",
-                held.join(" and ")
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// Whether a load substitutes the environment into the config it returns.
@@ -616,7 +566,7 @@ impl Config {
             // `env:`.
             Expansion::Literal => Self::yaml(path),
         };
-        refuse_two_transports(&figment)?;
+        backend_transport::refuse_two_transports(&figment)?;
         let mut config: Self = figment
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;

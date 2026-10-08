@@ -85,7 +85,7 @@ fn resolve_backend_urls(dict: &mut Dict) -> std::result::Result<(), String> {
         let Some(url) = fields.remove("url") else {
             continue;
         };
-        if let Some(other) = super::TRANSPORT_KEYS
+        if let Some(other) = super::backend_transport::TRANSPORT_KEYS
             .iter()
             .find(|k| fields.contains_key(**k))
         {
