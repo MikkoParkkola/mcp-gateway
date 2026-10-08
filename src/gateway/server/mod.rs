@@ -1799,6 +1799,7 @@ impl Gateway {
                     // Only the session cookie reads this; re-validation sets none.
                     tls_enabled: false,
                     live_config: Arc::clone(&live_config),
+                    agent_auth: agent_auth.clone(),
                 },
             ),
         );

@@ -508,6 +508,10 @@ pub(super) async fn reopen(
                     dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
                     tls_enabled: false,
                     live_config: Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
+                    agent_auth: crate::gateway::oauth::AgentAuthState::new(
+                        false,
+                        std::sync::Arc::default(),
+                    ),
                 },
             ),
         ),
