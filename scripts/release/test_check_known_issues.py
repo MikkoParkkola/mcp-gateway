@@ -580,6 +580,11 @@ def test_a_slash_after_a_block_tag_name_is_not_a_tag_boundary():
     assert run(text, "--check") == 1
 
 
+def test_a_title_inside_an_unclosed_tag_still_starts_the_section():
+    text = "# Notes\n\n<base/foo\nKnown\nissues\nfor 4.0>\n---\n\n- Fixed in 4.0.1.\n"
+    assert run(text, "--check") == 1
+
+
 def test_a_hyphen_range_to_a_later_release_fails_the_check():
     assert run(notes("\n- Seen in 4.0.0-4.0.1.\n"), "--check") == 1
 
