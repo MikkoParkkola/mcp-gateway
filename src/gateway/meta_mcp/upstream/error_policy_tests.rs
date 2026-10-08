@@ -154,3 +154,29 @@ fn a_failure_without_a_message_is_a_substitute() {
         UpstreamAnswer::Failed(_)
     ));
 }
+
+/// MIK-8139: the configured response firewall screens a recovered failure
+/// too, not only the anomaly patterns: in observe mode, where those patterns
+/// only annotate, a credential the firewall's default policy refuses is
+/// still withheld.
+#[cfg(feature = "firewall")]
+#[test]
+fn the_configured_firewall_withholds_a_recovered_failure() {
+    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_firewall(Some(Arc::new(
+        crate::security::firewall::Firewall::from_config(
+            crate::security::firewall::FirewallConfig::default(),
+            None,
+        ),
+    )));
+    let error = JsonRpcError {
+        code: -32001,
+        message: format!("upstream failed: {MARKER}"),
+        data: None,
+    };
+    let screened = meta.recover_task_error("peer", "slow_echo", None, "trace", error);
+    assert_eq!(
+        screened.message, RECOVERED_ERROR_WITHHELD,
+        "the firewall never saw the recovered failure"
+    );
+}

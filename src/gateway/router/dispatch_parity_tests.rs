@@ -721,3 +721,23 @@ async fn errscan_a_screened_direct_error_replays_without_redispatch() {
         );
     }
 }
+
+/// MIK-8139: under an explicit Warn rule a credential in a backend error is
+/// delivered redacted on both routes, as a result is (T12c).
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn errscan_warn_delivers_a_redacted_error_on_both_routes() {
+    use super::direct_guards_fixture::fixture_firewalled_with;
+    use crate::security::firewall::FirewallAction;
+    for backend in BACKENDS {
+        for direct in [false, true] {
+            let at = format!("{backend} direct={direct}");
+            let answer = Answer::RpcErrorText(WITH_SECRET);
+            let fx = fixture_firewalled_with(answer, Some(FirewallAction::Warn), false).await;
+            let (_, body) = fw_call(&fx, direct, backend, None).await;
+            let text = body.to_string();
+            assert!(text.contains("benign prefix"), "warn {at}: {body}");
+            assert!(!text.contains(REDACTED_SECRET), "warn {at}: {body}");
+        }
+    }
+}
