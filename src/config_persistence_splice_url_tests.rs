@@ -70,3 +70,61 @@ fn switching_a_url_backend_to_a_command_drops_the_url() {
     );
     assert!(!text.contains("url"), "{text}");
 }
+
+/// A backend a write adds is spelled `url`, whatever transport it is.
+#[test]
+fn a_new_backend_is_spliced_in_as_url() {
+    let original = "backends:\n  a:  # mine\n    command: a\n";
+    let before = Config::from_file_text(original).expect("before loads");
+    for (address, key) in [
+        ("https://b.example.test/mcp", "http_url"),
+        ("wss://b.example.test/mcp", "ws_url"),
+    ] {
+        let config = Config::from_file_text(&format!(
+            "backends:\n  a:\n    command: a\n  b:\n    {key}: \"{address}\"\n"
+        ))
+        .expect("config loads");
+        let text = with_backend_edited(original, &before, &config, "b").expect("spliced");
+        assert!(text.contains("# mine") && text.contains(address), "{text}");
+        assert!(text.contains("    url: ") && !text.contains(key), "{text}");
+    }
+}
+
+/// An address from the environment cannot be `url` (the loader resolves
+/// `url` before it expands variables), so it keeps its alias and still loads.
+#[test]
+fn a_new_backend_with_an_environment_address_keeps_its_alias() {
+    let original = "backends:\n  a:  # mine\n    command: a\n";
+    let before = Config::from_file_text(original).expect("before loads");
+    let config = Config::from_file_text(
+        "backends:\n  a:\n    command: a\n  b:\n    http_url: \"${B_URL}\"\n",
+    )
+    .expect("config loads");
+    let text = with_backend_edited(original, &before, &config, "b").expect("spliced");
+    assert!(
+        text.contains("http_url: ${B_URL}") || text.contains("http_url: \"${B_URL}\""),
+        "{text}"
+    );
+    assert!(Config::from_file_text(&text).is_ok(), "{text}");
+}
+
+/// A file the splice cannot edit (flow style) is rewritten in full; the
+/// rewrite keeps `url` where the file had it and uses it for a new backend.
+#[test]
+fn a_full_rewrite_keeps_url_and_uses_it_for_a_new_backend() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(
+        &path,
+        "backends: {a: {url: \"https://a.example.test/mcp\"}}\n",
+    )
+    .expect("write");
+    let config = Config::from_file_text(
+        "backends:\n  a:\n    url: \"https://a.example.test/mcp\"\n  b:\n    http_url: \"https://b.example.test/mcp\"\n",
+    )
+    .expect("config loads");
+    crate::config_persistence::write_config_preserving(&path, &config).expect("written");
+    let text = std::fs::read_to_string(&path).expect("read");
+    assert_eq!(text.matches("url: ").count(), 2, "{text}");
+    assert!(!text.contains("http_url"), "{text}");
+}
