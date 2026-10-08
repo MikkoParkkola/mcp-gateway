@@ -46,6 +46,30 @@ pub(super) fn refusal() -> (StatusCode, Json<Value>) {
     build_http_error_response(None, -32600, REFUSAL, StatusCode::FORBIDDEN)
 }
 
+/// `/mcp`'s refusal of a request with no session under `hardened`. One that
+/// declared the modern revision in its body and omitted a field is told which
+/// field, as the direct route and a header-declared request are (MIK-8162);
+/// anything else is a legacy client asked to declare elicitation.
+pub(super) fn refuse(request: &Value, declared_version: Option<&str>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let params = request.get("params");
+    if let RequestShape::Malformed { missing } =
+        crate::protocol::meta::classify_request(params, declared_version)
+    {
+        let id = request
+            .get("id")
+            .and_then(|id| serde_json::from_value::<RequestId>(id.clone()).ok());
+        return build_http_error_response(
+            id,
+            -32602,
+            format!("missing required request metadata: {}", missing.join(", ")),
+            StatusCode::BAD_REQUEST,
+        )
+        .into_response();
+    }
+    refusal().into_response()
+}
+
 /// The direct route's one reading of what a request declared: the header
 /// read once, duplicate-safe, then the observing classifier, as `/mcp` reads
 /// it (handlers.rs `classify_and_observe`). The hardened refusal and the era a
