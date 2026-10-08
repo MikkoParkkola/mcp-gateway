@@ -463,3 +463,49 @@ fn a_lone_carriage_return_at_the_end_is_kept() {
     });
     assert_eq!(out, "backends:\n  a:\n    command: z\n# kept\r");
 }
+
+/// MIK-8029: the first backend added to a `\r\n` file with no `backends:`
+/// key ends its new lines `\r\n`, and no line gains a second `\r`.
+#[test]
+fn a_first_backend_in_a_crlf_file_follows_its_endings() {
+    let text = "# mine\r\n";
+    let out = spliced(text, |c| {
+        c.backends.insert("b".into(), backend("command: y\n"));
+    });
+    assert!(out.starts_with(text) && !out.contains("\r\r"), "{out:?}");
+    let added = &out[text.len()..];
+    assert!(
+        added.split_inclusive('\n').all(|l| l.ends_with("\r\n")),
+        "{added:?}"
+    );
+}
+
+/// MIK-8029: an untouched line whose text repeats an edited one (`TOKEN: y`
+/// under `headers` after `env`'s `TOKEN` became `y`) keeps its own ending.
+#[test]
+fn a_repeated_untouched_line_keeps_its_own_ending() {
+    let text = "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    env:\n      TOKEN: x\n    headers:\n      TOKEN: y\r\n    description: one\n";
+    let out = spliced(text, |c| {
+        let a = c.backends.get_mut("a").expect("a");
+        a.env.insert("TOKEN".into(), "y".into());
+        a.description = "two".into();
+    });
+    assert_eq!(
+        out,
+        text.replace("TOKEN: x", "TOKEN: y").replace("one", "two")
+    );
+}
+
+/// MIK-8029: two adjacent edited fields each keep their own ending.
+#[test]
+fn adjacent_edited_fields_keep_their_own_endings() {
+    let text = "backends:\n  a:\n    description: one\n    command: x\r\n";
+    let out = spliced(text, |c| {
+        c.backends
+            .insert("a".into(), backend("description: two\ncommand: y\n"));
+    });
+    assert_eq!(
+        out,
+        "backends:\n  a:\n    description: two\n    command: y\r\n"
+    );
+}

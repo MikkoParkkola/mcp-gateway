@@ -2,75 +2,65 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Line endings for a spliced `gateway.yaml` (MIK-8029).
 //!
-//! The splice edits work on lines and join them with `\n`. Written back as
-//! is, a file that mixes `\n` and `\r\n`, or ends without a line break,
-//! would have every untouched line's ending rewritten. [`with_original_endings`]
-//! gives each untouched line its own ending back, byte for byte; a written
-//! line ends like the line it replaces, or else like the line before it.
+//! Every splice path says, for each line it writes, where the line came
+//! from ([`Line`]), and [`render`] turns that into text. Nothing is inferred
+//! from equal text afterwards, so a file that mixes `\n` and `\r\n`, repeats
+//! a line, or ends without a line break keeps every line the splice did not
+//! write byte for byte.
 
-/// `edited` (joined with `\n`) with `original`'s line endings.
-pub(super) fn with_original_endings(original: &str, edited: &str) -> String {
-    let old: Vec<(&str, &str)> = original.split_inclusive('\n').map(split_ending).collect();
-    // The edits end lines with `\n` only, so a `\r` before it is the line's
-    // own text (a file ending in a lone `\r` keeps it).
-    let new: Vec<&str> = edited
-        .split_inclusive('\n')
-        .map(|line| line.strip_suffix('\n').unwrap_or(line))
-        .collect();
-    let head = old
-        .iter()
-        .zip(&new)
-        .take_while(|((old, _), new)| old == *new)
-        .count();
-    let tail = old[head..]
-        .iter()
-        .rev()
-        .zip(new[head..].iter().rev())
-        .take_while(|((old, _), new)| old == *new)
-        .count();
-    let changed_end = old.len() - tail;
-    let mut lines: Vec<(&str, &str)> = old[..head].to_vec();
-    // Between the first and last edit, a line the edits left alone is found
-    // in order and keeps its ending; a written line ends like the line it
-    // replaces, or else like the line before it.
-    let mut next = head;
-    for &text in &new[head..new.len() - tail] {
-        let kept = old[next..changed_end]
-            .iter()
-            .position(|&(old, _)| old == text);
-        let ending = if let Some(at) = kept {
-            next += at + 1;
-            old[next - 1].1
-        } else {
-            old[next..changed_end]
-                .first()
-                .map(|&(_, ending)| ending)
-                .filter(|ending| !ending.is_empty())
-                .or_else(|| lines.last().map(|&(_, ending)| ending))
-                .unwrap_or("\n")
-        };
-        lines.push((text, ending));
-    }
-    lines.extend_from_slice(&old[changed_end..]);
-
-    let unterminated = !original.is_empty() && !original.ends_with('\n');
-    let mut out = String::with_capacity(edited.len() + lines.len());
-    let mut before = "\n";
-    for (at, &(text, ending)) in lines.iter().enumerate() {
-        out.push_str(text);
-        // Every line but the last needs a break, so a last line that gains a
-        // successor gets the one before it; the file's last line keeps having
-        // none if it had none.
-        let ending = if ending.is_empty() { before } else { ending };
-        if at + 1 < lines.len() || !unterminated {
-            out.push_str(ending);
-        }
-        before = ending;
-    }
-    out
+/// One line of a splice's result.
+pub(super) enum Line {
+    /// Source line `.0`, untouched: written byte for byte.
+    Kept(usize),
+    /// Source line `.0` rewritten as `.1`: it keeps the source line's ending.
+    Replaced(usize, String),
+    /// A line with no source line: it ends like its nearest neighbour.
+    New(String),
 }
 
-/// A line split into its text and its ending (`\r\n`, `\n`, or none).
+/// The text `out` describes, over the lines of `original`.
+///
+/// A rewritten line keeps its source line's ending; a new line ends like the
+/// line before it, or else the line after it, or else `\n`. The last line has
+/// a break exactly when `original`'s last line had one, and a line that had
+/// none but gains a successor takes its neighbour's.
+pub(super) fn render(original: &str, out: &[Line]) -> String {
+    let source: Vec<(&str, &str)> = original.split_inclusive('\n').map(split_ending).collect();
+    let rows: Vec<(&str, &str)> = out
+        .iter()
+        .map(|line| match line {
+            Line::Kept(at) => source[*at],
+            Line::Replaced(at, text) => (text.as_str(), source[*at].1),
+            Line::New(text) => (text.as_str(), ""),
+        })
+        .collect();
+    let unbroken_end = !original.is_empty() && !original.ends_with('\n');
+    let mut text = String::with_capacity(original.len() + 64);
+    for (at, &(line, ending)) in rows.iter().enumerate() {
+        text.push_str(line);
+        if at + 1 == rows.len() && unbroken_end {
+            break;
+        }
+        let neighbour = || {
+            rows[..at]
+                .iter()
+                .rev()
+                .chain(&rows[at + 1..])
+                .map(|&(_, ending)| ending)
+                .find(|ending| !ending.is_empty())
+                .unwrap_or("\n")
+        };
+        text.push_str(if ending.is_empty() {
+            neighbour()
+        } else {
+            ending
+        });
+    }
+    text
+}
+
+/// A line split into its text and its ending (`\r\n`, `\n`, or none). A lone
+/// `\r` is text, as the YAML splice sees it.
 fn split_ending(line: &str) -> (&str, &str) {
     if let Some(text) = line.strip_suffix("\r\n") {
         (text, "\r\n")
