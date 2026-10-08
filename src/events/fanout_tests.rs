@@ -115,6 +115,7 @@ fn subscription(name: &str) -> super::super::records::Subscription {
         payload_fields: Vec::new(),
         unoffered_since: None,
         held_until: None,
+        watch_class: None,
     }
 }
 
