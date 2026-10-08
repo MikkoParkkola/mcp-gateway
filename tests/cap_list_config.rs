@@ -104,7 +104,11 @@ fn a_malformed_config_is_reported_and_not_replaced_by_the_environment() {
 
 /// A config whose `env_files` hold `contents`, and the listing it produces.
 fn listing_with_env_file(contents: &str) -> String {
-    let root = tempfile::tempdir().expect("root");
+    // An apostrophe in the path, as a TMPDIR may hold, must survive the YAML.
+    let root = tempfile::Builder::new()
+        .prefix("o'k")
+        .tempdir()
+        .expect("root");
     let caps = capabilities(root.path());
     let env_file = root.path().join("keys.env");
     mcp_gateway::gateway::test_helpers::write_owner_only(&env_file, contents).expect("env file");
