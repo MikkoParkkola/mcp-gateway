@@ -2,14 +2,17 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Backend warm-start orchestration shared by HTTP and stdio server modes.
 
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use tracing::{debug, info, warn};
 
 use crate::Error;
-use crate::backend::BackendRegistry;
+use crate::backend::{Backend, BackendRegistry};
+use crate::config::Config;
+use crate::config_reload::{OnRegistered, RegisteredChange};
 
 /// Schedule for retrying warm-start until a backend's tools are cached.
 ///
@@ -145,13 +148,8 @@ const fn is_transient_io(kind: std::io::ErrorKind) -> bool {
 
 /// How many times warm-start re-asks a backend that answered with no tools.
 ///
-/// ACCEPTED RESIDUAL, raised in review: this budget is per warm-start task, not
-/// per backend instance, so a config reload that replaces a backend mid-loop
-/// inherits whatever the count had reached. A replacement whose tools register
-/// late therefore gets fewer than the full number of re-asks. Keying the count
-/// to the instance means tracking identity through the retry closure, which is
-/// more machinery than the case earns: the failure is reduced patience for a
-/// backend that was reloaded in the same minute it started, not invisibility.
+/// The budget is per warmer, and a warmer is bound to one backend instance
+/// (`MIK-8054`): a replacement gets its own warmer with a fresh count.
 ///
 /// A backend may register its tools a moment after it starts answering, so the
 /// first empty list is not proof. It may also genuinely have none, so this is
@@ -310,6 +308,8 @@ where
                 return Some(0);
             }
             Ok(Ok(tools)) => return Some(tools),
+            // Superseded or shutting down: a quiet stop, not a failure.
+            Ok(Err(Error::Shutdown)) => return None,
             Ok(Err(e)) if is_readiness_error(&e) => {
                 debug!(backend = %name, attempt = n, error = %e, "Warm-start not ready, retrying");
             }
@@ -374,74 +374,104 @@ const fn warm_start_prefetches_tools(mode: WarmStartMode) -> bool {
     matches!(mode, WarmStartMode::Http | WarmStartMode::Stdio)
 }
 
-/// Aborts the warm-start tasks it owns when dropped.
+/// The one owner of every warm-start task, boot and hot reload alike
+/// (`MIK-8054`): at most one warmer per backend name, each bound to the
+/// instance it was scheduled for.
 ///
-/// Stdio mode has no broadcast shutdown channel, so the tasks are cancelled by
-/// aborting their handles. Aborting them at the EOF path alone is not enough:
-/// an embedded host that cancels `run_stdio` never reaches that line, and the
-/// handles are simply dropped, which DETACHES the tasks rather than stopping
-/// them. Since warm-start now retries indefinitely while a tool cache is empty,
-/// a detached task keeps the backend registry alive and keeps contacting
-/// backends after the gateway is gone. Tying the abort to the guard's lifetime
-/// makes every exit path — return, error, cancellation — behave the same.
-pub(super) struct WarmStartTasks(Vec<tokio::task::JoinHandle<()>>);
-
-impl WarmStartTasks {
-    /// Abort the retry tasks and wait for them to finish unwinding.
-    ///
-    /// Callers that are about to stop the backends should use this rather than
-    /// relying on the `Drop` impl: an abort is asynchronous, so a task that is
-    /// mid-`ensure_started` would otherwise still be starting a backend while
-    /// shutdown drains it, delaying the drain and logging starts nobody wants.
-    pub(super) async fn cancel(mut self) {
-        for handle in &self.0 {
-            handle.abort();
-        }
-        for handle in std::mem::take(&mut self.0) {
-            // A cancelled task reports `JoinError::Cancelled`; that is the
-            // expected outcome here, not a failure.
-            let _ = handle.await;
-        }
-    }
-}
-
-impl Drop for WarmStartTasks {
-    fn drop(&mut self) {
-        for handle in &self.0 {
-            handle.abort();
-        }
-    }
-}
-
-/// Returns a guard that must be held for as long as warm-start should run:
-/// dropping it aborts every retry task.
-#[must_use = "dropping the returned guard aborts warm-start immediately"]
-pub(super) fn spawn_warm_start_task(
-    backends: &Arc<BackendRegistry>,
-    warm_start_list: Vec<String>,
+/// Held through [`WarmerGuard`]; reload hooks hold only a `Weak`, so dropping
+/// the guard cancels every warmer on any exit path. Warm-start retries
+/// indefinitely while a cache is empty, so a task that outlived the gateway
+/// would keep contacting backends after it was gone.
+pub(super) struct ReloadWarmer {
+    backends: Arc<BackendRegistry>,
     mode: WarmStartMode,
-    shutdown: Option<&tokio::sync::broadcast::Sender<()>>,
-) -> WarmStartTasks {
-    let policy = Arc::new(WarmStartPolicy::default());
-    let mut handles = Vec::new();
+    shutdown: Option<tokio::sync::broadcast::Sender<()>>,
+    policy: Arc<WarmStartPolicy>,
+    inner: std::sync::Mutex<WarmerInner>,
+}
 
-    for name in warm_start_list {
-        let backends = Arc::clone(backends);
-        let policy = Arc::clone(&policy);
-        // Each task needs its own receiver; stdio mode has no channel at all and
-        // is cancelled by aborting these handles instead.
-        let mut shutdown = shutdown.map(tokio::sync::broadcast::Sender::subscribe);
+#[derive(Default)]
+struct WarmerInner {
+    /// Set once shutdown begins; nothing is scheduled after it.
+    sealed: bool,
+    tasks: HashMap<String, tokio::task::JoinHandle<()>>,
+}
 
-        handles.push(tokio::spawn(async move {
-            if backends.get(&name).is_none() {
-                if matches!(mode, WarmStartMode::Http) {
+impl ReloadWarmer {
+    fn lock(&self) -> std::sync::MutexGuard<'_, WarmerInner> {
+        // A panic while scheduling leaves a map of handles, still usable.
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Warm `names` now, replacing any earlier warmer per name. Returns the
+    /// names scheduled.
+    fn warm_locked(&self, inner: &mut WarmerInner, names: Vec<String>) -> Vec<String> {
+        if inner.sealed {
+            return Vec::new();
+        }
+        let mut scheduled = Vec::new();
+        for name in names {
+            let Some(instance) = self.backends.get(&name) else {
+                if matches!(self.mode, WarmStartMode::Http) {
                     warn!(backend = %name, "Backend not found for warm-start");
                 }
-                return;
+                continue;
+            };
+            let task = self.spawn(name.clone(), Arc::downgrade(&instance));
+            if let Some(old) = inner.tasks.insert(name.clone(), task) {
+                old.abort();
             }
+            scheduled.push(name);
+        }
+        scheduled
+    }
 
-            let work = warm_start_until_cached(&backends, &name, &policy, mode);
+    /// A fully applied reload: stop the warmer of every replaced or removed
+    /// backend FIRST, then warm the registered ones the published config
+    /// selects. An excluded replacement is left with no warmer at all.
+    fn apply(&self, change: &RegisteredChange, config: &Config) -> Vec<String> {
+        let mut inner = self.lock();
+        if inner.sealed {
+            return Vec::new();
+        }
+        for name in change.registered.iter().chain(&change.removed) {
+            if let Some(old) = inner.tasks.remove(name) {
+                old.abort();
+            }
+        }
+        let wanted = &config.meta_mcp.warm_start;
+        let selected = change
+            .registered
+            .iter()
+            .filter(|name| wanted.is_empty() || wanted.contains(name))
+            .cloned()
+            .collect();
+        self.warm_locked(&mut inner, selected)
+    }
 
+    /// Seal, then abort every task, without waiting for them to unwind.
+    fn seal_and_abort(&self) {
+        let mut inner = self.lock();
+        inner.sealed = true;
+        for (_, task) in inner.tasks.drain() {
+            task.abort();
+        }
+    }
+
+    fn spawn(&self, name: String, instance: Weak<Backend>) -> tokio::task::JoinHandle<()> {
+        let backends = Arc::clone(&self.backends);
+        let policy = Arc::clone(&self.policy);
+        let mode = self.mode;
+        // Each task needs its own receiver; stdio mode has no channel at all and
+        // is cancelled by aborting these handles instead.
+        let mut shutdown = self
+            .shutdown
+            .as_ref()
+            .map(tokio::sync::broadcast::Sender::subscribe);
+        tokio::spawn(async move {
+            let work = warm_start_until_cached(&backends, &name, &policy, mode, &instance);
             match shutdown.as_mut() {
                 Some(rx) => {
                     tokio::select! {
@@ -453,10 +483,82 @@ pub(super) fn spawn_warm_start_task(
                 }
                 None => work.await,
             }
-        }));
+        })
+    }
+}
+
+/// Owns the [`ReloadWarmer`]; dropping it seals the warmer and aborts every
+/// task, whatever still holds a reload hook.
+#[must_use = "dropping the guard aborts warm-start immediately"]
+pub(super) struct WarmerGuard(Arc<ReloadWarmer>);
+
+impl WarmerGuard {
+    pub(super) fn new(
+        backends: &Arc<BackendRegistry>,
+        mode: WarmStartMode,
+        shutdown: Option<&tokio::sync::broadcast::Sender<()>>,
+    ) -> Self {
+        Self(Arc::new(ReloadWarmer {
+            backends: Arc::clone(backends),
+            mode,
+            shutdown: shutdown.cloned(),
+            policy: Arc::new(WarmStartPolicy::default()),
+            inner: std::sync::Mutex::new(WarmerInner::default()),
+        }))
     }
 
-    WarmStartTasks(handles)
+    /// Warm `names` (boot). Returns the names scheduled.
+    pub(super) fn warm(&self, names: Vec<String>) -> Vec<String> {
+        let mut inner = self.0.lock();
+        self.0.warm_locked(&mut inner, names)
+    }
+
+    /// The hook a reload context reports to. Holds the warmer weakly: once the
+    /// guard is gone the hook does nothing.
+    pub(super) fn hook(&self) -> OnRegistered {
+        let warmer = Arc::downgrade(&self.0);
+        Arc::new(move |change: &RegisteredChange, config: &Config| {
+            if let Some(warmer) = warmer.upgrade() {
+                warmer.apply(change, config);
+            }
+        })
+    }
+
+    /// Seal, abort every task, and wait for them to finish unwinding.
+    ///
+    /// Callers about to stop the backends use this rather than the `Drop`
+    /// impl: an abort is asynchronous, so a task mid-`ensure_started` would
+    /// otherwise still be starting a backend while shutdown drains it.
+    pub(super) async fn cancel(self) {
+        let tasks: Vec<_> = {
+            let mut inner = self.0.lock();
+            inner.sealed = true;
+            inner.tasks.drain().map(|(_, task)| task).collect()
+        };
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            // A cancelled task reports `JoinError::Cancelled`; expected here.
+            let _ = task.await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn abort_handles(&self) -> Vec<tokio::task::AbortHandle> {
+        self.0
+            .lock()
+            .tasks
+            .values()
+            .map(tokio::task::JoinHandle::abort_handle)
+            .collect()
+    }
+}
+
+impl Drop for WarmerGuard {
+    fn drop(&mut self) {
+        self.0.seal_and_abort();
+    }
 }
 
 /// Retry until this backend's tools are cached, or until retrying is pointless.
@@ -470,6 +572,7 @@ async fn warm_start_until_cached(
     name: &str,
     policy: &WarmStartPolicy,
     mode: WarmStartMode,
+    instance: &Weak<Backend>,
 ) {
     // Prefetch is what fills the cache, so without it there is nothing for this
     // loop to wait for. Handled before the loop rather than inside it: an
@@ -511,6 +614,14 @@ async fn warm_start_until_cached(
             let backend = backends
                 .get(name)
                 .ok_or_else(|| Error::BackendUnavailable(name.to_string()))?;
+            // Bound to the instance it was scheduled for (`MIK-8054`): a newer
+            // one has its own warmer, or none if the reload excluded it, so this
+            // task must never act on it. The `Weak` keeps the allocation, so the
+            // address cannot be reused by another instance.
+            if !std::ptr::eq(instance.as_ptr(), Arc::as_ptr(&backend)) {
+                debug!(backend = %name, "Warm-start superseded by a newer instance");
+                return Err(Error::Shutdown);
+            }
 
             // Deference to the idle reaper, bounded. Restarting a backend it
             // deliberately stopped fights it; deferring forever leaves the
@@ -587,4 +698,8 @@ fn resolve_warm_start_names(
 }
 
 #[cfg(test)]
+mod hot_reload_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod warmer_tests;

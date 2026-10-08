@@ -5,10 +5,6 @@
 //! All credential sources: `env:VAR`, `keychain:name`, `oauth:provider`,
 //! `file:/path:field`, `{env.VAR}`, `BARE_UPPER_NAME`.
 
-use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use serde::Deserialize;
 use serde_json::Value;
 use tracing::{info, warn};
 
@@ -348,16 +344,9 @@ impl CapabilityExecutor {
             }
 
             // 3. Refresh grant
-            if let (Some(ref_tok), Some(endpoint)) = (&token.refresh_token, token_endpoint) {
+            if let (Some(_), Some(endpoint)) = (&token.refresh_token, token_endpoint) {
                 match self
-                    .perform_token_refresh(
-                        provider,
-                        ref_tok,
-                        endpoint,
-                        storage,
-                        token.client_id.as_deref(),
-                        context,
-                    )
+                    .refresh_provider_token(provider, endpoint, storage, context)
                     .await
                 {
                     Ok(new_token) => return Ok(new_token),
@@ -392,104 +381,66 @@ impl CapabilityExecutor {
         )))
     }
 
-    /// Perform the OAuth refresh-token grant and persist the refreshed token.
+    /// Refresh `provider`'s stored token through the credential's refresh
+    /// flight, shared with MCP backends (MIK-8020): one exchange per stored
+    /// credential at a time, with the stored refresh token, never one an
+    /// earlier exchange may have consumed, and no followed redirect.
     ///
-    /// `client_id` is forwarded when present (required by Google and other providers).
-    /// `client_secret` is looked up from the macOS Keychain under the key
-    /// `"{provider}-client-secret"` and included when found.
-    pub(super) async fn perform_token_refresh(
+    /// `client_id` comes from the stored record; `client_secret` is looked up
+    /// from the macOS Keychain under `"{provider}-client-secret"` and sent
+    /// when found. Both, and `token_endpoint`, are stored with the new token.
+    pub(super) async fn refresh_provider_token(
         &self,
         provider: &str,
-        refresh_token: &str,
         token_endpoint: &str,
-        storage: &crate::oauth::TokenStorage,
-        client_id: Option<&str>,
+        storage: &std::sync::Arc<crate::oauth::TokenStorage>,
         context: &CapabilityExecutionContext,
     ) -> Result<String> {
+        use crate::oauth::client::{Refreshed, Rotation, StoredCredential, refresh_stored};
         // The refresh token and client secret go only where the capability's
         // own request may go (#2113): the same destination check, before any
-        // byte is sent. Redirect hops are checked by the executor's client.
+        // byte is sent.
         super::super::require_tls_for_credentials(token_endpoint)?;
         super::super::validate_capability_url_for_context(token_endpoint, context)?;
-        let mut params = HashMap::new();
-        params.insert("grant_type", "refresh_token");
-        params.insert("refresh_token", refresh_token);
-
-        if let Some(id) = client_id {
-            params.insert("client_id", id);
-        }
-
+        // Read before the flight: the keychain lookup may block, and the
+        // secret does not depend on the token.
         let keychain_key = format!("{provider}-client-secret");
-        let client_secret_owned: Option<String> =
-            self.fetch_from_keychain(&keychain_key).await.ok();
-        if let Some(ref secret) = client_secret_owned {
-            params.insert("client_secret", secret.as_str());
-        }
-
-        let response = self
-            .client
-            .post(token_endpoint)
-            .form(&params)
-            .send()
-            .await
-            .map_err(|e| {
-                Error::Config(format!(
-                    "OAuth refresh request to '{}' failed: {}",
-                    crate::security::sanitize::redact_url_for_diagnostics(token_endpoint),
-                    super::client::redact_url(e)
-                ))
-            })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            return Err(Error::Config(format!(
-                "OAuth refresh for '{provider}' failed: HTTP {status}"
-            )));
-        }
-
-        let resp: RefreshTokenResponse = response.json().await.map_err(|e| {
+        let client_secret = self.fetch_from_keychain(&keychain_key).await.ok();
+        let caller = ProviderRefresh {
+            executor: self,
+            provider,
+            endpoint: token_endpoint,
+            client_secret,
+        };
+        let at = StoredCredential {
+            storage,
+            key: provider,
+            resource_url: provider,
+            label: provider,
+            rotation: Rotation::Assumed,
+        };
+        let refreshed = refresh_stored(&caller, at).await.map_err(|e| {
             Error::Config(format!(
-                "Failed to parse OAuth refresh response for '{provider}': {}",
-                super::client::redact_url(e)
+                "OAuth refresh request to '{}' for '{provider}' failed: {e}",
+                crate::security::sanitize::redact_url_for_diagnostics(token_endpoint)
             ))
         })?;
-
-        let expires_at = resp.expires_in.map(|secs| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                + secs
-        });
-
-        let new_token = TokenInfo {
-            access_token: resp.access_token,
-            token_type: resp.token_type.unwrap_or_else(|| "Bearer".to_string()),
-            refresh_token: resp
-                .refresh_token
-                .or_else(|| Some(refresh_token.to_string())),
-            expires_at,
-            scope: resp.scope,
-            token_endpoint: Some(token_endpoint.to_string()),
-            client_id: client_id.map(str::to_owned),
-            client_secret: client_secret_owned,
-        };
-
-        if let Err(e) = storage.save(provider, provider, &new_token) {
-            warn!(
-                provider = %provider,
-                error = %e,
-                "Failed to persist refreshed OAuth token"
-            );
+        match refreshed {
+            Refreshed::Adopted(access) => Ok(access),
+            Refreshed::Exchanged(token) => {
+                self.oauth_tokens
+                    .read()
+                    .insert(provider.to_string(), token.clone());
+                info!(provider = %provider, "OAuth token refreshed successfully");
+                Ok(token.access_token)
+            }
+            Refreshed::Rejected { status, .. } => Err(Error::Config(format!(
+                "OAuth refresh for '{provider}' failed: HTTP {status}"
+            ))),
+            Refreshed::LoginRequired => Err(Error::Config(format!(
+                "OAuth refresh for '{provider}' needs a new authorization"
+            ))),
         }
-
-        {
-            let tokens = self.oauth_tokens.read();
-            tokens.insert(provider.to_string(), new_token.clone());
-        }
-
-        info!(provider = %provider, "OAuth token refreshed successfully");
-        Ok(new_token.access_token)
     }
 
     #[cfg(target_os = "macos")]
@@ -518,30 +469,58 @@ impl CapabilityExecutor {
     }
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct RefreshTokenResponse {
-    access_token: String,
-    token_type: Option<String>,
-    refresh_token: Option<String>,
-    expires_in: Option<u64>,
-    scope: Option<String>,
+/// A capability provider's side of a refresh under the credential's flight
+/// (MIK-8020).
+struct ProviderRefresh<'a> {
+    executor: &'a CapabilityExecutor,
+    provider: &'a str,
+    endpoint: &'a str,
+    client_secret: Option<String>,
 }
 
-// Manual `Debug` that redacts the OAuth tokens (CWE-532, mirrors PR #323). A
-// derived `Debug` would print `access_token` / `refresh_token` verbatim into
-// any trace or error context.
-impl std::fmt::Debug for RefreshTokenResponse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
-        f.debug_struct("RefreshTokenResponse")
-            .field("access_token", &"<redacted>")
-            .field("token_type", &self.token_type)
-            .field("refresh_token", &redact_opt(&self.refresh_token))
-            .field("expires_in", &self.expires_in)
-            .field("scope", &self.scope)
-            .finish()
+impl crate::oauth::client::RefreshCaller for ProviderRefresh<'_> {
+    /// A provider refreshes only when the stored token had expired: one that
+    /// is live now was stored by another call meanwhile.
+    fn adopt(&self, stored: Option<&TokenInfo>) -> Option<String> {
+        let stored = stored.filter(|token| !token.is_expired())?;
+        let tokens = self.executor.oauth_tokens.read();
+        tokens.insert(self.provider.to_string(), stored.clone());
+        Some(stored.access_token.clone())
+    }
+
+    fn request(
+        &self,
+        stored: &TokenInfo,
+        sent: &str,
+    ) -> Result<crate::oauth::client::RefreshRequest> {
+        let client_id = stored.client_id.clone();
+        let mut params = vec![
+            ("grant_type", "refresh_token".to_string()),
+            ("refresh_token", sent.to_string()),
+        ];
+        if let Some(id) = &client_id {
+            params.push(("client_id", id.clone()));
+        }
+        if let Some(secret) = &self.client_secret {
+            params.push(("client_secret", secret.clone()));
+        }
+        let endpoint = self.endpoint.to_string();
+        let kept_endpoint = endpoint.clone();
+        let client_secret = self.client_secret.clone();
+        Ok(crate::oauth::client::RefreshRequest {
+            http: self.executor.refresh.http.clone(),
+            endpoint,
+            params,
+            destination: self.executor.refresh.destination,
+            route: crate::oauth::client::destination::RefreshRoute::Owned,
+            // What this request sent is what the record keeps.
+            finish: Box::new(move |mut token| {
+                token.token_endpoint = Some(kept_endpoint.clone());
+                token.client_id.clone_from(&client_id);
+                token.client_secret.clone_from(&client_secret);
+                token
+            }),
+        })
     }
 }
 
@@ -587,8 +566,6 @@ fn extract_json_field(json: &Value, field: &str, path: &std::path::Path) -> Resu
     }
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 #[path = "oauth_refresh_tests.rs"]
 mod oauth_refresh_tests;
@@ -616,6 +593,7 @@ mod tests {
     fn executor_with(token_storage: Option<Arc<TokenStorage>>) -> CapabilityExecutor {
         CapabilityExecutor {
             client: reqwest::Client::new(),
+            refresh: super::super::client::build_refresh(None),
             cache: ResponseCache::new(),
             token_storage,
             oauth_tokens: RwLock::new(DashMap::new()),
@@ -761,35 +739,6 @@ mod tests {
         let ex = CapabilityExecutor::new();
         let err = ex.fetch_from_file("/path/to/file.json:").unwrap_err();
         assert!(err.to_string().contains("Empty field name"), "{err}");
-    }
-}
-
-#[cfg(test)]
-mod cwe532_debug_redaction {
-    use super::*;
-
-    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
-
-    // RefreshTokenResponse::Debug must never surface the OAuth tokens.
-    #[test]
-    fn refresh_token_response_debug_redacts_tokens() {
-        let r = RefreshTokenResponse {
-            access_token: SENTINEL.to_string(),
-            token_type: Some("Bearer".to_string()),
-            refresh_token: Some(format!("{SENTINEL}-refresh")),
-            expires_in: Some(3600),
-            scope: Some("read".to_string()),
-        };
-        let dbg = format!("{r:?}");
-        assert!(!dbg.contains(SENTINEL), "leaked token: {dbg}");
-        assert!(
-            dbg.contains("<redacted>"),
-            "missing redaction marker: {dbg}"
-        );
-        assert!(
-            dbg.contains("Bearer"),
-            "token_type should stay visible: {dbg}"
-        );
     }
 }
 
