@@ -511,6 +511,7 @@ impl Drop for HttpTransport {
     }
 }
 
+mod cancel_guard;
 mod client;
 mod extra_headers;
 #[allow(
