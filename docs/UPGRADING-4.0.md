@@ -187,7 +187,10 @@ backend" and "fails a capability file" first.**
 | 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
 | 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`, except those on lines the change deletes (a removed backend's entry, or a field an edit drops), which the command names by line number. On a file with comments, a change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. A file without comments is rewritten as before. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
 | 162 | An A2A backend (`transport: a2a`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public | None for gateway operators. Library users: configure the agent as a `transport: a2a` backend, or use your own A2A client to poll or cancel tasks |
-| 163 | A running gateway's web UI and admin edits load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository |
+| 163 | Reserved: #3489 | None |
+| 164 | Reserved: #3490 | None |
+| 165 | Reserved: #3479 | None |
+| 166 | A running gateway's web UI and admin edits load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still lose that writer's change on a config without comments, or with `--force` | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4276,7 +4279,7 @@ polled or cancelled tasks itself (`get_task`, `cancel_task`), or continued a con
 `context_id`, needs its own A2A client: each `send_message` call to the backend starts a new
 conversation with the agent and answers with the task's final result.
 
-## 163. Config writers take a lock
+## 166. Config writers take a lock
 
 **Startup:** no notice
 
@@ -4296,6 +4299,14 @@ CLI writes take the same lock for their write. One that finds it held prints
 another writer; retry." A config directory where the lock file cannot be created (a
 read-only mount) refuses the write instead of writing unlocked. A write refused because the
 existing file does not load leaves the directory as it was.
+
+One case is not covered yet. A CLI command reads `gateway.yaml` before it takes the lock. If
+another program (the web UI, another CLI command, a second gateway) saves the file in the
+moment between that read and the CLI's write, then on a config without comments, or with
+`--force`, the CLI writes its older copy back and the other program's change is lost. On a
+config with comments the CLI refuses instead, with a message about comments it would drop.
+Until this is closed, do not run a CLI config write while the web UI or another command is
+saving; if one is refused that way, run it again.
 
 Editors such as vim do not take the lock; avoid editing the file by hand while a CLI command
 or the web UI is saving it.
