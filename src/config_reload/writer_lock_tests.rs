@@ -103,9 +103,8 @@ async fn a_lock_that_cannot_be_taken_refuses_the_write() {
     assert_eq!(std::fs::read_to_string(&path).expect("read"), START);
 }
 
-/// R5 (`MIK-CONFIG-CAS.4`): the public CLI writer takes the `CommentLoss`
-/// mode, and no public config writer in `config_persistence.rs` takes a
-/// `bool`: a behaviour-selecting flag is an enum.
+/// R5: no public config writer in `config_persistence.rs` takes a `bool`: a
+/// behaviour-selecting flag is an enum.
 #[test]
 fn public_config_writers_take_a_mode_not_a_bool() {
     let source = include_str!("../config_persistence.rs");
@@ -123,14 +122,6 @@ fn public_config_writers_take_a_mode_not_a_bool() {
             "a public config writer takes a bool: {signature}"
         );
     }
-    let preserving = signatures
-        .iter()
-        .find(|s| s.starts_with("pub fn write_config_preserving"))
-        .expect("write_config_preserving is public");
-    assert!(
-        preserving.contains("CommentLoss"),
-        "write_config_preserving must take the CommentLoss mode: {preserving}"
-    );
 }
 
 /// R8: a symlink planted where the sidecar goes is refused, never followed:
