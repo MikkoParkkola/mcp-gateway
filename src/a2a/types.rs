@@ -26,6 +26,12 @@ pub(crate) struct AgentCard {
     pub supported_interfaces: Vec<AgentInterface>,
     #[serde(default)]
     pub skills: Vec<Skill>,
+    /// A2A 0.3 states its version and binding for the whole card, not per
+    /// interface. Read only so a refusal can name what such an agent offers.
+    #[serde(default)]
+    pub protocol_version: Option<String>,
+    #[serde(default)]
+    pub preferred_transport: Option<String>,
 }
 
 /// One `(url, binding, version)` the agent answers on.

@@ -59,6 +59,26 @@ fn a_card_with_no_usable_interface_names_what_it_offers() {
     assert!(error.contains("JSONRPC 0.3"), "{error}");
 }
 
+/// A real A2A 0.3 card has no `supportedInterfaces`: it states its version
+/// and binding once, at the top. The refusal still names them.
+#[test]
+fn a_0_3_card_is_refused_naming_its_top_level_version() {
+    let card: AgentCard = serde_json::from_value(json!({
+        "name": "legacy",
+        "url": "https://agent.invalid/a2a",
+        "protocolVersion": "0.3.0",
+        "preferredTransport": "JSONRPC",
+        "capabilities": {},
+        "skills": []
+    }))
+    .unwrap();
+    let error = client("https://agent.invalid")
+        .endpoint(&card)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("offered: [JSONRPC 0.3.0]"), "{error}");
+}
+
 #[test]
 fn a_card_path_must_be_a_path() {
     for path in ["card.json", "https://elsewhere.invalid/card.json"] {

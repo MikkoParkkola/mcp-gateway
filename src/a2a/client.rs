@@ -132,10 +132,17 @@ impl A2aClient {
     /// origin.
     pub(crate) fn endpoint(&self, card: &AgentCard) -> Result<Endpoint> {
         let Some(interface) = card.supported_interfaces.iter().find(|i| i.is_jsonrpc_v1()) else {
+            // A 0.3 card names its version once, at the top, and its binding
+            // defaults to JSON-RPC there.
+            let legacy = card.protocol_version.as_ref().map(|version| {
+                let binding = card.preferred_transport.as_deref().unwrap_or("JSONRPC");
+                format!("{binding} {version}")
+            });
             let offered: Vec<String> = card
                 .supported_interfaces
                 .iter()
                 .map(|i| format!("{} {}", i.protocol_binding, i.protocol_version))
+                .chain(legacy)
                 .collect();
             return Err(Error::Protocol(format!(
                 "A2A agent at {} offers no JSONRPC 1.x interface (offered: [{}]); \

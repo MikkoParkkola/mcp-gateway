@@ -186,7 +186,7 @@ backend" and "fails a capability file" first.**
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 | 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
 | 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`, except those on lines the change deletes (a removed backend's entry, or a field an edit drops), which the command names by line number. On a file with comments, a change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. A file without comments is rewritten as before. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
-| 162 | An A2A backend (`transport: a2a`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public | None for gateway operators. Library users: drop imports from `mcp_gateway::a2a`; configure the agent as a `transport: a2a` backend instead |
+| 162 | An A2A backend (`transport: a2a`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public | None for gateway operators. Library users: configure the agent as a `transport: a2a` backend, or use your own A2A client to poll or cancel tasks |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4253,16 +4253,26 @@ example `mcp-gateway remove old-server --force`.
 
 ## 162. A2A backends start, and the A2A module is crate-private
 
-**Startup:** no notice, a library API change rather than a change to running behaviour
+**Startup:** no notice
 
 A backend with `transport: a2a` and `a2a_url` failed at its first use in 3.x. It now starts and
 exposes the agent as one tool, `send_message`, which delegates to an A2A 1.0 agent over the
-JSON-RPC binding. An agent that offers only A2A 0.3 is refused at start, and the error names the
-versions it offers.
+JSON-RPC binding (the `a2a` Cargo feature, on by default):
 
-`mcp_gateway::a2a` was a public module in 3.x, and nothing in it reached a working agent. It is
-now crate-private. A program built on the crate drops those imports and configures the agent as a
-`transport: a2a` backend.
+```yaml
+backends:
+  travel-agent:
+    transport: a2a
+    a2a_url: "https://travel-agent.internal"
+```
+
+An agent that offers only A2A 0.3 is refused at start, and the error names the versions its card
+offers.
+
+`mcp_gateway::a2a` was a public module in 3.x and is now crate-private. A program that used it to
+send messages to an agent can configure the agent as a backend, as above. A program that also
+polled or cancelled tasks itself (`get_task`, `cancel_task`) needs its own A2A client: the backend
+answers each `send_message` call with the task's final result.
 
 ## Upgrading from 3.5.x: a walkthrough
 
