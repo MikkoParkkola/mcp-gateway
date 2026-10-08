@@ -330,6 +330,25 @@ def test_annotation_keys_are_config_rows() -> None:
     narrowed = code.replace(' || key.starts_with("x-")', "")
     assert {e.id for e in rows(code, inv.SRC / "config/strict_keys.rs")} == {"_*", "x-*"}
     assert {e.id for e in rows(narrowed, inv.SRC / "config/strict_keys.rs")} == {"_*"}
+    # Fails closed on a body it cannot read and on a removed call site (review r1).
+    both = code.replace(' || key.starts_with("x-")', ' && key.starts_with("x-")')
+    assert [e.id for e in rows(both, inv.SRC / "config/strict_keys.rs")][0].startswith("is_annotation: unrecognised"), both
+    one_site = code.replace("} else if is_annotation(key) {", "} else if false {", 1)
+    assert one_site != code
+    assert [e.id for e in rows(one_site, inv.SRC / "config/strict_keys.rs")][0].startswith("is_annotation: 1 call sites")
+
+
+def test_generated_flag_settings_are_read() -> None:
+    # Review r1: `disable_version_flag` removes --version; `disable_help_flag = false` keeps --help.
+    root = inv.Index().resolve("Cli", inv.SRC / "cli/mod.rs", "Parser")
+    ids = lambda: {e.id for e in inv.cli_root_rows(root)}
+    base = root.attrs
+    root.attrs = base.replace("#[command(version, ", "#[command(version, disable_version_flag = true, ")
+    assert "mcp-gateway --version" not in ids(), root.attrs
+    root.attrs = base.replace("#[command(version, ", "#[command(version, disable_help_flag = false, ")
+    assert {"mcp-gateway --version", "mcp-gateway --help"} <= ids(), root.attrs
+    root.attrs = base.replace("#[command(version, ", "#[command(version, disable_help_flag, ")
+    assert "mcp-gateway --help" not in ids(), root.attrs
 
 
 def test_repository_inventory_is_complete() -> None:

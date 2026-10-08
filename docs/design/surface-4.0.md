@@ -85,6 +85,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
+| `_*` | 1 |  |  |  |  |
 | `accounts` | 45 | `schema_version` | `adapters[].clock_skew_seconds`; `adapters[].max_lifetime_seconds`; `limits`; `limits.authority_bytes`; `limits.journeys_created_per_minute`; `limits.journeys_per_user`; `limits.journeys_total`; `limits.starts_per_minute_per_user`; `limits.store_entries` |  |  |
 | `agent_auth` | 10 |  |  |  |  |
 | `auth` | 17 |  | `client_circuit_breaker.failure_threshold`; `client_circuit_breaker.reset_timeout`; `client_circuit_breaker.success_threshold`; `dashboard_session`; `dashboard_session.absolute_timeout_secs`; `dashboard_session.idle_timeout_secs` |  | `api_keys[].key` |
@@ -112,38 +113,39 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `streaming` | 3 |  | `buffer_size`; `keep_alive_interval`; `session_reaper_interval`; `session_ttl` |  |  |
 | `tasks` | 3 |  | `default_ttl_ms`; `expiry_interval`; `logical_budget_bytes`; `max_per_principal`; `max_record_bytes`; `max_records`; `max_workers`; `poll_interval_ms` |  |  |
 | `webhooks` | 4 |  | `rate_limit` |  |  |
+| `x-*` | 1 |  |  |  |  |
 
 ### cli
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
-| `(global)` | 7 |  |  |  |  |
+| `(global)` | 11 |  |  |  |  |
 | `accounts` | 6 |  |  |  |  |
-| `add` | 8 |  |  |  | `mcp-gateway add --config` |
+| `add` | 9 |  |  |  | `mcp-gateway add --config`; `mcp-gateway add -c` |
 | `audit` | 8 |  |  |  |  |
-| `cap` | 41 |  |  |  |  |
-| `dashboard-link` | 5 |  |  |  |  |
-| `doctor` | 8 |  |  |  |  |
-| `events` | 11 |  |  |  |  |
-| `get` | 2 |  |  |  | `mcp-gateway get --config` |
+| `cap` | 50 |  |  |  |  |
+| `dashboard-link` | 6 |  |  |  |  |
+| `doctor` | 10 |  |  |  |  |
+| `events` | 12 |  |  |  |  |
+| `get` | 2 |  |  |  | `mcp-gateway get --config`; `mcp-gateway get -c` |
 | `hash-key` | 2 |  |  |  |  |
-| `identity` | 29 |  |  |  |  |
-| `import` | 15 |  |  |  |  |
-| `init` | 4 |  |  |  |  |
-| `kubernetes` |  |  |  | `mcp-gateway kubernetes`; `mcp-gateway kubernetes apply-plan`; `mcp-gateway kubernetes apply-plan --approve-apply`; `mcp-gateway kubernetes apply-plan --execute`; `mcp-gateway kubernetes apply-plan --format`; `mcp-gateway kubernetes apply-plan --namespace`; `mcp-gateway kubernetes apply-plan <resources>`; `mcp-gateway kubernetes controller`; `mcp-gateway kubernetes controller --cycles`; `mcp-gateway kubernetes controller --format`; `mcp-gateway kubernetes controller --interval-seconds`; `mcp-gateway kubernetes controller --namespace`; `mcp-gateway kubernetes controller --watch`; `mcp-gateway kubernetes controller <resources>`; `mcp-gateway kubernetes plan`; `mcp-gateway kubernetes plan --format`; `mcp-gateway kubernetes plan --namespace`; `mcp-gateway kubernetes plan <resources>` |  |
-| `list` | 3 |  |  |  | `mcp-gateway list --config` |
-| `ranking` |  |  |  | `mcp-gateway ranking`; `mcp-gateway ranking eval`; `mcp-gateway ranking eval --format`; `mcp-gateway ranking eval <file>` |  |
-| `remove` | 3 |  |  |  | `mcp-gateway remove --config` |
+| `identity` | 32 |  |  |  |  |
+| `import` | 18 |  |  |  |  |
+| `init` | 5 |  |  |  |  |
+| `kubernetes` |  |  |  | `mcp-gateway kubernetes`; `mcp-gateway kubernetes apply-plan`; `mcp-gateway kubernetes apply-plan --approve-apply`; `mcp-gateway kubernetes apply-plan --execute`; `mcp-gateway kubernetes apply-plan --format`; `mcp-gateway kubernetes apply-plan --namespace`; `mcp-gateway kubernetes apply-plan -f`; `mcp-gateway kubernetes apply-plan -n`; `mcp-gateway kubernetes apply-plan <resources>`; `mcp-gateway kubernetes controller`; `mcp-gateway kubernetes controller --cycles`; `mcp-gateway kubernetes controller --format`; `mcp-gateway kubernetes controller --interval-seconds`; `mcp-gateway kubernetes controller --namespace`; `mcp-gateway kubernetes controller --watch`; `mcp-gateway kubernetes controller -f`; `mcp-gateway kubernetes controller -n`; `mcp-gateway kubernetes controller <resources>`; `mcp-gateway kubernetes plan`; `mcp-gateway kubernetes plan --format`; `mcp-gateway kubernetes plan --namespace`; `mcp-gateway kubernetes plan -f`; `mcp-gateway kubernetes plan -n`; `mcp-gateway kubernetes plan <resources>` |  |
+| `list` | 3 |  |  |  | `mcp-gateway list --config`; `mcp-gateway list -c` |
+| `ranking` |  |  |  | `mcp-gateway ranking`; `mcp-gateway ranking eval`; `mcp-gateway ranking eval --format`; `mcp-gateway ranking eval -f`; `mcp-gateway ranking eval <file>` |  |
+| `remove` | 3 |  |  |  | `mcp-gateway remove --config`; `mcp-gateway remove -c` |
 | `runtime` |  |  |  | `mcp-gateway runtime`; `mcp-gateway runtime compile`; `mcp-gateway runtime compile --both`; `mcp-gateway runtime compile <DESCRIPTOR>` |  |
 | `serve` | 2 |  |  |  |  |
-| `setup` | 14 |  |  |  |  |
-| `skills` | 21 | `mcp-gateway skills generate --capabilities` |  |  |  |
-| `stats` | 2 |  |  |  |  |
-| `tls` | 20 |  |  |  |  |
-| `tool` | 13 | `mcp-gateway tool completions --capabilities`; `mcp-gateway tool inspect --capabilities`; `mcp-gateway tool invoke --capabilities`; `mcp-gateway tool list --capabilities` |  |  |  |
-| `trust` |  |  |  | `mcp-gateway trust`; `mcp-gateway trust generate`; `mcp-gateway trust generate --capabilities`; `mcp-gateway trust generate --format`; `mcp-gateway trust generate --output`; `mcp-gateway trust inspect`; `mcp-gateway trust inspect --capabilities`; `mcp-gateway trust inspect --format`; `mcp-gateway trust inspect <name>`; `mcp-gateway trust lab`; `mcp-gateway trust lab evaluate`; `mcp-gateway trust lab evaluate --active-fixtures`; `mcp-gateway trust lab evaluate --baseline`; `mcp-gateway trust lab evaluate --baseline-id`; `mcp-gateway trust lab evaluate --baseline-registry`; `mcp-gateway trust lab evaluate --capabilities`; `mcp-gateway trust lab evaluate --certification-score`; `mcp-gateway trust lab evaluate --enforce`; `mcp-gateway trust lab evaluate --execute-active-fixtures`; `mcp-gateway trust lab evaluate --format`; `mcp-gateway trust lab evaluate --minimum-score`; `mcp-gateway trust lab evaluate --runtime-image`; `mcp-gateway trust lab evaluate --runtime-provider-plan`; `mcp-gateway trust lab evaluate --update-baseline-registry`; `mcp-gateway trust lab evaluate --write-baseline`; `mcp-gateway trust lab evaluate <name>`; `mcp-gateway trust validate`; `mcp-gateway trust validate --capabilities`; `mcp-gateway trust validate --file`; `mcp-gateway trust validate --format`; `mcp-gateway trust validate --strict` |  |
-| `upgrade` | 4 |  |  |  |  |
-| `validate` | 5 | `mcp-gateway validate --no-color` |  |  |  |
+| `setup` | 20 |  |  |  |  |
+| `skills` | 21 | `mcp-gateway skills generate --capabilities`; `mcp-gateway skills generate -C` |  |  |  |
+| `stats` | 3 |  |  |  |  |
+| `tls` | 23 |  |  |  |  |
+| `tool` | 17 | `mcp-gateway tool completions --capabilities`; `mcp-gateway tool completions -C`; `mcp-gateway tool inspect --capabilities`; `mcp-gateway tool inspect -C`; `mcp-gateway tool invoke --capabilities`; `mcp-gateway tool invoke -C`; `mcp-gateway tool list --capabilities`; `mcp-gateway tool list -C` |  |  |  |
+| `trust` |  |  |  | `mcp-gateway trust`; `mcp-gateway trust generate`; `mcp-gateway trust generate --capabilities`; `mcp-gateway trust generate --format`; `mcp-gateway trust generate --output`; `mcp-gateway trust generate -C`; `mcp-gateway trust generate -f`; `mcp-gateway trust generate -o`; `mcp-gateway trust inspect`; `mcp-gateway trust inspect --capabilities`; `mcp-gateway trust inspect --format`; `mcp-gateway trust inspect -C`; `mcp-gateway trust inspect -f`; `mcp-gateway trust inspect <name>`; `mcp-gateway trust lab`; `mcp-gateway trust lab evaluate`; `mcp-gateway trust lab evaluate --active-fixtures`; `mcp-gateway trust lab evaluate --baseline`; `mcp-gateway trust lab evaluate --baseline-id`; `mcp-gateway trust lab evaluate --baseline-registry`; `mcp-gateway trust lab evaluate --capabilities`; `mcp-gateway trust lab evaluate --certification-score`; `mcp-gateway trust lab evaluate --enforce`; `mcp-gateway trust lab evaluate --execute-active-fixtures`; `mcp-gateway trust lab evaluate --format`; `mcp-gateway trust lab evaluate --minimum-score`; `mcp-gateway trust lab evaluate --runtime-image`; `mcp-gateway trust lab evaluate --runtime-provider-plan`; `mcp-gateway trust lab evaluate --update-baseline-registry`; `mcp-gateway trust lab evaluate --write-baseline`; `mcp-gateway trust lab evaluate -C`; `mcp-gateway trust lab evaluate -f`; `mcp-gateway trust lab evaluate <name>`; `mcp-gateway trust validate`; `mcp-gateway trust validate --capabilities`; `mcp-gateway trust validate --file`; `mcp-gateway trust validate --format`; `mcp-gateway trust validate --strict`; `mcp-gateway trust validate -C`; `mcp-gateway trust validate -f` |  |
+| `upgrade` | 5 |  |  |  |  |
+| `validate` | 7 | `mcp-gateway validate --no-color` |  |  |  |
 
 ### env
 

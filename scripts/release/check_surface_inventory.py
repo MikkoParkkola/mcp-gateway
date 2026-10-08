@@ -118,7 +118,12 @@ def matching_brace(mask: str, open_idx: int) -> int:
 
 def prod_scan(path: Path) -> tuple[str, str]:
     """`scan` of a file with every `#[cfg(test)]`-gated inline module blanked."""
-    code, mask = scan(path.read_text(encoding="utf-8"))
+    return prod_scan_text(path.read_text(encoding="utf-8"))
+
+
+def prod_scan_text(text: str) -> tuple[str, str]:
+    """`prod_scan` of source text already in hand."""
+    code, mask = scan(text)
     for m in reversed(list(re.finditer(r"#\[cfg\((?:all\()?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{", mask))):
         end = matching_brace(mask, m.end() - 1)
         blank = re.sub(r"[^\n]", " ", code[m.start() : end + 1])
@@ -444,16 +449,32 @@ def extract_config() -> list[Entry]:
     return sorted(w.out.values(), key=lambda e: e.id)
 
 
+QUOTED = r"""(?:'[^']*'|"[^"]*")"""
+# A pure disjunction of prefix tests is the only shape `annotation_rows` can read.
+ANNOTATION_BODY = re.compile(rf"\s*key\.starts_with\({QUOTED}\)(?:\s*\|\|\s*key\.starts_with\({QUOTED}\))*\s*")
+# The two loaders that let an annotation key through: top-level keys and backend
+# keys (strict_keys.rs). A call site removed is annotated configs rejected there.
+ANNOTATION_CALL_SITES = 2
+
+
 def annotation_rows(code: str, path: Path) -> list[Entry]:
-    """One row per key prefix `is_annotation` lets load at any mapping level."""
+    """One row per key prefix `is_annotation` lets load at any mapping level.
+
+    Fails closed: a body that is not a plain `starts_with` disjunction, or a
+    changed number of production call sites, yields a row no doc can hold.
+    """
+    code, _ = prod_scan_text(code)
     m = re.search(r"fn is_annotation\b[^{]*\{(.*?)\n\}", code, re.S)
     if m is None:
         return []
+    line = line_of(code, m.start())
+    if not ANNOTATION_BODY.fullmatch(m.group(1)):
+        return [Entry("is_annotation: unrecognised body, re-read the annotation rows", rel(path), line)]
+    calls = len(re.findall(r"(?<!fn )\bis_annotation\(", code))
+    if calls != ANNOTATION_CALL_SITES:
+        return [Entry(f"is_annotation: {calls} call sites, expected {ANNOTATION_CALL_SITES}", rel(path), line)]
     prefixes = re.findall(r"starts_with\((?:'([^']*)'|\"([^\"]*)\")\)", m.group(1))
-    return [
-        Entry(f"{a or b}*", rel(path), line_of(code, m.start()), "annotation: any mapping level, never read")
-        for a, b in prefixes
-    ]
+    return [Entry(f"{a or b}*", rel(path), line, "annotation: any mapping level, never read") for a, b in prefixes]
 
 
 # ── Surface: CLI ─────────────────────────────────────────────────────────────
@@ -540,11 +561,16 @@ class CliWalker:
 def cli_root_rows(root: Item) -> list[Entry]:
     """The flags clap generates from the root command's own attributes."""
     out = []
-    if attr_value(root.attrs, "command", "version") is not None:
+    if attr_value(root.attrs, "command", "version") is not None and not is_set(root.attrs, "disable_version_flag"):
         out.append(Entry("mcp-gateway --version", rel(root.file), root.line, "clap-generated"))
-    if attr_value(root.attrs, "command", "disable_help_flag") is None:
+    if not is_set(root.attrs, "disable_help_flag"):
         out.append(Entry("mcp-gateway --help", rel(root.file), root.line, "clap-generated"))
     return out
+
+
+def is_set(attrs: str, key: str) -> bool:
+    """A boolean `command(...)` setting: bare `key` or `key = true`."""
+    return attr_value(attrs, "command", key) in ("", "true")
 
 
 def extract_cli(index: Index | None = None) -> list[Entry]:
