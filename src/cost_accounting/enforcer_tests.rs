@@ -468,3 +468,26 @@ fn overflowing_spends_sweep_at_most_once_a_day() {
         "an overflowing spend swept the map again the same day"
     );
 }
+
+/// `MIK-8081.CEIL.2`: a tool priced below one micro-USD counts at least one
+/// micro-USD per call, so N calls exhaust a budget that fits N, and the call
+/// after them is refused.
+#[test]
+fn a_sub_micro_tool_exhausts_a_budget_of_n_micros() {
+    const N: u32 = 5;
+    // GIVEN: a tool priced at a tenth of a micro-USD, under a per-tool budget
+    // that fits N micro-USD and refuses the next
+    let limit = (f64::from(N) + 0.5) * 1e-6;
+    let e = enforcer_with(true, None, &[("cheap", limit)], &[], &[("cheap", 1e-7)]);
+    // WHEN: N calls are admitted and recorded
+    for call in 0..N {
+        let verdict = e.check("cheap", None);
+        assert!(verdict.allowed, "call {call} of {N} is admitted");
+        e.settle(verdict.hold.as_deref(), "cheap", None, verdict.cost_usd);
+    }
+    // THEN: the budget is spent, and the next call is refused
+    assert!(
+        !e.check("cheap", None).allowed,
+        "a sub-micro tool was never counted against its budget"
+    );
+}

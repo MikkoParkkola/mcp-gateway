@@ -154,3 +154,16 @@ fn a_tally_logs_its_first_overflow_once() {
     });
     assert_eq!(crate::test_log_capture::count(&records, "WARN", LINE), 1);
 }
+
+/// `MIK-8081.CEIL.1`: a positive cost rounds up to the next whole micro-USD,
+/// a cost already whole in micro-USD keeps its value despite float noise, and
+/// zero stays zero.
+#[test]
+fn a_positive_cost_rounds_up_to_whole_micro_usd() {
+    assert_eq!(micro(1e-7), 1, "a sub-micro cost counted as free");
+    assert_eq!(micro(1.5e-6), 2, "a fractional micro was dropped");
+    // 0.07 * 1e6 is 70000.00000000001 in f64: it must not become 70001.
+    assert_eq!(micro(0.07), 70_000);
+    assert_eq!(micro(0.01), 10_000);
+    assert_eq!(micro(0.0), 0);
+}
