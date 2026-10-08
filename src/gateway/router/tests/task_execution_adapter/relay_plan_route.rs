@@ -218,3 +218,43 @@ async fn a_rewritten_tool_error_keeps_the_gateways_advice_out_of_its_receipt() {
         "the gateway's advice is not backend text, so no receipt holds it: {advice}"
     );
 }
+
+/// Two short text blocks, each under a k-gram, so every fingerprint across
+/// them spans the two backend leaves.
+const FIELD_X: &str = "north slope rows seven to twelve, pears";
+const FIELD_Y: &str = "south terrace rows one to six, quinces";
+
+/// `MIK-8043.JOIN.4`: a rewritten wrapper is read member by member, so two
+/// short backend fields the caller got intact keep the receipt across them.
+/// The third block's URL is redacted with its closing quote, so the wrapper
+/// no longer parses; bob relaying the two fields is refused, alice is not.
+#[tokio::test]
+async fn a_rewritten_wrapper_keeps_its_fields_receipted_across_them() {
+    let answer = json!({"content": [
+        {"type": "text", "text": FIELD_X},
+        {"type": "text", "text": FIELD_Y},
+        {"type": "text", "text": DSN},
+    ], "isError": false});
+    let mock = MockBackend::answering(Answer::Sequence(vec![answer, text("ok"), text("ok")]));
+    let (state, _store) = plan_state(&mock).await;
+
+    let read = post(&state, "key-a", sync_invoke(1, json!({}))).await;
+    let block = read["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        block.contains("REDACTED") && serde_json::from_str::<Value>(block).is_err(),
+        "base: the redaction broke the wrapper's JSON: {read}"
+    );
+    let parts = json!({"parts": ["text", FIELD_X, "text", FIELD_Y]});
+    let control = post(&state, "key-a", sync_invoke(2, parts.clone())).await;
+    assert!(
+        control.get("error").is_none(),
+        "control: the holder's own relay is excused: {control}"
+    );
+    let relayed = post(&state, "key-b", sync_invoke(3, parts)).await;
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "the receipt lost the run across the two fields: {relayed}"
+    );
+}
