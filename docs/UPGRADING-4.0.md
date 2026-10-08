@@ -4321,7 +4321,9 @@ A running gateway now holds one lock from loading the file through writing it an
 what it wrote, for every web UI backend add, edit and delete. The lock is a hidden file,
 `.gateway.yaml.lock`, next to the config. It stays there by design: deleting it would let two
 writers lock different files. If your config lives in a git repository, add it to
-`.gitignore`.
+`.gitignore`. On Linux and macOS a lock file other accounts can open (one copied in or checked
+out as `0644`) is made owner-only at the next write, since any account that can open it could
+hold it and stall every save; one owned by another account is refused until you remove it.
 
 CLI writes take the same lock for their write. One that finds it held prints
 `Waiting for gateway.yaml ...` and continues once it is free; if another writer holds it for

@@ -58,6 +58,14 @@ pub(crate) enum NotLocked {
 /// A failure names `config` first: that is the file the user selected, and
 /// the sidecar is a detail of how it is locked.
 fn try_once(config: &Path, lock: &Path) -> Result<Option<ExclusiveFileLock>, NotLocked> {
+    #[cfg(unix)]
+    keep_private(lock).map_err(|error| {
+        NotLocked::Failed(format!(
+            "cannot lock {} (lock file {}): {error}",
+            config.display(),
+            lock.display()
+        ))
+    })?;
     match ExclusiveFileLock::try_acquire(lock) {
         Ok(held) => Ok(Some(held)),
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
@@ -67,6 +75,48 @@ fn try_once(config: &Path, lock: &Path) -> Result<Option<ExclusiveFileLock>, Not
             lock.display()
         ))),
     }
+}
+
+/// Unix: make an existing sidecar owner-only before it is locked.
+///
+/// Any account that can open the sidecar can lock it, and so stall every
+/// config write; `try_acquire` creates it owner-only, but one checked out by
+/// git or copied in can be `0644`. One this user owns is tightened in place
+/// (through the opened handle, never the path, so a swapped-in link is not
+/// followed); one another account owns is refused, except for root, which
+/// may write a user's config. A holder that opened it while it was readable
+/// keeps its handle: closing that would mean replacing the file, which the
+/// never-delete rule forbids.
+#[cfg(unix)]
+fn keep_private(lock: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        // Non-blocking, so a FIFO in its place cannot hang the open.
+        .custom_flags(
+            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
+                .bits()
+                .cast_signed(),
+        )
+        .open(lock)
+    {
+        Ok(file) => file,
+        // Missing: `try_acquire` creates it owner-only. Anything else (a
+        // link, a directory) is `try_acquire`'s to refuse.
+        Err(_) => return Ok(()),
+    };
+    let meta = file.metadata()?;
+    let me = rustix::process::geteuid().as_raw();
+    if !meta.is_file() || meta.mode() & 0o077 == 0 {
+        return Ok(());
+    }
+    if meta.uid() != me && me != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "it belongs to another user and others can open it; remove it",
+        ));
+    }
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
 }
 
 /// Take the lock for `config`, waiting until `deadline` while another writer
