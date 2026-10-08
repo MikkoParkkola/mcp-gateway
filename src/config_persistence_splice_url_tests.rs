@@ -90,19 +90,19 @@ fn a_new_backend_is_spliced_in_as_url() {
     }
 }
 
-/// An address from the environment cannot be `url` (the loader resolves
-/// `url` before it expands variables), so it keeps its alias and still loads.
+/// An `http_url` holding a ws address keeps its alias: as `url` it would
+/// switch the backend to the WebSocket transport.
 #[test]
-fn a_new_backend_with_an_environment_address_keeps_its_alias() {
+fn a_new_backend_whose_address_is_of_the_other_scheme_keeps_its_alias() {
     let original = "backends:\n  a:  # mine\n    command: a\n";
     let before = Config::from_file_text(original).expect("before loads");
     let config = Config::from_file_text(
-        "backends:\n  a:\n    command: a\n  b:\n    http_url: \"${B_URL}\"\n",
+        "backends:\n  a:\n    command: a\n  b:\n    http_url: \"wss://b.example.test/mcp\"\n",
     )
     .expect("config loads");
     let text = with_backend_edited(original, &before, &config, "b").expect("spliced");
     assert!(
-        text.contains("http_url: ${B_URL}") || text.contains("http_url: \"${B_URL}\""),
+        text.contains("http_url: ") && !text.contains("    url: "),
         "{text}"
     );
     assert!(Config::from_file_text(&text).is_ok(), "{text}");
@@ -127,4 +127,24 @@ fn a_full_rewrite_keeps_url_and_uses_it_for_a_new_backend() {
     let text = std::fs::read_to_string(&path).expect("read");
     assert_eq!(text.matches("url: ").count(), 2, "{text}");
     assert!(!text.contains("http_url"), "{text}");
+}
+
+/// A full rewrite that adds no backend leaves every alias as it was, and the
+/// file it writes passes the gateway's own load.
+#[test]
+fn a_full_rewrite_that_adds_nothing_keeps_the_aliases() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let flow = "backends: {a: {http_url: \"https://a.example.test/mcp\"}, b: {ws_url: \"wss://b.example.test/mcp\"}}\n";
+    crate::gateway::test_helpers::write_owner_only(&path, flow).expect("write");
+    let mut config = Config::from_file_text(flow).expect("config loads");
+    config.backends.get_mut("a").expect("a").description = "edited".into();
+    crate::config_persistence::write_config_preserving(&path, &config).expect("written");
+    let text = std::fs::read_to_string(&path).expect("read");
+    assert!(
+        text.contains("http_url: ") && text.contains("ws_url: "),
+        "{text}"
+    );
+    assert!(!text.contains("    url: "), "{text}");
+    assert!(Config::load(Some(&path)).is_ok(), "{text}");
 }

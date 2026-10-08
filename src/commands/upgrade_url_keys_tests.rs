@@ -94,7 +94,7 @@ fn a_skipped_backend_message_covers_every_reason() {
 }
 
 #[test]
-fn upgrade_keeps_an_environment_address_says_so_and_the_file_still_loads() {
+fn upgrade_keeps_an_alias_that_is_not_an_address_of_its_scheme_and_says_so() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(
@@ -104,10 +104,6 @@ fn upgrade_keeps_an_environment_address_says_so_and_the_file_still_loads() {
     .expect("write config");
     let (lines, text) = report(&path, RewriteMode::Apply);
     assert!(text.contains("http_url: \"${FS_URL}\""), "{text}");
-    assert!(
-        mcp_gateway::config::Config::load_literal(Some(&path)).is_ok(),
-        "{text}"
-    );
     let said = lines.join("\n");
     assert!(
         said.contains("kept") && said.contains("backends fs"),

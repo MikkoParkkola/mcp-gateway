@@ -314,8 +314,8 @@ fn an_older_url_key_names_the_command_that_rewrites_it() {
 
 #[test]
 fn an_older_url_key_holding_a_variable_names_no_upgrade() {
-    // `upgrade` leaves an address from the environment alone, so doctor
-    // does not suggest running it.
+    // `upgrade` leaves a value that is not an address of its scheme alone,
+    // so doctor does not suggest running it.
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
     std::fs::write(&path, "backends:\n  fs:\n    http_url: \"${FS_URL}\"\n").expect("write config");

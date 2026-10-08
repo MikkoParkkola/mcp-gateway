@@ -209,8 +209,8 @@ fn one_unsafe_backend_rolls_back_every_rename_in_the_file() {
 
 #[test]
 fn an_address_that_is_not_a_literal_of_its_key_keeps_its_alias() {
-    // `${FS_URL}` comes from the environment and `url` cannot hold it; an
-    // `http_url` holding a ws address would change transport if renamed.
+    // `${FS_URL}` is not an address (backend addresses are never expanded);
+    // an `http_url` holding a ws address would change transport if renamed.
     let text = "backends:\n  fs:\n    http_url: \"${FS_URL}\"\n  odd:\n    http_url: \"wss://odd.example.test/mcp\"\n  rt:\n    ws_url: \"wss://rt.example.test/mcp\"\n";
     let out = rewrite_url_aliases(text, None);
     assert_eq!(out.changed, vec![7], "{}", out.text);
