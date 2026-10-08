@@ -494,8 +494,9 @@ async fn an_answer_without_a_refresh_token_counts_as_keeping_it() {
 }
 
 /// ROT3.5: a rotation, once seen, outranks an earlier refresh that kept the
-/// token. The server kept `r1`, then rotated it to `r2`; the answer to `r2`'s
-/// refresh was lost, so `r2` is not sent again.
+/// token. The server kept `r1`, then rotated it to `r3` (the fixture counts
+/// the kept answer too); the answer to `r3`'s refresh was lost, so `r3` is
+/// not sent again.
 #[tokio::test]
 async fn a_seen_rotation_outranks_an_earlier_kept_token() {
     let server =
@@ -509,7 +510,7 @@ async fn a_seen_rotation_outranks_an_earlier_kept_token() {
     expire(&late);
     headless(&late)
         .await
-        .expect("a settled refresh that rotates to r2");
+        .expect("a settled refresh that rotates to r3");
     expire(&late);
     assert!(headless(&late).await.is_err(), "the answer was lost");
     expire(&late);
@@ -520,7 +521,7 @@ async fn a_seen_rotation_outranks_an_earlier_kept_token() {
         "{error:?}"
     );
     assert_eq!(
-        server.uses("r2"),
+        server.uses("r3"),
         1,
         "sent: {:?}",
         server.sent.lock().unwrap()
