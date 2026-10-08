@@ -18,22 +18,22 @@ pub(crate) const SERVE_RUNTIME_SHUTDOWN_TIMEOUT: std::time::Duration =
 /// What `main` does with the runtime once `run` returned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeShutdown {
-    /// Wait for every blocking-pool task. Every mode but stdio: an HTTP
-    /// gateway's audit, store and exporter flushes are not proven finished
-    /// when `run` returns, and must not be cut.
+    /// Wait for every blocking-pool task. Every command but `serve`: a one-shot
+    /// command's own writes must not be cut.
     WaitForBlockingWork,
-    /// Wait this long, then exit behind whatever is still running. Stdio only:
-    /// no frame is lost for a client that reads within the drain window; a
-    /// slower client loses at most the one in-flight fragment, which an
-    /// unbounded wait would also only deliver eventually.
+    /// Wait this long, then exit behind whatever is still running. Every serve
+    /// mode: stdio loses at most the one in-flight fragment a slow client
+    /// stopped reading; HTTP leaves behind only a write stuck on a stalled
+    /// mount, which an unbounded wait would never finish either.
     Bounded(std::time::Duration),
 }
 
 impl RuntimeShutdown {
     pub(crate) fn of(command: Option<&Command>) -> Self {
         match command {
-            Some(Command::Serve { stdio: true }) => Self::Bounded(SERVE_RUNTIME_SHUTDOWN_TIMEOUT),
-            _ => Self::WaitForBlockingWork,
+            // No subcommand serves HTTP.
+            Some(Command::Serve { .. }) | None => Self::Bounded(SERVE_RUNTIME_SHUTDOWN_TIMEOUT),
+            Some(_) => Self::WaitForBlockingWork,
         }
     }
 }
@@ -54,13 +54,26 @@ impl Drop for ShutdownGuard {
 }
 
 /// Shut `runtime` down by `mode`. Returns whether a bounded wait ran out with
-/// blocking work still running.
+/// blocking work still running, which it also logs at ERROR so an operator
+/// can tell a stalled disk or mount from a clean exit.
 pub(crate) fn shut_down(runtime: tokio::runtime::Runtime, mode: RuntimeShutdown) -> bool {
-    match mode {
-        RuntimeShutdown::WaitForBlockingWork => drop(runtime),
-        RuntimeShutdown::Bounded(timeout) => runtime.shutdown_timeout(timeout),
+    let RuntimeShutdown::Bounded(timeout) = mode else {
+        drop(runtime);
+        return false;
+    };
+    let started = std::time::Instant::now();
+    runtime.shutdown_timeout(timeout);
+    // `shutdown_timeout` returns as soon as the blocking pool is idle, so a
+    // wait that lasted the whole bound gave up on work still running.
+    let left_running = started.elapsed() >= timeout;
+    if left_running {
+        tracing::error!(
+            ?timeout,
+            "shutdown exited with blocking work still running after the bound \
+             (a disk or mount write that never returned?)"
+        );
     }
-    false
+    left_running
 }
 
 /// Run `future` to completion on a new multi-thread runtime, then shut the
