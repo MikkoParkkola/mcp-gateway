@@ -248,6 +248,10 @@ pub struct Backend {
     /// the handshake shape is chosen (MIK-8056).
     #[cfg(test)]
     era_decision_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
+    /// A test's pause point in a start, just after its transport is
+    /// published (the publish order of MIK-7897 LIFE.3a).
+    #[cfg(test)]
+    pub(crate) publish_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
     /// A test's stand-ins for the user's token store and browser, used by the
     /// OAuth client [`Backend::create_oauth_client`] builds.
     #[cfg(test)]
@@ -274,9 +278,9 @@ pub(crate) struct OAuthTestSeam {
 /// and waits for `release`.
 #[cfg(test)]
 #[derive(Default)]
-struct MarkWindowGate {
-    reached: tokio::sync::Notify,
-    release: tokio::sync::Notify,
+pub(crate) struct MarkWindowGate {
+    pub(crate) reached: tokio::sync::Notify,
+    pub(crate) release: tokio::sync::Notify,
 }
 
 impl Backend {
@@ -512,6 +516,9 @@ mod websocket_backend_tests;
 #[cfg(test)]
 mod destination_tests;
 
+#[cfg(test)]
+#[path = "publish_order_tests.rs"]
+mod publish_order_tests;
 #[cfg(test)]
 #[path = "stop_race_tests.rs"]
 mod stop_race_tests;

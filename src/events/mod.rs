@@ -100,6 +100,10 @@ pub(crate) struct EventsHub {
     /// Test-only: one attempt pauses just before its send admission.
     #[cfg(test)]
     before_send: crate::test_pause::Slot,
+    /// Test-only: one withdraw pauses between judging its rows and deleting
+    /// them (reconcile table T07).
+    #[cfg(test)]
+    before_withdraw: crate::test_pause::Slot,
 }
 
 /// One producer of events (design §4). The core knows sources only through
@@ -252,6 +256,8 @@ impl EventsHub {
             before_receipts: crate::test_pause::Slot::default(),
             #[cfg(test)]
             before_send: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_withdraw: crate::test_pause::Slot::default(),
         }))
     }
 

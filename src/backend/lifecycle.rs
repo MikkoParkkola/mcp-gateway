@@ -114,6 +114,8 @@ impl Backend {
             #[cfg(test)]
             era_decision_gate: parking_lot::Mutex::new(None),
             #[cfg(test)]
+            publish_gate: parking_lot::Mutex::new(None),
+            #[cfg(test)]
             oauth_test_seam: parking_lot::Mutex::new(None),
             instance: super::tools_nudge::next_instance(),
             nudge_feed: std::sync::OnceLock::new(),
@@ -528,6 +530,8 @@ impl Backend {
             }
             return Err(Error::BackendUnavailable(self.name.clone()));
         }
+        #[cfg(test)]
+        hold_at(&self.publish_gate).await;
         *entry.listen.write() = listen;
 
         // Note: Tools are fetched lazily on first get_tools() call
