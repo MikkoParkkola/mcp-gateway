@@ -59,6 +59,21 @@ impl EventsHub {
         services: &Arc<Services>,
         slots: &Arc<Semaphore>,
     ) -> Duration {
+        let held = self.runtime.busy.lock().clone();
+        // Expired rows settle every tick, before the reconcile gate (MIK-8061).
+        let due = {
+            let _ordered = self.receipts.lock().await;
+            let due = self
+                .blocking(move |store| store.due(Utc::now(), &held))
+                .await;
+            if let Some(due) = &due {
+                for record in &due.buried {
+                    self.dead_lettered(services, record, DeadReason::Expired)
+                        .await;
+                }
+            }
+            due
+        };
         // The catalogue is partial until the startup scan has run: a record
         // of a route removed while down must not be sent first (MIK-7772).
         if !self
@@ -68,11 +83,7 @@ impl EventsHub {
         {
             return IDLE;
         }
-        let held = self.runtime.busy.lock().clone();
-        let Some(due) = self
-            .blocking(move |store| store.due(Utc::now(), &held))
-            .await
-        else {
+        let Some(due) = due else {
             return IDLE;
         };
         let mut wait = due
@@ -201,6 +212,9 @@ impl EventsHub {
         // subscription by now: nothing is charged or sent for it. Otherwise
         // the current row signs, so a secret rotated since the claim counts.
         if self.store.signing_row(&record).is_none() {
+            // Pending again, for the next expiry pass (MIK-8061).
+            self.settle(services, &record, unsent_now("cancelled"))
+                .await;
             return;
         }
         let (Some(body), Some(url)) = (record.body(), url) else {
@@ -323,8 +337,17 @@ impl EventsHub {
         // row that signs is read after it, never before.
         let Some(current) = self.store.signing_row(record) else {
             services.audit_outcome(&ended("cancelled")).await;
+            self.settle(services, record, unsent_now("cancelled")).await;
             return;
         };
+        // An expired row kept for its burials still signs but is not sent to:
+        // unsent, and the next expiry pass settles it (MIK-8061).
+        if !current.live(Utc::now()) {
+            services.audit_outcome(&ended("subscription_expired")).await;
+            self.settle(services, record, unsent_now("subscription_expired"))
+                .await;
+            return;
+        }
         // Past its bounds after the wait for the record: dead, unsent, and the
         // record just written says how that attempt ended.
         if self.overdue(record, Utc::now()) {
@@ -742,6 +765,14 @@ fn grant(record: &OutboxRecord) -> Option<&str> {
 
 /// Back to pending after a refusal before the POST, ending `status`: a
 /// revoked subscription's record goes with it, a held one waits.
+/// Pending again at once, the attempt not counted: nothing was sent.
+fn unsent_now(status: &'static str) -> Settle {
+    Settle::Unsent {
+        next: Utc::now(),
+        status,
+    }
+}
+
 fn refusal_retry(status: &'static str) -> Settle {
     Settle::Retry {
         next: Utc::now() + REFUSAL_RETRY,

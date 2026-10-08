@@ -76,6 +76,9 @@ pub(crate) enum CapHit {
     /// The caller skipped the challenge on a cached opt-in that is gone or
     /// past its tail by commit time: it must verify again.
     Unverified,
+    /// The key's expired row still holds records the worker has not yet
+    /// buried or dropped: retry shortly.
+    Settling,
 }
 
 /// A `(principal, url)` pair, the unit a verification belongs to.
@@ -220,8 +223,9 @@ impl Store {
         Ok(store)
     }
 
-    /// Remove expired subscriptions. A pair left with no live subscription
-    /// records its latest expiry as the start of its verification tail.
+    /// Remove expired subscriptions that hold no record. One that still
+    /// holds records stays, not live, until the worker has buried or dropped
+    /// them (MIK-8061): nothing is sent to it and no cap counts it.
     fn sweep(&self, state: &mut State, now: DateTime<Utc>) -> std::io::Result<()> {
         let expired: Vec<String> = state
             .subs
@@ -232,6 +236,46 @@ impl Store {
         if expired.is_empty() {
             return Ok(());
         }
+        self.stamp_ended_tails(state, now)?;
+        for id in expired {
+            // A record never tried leaves no trace and needs no receipt: it
+            // goes now. One to bury, or in flight, keeps the row.
+            let untried: Vec<String> = state
+                .outbox
+                .values()
+                .filter(|r| r.subscription_id == id && !r.needs_burial_at_expiry())
+                .map(|r| r.event_id.clone())
+                .collect();
+            for event_id in untried {
+                remove_record(&self.outbox_dir, &OutboxRecord::file(&event_id))?;
+                state.outbox.remove(&event_id);
+            }
+            if state.outbox.values().any(|r| r.subscription_id == id) {
+                continue;
+            }
+            remove_record(&self.subs_dir, &format!("{id}.json"))?;
+            state.subs.remove(&id);
+        }
+        Ok(())
+    }
+
+    /// Remove the expired row `id`, which holds no record any more: its
+    /// pair's tail is stamped first, at its expiry, never at the removal.
+    fn remove_settled_row(
+        &self,
+        state: &mut State,
+        id: &str,
+        now: DateTime<Utc>,
+    ) -> std::io::Result<()> {
+        self.stamp_ended_tails(state, now)?;
+        remove_record(&self.subs_dir, &format!("{id}.json"))?;
+        state.subs.remove(id);
+        Ok(())
+    }
+
+    /// A pair left with no live subscription records its latest expiry as
+    /// the start of its verification tail, once.
+    fn stamp_ended_tails(&self, state: &mut State, now: DateTime<Utc>) -> std::io::Result<()> {
         let index = state.index(now);
         let ended: Vec<(String, Verified)> = state
             .verified
@@ -248,13 +292,6 @@ impl Store {
             let placed = write_record(&self.verified_dir, &key, &record)?;
             state.verified.insert(key, record);
             placed.durable()?;
-        }
-        for id in expired {
-            // Its pending records go with it: a later subscribe of the same
-            // key re-creates this id, and must not inherit them.
-            self.cancel_pending(state, &id)?;
-            remove_record(&self.subs_dir, &format!("{id}.json"))?;
-            state.subs.remove(&id);
         }
         Ok(())
     }
@@ -299,6 +336,11 @@ impl Store {
         self.sweep(&mut state, at)?;
         // A tail over the cap in force is gone before it can vouch.
         self.trim_tails(&mut state, at, tail)?;
+        // An expired row kept for its records' burials: a new row over it
+        // would inherit them, so it waits for the worker (MIK-8061).
+        if state.subs.get(&sub.id).is_some_and(|old| !old.live(at)) {
+            return Ok(Err(CapHit::Settling));
+        }
         sub.granted_at = at;
         sub.expires_at = grant.expires_at(at);
         // Read under the lock with the commit, so racing identical subscribes
@@ -316,15 +358,14 @@ impl Store {
             sub.last_delivery_at = old.last_delivery_at;
             sub.last_error.clone_from(&old.last_error);
         } else {
-            let mine = state
-                .subs
-                .values()
-                .filter(|s| s.principal == sub.principal)
-                .count();
+            // Live rows only: an expired row kept for its burials holds no
+            // slot.
+            let live = || state.subs.values().filter(|s| s.live(at));
+            let mine = live().filter(|s| s.principal == sub.principal).count();
             if mine >= caps.per_principal {
                 return Ok(Err(CapHit::PerPrincipal(caps.per_principal)));
             }
-            if state.subs.len() >= caps.global {
+            if live().count() >= caps.global {
                 return Ok(Err(CapHit::Global(caps.global)));
             }
         }

@@ -148,6 +148,7 @@ impl EventsHub {
             last_status: None,
             dead_as: None,
             firewall: Some(verdict.to_owned()),
+            replayed: true,
             ..dead.record.clone()
         };
         let (caps, dead_at) = (self.outbox_caps(), dead.dead_at);
