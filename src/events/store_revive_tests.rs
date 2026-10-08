@@ -45,7 +45,7 @@ fn a_revived_record_keeps_its_dead_letters_stamp() {
         store.revive("e1", now, replay, OUTBOX, || now).expect("io"),
         Revived::Written
     );
-    let due = store.due(now, &HashSet::new()).expect("io");
+    let due = store.due(now, &HashSet::new(), ROOMY).expect("io");
     assert_eq!(due.ready.len(), 1);
     assert_eq!(
         due.ready[0].created_at, now,
@@ -58,7 +58,7 @@ fn a_revived_record_keeps_its_dead_letters_stamp() {
     let reopened = Store::open(dir.path(), now, TAIL).expect("reopen");
     assert!(
         reopened
-            .due(now, &HashSet::new())
+            .due(now, &HashSet::new(), ROOMY)
             .expect("io")
             .ready
             .is_empty(),
@@ -96,7 +96,7 @@ fn a_replay_into_a_suspended_subscription_is_refused() {
     refresh(&store, now);
     assert!(
         store
-            .due(now, &HashSet::new())
+            .due(now, &HashSet::new(), ROOMY)
             .expect("io")
             .ready
             .is_empty(),
@@ -149,7 +149,7 @@ fn a_re_admitted_occurrence_under_a_held_id_is_coalesced() {
         "while the first waits behind a suspension"
     );
     refresh(&store, now);
-    let due = store.due(now, &HashSet::new()).expect("io");
+    let due = store.due(now, &HashSet::new(), ROOMY).expect("io");
     assert_eq!(due.ready.len(), 1);
     let held = &due.ready[0];
     assert_eq!(held.body_b64, "e30=", "the first body stands");
