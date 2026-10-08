@@ -363,20 +363,32 @@ async fn the_watcher_recognises_a_posture_refusal_and_not_as_a_broken_file() {
     );
 }
 
-/// MIK-8058: every refusal is the operator's config refused, and both shutdown
-/// paths are the gateway unavailable. The refusal texts are the ones
-/// `security/posture.rs` (`reload_refusal`) and this module's signing check
-/// write; anything else is internal.
+/// MIK-8058: only the network-posture refusal is the operator's config
+/// refused live; a change that needs a restart stays internal (its -32603 is
+/// pinned in `tests/message_signing_stdio_reload.rs`), and both shutdown
+/// paths are the gateway unavailable. The restart texts are the ones
+/// `security/posture.rs` (`reload_refusal`), this module's signing check and
+/// the account-binding check write.
 #[test]
 fn reload_failures_are_classified_by_cause() {
-    for refused in [
+    assert_eq!(
+        reload_failure(
+            "config reload refused: refusing to serve HTTP, reachable at the declared \
+             public_url host gw: authentication is disabled"
+        ),
+        ReloadFailure::PostureRefused
+    );
+    for restart in [
         "config reload refused: security.hardened requires restart",
         "config reload refused: security.message_signing.key requires restart",
+        "config reload refused: backend 'b' changes its account binding (from 'a' to 'c'). \
+         Restart to apply it. No backend was started or stopped, and no configuration was \
+         published.",
     ] {
         assert_eq!(
-            reload_failure(refused),
-            ReloadFailure::ConfigRefused,
-            "{refused}"
+            reload_failure(restart),
+            ReloadFailure::Internal,
+            "{restart}"
         );
     }
     for stopped in [SHUTDOWN_ABORTED_ERROR, reload_context::STOPPED] {

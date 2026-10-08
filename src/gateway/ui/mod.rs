@@ -583,11 +583,12 @@ async fn reload(
         )
             .into_response(),
         Err(error) => {
-            // Whose fault, not just that it failed (MIK-8058): a refused file
-            // is the operator's config, a shutdown is the gateway unavailable.
+            // Whose fault, not just that it failed (MIK-8058): a file the
+            // network posture refuses is the operator's config, a shutdown is
+            // the gateway unavailable.
             use crate::config_reload::{ReloadFailure, reload_failure};
             let status = match reload_failure(&error) {
-                ReloadFailure::ConfigRefused => StatusCode::CONFLICT,
+                ReloadFailure::PostureRefused => StatusCode::CONFLICT,
                 ReloadFailure::ShuttingDown => StatusCode::SERVICE_UNAVAILABLE,
                 ReloadFailure::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             };
