@@ -338,7 +338,7 @@ impl UpstreamListeners {
         let Some(shared) = map.get(backend).cloned() else {
             return;
         };
-        let changed = {
+        let (changed, no_uris) = {
             let mut need = shared.need.lock();
             let changed = need.remove(interest);
             if let Interest::ResourceUpdated(uri) = interest
@@ -346,8 +346,13 @@ impl UpstreamListeners {
             {
                 shared.ledger().lock().unwant(uri);
             }
-            changed
+            (changed, !need.watches_any())
         };
+        // With no URI watched the snapshot is no longer read, so it stops
+        // answering for a new URI (design r3 L4, MIK-7897 LIFE.3b).
+        if no_uris {
+            *shared.snapshot.lock() = Snapshot::default();
+        }
         if shared.is_idle() {
             shared.stop.cancel();
             map.remove(backend);
@@ -359,18 +364,31 @@ impl UpstreamListeners {
     /// What the backend's last good catalogue read says about `uri`;
     /// `Skip` while no listener holds one.
     pub(crate) fn verdict(&self, backend: &str, uri: &str) -> Verdict {
-        self.backends
-            .lock()
-            .get(backend)
+        self.answering(backend)
             .map_or(Verdict::Skip, |s| s.snapshot.lock().verdict(uri))
     }
 
     /// Whether a listener task holds a good snapshot for `backend`.
     pub(crate) fn has_snapshot(&self, backend: &str) -> bool {
-        self.backends
+        self.answering(backend)
+            .is_some_and(|s| s.snapshot.lock().is_known())
+    }
+
+    /// The entry whose snapshot may answer for `backend`: none when its
+    /// ledger was made for an instance the registry no longer holds, so a
+    /// replaced backend is judged live (design r3 L4, MIK-7897 LIFE.3b).
+    fn answering(&self, backend: &str) -> Option<Arc<Shared>> {
+        let entry = self.backends.lock().get(backend).cloned()?;
+        let now = self.registry.get(backend);
+        let replaced = self
+            .ledgers
             .lock()
             .get(backend)
-            .is_some_and(|s| s.snapshot.lock().is_known())
+            .is_some_and(|(made_for, _)| {
+                now.as_ref()
+                    .is_none_or(|b| !std::ptr::eq(made_for.as_ptr(), Arc::as_ptr(b)))
+            });
+        (!replaced).then_some(entry)
     }
 
     /// Whether a registered backend called `name` exists.
