@@ -298,7 +298,10 @@ async fn forward_sanitized(
     let client = caller.client.as_ref();
     release_if_interim(&forward, &mut admitted);
     let seen = (&admitted.call, preflight.challenge.as_deref());
-    let seal = (caller.verified_identity.as_ref(), envelope.params.as_ref());
+    let seal = (
+        (caller.verified_identity.as_ref(), caller.client.as_ref()),
+        envelope.params.as_ref(),
+    );
     let forward =
         DirectRouteGuards::after_dispatch(state, (seen, seal), client, &admission, forward).await;
     // The spend is settled; an unsettled reservation is given back here.
@@ -374,7 +377,10 @@ async fn forward_plain(
     let answered = if method == "tools/call" {
         release_if_interim(&forward, admitted);
         let seen = (&admitted.call, preflight.challenge.as_deref());
-        let seal = (caller.verified_identity.as_ref(), envelope.params.as_ref());
+        let seal = (
+            (caller.verified_identity.as_ref(), caller.client.as_ref()),
+            envelope.params.as_ref(),
+        );
         DirectRouteGuards::after_dispatch(state, (seen, seal), client, &admission, forward).await
     } else {
         forward.inspect(|_| super::record_client_success(state, client))
@@ -502,12 +508,15 @@ async fn redeem_retry(
     admitted: &mut Admitted<'_>,
     outbound: &mut Value,
 ) -> Result<(), Rejection> {
-    let identity = scope.caller.verified_identity.as_ref();
+    let who = (
+        scope.caller.verified_identity.as_ref(),
+        scope.caller.client.as_ref(),
+    );
     let sent = (scope.name, envelope.params.as_ref());
     let redeemed = scope
         .state
         .meta_mcp
-        .redeem_direct_retry(identity, sent, outbound)
+        .redeem_direct_retry(who, sent, outbound)
         .await;
     redeemed.map_err(|e| {
         if let Some(reservation) = admitted.idem_reservation.as_mut() {

@@ -193,6 +193,23 @@ pub(super) fn caller_cache_principal(
     }
 }
 
+/// What a continuation binds a caller with no verified identity to (MIK-8078,
+/// lead ruling A): the principal the idempotency guard keys that caller's
+/// calls on, from the same [`caller_cache_principal`], so the two can never
+/// name one caller two ways. A caller the guard cannot name binds to nothing
+/// (`Credential(None)`), and no continuation is minted for it.
+pub(super) fn key_binding<'a>(
+    credential_principal: Option<&str>,
+    authentication: Authentication,
+) -> crate::protocol::mrtr::PrincipalSource<'a> {
+    match caller_cache_principal(None, None, None, credential_principal, authentication) {
+        CachePrincipal::Caller(principal) => crate::protocol::mrtr::PrincipalSource::Key(principal),
+        CachePrincipal::Anonymous | CachePrincipal::Unresolved => {
+            crate::protocol::mrtr::PrincipalSource::Credential(None)
+        }
+    }
+}
+
 /// The proven subject a caller with no credential owns its keyed calls by
 /// (MIK-7688): an OAuth agent (its client id) or a client certificate (its
 /// SAN URI, else its CN), as the router's `caller_key` encodes them. Never a

@@ -168,7 +168,14 @@ impl crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
             Some(nonce) => crate::protocol::mrtr::PrincipalSource::Stdio {
                 nonce: nonce.bytes(),
             },
-            None => crate::protocol::mrtr::PrincipalSource::Credential(self.verified_identity),
+            None if self.verified_identity.is_some() => {
+                crate::protocol::mrtr::PrincipalSource::Credential(self.verified_identity)
+            }
+            // The guard's own inputs (`invoke.rs`, `caller_cache_principal`).
+            None => crate::gateway::meta_mcp::support::key_binding(
+                self.owner_principal(),
+                self.authentication,
+            ),
         }
     }
 }
