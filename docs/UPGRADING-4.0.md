@@ -195,6 +195,7 @@ backend" and "fails a capability file" first.**
 | 168 | Once its shutdown steps return, an HTTP gateway (`serve`, or no subcommand) waits at most 10 more seconds for disk work still running, then exits and logs at ERROR that it gave up waiting; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running after 10 seconds points at the storage to check |
 | 169 | On the per-backend route `POST /mcp/{name}`, a backend's `requestState` is sealed into a gateway continuation, as on `/mcp`; a retry must send that continuation back once. Callers with an API key and no verified identity now keep multi-round tool calls on both routes, bound to their key | None. A client that already echoes `requestState` as received keeps working. A client that wrote its own `requestState`, reused one, or sent it from another key gets -32602. Holders of one shared key count as one caller |
 | 170 | `cap search` and `cap registry-list` take `-C` for `--capabilities`, as every other command does; `-c` there now means the global `--config`. A debug build panicked on both commands, and a release build read `-c` as `--capabilities` | Scripts that passed `-c <dir>` to these two commands: use `-C <dir>` or `--capabilities <dir>` |
+| 171 | With agent authentication on, a listen or GET /mcp stream opened with an agent token is checked again at every delivery and ends, with no closing message, once the token expires, the agent leaves the registry or its key changes. A GET /mcp stream also checks each queued notification when it writes it, for every credential kind. With gateway authentication on, a valid agent token can listen on a public `/mcp`. `AuthState` gains `agent_auth` | Clients: re-subscribe with a fresh token when a stream ends. Library users building `AuthState` with a struct literal set `agent_auth` to the `AgentAuthState` the router's agent middleware uses (or `AgentAuthState::new(false, ...)` without agent auth) |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4453,6 +4454,33 @@ Both commands now take `-C` for `--capabilities`, the short form every other
 command already uses, and `-c` means `--config` everywhere. A script that
 passed `-c <dir>` to either command should pass `-C <dir>` or
 `--capabilities <dir>`.
+
+## 171. Agent-token streams end when the token stops validating
+
+**Startup:** no notice
+
+With agent authentication on, a stream opened with an agent token used to keep
+receiving notifications after the token expired or the agent was removed, and
+an agent token could not listen at all on a public `/mcp` with gateway
+authentication on. Now:
+
+- Every delivery re-validates the held agent token against the registry: its
+  signature, `exp` (with the 30-second leeway), issuer, audience and key. A
+  token that no longer validates receives nothing more, and the stream ends
+  without a graceful end message. The client re-subscribes with a fresh token.
+- A GET `/mcp` stream checks each queued notification again when it writes
+  it, for every credential kind, so a credential revoked between queueing and
+  writing is written nothing. A prompt queued behind it fails at once instead
+  of waiting out its timeout.
+- With gateway authentication on, a valid agent token that no gateway
+  credential recognises gets the public identity on a public `/mcp`, as a
+  request does, and can listen.
+- The RS256 deprecation warning is logged once per accepted request, not per
+  delivery.
+
+Library users: `AuthState` has a new public field, `agent_auth`. Code that
+builds `AuthState` with a struct literal sets it to the same `AgentAuthState`
+the router's agent middleware uses, so delivery checks the same registry.
 
 ## Upgrading from 3.5.x: a walkthrough
 
