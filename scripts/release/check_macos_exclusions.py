@@ -8,7 +8,8 @@ Usage: check_macos_exclusions.py [<root>]
 Scans the tree's Rust files for a test function, or a module in a test file,
 whose attributes keep it off macOS: `cfg(target_os = "linux")`,
 `cfg(not(target_os = "macos"))`, `cfg(all(..., not(target_os = "macos")))` or
-`cfg_attr(target_os = "macos", ignore ...)`, and every `--skip` of the macOS
+`cfg_attr(target_os = "macos", ignore ...)` (also `not(target_vendor = "apple")`,
+and as a file-level `#![cfg(...)]`, listed with item `*`), and every `--skip` of the macOS
 job's test step in .github/workflows/ci.yml. Fails on any such item missing
 from docs/release/macos-test-exclusions.tsv, on a row with no reason, and on a
 row that no longer matches an item (a stale exclusion)."""
@@ -21,10 +22,12 @@ from pathlib import Path
 
 LIST = "docs/release/macos-test-exclusions.tsv"
 WORKFLOW = ".github/workflows/ci.yml"
+# `#!` is a file-level gate: the whole file is kept off macOS (row item `*`).
 OFF_MACOS = re.compile(
-    r'#\[cfg\(target_os = "linux"\)\]'
-    r'|#\[cfg\(not\(target_os = "macos"\)\)\]'
-    r'|#\[cfg\(all\(.*(?:not\(target_os = "macos"\)|target_os = "linux").*\)\)\]'
+    r'#!?\[cfg\(target_os = "linux"\)\]'
+    r'|#!?\[cfg\(not\((?:target_os = "macos"|target_vendor = "apple")\)\)\]'
+    r'|#!?\[cfg\(all\(.*(?:not\(target_os = "macos"\)|not\(target_vendor = "apple"\)'
+    r'|target_os = "linux").*\)\)\]'
     r'|#\[cfg_attr\(target_os = "macos", ignore'
 )
 TEST_ATTR = re.compile(r"#\[(tokio::)?test\b")
@@ -43,6 +46,9 @@ def excluded(root: Path) -> set[tuple[str, str]]:
         lines = [line.strip() for line in file.read_text(errors="replace").splitlines()]
         for n, line in enumerate(lines):
             if not OFF_MACOS.match(line):
+                continue
+            if line.startswith("#!["):
+                found.add((rel, "*"))
                 continue
             # The attribute block this gate sits in, then the item it governs.
             start = n

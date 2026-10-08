@@ -92,6 +92,13 @@ class CheckMacosExclusions(unittest.TestCase):
             ["not run on macOS and not listed: src/reload/mod.rs e2e_tests"],
         )
 
+    def test_a_file_kept_off_apple_is_seen_as_a_whole(self) -> None:
+        rust = '#![cfg(all(unix, not(target_vendor = "apple")))]\n#[test]\nfn a() {}\n'
+        self.assertEqual(
+            self.tree(rust, path="tests/events.rs"),
+            ["not run on macOS and not listed: tests/events.rs *"],
+        )
+
     def test_an_equals_skip_is_seen(self) -> None:
         found = self.tree("fn nothing() {}\n", skips=" -- --skip=burst")
         self.assertEqual(found, ["not run on macOS and not listed: .github/workflows/ci.yml burst"])
