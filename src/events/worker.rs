@@ -93,8 +93,9 @@ impl EventsHub {
         // A deadline already past (more expired records waiting) is now.
         let mut wait = due
             .next
-            .map(|at| (at - Utc::now()).to_std().unwrap_or(Duration::ZERO))
-            .unwrap_or(IDLE)
+            .map_or(IDLE, |at| {
+                (at - Utc::now()).to_std().unwrap_or(Duration::ZERO)
+            })
             .min(IDLE);
         for record in due.ready {
             let Ok(permit) = Arc::clone(slots).try_acquire_owned() else {
