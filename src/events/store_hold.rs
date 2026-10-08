@@ -105,8 +105,9 @@ impl Store {
 
     /// In memory first, so the hold bounds the row on time even when the
     /// write fails; a failed write is retried by the next refresh.
-    fn persist_row(&self, state: &mut State, row: Subscription) -> std::io::Result<()> {
+    fn persist_row(&self, state: &mut State, mut row: Subscription) -> std::io::Result<()> {
         let id = row.id.clone();
+        row.generation = self.next_generation()?;
         let written = write_record(&self.subs_dir, &format!("{id}.json"), &row)
             .and_then(crate::events::records::Placed::durable);
         state.subs.insert(id.clone(), row);

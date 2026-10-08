@@ -27,6 +27,7 @@ mod limiter;
 mod operational_source;
 mod outbox;
 mod rate;
+mod reconcile;
 mod records;
 mod reload;
 mod rpc;

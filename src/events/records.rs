@@ -57,6 +57,11 @@ pub(crate) struct Subscription {
     pub failed_since: Option<DateTime<Utc>>,
     pub last_delivery_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+    /// Bumped from the store-wide counter on every persisted change of this
+    /// row (design r3 G3): a delete or delayed write judged against an older
+    /// row refuses it, even for a row re-made under the same id.
+    #[serde(default)]
+    pub generation: u64,
     /// The top-level payload fields its event carried when it was last
     /// committed: a restored route without one of them holds it (MIK-8076).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
