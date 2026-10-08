@@ -59,6 +59,8 @@ pub(crate) enum Answer {
     AskWith(&'static str),
     /// Like `AskOnce`, the question carrying a `_meta` that is not an object.
     AskBadMeta,
+    /// A response carrying both the question and a JSON-RPC `error`.
+    AskAndError,
     /// The backend cannot be reached: nothing was sent (`TransportConnect`).
     Unreachable,
     /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
@@ -143,7 +145,8 @@ fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRpcResponse> 
         | Answer::AskMalformed
         | Answer::AskBig
         | Answer::AskWith(_)
-        | Answer::AskBadMeta => {
+        | Answer::AskBadMeta
+        | Answer::AskAndError => {
             unreachable!("answered above")
         }
         Answer::Text(text) => Ok(JsonRpcResponse::success(
@@ -218,9 +221,18 @@ impl Transport for CountingBackend {
                 | Answer::AskBig
                 | Answer::AskWith(_)
                 | Answer::AskBadMeta
+                | Answer::AskAndError
         ) {
             return Ok(if n == 0 {
-                JsonRpcResponse::success(id, question(self.answer))
+                let mut asked = JsonRpcResponse::success(id, question(self.answer));
+                if matches!(self.answer, Answer::AskAndError) {
+                    asked.error = Some(crate::protocol::JsonRpcError {
+                        code: -32000,
+                        message: "backend failed".to_string(),
+                        data: None,
+                    });
+                }
+                asked
             } else {
                 JsonRpcResponse::success(
                     id,

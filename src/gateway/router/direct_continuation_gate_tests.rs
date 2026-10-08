@@ -204,3 +204,22 @@ async fn r21_a_failed_receipt_keeps_the_key_settled() {
         "the key was released: {again}"
     );
 }
+
+/// R26 (both arms): a response carrying a JSON-RPC `error` beside a question
+/// leaves the backend's outcome uncertain, so its idempotency key is settled,
+/// not released: a retry under that key does not reach the backend again.
+/// Mutant: the key parked on an interim claim whatever the error.
+#[tokio::test]
+async fn r26_a_question_with_an_error_keeps_the_key_settled() {
+    for backend in BACKENDS {
+        let fx = fixture(Answer::AskAndError, |_| {}).await;
+        let opening = json!({"_meta": { IDEMPOTENCY_KEY_META: format!("k-8078-26-{backend}") }});
+        let (_, first) = call(&fx, backend, Some("alice"), opening.clone()).await;
+        let (_, again) = call(&fx, backend, Some("alice"), opening).await;
+        assert_eq!(
+            dispatched(&fx),
+            1,
+            "{backend}: the key was released: {first} / {again}"
+        );
+    }
+}
