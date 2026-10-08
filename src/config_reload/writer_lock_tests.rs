@@ -24,7 +24,10 @@ fn config() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     (dir, path, lock)
 }
 
-#[allow(clippy::unnecessary_wraps, reason = "passed as the mutate closure, which returns a Result")]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the mutate closure returns a Result"
+)]
 fn add_b(config: &mut Config) -> Result<(), String> {
     let backend = config.backends["a"].clone();
     config.backends.insert("b".to_string(), backend);
@@ -212,7 +215,10 @@ async fn a_concurrent_writer_lands_after_the_edit_not_inside_it() {
     );
 }
 
-#[allow(clippy::unnecessary_wraps, reason = "passed as the mutate closure, which returns a Result")]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the mutate closure returns a Result"
+)]
 fn add_c(config: &mut Config) -> Result<(), String> {
     let backend = config.backends["a"].clone();
     config.backends.insert("c".to_string(), backend);
