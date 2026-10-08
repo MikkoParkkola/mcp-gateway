@@ -61,16 +61,8 @@ pub(super) fn with_backend_edited(
         }
         (None, None) => return None,
     };
-    // The edits write `\n`; a file whose first line break is `\r\n` gets
-    // its own ending back, rather than a change to every line.
-    let edited = if original
-        .find('\n')
-        .is_some_and(|at| original[..at].ends_with('\r'))
-    {
-        edited.replace("\r\n", "\n").replace('\n', "\r\n")
-    } else {
-        edited
-    };
+    // The edits write `\n`; every line gets its own ending back (MIK-8029).
+    let edited = super::eol::with_original_endings(original, &edited);
     let got: Value = serde_yaml::from_str(&edited).ok()?;
     // The text must also load as `config` itself: `original` is re-read at
     // write time, and a file another writer changed since `before` was
