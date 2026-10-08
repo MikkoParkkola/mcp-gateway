@@ -193,6 +193,7 @@ backend" and "fails a capability file" first.**
 | 166 | A running gateway's web UI backend edits (add, edit, delete) load, edit, write and reload `gateway.yaml` under one lock, a hidden `.gateway.yaml.lock` next to the config that stays there. CLI writes (`add`, `remove`, `setup`, `cap discover --write-config`) take the same lock for their write: one that meets another writer's lock waits up to 30 s, saying so, then writes nothing and exits non-zero. A CLI write that runs at the same moment as another writer can still undo that writer's change | Add `.gateway.yaml.lock` to `.gitignore` if the config lives in a repository. Do not run a CLI config write while the web UI or another command is saving |
 | 167 | On a multi-user gateway, an API-key or admin-bearer caller with no other identity gets its own `mcp` capability child, named by its credential, instead of a refusal. An `mcp` capability's cached answer is read back only by the caller whose child produced it | None. Callers who share one API key share one child |
 | 168 | Once its shutdown steps return, an HTTP gateway (`serve`, or no subcommand) waits at most 10 more seconds for disk work still running, then exits and logs at ERROR that it gave up waiting; it waited without limit, so a stalled mount (NFS, FUSE) kept the process alive forever | None. An ERROR at exit saying blocking work was still running after 10 seconds points at the storage to check |
+| 169 | `cap search` and `cap registry-list` take `-C` for `--capabilities`, as every other command does; `-c` there now means the global `--config`. A debug build panicked on both commands, and a release build read `-c` as `--capabilities` | Scripts that passed `-c <dir>` to these two commands: use `-C <dir>` or `--capabilities <dir>` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4414,6 +4415,21 @@ Work that finishes within the 10 seconds completes as before. When the wait
 runs the full 10 seconds, one ERROR line says the gateway exited with blocking
 work still running. That is a timeout, not a diagnosis: check the storage
 behind the task store and the audit log.
+
+## 169. `cap search` and `cap registry-list` take `-C` for `--capabilities`
+
+**Startup:** no notice
+
+`mcp-gateway cap search` and `mcp-gateway cap registry-list` gave `-c` to
+`--capabilities`. The global `--config` also answers to `-c` on every command,
+so on these two the short flag meant two things: a debug build panicked as the
+command was parsed, and a release build read `-c` as `--capabilities`, leaving
+`--config` without a short form there.
+
+Both commands now take `-C` for `--capabilities`, the short form every other
+command already uses, and `-c` means `--config` everywhere. A script that
+passed `-c <dir>` to either command should pass `-C <dir>` or
+`--capabilities <dir>`.
 
 ## Upgrading from 3.5.x: a walkthrough
 
