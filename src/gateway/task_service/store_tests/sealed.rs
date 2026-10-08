@@ -492,3 +492,22 @@ async fn sealed_rows_count_against_the_record_cap_during_the_load() {
         "three sealed rows loaded under a record cap of two"
     );
 }
+
+/// A service that gives its store back (a startup that failed after the
+/// open, or any shutdown) hands back the seal it set, so the caller's
+/// admission authority, which may keep serving without a task store, is
+/// not left refusing every new keyed call.
+#[tokio::test]
+async fn a_shut_down_service_hands_back_its_seal() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_path, _rows, admission, service) = sealed_service(dir.path(), &["k-sealed"]).await;
+    assert!(
+        !is_new_owner(&admission, "k-before"),
+        "premise: the open service seals new keys"
+    );
+    service.shutdown().await.expect("the store closes");
+    assert!(
+        is_new_owner(&admission, "k-after"),
+        "a shut-down service left the caller's admission sealed"
+    );
+}
