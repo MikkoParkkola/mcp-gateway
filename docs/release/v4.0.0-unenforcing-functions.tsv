@@ -29,3 +29,4 @@ src/gateway/task_service/store_disk.rs	visit_unit	1	A non-object admission membe
 src/gateway/task_service/store_expiry.rs	sealed_files	1	Absolute paths of sealed rows for the operator's startup report
 src/gateway/task_service/store_targets.rs	bounded	1	The constant bounded-failure transition
 src/transport/stdio.rs	diagnostic_command	1	Forwards to summarize_stdio_command for logs
+src/gateway/router/helpers.rs	build_http_response	1	Serialises a frame already wrapped as Egressed; the scan is decided where the Egressed value is made, not here.

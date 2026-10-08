@@ -88,6 +88,8 @@ src/gateway/router/backend_handlers/direct_dispatch.rs	redeem_retry	1	critical	d
 src/gateway/router/backend_handlers/direct_dispatch.rs	give_back_nonce	1	critical	b,d	give_back_nonce	Gives back the signing nonce of a call refused or failed before its backend ran (MIK-7698).
 src/gateway/router/backend_handlers/direct_dispatch.rs	park_if_interim	1	critical	d	park_if_interim	Holds an interim answer's idempotency key out of settlement until the guards ran (MIK-8078).
 src/gateway/router/backend_handlers/direct_dispatch.rs	settle_parked	1	critical	d	settle_parked	Releases the parked key once the answer was read; a failed receipt puts it back to be settled (MIK-8078).
+src/gateway/router/backend_handlers/direct_dispatch.rs	replay_scan	1	critical	d	replay_scan	Scans a cached result or error before it is replayed: the cache is shared across routes, so a skipped scan delivers backend text unscreened (MIK-8139).
+src/gateway/router/backend_handlers/direct_dispatch.rs	screen_target	1	standard	borderline	screen_target	Picks the policy target a direct answer is screened under; a wrong target applies another tool's response policy.
 src/gateway/router/backend_handlers/direct_list.rs	normalize_tools_list_response	1	critical	borderline	normalize_tools_list_response	Drops unjudged entries and rebuilds the result from an allow-list (A3).
 src/gateway/router/backend_handlers.rs	resolve_passthrough_headers	1	critical	a	resolve_passthrough_headers	Fails closed when a required passthrough credential is missing or the transport cannot carry it.
 src/gateway/router/backend_handlers.rs	cached_error_response	1	standard	borderline	cached_error_response	Keeps a cached firewall refusal a refusal on idempotent replay.
