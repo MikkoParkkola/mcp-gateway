@@ -12,7 +12,7 @@ use crate::gateway::WebhookRegistry;
 
 /// What subscribers rely on in one webhook event type.
 #[derive(Debug, Default, Clone)]
-struct Shape {
+pub(crate) struct Shape {
     filters: BTreeSet<String>,
     fields: BTreeSet<String>,
 }
@@ -42,77 +42,97 @@ fn first_incompatible(
         .map(|(name, _)| name.clone())
 }
 
-/// The last shape of each webhook type whose route is gone while stored
-/// subscriptions to it remain (MIK-8038): a partial load kept them, or
-/// their withdraw failed. A restore is judged against it as against a live
-/// route. In memory; changed only under the hub's catalogue gate.
-#[derive(Debug, Default)]
-pub(crate) struct Retired(BTreeMap<String, Shape>);
-
 /// Re-register the webhook routes of `capabilities`, unless the reload
-/// narrows a live event type, or a retired one that `subscribed` still
-/// names. Returns the event types the reload removed: their subscriptions
-/// are deleted (design §9).
+/// narrows a live event type (T52). Returns the new routes' shapes: a stored
+/// subscription they do not offer or serve is held, never deleted (MIK-8057,
+/// MIK-8076; see [`judge`]).
 ///
 /// # Errors
-/// The name of the event type the reload would narrow; the registry and
-/// `retired` are then left as they were.
+/// The name of the live event type the reload would narrow; the registry is
+/// then left as it was.
 pub(crate) fn refresh_webhooks(
     registry: &Arc<parking_lot::RwLock<WebhookRegistry>>,
     capabilities: &[CapabilityDefinition],
-    retired: &mut Retired,
-    subscribed: &BTreeSet<String>,
-) -> Result<Vec<String>, String> {
-    let old: BTreeMap<String, Shape> = registry
-        .read()
-        .event_routes()
-        .into_iter()
-        .filter_map(|(cap, route, def)| {
-            shape_of(&def).map(|s| (format!("webhook.{cap}.{route}.received"), s))
-        })
-        .collect();
-    let new: BTreeMap<String, Shape> = capabilities
-        .iter()
-        .flat_map(|cap| {
-            cap.webhooks.iter().filter_map(move |(route, def)| {
-                shape_of(def).map(|s| (format!("webhook.{}.{route}.received", cap.name), s))
-            })
-        })
-        .collect();
-    let mut judged: BTreeMap<String, Shape> = retired
-        .0
-        .iter()
-        .filter(|(name, _)| subscribed.contains(*name) && !old.contains_key(*name))
-        .map(|(name, shape)| (name.clone(), shape.clone()))
-        .collect();
-    judged.extend(
-        old.iter()
-            .map(|(name, shape)| (name.clone(), shape.clone())),
-    );
-    if let Some(name) = first_incompatible(&judged, &new) {
+) -> Result<BTreeMap<String, Shape>, String> {
+    let old = live_shapes(registry);
+    let new: BTreeMap<String, Shape> = shapes(capabilities.iter().flat_map(|cap| {
+        cap.webhooks
+            .iter()
+            .map(move |(route, def)| (cap.name.clone(), route.clone(), def.clone()))
+    }));
+    if let Some(name) = first_incompatible(&old, &new) {
         return Err(name);
     }
     registry.write().replace_capabilities(capabilities);
-    let gone = removed(&old, &new);
-    // Kept while a subscription outlives the route; a type offered again
-    // is judged by its live route from now on.
-    retired
-        .0
-        .retain(|name, _| subscribed.contains(name) && !new.contains_key(name));
-    for name in &gone {
-        if subscribed.contains(name) {
-            retired.0.insert(name.clone(), old[name].clone());
-        }
-    }
-    Ok(gone)
+    Ok(new)
 }
 
-/// The event names `old` has and `new` does not.
-fn removed(old: &BTreeMap<String, Shape>, new: &BTreeMap<String, Shape>) -> Vec<String> {
-    old.keys()
-        .filter(|name| !new.contains_key(*name))
-        .cloned()
+/// The shapes of the routes `registry` serves now, by event name.
+pub(crate) fn live_shapes(
+    registry: &Arc<parking_lot::RwLock<WebhookRegistry>>,
+) -> BTreeMap<String, Shape> {
+    shapes(registry.read().event_routes().into_iter())
+}
+
+/// Each routed event type's shape, by event name.
+fn shapes(
+    routes: impl Iterator<Item = (String, String, WebhookDefinition)>,
+) -> BTreeMap<String, Shape> {
+    routes
+        .filter_map(|(cap, route, def)| {
+            shape_of(&def).map(|s| (format!("webhook.{cap}.{route}.received"), s))
+        })
         .collect()
+}
+
+/// Whether the routes `shapes` serve `sub`, a stored webhook subscription:
+/// its type offered, every filter key a declared filter and mapped field,
+/// every payload field it was committed with still carried. A row with no
+/// payload fields yet takes its type's fields now. `None` for any other row.
+pub(crate) fn judge(
+    sub: &crate::events::records::Subscription,
+    shapes: &BTreeMap<String, Shape>,
+) -> Option<super::store::Judged> {
+    use super::store::{Held, Judged};
+    if !sub.name.starts_with(super::webhook_source::NAME_PREFIX) {
+        return None;
+    }
+    let Some(shape) = shapes.get(&sub.name) else {
+        return Some(Judged {
+            held: Some(Held {
+                reason: "event type no longer offered; the subscription resumes if it returns",
+                key: None,
+            }),
+            backfill: None,
+        });
+    };
+    let filters = sub.arguments.as_object().into_iter().flat_map(|m| m.keys());
+    let unserved = filters
+        .filter(|key| *key != "event_type")
+        .find(|key| !shape.filters.contains(*key) || !shape.fields.contains(*key))
+        .or_else(|| {
+            sub.payload_fields
+                .iter()
+                .find(|field| !shape.fields.contains(*field))
+        });
+    Some(Judged {
+        held: unserved.map(|key| Held {
+            reason: "not served by the event's current route; the subscription resumes if it returns",
+            key: Some(key.clone()),
+        }),
+        backfill: Some(shape.fields.iter().cloned().collect()),
+    })
+}
+
+/// The payload fields event type `name` carries on `registry`'s routes now.
+pub(crate) fn payload_fields(
+    registry: &parking_lot::RwLock<WebhookRegistry>,
+    name: &str,
+) -> Vec<String> {
+    shapes(registry.read().event_routes().into_iter())
+        .remove(name)
+        .map(|s| s.fields.into_iter().collect())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -141,19 +161,5 @@ mod tests {
             None,
             "removal is not narrowing"
         );
-    }
-
-    #[test]
-    fn removed_names_only_the_types_the_reload_dropped() {
-        let old = BTreeMap::from([
-            ("kept".to_owned(), shape(&[], &["a"])),
-            ("gone".to_owned(), shape(&[], &["a"])),
-        ]);
-        let new = BTreeMap::from([
-            ("kept".to_owned(), shape(&[], &["a"])),
-            ("added".to_owned(), shape(&[], &["a"])),
-        ]);
-        assert_eq!(removed(&old, &new), vec!["gone".to_owned()]);
-        assert!(removed(&old, &old).is_empty());
     }
 }

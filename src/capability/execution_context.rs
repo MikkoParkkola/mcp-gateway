@@ -97,6 +97,13 @@ pub struct CapabilityExecutionContext {
     /// starts a child. `None` for callers that bypass the backend. Not part of
     /// the cache identity.
     pub(crate) mcp_generation: Option<u64>,
+    /// The owner key of the credential this request validated,
+    /// `credential:<principal>` (`meta_mcp::support::credential_owner`), set only
+    /// when the request authenticated. An MCP child, and its cached answers,
+    /// are keyed on it when nothing above names the caller (MIK-7825).
+    /// Crate-visible: an embedder must not assert it.
+    // ci-allow-secret-debug: a truncated digest of the validated secret, never the secret; task owners record the same string.
+    pub(crate) credential_principal: Option<String>,
 }
 
 impl PartialEq for CapabilityExecutionContext {
@@ -159,6 +166,7 @@ impl CapabilityExecutionContext {
             // credential validated on this request. Fail closed.
             caller_provenance: crate::identity_propagation::CallerProvenance::Anonymous,
             mcp_generation: None,
+            credential_principal: None,
         }
     }
 

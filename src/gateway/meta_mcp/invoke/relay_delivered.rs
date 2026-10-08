@@ -143,6 +143,8 @@ impl MetaMcp {
                     digest,
                     in_plan: false,
                     pending_retain: false,
+                    step: None,
+                    kind: super::Kind::Delivered,
                 });
             }
             #[cfg(not(feature = "firewall"))]
@@ -244,13 +246,18 @@ fn keep_plan_receipts(
     // were dropped at staging and are dropped again here counts once.
     let staged = super::RELAY_STAGED.try_with(|s| fw.delivered_for_plan(answer, Some(s)));
     let Some(delivered) = staged.unwrap_or_else(|_| fw.delivered_for_plan(answer, None)) else {
-        receipts.retain(|r| !r.in_plan);
+        receipts.retain(|r| !r.in_plan && r.kind != super::Kind::Seam);
         return;
     };
     for r in receipts.iter_mut().filter(|r| r.in_plan) {
         let digest = std::mem::take(&mut r.digest);
         r.digest = fw.retain_delivered(digest, &delivered);
         r.pending_retain = false;
+    }
+    super::seams::add_seams(fw, receipts, answer);
+    for r in receipts.iter_mut().filter(|r| r.in_plan) {
+        let digest = std::mem::take(&mut r.digest);
+        r.digest = fw.cap_kept(digest);
     }
 }
 
@@ -663,5 +670,44 @@ mod tests {
             rewritten_text(&stamped).is_some(),
             "the gateway's final stamps stay a wrapper"
         );
+    }
+
+    /// `MIK-8025.SHAPE.1`: what the modern shaper writes (`resultType` when it
+    /// supplies one, the cache hints on a cacheable method) is the gateway's,
+    /// so a receipt copy leaves it out; a backend's own `resultType` stays.
+    #[tokio::test]
+    async fn a_copy_leaves_out_what_the_shaper_wrote() {
+        use crate::gateway::meta_mcp::invoke::gateway_writes::scope;
+        use crate::gateway::router::shape_modern_response;
+        use crate::protocol::{JsonRpcResponse, RequestId};
+        scope(async {
+            let body = json!({"contents": [{"uri": "res://x", "text": "body"}]});
+            let mut shaped = JsonRpcResponse::success(RequestId::Number(1), body);
+            let stamps = shape_modern_response(&mut shaped, "resources/read");
+            let result = shaped.result.as_ref().expect("a result");
+            assert_eq!(result["resultType"], "complete", "base: shaped {result}");
+            let written = result.as_object().map_or(0, serde_json::Map::len);
+            assert_eq!(written, 5, "base: the shaper wrote three members: {result}");
+            let copy = receipt_copy(result, stamps, AnswerShape::Literal).expect("a copy");
+            let mut kept: Vec<&str> = copy
+                .as_object()
+                .expect("an object")
+                .keys()
+                .map(String::as_str)
+                .collect();
+            kept.sort_unstable();
+            assert_eq!(
+                kept,
+                ["_meta", "contents"],
+                "the shaper's members kept: {copy}"
+            );
+            let own = json!({"content": [], "resultType": "input_required"});
+            let mut backend = JsonRpcResponse::success(RequestId::Number(2), own);
+            let stamps = shape_modern_response(&mut backend, "tools/call");
+            let result = backend.result.as_ref().expect("a result");
+            let copy = receipt_copy(result, stamps, AnswerShape::Literal).expect("a copy");
+            assert_eq!(copy["resultType"], "input_required", "{copy}");
+        })
+        .await;
     }
 }

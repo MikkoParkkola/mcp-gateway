@@ -75,6 +75,10 @@ pub(crate) struct DeliveryDigest {
     pub(super) sensitive: bool,
     /// Staged whole, its cap still to apply (a plan step, MIK-7992).
     deferred: bool,
+    /// A seam between plan steps of two or more sources (`MIK-8113`): the
+    /// contributing `server:tool` sources, ascending. Its copy may leave only
+    /// by a flow every one of them allows.
+    pub(super) seam_sources: Option<Box<[String]>>,
 }
 
 /// Leaf `i` as a whole segment, no seam before it; the first `values` are
@@ -171,6 +175,7 @@ impl DeliveryDigest {
             retained: Vec::new(),
             sensitive,
             deferred: false,
+            seam_sources: None,
         };
         (digest, cut)
     }
@@ -204,6 +209,7 @@ impl DeliveryDigest {
             retained: Vec::new(),
             sensitive,
             deferred: true,
+            seam_sources: None,
         };
         (digest, false)
     }
@@ -223,6 +229,7 @@ impl DeliveryDigest {
             retained: self.retained[..kept].to_vec(),
             sensitive: self.sensitive,
             deferred: false,
+            seam_sources: None,
         };
         Some((digest, cut || kept < self.retained.len()))
     }
@@ -254,6 +261,40 @@ impl DeliveryDigest {
         let per_leaf = std::mem::size_of::<Segment>();
         let text: usize = self.segments.iter().map(|s| s.text.len() + per_leaf).sum();
         std::mem::size_of::<Self>() + text
+    }
+
+    /// The fingerprints of a seam between plan steps (`MIK-8113`), at most
+    /// [`RECORD_CAP`] of them as any receipt's retained ones, under `sources`
+    /// when two or more sources contributed (a composite), else under the one
+    /// contributing source's own receipt identity.
+    pub(crate) fn of_seam(
+        mut fps: Vec<u64>,
+        sensitive: bool,
+        sources: Option<Box<[String]>>,
+    ) -> Self {
+        fps.sort_unstable();
+        fps.dedup();
+        fps.truncate(RECORD_CAP);
+        Self {
+            retained: fps,
+            sensitive,
+            seam_sources: sources,
+            ..Self::default()
+        }
+    }
+
+    /// The whole value leaves this digest keeps: delivered leaves a plan
+    /// step produced unchanged (`MIK-8113` ownership).
+    pub(crate) fn whole_values(&self) -> impl Iterator<Item = &str> {
+        self.segments
+            .iter()
+            .filter(|s| s.whole && !s.key)
+            .map(|s| s.text.as_str())
+    }
+
+    /// Whether this digest is sensitive.
+    pub(crate) const fn is_sensitive(&self) -> bool {
+        self.sensitive
     }
 
     /// This digest, as sensitive as `earlier` was: a rebuild from a redacted
@@ -317,6 +358,7 @@ impl DeliveryDigest {
             retained: Vec::new(),
             sensitive: self.sensitive,
             deferred: false,
+            seam_sources: None,
         };
         kept.with_original(detector, found, original, retained, &HashSet::new())
     }
@@ -374,6 +416,7 @@ impl DeliveryDigest {
             retained: Vec::new(),
             sensitive: self.sensitive,
             deferred: true,
+            seam_sources: None,
         };
         kept.with_original(detector, found, original, retained, &in_step)
     }
@@ -413,8 +456,8 @@ impl DeliveryDigest {
 
     /// This kept digest with `retained`, then the `original` fingerprints
     /// whose k-gram is `found` in a delivered leaf, spans adjacent kept
-    /// leaves, or is `in_step` (a removed leaf splits its run, and
-    /// re-winnowing the pieces can drop minima of text still delivered);
+    /// leaves, or is `in_step` (a removed leaf splits its run, and the
+    /// pieces' own fingerprints miss a k-gram that ran across the cut);
     /// each fingerprint once, so a
     /// later cap on their count never drops a distinct one for a repeat.
     fn with_original(
@@ -485,7 +528,7 @@ fn run_forms(run: &[&Segment]) -> Vec<String> {
 
 /// The string leaves of a plan's final answer, and every k-gram hash in them,
 /// taken leaf by leaf when first needed. With the kept runs' own k-grams they
-/// decide which fingerprints a receipt keeps, whichever window selected them.
+/// decide which fingerprints a receipt keeps.
 pub(crate) struct Delivered<'v> {
     values: HashSet<&'v str>,
     keys: HashSet<&'v str>,

@@ -414,6 +414,11 @@ impl ExportSink for FileExportSink {
             buf.push('\n');
         }
 
+        // A process that died inside a write (a kill, a crash, the exit after a
+        // bounded shutdown) left a partial last line; the in-memory latch above
+        // died with it. Cut back to the last complete line so the next record
+        // is never glued to the fragment (MIK-8130).
+        drop_torn_tail(&self.path)?;
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -527,6 +532,57 @@ impl ExportStatus {
             "governance": self.governance.snapshot(),
         })
     }
+}
+
+/// Cut the sink at `path` back to its last complete line when it ends inside
+/// one, as a process killed mid-write leaves it (MIK-8130). The dropped byte
+/// count is logged at WARN, never discarded silently. A path that is not a
+/// regular file (a FIFO, a device) is left alone: it has no tail to repair. A
+/// file that cannot be truncated fails the delivery, so the cursor does not
+/// advance over a torn stream.
+fn drop_torn_tail(path: &Path) -> Result<(), ExportError> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(meta) = std::fs::metadata(path) else {
+        return Ok(()); // not created yet: nothing to repair
+    };
+    if !meta.is_file() || meta.len() == 0 {
+        return Ok(());
+    }
+    let len = meta.len();
+    // Probe read-only first: a SIEM agent tailing the file may share it for
+    // reading only, and a clean tail needs no write handle at all.
+    let mut last = [0u8; 1];
+    let mut probe = std::fs::File::open(path)?;
+    probe.seek(SeekFrom::Start(len - 1))?;
+    probe.read_exact(&mut last)?;
+    if last[0] == b'\n' {
+        return Ok(());
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?;
+    // Walk back in chunks to the last newline; none means the whole file is
+    // one fragment.
+    let mut chunk = vec![0u8; 64 * 1024];
+    let (mut end, mut keep) = (len, 0);
+    while end > 0 {
+        let start = end.saturating_sub(chunk.len() as u64);
+        let read = usize::try_from(end - start).unwrap_or(chunk.len());
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut chunk[..read])?;
+        if let Some(at) = chunk[..read].iter().rposition(|&b| b == b'\n') {
+            keep = start + at as u64 + 1;
+            break;
+        }
+        end = start;
+    }
+    file.set_len(keep)?;
+    file.sync_all()?;
+    let dropped = len - keep;
+    let shown = path.display();
+    tracing::warn!(path = %shown, dropped, "SIEM sink ended in a partial line; dropped it before appending");
+    Ok(())
 }
 
 #[cfg(test)]

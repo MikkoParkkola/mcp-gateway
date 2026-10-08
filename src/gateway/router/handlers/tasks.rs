@@ -46,7 +46,11 @@ pub(super) fn session_owner_key(
 ) -> String {
     client.map_or_else(String::new, |c| {
         if c.authenticated && !c.principal.is_empty() {
-            format!("credential:{}", c.principal)
+            format!(
+                "{}{}",
+                crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
+                c.principal
+            )
         } else {
             String::new()
         }
@@ -82,18 +86,38 @@ pub(super) fn task_owner_key(
 pub(super) fn route_task_owner(
     state: &AppState,
     verified_identity: Option<&VerifiedIdentity>,
+    agent: Option<&OAuthAgentIdentity>,
     owner_key: &str,
 ) -> String {
     match verified_identity {
         Some(identity) => identity.stable_actor_id(),
-        // No identity exists to be kept apart when authentication is off, and
-        // pooling those callers is the operator's own configuration choice.
+        // Agent auth runs whether or not gateway auth does, so with gateway
+        // auth off a validated agent JWT is still an identity: pooling it with
+        // every other agent would let one read and cancel another's tasks
+        // (MIK-8031).
+        None if !state.auth_config.enabled => agent.map_or_else(
+            || AUTH_DISABLED_TASK_OWNER.to_owned(),
+            |agent| agent_task_owner(&agent.client_id),
+        ),
         // With authentication ON the owner key decides (`task_owner_key`:
         // proven subject, else credential), and an empty one is refused
         // upstream rather than pooled here.
-        None if !state.auth_config.enabled => AUTH_DISABLED_TASK_OWNER.to_owned(),
         None => task_principal(None, owner_key),
     }
+}
+
+/// The owner of a validated agent's tasks on a gateway with auth off.
+///
+/// The `client_id` enters as its SHA-256 digest: a fixed 74-byte owner fits task
+/// admission's metadata bound whatever the id's length, and no `client_id` can
+/// spell another's owner. Prefixed apart from `oidc:`, `credential:`,
+/// `subject:` and `local:`. `client_id` is the agent registry's key, so two
+/// agents never share one owner.
+fn agent_task_owner(client_id: &str) -> String {
+    format!(
+        "agent-jwt:{}",
+        crate::hashing::sha256_hex(client_id.as_bytes())
+    )
 }
 
 /// Everything the task-intent decision reads about one `tools/call`.
@@ -162,7 +186,7 @@ pub(super) fn task_intent_for_call(
     // owns its tasks as `credential:<principal>` (`route_task_owner`), and
     // checking the same string the record is admitted under keeps one
     // rendering of the caller (MIK-7967). With authentication off the owner
-    // is the gateway's own constant, never empty.
+    // is a validated agent's own key or the gateway's constant, never empty.
     if state.auth_config.enabled && req.owner.is_empty() {
         return Err(Box::new(JsonRpcResponse::error(
             Some(id),
@@ -515,6 +539,8 @@ pub(super) async fn tasks_cancel(
     route(state, &owner_text).cancel(id, params).await
 }
 
+#[cfg(test)]
+mod agent_owner_tests;
 #[cfg(test)]
 mod frame_subject_tests;
 #[cfg(test)]

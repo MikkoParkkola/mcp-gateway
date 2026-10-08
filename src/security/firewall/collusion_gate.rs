@@ -186,6 +186,16 @@ pub(super) struct RelayGate {
 }
 
 impl RelayGate {
+    /// See [`super::Firewall::keeping_every_kgram`].
+    #[cfg(test)]
+    pub(super) fn keep_every_kgram(&mut self) {
+        if let Some(detector) = self.detector.as_mut() {
+            Arc::get_mut(detector)
+                .expect("a gate just built shares its detector with no one")
+                .keep_every_kgram();
+        }
+    }
+
     pub(super) fn from_config(config: &CollusionConfig) -> Self {
         let compile = |patterns: &[String]| {
             patterns
@@ -249,8 +259,8 @@ fn detector_for(config: &CollusionConfig) -> Option<Arc<CollusionDetector>> {
 
 /// Result text kept per delivery: the first and last half of this, so an
 /// excerpt from either end still matches. Sized under the detector's
-/// 1,024-fingerprint keep limit (one fingerprint per ~8.5 chars, kept in
-/// text order): a larger cap would silently drop the tail's fingerprints.
+/// per-delivery keep limit (about one fingerprint per 4 chars and form, kept
+/// in text order): a larger cap would silently drop the tail's fingerprints.
 pub(super) const RECORD_CAP: usize = 6 * 1024;
 
 /// A context-integrity data class that makes a delivery sensitive.
@@ -531,7 +541,9 @@ impl Firewall {
         telemetry_metrics::counter!(PLAN_DROP_METRIC).increment(1);
     }
 
-    /// `digest` kept to what `delivered` carries; unchanged with relay
+    /// `digest` kept to what `delivered` carries, its deferred cap still to
+    /// apply: the seam pass reads which leaves it keeps whole before
+    /// [`Self::cap_kept`] cuts any (`MIK-8113`); unchanged with relay
     /// detection off.
     pub(crate) fn retain_delivered(
         &self,
@@ -539,12 +551,14 @@ impl Firewall {
         delivered: &Delivered<'_>,
     ) -> DeliveryDigest {
         match self.relay_detector() {
-            Some(detector) => {
-                let kept = digest.retaining(detector, delivered);
-                self.capped(&kept).unwrap_or(kept)
-            }
+            Some(detector) => digest.retaining(detector, delivered),
             None => digest,
         }
+    }
+
+    /// `digest` with its deferred cap applied, a cut counted.
+    pub(crate) fn cap_kept(&self, digest: DeliveryDigest) -> DeliveryDigest {
+        self.capped(&digest).unwrap_or(digest)
     }
 
     /// Record `digest` as delivered to `caller` from `server:tool`.
@@ -559,6 +573,19 @@ impl Firewall {
             return;
         };
         let source = format!("{server}:{tool}");
+        // MIK-8113: a seam of several sources leaves only by a flow every
+        // contributing source allows.
+        if let Some(sources) = digest.seam_sources.as_deref() {
+            let masks = sources.iter().map(|s| self.relay.source_flows(s)).collect();
+            detector.record_seam_at(
+                &source,
+                caller.key(),
+                (digest.sensitive, masks),
+                digest.fingerprints(detector),
+                Instant::now(),
+            );
+            return;
+        }
         let flows = self.relay.source_flows(&source);
         // MIK-7992: the one sink every record passes, so a plan step's
         // receipt never kept to its plan's answer is recorded capped too.
@@ -571,6 +598,26 @@ impl Firewall {
             digest.fingerprints(detector),
             Instant::now(),
         );
+    }
+}
+
+impl Firewall {
+    /// The seam fingerprints of a plan answer's value leaves (`MIK-8113`),
+    /// each leaf with the plan step that produced it; empty with relay
+    /// detection off.
+    pub(crate) fn seam_fingerprints(
+        &self,
+        parts: &[(&str, Option<u32>)],
+    ) -> Vec<super::collusion::SeamFingerprint> {
+        self.relay_detector()
+            .map(|detector| detector.seam_fingerprints(parts))
+            .unwrap_or_default()
+    }
+
+    /// The `allowed_flows` mask of each of `sources`, in order: a seam's flow
+    /// policy beside its sensitivity (`MIK-8113`).
+    pub(crate) fn source_masks(&self, sources: &[String]) -> Vec<u64> {
+        sources.iter().map(|s| self.relay.source_flows(s)).collect()
     }
 }
 

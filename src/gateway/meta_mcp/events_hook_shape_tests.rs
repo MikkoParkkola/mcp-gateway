@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8038 part 1: a type whose route is gone while its subscriptions
-//! remain keeps its last shape, so a reload that restores it narrower is
-//! refused as T52 refuses a narrowing of a live type.
+//! MIK-8038 part 1 under MIK-8057 and MIK-8076: a type whose route is gone
+//! while its subscriptions remain is restored as the reload says, narrower
+//! or not; a subscription the restored route cannot serve is held, never
+//! deleted, and resumes when the route serves it again.
 
 use super::*;
 
@@ -59,22 +60,16 @@ async fn restore_d2(d2: &std::path::Path, yaml: &str, caps: &CapabilityBackend, 
 }
 
 /// MIK-8038 `SHAPE.4` (A1): a partial reload keeps beta's subscription with
-/// its route gone; a complete reload restoring beta narrower is refused.
+/// its route gone; a complete reload restoring beta narrower applies, and
+/// the subscription it cannot serve stays, held.
 #[tokio::test]
-async fn a_narrower_restore_after_a_partial_reload_is_refused() {
+async fn a_narrower_restore_after_a_partial_reload_applies_and_holds() {
     let (_root, store, d2, caps, registry, meta) = two_dirs().await;
     drop_d2(&d2, &caps, &meta).await;
     assert_eq!(routes(&registry), ["alpha.push"], "beta's route is gone");
     restore_d2(&d2, &narrower("beta"), &caps, &meta).await;
-    assert_eq!(
-        routes(&registry),
-        ["alpha.push"],
-        "the narrower restore is refused, the routes stay as they were"
-    );
-    assert!(
-        subscribed(store.path(), "beta"),
-        "and the subscription stays"
-    );
+    assert_eq!(routes(&registry), ["alpha.push", "beta.push"]);
+    assert!(subscribed(store.path(), "beta"), "held, not deleted");
 }
 
 /// MIK-8038 `SHAPE.2`-style pin (A4): a wider restore applies.
@@ -103,93 +98,17 @@ async fn a_narrower_restore_of_a_type_nobody_subscribes_to_applies() {
     assert_eq!(routes(&registry), ["alpha.push", "beta.push"]);
 }
 
-/// Pin (A7): a refused restore changes nothing, and a second one is refused
-/// too; the compatible restore then applies.
+/// Pin (A7): a narrower restore holds; the full shape restored resumes, and
+/// a second cycle holds again, with nothing deleted.
 #[tokio::test]
-async fn a_refused_restore_leaves_the_retired_shape_in_place() {
+async fn a_held_subscription_survives_narrowing_cycles() {
     let (_root, store, d2, caps, registry, meta) = two_dirs().await;
-    drop_d2(&d2, &caps, &meta).await;
-    restore_d2(&d2, &narrower("beta"), &caps, &meta).await;
-    restore_d2(&d2, &narrower("beta"), &caps, &meta).await;
-    assert_eq!(routes(&registry), ["alpha.push"], "refused twice");
-    restore_d2(&d2, &capability("beta"), &caps, &meta).await;
-    assert_eq!(routes(&registry), ["alpha.push", "beta.push"]);
-    assert!(subscribed(store.path(), "beta"));
-    // A second cycle retires the shape again.
-    drop_d2(&d2, &caps, &meta).await;
-    restore_d2(&d2, &narrower("beta"), &caps, &meta).await;
-    assert_eq!(
-        routes(&registry),
-        ["alpha.push"],
-        "refused in the second cycle"
-    );
-}
-
-/// MIK-8038 `SHAPE.5` (A2): a reload removes beta but its withdraw fails
-/// (the store cannot delete), so the subscription stays; a reload then
-/// restoring beta narrower is refused.
-#[cfg(unix)]
-#[tokio::test]
-async fn a_narrower_restore_after_a_failed_withdraw_is_refused() {
-    use std::os::unix::fs::PermissionsExt as _;
-    let (_root, store, d2, caps, registry, meta) = two_dirs().await;
-    // Past the grace period, as a running gateway is: the reload withdraws
-    // by state, and the locked store makes that withdraw fail.
-    meta.run_deferred_webhook_withdraw().await;
-    let subs = store.path().join("subs");
-    std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(0o500)).expect("lock");
-    std::fs::remove_file(d2.join("beta.yaml")).expect("remove beta");
-    reload(&caps, &meta).await;
-    std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(0o700)).expect("unlock");
-    assert!(
-        subscribed(store.path(), "beta"),
-        "the failed withdraw kept it"
-    );
-    std::fs::write(d2.join("beta.yaml"), narrower("beta")).expect("write");
-    reload(&caps, &meta).await;
-    assert_eq!(
-        routes(&registry),
-        ["alpha.push"],
-        "the narrower restore is refused"
-    );
-    assert!(subscribed(store.path(), "beta"));
-}
-
-/// MIK-8038 `SHAPE.5` at startup (A3): the first startup pass withdraws the
-/// route its refresh removed, but the withdraw fails; a reload inside the
-/// grace period then restores beta narrower, and is refused.
-#[cfg(unix)]
-#[tokio::test]
-async fn a_narrower_restore_after_a_failed_first_pass_withdraw_is_refused() {
-    use std::os::unix::fs::PermissionsExt as _;
-    let dir = tempfile::tempdir().expect("dir");
-    let store = tempfile::tempdir().expect("store");
-    std::fs::write(dir.path().join("a.yaml"), capability("alpha")).expect("write");
-    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
-    seed_subscription(store.path(), "beta");
-    let (caps, registry, meta) = wired(&[dir.path()], store.path()).await;
-    caps.mark_initial_scan_complete();
-    std::fs::remove_file(dir.path().join("b.yaml")).expect("remove beta");
-    caps.reload()
-        .await
-        .expect("reload, its notice not yet handled");
-    let subs = store.path().join("subs");
-    std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(0o500)).expect("lock");
-    meta.reconcile_events_after_scan();
-    settled(|| routes(&registry) == ["alpha.push"]).await;
-    // Past the first pass's webhook decision, which runs under this gate.
-    drop(meta.events().expect("hub").catalogue_lock());
-    std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(0o700)).expect("unlock");
-    assert!(
-        subscribed(store.path(), "beta"),
-        "the failed withdraw kept it"
-    );
-    std::fs::write(dir.path().join("b.yaml"), narrower("beta")).expect("write");
-    reload(&caps, &meta).await;
-    assert_eq!(
-        routes(&registry),
-        ["alpha.push"],
-        "the narrower restore is refused"
-    );
-    assert!(subscribed(store.path(), "beta"));
+    for _cycle in 0..2 {
+        drop_d2(&d2, &caps, &meta).await;
+        restore_d2(&d2, &narrower("beta"), &caps, &meta).await;
+        assert!(subscribed(store.path(), "beta"));
+        restore_d2(&d2, &capability("beta"), &caps, &meta).await;
+        assert_eq!(routes(&registry), ["alpha.push", "beta.push"]);
+        assert!(subscribed(store.path(), "beta"));
+    }
 }
