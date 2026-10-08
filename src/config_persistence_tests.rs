@@ -357,3 +357,155 @@ fn a_cli_write_refuses_a_config_that_no_longer_loads() {
     write_config_preserving(&missing, &config).expect("a missing file is created");
     assert!(missing.exists());
 }
+
+/// MIK-8029: `text` spliced with `edit`'s change to the config it loads as.
+fn spliced(text: &str, edit: impl FnOnce(&mut Config)) -> String {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, text).expect("write");
+    let (before, read) = Config::load_literal_with_text(&path).expect("load");
+    assert_eq!(read, text, "the loader hands back the file's own bytes");
+    let mut config = before.clone();
+    edit(&mut config);
+    splice::with_backends_edited(&read, &before, &config, Splice::One).expect("spliced")
+}
+
+/// A file whose first line ends `\n` and whose other lines end `\r\n`.
+const MIXED: &str = "backends:\n  a:\n    command: x\r\n  b:\r\n    command: y\r\n";
+
+fn backend(yaml: &str) -> crate::config::BackendConfig {
+    serde_yaml::from_str(yaml).expect("backend")
+}
+
+/// `MIK-8029.EOL.1`: editing one field leaves every other line's ending as it
+/// was, and the edited line keeps its own.
+#[test]
+fn an_edit_keeps_every_line_ending_of_a_mixed_file() {
+    let out = spliced(MIXED, |c| {
+        c.backends.insert("b".into(), backend("command: z\n"));
+    });
+    assert_eq!(out, MIXED.replace("command: y", "command: z"));
+}
+
+/// `MIK-8029.EOL.2`: a removal keeps the other lines' endings.
+#[test]
+fn a_removal_keeps_every_other_line_ending_of_a_mixed_file() {
+    let out = spliced(MIXED, |c| {
+        c.backends.remove("a");
+    });
+    assert_eq!(out, "backends:\n  b:\r\n    command: y\r\n");
+}
+
+/// `MIK-8029.EOL.2/3`: an addition keeps the file's bytes and its new lines
+/// take the ending of the line they follow.
+#[test]
+fn an_addition_keeps_a_mixed_file_and_follows_its_last_ending() {
+    let out = spliced(MIXED, |c| {
+        c.backends.insert("c".into(), backend("command: w\n"));
+    });
+    assert!(out.starts_with(MIXED), "{out:?}");
+    let added = &out[MIXED.len()..];
+    assert!(
+        !added.is_empty() && added.split_inclusive('\n').all(|l| l.ends_with("\r\n")),
+        "{added:?}"
+    );
+}
+
+/// `MIK-8029.EOL.4`: a file with no final line break keeps none.
+#[test]
+fn a_file_without_a_final_line_break_keeps_none() {
+    let out = spliced("backends:\n  a:\n    command: x", |c| {
+        c.backends.insert("a".into(), backend("command: z\n"));
+    });
+    assert_eq!(out, "backends:\n  a:\n    command: z");
+}
+
+/// `MIK-8029.EOL.1`: two edits in one entry leave the untouched line between
+/// them with its own ending.
+#[test]
+fn a_line_between_two_edits_keeps_its_ending() {
+    let text = "backends:\n  a:\n    description: one\n    enabled: true\r\n    command: x\n";
+    let out = spliced(text, |c| {
+        c.backends.insert(
+            "a".into(),
+            backend("description: two\nenabled: true\ncommand: y\n"),
+        );
+    });
+    assert_eq!(
+        out,
+        text.replace("one", "two")
+            .replace("command: x", "command: y")
+    );
+}
+
+/// `MIK-8029.EOL.4`: an addition to a file with no final line break breaks
+/// the old last line and leaves the new last line unbroken.
+#[test]
+fn an_addition_to_an_unbroken_last_line_breaks_it() {
+    let text = "backends:\n  a:\n    command: x";
+    let out = spliced(text, |c| {
+        c.backends.insert("b".into(), backend("command: y\n"));
+    });
+    assert!(
+        out.starts_with("backends:\n  a:\n    command: x\n"),
+        "{out:?}"
+    );
+    assert!(out.contains("  b:") && !out.ends_with('\n'), "{out:?}");
+}
+
+/// A lone `\r` ending the file belongs to its last line, which the edit
+/// leaves alone.
+#[test]
+fn a_lone_carriage_return_at_the_end_is_kept() {
+    let text = "backends:\n  a:\n    command: x\n# kept\r";
+    let out = spliced(text, |c| {
+        c.backends.insert("a".into(), backend("command: z\n"));
+    });
+    assert_eq!(out, "backends:\n  a:\n    command: z\n# kept\r");
+}
+
+/// MIK-8029: the first backend added to a `\r\n` file with no `backends:`
+/// key ends its new lines `\r\n`, and no line gains a second `\r`.
+#[test]
+fn a_first_backend_in_a_crlf_file_follows_its_endings() {
+    let text = "# mine\r\n";
+    let out = spliced(text, |c| {
+        c.backends.insert("b".into(), backend("command: y\n"));
+    });
+    assert!(out.starts_with(text) && !out.contains("\r\r"), "{out:?}");
+    let added = &out[text.len()..];
+    assert!(
+        added.split_inclusive('\n').all(|l| l.ends_with("\r\n")),
+        "{added:?}"
+    );
+}
+
+/// MIK-8029: an untouched line whose text repeats an edited one (`TOKEN: y`
+/// under `headers` after `env`'s `TOKEN` became `y`) keeps its own ending.
+#[test]
+fn a_repeated_untouched_line_keeps_its_own_ending() {
+    let text = "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    env:\n      TOKEN: x\n    headers:\n      TOKEN: y\r\n    description: one\n";
+    let out = spliced(text, |c| {
+        let a = c.backends.get_mut("a").expect("a");
+        a.env.insert("TOKEN".into(), "y".into());
+        a.description = "two".into();
+    });
+    assert_eq!(
+        out,
+        text.replace("TOKEN: x", "TOKEN: y").replace("one", "two")
+    );
+}
+
+/// MIK-8029: two adjacent edited fields each keep their own ending.
+#[test]
+fn adjacent_edited_fields_keep_their_own_endings() {
+    let text = "backends:\n  a:\n    description: one\n    command: x\r\n";
+    let out = spliced(text, |c| {
+        c.backends
+            .insert("a".into(), backend("description: two\ncommand: y\n"));
+    });
+    assert_eq!(
+        out,
+        "backends:\n  a:\n    description: two\n    command: y\r\n"
+    );
+}
