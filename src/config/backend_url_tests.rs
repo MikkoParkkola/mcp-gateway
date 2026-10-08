@@ -133,3 +133,40 @@ fn a_key_of_another_transport_beside_url_is_refused() {
     let message = refusal("    url: \"https://a.example.com/mcp\"\n    cwd: \"/tmp\"\n");
     assert!(message.contains("b.cwd"), "{message}");
 }
+
+#[test]
+fn an_environment_transport_over_another_in_the_file_is_refused_naming_both() {
+    // Before 4.0 the first transport key present won and the other was
+    // dropped without a word, so this `ws_url` never took effect.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env = dir.path().join("gw.env");
+    crate::gateway::test_helpers::write_owner_only(
+        &env,
+        "MCP_GATEWAY_BACKENDS__B__WS_URL=wss://env.example.com/mcp\n",
+    )
+    .expect("write env file");
+    let message = match load(
+        dir.path(),
+        &format!(
+            "env_files: ['{}']\nbackends:\n  b:\n    http_url: \"https://file.example.com/mcp\"\n",
+            env.display()
+        ),
+    ) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("two transport keys loaded; one was silently dropped"),
+    };
+    assert!(
+        message.contains("backend b has both http_url and ws_url; keep one"),
+        "{message}"
+    );
+    assert!(!message.contains("example.com"), "echoed a URL: {message}");
+}
+
+#[test]
+fn two_transport_keys_in_the_file_are_refused_naming_both() {
+    let message = refusal("    command: \"srv\"\n    http_url: \"https://a.example.com/mcp\"\n");
+    assert!(
+        message.contains("backend b has both command and http_url; keep one"),
+        "{message}"
+    );
+}

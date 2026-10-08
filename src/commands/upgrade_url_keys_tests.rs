@@ -80,3 +80,15 @@ fn upgrade_with_config_rewrites_the_named_file() {
         "{text}"
     );
 }
+
+#[test]
+fn a_skipped_backend_message_covers_every_reason() {
+    let rewrite = UrlRewrite {
+        skipped: vec!["fs".into()],
+        ..UrlRewrite::default()
+    };
+    let lines = url_report(Path::new("g.yaml"), &rewrite, RewriteMode::Apply);
+    let line = lines.last().expect("a line");
+    assert!(line.contains("backends fs"), "{line}");
+    assert!(line.contains("could not edit safely"), "{line}");
+}
