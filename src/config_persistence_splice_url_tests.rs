@@ -40,3 +40,33 @@ fn a_backend_spelled_url_is_edited_in_its_own_spelling() {
     );
     assert!(!text.contains("http_url"), "{text}");
 }
+
+/// The edit `before` -> `after` on a commented entry spelled `url`.
+fn switched(after: &str) -> String {
+    let original = "backends:\n  svc:  # mine\n    url: \"https://a.example.test/mcp\"\n";
+    let before = Config::from_file_text(original).expect("before loads");
+    let config = Config::from_file_text(after).expect("config loads");
+    with_backend_edited(original, &before, &config, "svc").expect("spliced")
+}
+
+#[test]
+fn switching_a_url_backend_to_websocket_keeps_one_url_key() {
+    let text = switched("backends:\n  svc:\n    url: \"wss://b.example.test/mcp\"\n");
+    assert!(text.contains("# mine"), "{text}");
+    assert!(text.contains("wss://b.example.test/mcp"), "{text}");
+    assert!(
+        !text.contains("http_url") && !text.contains("ws_url"),
+        "{text}"
+    );
+    assert_eq!(text.matches("url:").count(), 1, "{text}");
+}
+
+#[test]
+fn switching_a_url_backend_to_a_command_drops_the_url() {
+    let text = switched("backends:\n  svc:\n    command: srv\n");
+    assert!(
+        text.contains("# mine") && text.contains("command: srv"),
+        "{text}"
+    );
+    assert!(!text.contains("url"), "{text}");
+}

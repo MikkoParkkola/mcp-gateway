@@ -56,6 +56,8 @@ impl super::Config {
 
     /// `text` loaded as a config file is, `url` resolved, with no environment
     /// layer: what a comment-keeping write proves its edited text loads as.
+    /// Extraction only: no strict-key check, no two-transport check and no
+    /// validation run here, so this is not proof that a file is acceptable.
     pub(crate) fn from_file_text(text: &str) -> Result<Self> {
         let file = ConfigFile {
             path: PathBuf::from("gateway.yaml"),
