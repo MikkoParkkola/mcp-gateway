@@ -567,13 +567,14 @@ impl Config {
             // `env:`.
             Expansion::Literal => Self::yaml(path),
         };
-        backend_transport::refuse_two_transports(&figment)?;
         let mut config: Self = figment
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
         // Before any validation, so a misspelt key is reported rather than the
         // validation error its absence causes.
         strict_keys::refuse_unrecognised_keys(path, &figment)?;
+        // After the file-only strict check: this catches a pair the env makes.
+        backend_transport::refuse_two_transports(&figment)?;
         // ORDER MATTERS, AND IT DID NOT BEFORE.
         //
         // `expand_env_vars` below INLINES `auth.bearer_token` and

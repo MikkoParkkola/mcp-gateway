@@ -59,7 +59,13 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
                 .as_ref()
                 .and_then(|d| d.get("backends")?.get(entry.name.as_str())?.get(alias))
                 .and_then(serde_yaml::Value::as_str);
-            if value.and_then(transport_key_for) != Some(alias) {
+            let Some(value) = value else {
+                // The parsed file has no such key: the line is text inside a
+                // value, so the backend needs a hand edit.
+                skipped.push(entry.name);
+                continue;
+            };
+            if transport_key_for(value) != Some(alias) {
                 // Renaming would switch transport or would not load.
                 kept.push(entry.name);
                 continue;
