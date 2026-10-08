@@ -62,6 +62,9 @@ mod relay_delivered_route;
 /// MIK-7887.RECEIPT.2: a redacted plan answer keeps each step's delivered text.
 #[cfg(feature = "firewall")]
 mod relay_plan_route;
+/// MIK-8113: seams between plan steps at the POST route.
+#[cfg(feature = "firewall")]
+mod relay_plan_seam_route;
 /// MIK-7934.PLANRCPT.1: a task plan redacted at settlement keeps step receipts.
 #[cfg(feature = "firewall")]
 mod relay_plan_task;
