@@ -12,7 +12,7 @@ use tokio::sync::broadcast;
 use super::SessionFrame;
 use super::{ClientSession, NotificationMultiplexer};
 use crate::gateway::auth::live::HeldCredential;
-use crate::gateway::session_id::SessionOwner;
+use crate::gateway::session_id::{SessionId, SessionOwner};
 
 impl NotificationMultiplexer {
     /// Whether `session_id` names a live session `owner` holds. A request that
@@ -47,9 +47,9 @@ impl NotificationMultiplexer {
         session_id: Option<&str>,
         owner: &SessionOwner,
         credential: Option<HeldCredential>,
-    ) -> Option<String> {
+    ) -> Option<SessionId> {
         let session = self.resume_owned(session_id, owner, credential)?;
-        Some(session.id.expose_secret().to_string())
+        Some(session.id.clone())
     }
 
     fn resume_owned(
