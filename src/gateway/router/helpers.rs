@@ -221,8 +221,12 @@ pub(crate) fn extract_request_id(value: &Value) -> Option<RequestId> {
     } else if value.is_i64() {
         Some(RequestId::Number(value.as_i64().unwrap()))
     } else if value.is_u64() {
-        #[allow(clippy::cast_possible_wrap)]
-        Some(RequestId::Number(value.as_u64().unwrap() as i64))
+        // Above `i64::MAX` the id cannot be held: unrecognised, never wrapped
+        // into a different, negative id that answers some other request.
+        value
+            .as_u64()
+            .and_then(|n| i64::try_from(n).ok())
+            .map(RequestId::Number)
     } else {
         None
     }

@@ -20,6 +20,7 @@ async fn a_body_declared_malformed_request_is_told_what_it_omitted() {
     let (direct_status, direct) = send(&fx, "/mcp/alpha", KEY, "tools/list", params, None).await;
     assert_eq!(mcp_status, axum::http::StatusCode::BAD_REQUEST, "{mcp}");
     assert_eq!(mcp["id"], 1, "the refusal answers its request: {mcp}");
+    assert_eq!(direct["id"], 1, "{direct}");
     assert_eq!(mcp["error"]["code"], -32602, "{mcp}");
     assert!(
         mcp["error"]["message"]
