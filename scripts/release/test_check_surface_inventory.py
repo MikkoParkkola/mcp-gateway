@@ -231,6 +231,30 @@ def test_repository_inventory_is_complete() -> None:
     assert inv.main([]) == 0, "docs/design/surface-4.0.md misses surface items; see stderr"
 
 
+HIDDEN_DOC = """## Surface: config
+| Item | Class | Reason | Migration | Defined at |
+|---|---|---|---|---|
+| `a.kept` | KEEP | needed | - | src/a.rs:1 |
+| `a.hidden` | INTERNAL | tuning | hidden key | src/a.rs:2 |
+| `a.auto` | AUTO | derived | hidden key | src/a.rs:3 |
+"""
+
+
+def table(*keys: str) -> str:
+    return "pub(super) const HIDDEN_CONFIG_KEYS: &[&str] = &[" + ", ".join(f'"{k}"' for k in keys) + "];"
+
+
+def test_hidden_table_matches_internal_and_auto_rows() -> None:
+    assert inv.check_hidden_table(HIDDEN_DOC, table("a.hidden", "a.auto")) == []
+    missing = inv.check_hidden_table(HIDDEN_DOC, table("a.hidden"))
+    assert any("misses 'a.auto'" in e for e in missing), missing
+    extra = inv.check_hidden_table(HIDDEN_DOC, table("a.hidden", "a.auto", "a.kept"))
+    assert any("lists 'a.kept'" in e for e in extra), extra
+    twice = inv.check_hidden_table(HIDDEN_DOC, table("a.hidden", "a.auto", "a.auto"))
+    assert any("twice" in e for e in twice), twice
+    assert inv.check_hidden_table(HIDDEN_DOC, "no table here") != []
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):

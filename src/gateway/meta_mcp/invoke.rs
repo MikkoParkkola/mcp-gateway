@@ -209,7 +209,7 @@ impl MetaMcp {
         // suffix, so their keys are byte-identical to before.
         // G4: the arm keys on the caller, never on the "" every modern caller
         // shares; a keyless caller gets the control arm and is not counted.
-        let arm_key = caller.experiment_key(session_id);
+        let arm_key = caller.experiment_key();
         let projection_key_suffix =
             crate::projection::projection_key_suffix(self.projection_mode, arm_key);
 

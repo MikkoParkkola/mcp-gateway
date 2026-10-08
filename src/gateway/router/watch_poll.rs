@@ -17,7 +17,7 @@ use std::sync::{Arc, Weak};
 use serde_json::{Value, json};
 
 use super::{AppState, OwnedRouterAuthorizer};
-use crate::events::watch_source::{Charge, Holder, PollFailed, Target, WatchHost};
+use crate::events::watch_source::{Catalogue, Charge, Holder, PollFailed, Target, WatchHost};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::InvokeScope;
 use crate::gateway::task_service::execution::OwnedCallerContext;
@@ -159,11 +159,19 @@ impl GatewayWatchHost {
 
 #[async_trait::async_trait]
 impl WatchHost for GatewayWatchHost {
-    fn targets(&self) -> Vec<Target> {
+    /// With the gateway gone, an empty partial catalogue: nothing withdrawn.
+    fn catalogue(&self) -> Catalogue {
         self.state
             .upgrade()
-            .map(|state| state.meta_mcp.watch_targets())
+            .map(|state| state.meta_mcp.watch_catalogue())
             .unwrap_or_default()
+    }
+
+    fn catalogue_generation(&self) -> u64 {
+        self.state
+            .upgrade()
+            .and_then(|state| state.meta_mcp.get_capabilities())
+            .map_or(0, |capabilities| capabilities.catalogue_generation())
     }
 
     fn may_invoke(&self, holder: &Holder, target: &Target) -> bool {
