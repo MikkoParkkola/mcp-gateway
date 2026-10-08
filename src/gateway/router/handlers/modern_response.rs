@@ -56,6 +56,8 @@ pub(crate) fn shape_modern_response(
     if let Some(ref mut result) = response.result
         && let Some(object) = result.as_object_mut()
     {
+        use crate::gateway::gateway_writes::{Layer, note};
+        let supplied = !object.contains_key("resultType");
         // Required on every result in this revision, and supplied here only
         // when the result does not already carry one.
         //
@@ -69,7 +71,8 @@ pub(crate) fn shape_modern_response(
             .entry("resultType")
             .or_insert_with(|| serde_json::Value::String("complete".to_string()));
 
-        if CACHEABLE_METHODS.contains(&method) {
+        let hinted = CACHEABLE_METHODS.contains(&method);
+        if hinted {
             // A relayed `resources/read` may carry its backend's own hint. The
             // gateway may shorten it, never lengthen it: raising a backend's
             // `ttlMs: 0` would let a client serve changing contents stale.
@@ -90,6 +93,16 @@ pub(crate) fn shape_modern_response(
                 crate::protocol::meta::KEY_SERVER_INFO.to_string(),
                 crate::protocol::meta::server_info(),
             );
+        }
+        // What the shaper wrote is the gateway's, so a receipt leaves it out
+        // (MIK-8025): `resultType` only when it supplied one, the cache hints
+        // whenever it wrote them. A backend's own `resultType` stays.
+        if supplied {
+            note(Layer::Answer, &["resultType"], result);
+        }
+        if hinted {
+            note(Layer::Answer, &["cacheScope"], result);
+            note(Layer::Answer, &["ttlMs"], result);
         }
     }
     GatewayStamps::Modern

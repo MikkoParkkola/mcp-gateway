@@ -93,6 +93,10 @@ const NOTED_PATHS: &[&[&str]] = &[
     // MIK-7994: the continuation envelope the gateway mints into an interim
     // answer.
     &["requestState"],
+    // MIK-8025: what the modern shaper writes.
+    &["resultType"],
+    &["cacheScope"],
+    &["ttlMs"],
 ];
 
 /// A note as the sync admission stores it beside a delivery. `seq` is not
