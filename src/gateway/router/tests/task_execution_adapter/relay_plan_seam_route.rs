@@ -438,3 +438,34 @@ async fn a_chains_two_results_form_a_seam() {
         "a seam between a chain's results was not receipted"
     );
 }
+
+/// `MIK-8113` (cap order): step one delivers a short field between two large
+/// ones, more than one receipt's recording cap together. Which leaves the
+/// step produced is read before that cap cuts its middle, so the short
+/// field beside step two's still forms a seam.
+#[tokio::test]
+async fn a_short_field_between_large_ones_keeps_its_seam() {
+    let large = |tag: &str| {
+        (0..700)
+            .map(|i| format!("{tag}{i:04} "))
+            .collect::<String>()
+    };
+    let (head, tail) = (large("h"), large("t"));
+    let blocks = json!({"content": [
+        {"type": "text", "text": head},
+        {"type": "text", "text": FIELD_A},
+        {"type": "text", "text": tail},
+    ], "isError": false});
+    let mut seq = vec![blocks, text(FIELD_B)];
+    seq.extend(std::iter::repeat_with(|| text("ok")).take(6));
+    let mock = MockBackend::answering(Answer::Sequence(seq));
+    let props = "    a:\n      path: $s1.content[0].text\n    b:\n      path: $s1.content[1].text\n    \
+                 c:\n      path: $s2.content[0].text\n    d:\n      path: $s1.content[2].text\n";
+    let (state, _store) = seam_state(&mock, &playbook(props)).await;
+    let output = run_seam(&state, json!({})).await;
+    assert_eq!(output["c"], FIELD_B, "base: {output}");
+    assert!(
+        refused(&state, "key-b", 2, &format!("{FIELD_A}{FIELD_B}")).await,
+        "a capped step lost the seam beside its short field"
+    );
+}

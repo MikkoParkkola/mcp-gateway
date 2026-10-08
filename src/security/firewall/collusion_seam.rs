@@ -99,26 +99,56 @@ impl CollusionDetector {
     }
 
     /// The form's text normalized as [`Self::kgram_hashes`] normalizes it,
-    /// with the step of each char. `None` when normalizing the parts one by
-    /// one does not give the text normalized whole (a part that composes
-    /// with its neighbour): that form then has no seam, a missed seam at
-    /// most, never a fingerprint the egress side cannot compute.
+    /// with the step of each char. Each part is normalized alone, except
+    /// where a boundary composes across (the next part opens with a mark
+    /// that joins the previous char): those parts are normalized together,
+    /// owned by their step only when they share one, else by none, so one
+    /// such boundary costs at most the seams over it. `None` only when the
+    /// result still differs from the text normalized whole: never a
+    /// fingerprint the egress side cannot compute.
     fn tagged_form(
         &self,
         parts: &[(&str, Option<u32>)],
         separator: &str,
     ) -> Option<(String, Vec<Option<u32>>)> {
         let nfc = ComposingNormalizerBorrowed::new_nfc();
+        let visible: Vec<String> = parts
+            .iter()
+            .map(|(text, _)| {
+                text.chars()
+                    .filter(|&c| !crate::security::sanitize::is_unsafe_control(c))
+                    .collect()
+            })
+            .collect();
+        let alone: Vec<String> = visible
+            .iter()
+            .map(|v| nfc.normalize(v).into_owned())
+            .collect();
         let mut stream: Vec<(char, Option<u32>)> = Vec::new();
-        for (i, (text, owner)) in parts.iter().enumerate() {
+        let mut i = 0;
+        while i < parts.len() {
+            // Each boundary is normalized once, so this stays linear.
+            let mut j = i;
+            while j + 1 < parts.len() {
+                let pair = format!("{}{separator}{}", visible[j], visible[j + 1]);
+                if nfc.normalize(&pair) == format!("{}{separator}{}", alone[j], alone[j + 1]) {
+                    break;
+                }
+                j += 1;
+            }
             if i > 0 {
                 stream.extend(separator.chars().map(|c| (c, None)));
             }
-            let visible: String = text
-                .chars()
-                .filter(|&c| !crate::security::sanitize::is_unsafe_control(c))
-                .collect();
-            stream.extend(nfc.normalize(&visible).chars().map(|c| (c, *owner)));
+            if j == i {
+                stream.extend(alone[i].chars().map(|c| (c, parts[i].1)));
+            } else {
+                let owner = parts[i]
+                    .1
+                    .filter(|o| parts[i..=j].iter().all(|p| p.1 == Some(*o)));
+                let fused = visible[i..=j].join(separator);
+                stream.extend(nfc.normalize(&fused).chars().map(|c| (c, owner)));
+            }
+            i = j + 1;
         }
         // Whitespace collapsed as `split_whitespace().join(" ")`: trimmed, and
         // each inner run one unowned space.

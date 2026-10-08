@@ -255,6 +255,10 @@ fn keep_plan_receipts(
         r.pending_retain = false;
     }
     super::seams::add_seams(fw, receipts, answer);
+    for r in receipts.iter_mut().filter(|r| r.in_plan) {
+        let digest = std::mem::take(&mut r.digest);
+        r.digest = fw.cap_kept(digest);
+    }
 }
 
 /// MIK-7998: the single staged receipt kept to a wrapper the gateway's own

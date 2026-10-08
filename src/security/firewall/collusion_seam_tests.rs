@@ -203,3 +203,21 @@ fn many_tiny_leaves_are_read_in_one_pass() {
         start.elapsed()
     );
 }
+
+/// A leaf that opens with a combining mark composes with the leaf before it
+/// when values are run together. That boundary is normalized as one piece;
+/// an unrelated seam elsewhere in the same form is still found.
+#[test]
+fn a_composing_boundary_elsewhere_keeps_other_seams() {
+    let det = detector();
+    let parts = [
+        (FIELD_A, Some(0)),
+        (FIELD_B, Some(1)),
+        ("cafe", Some(2)),
+        ("\u{301} terrace rows, closing time", Some(3)),
+    ];
+    assert!(
+        matched(&det, &parts, &format!("{FIELD_A}{FIELD_B}")),
+        "one composing boundary dropped every run-together seam"
+    );
+}

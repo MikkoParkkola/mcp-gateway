@@ -531,7 +531,9 @@ impl Firewall {
         telemetry_metrics::counter!(PLAN_DROP_METRIC).increment(1);
     }
 
-    /// `digest` kept to what `delivered` carries; unchanged with relay
+    /// `digest` kept to what `delivered` carries, its deferred cap still to
+    /// apply: the seam pass reads which leaves it keeps whole before
+    /// [`Self::cap_kept`] cuts any (`MIK-8113`); unchanged with relay
     /// detection off.
     pub(crate) fn retain_delivered(
         &self,
@@ -539,12 +541,14 @@ impl Firewall {
         delivered: &Delivered<'_>,
     ) -> DeliveryDigest {
         match self.relay_detector() {
-            Some(detector) => {
-                let kept = digest.retaining(detector, delivered);
-                self.capped(&kept).unwrap_or(kept)
-            }
+            Some(detector) => digest.retaining(detector, delivered),
             None => digest,
         }
+    }
+
+    /// `digest` with its deferred cap applied, a cut counted.
+    pub(crate) fn cap_kept(&self, digest: DeliveryDigest) -> DeliveryDigest {
+        self.capped(&digest).unwrap_or(digest)
     }
 
     /// Record `digest` as delivered to `caller` from `server:tool`.

@@ -8,7 +8,7 @@
 //! receipts, past which the remaining seams are grouped by flow policy. Each
 //! seam fingerprint is recorded under exactly one receipt per delivery.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::Value;
 
@@ -21,9 +21,17 @@ use super::PLAN_MEMBERS;
 /// grouped by policy (sensitivity and the contributors' flow masks).
 const COMPOSITES: usize = 16;
 
+/// One plan step's kept whole values, its sources and whether any of its
+/// receipts was delivered sensitive.
+#[derive(Default)]
+struct Step<'r> {
+    whole: HashSet<&'r str>,
+    sources: BTreeSet<(String, String)>,
+    sensitive: bool,
+}
+
 /// The seam fingerprints of one set of contributing sources, and whether
 /// any contributing step was delivered sensitive.
-#[derive(Default)]
 struct Group {
     sensitive: bool,
     fps: Vec<u64>,
@@ -54,16 +62,24 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
         }
         _ => walk(answer, &mut String::new(), None, &notes, &mut parts),
     }
+    // Each step's whole kept values, sources and sensitivity, read once.
+    let mut steps: HashMap<u32, Step<'_>> = HashMap::new();
+    for r in receipts.iter().filter(|r| r.in_plan) {
+        let Some(label) = r.step else { continue };
+        let step = steps.entry(label).or_default();
+        step.whole.extend(r.digest.whole_values());
+        step.sources.insert((r.server.clone(), r.tool.clone()));
+        step.sensitive |= r.digest.is_sensitive();
+    }
     // A leaf is its step's only while the step's receipt keeps it whole: text
     // a rewrite changed, or an equal string from elsewhere, is no step's.
-    let owned = |(text, label): (&str, Option<u32>)| {
-        label.filter(|l| {
-            receipts
-                .iter()
-                .any(|r| r.in_plan && r.step == Some(*l) && r.digest.keeps_whole_value(text))
+    let parts: Vec<(&str, Option<u32>)> = parts
+        .into_iter()
+        .map(|(text, label)| {
+            let owned = label.filter(|l| steps.get(l).is_some_and(|s| s.whole.contains(text)));
+            (text, owned)
         })
-    };
-    let parts: Vec<(&str, Option<u32>)> = parts.into_iter().map(|p| (p.0, owned(p))).collect();
+        .collect();
     if parts
         .iter()
         .filter_map(|p| p.1)
@@ -78,23 +94,19 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
         return;
     };
     let (key, keyed) = (caller.key.clone(), caller.keyed);
-    let mut groups: BTreeMap<BTreeSet<(String, String)>, Group> = BTreeMap::new();
+    // Grouped by contributing sources AND sensitivity, so a fingerprint is
+    // sensitive only when its own contributors are.
+    let mut groups: BTreeMap<(BTreeSet<(String, String)>, bool), Vec<u64>> = BTreeMap::new();
     for (fp, labels) in seams {
-        let contributors = receipts
-            .iter()
-            .filter(|r| r.in_plan && r.step.is_some_and(|s| labels.contains(&s)));
         let mut sources = BTreeSet::new();
         let mut sensitive = false;
-        for r in contributors {
-            sources.insert((r.server.clone(), r.tool.clone()));
-            sensitive |= r.digest.is_sensitive();
+        for step in labels.iter().filter_map(|l| steps.get(l)) {
+            sources.extend(step.sources.iter().cloned());
+            sensitive |= step.sensitive;
         }
-        if sources.is_empty() {
-            continue;
+        if !sources.is_empty() {
+            groups.entry((sources, sensitive)).or_default().push(fp);
         }
-        let group = groups.entry(sources).or_default();
-        group.sensitive |= sensitive;
-        group.fps.push(fp);
     }
     let seam = |server: String, tool: String, digest: DeliveryDigest| Receipt {
         key: key.clone(),
@@ -109,7 +121,8 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
     };
     let mut composites = 0;
     let mut overflow: BTreeMap<(bool, Vec<u64>), (BTreeSet<String>, Vec<u64>)> = BTreeMap::new();
-    for (sources, group) in groups {
+    for ((sources, sensitive), fps) in groups {
+        let group = Group { sensitive, fps };
         if let [(server, tool)] = sources.iter().collect::<Vec<_>>().as_slice() {
             let digest = DeliveryDigest::of_seam(group.fps, group.sensitive, None);
             receipts.push(seam(server.clone(), tool.clone(), digest));

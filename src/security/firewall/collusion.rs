@@ -176,7 +176,7 @@ pub(crate) enum Flows {
     /// source; an egress is allowed only when it matches an entry of every
     /// one, so the joined text never leaves by a flow some contributor's text
     /// may not take. Never empty.
-    Each(Box<[u64]>),
+    Each(std::sync::Arc<[u64]>),
 }
 
 impl Flows {
@@ -415,11 +415,15 @@ impl CollusionDetector {
         &self,
         source: &str,
         principal: &str,
-        (sensitive, masks): (bool, Vec<u64>),
+        (sensitive, mut masks): (bool, Vec<u64>),
         fps: Vec<u64>,
         now: Instant,
     ) {
-        let flows = Flows::Each(masks.into_boxed_slice());
+        // Distinct masks, shared by every fingerprint's holder: as allowing
+        // as the full list, and never one copy per fingerprint.
+        masks.sort_unstable();
+        masks.dedup();
+        let flows = Flows::Each(masks.into());
         self.record_held_at(source, principal, (sensitive, flows), fps, now);
     }
 

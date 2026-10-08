@@ -281,12 +281,13 @@ impl DeliveryDigest {
         }
     }
 
-    /// Whether `text` is a whole value leaf this digest keeps: a delivered
-    /// leaf a plan step produced unchanged (`MIK-8113` ownership).
-    pub(crate) fn keeps_whole_value(&self, text: &str) -> bool {
+    /// The whole value leaves this digest keeps: delivered leaves a plan
+    /// step produced unchanged (`MIK-8113` ownership).
+    pub(crate) fn whole_values(&self) -> impl Iterator<Item = &str> {
         self.segments
             .iter()
-            .any(|s| s.whole && !s.key && s.text == text)
+            .filter(|s| s.whole && !s.key)
+            .map(|s| s.text.as_str())
     }
 
     /// Whether this digest is sensitive.
