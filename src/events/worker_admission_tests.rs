@@ -131,7 +131,7 @@ async fn attempt_across_a_reload(after: Config) -> usize {
 #[tokio::test]
 async fn a_reload_that_removes_the_backend_before_the_send_sends_nothing() {
     assert_eq!(
-        attempt_across_a_reload(config(false)).await,
+        Box::pin(attempt_across_a_reload(config(false))).await,
         0,
         "sent for a backend the reload removed"
     );
@@ -141,7 +141,7 @@ async fn a_reload_that_removes_the_backend_before_the_send_sends_nothing() {
 #[tokio::test]
 async fn a_reload_that_keeps_the_backend_before_the_send_still_sends() {
     assert!(
-        attempt_across_a_reload(config(true)).await >= 1,
+        Box::pin(attempt_across_a_reload(config(true))).await >= 1,
         "not sent though the backend stayed"
     );
 }

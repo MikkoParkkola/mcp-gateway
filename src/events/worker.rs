@@ -376,16 +376,10 @@ impl EventsHub {
         }
         #[cfg(test)]
         self.before_send.pause().await;
-        // MIK-7907 WINDOW.1: admitted under the live config's gate, with no
-        // await inside, so a reload that has returned is always seen. Not
-        // admitted: unsent and held; the next attempt reads a fresh verdict.
+        // MIK-7907 WINDOW.1: admitted under the reload gate (`admits_now`).
         if !services.live.admit(|| self.admits_now(&record.name)) {
             services.audit_outcome(&ended(HELD)).await;
-            let held = Settle::Unsent {
-                next: Utc::now() + REFUSAL_RETRY,
-                status: HELD,
-            };
-            self.settle(services, record, held).await;
+            self.settle(services, record, unsent_later(HELD)).await;
             return;
         }
         // Charged once the attempt is on record, so a retry after an audit
@@ -767,6 +761,14 @@ fn grant(record: &OutboxRecord) -> Option<&str> {
 fn unsent_now(status: &'static str) -> Settle {
     Settle::Unsent {
         next: Utc::now(),
+        status,
+    }
+}
+
+/// Held unsent after a refused send admission; retried later (MIK-7907).
+fn unsent_later(status: &'static str) -> Settle {
+    Settle::Unsent {
+        next: Utc::now() + REFUSAL_RETRY,
         status,
     }
 }
