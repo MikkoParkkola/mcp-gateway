@@ -99,3 +99,43 @@ impl super::Backend {
         (stored.map(|tools| self.without_blocked(tools)), populated)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{NudgeKind, ToolsNudge};
+    use crate::backend::Backend;
+    use crate::backend::descriptor_gate::{Listing, Verdicts};
+
+    fn backend(name: &str) -> Backend {
+        Backend::new(
+            name,
+            crate::config::BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_descriptor_verdict_nudges_the_drain() {
+        // A verdict filters the shared view without any list being stored.
+        let backend = backend("a");
+        let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+        backend.attach_nudges(&feed);
+        let mut verdicts = Verdicts::default();
+        verdicts.add_unparseable([("x".to_string(), "digest".to_string())]);
+        backend.commit_verdicts("", Listing::Complete, verdicts);
+        assert_eq!(
+            nudges.try_recv().ok(),
+            Some(ToolsNudge::Backend {
+                name: "a".to_string(),
+                instance: backend.instance(),
+                kind: NudgeKind::Changed,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn instances_never_share_an_identity() {
+        assert_ne!(backend("a").instance(), backend("a").instance());
+    }
+}
