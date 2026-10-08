@@ -104,3 +104,65 @@ async fn a_written_initialize_dropped_is_never_cancelled() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(rx.try_recv().is_err(), "initialize is never cancelled");
 }
+
+/// The answer was routed, but its caller was dropped before reading it: the
+/// answer won the race, so no cancel follows. On this single-threaded test
+/// runtime the abort lands before the caller is polled again.
+#[tokio::test]
+async fn a_caller_dropped_after_its_answer_was_routed_sends_no_cancel() {
+    let (transport, mut rx, call, (frame, claim)) = queued_request("tools/call").await;
+    assert!(claim.expect("a claim").claim_write());
+    let id = json_of(&frame)["id"].to_string();
+    let (_, sender) = transport.inner.pending.remove(&id).expect("pending");
+    drop(sender.send(JsonRpcResponse::success(
+        serde_json::from_str(&id).unwrap(),
+        json!({}),
+    )));
+    call.abort();
+    drop(call.await);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(rx.try_recv().is_err(), "the routed answer won; no cancel");
+}
+
+/// Q1w through the real writer: a request abandoned in the queue never
+/// reaches the peer, and the frame behind it still does.
+#[tokio::test]
+async fn the_writer_skips_a_request_abandoned_in_the_queue() {
+    use crate::protocol::{JsonRpcRequest, RequestId};
+    use crate::transport::websocket_test_server::{Behaviour, WsPeer};
+    use crate::transport::write_claim::WriteClaim;
+
+    let peer = WsPeer::start(Behaviour::SilentRequests).await;
+    let transport = WebSocketTransport::new(&peer.url, HashMap::new(), ARRIVAL, None);
+    tokio::time::timeout(ARRIVAL, transport.connect())
+        .await
+        .expect("connects in time")
+        .expect("connects");
+    let abandoned = WriteClaim::new();
+    assert!(!abandoned.abandon(), "precondition: abandoned unwritten");
+    for (id, claim) in [(900, Some(abandoned)), (901, None)] {
+        let frame = super::McpFrame::Request(JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: RequestId::Number(id),
+            method: "tools/call".to_string(),
+            params: Some(json!({"name": "echo"})),
+        })
+        .to_ws_message()
+        .expect("a frame");
+        transport.enqueue((frame, claim)).await.expect("queued");
+    }
+    let deadline = tokio::time::Instant::now() + ARRIVAL;
+    while peer.seen.calls.lock().is_empty() {
+        assert!(tokio::time::Instant::now() < deadline, "nothing arrived");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let ids: Vec<Value> = peer
+        .seen
+        .calls
+        .lock()
+        .iter()
+        .map(|c| c["id"].clone())
+        .collect();
+    assert_eq!(ids, [json!(901)], "only the frame nobody abandoned");
+}
