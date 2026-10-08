@@ -206,3 +206,47 @@ fn one_unsafe_backend_rolls_back_every_rename_in_the_file() {
     assert!(out.changed.is_empty());
     assert_eq!(out.skipped, vec!["ok".to_string(), "fs".to_string()]);
 }
+
+#[test]
+fn an_address_that_is_not_a_literal_of_its_key_keeps_its_alias() {
+    // `${FS_URL}` comes from the environment and `url` cannot hold it; an
+    // `http_url` holding a ws address would change transport if renamed.
+    let text = "backends:\n  fs:\n    http_url: \"${FS_URL}\"\n  odd:\n    http_url: \"wss://odd.example.test/mcp\"\n  rt:\n    ws_url: \"wss://rt.example.test/mcp\"\n";
+    let out = rewrite_url_aliases(text, None);
+    assert_eq!(out.changed, vec![7], "{}", out.text);
+    assert_eq!(out.kept, vec!["fs".to_string(), "odd".to_string()]);
+    assert!(out.text.contains("http_url: \"${FS_URL}\""), "{}", out.text);
+}
+
+/// The binary keeps its own copy of the scheme table (the library's is not
+/// public); this holds the copy to what the loader actually does.
+#[test]
+fn the_scheme_table_agrees_with_the_loader() {
+    use mcp_gateway::config::{Config, TransportConfig};
+    for address in [
+        "http://a.example.test/mcp",
+        "https://a.example.test/mcp",
+        "HTTPS://a.example.test/mcp",
+        "ws://a.example.test/mcp",
+        "wss://a.example.test/mcp",
+        "WSS://a.example.test/mcp",
+        "ftp://a.example.test/mcp",
+        "a.example.test/mcp",
+    ] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        mcp_gateway::gateway::test_helpers::write_owner_only(
+            &path,
+            &format!("backends:\n  b:\n    url: \"{address}\"\n"),
+        )
+        .expect("write config");
+        let loaded = Config::load(Some(&path))
+            .ok()
+            .map(|c| match c.backends["b"].transport {
+                TransportConfig::Http { .. } => "http_url",
+                TransportConfig::WebSocket { .. } => "ws_url",
+                _ => "another transport",
+            });
+        assert_eq!(transport_key_for(address), loaded, "{address}");
+    }
+}

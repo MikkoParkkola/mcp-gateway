@@ -92,3 +92,25 @@ fn a_skipped_backend_message_covers_every_reason() {
     assert!(line.contains("backends fs"), "{line}");
     assert!(line.contains("could not edit safely"), "{line}");
 }
+
+#[test]
+fn upgrade_keeps_an_environment_address_says_so_and_the_file_still_loads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &path,
+        "backends:\n  fs:\n    http_url: \"${FS_URL}\"\n",
+    )
+    .expect("write config");
+    let (lines, text) = report(&path, RewriteMode::Apply);
+    assert!(text.contains("http_url: \"${FS_URL}\""), "{text}");
+    assert!(
+        mcp_gateway::config::Config::load_literal(Some(&path)).is_ok(),
+        "{text}"
+    );
+    let said = lines.join("\n");
+    assert!(
+        said.contains("kept") && said.contains("backends fs"),
+        "{said}"
+    );
+}

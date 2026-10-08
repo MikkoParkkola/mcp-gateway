@@ -217,3 +217,16 @@ fn a_literal_load_reads_the_file_alone_so_an_environment_transport_is_no_conflic
         config.backends["b"].transport
     );
 }
+
+#[test]
+fn a_url_from_a_variable_is_refused_saying_to_keep_the_alias() {
+    // `url` is resolved before variables expand, so it must be literal.
+    let message = refusal("    url: \"${FS_URL}\"\n");
+    assert!(
+        message.contains(
+            "backends.b.url must be a literal address; for one from the environment keep \
+             http_url or ws_url"
+        ),
+        "{message}"
+    );
+}

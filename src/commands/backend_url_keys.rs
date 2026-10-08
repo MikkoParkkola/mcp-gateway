@@ -10,12 +10,28 @@
 use std::collections::BTreeSet;
 
 /// The result of a rewrite: the new text, the 1-based numbers of the lines
-/// it changed, and the backends it could not edit.
+/// it changed, the backends it could not edit, and the backends it left on
+/// their alias because the address is not a literal of that key's scheme
+/// (an address from the environment, `${VAR}`, cannot be `url`).
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct UrlRewrite {
     pub text: String,
     pub changed: Vec<usize>,
     pub skipped: Vec<String>,
+    pub kept: Vec<String>,
+}
+
+/// The transport key a `url` stands for, by scheme. A private copy of the
+/// library's table, which is not public; a test holds the two equal.
+fn transport_key_for(url: &str) -> Option<&'static str> {
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        Some("http_url")
+    } else if lower.starts_with("ws://") || lower.starts_with("wss://") {
+        Some("ws_url")
+    } else {
+        None
+    }
 }
 
 /// Rewrite the aliases of every backend, or only of the backends in `only`.
@@ -51,12 +67,14 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
             text: text.to_string(),
             changed: Vec::new(),
             skipped,
+            kept: Vec::new(),
         };
     }
     UrlRewrite {
         text: rewritten,
         changed,
         skipped,
+        kept: Vec::new(),
     }
 }
 

@@ -311,3 +311,18 @@ fn an_older_url_key_names_the_command_that_rewrites_it() {
         row.detail
     );
 }
+
+#[test]
+fn an_older_url_key_holding_a_variable_names_no_upgrade() {
+    // `upgrade` leaves an address from the environment alone, so doctor
+    // does not suggest running it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, "backends:\n  fs:\n    http_url: \"${FS_URL}\"\n").expect("write config");
+    let row = check_hidden_keys(&path).expect("an older url key is listed");
+    assert!(
+        row.detail.contains("backends.<name>.http_url") && !row.detail.contains("upgrade"),
+        "{}",
+        row.detail
+    );
+}
