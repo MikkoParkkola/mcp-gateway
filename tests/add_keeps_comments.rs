@@ -215,11 +215,16 @@ fn several_backends_at_once_keep_comments() {
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED).expect("write");
-    let mut config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
-    config.backends.insert("one".into(), echo_backend());
-    config.backends.insert("two".into(), echo_backend());
-    let kept = mcp_gateway::config_persistence::write_config_preserving(&path, &config);
-    assert_eq!(kept, Ok(()));
+    let kept = mcp_gateway::config_persistence::write_config_preserving(
+        &path,
+        mcp_gateway::config_persistence::CommentLoss::Refuse,
+        |config| {
+            config.backends.insert("one".into(), echo_backend());
+            config.backends.insert("two".into(), echo_backend());
+            Ok(())
+        },
+    );
+    assert_eq!(kept, Ok(((), None)));
     let written = std::fs::read_to_string(&path).expect("read");
     assert!(written.contains("# kept by hand"), "{written}");
     let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
@@ -228,11 +233,13 @@ fn several_backends_at_once_keep_comments() {
     assert_eq!(names, ["old", "one", "two"], "{written}");
 }
 
-/// A stale config (another writer added `c` after it was loaded) differs by
-/// a removal plus an addition: it is refused, never spliced over `c`.
+/// An edit that swaps in a stale whole config (one that predates another
+/// writer's `c`) differs by a removal plus an addition: it is refused, never
+/// spliced over `c`. The lock makes a stale load impossible; this pins the
+/// splice's own refusal behind it.
 #[test]
 fn a_stale_multi_change_is_refused_not_spliced() {
-    use mcp_gateway::config_persistence::write_config_preserving;
+    use mcp_gateway::config_persistence::{CommentLoss, write_config_preserving};
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED).expect("write");
@@ -240,7 +247,11 @@ fn a_stale_multi_change_is_refused_not_spliced() {
     stale.backends.insert("b".into(), echo_backend());
     let current = format!("{NOTED}  c:\n    command: c\n");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, &current).expect("write");
-    let refusal = write_config_preserving(&path, &stale).expect_err("refused");
+    let refusal = write_config_preserving(&path, CommentLoss::Refuse, |config| {
+        *config = stale;
+        Ok(())
+    })
+    .expect_err("refused");
     assert!(
         refusal.starts_with("Not saved") && refusal.contains("--force"),
         "{refusal}"

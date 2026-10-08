@@ -7,16 +7,8 @@
 use std::path::Path;
 
 use mcp_gateway::config::Config;
-use mcp_gateway::config_persistence::{write_config, write_config_preserving};
-
-/// What a CLI write does when it cannot keep the file's comments.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CommentLoss {
-    /// Rewrite the whole file (`--force`).
-    Rewrite,
-    /// Write nothing and say which comment lines would be lost.
-    Refuse,
-}
+pub use mcp_gateway::config_persistence::CommentLoss;
+use mcp_gateway::config_persistence::write_config_preserving;
 
 /// `--force` rewrites a file whose comments cannot be kept; without it that
 /// write is refused and nothing is written.
@@ -28,30 +20,29 @@ pub fn comment_loss(force: bool) -> CommentLoss {
     }
 }
 
-/// How [`write_config_preserving`] starts a comment-loss refusal.
-const REFUSAL: &str = "Not saved:";
-
-/// Write `config` to `path`; the error is a message ready to print.
+/// Edit the config at `path` with `edit` and write it, as one transaction
+/// under the config lock; the error is a message ready to print.
 ///
-/// Every write is tried as a refusing one first, so `--force` still names
-/// the comment lines it drops before it rewrites the file. A write that
-/// keeps the file's comments but removes an entry names the comment lines
-/// that went with that entry.
-pub fn write(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), String> {
-    let before = std::fs::read_to_string(path).unwrap_or_default();
-    if let Err(refusal) = write_config_preserving(path, config) {
-        // `--force` overrides only the comment check; a validation or I/O
-        // failure is reported as itself, never as a comment warning.
-        if mode == CommentLoss::Refuse || !refusal.starts_with(REFUSAL) {
-            return Err(refusal);
-        }
-        write_config(path, config)
-            .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
+/// `--force` still names the comment lines it dropped. A write that keeps the
+/// file's comments but removes an entry names the comment lines that went
+/// with that entry: the text before is read inside the transaction, so the
+/// comparison is against the file this edit actually changed.
+pub fn write<T>(
+    path: &Path,
+    mode: CommentLoss,
+    edit: impl FnOnce(&mut Config) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut before = String::new();
+    let (value, forced) = write_config_preserving(path, mode, |config| {
+        before = std::fs::read_to_string(path).unwrap_or_default();
+        edit(config)
+    })?;
+    if let Some(refusal) = forced {
         eprintln!(
-            "Warning: --force rewrites {} in full. Without it this write is refused:\n  {refusal}",
+            "Warning: --force rewrote {} in full. Without it this write is refused:\n  {refusal}",
             path.display()
         );
-        return Ok(());
+        return Ok(value);
     }
     let after = std::fs::read_to_string(path).unwrap_or_default();
     let gone = dropped_comments(&before, &after);
@@ -63,7 +54,7 @@ pub fn write(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), Stri
             gone.join("; ")
         );
     }
-    Ok(())
+    Ok(value)
 }
 
 /// The lines of `before` whose comment `after` no longer has, as `line N`.
@@ -104,18 +95,18 @@ fn dropped_comments(before: &str, after: &str) -> Vec<String> {
 mod tests {
     use super::dropped_comments;
 
-    /// An I/O failure under `--force` comes back as that failure, not as a
-    /// comment warning over a rewrite (a directory where the file goes makes
-    /// the rename fail on every platform).
+    /// A failure under `--force` comes back as that failure, not as a
+    /// comment warning over a rewrite (a directory where the file goes fails
+    /// on every platform).
     #[test]
     fn an_io_failure_under_force_is_reported_as_itself() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
         std::fs::create_dir(&path).expect("dir in the way");
-        let config = mcp_gateway::config::Config::default();
-        let error = super::write(&path, &config, super::CommentLoss::Rewrite).expect_err("fails");
+        let error =
+            super::write(&path, super::CommentLoss::Rewrite, |_| Ok(())).expect_err("fails");
         assert!(
-            error.starts_with("Failed to write") && !error.contains(super::REFUSAL),
+            error.starts_with("Failed to") && !error.contains("Not saved:"),
             "{error}"
         );
     }

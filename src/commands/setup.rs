@@ -89,20 +89,16 @@ pub async fn run_setup_command(
         }
     }
 
-    // ── 4. Merge into config ───────────────────────────────────────────────
-    let mut config = match load_existing_or_default(output) {
-        Ok(config) => config,
+    // ── 4. Merge into config, under the config lock ───────────────────────
+    let added = match super::config_write::write(output, mode, |config| {
+        Ok(merge_servers_into_config(config, &selected))
+    }) {
+        Ok(added) => added,
         Err(e) => {
-            eprintln!("Error: Failed to load {}: {e}", output.display());
+            eprintln!("Error: {e}");
             return ExitCode::FAILURE;
         }
     };
-    let added = merge_servers_into_config(&mut config, &selected);
-
-    if let Err(e) = super::config_write::write(output, &config, mode) {
-        eprintln!("Error: {e}");
-        return ExitCode::FAILURE;
-    }
 
     println!();
     println!("Imported {added} server(s) into {}", output.display());

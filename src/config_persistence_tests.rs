@@ -344,3 +344,49 @@ fn a_written_config_is_owner_only_even_in_an_open_directory() {
     // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
     assert_owner_only("1718-W1", &path, false);
 }
+
+/// The one public writer: `Ok` when it keeps the comments; under
+/// `Refuse` the refusal as `Err`, naming the lines and leaving the file
+/// untouched; under `Rewrite` the rewrite, with that refusal returned.
+#[test]
+fn the_preserving_writer_reports_each_outcome() {
+    use crate::config_persistence::{CommentLoss, write_config_preserving};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    // Owner-only, as the loader requires (CONFIG.2): a file it refuses to
+    // load would be refused for that reason, not the one under test.
+    let write = crate::gateway::test_helpers::write_owner_only;
+    let flow = "backends: {a: {command: a}}  # kept by hand\n";
+    write(&path, flow).expect("write");
+    let two: Config =
+        serde_yaml::from_str("backends:\n  a: {command: a}\n  b: {command: b}\n").expect("config");
+    let set = |target: Config| {
+        move |config: &mut Config| {
+            *config = target;
+            Ok::<(), String>(())
+        }
+    };
+    let refusal =
+        write_config_preserving(&path, CommentLoss::Refuse, set(two.clone())).expect_err("refused");
+    assert!(
+        refusal.starts_with("Not saved:") && refusal.contains("line 1"),
+        "{refusal}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), flow);
+    let block = "backends:\n  a:  # kept by hand\n    command: a\n";
+    write(&path, block).expect("write");
+    assert_eq!(
+        write_config_preserving(&path, CommentLoss::Refuse, set(two.clone())),
+        Ok(((), None))
+    );
+    // Under Rewrite, a refusal is overridden and returned beside the value.
+    write(&path, flow).expect("write");
+    let (_, forced) =
+        write_config_preserving(&path, CommentLoss::Rewrite, set(two)).expect("rewritten");
+    assert!(forced.is_some_and(|r| r.contains("line 1")));
+    assert!(
+        std::fs::read_to_string(&path)
+            .expect("read")
+            .contains("# kept by hand")
+    );
+}

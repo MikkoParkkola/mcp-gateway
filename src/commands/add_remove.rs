@@ -15,7 +15,6 @@ use super::config_write::CommentLoss;
 
 use mcp_gateway::{
     config::TransportConfig,
-    config_persistence::load_existing_or_default,
     gateway::ui::backend_ops::{
         self, BackendUpdate, add_backend, get_backend, list_backends, parse_env_vars,
         remove_backend, resolve_backend, update_backend,
@@ -74,28 +73,18 @@ pub async fn run_add_command(
     // credential is not generated here on purpose; minting one as a side effect
     // of adding a backend is a surprise. Saying so is not.
     let creating_config = !config.exists();
-    let mut gateway_config = match load_existing_or_default(config) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("Error: Failed to load {}: {e}", config.display());
-            return ExitCode::FAILURE;
-        }
-    };
 
-    // ── Insert backend ─────────────────────────────────────────────────────
-    let notes = match add_backend(&mut gateway_config, name, resolved) {
+    // ── Insert backend and write, under the config lock ───────────────────
+    let notes = match super::config_write::write(config, mode, |gateway_config| {
+        add_backend(gateway_config, name, resolved)
+            .map_err(|msg| format!("{msg} (in {})", config.display()))
+    }) {
         Ok(notes) => notes,
-        Err(msg) => {
-            eprintln!("Error: {msg} (in {})", config.display());
+        Err(e) => {
+            eprintln!("Error: {e}");
             return ExitCode::FAILURE;
         }
     };
-
-    // ── Write config ───────────────────────────────────────────────────────
-    if let Err(e) = super::config_write::write(config, &gateway_config, mode) {
-        eprintln!("Error: {e}");
-        return ExitCode::FAILURE;
-    }
 
     // ── Report ─────────────────────────────────────────────────────────────
     let transport_label = match &transport {
@@ -128,14 +117,10 @@ pub async fn run_add_command(
 
 /// Run `mcp-gateway remove`.
 pub fn run_remove_command(name: &str, config: &Path, mode: CommentLoss) -> ExitCode {
-    let mut gateway_config = backend_ops::load_config_or_default(config);
-
-    if let Err(msg) = remove_backend(&mut gateway_config, name) {
-        eprintln!("Error: {msg} (in {})", config.display());
-        return ExitCode::FAILURE;
-    }
-
-    if let Err(e) = super::config_write::write(config, &gateway_config, mode) {
+    if let Err(e) = super::config_write::write(config, mode, |gateway_config| {
+        remove_backend(gateway_config, name)
+            .map_err(|msg| format!("{msg} (in {})", config.display()))
+    }) {
         eprintln!("Error: {e}");
         return ExitCode::FAILURE;
     }
@@ -282,10 +267,10 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
 /// Will be called from HTTP handlers in Task 1.2.
 #[allow(dead_code)]
 pub fn run_update_backend(name: &str, update: BackendUpdate, config: &Path) -> Result<(), String> {
-    let mut gateway_config = backend_ops::load_config_or_default(config);
-    update_backend(&mut gateway_config, name, update)?;
     // No `--force` reaches here: an edit that would drop comments is refused.
-    super::config_write::write(config, &gateway_config, CommentLoss::Refuse)
+    super::config_write::write(config, CommentLoss::Refuse, |gateway_config| {
+        update_backend(gateway_config, name, update)
+    })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

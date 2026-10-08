@@ -108,7 +108,7 @@ fn not_locked(path: &Path, e: lock::NotLocked) -> String {
 
 /// What a write does when it cannot keep the file's comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CommentLoss {
+pub enum CommentLoss {
     /// Re-serialise the whole file (a CLI write given `--force`, and the
     /// reload module's public write API).
     Rewrite,
@@ -159,20 +159,33 @@ pub(crate) fn write_config_with(
     write_spliced(path, config, mode, Splice::One)
 }
 
-/// Write `config` to `path` for a CLI command, keeping the file's comments.
+/// Edit the config at `path` for a CLI command, keeping the file's comments.
 ///
-/// The file's text is edited in place when `config` differs from it in
+/// One transaction under the cross-process config lock ([`lock`]): the file
+/// is loaded, `edit` changes it, and the result is written, so no other
+/// writer's change can land in between and be erased. While another writer
+/// holds the lock this waits (up to [`CLI_LOCK_WAIT`]) and says so once on
+/// stderr.
+///
+/// The file's text is edited in place when the result differs from it in
 /// `backends` alone: one backend added, removed or edited, or several added or
 /// edited (setup and discovery import). A write that would drop comments is
-/// refused, and the refusal names the comment lines; [`write_config`] (the
-/// CLI's `--force`) rewrites the file in full when it cannot splice. A `config`
-/// that is what the file already loads as writes nothing.
+/// refused under [`CommentLoss::Refuse`], and the refusal names the comment
+/// lines; under [`CommentLoss::Rewrite`] (the CLI's `--force`) the file is
+/// rewritten in full instead and that refusal is returned beside `edit`'s
+/// value, so the caller can say which lines went. An edit that changes
+/// nothing writes nothing, in either mode.
 ///
 /// # Errors
 ///
-/// The refusal, which starts with `Not saved:`, or a validation,
-/// serialisation or I/O failure, as a message ready to print.
-pub fn write_config_preserving(path: &Path, config: &Config) -> Result<(), String> {
+/// `edit`'s own error; the refusal, which starts with `Not saved:`; a lock
+/// that is busy past the wait or cannot be taken; or a load, validation,
+/// serialisation or I/O failure. Each is a message ready to print.
+pub fn write_config_preserving<T>(
+    path: &Path,
+    mode: CommentLoss,
+    edit: impl FnOnce(&mut Config) -> Result<T, String>,
+) -> Result<(T, Option<String>), String> {
     let _held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
         eprintln!(
             "Waiting for {} (another writer holds {})...",
@@ -181,10 +194,23 @@ pub fn write_config_preserving(path: &Path, config: &Config) -> Result<(), Strin
         );
     })
     .map_err(|e| not_locked(path, e))?;
-    write_spliced(path, config, CommentLoss::Refuse, Splice::NoRemoval).map_err(|e| match e {
-        Unwritten::CommentLoss(message) => message,
-        Unwritten::Failed(message) => format!("Failed to write {}: {message}", path.display()),
-    })
+    let mut config = load_existing_or_default(path)
+        .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
+    let value = edit(&mut config)?;
+    let failed = |message: String| format!("Failed to write {}: {message}", path.display());
+    match write_spliced(path, &config, CommentLoss::Refuse, Splice::NoRemoval) {
+        Ok(()) => Ok((value, None)),
+        Err(Unwritten::CommentLoss(refusal)) if mode == CommentLoss::Rewrite => {
+            write_spliced(path, &config, CommentLoss::Rewrite, Splice::NoRemoval).map_err(|e| {
+                match e {
+                    Unwritten::Failed(message) | Unwritten::CommentLoss(message) => failed(message),
+                }
+            })?;
+            Ok((value, Some(refusal)))
+        }
+        Err(Unwritten::CommentLoss(refusal)) => Err(refusal),
+        Err(Unwritten::Failed(message)) => Err(failed(message)),
+    }
 }
 
 /// How many backends one splice may change.
