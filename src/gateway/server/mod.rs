@@ -1845,7 +1845,7 @@ impl Gateway {
             path = %task_store_dir.display(),
             max_workers = self.config.tasks.max_workers,
             skipped_kept_key = skipped.reserved,
-            skipped_unreadable = skipped.unreadable,
+            skipped_sealed = skipped.sealed,
             "Durable task store opened"
         );
         // The trusted upstream adapter, installed after the store recovered and

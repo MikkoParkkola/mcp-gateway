@@ -13,6 +13,19 @@ use super::platform::sync_dir;
 use super::{CommitStage, Shared, StoreError, TaskStore, fire, record_name};
 use crate::protocol::tasks::TaskStatus;
 
+/// The admission binding a stored admission block describes.
+fn binding_of(
+    admission: &super::super::record::AdmissionRecord,
+) -> crate::idempotency::admission::RestoredBinding {
+    crate::idempotency::admission::RestoredBinding {
+        identity: admission.identity_digest.clone(),
+        principal_digest: admission.principal_digest.clone(),
+        operation: admission.operation_digest.clone(),
+        representation: admission.representation_digest.clone(),
+        metadata_bytes: admission.metadata_bytes,
+    }
+}
+
 /// The S1 store surface: restart enumeration and the conditional durable expiry
 /// that couples a record's deletion to its dedupe entry.
 impl TaskStore {
@@ -30,27 +43,121 @@ impl TaskStore {
             .iter()
             .map(|(id, entry)| (&entry.record.admission, id))
             .chain(state.reserved.iter().map(|(admission, id)| (admission, id)))
-            .map(|(admission, id)| {
-                (
-                    crate::idempotency::admission::RestoredBinding {
-                        identity: admission.identity_digest.clone(),
-                        principal_digest: admission.principal_digest.clone(),
-                        operation: admission.operation_digest.clone(),
-                        representation: admission.representation_digest.clone(),
-                        metadata_bytes: admission.metadata_bytes,
-                    },
-                    id.clone(),
-                )
+            .map(|(admission, id)| (binding_of(admission), id.clone()))
+            .collect()
+    }
+
+    /// Read every sealed row again (MIK-8052), off the runtime, and apply what
+    /// it found: a removed file leaves the seal; a repaired row whose binding
+    /// `import` accepts joins the reserved rows. `import` runs outside the
+    /// store's lock. Returns how many rows stay sealed, for the caller to hand to
+    /// admission AFTER any import, so a repaired key is never left unguarded.
+    pub(in crate::gateway::task_service) async fn reread_sealed(
+        &self,
+        import: impl Fn(crate::idempotency::admission::RestoredBinding, String) -> bool,
+    ) -> usize {
+        let names: Vec<String> = self.0.state().sealed.iter().cloned().collect();
+        if names.is_empty() {
+            return 0;
+        }
+        let shared = Arc::clone(&self.0);
+        let found = tokio::task::spawn_blocking(move || {
+            names
+                .into_iter()
+                .map(|name| {
+                    let outcome = super::disk::reread_record(
+                        &shared.dir,
+                        &name,
+                        shared.limits,
+                        shared.dir_id,
+                    );
+                    (name, outcome)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        for (name, outcome) in found {
+            let kept = match outcome {
+                super::disk::Reread::Sealed => continue,
+                super::disk::Reread::Gone => None,
+                super::disk::Reread::Repaired(admission, id) => {
+                    // The load's per-principal cap holds for a repaired row too:
+                    // a seal never lifts over a directory startup would refuse.
+                    let held = {
+                        let state = self.0.state();
+                        state
+                            .entries
+                            .values()
+                            .map(|entry| &entry.record.admission)
+                            .chain(state.reserved.iter().map(|(kept, _)| kept))
+                            .filter(|kept| kept.principal_digest == admission.principal_digest)
+                            .count()
+                    };
+                    if held >= self.0.limits.per_principal {
+                        tracing::error!(record = %name, "repaired task record would exceed its owner's cap; it stays sealed");
+                        continue;
+                    }
+                    if !import(binding_of(&admission), id.clone()) {
+                        tracing::error!(record = %name, "repaired task record's key is refused by admission; it stays sealed");
+                        continue;
+                    }
+                    Some((admission, id))
+                }
+            };
+            tracing::warn!(record = %name, repaired = kept.is_some(), "sealed task record cleared");
+            let mut state = self.0.state();
+            state.sealed.remove(&name);
+            state.reserved.extend(kept);
+        }
+        let (sealed, reserved) = {
+            let state = self.0.state();
+            if !state.sealed.is_empty() {
+                // Once per sweep while sealed: loud on purpose, names only.
+                let files: Vec<&str> = state.sealed.iter().map(String::as_str).collect();
+                tracing::error!(
+                    ?files,
+                    "task records with an unreadable key: new keyed calls are refused (409) until each file is repaired (its key is kept) or removed (its key is released)"
+                );
+            }
+            (state.sealed.len(), state.reserved.len())
+        };
+        for (class, count) in [("sealed", sealed), ("reserved", reserved)] {
+            #[allow(clippy::cast_precision_loss)]
+            telemetry_metrics::gauge!("mcp_task_store_skipped_records", "class" => class)
+                .set(count as f64);
+        }
+        sealed
+    }
+
+    /// Mark `name` sealed as though the load had found its key unreadable, for
+    /// tests above the store that cannot plant a row before their store opens.
+    #[cfg(test)]
+    pub(in crate::gateway::task_service) fn seal_for_test(&self, name: &str) {
+        self.0.state().sealed.insert(name.to_owned());
+    }
+
+    /// The rows the load skipped, for the startup report (MIK-8023).
+    /// The full path of each sealed row's file, for the operator (MIK-8052).
+    pub(crate) fn sealed_files(&self) -> Vec<std::path::PathBuf> {
+        let state = self.0.state();
+        // Absolute even when `tasks.store_dir` is relative, so the operator is
+        // never left to resolve it against the gateway's working directory.
+        state
+            .sealed
+            .iter()
+            .map(|name| {
+                let path = self.0.dir.join(name);
+                std::path::absolute(&path).unwrap_or(path)
             })
             .collect()
     }
 
-    /// The rows the load skipped, for the startup report (MIK-8023).
     pub(crate) fn skipped_records(&self) -> super::SkippedRecords {
         let state = self.0.state();
         super::SkippedRecords {
             reserved: state.reserved.len(),
-            unreadable: state.unreadable,
+            sealed: state.sealed.len(),
         }
     }
 

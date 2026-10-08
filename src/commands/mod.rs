@@ -207,7 +207,6 @@ fn build_init_config(with_examples: bool, profile: InitProfile, starter: &str) -
             "meta_mcp:\n",
             "  enabled: true\n",
             "  cache_tools: true\n",
-            "  cache_ttl: 300s\n",
             "{examples_section}",
             "{starter}",
         ),

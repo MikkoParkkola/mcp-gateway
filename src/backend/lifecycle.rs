@@ -490,15 +490,11 @@ impl Backend {
                 transport
             }
             #[cfg(feature = "a2a")]
-            TransportConfig::A2a { a2a_url, .. } => {
-                // A2A backends are managed by A2aProvider, not the legacy
-                // Backend/Transport stack.  Reaching this branch means an A2A
-                // backend was incorrectly started through the legacy path.
-                return Err(crate::Error::Config(format!(
-                    "A2A backend '{name}' (url: {a2a_url}) must be started via A2aProvider, \
-                     not the legacy Backend::start() path",
-                    name = self.name,
-                )));
+            TransportConfig::A2a { .. } => {
+                built_under = self.mark_connecting();
+                self.begin_connecting(built_under)?;
+                listen = None;
+                self.start_a2a(built_under).await?
             }
         };
 
