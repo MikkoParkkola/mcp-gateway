@@ -46,7 +46,11 @@ pub(super) fn session_owner_key(
 ) -> String {
     client.map_or_else(String::new, |c| {
         if c.authenticated && !c.principal.is_empty() {
-            format!("credential:{}", c.principal)
+            format!(
+                "{}{}",
+                crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
+                c.principal
+            )
         } else {
             String::new()
         }

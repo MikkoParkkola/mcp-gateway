@@ -34,10 +34,20 @@ while IFS= read -r line; do
 done
 "#;
 
-/// A path as `sh` reads it: forward slashes, since a Windows backslash is an
-/// escape to the shell (and to the quoted YAML scalar it sits in).
+/// A temporary home whose path holds a space and an apostrophe, so a path
+/// left unquoted (or unescaped in YAML) in the peer script or its `command:`
+/// line breaks and the row fails.
+fn spaced_home() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("home o'space ")
+        .tempdir()
+        .expect("temporary home")
+}
+
+/// A path as `sh` reads it: double-quoted so a space cannot split it, with
+/// forward slashes because a Windows backslash is a shell escape.
 fn sh_path(path: &std::path::Path) -> String {
-    path.display().to_string().replace('\\', "/")
+    format!("\"{}\"", path.display().to_string().replace('\\', "/"))
 }
 
 fn spawn_gateway(home: &std::path::Path) -> StdioSession {
@@ -46,8 +56,9 @@ fn spawn_gateway(home: &std::path::Path) -> StdioSession {
     mcp_gateway::gateway::test_helpers::write_owner_only(
         home.join("gateway.yaml"),
         format!(
-            "backends:\n  {BACKEND}:\n    command: \"sh {}\"\n",
-            sh_path(&script)
+            "backends:\n  {BACKEND}:\n    command: 'sh {}'\n",
+            // A single-quoted YAML scalar writes an apostrophe as two.
+            sh_path(&script).replace('\'', "''")
         ),
     )
     .expect("write gateway.yaml");
@@ -56,7 +67,7 @@ fn spawn_gateway(home: &std::path::Path) -> StdioSession {
 
 #[tokio::test]
 async fn a_null_method_frame_is_not_delivered_as_the_calls_result() {
-    let home = tempfile::tempdir().expect("home");
+    let home = spaced_home();
     let mut session = spawn_gateway(home.path());
     session
         .send(&json!({

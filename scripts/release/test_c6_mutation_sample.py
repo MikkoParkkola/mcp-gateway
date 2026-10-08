@@ -56,6 +56,15 @@ class C6Sample(unittest.TestCase):
         self.assertEqual(run(), run(str(FRAME)))
         self.assertNotEqual(run(str(scratch)), run(str(FRAME)))
 
+    def test_a_moved_stdio_function_stays_in_stdio_dispatch(self):
+        live = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/release/c6_mutation_sample.py"), NONCE,
+             str(ROOT / "docs/release/v4.0.0-critical-functions.tsv")],
+            cwd=ROOT, capture_output=True, text=True, check=True).stdout.splitlines()
+        groups = {l.split("\t")[2] for l in live
+                  if l.split("\t")[3] == "src/transport/stdio_env.rs"}
+        self.assertEqual(groups, {"stdio dispatch"})
+
     def test_sample_quotas(self):
         rows = [l.split("\t") for l in RANKING.read_text(encoding="utf-8").splitlines()
                 if l and not l.startswith(("#", "rank\t"))]

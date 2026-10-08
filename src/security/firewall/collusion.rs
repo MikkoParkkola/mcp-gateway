@@ -7,7 +7,7 @@
 //! backend call, when B never received it from that source itself. Each side
 //! looks ordinary to a per-principal control; only the pair is suspicious.
 //!
-//! This is the pure core: winnowed fingerprints, bounded in-process state and
+//! This is the pure core: sampled fingerprints, bounded in-process state and
 //! the relay predicate. Wiring into the request and response paths, the
 //! config surface and metrics come in later increments.
 
@@ -70,9 +70,10 @@ pub(crate) struct RelayFinding {
 
 /// Characters per k-gram. Nothing shorter than this can ever match.
 pub(super) const K: usize = 48;
-/// Hashes per winnowing window: a shared run of `K + W - 1` chars yields at
-/// least one common fingerprint.
-const W: usize = 16;
+/// One k-gram in `SAMPLE` is kept, by its own hash: whether a k-gram is kept
+/// never depends on the text around it, so two texts sharing a k-gram keep it
+/// in both or in neither, and the same-source excuse is exact (MIK-8083).
+const SAMPLE: u64 = 4;
 /// Tuples one fingerprint may hold before it is `Saturated`.
 const MAX_TUPLES: usize = 8;
 /// The most distinct principals one tracked fingerprint can reach: a 9th
@@ -81,9 +82,10 @@ pub(super) const MAX_COMMON_PRINCIPALS: usize = MAX_TUPLES + 1;
 /// Fingerprints kept per delivered result; the rest are counted, not stored.
 /// Twice one form's share: a split delivery records its newline-joined and
 /// its run-together forms, which share almost no k-grams, and both are
-/// expected to fit for a copy up to the record cap (winnowing keeps about
-/// 2 in 17 positions; crafted text can exceed it, costing only an excuse).
-const MAX_SOURCE_FINGERPRINTS: usize = 2 * 1_024;
+/// expected to fit for a copy up to the record cap (sampling keeps about 1
+/// in [`SAMPLE`] positions; crafted text can exceed it, costing only an
+/// excuse).
+const MAX_SOURCE_FINGERPRINTS: usize = 4 * 1_024;
 
 /// Delivery instants kept per pair; see [`Copies`].
 const MAX_COPIES: usize = 3;
@@ -160,10 +162,42 @@ struct Holder {
     /// The *sensitive* deliveries: what a relay witness reads. Kept apart so
     /// a plain re-delivery cannot extend sensitive evidence.
     sensitive: Option<Copies>,
-    /// The `allowed_flows` entries whose source glob matched this source (one
-    /// bit per entry): a copy delivered here may leave through an egress
-    /// matching the same entry without being a relay.
-    flows: u64,
+    /// The `allowed_flows` entries this copy may leave through without being
+    /// a relay.
+    flows: Flows,
+}
+
+/// Which `allowed_flows` entries (one bit per entry) let a held copy leave
+/// through an egress without being a relay.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum Flows {
+    /// An ordinary source: the entries whose source glob matched it; an
+    /// egress matching any of them is allowed.
+    Any(u64),
+    /// A seam between plan steps (`MIK-8113`): one mask per contributing
+    /// source; an egress is allowed only when it matches an entry of every
+    /// one, so the joined text never leaves by a flow some contributor's text
+    /// may not take. Never empty.
+    Each(std::sync::Arc<[u64]>),
+}
+
+impl Flows {
+    /// Whether an egress matching the entries in `egress` may carry this copy.
+    fn allows(&self, egress: u64) -> bool {
+        match self {
+            Self::Any(mask) => mask & egress != 0,
+            Self::Each(masks) => !masks.is_empty() && masks.iter().all(|m| m & egress != 0),
+        }
+    }
+
+    /// A repeat delivery of the same pair: an ordinary source's entries
+    /// accumulate; a seam's identity fixes its contributors, so its masks
+    /// are the same and kept.
+    fn merge(&mut self, more: Self) {
+        if let (Self::Any(held), Self::Any(more)) = (&mut *self, more) {
+            *held |= more;
+        }
+    }
 }
 
 enum Holders {
@@ -209,33 +243,23 @@ impl State {
     }
 }
 
-/// Winnowing: the rightmost minimum of every `W`-hash window, distinct, in
-/// position order. Fewer than `W` hashes form one short window.
-fn winnow(hashes: &[u64]) -> Vec<u64> {
-    let mut out = Vec::new();
+/// The hashes kept as fingerprints: those 0 mod `every` ([`SAMPLE`]),
+/// distinct, in position order.
+fn sample(hashes: &[u64], every: u64) -> Vec<u64> {
     let mut seen = HashSet::new();
-    let mut last = None;
-    for start in 0..=hashes.len().saturating_sub(W) {
-        let end = (start + W).min(hashes.len());
-        // Rightmost minimum: `min_by_key` keeps the first of equals, so scan
-        // the window backwards.
-        let pos = (start..end)
-            .rev()
-            .min_by_key(|&i| hashes[i])
-            .unwrap_or(start);
-        if end > start && last != Some(pos) {
-            last = Some(pos);
-            if seen.insert(hashes[pos]) {
-                out.push(hashes[pos]);
-            }
-        }
-    }
-    out
+    hashes
+        .iter()
+        .copied()
+        .filter(|h| h % every == 0 && seen.insert(*h))
+        .collect()
 }
 
 /// Relay detector state for one gateway process.
 pub(crate) struct CollusionDetector {
     params: RelayParams,
+    /// One k-gram in this many is kept: [`SAMPLE`], or 1 in a test that
+    /// must not depend on the hash key.
+    sample: u64,
     state: Mutex<State>,
     evicted: AtomicU64,
     saturated: AtomicU64,
@@ -257,6 +281,7 @@ impl CollusionDetector {
     pub(crate) fn new(params: RelayParams) -> Self {
         Self {
             params,
+            sample: SAMPLE,
             state: Mutex::new(State::default()),
             evicted: AtomicU64::new(0),
             saturated: AtomicU64::new(0),
@@ -273,34 +298,32 @@ impl CollusionDetector {
         key().hash_one(id)
     }
 
-    /// Winnowed fingerprints of `text`, distinct, in position order.
+    /// Sampled fingerprints of `text`, distinct, in position order.
     ///
     /// Characters input sanitization strips are dropped first, so text
     /// interleaved with them matches what a backend receives; then
     /// NFC-normalized and whitespace-collapsed; then every `K`-char
-    /// k-gram is hashed and the rightmost minimum of each `W`-hash window is
-    /// kept. Offset-independent: a shifted copy selects the same minima.
+    /// k-gram is hashed and those [`sample`] keeps are kept. Context-free: a
+    /// k-gram is kept wherever it occurs, whatever surrounds it.
     ///
     /// Scratch memory is linear in `text`; callers bound it with the request
     /// and response size limits, not this function.
     pub(crate) fn fingerprints(&self, text: &str) -> Vec<u64> {
-        winnow(&self.kgram_hashes(text))
+        sample(&self.kgram_hashes(text), self.sample)
+    }
+
+    /// Keep every k-gram, so whether a text has fingerprints no longer
+    /// depends on the per-process hash key (tests only).
+    #[cfg(test)]
+    pub(crate) fn keep_every_kgram(&mut self) {
+        self.sample = 1;
     }
 
     /// Every `K`-char k-gram hash of `text`, normalised as
-    /// [`Self::fingerprints`] reads it, before winnowing: a fingerprint is
+    /// [`Self::fingerprints`] reads it, before sampling: a fingerprint is
     /// one of these.
-    #[expect(
-        clippy::unused_self,
-        reason = "the key is per process; a method keeps callers from hashing with any other"
-    )]
     pub(crate) fn kgram_hashes(&self, text: &str) -> Vec<u64> {
-        let visible: String = text
-            .chars()
-            .filter(|&c| !crate::security::sanitize::is_unsafe_control(c))
-            .collect();
-        let nfc = ComposingNormalizerBorrowed::new_nfc().normalize(&visible);
-        let norm = nfc.split_whitespace().collect::<Vec<_>>().join(" ");
+        let norm = self.normalized(text);
         let bounds: Vec<usize> = norm
             .char_indices()
             .map(|(i, _)| i)
@@ -313,6 +336,21 @@ impl CollusionDetector {
         (0..=chars - K)
             .map(|i| key().hash_one(&norm[bounds[i]..bounds[i + K]]))
             .collect()
+    }
+
+    /// `text` as every k-gram reads it: unsafe controls dropped, NFC,
+    /// whitespace collapsed.
+    #[expect(
+        clippy::unused_self,
+        reason = "one normalization for every reader, the seam pass included"
+    )]
+    fn normalized(&self, text: &str) -> String {
+        let visible: String = text
+            .chars()
+            .filter(|&c| !crate::security::sanitize::is_unsafe_control(c))
+            .collect();
+        let nfc = ComposingNormalizerBorrowed::new_nfc().normalize(&visible);
+        nfc.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
     /// Records a result delivered to `principal` from `source`.
@@ -360,6 +398,36 @@ impl CollusionDetector {
         source: &str,
         principal: &str,
         (sensitive, flows): (bool, u64),
+        fps: Vec<u64>,
+        now: Instant,
+    ) {
+        self.record_held_at(source, principal, (sensitive, Flows::Any(flows)), fps, now);
+    }
+
+    /// [`Self::record_fingerprints_at`] for a seam between plan steps under
+    /// its composite `source` (`MIK-8113`): `masks` holds one `allowed_flows`
+    /// mask per contributing source, and an egress must match every one.
+    pub(crate) fn record_seam_at(
+        &self,
+        source: &str,
+        principal: &str,
+        (sensitive, mut masks): (bool, Vec<u64>),
+        fps: Vec<u64>,
+        now: Instant,
+    ) {
+        // Distinct masks, shared by every fingerprint's holder: as allowing
+        // as the full list, and never one copy per fingerprint.
+        masks.sort_unstable();
+        masks.dedup();
+        let flows = Flows::Each(masks.into());
+        self.record_held_at(source, principal, (sensitive, flows), fps, now);
+    }
+
+    fn record_held_at(
+        &self,
+        source: &str,
+        principal: &str,
+        (sensitive, flows): (bool, Flows),
         mut fps: Vec<u64>,
         now: Instant,
     ) {
@@ -378,7 +446,7 @@ impl CollusionDetector {
             principal: self.digest(principal),
             copies: Copies::one(at),
             sensitive: sensitive.then(|| Copies::one(at)),
-            flows,
+            flows: flows.clone(),
         };
         let window = self.params.window;
         let mut state = self.state.lock();
@@ -422,7 +490,7 @@ impl CollusionDetector {
                     (Some(held), Some(more)) => held.add(&more, window),
                     (held, more) => *held = held.or(more),
                 }
-                t.flows |= new.flows;
+                t.flows.merge(new.flows);
             }
             None => tuples.push(new),
         }
@@ -491,7 +559,7 @@ impl CollusionDetector {
             let sensitive =
                 |t: &&Holder| t.sensitive.is_some_and(|copies| copies.held(now, window));
             if let Some(t) = tuples.iter().filter(sensitive).find(|t| {
-                t.principal != sender && !excused(t.source) && t.flows & egress_flows == 0
+                t.principal != sender && !excused(t.source) && !t.flows.allows(egress_flows)
             }) {
                 matches += 1;
                 first.get_or_insert((t.source, t.principal));
@@ -528,6 +596,13 @@ impl CollusionDetector {
         self.source_truncated.load(Ordering::Relaxed)
     }
 }
+
+#[path = "collusion_seam.rs"]
+mod seam;
+#[cfg(test)]
+#[path = "collusion_seam_tests.rs"]
+mod seam_tests;
+pub(crate) use seam::SeamFingerprint;
 
 #[cfg(test)]
 #[path = "collusion_tests.rs"]

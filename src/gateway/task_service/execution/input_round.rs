@@ -77,10 +77,21 @@ impl<'a> Settling<'a> {
         cancel_rx: &mut watch::Receiver<bool>,
     ) {
         let mut state_only = 0;
+        // Where the round being settled began in this worker's write record:
+        // the first answer's notes are the whole record; a state-only round's
+        // are dropped with it (MIK-7993 r2a), so only the answer stored is
+        // described.
+        let mut round_mark: Option<crate::gateway::gateway_writes::Mark> = None;
         loop {
             let round = match classify_dispatch(response) {
                 DispatchSettlement::Complete(result) => {
-                    return self.settle(TaskTransition::Complete(result), true).await;
+                    let writes = round_mark.map_or_else(
+                        crate::gateway::gateway_writes::recorded,
+                        crate::gateway::gateway_writes::snapshot_since,
+                    );
+                    return self
+                        .settle_with(TaskTransition::Complete(result), true, writes)
+                        .await;
                 }
                 DispatchSettlement::Fail(error) => {
                     return self.settle(TaskTransition::Fail(error), false).await;
@@ -107,6 +118,7 @@ impl<'a> Settling<'a> {
             // A state-only round reached nobody: what it staged was not delivered.
             crate::gateway::meta_mcp::invoke::relay::discard_staged();
             let retry = self.owned.continuation(round.request_state, None);
+            round_mark = Some(crate::gateway::gateway_writes::mark());
             let Some(next) = dispatch(self.state, self.owned, self.call, &retry, cancel_rx).await
             else {
                 return;
@@ -135,6 +147,22 @@ impl<'a> Settling<'a> {
     /// Settle `event`. Staged relay receipts are recorded only when it is
     /// the dispatched result (`dispatched`) and the store kept it as such.
     async fn settle(&self, event: TaskTransition, dispatched: bool) {
+        self.settle_with(
+            event,
+            dispatched,
+            crate::gateway::gateway_writes::WriteRecord::default(),
+        )
+        .await;
+    }
+
+    /// [`Self::settle`], storing `writes`: the members of a dispatched
+    /// result the gateway wrote (MIK-7993).
+    async fn settle_with(
+        &self,
+        event: TaskTransition,
+        dispatched: bool,
+        writes: crate::gateway::gateway_writes::WriteRecord,
+    ) {
         let stored = self
             .executor
             .settle_cas_with(
@@ -142,6 +170,7 @@ impl<'a> Settling<'a> {
                 self.id,
                 self.revision,
                 (event, self.plan_targets()),
+                writes,
             )
             .await;
         self.state

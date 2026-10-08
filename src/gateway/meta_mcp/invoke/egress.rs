@@ -498,7 +498,7 @@ impl MetaMcp {
     ///
     /// # Errors
     /// [`crate::Error::ResponseFirewallRefused`] when the scan refuses.
-    pub(in crate::gateway::meta_mcp) fn inspect_discovery_value(
+    pub(in crate::gateway) fn inspect_discovery_value(
         &self,
         value: &mut Value,
     ) -> crate::Result<()> {

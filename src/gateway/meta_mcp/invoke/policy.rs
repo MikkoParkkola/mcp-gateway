@@ -434,6 +434,7 @@ impl MetaMcp {
                     serde_json::Value::String("no_contract_declared".to_string()),
                 );
             }
+            super::gateway_writes::note_contract(result);
         } else if !text.is_empty() {
             // Build effective contract merging global defaults with per-tool overrides.
             let effective_max_bytes = tool_entry
@@ -497,6 +498,7 @@ impl MetaMcp {
                         serde_json::Value::String(violation.reason.to_string()),
                     );
                 }
+                super::gateway_writes::note_contract(result);
             }
         }
         Ok(())

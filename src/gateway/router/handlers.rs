@@ -2107,8 +2107,8 @@ mod cacheable_field_tests {
         // still pass if a method were dropped from it.
         assert_eq!(
             CACHEABLE_METHODS.len(),
-            5,
-            "the criterion names five methods: {CACHEABLE_METHODS:?}"
+            6,
+            "five cacheable methods and discovery: {CACHEABLE_METHODS:?}"
         );
         for method in CACHEABLE_METHODS {
             let response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
@@ -2135,7 +2135,7 @@ mod cacheable_field_tests {
     #[tokio::test]
     async fn a_non_cacheable_method_gets_neither_field() {
         let response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
-        let built = build_modern_response(response, StatusCode::OK, "server/discover");
+        let built = build_modern_response(response, StatusCode::OK, "tools/call");
         let bytes = axum::body::to_bytes(built.into_body(), usize::MAX)
             .await
             .expect("the builder produces a complete in-memory body");

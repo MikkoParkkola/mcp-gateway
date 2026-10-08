@@ -80,14 +80,9 @@ pub(crate) struct EventsHub {
     debounce: backend_source::Debounce,
     /// Held while the catalogue changes or is read to delete from it.
     catalogue_gate: parking_lot::Mutex<()>,
-    /// Whether a webhook type the catalogue does not offer may be withdrawn
-    /// for that alone. False until the deferred startup pass sets it, so
-    /// before the grace period ends a reload withdraws only the types it
-    /// removed (MIK-8027). Read and set under `catalogue_gate`.
-    webhook_withdrawals: std::sync::atomic::AtomicBool,
-    /// The last shapes of webhook types whose route is gone while stored
-    /// subscriptions remain (MIK-8038). Changed under `catalogue_gate`.
-    retired: parking_lot::Mutex<reload::Retired>,
+    /// The webhook routes, for the payload fields a subscribe records
+    /// (MIK-8076). Set once with the webhook source.
+    webhook_registry: std::sync::OnceLock<Arc<parking_lot::RwLock<WebhookRegistry>>>,
     /// Held by each burial and dead-letter sweep from its store call through
     /// its last receipt, so a burial's receipt comes before any eviction of
     /// it. Taken before the store's own lock, and never with `lifecycle`.
@@ -216,8 +211,7 @@ impl EventsHub {
             lifecycle: lifecycle::Started::default(),
             debounce: backend_source::Debounce::default(),
             catalogue_gate: parking_lot::Mutex::new(()),
-            webhook_withdrawals: std::sync::atomic::AtomicBool::new(false),
-            retired: parking_lot::Mutex::default(),
+            webhook_registry: std::sync::OnceLock::new(),
             receipts: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             after_commit: crate::test_pause::Slot::default(),
@@ -256,6 +250,7 @@ impl EventsHub {
         self: &Arc<Self>,
         registry: Arc<parking_lot::RwLock<WebhookRegistry>>,
     ) {
+        let _ = self.webhook_registry.set(Arc::clone(&registry));
         self.register_source(Arc::new(webhook_source::WebhookSource { registry }));
     }
 

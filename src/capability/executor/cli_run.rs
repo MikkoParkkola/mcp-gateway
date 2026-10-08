@@ -116,11 +116,13 @@ pub(crate) fn child_env(
     env
 }
 
-/// Names the gateway sets for the child itself. An allowlist entry or
-/// `token_env` naming one is ignored: it would point the child back at the
-/// operator's home, profile or temp space. Case-insensitive, as on Windows.
+/// Names the gateway sets for the child itself. An allowlist entry,
+/// `token_env` or `root_env` naming one is ignored: it would point the child
+/// back at the operator's home, profile or temp space, or (SYSTEMROOT,
+/// COMSPEC) replace the Windows bootstrap values `child_env` sets.
+/// Case-insensitive, as on Windows.
 pub(crate) fn is_reserved(name: &str) -> bool {
-    const RESERVED: [&str; 12] = [
+    const RESERVED: [&str; 14] = [
         "HOME",
         "XDG_CONFIG_HOME",
         "XDG_CACHE_HOME",
@@ -133,6 +135,8 @@ pub(crate) fn is_reserved(name: &str) -> bool {
         "TEMP",
         "TMP",
         "PATHEXT",
+        "SYSTEMROOT",
+        "COMSPEC",
     ];
     RESERVED.iter().any(|r| r.eq_ignore_ascii_case(name))
 }
