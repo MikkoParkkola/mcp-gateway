@@ -503,11 +503,21 @@ impl MetaMcp {
         // integrity, the configured firewall). An annotation alone is not a
         // refusal, preserving the operator's observe mode.
         let mut error = error;
+        // MIK-7116.MIN.1: the tenants the failure names, noted as the
+        // response gates note a result's.
+        let mut content = vec![json!({"type": "text", "text": error.message})];
+        if let Some(data) = &error.data {
+            content.push(json!({"type": "text", "text": data.to_string()}));
+        }
+        let (_, raw_read) =
+            super::invoke::audit::noted_response(self, json!({ "content": content }));
         let screened = self.scan_backend_error((server, tool, trace_id), api_key_name, &mut error);
         // A redaction is written back in place and stored, as a redacted task
         // result is; only a refusal withholds the peer's text.
         let clean = screened != super::invoke::egress::EgressOutcome::Refused;
         if clean {
+            // MIN.2: past every gate, so this reading counts.
+            crate::security::tenant_reads::note_attribution(raw_read);
             (error, crate::gateway::task_service::ErrorAuthor::Peer)
         } else {
             tracing::warn!(

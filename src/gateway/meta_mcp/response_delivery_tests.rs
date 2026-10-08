@@ -428,9 +428,10 @@ fn firewall_delivery_block_is_safe_marked_error_then_attempt() {
     assert_attempt(&attempts[0], &response);
 }
 
-/// MIK-7407.RESPONSE.4/.5; FWR-12 ordinary covered errors remain unmarked.
+/// MIK-8139 (design 2026-10-08 E1, both parts): a backend error is scanned
+/// like a result; a blocked one is refused, then gets its attempt.
 #[test]
-fn firewall_delivery_ordinary_errors_skip_scanning_but_get_attempts() {
+fn firewall_delivery_blocked_errors_are_refused_then_get_attempts() {
     for method in ["tools/call", "tools/list"] {
         let fixture = Fixture::new(FirewallAction::Block, true, true, true);
         let original = JsonRpcResponse::error_with_data(
@@ -439,13 +440,16 @@ fn firewall_delivery_ordinary_errors_skip_scanning_but_get_attempts() {
             "backend error",
             json!({"detail":INJECTION}),
         );
-        let expected = serde_json::to_value(&original).unwrap();
         let response = fixture.finalize(method, original, &targets());
-        assert_eq!(serde_json::to_value(&response).unwrap(), expected);
-        assert!(!response.delivery_refusal);
+        assert_eq!(
+            serde_json::to_value(&response).unwrap(),
+            json!({"jsonrpc":"2.0", "id":"041", "error":{"code":-32600,"message":REFUSAL}}),
+            "{method}"
+        );
+        assert!(response.delivery_refusal);
         assert!(!response.confirmation_refusal);
-        fixture.assert_counts(0);
-        assert!(fixture.audits().is_empty());
+        fixture.assert_counts(1);
+        assert_eq!(fixture.audits().len(), 1, "{method}");
         let attempts = fixture.attempts();
         assert_eq!(attempts.len(), 1);
         assert_attempt(&attempts[0], &response);
@@ -593,37 +597,33 @@ fn firewall_delivery_absent_logger_keeps_enforcement_active() {
     fixture.assert_counts(1);
 }
 
-/// MIK-7407.RESPONSE.4; FWR-12 tools-only scanning leaves other methods intact.
+/// MIK-8155 (design 2026-10-08 E2): `finalize_content` scans every method;
+/// the `tools/call` / `tools/list` filter is gone.
 #[test]
-fn firewall_delivery_uncovered_methods_are_not_response_scanned() {
+fn firewall_delivery_every_method_is_response_scanned() {
     for method in ["initialize", "ping", "resources/read", "prompts/get"] {
         let fixture = Fixture::new(FirewallAction::Block, true, true, false);
-        let original = shaped_response(INJECTION);
-        let expected = serde_json::to_value(&original).unwrap();
-        let response = fixture.finalize(method, original, &targets());
-        assert_eq!(serde_json::to_value(&response).unwrap(), expected);
-        assert!(!response.delivery_refusal);
-        fixture.assert_counts(0);
-        assert!(fixture.audits().is_empty());
+        let response = fixture.finalize(method, shaped_response(INJECTION), &targets());
+        assert_eq!(
+            serde_json::to_value(&response).unwrap(),
+            json!({"jsonrpc":"2.0", "id":-41, "error":{"code":-32600,"message":REFUSAL}}),
+            "{method}"
+        );
+        assert!(response.delivery_refusal);
+        fixture.assert_counts(1);
     }
 }
 
-/// MIK-7407.RESPONSE.5; FWR-15 attempt accounting has no scan-method bypass.
+/// MIK-7407.RESPONSE.5; FWR-15 attempt accounting has no scan-method bypass:
+/// every method's refusal gets its final attempt.
 #[test]
-fn firewall_delivery_uncovered_methods_still_record_final_attempts() {
+fn firewall_delivery_every_method_records_its_final_attempt() {
     for method in ["initialize", "ping", "resources/read", "prompts/get"] {
         let fixture = Fixture::new(FirewallAction::Block, true, true, true);
-        let original = shaped_response(INJECTION);
-        let expected = serde_json::to_value(&original).unwrap();
-        let response = fixture.finalize(method, original, &targets());
-        assert_eq!(
-            serde_json::to_value(&response).unwrap(),
-            expected,
-            "{method}"
-        );
-        assert!(!response.delivery_refusal);
-        fixture.assert_counts(0);
-        assert!(fixture.audits().is_empty());
+        let response = fixture.finalize(method, shaped_response(INJECTION), &targets());
+        assert!(response.delivery_refusal, "{method}");
+        fixture.assert_counts(1);
+        assert_eq!(fixture.audits().len(), 1, "{method}");
         let attempts = fixture.attempts();
         assert_eq!(attempts.len(), 1, "{method}");
         assert_attempt(&attempts[0], &response);

@@ -186,6 +186,18 @@ impl JsonRpcResponse {
         response
     }
 
+    /// An error the gateway wrote from its own text (a signing refusal before
+    /// dispatch): nothing a backend sent, so the egress scan skips it.
+    pub(crate) fn gateway_error(
+        id: Option<RequestId>,
+        code: i32,
+        message: impl Into<String>,
+    ) -> Self {
+        let mut response = Self::error(id, code, message);
+        response.egress_scanned = true;
+        response
+    }
+
     /// Policy refusals neither consume a failure strike nor reset prior strikes.
     pub(crate) fn excludes_client_accounting(&self) -> bool {
         self.confirmation_refusal || self.delivery_refusal

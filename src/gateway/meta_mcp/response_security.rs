@@ -182,13 +182,31 @@ impl super::MetaMcp {
     /// firewall, scope clamp, chain, signing. The delivery record is not
     /// written here, so a caller can judge the finalized answer first and put
     /// its verdict in that record (MIK-7799).
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn finalize_content(
+        &self,
+        response: crate::protocol::JsonRpcResponse,
+        context: &ResponseDeliveryContext<'_>,
+    ) -> crate::protocol::JsonRpcResponse {
+        self.finalize_routed(response, context, None)
+    }
+
+    /// [`Self::finalize_content`] on the HTTP route: a `tools/call` is
+    /// scanned by the router's own instance, which keeps that session's
+    /// firewall state; every other method by this one (NFR.WORKLOAD.1).
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn finalize_routed(
         &self,
         mut response: crate::protocol::JsonRpcResponse,
         context: &ResponseDeliveryContext<'_>,
+        router: Option<&crate::security::firewall::Firewall>,
     ) -> crate::protocol::JsonRpcResponse {
         use crate::protocol::JsonRpcResponse;
+
+        let own = self.firewall.as_deref();
+        let firewall = match context.method {
+            "tools/call" => router.or(own),
+            _ => own,
+        };
 
         let sealed = self.sealed_question(context.method, &response);
         // One egress scan, every method and every part (MIK-8139 family):
@@ -198,7 +216,7 @@ impl super::MetaMcp {
             targets: context.targets,
             correlation: &context.correlation,
             api_key_name: None,
-            firewall: self.firewall.as_deref(),
+            firewall,
         };
         self.scan_egress(&mut response, &at);
         // MIK-7211.PARENT.6: the scope is settled before the chain link and the

@@ -1914,7 +1914,11 @@ async fn meta_mcp_dispatch(
         chain_source: response.chain_source,
         chain_nonce: chain_nonce.as_deref(),
     };
-    let mut response = (state.meta_mcp).finalize_content(response, &delivery);
+    #[cfg(feature = "firewall")]
+    let router = state.firewall.as_deref();
+    #[cfg(not(feature = "firewall"))]
+    let router = None;
+    let mut response = (state.meta_mcp).finalize_routed(response, &delivery, router);
     state.meta_mcp.release_unsent_hold(&mut response).await; // MIK-8131
     // Kept for the stored delivery (cloned only when an execution stores it).
     let finalized = execution.as_ref().map(|_| response.clone());

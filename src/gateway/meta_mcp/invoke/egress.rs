@@ -170,9 +170,7 @@ impl MetaMcp {
         // A carrier it withheld or transformed cannot map back onto the
         // frame's fields, so enforcement refuses the whole frame.
         let carrier = serde_json::json!({"content": [{"type": "text", "text": text}]});
-        let (_, effect) =
-            self.apply_context_integrity(server, tool, at.api_key_name, trace_id, carrier);
-        effect == super::super::response_security::GateEffect::Enforced
+        self.context_integrity_enforces((server, tool), at.api_key_name, trace_id, &carrier)
     }
 }
 

@@ -3402,7 +3402,7 @@ impl Gateway {
                     &caller,
                 )
             {
-                break 'tool_call JsonRpcResponse::error(
+                break 'tool_call JsonRpcResponse::gateway_error(
                     Some(id),
                     error.to_rpc_code(),
                     super::meta_mcp::signing::wire_error_message(&error),
