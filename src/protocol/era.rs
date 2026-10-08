@@ -340,6 +340,10 @@ impl EraCache {
     /// runs (MIK-7643). `serving` runs the discard and, later, the install under the
     /// slot's own guard, and refuses both once the slot is retired: a removed slot's
     /// start neither erases the backend's verdict nor installs its peer's answer.
+    ///
+    /// Returns the era this start's own probe decided, installed or not, and
+    /// `Legacy` (the RFC fallback) when the slot was retired before any probe. Never
+    /// the shared cache: another slot may have written it since (MIK-8056).
     pub(crate) async fn restart_while_serving<F, Fut, S>(&self, probe: F, serving: S) -> Era
     where
         F: FnOnce() -> Fut,
@@ -356,7 +360,7 @@ impl EraCache {
                 discarded = true;
             }
         }) {
-            return guard.era;
+            return Era::Legacy;
         }
         if discarded {
             tracing::info!(
@@ -403,7 +407,9 @@ impl EraCache {
                 duration_ms,
                 trigger = trigger.as_str(),
             );
-            return guard.era;
+            // What this probe decided, not what the cache holds: the caller asked
+            // about its own peer (MIK-8056).
+            return observation.era;
         }
 
         // Two call sites rather than an optional field: `error_code` is absent
