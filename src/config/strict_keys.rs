@@ -652,7 +652,9 @@ mod tests {
             .map(|(_, why)| *why);
         let quote = why.map(|why| retired_warning("meta_mcp.cache_tools", why));
         assert!(
-            quote.is_some_and(|quote| include_str!("../../docs/UPGRADING-4.0.md").contains(&quote)),
+            quote
+                .as_deref()
+                .is_some_and(|quote| include_str!("../../docs/UPGRADING-4.0.md").contains(quote)),
             "UPGRADING must quote the cache_tools warning: {quote:?}"
         );
     }
