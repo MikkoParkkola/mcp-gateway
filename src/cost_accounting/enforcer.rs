@@ -28,6 +28,13 @@ use super::registry::CostRegistry;
 #[cfg(feature = "cost-governance")]
 #[path = "enforcer_crossings.rs"]
 pub(crate) mod crossings;
+#[cfg(feature = "cost-governance")]
+#[path = "enforcer_rows.rs"]
+mod rows;
+#[cfg(all(feature = "cost-governance", test))]
+use rows::MAX_UNBUDGETED_ROWS;
+#[cfg(feature = "cost-governance")]
+use rows::add_capped;
 
 // ── DailyAccumulator ─────────────────────────────────────────────────────────
 
@@ -154,42 +161,6 @@ fn current_day() -> u64 {
         .unwrap_or(Duration::ZERO)
         .as_secs()
         / 86_400
-}
-
-/// Unbudgeted names one day map keeps entries for; later names add into
-/// `(other)`. A check reads only budgeted names, so with R2 off and a non-zero
-/// `default_cost` the caller would otherwise choose how many entries exist.
-#[cfg(feature = "cost-governance")]
-const MAX_UNBUDGETED_ROWS: usize = 256;
-
-/// Add `micro` to `name`'s entry and return that entry's running total. A
-/// budgeted name always has its own. Any other name has one only while `map`
-/// holds fewer than [`MAX_UNBUDGETED_ROWS`] unbudgeted entries, and only if it is no longer than the cost tracker's row-name limit; past
-/// either, its spend goes to `overflow`, which no budget check ever reads, so
-/// a budget whose name happens to be `(other)` keeps its own total.
-/// ponytail: a soft cap; racing first inserts can pass it by the caller count.
-#[cfg(feature = "cost-governance")]
-fn add_capped(
-    (map, overflow): (&DashMap<String, DailyAccumulator>, &DailyAccumulator),
-    name: &str,
-    limits: &HashMap<String, f64>,
-    micro: u64,
-) -> u64 {
-    // Budgeted entries never count against the cap, present or not, so the map
-    // holds at most every budgeted name plus MAX_UNBUDGETED_ROWS others.
-    let unbudgeted = || {
-        let budgeted = limits.keys().filter(|k| map.contains_key(*k)).count();
-        // A sweep may remove entries between the two reads.
-        map.len().saturating_sub(budgeted)
-    };
-    let own = limits.contains_key(name)
-        || map.contains_key(name)
-        || (name.len() <= super::tally::MAX_ROW_NAME_BYTES && unbudgeted() < MAX_UNBUDGETED_ROWS);
-    if own {
-        map.entry(name.to_string()).or_default().add(micro)
-    } else {
-        overflow.add(micro)
-    }
 }
 
 // ── EnforcementResult ────────────────────────────────────────────────────────
@@ -423,6 +394,9 @@ pub struct BudgetEnforcer {
     /// Spend of unbudgeted tool and key names past the day maps' cap.
     tool_overflow: DailyAccumulator,
     key_overflow: DailyAccumulator,
+    /// The day an overflowing spend last swept each map (MIK-8045).
+    tool_overflow_swept: std::sync::atomic::AtomicU64,
+    key_overflow_swept: std::sync::atomic::AtomicU64,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -441,6 +415,8 @@ impl BudgetEnforcer {
             swept_day: std::sync::atomic::AtomicU64::new(0),
             tool_overflow: DailyAccumulator::new(),
             key_overflow: DailyAccumulator::new(),
+            tool_overflow_swept: std::sync::atomic::AtomicU64::new(0),
+            key_overflow_swept: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -640,7 +616,7 @@ impl BudgetEnforcer {
                 (&self.tool_daily, &budgets.per_tool),
                 (&self.key_daily, &budgets.per_key),
             ] {
-                map.retain(|name, day| limits.contains_key(name) || day.is_current());
+                rows::sweep_stale(map, limits);
             }
             self.swept_day
                 .fetch_max(today, std::sync::atomic::Ordering::Relaxed);
@@ -709,14 +685,22 @@ impl BudgetEnforcer {
         self.key_overflow.add(micro(persisted.key_overflow_usd));
     }
 
-    /// The per-tool day map and its overflow accumulator.
-    fn tool_maps(&self) -> (&DashMap<String, DailyAccumulator>, &DailyAccumulator) {
-        (&self.tool_daily, &self.tool_overflow)
+    /// The per-tool day rows.
+    fn tool_maps(&self) -> rows::Rows<'_> {
+        (
+            &self.tool_daily,
+            &self.tool_overflow,
+            &self.tool_overflow_swept,
+        )
     }
 
-    /// The per-key day map and its overflow accumulator.
-    fn key_maps(&self) -> (&DashMap<String, DailyAccumulator>, &DailyAccumulator) {
-        (&self.key_daily, &self.key_overflow)
+    /// The per-key day rows.
+    fn key_maps(&self) -> rows::Rows<'_> {
+        (
+            &self.key_daily,
+            &self.key_overflow,
+            &self.key_overflow_swept,
+        )
     }
 
     /// Snapshot current accumulator state for persistence and the UI endpoint.

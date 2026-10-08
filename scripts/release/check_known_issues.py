@@ -56,7 +56,19 @@ INLINE_NOISE = re.compile(r"<!--.*?(?:-->|$)|<[^>]*>|\]\([^)]*\)|\]\[[^\]]*\]")
 # The same, for body text: only real tags go, so an autolink's URL, which
 # renders, is still scanned.
 HIDDEN_MARKUP = re.compile(
-    r"<!--.*?(?:-->|$)|</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?/?>|\]\([^)]*\)|\]\[[^\]]*\]"
+    r"<!--.*?(?:-->|$)|<\?.*?(?:\?>|$)|<!\[CDATA\[.*?(?:\]\]>|$)|<![A-Za-z][^>]*>"
+    r"|</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?/?>|\]\([^)]*\)|\]\[[^\]]*\]"
+)
+# Raw HTML that can interrupt a paragraph (CommonMark HTML block types 1-6):
+# any other tag line inside a paragraph is paragraph text.
+BLOCK_HTML = re.compile(
+    r"^ {0,3}<(?:[?!]|/?(?:script|pre|style|textarea|address|article|aside|base|"
+    r"basefont|blockquote|body|caption|center|col|colgroup|details|dialog|dir|div|"
+    r"dl|dt|dd|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|"
+    r"header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|"
+    r"optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|"
+    r"thead|title|tr|track|ul)(?:[ \t]|/?>|$))",
+    re.IGNORECASE,
 )
 # A tag read with quoted attribute values, so a quoted > does not end it. An
 # extra reading only: an unbalanced quote defeats it, and the plain one holds.
@@ -108,8 +120,9 @@ def opens_comment(line):
 
 def is_text(line):
     """True when `line` can be paragraph text: not blank, and no list, quote,
-    heading, fence, raw HTML or open comment. Indented four columns or more,
-    any line is text: a continuation line's markers are literal there."""
+    heading, fence, HTML block that can interrupt a paragraph, or open
+    comment. Indented four columns or more, any line is text: a continuation
+    line's markers are literal there."""
     wide = line.expandtabs(4)
     if wide.strip() and len(wide) - len(wide.lstrip()) >= 4:
         return True
@@ -117,7 +130,7 @@ def is_text(line):
         line.strip()
         and not NOT_A_PARAGRAPH.match(line)
         and not FENCE.match(line)
-        and not HTML.match(line)
+        and not BLOCK_HTML.match(line)
         and not opens_comment(line)
     )
 
@@ -139,9 +152,13 @@ def is_title(text):
     """True when the letters of `text` hold "knownissues".
 
     Containment, not an exact match: whatever else the title says only makes
-    a doubtful start, and a start fails closed.
+    a doubtful start, and a start fails closed. The letters are also read
+    with no markup dropped, so text that only looks like a tag (an unclosed
+    one renders as text) cannot hide a title; such a start keeps its title
+    as content (see known_issues).
     """
-    return any(TITLE in letters for letters in title_readings(text))
+    raw = re.sub(r"[^a-z]", "", html.unescape(text).lower())
+    return TITLE in raw or any(TITLE in letters for letters in title_readings(text))
 
 
 def atx_start(line):
@@ -276,9 +293,15 @@ def is_prerelease_tag(tag):
 def in_range(text, match):
     """True when the version `match` ends a hyphen range (4.0.0-rc.1-4.0.1,
     v4.0.0-rc.1-v4.0.1) rather than sitting in the suffix before it: a
-    hyphen, then a whole x.y.z or a v-prefixed version."""
-    return text[: match.start()].endswith("-") and (
-        match.group(3) is not None or match.group(0)[:1] in "vV"
+    hyphen, then a whole x.y.z or a v-prefixed version. Never inside build
+    metadata: 4.0.0+build-4.0.1 is a build of 4.0.0."""
+    before = text[: match.start()]
+    suffix = IN_SUFFIX.search(before)
+    return (
+        bool(suffix)
+        and "+" not in suffix.group(0)
+        and before.endswith("-")
+        and (match.group(3) is not None or match.group(0)[:1] in "vV")
     )
 
 
@@ -320,11 +343,19 @@ def later_releases(line):
 
 
 def problems(section, release):
-    # A comment or tag may span lines and split a version, so the section is
-    # also read with comments, then tags, removed across line breaks.
-    joined = re.sub(r"<!--.*?(?:-->|$)", "", "\n".join(section), flags=re.S)
-    untagged = HIDDEN_MARKUP.sub("", QUOTED_TAG.sub("", joined))
-    extra = joined.splitlines() + untagged.splitlines()
+    # A comment, processing instruction, CDATA section or tag may span lines
+    # and split a version, so the section is also read with those removed
+    # across line breaks: once with comments only, once with all three, as
+    # an opener inside a code span would otherwise swallow the rest.
+    text = "\n".join(section)
+    extra = []
+    for hidden in (
+        r"<!--.*?(?:-->|$)",
+        r"<!--.*?(?:-->|$)|<\?.*?(?:\?>|$)|<!\[CDATA\[.*?(?:\]\]>|$)",
+    ):
+        joined = re.sub(hidden, "", text, flags=re.S)
+        untagged = HIDDEN_MARKUP.sub("", QUOTED_TAG.sub("", joined))
+        extra += joined.splitlines() + untagged.splitlines()
     lines = section + [line for line in dict.fromkeys(extra) if line not in section]
     found = [
         f"Known issues names a later release ({', '.join(later)}): {line.strip()}"
