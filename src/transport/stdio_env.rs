@@ -106,38 +106,10 @@ where
             key.to_str().is_some_and(|name| {
                 let name = name.to_ascii_lowercase();
                 FORWARDED_NPM_SETTINGS.contains(&name.as_str())
-                    && !backend_env
-                        .keys()
-                        .any(|configured| npm_setting(configured) == npm_setting(&name))
+                    && !backend_env.keys().any(|configured| {
+                        super::cache::npm_setting(configured) == super::cache::npm_setting(&name)
+                    })
             })
         })
         .collect()
-}
-
-/// The setting npm reads from an environment key, folded as npm folds it: the
-/// `npm_config_` prefix in any case, then every non-leading `_` read as `-`,
-/// lowercased (`@npmcli/config` `loadEnv`). `npm_config_strict_ssl` and
-/// `NPM_CONFIG_STRICT-SSL` are one setting; a key outside the prefix is none.
-/// Lowercasing is ASCII only, where npm's is Unicode: enough for the allowlist,
-/// whose names are ASCII, since a key that folds differently cannot name one.
-fn npm_setting(key: &str) -> Option<String> {
-    const PREFIX: &str = "npm_config_";
-    let rest = key
-        .get(..PREFIX.len())
-        .filter(|head| head.eq_ignore_ascii_case(PREFIX))
-        .map(|_| &key[PREFIX.len()..])?;
-    if rest.starts_with("//") {
-        return Some(rest.to_owned());
-    }
-    Some(
-        rest.char_indices()
-            .map(|(at, c)| {
-                if at > 0 && c == '_' {
-                    '-'
-                } else {
-                    c.to_ascii_lowercase()
-                }
-            })
-            .collect(),
-    )
 }
