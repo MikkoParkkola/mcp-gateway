@@ -166,14 +166,14 @@ impl Transport for CountingBackend {
                 "rate limit exceeded",
             )),
             Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
-            Answer::RpcErrorText(text) => Ok(JsonRpcResponse::error(Some(id), -32001, text)),
+            Answer::RpcErrorText(text) => Ok(JsonRpcResponse::error(Some(id), -32001, *text)),
             Answer::RpcErrorData(text) => Ok(JsonRpcResponse::error_with_data(
                 Some(id),
                 -32001,
                 "backend says no",
                 json!({"detail": text}),
             )),
-            Answer::FailedWith(text) => Err(crate::Error::json_rpc(-32001, text)),
+            Answer::FailedWith(text) => Err(crate::Error::json_rpc(-32001, *text)),
             Answer::AskOnce => unreachable!("answered above"),
             Answer::Text(text) => Ok(JsonRpcResponse::success(
                 id,
