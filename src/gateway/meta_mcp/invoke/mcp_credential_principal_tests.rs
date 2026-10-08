@@ -156,14 +156,23 @@ async fn two_api_keys_reach_their_own_children_through_dispatch() {
     )
     .await
     .unwrap();
-    let (a, a_again, b) = (pid(&a), pid(&a_again), pid(&b));
+    // A background task's rebuilt caller carries its recorded owner,
+    // `credential:<principal>`, where the live call carried the bare principal.
+    let task = say(
+        &meta,
+        &caller(Some("credential:digest-a"), Authentication::Authenticated),
+    )
+    .await
+    .unwrap();
+    let (a, a_again, b, task) = (pid(&a), pid(&a_again), pid(&b), pid(&task));
     assert!(a.is_some(), "the probe reports its pid");
     assert_eq!(a, a_again, "one key reuses its child");
     assert_ne!(a, b, "another key gets another child");
+    assert_eq!(a, task, "the task a key starts reaches that key's child");
 }
 
 /// Control: a caller that presented no credential is still refused on a
-/// multi-user gateway, and so is one whose digest is empty.
+/// multi-user gateway, and so is one whose digest is empty: no child runs.
 #[tokio::test]
 async fn a_caller_with_no_credential_digest_is_still_refused() {
     let (meta, _dir) = multi_user_meta().await;
@@ -171,7 +180,38 @@ async fn a_caller_with_no_credential_digest_is_still_refused() {
         caller(None, Authentication::Anonymous),
         caller(Some(""), Authentication::Authenticated),
     ] {
-        let err = say(&meta, &caller).await.unwrap_err().to_string();
-        assert!(err.contains("identified caller"), "{err}");
+        // Dispatch answers a capability's refusal as an error result.
+        let answer = say(&meta, &caller).await;
+        let text = match &answer {
+            Ok(result) => result.to_string(),
+            Err(error) => error.to_string(),
+        };
+        assert!(text.contains("identified caller"), "{text}");
+        assert!(!answer.as_ref().is_ok_and(|result| pid(result).is_some()));
     }
+}
+
+/// T8: a live call carries the bare principal and the background task it
+/// starts carries the recorded owner; both name one key, so one child.
+#[test]
+fn a_live_call_and_its_task_name_one_credential_owner() {
+    use crate::gateway::meta_mcp::support::credential_owner;
+    let live = credential_owner(&caller(Some("5e1f0a2b3c4d"), Authentication::Authenticated));
+    let task = credential_owner(&caller(
+        Some("credential:5e1f0a2b3c4d"),
+        Authentication::Authenticated,
+    ));
+    assert_eq!(live.as_deref(), Some("credential:5e1f0a2b3c4d"));
+    assert_eq!(live, task);
+    let auth_off = caller(
+        Some("local:auth-disabled:tasks:v1"),
+        Authentication::Anonymous,
+    );
+    assert_eq!(
+        credential_owner(&auth_off),
+        None,
+        "auth off names no caller"
+    );
+    let empty = caller(Some(""), Authentication::Authenticated);
+    assert_eq!(credential_owner(&empty), None);
 }
