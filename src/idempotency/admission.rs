@@ -228,13 +228,21 @@ impl ExecutionAdmission {
         })
     }
 
-    /// Seal or unseal NEW identities: `rows` is how many stored task rows hold
-    /// a key nobody can read (MIK-8052). Set by the task service at open and
-    /// after each re-read of those rows, always after any repaired row's
-    /// binding is imported, so a key never falls between the two. Returns the
-    /// previous count, so a startup that fails can put it back.
-    pub(crate) fn set_sealed(&self, rows: usize) -> usize {
-        std::mem::replace(&mut self.state.lock().sealed, rows)
+    /// Move one holder's share of the seal on NEW identities from `from` to
+    /// `to` rows (MIK-8052). A holder is a task service: its share is how many
+    /// of its stored rows hold a key nobody can read. It moves only its own
+    /// share, at open, after each re-read (always after any repaired row's
+    /// binding is imported, so a key never falls between the two) and at
+    /// shutdown; a seal another holder placed is never touched.
+    pub(crate) fn adjust_sealed(&self, from: usize, to: usize) {
+        let mut state = self.state.lock();
+        state.sealed = state.sealed.saturating_sub(from).saturating_add(to);
+    }
+
+    /// The seal count, for tests.
+    #[cfg(test)]
+    pub(crate) fn sealed_for_test(&self) -> usize {
+        self.state.lock().sealed
     }
 
     /// Call only after current authorization, with a stable verified principal

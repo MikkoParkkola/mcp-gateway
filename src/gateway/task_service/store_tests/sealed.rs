@@ -466,11 +466,15 @@ async fn a_refused_startup_import_leaves_the_seal_as_it_found_it() {
         !is_new_owner(&admission, "k-held"),
         "the caller's own lease survives the refused startup"
     );
-    // A seal the caller already had is put back as it was, not cleared.
-    admission.set_sealed(7);
+    // A seal another holder already placed is left as it was, not cleared.
+    admission.adjust_sealed(0, 7);
     let reopened = TaskService::open(&path, StoreLimits::default(), Arc::clone(&admission)).await;
     assert!(reopened.is_err(), "the import is still refused");
-    assert_eq!(admission.set_sealed(0), 7, "the earlier seal is restored");
+    assert_eq!(
+        admission.sealed_for_test(),
+        7,
+        "the other holder's seal stands"
+    );
     drop(held);
 }
 
@@ -509,5 +513,37 @@ async fn a_shut_down_service_hands_back_its_seal() {
     assert!(
         is_new_owner(&admission, "k-after"),
         "a shut-down service left the caller's admission sealed"
+    );
+}
+
+/// The lead's interleaving: a service opens over a sealed row, another
+/// holder seals after it, and the service's startup then fails and it shuts
+/// down. Only the service's own share is released, and only once: the other
+/// holder's seal stays in force through a second shutdown.
+#[tokio::test]
+async fn a_shutdown_releases_only_its_own_share_of_the_seal_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_path, _rows, admission, service) = sealed_service(dir.path(), &["k-sealed"]).await;
+    assert_eq!(
+        admission.sealed_for_test(),
+        1,
+        "premise: the service's share"
+    );
+    admission.adjust_sealed(0, 1);
+    service.shutdown().await.expect("the store closes");
+    assert_eq!(
+        admission.sealed_for_test(),
+        1,
+        "the other holder's seal stands"
+    );
+    assert!(
+        !is_new_owner(&admission, "k-after"),
+        "still sealed by the other holder"
+    );
+    service.shutdown().await.ok();
+    assert_eq!(
+        admission.sealed_for_test(),
+        1,
+        "a second shutdown released the other holder's seal"
     );
 }

@@ -68,9 +68,10 @@ pub enum ServiceError {
 pub struct TaskService {
     pub(crate) store: TaskStore,
     admission: Arc<ExecutionAdmission>,
-    /// The seal count the caller's admission held before this store sealed
-    /// it (MIK-8052), handed back when the service gives its store back.
-    prior_sealed: usize,
+    /// This service's own share of the caller's admission seal: its stored
+    /// rows whose key nobody can read (MIK-8052). Moved by re-reads, released
+    /// once at shutdown; a share another holder placed is never touched.
+    sealed: parking_lot::Mutex<usize>,
 }
 
 impl TaskService {
@@ -95,16 +96,17 @@ impl TaskService {
         // empty batch and a store whose only rows are sealed must still seal.
         // A refused import puts the previous seal back: the caller's index is
         // left exactly as it was found.
-        let prior = admission.set_sealed(store.skipped_records().sealed);
+        let sealed = store.skipped_records().sealed;
+        admission.adjust_sealed(0, sealed);
         if admission.import_tasks(&store.restored_bindings()).is_err() {
-            admission.set_sealed(prior);
+            admission.adjust_sealed(sealed, 0);
             let _ = store.close().await;
             return Err(ServiceError::Unavailable);
         }
         Ok(Self {
             store,
             admission,
-            prior_sealed: prior,
+            sealed: parking_lot::Mutex::new(sealed),
         })
     }
 
@@ -118,15 +120,22 @@ impl TaskService {
             .store
             .reread_sealed(|binding, id| admission.import_tasks(&[(binding, id)]).is_ok())
             .await;
-        self.admission.set_sealed(sealed);
+        self.move_seal(sealed);
+    }
+
+    /// Move this service's share of the seal to `rows`, under its own lock so
+    /// two moves never interleave.
+    fn move_seal(&self, rows: usize) {
+        let mut mine = self.sealed.lock();
+        self.admission.adjust_sealed(*mine, rows);
+        *mine = rows;
     }
 
     /// Seal `name` as the load would, and seal admission with it (MIK-8052).
     #[cfg(test)]
     pub(crate) fn seal_for_test(&self, name: &str) {
         self.store.seal_for_test(name);
-        self.admission
-            .set_sealed(self.store.skipped_records().sealed);
+        self.move_seal(self.store.skipped_records().sealed);
     }
 
     /// The rows the store skipped when it opened (MIK-8023).
@@ -284,7 +293,8 @@ impl TaskService {
             .close()
             .await
             .map_err(|_| ServiceError::Unavailable);
-        self.admission.set_sealed(self.prior_sealed);
+        // Releases this service's share once: a second shutdown moves 0 to 0.
+        self.move_seal(0);
         closed
     }
 

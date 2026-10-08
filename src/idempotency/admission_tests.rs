@@ -519,7 +519,7 @@ fn sub4_core_clock_overflow_after_dispatch_never_readmits_uncertain_effect() {
 fn a_sealed_authority_refuses_only_new_identities() {
     let (service, _) = fixture();
     let held = owned(admit(&service, "alice", "held"));
-    service.set_sealed(1);
+    service.adjust_sealed(0, 1);
     assert!(matches!(
         admit(&service, "alice", "new"),
         Ok(Admission::Unavailable)
@@ -539,7 +539,7 @@ fn a_sealed_authority_refuses_only_new_identities() {
         matches!(admit(&service, "alice", "held"), Ok(Admission::InFlight)),
         "a held identity is unaffected by the seal"
     );
-    service.set_sealed(0);
+    service.adjust_sealed(1, 0);
     drop(owned(admit(&service, "alice", "new")));
     drop(held);
 }
