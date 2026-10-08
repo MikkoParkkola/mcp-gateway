@@ -789,3 +789,46 @@ async fn short_fields_delivered_reordered_keep_the_delivered_run() {
         "the receipt kept the step's order, not the delivered one"
     );
 }
+
+/// Diagnostic probe for MIK-8124 (throwaway only): the gateway scenario
+/// under fresh keys, with the relay counters of each refused run.
+#[tokio::test]
+async fn probe_mik8124_gateway_counters() {
+    use crate::security::firewall::collusion::PROBE_KEY;
+    const RUNS: usize = 300;
+    let mut fails = 0;
+    let mut report = Vec::new();
+    let mut ok_sample = String::new();
+    for run in 0..RUNS {
+        PROBE_KEY.with(|k| *k.borrow_mut() = Some(std::hash::RandomState::new()));
+        let (meta, firewall) = relay_meta();
+        let copy = filler("rep", 25);
+        let step = json!({"a": vec![copy.as_str(); 800], "body": format!("{PROSE} {SECRET}")});
+        let answer = plan_answer(&json!({"a": copy, "body": PROSE}));
+        deliver_step(&meta, &step, &answer).await;
+        let d = firewall.collusion_detector().expect("detector");
+        let after_alice = (d.tracked_fingerprints(), d.source_truncated(), d.saturated(), d.evicted());
+        carol_holds(&firewall, "a", PROSE);
+        let stats = format!(
+            "after alice (tracked, truncated, saturated, evicted) {after_alice:?}; after carol {:?}; text cuts {}; plan drops {}; prose fps {}",
+            (d.tracked_fingerprints(), d.source_truncated(), d.saturated(), d.evicted()),
+            firewall.relay_text_cuts(),
+            firewall.relay_plan_drops(),
+            d.fingerprints(PROSE).len(),
+        );
+        if refused(&firewall, "alice", PROSE) {
+            fails += 1;
+            if report.len() < 6 {
+                report.push(format!("run {run}: {stats}"));
+            }
+        } else if ok_sample.is_empty() {
+            ok_sample = stats;
+        }
+    }
+    PROBE_KEY.with(|k| *k.borrow_mut() = None);
+    assert_eq!(
+        fails, 0,
+        "PROBE MIK-8124 gateway: {fails}/{RUNS}\nok run: {ok_sample}\n{}",
+        report.join("\n")
+    );
+}
