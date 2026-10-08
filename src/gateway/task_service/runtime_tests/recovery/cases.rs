@@ -410,7 +410,7 @@ async fn recovery_beside_a_sealed_row_settles_and_keeps_keys() {
                 mode: Mode::Sync,
                 ..request(row.key, &operation, &representation)
             }),
-            Ok(Admission::Unavailable)
+            Ok(Admission::Sealed)
         ),
         "a new key is refused while the seal holds"
     );
