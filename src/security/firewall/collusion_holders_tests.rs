@@ -279,3 +279,45 @@ fn the_pool_is_released_when_text_turns_common() {
     }
     assert!(d.pool_in_use() > 0, "released records were not reused");
 }
+
+/// `MIK-8123`: records leaving the window release their pool capacity while
+/// the fingerprint itself stays live.
+#[test]
+fn expired_records_release_pool_while_the_text_stays_live() {
+    let d = detector();
+    let t0 = Instant::now();
+    let text = passage();
+    for i in 0..12 {
+        d.record_delivery_at(&source(i), CAROL, true, &text, t0);
+    }
+    // Touched mid-window, so the entry outlives its first records.
+    d.record_delivery_at(
+        &source(50),
+        CAROL,
+        true,
+        &text,
+        t0 + Duration::from_secs(300),
+    );
+    assert!(d.pool_in_use() > 0, "premise: pool records held");
+    let t1 = t0 + Duration::from_secs(650);
+    d.record_delivery_at(&source(99), CAROL, true, &text, t1);
+    assert_eq!(d.pool_in_use(), 0, "expired records kept pool capacity");
+    assert!(
+        d.check_egress_at(BOB, EGRESS, &text, t1).is_some(),
+        "control: the text is still judged"
+    );
+}
+
+/// `MIK-8123`: a plain record giving way to a sensitive one is counted.
+#[test]
+fn a_replaced_plain_record_is_counted() {
+    let d = detector();
+    let now = Instant::now();
+    let text = passage();
+    for i in 0..64 {
+        d.record_delivery_at(&source(i), CAROL, false, &text, now);
+    }
+    assert_eq!(d.capped(), 0, "premise: 64 records fit");
+    d.record_delivery_at(&source(64), CAROL, true, &text, now);
+    assert!(d.capped() > 0, "a replaced plain record went uncounted");
+}
