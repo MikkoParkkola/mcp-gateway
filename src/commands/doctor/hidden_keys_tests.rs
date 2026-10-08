@@ -86,3 +86,44 @@ fn doctor_adds_no_hidden_settings_row_for_a_fresh_init_config() {
         }
     }
 }
+
+/// Everything `doctor` would print or emit as JSON for the hidden-key row.
+fn rendered(row: &CheckResult) -> String {
+    format!(
+        "{} {} {:?} {}",
+        row.label,
+        row.detail,
+        row.hint,
+        super::super::check_result_json_value(row)
+    )
+}
+
+#[test]
+fn doctor_never_prints_a_config_value() {
+    const SECRET: &str = "s3cr3t-never-printed-7f2c";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &path,
+        format!(
+            "auth:\n  enabled: true\n  bearer_token: \"{SECRET}\"\n\
+             meta_mcp:\n  projection_mode: \"{SECRET}\"\n\
+             backends:\n  fs:\n    command: x\n    max_frame_bytes: \"{SECRET}\"\n"
+        ),
+    )
+    .expect("write config");
+    let row = check_hidden_keys(&path).expect("hidden keys are set");
+    let out = rendered(&row);
+    assert!(out.contains("meta_mcp.projection_mode"), "{out}");
+    assert!(!out.contains(SECRET), "a config value leaked: {out}");
+}
+
+#[test]
+fn a_malformed_config_produces_no_row_and_no_parse_text() {
+    const SECRET: &str = "s3cr3t-in-a-broken-line-91ad";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, format!("auth:\n  bearer_token: \"{SECRET}\n  : [\n"))
+        .expect("write config");
+    assert!(check_hidden_keys(&path).is_none());
+}
