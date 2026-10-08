@@ -284,8 +284,9 @@ fn keep_to_rewritten(
 /// string never holds a raw newline, so each line's string literals are read
 /// escape-aware and unescaped: a literal whose closing quote is gone runs to
 /// the line's end, and the line is also read from its end, so a damaged key
-/// does not take the value beside it. Values come first, then keys, then the
-/// flat text, which only widens what counts as delivered.
+/// does not take the value beside it. Values come first, then keys. The
+/// literals together are never longer than the wrapper, so the answer is
+/// bounded as the whole wrapper text was.
 #[cfg(feature = "firewall")]
 fn rewritten_answer(text: &str) -> Value {
     let (mut values, mut keys) = (Vec::new(), serde_json::Map::new());
@@ -296,7 +297,6 @@ fn rewritten_answer(text: &str) -> Value {
             values.push(Value::String(literal));
         }
     }
-    values.push(Value::String(unescape(text)));
     values.push(Value::Object(keys));
     Value::Array(values)
 }
@@ -553,16 +553,17 @@ mod tests {
         );
     }
 
-    /// `MIK-8043.JOIN.4`: values in print order, then the flat text, then the
-    /// keys, as a delivery walk reads them.
+    /// `MIK-8043.JOIN.4`: values in print order, then the keys, as a delivery
+    /// walk reads them; no copy of the whole text, which would double what the
+    /// answer's bound counts.
     #[test]
-    fn a_rewritten_answer_lists_values_then_flat_text_then_keys() {
+    fn a_rewritten_answer_lists_values_then_keys() {
         let text = "{\n  \"content\": [\n    \"x\",\n    \"y\"\n  ]\n}";
         let read = rewritten_answer(text);
         assert_eq!(read[0], "x");
         assert_eq!(read[1], "y");
-        assert_eq!(read[2], unescape(text));
-        assert!(read[3].get("content").is_some(), "{read}");
+        assert!(read[2].get("content").is_some(), "{read}");
+        assert_eq!(read.as_array().map(Vec::len), Some(3), "{read}");
     }
 
     /// A delivered answer with a `serverInfo` in its `_meta`.
