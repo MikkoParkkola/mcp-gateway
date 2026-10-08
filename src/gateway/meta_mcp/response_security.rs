@@ -197,6 +197,7 @@ impl super::MetaMcp {
             targets: context.targets,
             correlation: &context.correlation,
             api_key_name: None,
+            firewall: self.firewall.as_deref(),
         };
         self.scan_egress(&mut response, &at);
         // MIK-7211.PARENT.6: the scope is settled before the chain link and the
@@ -267,7 +268,7 @@ impl super::MetaMcp {
         task_id: &str,
         result: &mut serde_json::Value,
     ) -> crate::Result<()> {
-        use super::invoke::egress::{Egress, EgressOutcome};
+        use super::invoke::egress::{Egress, EgressOutcome, firewall_result};
         let (server, tool) = targets.first().map_or(("gateway", "tasks/get"), |t| {
             (t.server.as_str(), t.tool.as_str())
         });
@@ -285,8 +286,9 @@ impl super::MetaMcp {
             targets,
             correlation: &correlation,
             api_key_name: None,
+            firewall: self.firewall.as_deref(),
         };
-        if self.firewall_result(result, &at) == EgressOutcome::Refused {
+        if firewall_result(result, &at) == EgressOutcome::Refused {
             tracing::warn!(task_id, "Firewall: task result blocked");
             return Err(crate::Error::ResponseFirewallRefused);
         }

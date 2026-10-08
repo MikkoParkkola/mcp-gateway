@@ -482,8 +482,8 @@ impl MetaMcp {
     /// like any recovered result, so they face the screen every route's
     /// backend error shares (MIK-8139): anomaly screening, context integrity
     /// and the configured response firewall, not a result's output contract.
-    /// Refusal or content rewriting withholds the raw content; observe-mode
-    /// findings retain the configured pass-through.
+    /// A refusal withholds the raw content; a redaction is stored in place;
+    /// observe-mode findings retain the configured pass-through.
     ///
     /// The outcome stays a failure and keeps the peer's `code`: there is no
     /// return path here through which an error could become a result.
@@ -499,13 +499,14 @@ impl MetaMcp {
         trace_id: &str,
         error: JsonRpcError,
     ) -> (JsonRpcError, crate::gateway::task_service::ErrorAuthor) {
-        // MIK-8139: the screen every route's backend error shares (content
-        // inspection, context integrity, the configured firewall). An
-        // annotation alone is not a refusal, preserving the operator's observe
-        // mode, but content a screen rewrote is never persisted.
+        // MIK-8139: the egress scan's error step (content inspection, context
+        // integrity, the configured firewall). An annotation alone is not a
+        // refusal, preserving the operator's observe mode.
         let mut error = error;
         let screened = self.scan_backend_error((server, tool, trace_id), api_key_name, &mut error);
-        let clean = screened == super::invoke::egress::EgressOutcome::Delivered;
+        // A redaction is written back in place and stored, as a redacted task
+        // result is; only a refusal withholds the peer's text.
+        let clean = screened != super::invoke::egress::EgressOutcome::Refused;
         if clean {
             (error, crate::gateway::task_service::ErrorAuthor::Peer)
         } else {

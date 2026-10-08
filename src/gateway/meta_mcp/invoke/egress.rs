@@ -24,6 +24,11 @@ pub(crate) struct Egress<'a> {
     pub(crate) correlation: &'a ResponseCorrelation<'a>,
     /// The caller's key name, for context integrity's subject.
     pub(crate) api_key_name: Option<&'a str>,
+    /// The firewall instance that judges this route: the router's on the
+    /// direct route (its own audit and rules, MIK-7669), the Meta-MCP's on
+    /// every other.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    pub(crate) firewall: Option<&'a crate::security::firewall::Firewall>,
 }
 
 /// What the scan did to a frame, in increasing strength.
@@ -80,30 +85,10 @@ impl MetaMcp {
             return EgressOutcome::Refused;
         }
         let snapshot = self.relay_snapshot(result);
-        let outcome = self.firewall_result(result, at);
+        let outcome = firewall_result(result, at);
         let shape = super::relay::AnswerShape::of(at.correlation.external_tool);
         self.restage_if_changed(snapshot, Some(&*result), shape);
         outcome
-    }
-
-    /// The firewall on a result part under the part's own policy, without
-    /// the relay receipt: a task settles its receipt itself.
-    pub(crate) fn firewall_result(&self, result: &mut Value, at: &Egress<'_>) -> EgressOutcome {
-        #[cfg(feature = "firewall")]
-        if let Some(firewall) = &self.firewall {
-            use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
-            let verdict = firewall.check_response_artifact(
-                result,
-                at.targets,
-                at.correlation,
-                ResponseArtifactKind::FinalResponse,
-                ResponseMutationPolicy::for_result(result),
-            );
-            return firewall_outcome(verdict);
-        }
-        #[cfg(not(feature = "firewall"))]
-        let _ = (result, at);
-        EgressOutcome::Delivered
     }
 
     /// An error part: its message and data meet the content checks and the
@@ -115,9 +100,9 @@ impl MetaMcp {
             return EgressOutcome::Refused;
         }
         #[cfg(feature = "firewall")]
-        if let Some(firewall) = &self.firewall {
+        if let Some(firewall) = at.firewall {
             use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
-            let mut artifact = fields;
+            let mut artifact = fields.clone();
             let verdict = firewall.check_response_artifact(
                 &mut artifact,
                 at.targets,
@@ -125,9 +110,13 @@ impl MetaMcp {
                 ResponseArtifactKind::FinalResponse,
                 ResponseMutationPolicy::Redact,
             );
-            let outcome = firewall_outcome(verdict);
-            if outcome != EgressOutcome::Rewritten {
-                return outcome;
+            // Rewritten only when the redactor changed a field: a finding it
+            // let through untouched leaves the backend's error as sent.
+            if firewall_outcome(verdict) == EgressOutcome::Refused {
+                return EgressOutcome::Refused;
+            }
+            if artifact == fields {
+                return EgressOutcome::Delivered;
             }
             let Some(message) = artifact["message"].as_str() else {
                 return EgressOutcome::Refused;
@@ -136,7 +125,7 @@ impl MetaMcp {
             if error.data.is_some() {
                 error.data = artifact.as_object_mut().and_then(|a| a.remove("data"));
             }
-            return outcome;
+            return EgressOutcome::Rewritten;
         }
         EgressOutcome::Delivered
     }
@@ -162,6 +151,26 @@ impl MetaMcp {
             self.apply_context_integrity(server, tool, at.api_key_name, trace_id, carrier);
         effect == super::super::response_security::GateEffect::Enforced
     }
+}
+
+/// The firewall on a result part under the part's own policy, without
+/// the relay receipt: a task settles its receipt itself.
+pub(crate) fn firewall_result(result: &mut Value, at: &Egress<'_>) -> EgressOutcome {
+    #[cfg(feature = "firewall")]
+    if let Some(firewall) = at.firewall {
+        use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
+        let verdict = firewall.check_response_artifact(
+            result,
+            at.targets,
+            at.correlation,
+            ResponseArtifactKind::FinalResponse,
+            ResponseMutationPolicy::for_result(result),
+        );
+        return firewall_outcome(verdict);
+    }
+    #[cfg(not(feature = "firewall"))]
+    let _ = (result, at);
+    EgressOutcome::Delivered
 }
 
 /// A firewall verdict as an outcome: a refusal or a missing target refuses,
@@ -231,6 +240,7 @@ impl MetaMcp {
             targets: &targets,
             correlation: &correlation,
             api_key_name,
+            firewall: self.firewall.as_deref(),
         };
         self.scan_error(error, &at)
     }
@@ -291,6 +301,7 @@ impl crate::transport::notification_sink::NotificationScreen for NotificationEgr
             targets: &targets,
             correlation: &correlation,
             api_key_name: None,
+            firewall: self.meta.firewall.as_deref(),
         };
         self.meta.scan_notification(params, &at) != EgressOutcome::Refused
     }
@@ -318,7 +329,7 @@ impl MetaMcp {
             return EgressOutcome::Refused;
         }
         #[cfg(feature = "firewall")]
-        if let Some(firewall) = &self.firewall {
+        if let Some(firewall) = at.firewall {
             use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
             let verdict = firewall.check_response_artifact(
                 params,
@@ -385,7 +396,8 @@ impl MetaMcp {
             targets: &targets,
             correlation: &correlation,
             api_key_name: None,
+            firewall: self.firewall.as_deref(),
         };
-        self.firewall_result(value, &at) == EgressOutcome::Refused
+        firewall_result(value, &at) == EgressOutcome::Refused
     }
 }

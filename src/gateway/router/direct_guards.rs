@@ -143,14 +143,21 @@ impl DirectRouteGuards {
 
 /// The JSON-RPC error a direct-route refusal answers with (HTTP 200). A
 /// firewall refusal carries the delivery-refusal projection, as on meta.
+///
+/// Every caller passes a gate's own error, raised before dispatch or by a
+/// post-dispatch gate, never a backend's: the frame carries gateway text and
+/// is born marked, so no later exit scans it (and no content check records
+/// data classes on a refusal).
 pub(super) fn refusal(id: Option<RequestId>, error: &Error) -> JsonRpcResponse {
-    match error {
+    let mut frame = match error {
         Error::ResponseFirewallRefused => {
             JsonRpcResponse::delivery_refusal_error(id, error.to_rpc_code(), &error.to_string())
         }
         Error::JsonRpc { code, message, .. } => JsonRpcResponse::error(id, *code, message.clone()),
         _ => JsonRpcResponse::error(id, error.to_rpc_code(), error.to_string()),
-    }
+    };
+    frame.egress_scanned = true;
+    frame
 }
 
 /// The egress scan (design `2026-10-08-one-egress-scan.md`) on a direct-route
@@ -181,6 +188,8 @@ pub(super) fn scan_direct_egress(
         targets: &targets,
         correlation: &correlation,
         api_key_name: client.map(|c| c.name.as_str()),
+        // The router's own instance judges the direct route (MIK-7669).
+        firewall: state.firewall.as_deref(),
     };
     state.meta_mcp.scan_egress(response, &at)
 }
