@@ -728,3 +728,69 @@ async fn r20_a_spend_refusal_consumes_no_nonce() {
         assert_eq!(dispatched(&fx), 1, "{backend}");
     }
 }
+
+/// A chained backend's transport that asks the fixture's question with no
+/// chain receipt, counting every request.
+struct AskUnsigned(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for AskUnsigned {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let asked = json!({"resultType": "input_required", "requestState": BACKEND_STATE,
+            "inputRequests": {"k1": {"method": "elicitation/create",
+                "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}}}});
+        let id = crate::protocol::RequestId::Number(1);
+        Ok(crate::protocol::JsonRpcResponse::success(id, asked))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// R21: an answer whose chain receipt fails is refused before it is read as a
+/// question, so its idempotency key stays settled and a retry under that key
+/// does not reach the backend again. Mutant: the key released on an interim
+/// claim before the receipt is checked.
+#[tokio::test]
+async fn r21_a_failed_receipt_keeps_the_key_settled() {
+    use crate::config::{BackendConfig, ChainEmit, ChainMode, FailsafeConfig};
+    let fx = fixture(Answer::Ok, |meta| {
+        meta.set_chain_signer(
+            crate::gateway::chain_test_support::signer(),
+            ChainEmit::OnRequest,
+        );
+    })
+    .await;
+    let reached = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let backend = std::sync::Arc::new(crate::backend::Backend::new(
+        "alpha-chain",
+        BackendConfig {
+            signature_chain: ChainMode::Require,
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(std::sync::Arc::new(AskUnsigned(reached.clone())));
+    assert!(fx.state.backends.register(backend), "fixture registration");
+    let opening = json!({"_meta": { IDEMPOTENCY_KEY_META: "k-8078-receipt" }});
+    let (_, first) = call(&fx, "alpha-chain", Some("alice"), opening.clone()).await;
+    assert!(first.get("error").is_some(), "{first}");
+    let (_, again) = call(&fx, "alpha-chain", Some("alice"), opening).await;
+    assert_eq!(
+        reached.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the key was released: {again}"
+    );
+}
