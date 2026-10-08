@@ -451,3 +451,35 @@ fn a_marker_survives_a_clear_that_fails() {
         "the marker stays until the token is known to be gone"
     );
 }
+
+/// A login repairs a damaged sidecar: the token it saves is new, so no lost
+/// marker can have named it, and its first refresh sends it. Without the
+/// repair every fresh token would be retired at its first refresh, and the
+/// backend would ask for a login once per token lifetime.
+#[tokio::test]
+async fn a_login_repairs_a_damaged_refresh_state() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut owned = client(dir.path(), &server);
+    if let Some(meta) = owned.auth_metadata.as_mut() {
+        meta.grant_types_supported = vec!["client_credentials".to_string()];
+    }
+    let key = owned.credential_key().unwrap();
+    std::fs::write(owned.storage.refresh_state_path(&key, RESOURCE), "not json").unwrap();
+
+    owned.try_client_credentials().await.expect("logged in");
+    let issued = stored(&owned)
+        .and_then(|t| t.refresh_token)
+        .expect("the login stored a refresh token");
+    expire(&owned);
+    headless(&owned).await.expect("the fresh token refreshes");
+
+    assert_eq!(
+        server.uses(&issued),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+    let state = owned.storage.load_refresh_state(&key, RESOURCE);
+    assert!(!state.damaged, "the login rewrote the sidecar");
+}
