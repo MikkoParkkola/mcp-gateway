@@ -117,7 +117,9 @@ impl WatchSource {
     }
 
     /// Record the class of every watch row written before it was recorded:
-    /// what the catalogue admits its capability under now, else keyed.
+    /// what the catalogue admits its capability under now. A row whose
+    /// capability the catalogue does not name yet waits for a later replay;
+    /// the worker's sweep runs one (MIK-8151).
     pub(super) fn pin_classes(&self, store: &Store) {
         let mut names: Vec<String> = store
             .subscriptions()
@@ -128,7 +130,9 @@ impl WatchSource {
         names.sort();
         names.dedup();
         for name in names {
-            let class = self.watch_class(&name).unwrap_or(WatchClass::Keyed);
+            let Some(class) = self.watch_class(&name) else {
+                continue;
+            };
             if let Err(error) = store.backfill_watch_class(&name, class) {
                 tracing::warn!(%error, "events: a watch class was not recorded; retried at the next replay");
             }

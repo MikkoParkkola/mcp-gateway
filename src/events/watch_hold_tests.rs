@@ -179,3 +179,34 @@ async fn a_hold_survives_a_restart() {
     let hub = hub(dir.path());
     assert!(hub.store.held(&id).is_some(), "held after the restart");
 }
+
+/// MIK-8151 `AC1`: a watch row written before its class was recorded gets
+/// no key and no class while a partial catalogue leaves its capability
+/// unread; once a complete read offers it credential-free, the next sweep
+/// pins the row shared and polls under the shared key.
+#[tokio::test]
+async fn a_legacy_watch_waits_for_its_class_then_polls_shared() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = hub(dir.path());
+    let host = fake(Vec::new());
+    host.partial
+        .store(true, std::sync::atomic::Ordering::Release);
+    admit(&hub, "p", NAME, &json!({}));
+    hub.install_watch_source(Arc::clone(&host) as Arc<dyn WatchHost>);
+    tokio::task::yield_now().await;
+    assert!(hub.lifecycle.lock().await.is_empty(), "no key while unread");
+    let id = only_row(&hub);
+    let class = |hub: &EventsHub| hub.store.subscriptions()[0].watch_class;
+    assert_eq!(class(&hub), None, "no class guessed while unread");
+    host.partial
+        .store(false, std::sync::atomic::Ordering::Release);
+    *host.targets.lock() = vec![target("weather", true, CredentialUse::Free)];
+    sweep(&hub).await;
+    let shared = (SourceKind::RestWatch, json!([NAME, {}]).to_string());
+    assert!(
+        hub.lifecycle.lock().await.contains(&shared),
+        "started under the shared key"
+    );
+    assert_eq!(class(&hub), Some(WatchClass::Free), "pinned shared");
+    assert!(hub.store.held(&id).is_none(), "not held");
+}

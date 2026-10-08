@@ -714,6 +714,8 @@ async fn a_sweep_starts_the_poller_of_a_capability_offered_again() {
 
 /// MIK-8053: the sweep stops pollers no live row holds before it starts the
 /// restored ones, so a stale poller never takes the last `max_pollers` slot.
+/// A held watch is not stale: its poller runs to see it return (MIK-8122),
+/// so the slot here is freed by the row going.
 #[tokio::test]
 async fn a_sweep_frees_a_stale_slot_before_it_starts_a_restored_key() {
     let dir = tempfile::tempdir().expect("dir");
@@ -730,9 +732,19 @@ async fn a_sweep_frees_a_stale_slot_before_it_starts_a_restored_key() {
         1,
         "weather holds the slot"
     );
-    // Weather turns side-effecting (no longer offered); rain comes in.
+    // Weather's row goes; rain comes in.
+    let weather = hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .find(|s| s.name == "watch.weather.changed")
+        .expect("weather row");
+    let tail = super::super::tail_policy(&crate::config::EventsConfig::default());
+    hub.store
+        .remove(&weather.id, Utc::now(), tail)
+        .expect("removed");
     *host.targets.lock() = vec![
-        target("weather", false, CredentialUse::Free),
+        target("weather", true, CredentialUse::Free),
         target("rain", true, CredentialUse::Free),
     ];
     sweep(&hub).await;
@@ -744,11 +756,12 @@ async fn a_sweep_frees_a_stale_slot_before_it_starts_a_restored_key() {
     );
 }
 
-/// MIK-8053 (review of #3406): a poller the sweep stopped while a partial
-/// catalogue left its capability unread starts again once the catalogue is
-/// whole; its row was kept throughout.
+/// MIK-8053 (review of #3406): a partial catalogue that leaves a watch's
+/// capability unread neither drops its row nor its poller: the row keeps its
+/// key (MIK-8122), the poller runs on and decides nothing while unread, and
+/// the whole catalogue finds it still started, once.
 #[tokio::test]
-async fn a_poller_stopped_during_a_partial_catalogue_restarts_after_it() {
+async fn a_watch_poller_runs_through_a_partial_catalogue() {
     let dir = tempfile::tempdir().expect("dir");
     let hub = hub(dir.path());
     let host = fake(vec![target("weather", true, CredentialUse::Free)]);
@@ -759,15 +772,16 @@ async fn a_poller_stopped_during_a_partial_catalogue_restarts_after_it() {
     host.targets.lock().clear();
     host.partial.store(true, Ordering::Release);
     sweep(&hub).await;
-    assert!(
-        hub.lifecycle.lock().await.is_empty(),
-        "premise: stopped while unread"
+    assert_eq!(
+        hub.lifecycle.lock().await.len(),
+        1,
+        "still started while unread"
     );
     assert_eq!(hub.store.subscriptions().len(), 1, "the row is kept");
     host.partial.store(false, Ordering::Release);
     *host.targets.lock() = vec![target("weather", true, CredentialUse::Free)];
     sweep(&hub).await;
-    assert_eq!(hub.lifecycle.lock().await.len(), 1, "restarted once whole");
+    assert_eq!(hub.lifecycle.lock().await.len(), 1, "one poller once whole");
 }
 
 #[path = "watch_source_partial_tests.rs"]

@@ -432,11 +432,15 @@ impl EventSource for WatchSource {
     }
 
     fn row_key(&self, sub: &Subscription) -> Option<String> {
-        is_watch(&sub.name).then(|| {
-            let keyed = self.effective_class(sub) == WatchClass::Keyed;
-            let alone = keyed.then_some(sub.principal.as_str());
-            poll_key(alone, &sub.name, &sub.arguments)
-        })
+        if !is_watch(&sub.name) {
+            return None;
+        }
+        // A row with no recorded class has no key until a catalogue read
+        // names its class: a guess would key it under the wrong class for
+        // good (MIK-8151).
+        let class = sub.watch_class.or_else(|| self.watch_class(&sub.name))?;
+        let alone = (class == WatchClass::Keyed).then_some(sub.principal.as_str());
+        Some(poll_key(alone, &sub.name, &sub.arguments))
     }
 
     fn pin_rows(&self, store: &super::store::Store) {
