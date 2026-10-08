@@ -15,8 +15,15 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::BuildHasher;
 
 use icu_normalizer::ComposingNormalizerBorrowed;
+use icu_normalizer::properties::{
+    CanonicalCombiningClassMapBorrowed, CanonicalCompositionBorrowed,
+};
 
 use super::{CollusionDetector, K, key, winnow};
+
+/// The longest piece of text normalized together, in bytes: past it the
+/// stream is cut even inside a composing run.
+const MAX_PIECE: usize = 256;
 
 /// A seam fingerprint and the steps whose text it touches anywhere in the
 /// answer, ascending.
@@ -95,12 +102,14 @@ impl CollusionDetector {
         union.into_iter().collect()
     }
 
-    /// The form's text normalized as [`Self::kgram_hashes`] normalizes it,
-    /// with the step of each char. Each part is normalized alone. NFC is
-    /// local: where a part opens with a mark that composes with the char
-    /// before it, only the k-grams over that boundary differ from the text
-    /// normalized whole, so such a boundary costs at most the seams over
-    /// it, never another seam in the form.
+    /// The form's text normalized as [`Self::kgram_hashes`] normalizes the
+    /// whole text, with the step of each char. The stream is cut only before
+    /// a starter that cannot compose with the char before it, where NFC
+    /// never reaches across, so normalizing each piece gives exactly the
+    /// text normalized whole. A piece takes the step of the char it starts
+    /// with: a mark of another step composed into it adds no step. A piece
+    /// over [`MAX_PIECE`] bytes is cut anyway, costing at most the k-grams
+    /// over that cut.
     #[expect(
         clippy::unused_self,
         reason = "normalized as every k-gram the detector reads"
@@ -111,17 +120,45 @@ impl CollusionDetector {
         separator: &str,
     ) -> (String, Vec<Option<u32>>) {
         let nfc = ComposingNormalizerBorrowed::new_nfc();
+        let ccc = CanonicalCombiningClassMapBorrowed::new();
+        let comp = CanonicalCompositionBorrowed::new();
         let mut stream: Vec<(char, Option<u32>)> = Vec::new();
-        for (i, (text, owner)) in parts.iter().enumerate() {
-            if i > 0 {
-                stream.extend(separator.chars().map(|c| (c, None)));
+        let mut piece = String::new();
+        let mut owner = None;
+        let chars = parts.iter().enumerate().flat_map(|(i, (text, step))| {
+            let sep = if i > 0 { separator } else { "" };
+            sep.chars().map(|c| (c, None)).chain(
+                text.chars()
+                    .filter(|&c| !crate::security::sanitize::is_unsafe_control(c))
+                    .map(move |c| (c, *step)),
+            )
+        });
+        for (c, step) in chars {
+            if !piece.is_empty() && ccc.get_u8(c) == 0 {
+                // An ASCII piece is already normalized, and no starter
+                // composes with an ASCII char.
+                let normal = if piece.is_ascii() {
+                    std::borrow::Cow::Borrowed(piece.as_str())
+                } else {
+                    nfc.normalize(&piece)
+                };
+                let joins = !c.is_ascii()
+                    && normal
+                        .chars()
+                        .next_back()
+                        .is_some_and(|last| comp.compose(last, c).is_some());
+                if !joins || piece.len() >= MAX_PIECE {
+                    stream.extend(normal.chars().map(|n| (n, owner)));
+                    drop(normal);
+                    piece.clear();
+                }
             }
-            let visible: String = text
-                .chars()
-                .filter(|&c| !crate::security::sanitize::is_unsafe_control(c))
-                .collect();
-            stream.extend(nfc.normalize(&visible).chars().map(|c| (c, *owner)));
+            if piece.is_empty() {
+                owner = step;
+            }
+            piece.push(c);
         }
+        stream.extend(nfc.normalize(&piece).chars().map(|n| (n, owner)));
         // Whitespace collapsed as `split_whitespace().join(" ")`: trimmed, and
         // each inner run one unowned space.
         let mut norm = String::new();

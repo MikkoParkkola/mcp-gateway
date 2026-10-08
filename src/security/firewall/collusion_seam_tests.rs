@@ -256,3 +256,28 @@ fn jamo_split_over_empty_leaves_keep_other_seams() {
         "composing jamo erased an unrelated seam"
     );
 }
+
+/// NFC can carry a composition back across a long run of marks: a final
+/// acute composes with the `e` before eighty marks of other steps. The seam
+/// pass normalizes as the whole text is normalized, so every seam
+/// fingerprint is one a relay of the delivered text computes.
+#[test]
+fn a_composition_across_many_marks_keeps_seams_exact() {
+    let det = detector();
+    let marks = "\u{315}".repeat(80);
+    let parts = [
+        (FIELD_A, Some(0)),
+        ("south terrace rows one to six, early quince", Some(1)),
+        (marks.as_str(), Some(2)),
+        ("\u{301}", Some(3)),
+    ];
+    let texts: Vec<&str> = parts.iter().map(|(t, _)| *t).collect();
+    let mut egress = det.fingerprints(&texts.join("\n"));
+    egress.extend(det.fingerprints(&texts.concat()));
+    let seams = seam_fps(&det, &parts);
+    assert!(!seams.is_empty(), "premise: a seam across the first two");
+    assert!(
+        seams.iter().all(|fp| egress.contains(fp)),
+        "a seam fingerprint no relay of the delivered text computes"
+    );
+}
