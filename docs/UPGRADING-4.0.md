@@ -197,8 +197,7 @@ backend" and "fails a capability file" first.**
 | 170 | `cap search` and `cap registry-list` take `-C` for `--capabilities`, as every other command does; `-c` there now means the global `--config`. A debug build panicked on both commands, and a release build read `-c` as `--capabilities` | Scripts that passed `-c <dir>` to these two commands: use `-C <dir>` or `--capabilities <dir>` |
 | 171 | With agent authentication on, a listen or GET /mcp stream opened with an agent token is checked again at every delivery and ends, with no closing message, once the token expires, the agent leaves the registry or its key changes. A GET /mcp stream also checks each queued notification when it writes it, for every credential kind. With gateway authentication on, a valid agent token can listen on a public `/mcp`. `AuthState` gains `agent_auth` | Clients: re-subscribe with a fresh token when a stream ends. Library users building `AuthState` with a struct literal set `agent_auth` to the `AgentAuthState` the router's agent middleware uses (or `AgentAuthState::new(false, ...)` without agent auth) |
 | 172 | `/.well-known/oauth-protected-resource` answers 404 when the gateway names no authorization server (auth off, API keys only, or agent auth); it answered 200 with a document naming none, or 503 on a wildcard bind without `server.public_url` | None. A client that probes the path now uses the API key it was given instead of attempting an OAuth sign-in that could not complete. With `key_server.delegated_bearer` on, the document is served as before |
-| 173 | Reserved: #3527 | None |
-| 174 | `meta_mcp.cache_tools` is retired: nothing ever read it. A config that sets it loads and logs one warning; `upgrade` removes it, or names it when it cannot do so safely, and `init` no longer writes it | Run `mcp-gateway upgrade`, or delete the key. To change how long tool lists are cached, set `meta_mcp.cache_ttl` |
+| 173 | `meta_mcp.cache_tools` is retired: nothing ever read it. A config that sets it loads and logs one warning; `upgrade` removes it, or names it when it cannot do so safely, and `init` no longer writes it | Run `mcp-gateway upgrade`, or delete the key. To change how long tool lists are cached, set `meta_mcp.cache_ttl` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4502,7 +4501,7 @@ as before. Nothing to change: clients of an API-key gateway keep sending the
 key, and a `404` is what a standards-following client expects from a resource
 with no OAuth sign-in.
 
-## 174. `meta_mcp.cache_tools` is retired
+## 173. `meta_mcp.cache_tools` is retired
 
 **Startup:** no notice, a config that sets the key logs one warning at load
 
