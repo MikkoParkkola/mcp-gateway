@@ -301,14 +301,22 @@ impl EventsHub {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        // A removed backend takes its subscriptions with it, as a reload that
-        // removes a webhook route does; re-adding the name starts clean.
+        // A removed backend takes the subscriptions of every one of its event
+        // types with it, as a reload that removes a webhook route does;
+        // re-adding the name starts clean (MIK-7897).
         if let Some(source) = self.source(SourceKind::BackendNotification)
             && !source.offers(&event_name(backend))
         {
             // A report still waiting for its quiet period must not outlive the backend.
             self.debounce.latest.lock().remove(backend);
-            self.withdraw(&[event_name(backend)]);
+            let gone: Vec<String> = self
+                .store
+                .subscriptions()
+                .into_iter()
+                .map(|sub| sub.name)
+                .filter(|name| parse_name(name).is_some_and(|(of, _)| of == backend))
+                .collect();
+            self.withdraw(&gone);
             self.reconcile_stops_in_background();
             return;
         }
