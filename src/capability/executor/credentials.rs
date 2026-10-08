@@ -396,7 +396,7 @@ impl CapabilityExecutor {
         storage: &std::sync::Arc<crate::oauth::TokenStorage>,
         context: &CapabilityExecutionContext,
     ) -> Result<String> {
-        use crate::oauth::client::{Refreshed, Rotation, StoredCredential, refresh_stored};
+        use crate::oauth::client::{Refreshed, StoredCredential, refresh_stored};
         // The refresh token and client secret go only where the capability's
         // own request may go (#2113): the same destination check, before any
         // byte is sent.
@@ -417,7 +417,6 @@ impl CapabilityExecutor {
             key: provider,
             resource_url: provider,
             label: provider,
-            rotation: Rotation::Assumed,
         };
         let refreshed = refresh_stored(&caller, at).await.map_err(|e| {
             Error::Config(format!(
