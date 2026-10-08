@@ -190,6 +190,7 @@ backend" and "fails a capability file" first.**
 | 163 | With gateway authentication off and agent authentication on, each agent owns its tasks apart, keyed on the `client_id` its token validates as (a renewed token for the same agent keeps them); every agent had shared one task owner | None. Tasks an agent created before the upgrade stay under the old shared owner, so the agent no longer finds them under its own |
 | 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept, a removed one released); restart to read a repaired task; probes (`/livez`, `/readyz`) are unaffected |
 | 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
+| 166 | On a multi-user gateway, an API-key or admin-bearer caller with no other identity gets its own `mcp` capability child, named by its credential, instead of a refusal. An `mcp` capability's cached answer is read back only by the caller whose child produced it | None. Callers who share one API key share one child |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4343,6 +4344,21 @@ says whose fault it is:
 The `gateway_reload_config` meta-tool answers that refusal with JSON-RPC
 -32600 (it was -32603) and keeps -32603 otherwise. The message text is
 unchanged on both.
+
+## 166. API-key callers get their own `mcp` capability child on a multi-user gateway
+
+**Startup:** no notice
+
+An `mcp` capability runs one child process per caller. On a multi-user
+gateway, a caller named by no identity-propagation binding, OIDC identity or
+grant subject was refused ("needs an identified caller"), which refused every
+API-key and admin-bearer caller. Such a caller now gets its own child, named by
+its validated credential, and a background task it starts reaches the same
+child. A single-user gateway still runs one shared child for every caller
+without an identity.
+
+An `mcp` capability with `cache:` set also keys its cached answers on that same
+per-caller name, so one caller is never served another caller's cached answer.
 
 ## Upgrading from 3.5.x: a walkthrough
 
