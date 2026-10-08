@@ -351,6 +351,34 @@ impl MetaMcp {
         ErrorScreen::Clean
     }
 
+    /// Whether `e`, when it carries a backend's JSON-RPC error, passes
+    /// [`Self::screen_backend_error`] unchanged; any other error is the
+    /// gateway's own.
+    pub(crate) fn backend_error_screens_clean(&self, server: &str, tool: &str, e: &Error) -> bool {
+        let Error::JsonRpc {
+            code,
+            message,
+            data,
+        } = e
+        else {
+            return true;
+        };
+        let mut error = crate::protocol::JsonRpcError {
+            code: *code,
+            message: message.clone(),
+            data: data.clone(),
+        };
+        let call = BackendCall {
+            server,
+            tool,
+            session_id: None,
+            api_key_name: None,
+            trace_id: tool,
+            caller_key: None,
+        };
+        self.screen_backend_error(&call, &mut error) == ErrorScreen::Clean
+    }
+
     /// [`Self::screen_backend_error`] on `response`'s error, if any: a block
     /// replaces the answer with the firewall's delivery refusal, as for a
     /// blocked result on every route.

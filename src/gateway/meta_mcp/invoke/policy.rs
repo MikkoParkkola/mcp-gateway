@@ -342,15 +342,6 @@ impl MetaMcp {
         Ok(delivered)
     }
 
-    /// The response contract gate (issue #133, D1), split out of
-    /// [`Self::apply_response_gates`] purely to keep that function under the
-    /// line budget — logic, ordering and return semantics are unchanged.
-    ///
-    /// Validates the response against the per-tool contract declared in
-    /// `config`. Default-deny (`fail_closed=true`) can block responses from
-    /// tools with no declared contract.
-    ///
-    /// Runs BEFORE D2 anomaly screening so contract violations abort early.
     /// D2 content inspection of a backend answer's text, shared by a result
     /// and a backend error (MIK-8139) so their screening cannot diverge:
     /// findings are logged and returned; in action mode a HIGH/CRITICAL
@@ -391,6 +382,15 @@ impl MetaMcp {
         Ok(inspection.findings)
     }
 
+    /// The response contract gate (issue #133, D1), split out of
+    /// [`Self::apply_response_gates`] purely to keep that function under the
+    /// line budget — logic, ordering and return semantics are unchanged.
+    ///
+    /// Validates the response against the per-tool contract declared in
+    /// `config`. Default-deny (`fail_closed=true`) can block responses from
+    /// tools with no declared contract.
+    ///
+    /// Runs BEFORE D2 anomaly screening so contract violations abort early.
     pub(super) fn apply_response_contract_gate(
         &self,
         server: &str,
