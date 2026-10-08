@@ -285,3 +285,68 @@ fn a_reading_over_the_bound_falls_back_to_the_whole_text() {
     assert!(fw.delivered_preferring(&answer, &flat, None).is_some());
     assert_eq!(fw.relay_plan_drops(), drops, "no drop while the text fits");
 }
+
+/// Diagnostic probe for MIK-8124 (throwaway only): the crowded-receipt
+/// scenario at digest level under fresh keys; reports where a missing
+/// fingerprint of the delivered text was lost.
+#[test]
+fn probe_mik8124_digest_level() {
+    use super::super::super::collusion::PROBE_KEY;
+    use std::collections::HashSet;
+    const RUNS: usize = 3000;
+    let prose = "The orchard ledger for the north slope records seven rows of late pears, \
+    the grafting dates for each rootstock, the hours the drip lines ran during the dry weeks of \
+    August, and which crew pruned the older trees after the second frost. It closes with the \
+    count of crates sent to the cooperative press and a note about the broken ladder by the barn.";
+    let secret = "Account recovery phrase for the vineyard terminal: amber kettle \
+    seventeen lantern quiet harbour violet anchor, rotated after the September audit.";
+    let copy = (0..25).map(|i| format!("rep{i:05}")).collect::<Vec<_>>().join(" ");
+    let body = format!("{prose} {secret}");
+    let step = json!({"a": vec![copy.as_str(); 800], "body": body});
+    let shown = serde_json::to_string_pretty(&json!({"a": copy, "body": prose})).unwrap();
+    let answer = json!({"content": [{"type": "text", "text": shown}]});
+    let mut fails = 0;
+    let mut report = Vec::new();
+    for run in 0..RUNS {
+        PROBE_KEY.with(|k| *k.borrow_mut() = Some(std::hash::RandomState::new()));
+        let detector = CollusionDetector::new(RelayParams::default());
+        let (leaves, values) = super::super::delivery_parts(&step);
+        let (staged, _) = DeliveryDigest::of_plan_step_parts(&leaves, values, true);
+        let original: HashSet<u64> = staged.fingerprints(&detector).into_iter().collect();
+        let (dl, dv) = super::super::delivery_parts(&answer);
+        let delivered = Delivered::of_parts(dl.clone(), dv).expect("bounded");
+        let kept = staged.retaining(&detector, &delivered);
+        let kept_len = kept.retained_len();
+        let (capped, cut) = kept.capped().expect("deferred");
+        let fps: HashSet<u64> = capped.fingerprints(&detector).into_iter().collect();
+        let want = detector.fingerprints(prose);
+        let missing: Vec<u64> = want.iter().copied().filter(|fp| !fps.contains(fp)).collect();
+        if missing.len() >= 2 {
+            fails += 1;
+            if report.len() < 4 {
+                let body_fps: HashSet<u64> = detector.fingerprints(&body).into_iter().collect();
+                let prose_kg: HashSet<u64> = detector.kgram_hashes(prose).into_iter().collect();
+                let found: HashSet<u64> = dl.iter().flat_map(|l| detector.kgram_hashes(l)).collect();
+                let pos: Vec<usize> = missing
+                    .iter()
+                    .map(|fp| detector.kgram_hashes(prose).iter().position(|h| h == fp).unwrap_or(usize::MAX))
+                    .collect();
+                report.push(format!(
+                    "run {run}: missing {}/{} at kgram pos {pos:?} (prose kgrams {}); in body winnow {:?}; in original {:?}; in found {:?}; in prose kgrams {:?}; kept retained {kept_len}; capped fps {}; cut {cut}; dl {} leaves {:?}",
+                    missing.len(),
+                    want.len(),
+                    prose_kg.len(),
+                    missing.iter().map(|f| body_fps.contains(f)).collect::<Vec<_>>(),
+                    missing.iter().map(|f| original.contains(f)).collect::<Vec<_>>(),
+                    missing.iter().map(|f| found.contains(f)).collect::<Vec<_>>(),
+                    missing.iter().map(|f| prose_kg.contains(f)).collect::<Vec<_>>(),
+                    fps.len(),
+                    dl.len(),
+                    dl.iter().map(|l| l.len()).collect::<Vec<_>>(),
+                ));
+            }
+        }
+    }
+    PROBE_KEY.with(|k| *k.borrow_mut() = None);
+    assert_eq!(fails, 0, "PROBE MIK-8124 digest: {fails}/{RUNS}\n{}", report.join("\n"));
+}
