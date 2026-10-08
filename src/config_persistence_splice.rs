@@ -37,7 +37,8 @@ pub(super) fn with_backend_edited(
     let backends = root.get_mut(&key)?.as_mapping_mut()?;
     let edited = match (before.backends.get(name), config.backends.get(name)) {
         (None, Some(backend)) => {
-            let entry_value = serde_yaml::to_value(backend).ok()?;
+            let mut entry_value = serde_yaml::to_value(backend).ok()?;
+            super::url_spelling::spell_as_url(entry_value.as_mapping_mut()?);
             let mut entry = Mapping::new();
             entry.insert(name.into(), entry_value.clone());
             backends.insert(name.into(), entry_value);
@@ -48,15 +49,17 @@ pub(super) fn with_backend_edited(
             remove_entry(original, name)?
         }
         (Some(old), Some(new)) => {
-            let (Value::Mapping(old), Value::Mapping(new)) = (
+            let (Value::Mapping(mut old), Value::Mapping(mut new)) = (
                 serde_yaml::to_value(old).ok()?,
                 serde_yaml::to_value(new).ok()?,
             ) else {
                 return None;
             };
+            let raw = backends.get_mut(name)?.as_mapping_mut()?;
+            super::url_spelling::follow_file_spelling(raw, &mut old, &mut new);
             // `want` is the file's own spelling of the entry with only the
             // changed keys replaced, never the fully serialised backend.
-            apply_delta(backends.get_mut(name)?.as_mapping_mut()?, &old, &new);
+            apply_delta(raw, &old, &new);
             edit_entry(original, name, &old, &new)?
         }
         (None, None) => return None,
@@ -75,7 +78,7 @@ pub(super) fn with_backend_edited(
     // The text must also load as `config` itself: `original` is re-read at
     // write time, and a file another writer changed since `before` was
     // loaded would otherwise be written without `config`'s validation.
-    let loaded = serde_json::to_value(serde_yaml::from_str::<Config>(&edited).ok()?).ok()?;
+    let loaded = serde_json::to_value(Config::from_file_text(&edited).ok()?).ok()?;
     (got == want && loaded == serde_json::to_value(config).ok()?).then_some(edited)
 }
 
@@ -790,3 +793,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "config_persistence_splice_url_tests.rs"]
+mod url_tests;

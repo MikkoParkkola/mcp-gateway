@@ -57,10 +57,13 @@ pub(super) fn spawn_in_own_tree(cmd: Command) -> Result<Box<dyn ChildWrapper>> {
 pub(super) async fn write_frame(
     writer: &std::sync::Arc<tokio::sync::Mutex<Option<tokio::process::ChildStdin>>>,
     shutdown: &parking_lot::Mutex<tokio_util::sync::CancellationToken>,
-    message: &str,
+    message: String,
+    began: &std::sync::atomic::AtomicBool,
     claim: Option<&WriteClaim>,
 ) -> Result<()> {
-    let frame = [message.as_bytes(), b"\n"].concat();
+    // Built in place: a queued write holds one copy of the message.
+    let mut frame = message.into_bytes();
+    frame.push(b'\n');
     let mut writer = std::sync::Arc::clone(writer).lock_owned().await;
     // Admitted: from here the frame goes out whole, so a caller dropped
     // after this point has a written request to cancel (`MIK-7642.PR.B`).
@@ -69,6 +72,9 @@ pub(super) async fn write_frame(
     }
     // Taken under the stdin lock: the token belongs to the stdin it guards.
     let shutdown = shutdown.lock().clone();
+    // From here the frame goes out whole even if the caller is dropped, so the
+    // call is no longer pre-send (MIK-7979).
+    began.store(true, std::sync::atomic::Ordering::Relaxed);
     tokio::spawn(async move {
         let Some(stdin) = writer.as_mut() else {
             return Err(Error::TransportConnect("Not connected".to_string()));
@@ -143,7 +149,10 @@ impl Drop for CancelUnanswered<'_> {
             "params": crate::transport::write_claim::cancelled_params(&self.id),
         })
         .to_string();
-        runtime.spawn(async move { drop(write_frame(&writer, &shutdown, &message, None).await) });
+        runtime.spawn(async move {
+            let began = std::sync::atomic::AtomicBool::new(false);
+            drop(write_frame(&writer, &shutdown, message, &began, None).await);
+        });
     }
 }
 

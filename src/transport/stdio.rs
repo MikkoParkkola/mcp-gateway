@@ -186,8 +186,8 @@ impl StdioTransport {
         *writer = Some(stdin);
         drop(writer);
         *self.child.lock().await = Some(child);
-        let (eof_tx, eof_rx) = tokio::sync::watch::channel(false);
-        self.start.begin(eof_rx);
+        let eof_tx = Arc::new(tokio::sync::watch::channel(false).0);
+        self.start.begin(Arc::clone(&eof_tx));
 
         // Spawn reader task.
         //
@@ -206,6 +206,7 @@ impl StdioTransport {
         let transport = Arc::downgrade(self);
         let max_frame = self.max_frame_bytes.load(Ordering::Relaxed);
         let stdout_reader = tokio::spawn(async move {
+            let latch = early_exit::TripOnDrop(eof_tx);
             debug!("Reader task started");
             let mut reader = BufReader::new(stdout);
             let mut frame = Vec::new();
@@ -241,7 +242,9 @@ impl StdioTransport {
                 }
             }
 
-            let _ = eof_tx.send(true);
+            // Before the clear: a request that registers after it sees the
+            // latch, and one that registered before it is dropped by it.
+            drop(latch);
             if let Some(transport) = transport.upgrade() {
                 transport.connected.store(false, Ordering::Relaxed);
                 // The stream is over: wake every waiting call now (its receiver
@@ -560,15 +563,6 @@ impl StdioTransport {
         Ok(())
     }
 
-    /// Write one frame to stdin, cancel-safely: see [`tree::write_frame`].
-    async fn write_message(&self, message: &str, claim: Option<&WriteClaim>) -> Result<()> {
-        debug!(message_len = message.len(), "Writing to stdin");
-        tree::write_frame(&self.writer, &self.shutdown, message, claim).await?;
-        tokio::task::yield_now().await;
-        debug!("Write complete and flushed");
-        Ok(())
-    }
-
     /// Get next request ID
     #[allow(clippy::cast_possible_wrap)] // request IDs won't exceed i64::MAX
     fn next_id(&self) -> RequestId {
@@ -647,23 +641,20 @@ impl Transport for StdioTransport {
         let message = serde_json::to_string(&request)?;
         let (tx, rx) = oneshot::channel();
         self.pending.insert(id.to_string(), tx);
-        // The guard removes the entry on every path, CANCELLATION included (an
-        // outer timeout or task abort dropping this future mid-await); a
-        // stranded entry would leak for the transport's lifetime.
+        // Removing the entry is the guard's job on every path: on success the
+        // reader task has already routed the response and the removal is a
+        // no-op, and on an error, an internal timeout or CANCELLATION (an
+        // outer timeout or task abort dropping this future mid-await) the
+        // guard's Drop is the only thing that removes it — without it a
+        // stranded entry would leak here for the transport's lifetime.
         let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
+
         // Declared after `_cleanup`, so it drops first and still finds the
         // entry of a request nobody answered.
         let claim = WriteClaim::new();
         let mut cancel = tree::CancelUnanswered::arm(self, &request, &claim);
-        let outcome = match self.write_message(&message, Some(&claim)).await {
-            Err(e) => Err(e),
-            // Wait for response with timeout
-            Ok(()) => match tokio::time::timeout(self.request_timeout, rx).await {
-                Ok(Ok(response)) => Ok(response),
-                Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
-                Err(_) => Err(Error::BackendTimeout("Request timed out".to_string())),
-            },
-        };
+        // The guards drop after this value: the pending entry and progress go.
+        let outcome = self.exchange(message, rx, Some(&claim)).await;
         cancel.disarm();
         outcome
     }
@@ -676,7 +667,7 @@ impl Transport for StdioTransport {
         };
 
         let message = serde_json::to_string(&notification)?;
-        self.write_message(&message, None).await
+        self.write_message(message).await
     }
 
     fn is_connected(&self) -> bool {
@@ -734,6 +725,8 @@ mod progress;
 #[path = "stdio_start_failure.rs"]
 mod start_failure;
 use progress::{progress_token_string, request_progress_token};
+#[path = "stdio_write.rs"]
+mod write;
 
 #[cfg(test)]
 #[path = "stdio_tests.rs"]
@@ -763,3 +756,12 @@ mod start_refusal_tests;
 #[cfg(test)]
 #[path = "stdio_spawn_classification_tests.rs"]
 mod spawn_classification_tests;
+
+// Unix-only: the fake backend is a `sh` script.
+#[cfg(all(test, unix))]
+#[path = "stdio_eof_request_tests.rs"]
+mod eof_request_tests;
+
+#[cfg(test)]
+#[path = "stdio_cache_abs_tests.rs"]
+mod cache_abs_tests;
