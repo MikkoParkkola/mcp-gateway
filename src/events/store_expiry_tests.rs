@@ -164,3 +164,85 @@ fn an_unsubscribe_still_drops_a_replayed_record() {
     assert!(store.remove("s1", now, TAIL).expect("io"), "unsubscribed");
     assert_eq!(dead_reason(&store, "e1"), None, "dropped, as before");
 }
+
+/// L16: the worker buries and removes an expired row before any synchronous
+/// sweep. The verification tail starts at the row's expiry, not at the
+/// removal: an hour after the expiry it has run out.
+#[test]
+fn a_row_removed_by_the_worker_stamps_its_tail_at_expiry() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let tried = OutboxRecord {
+        attempt: 1,
+        ..record("e1", "s1", now)
+    };
+    store.enqueue(tried, OUTBOX).expect("io");
+    let expiry = now + chrono::Duration::hours(1);
+    let removal = expiry + chrono::Duration::minutes(50);
+    store.due(removal, &HashSet::new()).expect("io");
+    assert!(store.get("s1").is_none(), "the worker removed the row");
+    let after = expiry + chrono::Duration::minutes(61);
+    assert!(
+        !store.is_verified("p", "https://h/s1", after, TAIL),
+        "the tail began at expiry and has run out"
+    );
+}
+
+/// L17: an expiry burial whose dead-letter sync fails keeps the outbox copy.
+/// Until that burial completes, a cap eviction leaves its dead letter alone,
+/// so no eviction can come before, or replace, the burial.
+#[test]
+fn an_unfinished_expiry_burial_is_not_evicted() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let tried = OutboxRecord {
+        attempt: 1,
+        ..record("e1", "s1", now)
+    };
+    store.enqueue(tried, OUTBOX).expect("io");
+    store
+        .fail_next_dead_sync
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let later = past_expiry(now);
+    store.due(later, &HashSet::new()).expect("io");
+    assert!(store.has_due("s1", later), "the outbox copy stays");
+    let tight = DeadPolicy {
+        max_records: 0,
+        ..ROOMY
+    };
+    let evicted = store.sweep_dead(later, tight).expect("io");
+    assert!(
+        evicted.iter().all(|e| e.event_id != "e1"),
+        "an unfinished burial is not evicted"
+    );
+    store.due(later, &HashSet::new()).expect("io");
+    assert_eq!(
+        dead_reason(&store, "e1").as_deref(),
+        Some("subscription_expired"),
+        "the next tick completes the burial"
+    );
+}
+
+/// L18 (pin): a record whose subscription row is gone (an unsubscribe whose
+/// record removal did not happen) is dropped by `due`, never buried.
+#[test]
+fn a_record_of_a_gone_subscription_is_dropped_not_buried() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let tried = OutboxRecord {
+        attempt: 1,
+        ..record("e1", "s1", now)
+    };
+    store.enqueue(tried, OUTBOX).expect("io");
+    drop(store);
+    for entry in std::fs::read_dir(dir.path().join("subs")).expect("subs") {
+        std::fs::remove_file(entry.expect("entry").path()).expect("row gone");
+    }
+    let reopened = Store::open(dir.path(), now, TAIL).expect("reopen");
+    reopened.due(now, &HashSet::new()).expect("io");
+    assert!(!reopened.has_due("s1", now), "dropped");
+    assert_eq!(dead_reason(&reopened, "e1"), None, "never buried");
+}
