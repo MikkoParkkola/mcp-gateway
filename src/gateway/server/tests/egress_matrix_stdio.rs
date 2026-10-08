@@ -38,7 +38,8 @@ async fn stdio_on(backend: Arc<Planted>, setup: Setup) -> (Arc<MetaMcp>, Option<
         Duration::from_secs(300),
     ));
     alpha.set_transport_for_test(backend as Arc<dyn crate::transport::Transport>);
-    alpha.get_tools_shared().await.expect("warm the tool cache");
+    // Warmed when it can be: a row planting an error in `tools/list` fails it.
+    let _ = alpha.get_tools_shared().await;
     assert!(registry.register(alpha));
     let rules = match setup {
         Setup::Warn => vec![FirewallRule {
@@ -91,6 +92,9 @@ fn params(method: &'static str, part: Part) -> (&'static str, Value) {
     };
     if part.is_notification() {
         params["_meta"] = json!({"progressToken": "p1"});
+    }
+    if matches!(part, Part::InterimQuestion | Part::InterimState) {
+        params["_meta"] = answering_client();
     }
     (sent, params)
 }
@@ -156,6 +160,23 @@ async fn cell(setup: Setup, method: &'static str, part: Part, text: String) -> S
     }
 }
 
+/// A 2026-07-28 request's `_meta` declaring `elicitation`: an interim
+/// question reaches the egress only for a client that said it can answer it
+/// (otherwise the capability gate refuses it first, -32021).
+fn answering_client() -> Value {
+    json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {"elicitation": {}},
+        "io.modelcontextprotocol/clientInfo": {"name": "EgressMatrix", "version": "1.0.0"}
+    })
+}
+
+/// Whether a question reached the client rewritten: MIK-8155 forbids it on
+/// every route (refused, or never asked, are both whole-question outcomes).
+fn rewritten(body: &str) -> bool {
+    body.contains("[REDACTED")
+}
+
 fn refused(body: &str) -> bool {
     body.contains("Response blocked by security firewall") || body.contains("\"code\":-32600")
 }
@@ -185,8 +206,8 @@ async fn egress_no_planted_credential_reaches_a_stdio_client() {
             if seen.body.contains(&leak) {
                 failures.push(format!("{at}: credential delivered: {}", seen.body));
             }
-            if part == Part::InterimQuestion && !refused(&seen.body) {
-                failures.push(format!("{at}: question not refused: {}", seen.body));
+            if part == Part::InterimQuestion && rewritten(&seen.body) {
+                failures.push(format!("{at}: question rewritten: {}", seen.body));
             }
         }
     }
@@ -218,8 +239,8 @@ async fn egress_warn_redacts_an_answer_and_refuses_a_question_on_stdio() {
     ))
     .await;
     assert!(
-        !seen.body.contains(&leak) && refused(&seen.body),
-        "question not refused: {}",
+        !seen.body.contains(&leak) && !rewritten(&seen.body) && refused(&seen.body),
+        "question not refused whole: {}",
         seen.body
     );
 }
