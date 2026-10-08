@@ -10,24 +10,9 @@ use std::time::{Duration, Instant};
 use crate::config::Config;
 use crate::fs_lock::ExclusiveFileLock;
 
-/// Gateway state directory, honoring the existing operator override.
-#[must_use]
-pub fn gateway_data_dir() -> PathBuf {
-    resolve_gateway_data_dir(
-        std::env::var("MCP_GATEWAY_CONFIG_DIR").ok(),
-        crate::home_dir::home_dir(),
-    )
-}
-
-fn resolve_gateway_data_dir(configured: Option<String>, home: Option<PathBuf>) -> PathBuf {
-    configured.map_or_else(
-        || {
-            home.unwrap_or_else(|| PathBuf::from("."))
-                .join(".mcp-gateway")
-        },
-        PathBuf::from,
-    )
-}
+#[path = "config_persistence_data_dir.rs"]
+mod data_dir;
+pub use data_dir::gateway_data_dir;
 
 /// Load config tolerantly, returning defaults when the file is absent or unloadable.
 ///
