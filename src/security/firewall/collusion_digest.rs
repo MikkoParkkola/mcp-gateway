@@ -227,6 +227,15 @@ impl DeliveryDigest {
         Some((digest, cut || kept < self.retained.len()))
     }
 
+    /// At most [`RECORD_CAP`] retained fingerprints, for a digest capped at
+    /// staging that seams were added to (`MIK-8043.SEAM.3`); whether any was
+    /// cut.
+    pub(super) fn limit_retained(&mut self) -> bool {
+        let cut = self.retained.len() > RECORD_CAP;
+        self.retained.truncate(RECORD_CAP);
+        cut
+    }
+
     /// Whether the cap is still to apply (tests only).
     #[cfg(test)]
     pub(super) fn is_deferred(&self) -> bool {
@@ -524,30 +533,29 @@ pub(super) fn add_seams(
                 .filter(|_| !engine(part.0))
                 .filter(|o| seen.get(part).is_some_and(|&n| n <= o.len()))
         };
-        let mut run: Vec<(&str, bool)> = Vec::new();
-        let mut run_owners: Vec<usize> = Vec::new();
+        let mut run: Vec<((&str, bool), usize)> = Vec::new();
         for part in parts.iter().map(Some).chain([None]) {
             if let Some(p) = part
                 && let Some(o) = owned(p)
             {
-                run.push(*p);
-                run_owners.extend(o);
+                run.push((*p, o[0]));
                 continue;
             }
-            run_owners.sort_unstable();
-            run_owners.dedup();
-            if run.len() > 1 && run_owners.len() > 1 {
-                let seams: Vec<u64> = seam_forms(&run)
+            if run.iter().any(|(_, r)| *r != run[0].1) {
+                let all: Vec<(&str, usize)> = run.iter().map(|((t, _), r)| (*t, *r)).collect();
+                let values: Vec<(&str, usize)> = run
                     .iter()
-                    .flat_map(|text| detector.fingerprints(text))
-                    .filter(|fp| !run_owners.iter().any(|&r| own[r].contains(fp)))
+                    .filter(|((_, key), _)| !key)
+                    .map(|((t, _), r)| (*t, *r))
                     .collect();
-                for &r in &run_owners {
-                    added[r].extend(&seams);
+                for (r, fp) in seam_owners(&all, "\n", detector, &own)
+                    .into_iter()
+                    .chain(seam_owners(&values, "", detector, &own))
+                {
+                    added[r].push(fp);
                 }
             }
             run.clear();
-            run_owners.clear();
         }
     }
     for (digest, seams) in digests.iter_mut().zip(added) {
@@ -558,19 +566,98 @@ pub(super) fn add_seams(
     }
 }
 
-/// [`run_forms`] for a run of delivered parts (text, whether a key).
-fn seam_forms(run: &[(&str, bool)]) -> Vec<String> {
-    let joined = run.iter().map(|(t, _)| *t).collect::<Vec<_>>().join("\n");
-    let values: Vec<&str> = run
-        .iter()
-        .filter(|(_, key)| !key)
-        .map(|(t, _)| *t)
-        .collect();
-    let mut forms = vec![joined];
-    if values.len() > 1 {
-        forms.push(values.concat());
+/// The seam fingerprints of a run of `parts` (text, the receipt credited
+/// with it) joined by `sep`, each with the receipt it goes to: a fingerprint
+/// of the joined text whose k-gram crosses the boundary between two parts
+/// goes to the receipts of those two parts, at the first boundary it
+/// crosses, unless one of them already holds it in its own runs. So a seam
+/// fingerprint has at most two holders per delivery and never saturates.
+fn seam_owners(
+    parts: &[(&str, usize)],
+    sep: &str,
+    detector: &CollusionDetector,
+    own: &[HashSet<u64>],
+) -> Vec<(usize, u64)> {
+    let mut out = Vec::new();
+    if parts.len() < 2 {
+        return out;
     }
-    forms
+    let text: Vec<&str> = parts.iter().map(|(t, _)| *t).collect();
+    let fps = detector.fingerprints(&text.join(sep));
+    let mut done = HashSet::new();
+    for b in 1..parts.len() {
+        let (l, r) = (parts[b - 1].1, parts[b].1);
+        let (left, right) = (
+            window(&text[..b], sep, Side::Left),
+            window(&text[b..], sep, Side::Right),
+        );
+        let lone: HashSet<u64> = detector
+            .kgram_hashes(&left)
+            .into_iter()
+            .chain(detector.kgram_hashes(&right))
+            .collect();
+        let cross: HashSet<u64> = detector
+            .kgram_hashes(&format!("{left}{sep}{right}"))
+            .into_iter()
+            .filter(|k| !lone.contains(k))
+            .collect();
+        for &fp in &fps {
+            if cross.contains(&fp)
+                && !own[l].contains(&fp)
+                && !own[r].contains(&fp)
+                && done.insert(fp)
+            {
+                out.push((l, fp));
+                if r != l {
+                    out.push((r, fp));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Which end of a run a [`window`] is taken from.
+#[derive(Clone, Copy)]
+enum Side {
+    Left,
+    Right,
+}
+
+/// The parts of a run nearest a boundary, joined by `sep`, up to about two
+/// k-grams of text: every k-gram that crosses the boundary lies within the
+/// left window, the separator and the right window.
+fn window(parts: &[&str], sep: &str, side: Side) -> String {
+    let reach = 2 * K;
+    let mut taken: Vec<&str> = Vec::new();
+    let mut len = 0;
+    let order: Vec<usize> = match side {
+        Side::Left => (0..parts.len()).rev().collect(),
+        Side::Right => (0..parts.len()).collect(),
+    };
+    for part in order.into_iter().map(|i| parts[i]) {
+        let chars = part.chars().count();
+        let cut = match side {
+            Side::Left => part
+                .char_indices()
+                .rev()
+                .nth(reach.saturating_sub(1))
+                .map_or(part, |(i, _)| &part[i..]),
+            Side::Right => part
+                .char_indices()
+                .nth(reach)
+                .map_or(part, |(i, _)| &part[..i]),
+        };
+        taken.push(cut);
+        len += chars + sep.len();
+        if len >= reach {
+            break;
+        }
+    }
+    if matches!(side, Side::Left) {
+        taken.reverse();
+    }
+    taken.join(sep)
 }
 
 /// The string leaves of a plan's final answer, and every k-gram hash in them,

@@ -261,3 +261,36 @@ fn a_kept_receipt_holds_no_more_than_its_step_staged() {
         "copies past the step's size kept"
     );
 }
+
+/// `MIK-8043.SEAM.3`: a seam fingerprint goes only to the receipts of the
+/// leaves beside the boundary it crosses, so ten steps' short leaves
+/// delivered side by side never give one fingerprint more than two holders
+/// (a ninth tuple would saturate it and end detection).
+#[test]
+fn a_seam_fingerprint_has_at_most_two_holders() {
+    use std::collections::{HashMap, HashSet};
+    let (fw, _dir) = observing(|_| {});
+    let detector = CollusionDetector::new(RelayParams::default());
+    let leaves: Vec<String> = (0..10)
+        .map(|i| format!("field {i}: rows {i} to {}, pears", i + 6))
+        .collect();
+    let digests = leaves
+        .iter()
+        .map(|leaf| DeliveryDigest::of_plan_step_leaves(&[leaf.as_str()], false).0)
+        .collect();
+    let delivered =
+        Delivered::of_leaves(leaves.iter().map(String::as_str).collect()).expect("bounded");
+    let kept = fw.retain_plan(digests, &delivered, &|_| false);
+    let mut holders: HashMap<u64, usize> = HashMap::new();
+    for digest in &kept {
+        let own: HashSet<u64> = digest.fingerprints(&detector).into_iter().collect();
+        for fp in own {
+            *holders.entry(fp).or_default() += 1;
+        }
+    }
+    assert!(
+        !holders.is_empty(),
+        "premise: the run has seam fingerprints"
+    );
+    assert!(holders.values().all(|&n| n <= 2), "{holders:?}");
+}

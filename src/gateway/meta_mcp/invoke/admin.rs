@@ -371,8 +371,13 @@ impl MetaMcp {
                 super::gateway_writes::note_engine_text(member);
             }
         }
-        for prop in &result.fallbacks {
+        for prop in &result.engine_text_props {
             super::gateway_writes::note_engine_text(&answer["output"][prop.as_str()]);
+        }
+        // The output's own property names come from the playbook, not a step.
+        if let Some(output) = answer["output"].as_object() {
+            let names = output.keys().cloned().map(Value::String).collect();
+            super::gateway_writes::note_engine_text(&Value::Array(names));
         }
         Ok(answer)
     }

@@ -529,6 +529,13 @@ async fn execute_output_with_fallback() {
                         fallback: None,
                     },
                 ),
+                (
+                    "echoed".to_string(),
+                    OutputMapping {
+                        path: "$inputs.q".to_string(),
+                        fallback: None,
+                    },
+                ),
             ]),
         }),
         on_error: ErrorStrategy::Abort,
@@ -538,15 +545,17 @@ async fn execute_output_with_fallback() {
 
     let invoker = MockInvoker::new().respond("tool_a", json!({"data": "found_it"}));
     let result = engine
-        .execute("fallback_test", json!({}), &invoker)
+        .execute("fallback_test", json!({"q": "hello"}), &invoker)
         .await
         .unwrap();
 
     assert_eq!(result.output["found"], json!("found_it"));
     assert_eq!(result.output["missing"], json!("default_value"));
     assert_eq!(result.output["null_no_fallback"], Value::Null);
-    // MIK-8043.SEAM.3: only the property a fallback filled is engine text.
-    assert_eq!(result.fallbacks, ["missing"]);
+    // MIK-8043.SEAM.3: a fallback and a caller input are not step text.
+    let mut engine_text = result.engine_text_props.clone();
+    engine_text.sort();
+    assert_eq!(engine_text, ["echoed", "missing"]);
 }
 
 #[tokio::test]
@@ -650,7 +659,7 @@ fn build_output_no_mapping_returns_all_results() {
     ctx.step_results
         .insert("s1".to_string(), json!({"data": 1}));
 
-    let (output, fallbacks) = build_output(&def, &ctx);
+    let (output, engine_text_props) = build_output(&def, &ctx);
     assert_eq!(output["s1"], json!({"data": 1}));
-    assert!(fallbacks.is_empty(), "no mapping, no fallback");
+    assert!(engine_text_props.is_empty(), "no mapping, no engine text");
 }

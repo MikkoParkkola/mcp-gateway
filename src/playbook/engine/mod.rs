@@ -232,7 +232,7 @@ impl PlaybookEngine {
         }
 
         // Build output
-        let (output, fallbacks) = build_output(definition, &ctx);
+        let (output, engine_text_props) = build_output(definition, &ctx);
         #[allow(clippy::cast_possible_truncation)]
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -243,7 +243,7 @@ impl PlaybookEngine {
             steps_failed,
             step_errors,
             duration_ms,
-            fallbacks,
+            engine_text_props,
         })
     }
 }
@@ -255,14 +255,14 @@ impl Default for PlaybookEngine {
 }
 
 /// Build the final output from output mappings or raw step results, and
-/// the properties a fallback filled.
+/// the properties no step result filled (a fallback or a caller input).
 fn build_output(definition: &PlaybookDefinition, ctx: &PlaybookContext) -> (Value, Vec<String>) {
     let Some(ref output_def) = definition.output else {
         // No output mapping: return all step results.
         let all = ctx.step_results.iter().map(|(k, v)| (k.clone(), v.clone()));
         return (Value::Object(all.collect()), Vec::new());
     };
-    let mut fallbacks = Vec::new();
+    let mut engine_text_props = Vec::new();
 
     let mut result = serde_json::Map::new();
     for (prop_name, mapping) in &output_def.properties {
@@ -270,15 +270,18 @@ fn build_output(definition: &PlaybookDefinition, ctx: &PlaybookContext) -> (Valu
         if resolved.is_null() {
             if let Some(ref fallback) = mapping.fallback {
                 result.insert(prop_name.clone(), fallback.clone());
-                fallbacks.push(prop_name.clone());
+                engine_text_props.push(prop_name.clone());
             } else {
                 result.insert(prop_name.clone(), Value::Null);
             }
         } else {
+            if mapping.path.starts_with("$inputs") {
+                engine_text_props.push(prop_name.clone());
+            }
             result.insert(prop_name.clone(), resolved);
         }
     }
-    (Value::Object(result), fallbacks)
+    (Value::Object(result), engine_text_props)
 }
 
 // ============================================================================

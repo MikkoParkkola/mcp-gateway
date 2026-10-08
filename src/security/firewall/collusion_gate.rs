@@ -536,7 +536,13 @@ impl Firewall {
             .collect();
         add_seams(&mut kept, detector, delivered, engine);
         kept.into_iter()
-            .map(|digest| self.capped(&digest).unwrap_or(digest))
+            .map(|mut digest| match self.capped(&digest) {
+                Some(capped) => capped,
+                None => {
+                    self.count_cut(digest.limit_retained());
+                    digest
+                }
+            })
             .collect()
     }
 

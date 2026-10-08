@@ -138,6 +138,11 @@ where
             "results": completed,
         }));
     }
+    // MIK-8043.SEAM.3: the tool names between step results are the caller's
+    // text, not a backend's, so no seam joins them.
+    for entry in &completed {
+        crate::gateway::meta_mcp::invoke::gateway_writes::note_engine_text(&entry["tool"]);
+    }
     Ok(json!({"steps": completed.len(), "results": completed}))
 }
 

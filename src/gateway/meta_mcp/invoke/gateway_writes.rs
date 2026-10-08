@@ -231,14 +231,18 @@ pub(crate) fn note(layer: Layer, path: &'static [&'static str], value: &Value) {
     });
 }
 
-/// Note every string leaf of `value` as text the gateway wrote into a plan
-/// answer (`MIK-8043.SEAM.3`). A no-op outside a delivery scope.
+/// Note every string leaf and object key of `value` as text the gateway
+/// wrote into a plan answer (`MIK-8043.SEAM.3`). A no-op outside a delivery
+/// scope.
 pub(crate) fn note_engine_text(value: &Value) {
     fn leaves(value: &Value, out: &mut Vec<u64>) {
         match value {
             Value::String(_) => out.push(digest(value)),
             Value::Array(items) => items.iter().for_each(|v| leaves(v, out)),
-            Value::Object(map) => map.values().for_each(|v| leaves(v, out)),
+            Value::Object(map) => map.iter().for_each(|(k, v)| {
+                out.push(digest(&Value::String(k.clone())));
+                leaves(v, out);
+            }),
             _ => {}
         }
     }
@@ -341,6 +345,9 @@ fn member_mut<'v>(value: &'v mut Value, path: &[&str]) -> Option<&'v mut Value> 
 #[cfg(feature = "firewall")]
 pub(super) fn rebind(layer: Layer, before: &Value, after: &Value) {
     let _ = GATEWAY_WRITES.try_with(|writes| {
+        if layer == Layer::Value {
+            rebind_engine(before, after, &mut writes.borrow_mut().engine);
+        }
         writes.borrow_mut().list.retain_mut(|w| {
             if w.layer != layer {
                 return true;
@@ -357,11 +364,53 @@ pub(super) fn rebind(layer: Layer, before: &Value, after: &Value) {
     });
 }
 
+/// Engine text the final pass rewrote stays engine text (`MIK-8043.SEAM.3`):
+/// each string of `before` noted as the gateway's own notes its counterpart
+/// in `after` too, matched by position.
+#[cfg(feature = "firewall")]
+fn rebind_engine(before: &Value, after: &Value, engine: &mut Vec<u64>) {
+    match (before, after) {
+        (Value::String(_), Value::String(_)) => {
+            if engine.contains(&digest(before)) {
+                engine.push(digest(after));
+            }
+        }
+        (Value::Array(b), Value::Array(a)) => {
+            b.iter()
+                .zip(a)
+                .for_each(|(b, a)| rebind_engine(b, a, engine));
+        }
+        (Value::Object(b), Value::Object(a)) => b
+            .iter()
+            .filter_map(|(k, v)| a.get(k).map(|now| (v, now)))
+            .for_each(|(b, a)| rebind_engine(b, a, engine)),
+        _ => {}
+    }
+}
+
 #[cfg(all(test, feature = "firewall"))]
 mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// `MIK-8043.SEAM.3`: engine text is every string and key noted, and a
+    /// noted string the final pass rewrote stays engine text.
+    #[tokio::test]
+    async fn engine_text_covers_keys_and_survives_a_rewrite() {
+        scope(async {
+            note_engine_text(&json!({"step name": ["fallback text"]}));
+            assert!(is_engine_text("fallback text") && is_engine_text("step name"));
+            assert!(!is_engine_text("backend text"), "only what was noted");
+            let before = json!({"a": "fallback text"});
+            rebind(Layer::Value, &before, &json!({"a": "[REDACTED]"}));
+            assert!(
+                is_engine_text("[REDACTED]"),
+                "the rewrite stays engine text"
+            );
+        })
+        .await;
+    }
 
     /// A noted member is removed while it holds what was written; a member
     /// of the same name with other text (a replaced value) stays.

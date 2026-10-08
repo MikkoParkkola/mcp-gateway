@@ -375,10 +375,11 @@ pub struct PlaybookResult {
     pub step_errors: std::collections::BTreeMap<String, String>,
     /// Total execution time in milliseconds.
     pub duration_ms: u64,
-    /// The output properties a mapping's fallback filled: engine text, not a
-    /// step's (`MIK-8043.SEAM.3`). Never serialized.
+    /// The output properties no step result filled: a mapping's fallback or a
+    /// caller input (`$inputs`), text the gateway or the caller wrote, never a
+    /// backend's (`MIK-8043.SEAM.3`). Never serialized.
     #[serde(skip)]
-    pub(crate) fallbacks: Vec<String>,
+    pub(crate) engine_text_props: Vec<String>,
 }
 
 // ============================================================================
