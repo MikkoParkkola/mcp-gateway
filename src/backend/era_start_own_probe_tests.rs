@@ -16,9 +16,10 @@ use axum::response::IntoResponse as _;
 use serde_json::{Value, json};
 
 use super::era_stale_probe_tests::{Answer, Peer};
+use super::stop_race_tests::within;
 use super::{Backend, MarkWindowGate};
 use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
-use crate::protocol::era::Era;
+use crate::protocol::era::{Era, EraCache, METHOD_NOT_FOUND_CODE, ProbeOutcome};
 use crate::transport::Transport;
 
 /// What the loopback server answers `server/discover` with.
@@ -68,12 +69,6 @@ async fn upstream(discover: Discover) -> (String, Arc<Mutex<Vec<String>>>) {
     let url = format!("http://{}/mcp", listener.local_addr().expect("addr"));
     tokio::spawn(async move { axum::serve(listener, app).await });
     (url, seen)
-}
-
-async fn within<T>(what: &str, wait: impl std::future::Future<Output = T>) -> T {
-    tokio::time::timeout(Duration::from_secs(30), wait)
-        .await
-        .unwrap_or_else(|_| panic!("{what} did not happen within 30s"))
 }
 
 /// Start an HTTP backend against `discover`, hold it at the era decision,
@@ -154,4 +149,61 @@ async fn a_modern_start_probe_skips_the_handshake_despite_a_legacy_verdict_insta
         !seen.iter().any(|m| m == "initialize"),
         "the start followed another writer's Legacy instead of its own Modern probe: {seen:?}"
     );
+}
+
+/// A discovery document naming a modern revision.
+fn modern_document() -> ProbeOutcome {
+    ProbeOutcome::Result(json!({
+        "supportedVersions": [crate::protocol::meta::MODERN_VERSIONS[0]],
+        "capabilities": {},
+    }))
+}
+
+/// A probe a refused start must never run.
+async fn no_probe() -> ProbeOutcome {
+    unreachable!("no probe runs for a retired slot")
+}
+
+/// ERAPROOF.3a: a start whose slot was retired before any probe reports
+/// `Legacy`, not the verdict the shared cache holds about another peer, and
+/// leaves that verdict in place.
+#[tokio::test]
+async fn a_start_retired_before_its_probe_reports_legacy() {
+    let cache = EraCache::for_backend("retired-before-probe");
+    cache.restart_with(|| async { modern_document() }).await;
+    assert_eq!(cache.cached().await, Some(Era::Modern), "primed");
+
+    let era = cache.restart_while_serving(no_probe, |_step| false).await;
+    assert_eq!(era, Era::Legacy);
+    assert_eq!(cache.cached().await, Some(Era::Modern));
+}
+
+/// ERAPROOF.3b: a start whose probe ran but whose slot was retired before the
+/// install reports what its own probe decided, and installs nothing.
+#[tokio::test]
+async fn a_start_refused_at_install_reports_its_own_probe() {
+    let cache = EraCache::for_backend("retired-mid-probe");
+    cache
+        .restart_with(|| async { ProbeOutcome::Error(METHOD_NOT_FOUND_CODE) })
+        .await;
+    assert_eq!(cache.cached().await, Some(Era::Legacy), "primed");
+
+    // Serving at the discard, retired by the install.
+    let calls = std::cell::Cell::new(0);
+    let era = cache
+        .restart_while_serving(
+            || async { modern_document() },
+            |step| {
+                calls.set(calls.get() + 1);
+                if calls.get() == 1 {
+                    step();
+                    true
+                } else {
+                    false
+                }
+            },
+        )
+        .await;
+    assert_eq!(era, Era::Modern);
+    assert_eq!(cache.cached().await, None, "discarded, nothing installed");
 }
