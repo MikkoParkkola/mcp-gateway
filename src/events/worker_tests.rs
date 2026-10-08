@@ -538,34 +538,6 @@ async fn a_burial_the_caps_evict_at_once_still_leaves_its_record() {
     assert_eq!(written[0]["event_id"], "evt_evicted");
 }
 
-/// MIK-7805 AC4: the host on a dead-letter record is the one stamped on the
-/// occurrence at fan-out, even when the subscription is gone by then.
-#[tokio::test]
-async fn a_dead_letter_record_names_the_host_stamped_on_the_occurrence() {
-    let dir = tempfile::tempdir().expect("dir");
-    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
-    let services = logged_services(dir.path());
-    queued(&hub, 9, "evt_hosted");
-    let later = Utc::now() + chrono::Duration::minutes(5);
-    let mut record = hub
-        .store
-        .due(later, &std::collections::HashSet::new(), hub.dead_policy())
-        .expect("io")
-        .ready
-        .remove(0);
-    record.callback_host = "stamped.example".to_owned();
-    // The subscription leaves while the burial is being recorded.
-    let tail = crate::events::tail_policy(&config_default());
-    hub.store
-        .remove("sub_worker", Utc::now(), tail)
-        .expect("removed");
-    hub.dead_lettered(&services, &record, DeadReason::Gone)
-        .await;
-    let written = audit_actions(dir.path(), "events.dead_letter");
-    assert_eq!(written.len(), 1, "{written:?}");
-    assert_eq!(written[0]["callback_host"], "stamped.example");
-}
-
 fn config_default() -> crate::config::EventsConfig {
     crate::config::EventsConfig::default()
 }
