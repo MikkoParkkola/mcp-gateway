@@ -34,10 +34,11 @@ async fn meta_replay_leaves_the_gateway_hint_out_of_the_receipt() {
 }
 
 /// A cost category long enough that the gateway's suggestion naming it is
-/// text a receipt holding it would be caught on (79 chars and more).
+/// text a receipt holding it would be caught on: at 125 chars a relay of it
+/// is missed about once in 10^8 (fingerprints are a sample of k-grams).
 #[cfg(feature = "cost-governance")]
-const CATEGORY: &str =
-    "cellar inventory of pressed cider barrels sorted by vintage, cask size and orchard row";
+const CATEGORY: &str = "cellar inventory of pressed cider barrels sorted by vintage, cask size and \
+    orchard row, with the cooper's notes on every hoop";
 
 /// A receipt window short enough that a row can let the first call's receipt
 /// lapse, so a later control proves the hit or replay staged its own.
