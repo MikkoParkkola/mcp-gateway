@@ -246,8 +246,14 @@ fn upgrade_removes_a_meta_mcp_block_that_held_only_cache_tools() {
     let path = dir.path().join("gateway.yaml");
     let text = "# mine\nmeta_mcp:\n  cache_tools: false\nbackends: {}\n";
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, text).expect("write config");
+    let meta = || {
+        let config = mcp_gateway::config::Config::load(Some(&path)).expect("loads");
+        serde_json::to_value(&config.meta_mcp).expect("serialises")
+    };
+    let before = meta();
 
     let (applied, written) = report(&path, RewriteMode::Apply);
+    assert_eq!(meta(), before, "the gateway loads the same settings");
     assert_eq!(written, "# mine\nbackends: {}\n");
     assert!(
         applied
