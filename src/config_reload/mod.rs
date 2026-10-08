@@ -424,8 +424,6 @@ pub use write::{
 };
 // Only the web UI writes in refusing mode.
 #[cfg(test)]
-// The writer-lock tests call the refusing writer directly.
-#[cfg(test)]
 use write::mutate_config_and_reload_with;
 #[cfg(feature = "webui")]
 pub(crate) use write::{MutateError, mutate_config_and_reload_detached};
