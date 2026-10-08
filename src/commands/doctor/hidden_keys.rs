@@ -10,6 +10,9 @@
 
 use std::path::Path;
 
+use figment::providers::{Format as _, Yaml};
+use figment::value::{Dict, Value};
+
 use super::CheckResult;
 
 /// Hidden config keys in inventory form: `<name>` matches any map key and a
@@ -127,34 +130,85 @@ pub(super) const HIDDEN_CONFIG_KEYS: &[&str] = &[
     "webhooks.rate_limit",
 ];
 
-/// Hidden keys that `raw` sets, in table order.
-pub(super) fn set_hidden_keys(raw: &serde_yaml::Value) -> Vec<&'static str> {
-    HIDDEN_CONFIG_KEYS
+/// Hidden keys that `config` sets, in table order. A key is left out when a
+/// longer key under it is also set, so a section and its field are not both named.
+pub(super) fn set_hidden_keys(config: &Dict) -> Vec<&'static str> {
+    let set: Vec<&'static str> = HIDDEN_CONFIG_KEYS
         .iter()
         .copied()
-        .filter(|key| is_set(raw, &key.split('.').collect::<Vec<_>>()))
+        .filter(|key| is_set(config, &key.split('.').collect::<Vec<_>>()))
+        .collect();
+    set.iter()
+        .copied()
+        .filter(|key| {
+            !set.iter().any(|other| {
+                other
+                    .strip_prefix(key)
+                    .is_some_and(|tail| tail.starts_with('.'))
+            })
+        })
         .collect()
 }
 
-/// Whether `value` holds something at `path`. `<name>` matches any map key; a
+/// Whether `map` holds something at `path`. `<name>` matches any map key; a
 /// segment ending in `[]` names a list whose every item is searched.
-fn is_set(value: &serde_yaml::Value, path: &[&str]) -> bool {
+fn is_set(map: &Dict, path: &[&str]) -> bool {
     let Some((head, rest)) = path.split_first() else {
         return true;
     };
-    let Some(map) = value.as_mapping() else {
-        return false;
+    let below = |child: &Value| {
+        rest.is_empty() || matches!(child, Value::Dict(_, inner) if is_set(inner, rest))
     };
     if *head == "<name>" {
-        return map.values().any(|child| is_set(child, rest));
+        return map.values().any(below);
     }
     if let Some(list_key) = head.strip_suffix("[]") {
-        return map
-            .get(list_key)
-            .and_then(serde_yaml::Value::as_sequence)
-            .is_some_and(|items| items.iter().any(|item| is_set(item, rest)));
+        return match map.get(list_key) {
+            Some(Value::Array(_, items)) => items.iter().any(below),
+            _ => false,
+        };
     }
-    map.get(*head).is_some_and(|child| is_set(child, rest))
+    map.get(*head).is_some_and(below)
+}
+
+/// Read the config file for its key names, never its values.
+///
+/// `Config::load` has already read this path through the mode-checked reader.
+/// This second read is refused rather than allowed to block or follow a link:
+/// on Unix it opens with `O_NONBLOCK | O_NOFOLLOW` and refuses anything the
+/// opened handle does not report as a regular file. Like that reader, it sets
+/// no size limit on a config file. A regular file swapped in since the first
+/// read can still be read; only its key names are reported. Every error is
+/// dropped unformatted, because a parser message can quote a line.
+fn read_key_names(path: &Path) -> Option<Dict> {
+    use std::io::Read as _;
+
+    let mut file = open_nonblocking(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text).ok()?;
+    // The loader's own reader: two equal keys keep the last, as the gateway does.
+    Yaml::from_str::<Dict>(&text).ok()
+}
+
+#[cfg(unix)]
+fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(
+            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
+                .bits()
+                .cast_signed(),
+        )
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
 }
 
 /// The `doctor` row listing the hidden keys the config file at `path` sets.
@@ -162,9 +216,7 @@ fn is_set(value: &serde_yaml::Value, path: &[&str]) -> bool {
 /// `None` when the file cannot be read or parsed (the configuration check
 /// already reports that) or when it sets no hidden key.
 pub(super) fn check_hidden_keys(path: &Path) -> Option<CheckResult> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let raw: serde_yaml::Value = serde_yaml::from_str(&text).ok()?;
-    let set = set_hidden_keys(&raw);
+    let set = set_hidden_keys(&read_key_names(path)?);
     if set.is_empty() {
         return None;
     }

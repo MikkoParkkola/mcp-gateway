@@ -53,7 +53,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/commands/doctor/hidden_keys.rs",
-        "gateway.yaml re-read only after Config::load's mode-checked read succeeded; prints key names, never values",
+        "gateway.yaml re-read only after Config::load's mode-checked read succeeded; O_NONBLOCK|O_NOFOLLOW, regular files only, no size limit (as the guarded reader for config); prints key names, never values; a regular file swapped in since the first read can be read, key names only",
     ),
     (
         "src/commands/kubernetes.rs",

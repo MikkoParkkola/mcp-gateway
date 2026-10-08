@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
+use figment::providers::{Format as _, Yaml};
 
-fn yaml(text: &str) -> serde_yaml::Value {
-    serde_yaml::from_str(text).expect("test yaml parses")
+/// Parse as the loader does.
+fn yaml(text: &str) -> Dict {
+    Yaml::from_str(text).expect("test yaml parses")
 }
 
 #[test]
@@ -77,17 +79,13 @@ fn doctor_adds_no_hidden_settings_row_for_a_fresh_init_config() {
         for with_examples in [true, false] {
             let path = dir.path().join(format!("{profile}-{with_examples}.yaml"));
             let config = crate::commands::build_init_config(with_examples, profile, "");
-            let parsed: serde_yaml::Value = serde_yaml::from_str(&config)
+            let parsed: Dict = Yaml::from_str(&config)
                 .unwrap_or_else(|e| panic!("init --profile {profile} writes invalid YAML: {e}"));
-            assert!(
-                parsed.is_mapping(),
-                "init --profile {profile} writes a non-mapping"
-            );
             std::fs::write(&path, &config).expect("write init config");
             assert!(
                 check_hidden_keys(&path).is_none(),
                 "init --profile {profile} (examples: {with_examples}) writes a hidden key: {:?}",
-                set_hidden_keys(&serde_yaml::from_str(&config).expect("init config parses"))
+                set_hidden_keys(&parsed)
             );
         }
     }
@@ -165,4 +163,58 @@ fn a_parent_key_is_not_listed_beside_its_child() {
         .expect("write config");
     let row = check_hidden_keys(&path).expect("a row when a hidden key is set");
     assert_eq!(named_keys(&row), vec!["accounts.limits.authority_bytes"]);
+}
+
+/// A config tree that sets `key`, placed after an empty sibling at every
+/// `<name>` and `[]` step so later positions are searched too.
+fn tree(segments: &[&str]) -> Value {
+    use figment::value::Tag;
+    let Some((head, rest)) = segments.split_first() else {
+        return Value::from("set");
+    };
+    let child = tree(rest);
+    let empty = || Value::Dict(Tag::Default, Dict::new());
+    let entries = if *head == "<name>" {
+        vec![("a0".to_string(), empty()), ("b0".to_string(), child)]
+    } else if let Some(list_key) = head.strip_suffix("[]") {
+        vec![(
+            list_key.to_string(),
+            Value::Array(Tag::Default, vec![empty(), child]),
+        )]
+    } else {
+        vec![((*head).to_string(), child)]
+    };
+    Value::Dict(Tag::Default, entries.into_iter().collect())
+}
+
+#[test]
+fn every_table_entry_is_found_where_a_config_sets_it() {
+    for key in HIDDEN_CONFIG_KEYS {
+        let Value::Dict(_, config) = tree(&key.split('.').collect::<Vec<_>>()) else {
+            unreachable!("a tree is a dict")
+        };
+        assert!(set_hidden_keys(&config).contains(key), "{key} not found");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_at_the_config_path_returns_at_once_with_no_row() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let status = std::process::Command::new("mkfifo")
+        .args(["-m", "600"])
+        .arg(&path)
+        .status()
+        .expect("run mkfifo(1)");
+    assert!(status.success(), "mkfifo(1) failed");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let probe = path.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(check_hidden_keys(&probe).is_none());
+    });
+    let no_row = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("doctor blocked on a FIFO");
+    assert!(no_row, "a FIFO produced a row");
 }
