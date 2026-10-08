@@ -31,6 +31,10 @@ impl ReloadContext {
     /// one reload reads the other's file, and the caller is told its own edit
     /// was applied. Holding one guard across write-read-apply-publish is what
     /// makes an edit's own bytes the ones it reloads.
+    ///
+    /// Dropping this future after the write and before the reload publishes
+    /// leaves the file ahead of the running gateway (MIK-8120): a caller that
+    /// can be cancelled (a request handler) runs it in a task of its own.
     pub async fn write_and_reload_outcome(
         &self,
         path: &std::path::Path,
@@ -82,6 +86,10 @@ impl ReloadContext {
     /// [`ConfigWriteError::Failed`] on load, write, rename, or reload failure. A
     /// refusal from `mutate` is not an error; it comes back as
     /// [`ConfigMutation::Rejected`].
+    ///
+    /// Dropping this future after the write and before the reload publishes
+    /// leaves the file ahead of the running gateway (MIK-8120): a caller that
+    /// can be cancelled (a request handler) runs it in a task of its own.
     pub async fn mutate_and_reload_outcome<T, E, F>(
         &self,
         path: &std::path::Path,

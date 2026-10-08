@@ -35,7 +35,7 @@ use super::{
 use crate::config::TransportConfig;
 use crate::config_persistence::CommentLoss;
 use crate::config_reload::{
-    ConfigMutation, ConfigWriteError, MutateError, mutate_config_and_reload_with,
+    ConfigMutation, ConfigWriteError, MutateError, mutate_config_and_reload_detached,
 };
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
@@ -218,22 +218,23 @@ async fn add_backend(
 
     // Load, check for duplicates, persist and reload - all inside one lock, so
     // a second request cannot build its change on the pre-edit config.
-    let mutation = mutate_config_and_reload_with(
-        config_path,
-        state.meta_mcp.reload_context().as_deref(),
+    let name = req.name.clone();
+    let mutation = mutate_config_and_reload_detached(
+        config_path.clone(),
+        state.meta_mcp.reload_context(),
         CommentLoss::Refuse,
-        |config| {
-            add_backend_config(config, &req.name, resolved)
+        move |config| {
+            add_backend_config(config, &name, resolved)
                 .map(|notes| {
                     // Whether it went in enabled: notes alone do not say, an
                     // OAuth login note comes with an enabled backend.
-                    let enabled = config.backends.get(&req.name).is_some_and(|b| b.enabled);
+                    let enabled = config.backends.get(&name).is_some_and(|b| b.enabled);
                     (notes, enabled)
                 })
                 .map_err(|_| {
                     (
                         StatusCode::CONFLICT,
-                        format!("Backend '{}' already exists", req.name),
+                        format!("Backend '{name}' already exists"),
                     )
                 })
         },
@@ -280,13 +281,18 @@ async fn remove_backend(
         return config_path_unavailable().into_response();
     };
 
-    let mutation = mutate_config_and_reload_with(
-        config_path,
-        state.meta_mcp.reload_context().as_deref(),
+    let removed = name.clone();
+    let mutation = mutate_config_and_reload_detached(
+        config_path.clone(),
+        state.meta_mcp.reload_context(),
         CommentLoss::Refuse,
-        |config| {
-            remove_backend_config(config, &name)
-                .map_err(|_| (StatusCode::NOT_FOUND, format!("Backend '{name}' not found")))
+        move |config| {
+            remove_backend_config(config, &removed).map_err(|_| {
+                (
+                    StatusCode::NOT_FOUND,
+                    format!("Backend '{removed}' not found"),
+                )
+            })
         },
     )
     .await;
@@ -395,11 +401,12 @@ async fn update_backend(
     // Everything from here reads the config and writes it back, so it all runs
     // inside one lock. Splitting the read from the write is what lets one edit
     // overwrite another.
-    let mutation = mutate_config_and_reload_with(
-        config_path,
-        state.meta_mcp.reload_context().as_deref(),
+    let updated = name.clone();
+    let mutation = mutate_config_and_reload_detached(
+        config_path.clone(),
+        state.meta_mcp.reload_context(),
         CommentLoss::Refuse,
-        |config| {
+        move |config| {
             if !config.backends.contains_key(&name) {
                 return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
             }
@@ -459,7 +466,7 @@ async fn update_backend(
         Err(e) => return unwritten(e),
     };
 
-    Json(json!({"status": "updated", "name": name, "reload": reload})).into_response()
+    Json(json!({"status": "updated", "name": updated, "reload": reload})).into_response()
 }
 
 /// The answer to a backend write that did not happen.
