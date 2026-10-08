@@ -250,6 +250,52 @@ async fn a_capability_refresh_left_in_flight_is_not_resent() {
     );
 }
 
+/// RESTFIRST.1: a capability token endpoint counts as rotating from its first
+/// refresh. One whose outcome is unknown is not sent again, even though the
+/// server was never seen to rotate.
+#[tokio::test]
+async fn a_first_capability_refresh_with_an_unknown_outcome_is_not_resent() {
+    let server = TokenServer::start(&[Answer::RotateThen502]).await;
+    let dir = tempfile::tempdir().unwrap();
+    store_expired(dir.path(), "r1");
+
+    let _ = fetch(&executor(dir.path()), &server).await;
+    let _ = fetch(&executor(dir.path()), &server).await;
+    assert_eq!(
+        server.uses("r1"),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+    not_revoked(&server);
+}
+
+/// RESTFIRST.2: a process stopped during a capability token's first refresh
+/// left its in-flight marker, before any rotation was seen. The next call
+/// sends nothing.
+#[tokio::test]
+async fn a_first_capability_refresh_left_in_flight_is_not_resent() {
+    use sha2::Digest as _;
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    store_expired(dir.path(), "r1");
+    let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+    let mut state = storage.load_refresh_state(PROVIDER, PROVIDER);
+    state.in_flight = Some(hex::encode(sha2::Sha256::digest(b"r1")));
+    storage
+        .save_refresh_state(PROVIDER, PROVIDER, &state)
+        .unwrap();
+
+    let result = fetch(&executor(dir.path()), &server).await;
+    assert!(result.is_err(), "a possibly consumed token was used");
+    assert_eq!(
+        server.requests(),
+        0,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+}
+
 /// RESTSAVE.1: the token directory turns read-only while the server holds the
 /// rotated answer, so nothing about the answer can be stored. The refresh
 /// token it replaced is not sent again, even once storage is writable.
