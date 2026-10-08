@@ -128,4 +128,24 @@ mod tests {
             Path::new(".gateway.yaml.lock")
         );
     }
+
+    /// A sidecar other accounts can open (a `0644` one checked out by git,
+    /// say) is one they can lock, stalling every config write. One this
+    /// user owns is made owner-only before it is locked.
+    #[cfg(unix)]
+    #[test]
+    fn a_readable_sidecar_is_made_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = dir.path().join("gateway.yaml");
+        let lock = lock_path(&config);
+        std::fs::write(&lock, "").expect("sidecar");
+        std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        let held = super::lock_config_blocking(&config, std::time::Instant::now(), |_| {});
+
+        assert!(held.is_ok(), "the lock is taken");
+        let mode = std::fs::metadata(&lock).expect("stat").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "mode {mode:o}");
+    }
 }
