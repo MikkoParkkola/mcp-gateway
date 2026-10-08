@@ -78,9 +78,9 @@ mod collusion_direct_tests;
 #[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
-mod direct_continuation_tests;
-#[cfg(test)]
 mod direct_continuation_gate_tests;
+#[cfg(test)]
+mod direct_continuation_tests;
 #[cfg(test)]
 mod direct_guards_fixture;
 #[cfg(test)]
@@ -119,6 +119,9 @@ mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
+/// MIK-8058: a failed reload's status says whose fault it is.
+#[cfg(all(test, feature = "webui"))]
+mod reload_status_tests;
 #[cfg(test)]
 mod webhook_mount_tests;
 /// The meta route's post-judge delivery record, shared with stdio (MIK-7920).
