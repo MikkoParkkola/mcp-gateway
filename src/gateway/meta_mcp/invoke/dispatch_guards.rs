@@ -253,6 +253,73 @@ impl MetaMcp {
     }
 }
 
+/// What screening a backend's JSON-RPC error left of it (MIK-8139).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ErrorScreen {
+    /// Nothing acted on it: deliver it as the backend sent it.
+    Clean,
+    /// The firewall redacted text in its message or data.
+    Rewritten,
+    /// A policy refuses it: deliver the route's refusal instead.
+    Blocked,
+}
+
+impl MetaMcp {
+    /// S4 for a backend error (MIK-8139): the content inspection and the
+    /// configured response firewall a result gets, on the error's message and
+    /// data, so backend text never reaches a caller unscreened because it
+    /// came as an error. Not the contract gate or context integrity: an
+    /// output contract and provenance tagging describe a result, not an
+    /// error. The data keeps its type; redactions are written back in place.
+    pub(crate) fn screen_backend_error(
+        &self,
+        call: &BackendCall<'_>,
+        error: &mut crate::protocol::JsonRpcError,
+    ) -> ErrorScreen {
+        let mut text = error.message.clone();
+        if let Some(data) = &error.data {
+            text.push('\n');
+            text.push_str(&data.to_string());
+        }
+        if self
+            .inspect_backend_text((call.server, call.tool, call.trace_id), &text)
+            .is_err()
+        {
+            return ErrorScreen::Blocked;
+        }
+        #[cfg(feature = "firewall")]
+        if let Some(firewall) = &self.firewall {
+            let mut artifact = serde_json::json!({
+                "message": error.message,
+                "data": error.data,
+            });
+            let before = artifact.clone();
+            let verdict = firewall.check_response(
+                &format!("error:{}", call.server),
+                call.server,
+                call.tool,
+                &mut artifact,
+                call.api_key_name.unwrap_or("anonymous"),
+            );
+            if !verdict.allowed
+                || verdict.action == crate::security::firewall::FirewallAction::Block
+            {
+                return ErrorScreen::Blocked;
+            }
+            if artifact != before {
+                if let Some(message) = artifact["message"].as_str() {
+                    message.clone_into(&mut error.message);
+                }
+                if error.data.is_some() {
+                    error.data = Some(artifact["data"].take());
+                }
+                return ErrorScreen::Rewritten;
+            }
+        }
+        ErrorScreen::Clean
+    }
+}
+
 #[cfg(test)]
 #[path = "dispatch_guards_tests.rs"]
 mod dispatch_guards_tests;

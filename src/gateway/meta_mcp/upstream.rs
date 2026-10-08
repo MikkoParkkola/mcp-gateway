@@ -507,11 +507,23 @@ impl MetaMcp {
         let carrier = json!({"content": content, "isError": true});
         let submitted = crate::security::response_inspect::extract_text_from_result(&carrier);
         let gated = self.apply_response_gates(server, tool, api_key_name, trace_id, carrier);
-        let clean = gated.as_ref().is_ok_and(|value| {
-            // An annotation alone is not a refusal. Preserve the operator's
-            // observe mode, but never persist content that a gate rewrote.
-            crate::security::response_inspect::extract_text_from_result(value) == submitted
-        });
+        // MIK-8139: and the configured response firewall, through the screen
+        // every route's backend error shares; a redaction withholds too.
+        let call = super::invoke::dispatch_guards::BackendCall {
+            server,
+            tool,
+            session_id: None,
+            api_key_name,
+            trace_id,
+            caller_key: None,
+        };
+        let screened = self.screen_backend_error(&call, &mut error.clone());
+        let clean = screened == super::invoke::dispatch_guards::ErrorScreen::Clean
+            && gated.as_ref().is_ok_and(|value| {
+                // An annotation alone is not a refusal. Preserve the operator's
+                // observe mode, but never persist content that a gate rewrote.
+                crate::security::response_inspect::extract_text_from_result(value) == submitted
+            });
         if clean {
             (error, crate::gateway::task_service::ErrorAuthor::Peer)
         } else {

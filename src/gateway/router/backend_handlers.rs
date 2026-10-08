@@ -544,6 +544,28 @@ async fn dispatch_armed<T>(
     dispatch.await
 }
 
+/// MIK-8139: a backend's JSON-RPC error screened as a result is, one helper
+/// for both direct sinks (an answered error and a failed dispatch): a block
+/// becomes the route's firewall refusal, answered with HTTP 200 as a blocked
+/// result is; a redaction is delivered as redacted.
+fn screen_direct_error(
+    state: &AppState,
+    call: &crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall<'_>,
+    mut response: JsonRpcResponse,
+) -> (JsonRpcResponse, Option<StatusCode>) {
+    use crate::gateway::meta_mcp::invoke::dispatch_guards::ErrorScreen;
+    let Some(error) = response.error.as_mut() else {
+        return (response, None);
+    };
+    match state.meta_mcp.screen_backend_error(call, error) {
+        ErrorScreen::Blocked => (
+            refusal(response.id.clone(), &crate::Error::ResponseFirewallRefused),
+            Some(StatusCode::OK),
+        ),
+        ErrorScreen::Rewritten | ErrorScreen::Clean => (response, None),
+    }
+}
+
 /// Store the direct route's result under the client's idempotency key so a
 /// re-issue replays it instead of invoking the backend again. Runs after the
 /// scan and provenance stamp, before any chain link. Both terminal outcomes
