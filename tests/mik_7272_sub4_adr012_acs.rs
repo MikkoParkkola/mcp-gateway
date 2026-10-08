@@ -41,16 +41,14 @@ use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::NotificationMultiplexer;
 use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
 use mcp_gateway::gateway::test_helpers::{
-    AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
+    AppState, MetaMcp, StoreLimits, auth_state, open_runtime,
 };
 use mcp_gateway::idempotency::{
     CheckOutcome, GuardOutcome, IN_FLIGHT_TIMEOUT, IdempotencyCache, IdempotencyReservation,
     enforce,
 };
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-use mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
-use tower::ServiceExt;
 
 /// A mutation. Carries no annotations at all, which under amendment A1 is the
 /// same answer as `readOnlyHint: false`: deny.
@@ -391,61 +389,9 @@ fn register_route_backend(state: &Arc<AppState>, url: &str, arm: ForwardArm) {
     );
 }
 
-/// A client's own direct-route `tools/call` frame, carrying `idempotency_key`
-/// where a client can actually put it.
-///
-/// `id` varies per call because a re-issue after a broken stream is a second
-/// JSON-RPC request; that is the whole shape the criterion is about.
-fn keyed_call(id: u32, key: &str) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": "tools/call",
-        "params": {
-            "name": MUTATION,
-            "arguments": {},
-            "_meta": {IDEMPOTENCY_KEY_META: key}
-        }
-    })
-}
-
-/// POST to the direct backend route and read the status and body back.
-async fn post_direct(state: &Arc<AppState>, mut body: Value) -> (StatusCode, Value) {
-    // A modern request as `/mcp` requires it, which the direct route now
-    // requires too (MIK-8040): the revision and capabilities in `_meta`, and
-    // the method and name headers echoing the body.
-    let meta = &mut body["params"]["_meta"];
-    meta["io.modelcontextprotocol/protocolVersion"] = json!("2026-07-28");
-    meta["io.modelcontextprotocol/clientCapabilities"] = json!({});
-    let method = body["method"].as_str().unwrap_or_default().to_owned();
-    let name = body["params"]["name"]
-        .as_str()
-        .unwrap_or_default()
-        .to_owned();
-    let request = axum::http::Request::builder()
-        .method("POST")
-        .uri(format!("/mcp/{ROUTE_BACKEND}"))
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", "2026-07-28")
-        .header("mcp-method", method)
-        .header("mcp-name", name)
-        .body(axum::body::Body::from(
-            serde_json::to_vec(&body).expect("frame serializes"),
-        ))
-        .expect("request builds");
-    let response = create_router(Arc::clone(state))
-        .oneshot(request)
-        .await
-        .expect("the router must answer");
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("the body must read");
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
-}
+#[path = "mik_7272_sub4_adr012_acs/direct.rs"]
+mod direct;
+use direct::{keyed_call, post_direct};
 
 /// Row 1 — settling a dispatched call that errored stores a terminal outcome,
 /// and the retry of that key is served the stored error rather than readmitted.
