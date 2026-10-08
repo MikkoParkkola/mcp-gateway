@@ -33,9 +33,12 @@ use std::process::ExitCode;
 mod backend_grant_notice;
 #[path = "upgrade_notice_items.rs"]
 mod notice_items;
+#[path = "upgrade_url_keys.rs"]
+mod url_keys;
 #[path = "upgrade_webhook_notice.rs"]
 mod webhook_notice;
 use notice_items::NOTICE_4_0_0_ITEMS;
+pub use url_keys::run_upgrade_with_config;
 
 // ── Semver comparison ─────────────────────────────────────────────────────────
 
