@@ -337,7 +337,11 @@ async fn forward_sanitized(
             ),
             caller.client.as_ref(),
         ),
-        (envelope.params.as_ref(), route.backend.instance()),
+        (
+            envelope.params.as_ref(),
+            route.backend.instance(),
+            envelope.declared,
+        ),
     );
     let guards = (client, &mut admitted.sealed);
     let forward =
@@ -428,7 +432,11 @@ async fn forward_plain(
                 ),
                 caller.client.as_ref(),
             ),
-            (envelope.params.as_ref(), route.backend.instance()),
+            (
+                envelope.params.as_ref(),
+                route.backend.instance(),
+                envelope.declared,
+            ),
         );
         let guards = (client, &mut admitted.sealed);
         let guarded =
