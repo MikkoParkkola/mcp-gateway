@@ -37,7 +37,7 @@ exactly when tools/call results are; it needs a proving row, not a code path.
 
 ### E1. One function decides what a frame is and how it is scanned
 
-`MetaMcp::scan_egress(&self, frame: &mut JsonRpcResponse, at: &Egress<'_>) -> EgressOutcome`
+`MetaMcp::scan_egress(&self, frame: JsonRpcResponse, at: &Egress<'_>) -> (Egressed, EgressOutcome)`
 in a new `meta_mcp/egress.rs`. `Egress` carries targets and correlation (who,
 which backend, which method). It owns, in one place:
 
@@ -86,7 +86,7 @@ which backend, which method). It owns, in one place:
 | Route | The one call | Deleted |
 |---|---|---|
 | HTTP `/mcp` and stdio | `finalize_content`, for every method (the `tools/call` / `tools/list` filter goes) | `response_pass.rs` pre-pass, `handlers.rs:1768` block |
-| `/mcp/{name}` | each of the 4 exits below, at its start: before `tools/list` normalization and trust-card stamping, before client-success accounting, before `settle_direct_idempotency` (so the cache holds the scanned copy and a replay needs no scan) | `response_blocked`, `scan_direct_tools_list_response`, `screen_backend_response` |
+| `/mcp/{name}` | each of the 4 exits below, at its start: before `tools/list` normalization and trust-card stamping, before client-success accounting, before `settle_direct_idempotency` (so the cache holds the scanned copy) | `response_blocked`, `scan_direct_tools_list_response`, `screen_backend_response` |
 | tasks | `inspect_settled` (stored result is the scanned one), watch poll, upstream recovery | `inspect_task_result` body becomes a call |
 
 The direct route has 11 `build_http_response` calls under
@@ -95,8 +95,12 @@ take the scan:
 
 1. `direct_dispatch.rs` `finish_response` (top, before the list arm):
    every success, the plain arm and the sanitized arm (`forward_sanitized`
-   also ends in `finish_response`). A cached replay through `deliver_tail`
-   serves what this exit settled, already scanned.
+   also ends in `finish_response`). A cached replay (result or error,
+   `direct_dispatch.rs:234-245`) is scanned again before delivery: the
+   idempotency cache is shared across routes (`support.rs:105`,
+   `direct_route.rs:67`) and the meta route settles before its delivery scan
+   (`invoke.rs:677`), so a cached entry's provenance proves nothing. A
+   rescan of an already-redacted copy is a no-op rewrite.
 2. `direct_failure.rs` `DirectFailure::answer`: a failed dispatch, from
    `answer_failure` and from `key_check.rs` (its `Err` arm). A cached failure
    (`direct_dispatch.rs:245`) replays what this exit settled, already scanned.
@@ -104,14 +108,20 @@ take the scan:
 4. `direct_caller.rs:437`: a failed notification forward answers with
    `e.to_string()`, which for a backend JSON-RPC error is the backend's text.
 
-`direct_dispatch.rs:245` replays a failure exit 2 settled. The other 5
+`direct_dispatch.rs:245` replays a cached failure, scanned as above. The other 5
 (`direct_caller.rs:231`, `direct_dispatch.rs:211, 274, 341`,
 `direct_preflight.rs:151`) build gateway-own refusals before any dispatch.
 
 **Completeness is a type, not a list.** `build_http_response` and the stdio
-writer accept only `Egressed`, which two constructors make: `scan_egress`
-(backend-derived frames) and `Egressed::gateway_own` (a frame the gateway
-built with no backend text, e.g. a pre-dispatch refusal). Every one of the 17
+writer accept only `Egressed`, which two constructors make: `scan_egress`,
+which takes the frame by value and returns it wrapped beside its outcome
+(backend-derived frames, cached replays included), and `Egressed::gateway_own`
+(a frame the gateway built with no backend text, e.g. a pre-dispatch
+refusal). There is no third constructor: a replay is a backend frame and is
+scanned. The tenant read judge (`gateway/outbound`) takes the frame out of
+`Egressed` after the scan, so its verdict is about the delivered bytes; a
+batch answers with one `Egressed` per item; bridged server-to-client requests
+are requests, not responses, and keep their `Immutable` challenge check. Every one of the 17
 `build_http_response` callers and the stdio writer must pick one, so a new
 exit cannot compile without deciding, and a `gateway_own` wrapping backend
 text is visible in review at its call site. Both seats asked for this over a
@@ -139,16 +149,19 @@ read check, not a content scan. All three paths pass through
 :232). The direct route drops notifications (`backend_handlers.rs:382`).
 
 Fix at that one point: the sink's task-local scope, opened by `POST /mcp` and
-the stdio server, also carries the egress scanner (firewall handle plus
-correlation). Each notification's `params` is inspected as its own artifact
+the stdio server, also carries a `dyn NotificationScreen` the gateway
+supplies (firewall handle plus correlation behind a one-method trait), so the
+transport layer calls a screen without knowing what a firewall is. Each notification's `params` is inspected as its own artifact
 (a new `ResponseArtifactKind::Notification` variant for the audit log, `Redact`); a Block drops the frame and
 counts it, as a full sink does. A notification is never delayed by a call
 into the async world: the scan is synchronous, as `check_response_artifact` is.
 
-`notifications/tasks` frames (`meta_mcp/task_notify.rs:66`) carry the stored
-task result to its subscriber. They are rescanned at send under the task's
-recorded targets, as `tasks/get` is, so a policy tightened after settlement
-covers both reads of the same row.
+`notifications/tasks` frames (`meta_mcp/task_notify.rs:66`) are built by the
+gateway, not streamed through the sink, and carry the stored task result to
+its subscriber. That result is rescanned at send under the task's recorded
+targets with the result-part policy, exactly as `tasks/get` delivers it: an
+interim task result gets `PreserveInputRequired`, and a refusal withholds the
+frame. Exempting them would reopen round 1 finding 2.
 
 Not frames for this family, with the reason:
 
@@ -193,6 +206,14 @@ One table test, `egress_matrix_tests.rs`:
   Interim cells assert refused (MIK-8155) and that only the refused
   exchange's slot is freed: an unrelated live exchange opened first keeps its
   slot (MIK-8131 FW.3).
+- Mixed frames: a peer frame with both `result` and `error`, a secret in
+  each in turn.
+- Independent checks: a D2-only finding (an injected instruction no
+  credential pattern matches) and a context-integrity-only finding, on an
+  error and a catalogue result, so a part marked after only the firewall ran
+  fails.
+- Replay cells: a meta-route call settles a key, a direct retry with the same
+  key replays it; the secret never arrives.
 - Clean cells: the same frames without a secret come out byte-identical.
 - Completeness: a source scan lists every method arm of the HTTP and stdio
   dispatchers and the direct route and fails if one is missing from the table,
@@ -246,3 +267,15 @@ the egress call removed per route, the mark ignored.
 | 11 | agy | A red MIK-8131 row on the merging branch breaks CI | Adopted: follow-up PR if #3451 is late (E3) |
 | 12 | gpt | Slot test must include an unrelated live exchange | Adopted (test plan) |
 | 13 | agy | Exhaustive method enum instead of a source scan | Declined: the dispatchers match on strings from the wire; an enum would be a second list of the same methods. The method axis is read from the dispatchers' own arms |
+
+## Review round 2 (delta, gpt-review and agy-review: both SHIP-WITH-FIXES)
+
+| # | Seat | Finding | Disposition |
+|---|---|---|---|
+| 1 | gpt | Direct replays may serve a meta-route entry cached before its delivery scan | Fixed: every replay is scanned (E2) |
+| 2 | agy | Replays have no `Egressed` constructor | Fixed by 1: a replay goes through `scan_egress`; no cache constructor exists |
+| 3 | agy | `scan_egress` signature cannot yield `Egressed` | Fixed: takes the frame by value, returns `(Egressed, EgressOutcome)` |
+| 4 | gpt, agy | `notifications/tasks` interim results get `Redact` | Fixed: result-part policy, refusal withholds the frame (E2b). agy's fix (exempt them) declined: it reopens round 1 finding 2 |
+| 5 | gpt | How `Egressed` composes with the read judge, batches, bridge requests | Specified (E2) |
+| 6 | gpt | Mixed-frame and D2-only / context-integrity-only cases | Added to the test plan |
+| 7 | agy | Security logic in the transport layer | Adopted: `dyn NotificationScreen` supplied by the gateway (E2b) |
