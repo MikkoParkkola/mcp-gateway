@@ -283,9 +283,9 @@ impl MetaMcp {
     /// S4 for a backend error (MIK-8139): the content inspection and the
     /// configured response firewall a result gets, on the error's message and
     /// data, so backend text never reaches a caller unscreened because it
-    /// came as an error. Not the contract gate or context integrity: an
-    /// output contract and provenance tagging describe a result, not an
-    /// error. The data keeps its type; redactions are written back in place.
+    /// came as an error. Not the contract gate: an output contract describes
+    /// a result, not an error. The data keeps its type; redactions are
+    /// written back in place.
     pub(crate) fn screen_backend_error(
         &self,
         call: &BackendCall<'_>,
@@ -301,6 +301,20 @@ impl MetaMcp {
             .inspect_backend_text((call.server, call.tool, call.trace_id), &text)
             .is_err()
         {
+            return ErrorScreen::Blocked;
+        }
+        // Context integrity too: it refuses text the patterns above miss. A
+        // carrier it withheld or transformed cannot map back onto the
+        // error's fields, so its enforcement withholds the whole error.
+        let carrier = serde_json::json!({"content": [{"type": "text", "text": text}]});
+        let (_, effect) = self.apply_context_integrity(
+            call.server,
+            call.tool,
+            call.api_key_name,
+            call.trace_id,
+            carrier,
+        );
+        if effect == super::super::response_security::GateEffect::Enforced {
             return ErrorScreen::Blocked;
         }
         #[cfg(feature = "firewall")]
