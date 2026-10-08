@@ -30,6 +30,7 @@ pub(crate) use observe::{
     UpstreamRecovery,
 };
 use observe::{Handoff, HandoffRegistry};
+pub(in crate::gateway::task_service) use recovery::recovery_event;
 pub(crate) use upstream::UpstreamCapture;
 /// Reachable at the visibility of [`TaskExecutor::commit`], which returns it.
 pub(crate) use worker::CommitFailure;
@@ -179,6 +180,9 @@ pub struct TaskExecutor {
     observer: Mutex<Option<Arc<dyn CommitObserver>>>,
     /// Told of every committed transition (the events source), once installed.
     publication_hook: std::sync::OnceLock<PublicationHook>,
+    /// The adapters startup recovery deferred to, kept so the sweep that
+    /// serves a repaired row decides the same way (MIK-8121). Write-once.
+    pub(super) managed: std::sync::OnceLock<Arc<[String]>>,
     /// Cancelled once, by a shutdown whose drain ran out; every worker runs
     /// under it ([`Self::spawn_worker`]).
     shutdown: tokio_util::sync::CancellationToken,
@@ -201,6 +205,7 @@ impl TaskExecutor {
             query_gate: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             observer: Mutex::new(None),
             publication_hook: std::sync::OnceLock::new(),
+            managed: std::sync::OnceLock::new(),
             shutdown: tokio_util::sync::CancellationToken::new(),
         })
     }
@@ -209,6 +214,16 @@ impl TaskExecutor {
     /// id, its new status and its last-change time. Write-once.
     pub(crate) fn on_publication(&self, hook: PublicationHook) -> bool {
         self.publication_hook.set(hook).is_ok()
+    }
+
+    /// Serve the sealed rows an operator repaired (MIK-8121), deciding a live
+    /// one as startup did, and announce each row settled on the way.
+    pub(crate) async fn reread_sealed(&self) {
+        let managed = self.managed.get().cloned().unwrap_or_else(|| Arc::from([]));
+        for committed in self.service.reread_sealed_deferring(managed).await {
+            let id = committed.task.id().to_owned();
+            self.published(&committed, &id);
+        }
     }
 
     pub(crate) fn recovery(&self) -> Option<&Arc<dyn UpstreamRecovery>> {

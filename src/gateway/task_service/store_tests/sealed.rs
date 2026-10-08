@@ -233,8 +233,12 @@ async fn repairing_a_sealed_row_keeps_its_key_and_lifts_the_seal() {
     assert_eq!(service.skipped_records().sealed, 0);
     assert_eq!(
         service.skipped_records().reserved,
-        1,
-        "the repaired row is kept"
+        0,
+        "a repaired row that restores is served, not only reserved (MIK-8121)"
+    );
+    assert!(
+        service.get("oidc:acme:alice", id).is_ok(),
+        "the repaired task reads without a restart (MIK-8121)"
     );
     match admission.admit_task(task_request("oidc:acme:alice", "k-fixed")) {
         Ok(TaskAdmission::Existing { task_id, .. }) => assert_eq!(&task_id, id),
@@ -317,8 +321,8 @@ async fn a_refused_reread_keeps_the_seal_and_the_store() {
     service.close().await.unwrap();
 }
 
-/// A repaired row moves from the sealed rows to the reserved ones: it counts
-/// once against the record cap, before and after. With a cap of two, one
+/// A repaired row moves from the sealed rows to the served ones (MIK-8121):
+/// it counts once against the record cap, before and after. With a cap of two, one
 /// repaired row leaves room for exactly one new task.
 #[tokio::test]
 async fn a_repaired_row_counts_once_against_the_record_cap() {
@@ -336,7 +340,7 @@ async fn a_repaired_row_counts_once_against_the_record_cap() {
     let (id, original) = &rows[0];
     std::fs::write(path.join(format!("{id}.json")), original).unwrap();
     service.reread_sealed().await;
-    assert_eq!(service.skipped_records().reserved, 1);
+    assert_eq!(service.skipped_records().sealed, 0, "the repair was read");
     let writer = services();
     settled_task(&service.store, &writer, "k-second").await;
     let third = writer.admit_task(task_request("oidc:acme:alice", "k-third"));
@@ -371,19 +375,23 @@ async fn a_repaired_key_is_never_free_while_the_seal_lifts() {
     let (path, rows, admission, service) = sealed_service(dir.path(), &["k-race"]).await;
     let (id, original) = &rows[0];
     std::fs::write(path.join(format!("{id}.json")), original).unwrap();
-    let seen = std::sync::Mutex::new(Vec::new());
-    let sealed = service
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (record, during) = (Arc::clone(&seen), Arc::clone(&admission));
+    let (sealed, _) = service
         .store
-        .reread_sealed(|binding, task_id| {
-            let imported = admission.import_tasks(&[(binding, task_id)]).is_ok();
-            seen.lock().unwrap().push((
-                admission.admit_task(task_request("oidc:acme:alice", "k-race")),
-                is_new_owner(&admission, "k-meanwhile"),
-            ));
-            imported
-        })
+        .reread_sealed(
+            move |binding, task_id| {
+                let imported = during.import_tasks(&[(binding, task_id)]).is_ok();
+                record.lock().unwrap().push((
+                    during.admit_task(task_request("oidc:acme:alice", "k-race")),
+                    is_new_owner(&during, "k-meanwhile"),
+                ));
+                imported
+            },
+            |_| None,
+        )
         .await;
-    let seen = seen.into_inner().unwrap();
+    let seen = std::mem::take(&mut *seen.lock().unwrap());
     assert_eq!(seen.len(), 1, "one repaired row");
     let (retry, new_owner) = &seen[0];
     assert!(
@@ -599,14 +607,14 @@ async fn a_moved_store_directory_keeps_the_seal() {
     store.seal_for_test("task-00000000-0000-4000-8000-000000000001.json");
     std::fs::rename(&path, dir.path().join("moved")).unwrap();
     assert_eq!(
-        store.reread_sealed(|_, _| true).await,
+        store.reread_sealed(|_, _| true, |_| None).await.0,
         1,
         "a missing store directory lifted the seal"
     );
     std::fs::create_dir(&path).unwrap();
     std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
     assert_eq!(
-        store.reread_sealed(|_, _| true).await,
+        store.reread_sealed(|_, _| true, |_| None).await.0,
         1,
         "another directory under the store's name lifted the seal"
     );

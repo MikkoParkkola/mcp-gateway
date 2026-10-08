@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use super::settlement::interrupted_result;
 use super::{CommitFailure, CommittedTask, TaskExecutor, TransitionWrite};
+use crate::gateway::task_service::record::InterruptedTask;
 use crate::gateway::task_service::service::ServiceError;
 use crate::gateway::task_service::store::StoreError;
 use crate::gateway::task_service::{ErrorAuthor, Target};
@@ -39,22 +40,9 @@ impl TaskExecutor {
         managed: &[String],
     ) -> Result<(), ServiceError> {
         for row in self.service.store.interrupted() {
-            // `input_required` is never deferred: `recovery_target` refuses a
-            // row that is not `working`, so deferring one would strand it
-            // non-terminal until its TTL with no read able to advance it. It
-            // takes the reviewed I3 treatment below, unchanged.
-            if row.is_working
-                && let Some(upstream) = row.upstream.as_ref()
-                && managed.contains(&upstream.backend)
-            {
-                tracing::info!(
-                    task_id = %row.id,
-                    backend = %upstream.backend,
-                    "interrupted task retained as managed working; no upstream call at startup"
-                );
+            let Some(event) = recovery_event(&row, managed) else {
                 continue;
-            }
-            let event = TaskTransition::Complete(restart_result(row.never_dispatched));
+            };
             match self
                 .commit_transition(TransitionWrite::Recover {
                     owner_digest: &row.owner_digest,
@@ -119,6 +107,33 @@ impl TaskExecutor {
             Err(_) => Err(CommitFailure::Service(ServiceError::Unavailable)),
         }
     }
+}
+
+/// What recovery writes for an interrupted `row`: `None` for a managed
+/// deferral, else the restart result its record can prove. Startup and the
+/// sweep that serves a repaired row (MIK-8121) decide by this one table.
+pub(in crate::gateway::task_service) fn recovery_event(
+    row: &InterruptedTask,
+    managed: &[String],
+) -> Option<TaskTransition> {
+    // `input_required` is never deferred: `recovery_target` refuses a row that
+    // is not `working`, so deferring one would strand it non-terminal until
+    // its TTL with no read able to advance it. It takes the reviewed I3
+    // treatment below, unchanged.
+    if row.is_working
+        && let Some(upstream) = row.upstream.as_ref()
+        && managed.contains(&upstream.backend)
+    {
+        tracing::info!(
+            task_id = %row.id,
+            backend = %upstream.backend,
+            "interrupted task retained as managed working; no upstream call at startup"
+        );
+        return None;
+    }
+    Some(TaskTransition::Complete(restart_result(
+        row.never_dispatched,
+    )))
 }
 
 /// The two answers a record can still prove (§13.5 rows 2–4). Both are tool

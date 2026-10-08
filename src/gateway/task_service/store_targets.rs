@@ -195,17 +195,30 @@ impl Shared {
             }
             (entry.task.clone(), entry.record.clone())
         };
+        self.settle_with_fallback(&task, &record, (event, targets, author), at)
+    }
+
+    /// Settle `task` as `record` holds it, falling back to the bounded failure
+    /// when the outcome does not fit. Callers hold the ordering lock. Also the
+    /// recovery of a repaired row that is not yet served (MIK-8121).
+    pub(super) fn settle_with_fallback(
+        &self,
+        task: &Task,
+        record: &Record,
+        (event, targets, author): (TaskTransition, Option<Vec<Target>>, ErrorAuthor),
+        at: DateTime<Utc>,
+    ) -> Result<CommittedTask, StoreError> {
         // Last resort: an output-free record. It discards the targets and the
         // recovery descriptor, and it is marked so delivery knows its only
         // content is the gateway's own error. Every live row was admitted
         // with room for it ([`fallback_bytes`]).
-        match self.settle_attempt(&task, &record, (event, targets, false, author), at) {
+        match self.settle_attempt(task, record, (event, targets, false, author), at) {
             Err(StoreError::Capacity) => {}
             settled => return settled,
         }
         self.settle_attempt(
-            &task,
-            &record,
+            task,
+            record,
             (bounded(), None, true, ErrorAuthor::Gateway),
             at,
         )
