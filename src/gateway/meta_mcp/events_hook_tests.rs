@@ -732,3 +732,29 @@ async fn a_route_removed_before_the_first_pass_is_withdrawn_by_it() {
 
 #[path = "events_hook_shape_tests.rs"]
 mod shape_tests;
+
+/// MIK-8057 H1: past the grace period, a hot reload reads beta's file
+/// mid-write (valid YAML, no webhook section). No read deletes anything:
+/// beta's subscription is held, and the complete file brings its route back.
+#[tokio::test]
+async fn a_reload_reading_a_file_mid_write_withdraws_nothing() {
+    let dir = tempfile::tempdir().expect("dir");
+    let store = tempfile::tempdir().expect("store");
+    std::fs::write(dir.path().join("b.yaml"), capability("beta")).expect("write");
+    seed_subscription(store.path(), "beta");
+    let (caps, registry, meta) = wired(&[dir.path()], store.path()).await;
+    caps.mark_initial_scan_complete();
+    meta.run_deferred_webhook_withdraw().await;
+    let whole = capability("beta");
+    let partial = &whole[..whole.find("webhooks:").expect("section")];
+    std::fs::write(dir.path().join("b.yaml"), partial).expect("mid-write");
+    reload(&caps, &meta).await;
+    assert!(
+        subscribed(store.path(), "beta"),
+        "a mid-write read holds the subscription"
+    );
+    std::fs::write(dir.path().join("b.yaml"), &whole).expect("complete");
+    reload(&caps, &meta).await;
+    assert_eq!(routes(&registry), ["beta.push"]);
+    assert!(subscribed(store.path(), "beta"));
+}
