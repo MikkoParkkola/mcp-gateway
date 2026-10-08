@@ -426,10 +426,12 @@ async fn dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader() {
         let transport = std::sync::Arc::clone(&transport);
         tokio::spawn(async move { transport.request("tools/call", Some(big)).await })
     };
-    let mut escaped = String::new();
     for _ in 0..100 {
-        escaped = std::fs::read_to_string(&pidfile).unwrap_or_default();
-        if !escaped.trim().is_empty() {
+        if !std::fs::read_to_string(&pidfile)
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
