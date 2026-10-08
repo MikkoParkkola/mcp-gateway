@@ -559,7 +559,7 @@ impl EventsHub {
         now: DateTime<Utc>,
         (caller, url, commit): (&Caller, &url::Url, Commit),
     ) -> Result<Result<super::store::Admitted, CapHit>, RpcError> {
-        let attempt = record.clone();
+        let mut attempt = record.clone();
         let mut started = self.lifecycle.lock().await;
         self.upstream_admits(&record.name)?;
         let begun = self
@@ -578,10 +578,25 @@ impl EventsHub {
             // subscription is stored that its route can no longer serve
             // (MIK-8038).
             let _gate = hub.catalogue_lock();
-            if commit == Commit::Checked
-                && let Err(refused) = hub.still_admits(&attempt)
-            {
-                return Ok(Err(refused));
+            // A held row's refresh keeps the row's hold as it is now, not as
+            // the refresh read it; any other commit, a held refresh whose row
+            // is gone included, is checked against the routes now and
+            // records the payload fields they carry now (MIK-8057, MIK-8076).
+            let held_row = (commit == Commit::Held)
+                .then(|| store.get(&attempt.id).filter(|s| s.live(now)))
+                .flatten();
+            if let Some(row) = held_row {
+                attempt.payload_fields = row.payload_fields;
+                attempt.unoffered_since = row.unoffered_since;
+                attempt.held_until = row.held_until;
+            } else {
+                if let Err(refused) = hub.still_admits(&attempt) {
+                    return Ok(Err(refused));
+                }
+                attempt.payload_fields = hub.payload_fields(&attempt.name);
+                attempt.unoffered_since = None;
+                attempt.held_until = None;
+                store.clear_hold(&attempt.id);
             }
             #[cfg(test)]
             tokio::runtime::Handle::current().block_on(hub.before_admit.pause());

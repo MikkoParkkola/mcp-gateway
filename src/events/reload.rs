@@ -54,7 +54,7 @@ pub(crate) fn refresh_webhooks(
     registry: &Arc<parking_lot::RwLock<WebhookRegistry>>,
     capabilities: &[CapabilityDefinition],
 ) -> Result<BTreeMap<String, Shape>, String> {
-    let old: BTreeMap<String, Shape> = shapes(registry.read().event_routes().into_iter());
+    let old = live_shapes(registry);
     let new: BTreeMap<String, Shape> = shapes(capabilities.iter().flat_map(|cap| {
         cap.webhooks
             .iter()
@@ -65,6 +65,13 @@ pub(crate) fn refresh_webhooks(
     }
     registry.write().replace_capabilities(capabilities);
     Ok(new)
+}
+
+/// The shapes of the routes `registry` serves now, by event name.
+pub(crate) fn live_shapes(
+    registry: &Arc<parking_lot::RwLock<WebhookRegistry>>,
+) -> BTreeMap<String, Shape> {
+    shapes(registry.read().event_routes().into_iter())
 }
 
 /// Each routed event type's shape, by event name.

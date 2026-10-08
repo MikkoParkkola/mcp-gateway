@@ -50,7 +50,7 @@ impl EventsHub {
             .unwrap_or_else(|| json!({}));
         let id = subscription_id(principal, url.as_str(), name, &arguments);
         let now = Utc::now();
-        let (Some(held), Some(existing)) = (
+        let (Some(_), Some(existing)) = (
             self.store.held(&id),
             self.store.get(&id).filter(|s| s.live(now)),
         ) else {
@@ -82,6 +82,8 @@ impl EventsHub {
             previous_until: None,
             granted_at: now,
             expires_at: grant.expires_at(now),
+            // A refresh reactivates a suspended row, held or not.
+            active: true,
             ..existing.clone()
         };
         let caps = self.caps();
@@ -104,16 +106,16 @@ impl EventsHub {
                 .await;
             match outcome? {
                 Ok((_, expires_at)) => {
+                    self.runtime.wake.notify_one();
                     let mut answer = subscribe_answer(&id, expires_at, Some(&existing), false);
-                    let until = match (expires_at, existing.held_until) {
-                        (Some(a), Some(b)) => Some(a.min(b)),
-                        (a, b) => a.or(b),
-                    };
-                    answer["held"] = json!({
-                        "reason": held.reason,
-                        "key": held.key,
-                        "until": to_wire_time(until),
-                    });
+                    // As committed: a reload may have resumed the row meanwhile.
+                    if let (Some(held), Some(row)) = (self.store.held(&id), self.store.get(&id)) {
+                        answer["held"] = json!({
+                            "reason": held.reason,
+                            "key": held.key,
+                            "until": to_wire_time(row.effective_expiry()),
+                        });
+                    }
                     return Ok(Some(answer));
                 }
                 Err(CapHit::Unverified) if verified => verified = false,

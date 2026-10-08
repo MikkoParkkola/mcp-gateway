@@ -385,15 +385,25 @@ impl EventsHub {
     /// deleted.
     ///
     /// # Errors
-    /// The live event type the reload would narrow (T52); nothing changes.
+    /// The live event type the reload would narrow (T52); the routes stay
+    /// as they were, and the stored rows are judged against them.
     pub(crate) fn refresh_webhooks(
         &self,
         registry: &Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>,
         capabilities: &[crate::capability::CapabilityDefinition],
     ) -> Result<(), String> {
-        let shapes = super::reload::refresh_webhooks(registry, capabilities)?;
-        self.hold_unserved(&shapes);
-        Ok(())
+        match super::reload::refresh_webhooks(registry, capabilities) {
+            Ok(shapes) => {
+                self.hold_unserved(&shapes);
+                Ok(())
+            }
+            // The routes left live may be ones no row was judged against yet,
+            // as when a startup scan registered them: judge against those.
+            Err(narrowed) => {
+                self.hold_unserved(&super::reload::live_shapes(registry));
+                Err(narrowed)
+            }
+        }
     }
 
     /// Judge every stored webhook subscription against `shapes`; a stamp

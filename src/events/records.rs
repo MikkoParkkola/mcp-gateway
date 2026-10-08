@@ -183,9 +183,18 @@ impl std::fmt::Debug for Subscription {
 }
 
 impl Subscription {
-    /// Live at `now`: not past its expiry, nor past the bound of a hold.
+    /// When the row stops being live: its expiry or the bound of its hold,
+    /// whichever comes first; `None` when neither is set.
+    pub(crate) fn effective_expiry(&self) -> Option<DateTime<Utc>> {
+        match (self.expires_at, self.held_until) {
+            (Some(at), Some(bound)) => Some(at.min(bound)),
+            (at, bound) => at.or(bound),
+        }
+    }
+
+    /// Live at `now`: not past its effective expiry.
     pub(crate) fn live(&self, now: DateTime<Utc>) -> bool {
-        self.expires_at.is_none_or(|at| at > now) && self.held_until.is_none_or(|at| at > now)
+        self.effective_expiry().is_none_or(|at| at > now)
     }
 }
 
