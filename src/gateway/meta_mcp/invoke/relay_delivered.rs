@@ -268,7 +268,7 @@ fn keep_to_rewritten(
     let [one] = receipts.as_mut_slice() else {
         return;
     };
-    let read = Value::String(unescape(text));
+    let read = rewritten_answer(text);
     let staged = super::RELAY_STAGED.try_with(|s| fw.delivered_for_plan(&read, Some(s)));
     match staged.unwrap_or_else(|_| fw.delivered_for_plan(&read, None)) {
         Some(delivered) => {
@@ -277,6 +277,77 @@ fn keep_to_rewritten(
         }
         None => receipts.clear(),
     }
+}
+
+/// `MIK-8043.JOIN.4`: a rewritten wrapper as the caller reads it, member by
+/// member. The pretty print puts every scalar on its own line and a JSON
+/// string never holds a raw newline, so each line's string literals are read
+/// escape-aware and unescaped: a literal whose closing quote is gone runs to
+/// the line's end, and the line is also read from its end, so a damaged key
+/// does not take the value beside it. Values come first, then keys, then the
+/// flat text, which only widens what counts as delivered.
+#[cfg(feature = "firewall")]
+fn rewritten_answer(text: &str) -> Value {
+    let (mut values, mut keys) = (Vec::new(), serde_json::Map::new());
+    for (literal, key) in text.lines().flat_map(line_literals) {
+        if key {
+            keys.insert(literal, Value::Null);
+        } else {
+            values.push(Value::String(literal));
+        }
+    }
+    values.push(Value::String(unescape(text)));
+    values.push(Value::Object(keys));
+    Value::Array(values)
+}
+
+/// The string literals on one line of a pretty print, unescaped, each with
+/// whether it is a key (a `:` follows it).
+#[cfg(feature = "firewall")]
+fn line_literals(line: &str) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Some(open) = line[at..].find('"') {
+        let start = at + open + 1;
+        let close = closing_quote(&line[start..]).map(|c| start + c);
+        let (raw, next) = close.map_or((&line[start..], line.len()), |c| (&line[start..c], c + 1));
+        out.push((unescape(raw), line[next..].trim_start().starts_with(':')));
+        at = next;
+    }
+    let tail = line.trim_end().trim_end_matches(',');
+    if let Some(body) = tail.strip_suffix('"')
+        && let Some(open) = last_open_quote(body)
+    {
+        let last = unescape(&body[open + 1..]);
+        if !out.iter().any(|(literal, _)| *literal == last) {
+            out.push((last, false));
+        }
+    }
+    out
+}
+
+/// The byte offset of the first unescaped `"` in `rest`.
+#[cfg(feature = "firewall")]
+fn closing_quote(rest: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (i, c) in rest.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The byte offset of the last `"` in `body` that no backslash escapes.
+#[cfg(feature = "firewall")]
+fn last_open_quote(body: &str) -> Option<usize> {
+    body.match_indices('"').map(|(i, _)| i).rev().find(|&i| {
+        let slashes = body[..i].bytes().rev().take_while(|&b| b == b'\\').count();
+        slashes % 2 == 0
+    })
 }
 
 /// The text of a JSON print as a caller reads it: each string escape
@@ -451,6 +522,48 @@ mod tests {
 
     use super::*;
     use crate::protocol::meta::KEY_SERVER_INFO;
+
+    /// `MIK-8043.JOIN.4`: each literal on a line, unescaped, with whether it
+    /// is a key; a literal that lost its closing quote runs to the line's end.
+    #[test]
+    fn a_print_line_is_read_literal_by_literal() {
+        let lit = |s: &str, key| (s.to_owned(), key);
+        assert_eq!(
+            line_literals(r#"    "type": "text","#),
+            [lit("type", true), lit("text", false)]
+        );
+        assert_eq!(
+            line_literals(r#"    "text": "a \"quoted\" word""#),
+            [lit("text", true), lit("a \"quoted\" word", false)]
+        );
+        assert_eq!(
+            line_literals(r#"    "text": "postgres://[REDACTED]"#),
+            [lit("text", true), lit("postgres://[REDACTED]", false)]
+        );
+    }
+
+    /// `MIK-8043.JOIN.4` (G1): a key that lost its closing quote does not take
+    /// the value beside it; the line is read from its end too.
+    #[test]
+    fn a_damaged_key_keeps_the_value_beside_it() {
+        let literals = line_literals(r#"    "te[REDACTED] "south terrace rows","#);
+        assert!(
+            literals.contains(&("south terrace rows".to_owned(), false)),
+            "{literals:?}"
+        );
+    }
+
+    /// `MIK-8043.JOIN.4`: values in print order, then the flat text, then the
+    /// keys, as a delivery walk reads them.
+    #[test]
+    fn a_rewritten_answer_lists_values_then_flat_text_then_keys() {
+        let text = "{\n  \"content\": [\n    \"x\",\n    \"y\"\n  ]\n}";
+        let read = rewritten_answer(text);
+        assert_eq!(read[0], "x");
+        assert_eq!(read[1], "y");
+        assert_eq!(read[2], unescape(text));
+        assert!(read[3].get("content").is_some(), "{read}");
+    }
 
     /// A delivered answer with a `serverInfo` in its `_meta`.
     fn answered() -> Value {
