@@ -491,6 +491,7 @@ impl Store {
             return Err(error);
         }
         sub.generation = self.next_generation()?;
+        sub.incarnation = sub.generation;
         let name = format!("{}.json", sub.id);
         let placed = match write_record(&self.subs_dir, &name, &sub) {
             Ok(placed) => placed,

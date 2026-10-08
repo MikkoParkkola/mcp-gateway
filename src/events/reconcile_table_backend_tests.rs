@@ -52,6 +52,12 @@ fn admit_kind(hub: &EventsHub, kind: &str) {
 
 /// Admit `p`'s row for `backend.<backend>.<kind>`.
 fn admit_on(hub: &EventsHub, backend: &str, kind: &str) {
+    admit_on_at(hub, backend, kind, chrono::Utc::now());
+}
+
+/// [`admit_on`] granted at `at` (the store grants at the later of `at` and
+/// its clock, so a future `at` fixes the grant time).
+fn admit_on_at(hub: &EventsHub, backend: &str, kind: &str, at: chrono::DateTime<chrono::Utc>) {
     let config = crate::config::EventsConfig::default();
     let row: records::Subscription = serde_json::from_value(serde_json::json!({
         "v": 1, "id": format!("sub_{backend}_{kind}"), "principal": "p", "url": "https://h/x",
@@ -70,7 +76,7 @@ fn admit_on(hub: &EventsHub, backend: &str, kind: &str) {
                 global: 10,
             },
             chrono::Duration::zero(),
-            chrono::Utc::now(),
+            at,
             tail_policy(&config),
         )
         .expect("io")
@@ -331,4 +337,84 @@ fn t10_every_row_removal_is_counted_for_the_tick() {
     );
     let (_, after) = hub.store.lapses(now, now);
     assert_eq!(after, before + 1, "the removal is counted");
+}
+
+/// T07, same-tick half (lead ruling on the R1a review): a re-grant whose
+/// grant time equals the judged row's is still a new incarnation, so the
+/// stale withdraw leaves it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn t07_a_re_grant_in_the_same_tick_survives() {
+    let (hub, _dir) = hub();
+    hub.install_backend_source(Arc::new(|| vec!["x".to_owned()]));
+    let tick = chrono::Utc::now() + chrono::Duration::hours(1);
+    admit_on_at(&hub, "x", "tools_changed", tick);
+    let (reached, release) = hub.before_withdraw.arm();
+    let pass = tokio::task::spawn_blocking({
+        let hub = Arc::clone(&hub);
+        move || hub.withdraw(&["backend.x.tools_changed".to_owned()])
+    });
+    crate::test_pause::within("the withdraw judging", reached.notified()).await;
+    let tail = tail_policy(&hub.config);
+    hub.store
+        .remove("sub_x_tools_changed", chrono::Utc::now(), tail)
+        .expect("unsubscribed");
+    admit_on_at(&hub, "x", "tools_changed", tick);
+    let regranted = hub.store.subscriptions();
+    assert_eq!(
+        regranted[0].granted_at, tick,
+        "premise: the same grant time"
+    );
+    release.notify_one();
+    crate::test_pause::within("the withdraw", pass)
+        .await
+        .expect("join");
+    assert_eq!(
+        hub.store.subscriptions().len(),
+        1,
+        "the re-grant survives the stale withdraw"
+    );
+}
+
+/// T07, restart half (lead ruling): the generation counter is seeded from
+/// the highest persisted generation (store.rs `Store::open`), so a grant
+/// after a restart never reuses a persisted row's incarnation, and a stale
+/// withdraw leaves the re-grant.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn t07_a_re_grant_after_a_restart_survives() {
+    let (hub, dir) = hub();
+    admit_kind(&hub, "tools_changed");
+    let before = hub.store.subscriptions()[0].incarnation;
+    drop(hub);
+    let hub =
+        EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("reopened");
+    hub.install_backend_source(Arc::new(|| vec!["x".to_owned()]));
+    assert_eq!(
+        hub.store.subscriptions()[0].incarnation,
+        before,
+        "premise: the persisted incarnation"
+    );
+    let (reached, release) = hub.before_withdraw.arm();
+    let pass = tokio::task::spawn_blocking({
+        let hub = Arc::clone(&hub);
+        move || hub.withdraw(&["backend.x.tools_changed".to_owned()])
+    });
+    crate::test_pause::within("the withdraw judging", reached.notified()).await;
+    let tail = tail_policy(&hub.config);
+    hub.store
+        .remove("sub_x_tools_changed", chrono::Utc::now(), tail)
+        .expect("unsubscribed");
+    admit_kind(&hub, "tools_changed");
+    assert!(
+        hub.store.subscriptions()[0].incarnation > before,
+        "the re-grant is a new incarnation"
+    );
+    release.notify_one();
+    crate::test_pause::within("the withdraw", pass)
+        .await
+        .expect("join");
+    assert_eq!(
+        hub.store.subscriptions().len(),
+        1,
+        "the re-grant survives the stale withdraw"
+    );
 }

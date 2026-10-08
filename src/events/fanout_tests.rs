@@ -92,6 +92,7 @@ fn subscription(name: &str) -> super::super::records::Subscription {
     let now = Utc::now();
     super::super::records::Subscription {
         generation: 0,
+        incarnation: 0,
         v: 1,
         id: format!("sub_{name}"),
         principal: "p".into(),

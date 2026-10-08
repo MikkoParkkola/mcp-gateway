@@ -62,6 +62,12 @@ pub(crate) struct Subscription {
     /// row refuses it, even for a row re-made under the same id.
     #[serde(default)]
     pub generation: u64,
+    /// The generation this subscription was granted at, kept by every later
+    /// write: a re-grant under the same id is a new incarnation, a status or
+    /// hold write is not (design r3 G3). Never a timestamp, which two grants
+    /// in one clock tick could share.
+    #[serde(default)]
+    pub incarnation: u64,
     /// The top-level payload fields its event carried when it was last
     /// committed: a restored route without one of them holds it (MIK-8076).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

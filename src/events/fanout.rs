@@ -251,8 +251,8 @@ impl EventsHub {
 
     /// Delete each judged row. A row written since (a delivery status, a
     /// hold stamp) is the same subscription and still goes; a row re-made
-    /// under the same id (a new grant) is left to the cause that made it
-    /// (design r3 G3). `false` when a subscription could not be removed.
+    /// under the same id (a new grant, a new incarnation) is left to the
+    /// cause that made it (design r3 G3). `false` when a subscription could not be removed.
     pub(crate) fn withdraw_rows(&self, judged: &[Subscription]) -> bool {
         let tail = super::tail_policy(&self.config);
         let now = Utc::now();
@@ -260,10 +260,10 @@ impl EventsHub {
         self.before_withdraw.pause_blocking();
         let mut all_removed = true;
         for sub in judged {
-            let granted_at = sub.granted_at;
+            let incarnation = sub.incarnation;
             if let Err(error) = self
                 .store
-                .remove_where(&sub.id, now, tail, |row| row.granted_at == granted_at)
+                .remove_where(&sub.id, now, tail, |row| row.incarnation == incarnation)
             {
                 tracing::warn!(%error, "events: withdrawn subscription not removed");
                 all_removed = false;

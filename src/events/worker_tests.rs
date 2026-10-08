@@ -162,6 +162,7 @@ fn queued_with(
     let now = Utc::now();
     let mut sub = Subscription {
         generation: 0,
+        incarnation: 0,
         v: 1,
         id: "sub_worker".into(),
         principal: "p".into(),
