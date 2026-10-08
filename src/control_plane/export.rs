@@ -549,16 +549,19 @@ fn drop_torn_tail(path: &Path) -> Result<(), ExportError> {
         return Ok(());
     }
     let len = meta.len();
+    // Probe read-only first: a SIEM agent tailing the file may share it for
+    // reading only, and a clean tail needs no write handle at all.
+    let mut last = [0u8; 1];
+    let mut probe = std::fs::File::open(path)?;
+    probe.seek(SeekFrom::Start(len - 1))?;
+    probe.read_exact(&mut last)?;
+    if last[0] == b'\n' {
+        return Ok(());
+    }
     let mut file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)?;
-    let mut last = [0u8; 1];
-    file.seek(SeekFrom::Start(len - 1))?;
-    file.read_exact(&mut last)?;
-    if last[0] == b'\n' {
-        return Ok(());
-    }
     // Walk back in chunks to the last newline; none means the whole file is
     // one fragment.
     let mut chunk = vec![0u8; 64 * 1024];
