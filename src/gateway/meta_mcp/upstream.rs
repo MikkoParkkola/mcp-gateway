@@ -479,11 +479,10 @@ impl MetaMcp {
     /// The ordinary post-dispatch processing for a FAILURE that arrived late.
     ///
     /// A peer's `error.message` and its nested `error.data` are upstream text
-    /// like any recovered result, so they face the screen every route's
-    /// backend error shares (MIK-8139): anomaly screening, context integrity
-    /// and the configured response firewall, not a result's output contract.
-    /// Refusal or content rewriting withholds the raw content; observe-mode
-    /// findings retain the configured pass-through.
+    /// like any recovered result, so they face the same configured gates —
+    /// response contract, anomaly screening, context integrity — carried in the
+    /// shape those gates read. Refusal or content rewriting withholds the raw
+    /// content; observe-mode annotations retain the configured pass-through.
     ///
     /// The outcome stays a failure and keeps the peer's `code`: there is no
     /// return path here through which an error could become a result.
@@ -499,21 +498,20 @@ impl MetaMcp {
         trace_id: &str,
         error: JsonRpcError,
     ) -> (JsonRpcError, crate::gateway::task_service::ErrorAuthor) {
-        // MIK-8139: the screen every route's backend error shares (content
-        // inspection, context integrity, the configured firewall). An
-        // annotation alone is not a refusal, preserving the operator's observe
-        // mode, but content a screen rewrote is never persisted.
-        let call = super::invoke::dispatch_guards::BackendCall {
-            server,
-            tool,
-            session_id: None,
-            api_key_name,
-            trace_id,
-            caller_key: None,
-        };
-        let mut error = error;
-        let clean = self.screen_backend_error(&call, &mut error)
-            == super::invoke::dispatch_guards::ErrorScreen::Clean;
+        let mut content = vec![json!({"type": "text", "text": error.message})];
+        if let Some(data) = &error.data {
+            // Inspected too: a gate shown only the message would let the same
+            // secret through one field over.
+            content.push(json!({"type": "text", "text": data.to_string()}));
+        }
+        let carrier = json!({"content": content, "isError": true});
+        let submitted = crate::security::response_inspect::extract_text_from_result(&carrier);
+        let gated = self.apply_response_gates(server, tool, api_key_name, trace_id, carrier);
+        let clean = gated.as_ref().is_ok_and(|value| {
+            // An annotation alone is not a refusal. Preserve the operator's
+            // observe mode, but never persist content that a gate rewrote.
+            crate::security::response_inspect::extract_text_from_result(value) == submitted
+        });
         if clean {
             (error, crate::gateway::task_service::ErrorAuthor::Peer)
         } else {

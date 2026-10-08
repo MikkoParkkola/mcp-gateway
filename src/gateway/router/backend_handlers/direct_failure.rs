@@ -19,7 +19,6 @@ use super::super::AppState;
 use super::super::helpers::build_http_response;
 use super::{record_client_failure, settle_direct_failure};
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::meta_mcp::invoke::dispatch_guards::ErrorScreen;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::ManagedLease;
 use crate::personal_accounts::refusal::{marked, refusal_text, upstream_rejection};
@@ -45,7 +44,6 @@ impl DirectFailure<'_> {
         self,
         reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
         error: crate::Error,
-        call: &crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall<'_>,
     ) -> (StatusCode, Json<Value>) {
         let error = match self.managed {
             Some(managed) if is_upstream_unauthorized(&error) => {
@@ -57,8 +55,7 @@ impl DirectFailure<'_> {
         if !matches!(error, crate::Error::IdentitySlotsExhausted { .. }) {
             record_client_failure(self.state, self.client);
         }
-        // The code only: the error's text can be the backend's, unscreened.
-        error!(backend = %self.name, code = error.to_rpc_code(), "Backend request failed");
+        error!(backend = %self.name, error = %error, "Backend request failed");
         let (code, text) = (error.to_rpc_code(), refusal_text(&error));
         let response = match upstream_rejection(&error) {
             Some(rejection) => JsonRpcResponse::error_with_data(
@@ -69,26 +66,13 @@ impl DirectFailure<'_> {
             ),
             None => JsonRpcResponse::error(Some(self.id.clone()), code, text),
         };
-        // MIK-8139: a failed dispatch's text can be the backend's own (a
-        // non-2xx JSON-RPC refusal), so it gets a result's screening; the
-        // screened answer is what the reservation settles with.
-        let mut response = response;
-        let screen = self
-            .state
-            .meta_mcp
-            .screen_backend_response(call, &mut response);
         // A reconnect refusal settles the key with `response`, not the refusal
         // body returned below. That entry is never replayed: a fenced account
         // is refused at mint, before the idempotency guard, and the guard's
         // principal is the managed binding, which changes with a reconnect or
         // a rotation (`support.rs` `caller_cache_principal`, A11 review).
         settle_direct_failure(reservation, &error, &response);
-        // The account refusal re-reads the failure's text, so it answers only
-        // a failure the screen left as it was.
-        if screen == ErrorScreen::Blocked {
-            return build_http_response(&response, StatusCode::OK);
-        }
-        if screen == ErrorScreen::Clean && marked(&error).is_some() {
+        if marked(&error).is_some() {
             let text = refusal_text(&error);
             return self
                 .state

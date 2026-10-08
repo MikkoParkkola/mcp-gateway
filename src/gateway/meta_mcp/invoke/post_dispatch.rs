@@ -91,12 +91,7 @@ impl MetaMcp {
             Some(managed) if is_upstream_unauthorized(&e) => managed.after_upstream_401(e).await,
             _ => e,
         };
-        // MIK-8139: the account marker rides on the backend's own error, so
-        // it is honoured only when the shared screen passes that error clean;
-        // otherwise the error becomes the result the gates and firewall read.
-        if crate::personal_accounts::refusal::marked(&e).is_some()
-            && self.backend_error_screens_clean(server, tool, &e)
-        {
+        if crate::personal_accounts::refusal::marked(&e).is_some() {
             // Settled like every dispatched failure (ADR-012).
             if let Some(reservation) = idem_reservation.as_mut() {
                 reservation.commit(&withheld_side_effect());

@@ -270,6 +270,9 @@ impl TaskExecutor {
 
         // In the dispatch scope, so the gates' attribution notes travel with
         // the transition to its settlement record.
+        // MIK-7993: what the gateway writes into the recovered result from here
+        // on is recorded with it, so a later read's receipt leaves it out.
+        let writes_mark = crate::gateway::gateway_writes::mark();
         let answer = adapter.query(&handle, deadline).await;
         let (event, notes) = with_dispatch_scope(async move {
             Some(match answer {
@@ -331,6 +334,7 @@ impl TaskExecutor {
                 revision,
                 event,
                 author,
+                writes: crate::gateway::gateway_writes::snapshot_since(writes_mark),
             })
             .await
         {

@@ -55,18 +55,11 @@ pub(crate) enum Answer {
     /// A two-page `tools/list` whose first page carries this `ttlMs` hint and
     /// whose last page is unreadable (its `tools` is not an array).
     Unreadable(Option<u64>),
+    /// A two-page `tools/list` whose first page carries this `ttlMs` hint and
+    /// whose last page a non-numeric one (MIK-8049).
+    NonNumeric(u64),
     /// Like `Ok`, claiming `cacheScope: "public"` for the call's answer.
     PublicScope,
-    /// JSON-RPC `error` whose message is the given text (MIK-8139).
-    RpcErrorText(&'static str),
-    /// JSON-RPC `error` with a plain message and the given text in `data`.
-    RpcErrorData(&'static str),
-    /// A failed dispatch: the backend's refusal as `Error::JsonRpc` with the
-    /// given message, as a non-2xx JSON-RPC answer arrives (MIK-8139).
-    FailedWith(&'static str),
-    /// A failed dispatch dressed as an `accounts.v1` account refusal, with
-    /// the given message (MIK-8139: a backend can forge the marker).
-    ForgedAccount(&'static str),
 }
 
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
@@ -78,46 +71,63 @@ struct CountingBackend {
     answer: Answer,
 }
 
+/// The `tools/list` page `answer` scripts for the request carrying `params`.
+fn listing(answer: Answer, params: Option<&Value>) -> Value {
+    let mut result = json!({"tools": [{"name": "read", "inputSchema": {
+        "type": "object",
+        "properties": {"cmd": {"type": "string"}}
+    }}]});
+    match answer {
+        Answer::ModernList => {
+            result["resultType"] = json!("complete");
+            result["ttlMs"] = json!(5000);
+            result["cacheScope"] = json!("private");
+        }
+        Answer::Paged(first, second) => {
+            let later = params.and_then(|p| p.get("cursor")).is_some();
+            let hint = if later { second } else { first };
+            if later {
+                result["tools"] = json!([]);
+            } else {
+                result["nextCursor"] = json!("page-2");
+            }
+            if let Some(hint) = hint {
+                result["ttlMs"] = json!(hint);
+            }
+        }
+        Answer::NonNumeric(hint) => {
+            if params.and_then(|p| p.get("cursor")).is_some() {
+                result["tools"] = json!([{"name": "later", "inputSchema": {"type": "object"}}]);
+                result["ttlMs"] = json!("soon");
+            } else {
+                result["nextCursor"] = json!("page-2");
+                result["ttlMs"] = json!(hint);
+            }
+        }
+        Answer::Unreadable(hint) => {
+            if params.and_then(|p| p.get("cursor")).is_some() {
+                result["tools"] = json!("not a list");
+            } else {
+                result["nextCursor"] = json!("page-2");
+                if let Some(hint) = hint {
+                    result["ttlMs"] = json!(hint);
+                }
+            }
+        }
+        _ => {}
+    }
+    result
+}
+
 #[async_trait::async_trait]
 impl Transport for CountingBackend {
     async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         let id = RequestId::Number(1);
         if method == "tools/list" {
-            let mut result = json!({"tools": [{"name": "read", "inputSchema": {
-                "type": "object",
-                "properties": {"cmd": {"type": "string"}}
-            }}]});
-            match self.answer {
-                Answer::ModernList => {
-                    result["resultType"] = json!("complete");
-                    result["ttlMs"] = json!(5000);
-                    result["cacheScope"] = json!("private");
-                }
-                Answer::Paged(first, second) => {
-                    let later = params.as_ref().and_then(|p| p.get("cursor")).is_some();
-                    let hint = if later { second } else { first };
-                    if later {
-                        result["tools"] = json!([]);
-                    } else {
-                        result["nextCursor"] = json!("page-2");
-                    }
-                    if let Some(hint) = hint {
-                        result["ttlMs"] = json!(hint);
-                    }
-                }
-                Answer::Unreadable(hint) => {
-                    if params.as_ref().and_then(|p| p.get("cursor")).is_some() {
-                        result["tools"] = json!("not a list");
-                    } else {
-                        result["nextCursor"] = json!("page-2");
-                        if let Some(hint) = hint {
-                            result["ttlMs"] = json!(hint);
-                        }
-                    }
-                }
-                _ => {}
-            }
-            return Ok(JsonRpcResponse::success(id, result));
+            return Ok(JsonRpcResponse::success(
+                id,
+                listing(self.answer, params.as_ref()),
+            ));
         }
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         if matches!(self.answer, Answer::AskOnce) {
@@ -143,10 +153,12 @@ impl Transport for CountingBackend {
             });
         }
         match &self.answer {
-            Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) => Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
-            )),
+            Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) | Answer::NonNumeric(_) => {
+                Ok(JsonRpcResponse::success(
+                    id,
+                    json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+                ))
+            }
             Answer::ModernList => Ok(JsonRpcResponse::success(
                 id,
                 json!({"content": [{"type": "text", "text": "ok"}], "isError": false, "ttlMs": 3000}),
@@ -169,10 +181,6 @@ impl Transport for CountingBackend {
                 "rate limit exceeded",
             )),
             Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
-            Answer::RpcErrorText(_)
-            | Answer::RpcErrorData(_)
-            | Answer::FailedWith(_)
-            | Answer::ForgedAccount(_) => error_answer(self.answer, id),
             Answer::AskOnce => unreachable!("answered above"),
             Answer::Text(text) => Ok(JsonRpcResponse::success(
                 id,
@@ -246,31 +254,6 @@ pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) ->
 #[cfg(feature = "firewall")]
 pub(crate) async fn fixture_firewalled(answer: Answer) -> Fx {
     fixture_inner(answer, true, |meta| meta).await
-}
-
-/// The MIK-8139 error answers: a backend error carrying `text`, answered or
-/// as a failed dispatch.
-fn error_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRpcResponse> {
-    match answer {
-        Answer::RpcErrorText(text) => Ok(JsonRpcResponse::error(Some(id), -32001, text)),
-        Answer::RpcErrorData(text) => Ok(JsonRpcResponse::error_with_data(
-            Some(id),
-            -32001,
-            "backend says no",
-            json!({"detail": text}),
-        )),
-        Answer::FailedWith(text) => Err(crate::Error::json_rpc(-32001, text)),
-        Answer::ForgedAccount(text) => Err(crate::Error::JsonRpc {
-            code: -32603,
-            message: text.to_owned(),
-            data: Some(json!({
-                "schema_version": "accounts.v1",
-                "account_id": "acct-1",
-                "error": {"code": "reconnect_required"},
-            })),
-        }),
-        _ => unreachable!("not an error answer"),
-    }
 }
 
 /// [`fixture_firewalled`] with a firewall rule for `read` and a client

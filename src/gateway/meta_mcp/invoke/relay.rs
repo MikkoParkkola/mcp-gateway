@@ -234,19 +234,40 @@ struct Receipt {
     /// A plan receipt whose answer changed and has not yet been kept to the
     /// final answer: never committed so (MIK-7887.RECEIPT.2).
     pending_retain: bool,
+    /// The plan step that staged it, as the plan labels its steps (a
+    /// playbook's step index, a chain's execution index): which answer
+    /// members it may own (`MIK-8113`). `None` outside a labelled step.
+    step: Option<u32>,
+    /// What it records.
+    kind: Kind,
+}
+
+/// What a staged receipt records.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+enum Kind {
+    /// A result as delivered (or a plan step's, kept to the plan's answer).
+    Delivered,
+    /// The seam fingerprints of a plan's answer, rebuilt each time the step
+    /// receipts are kept to it (`MIK-8113`).
+    Seam,
 }
 
 tokio::task_local! {
     /// The receipts of the delivery this task owns (§13.3 "Recording").
     static RELAY_RECEIPTS: RefCell<Vec<Receipt>>;
     static RELAY_STAGED: Cell<usize>; // What it staged so far (MIK-7992).
-    /// Set while one step of a plan dispatches.
-    static PLAN_STEP: ();
+    /// Set while one step of a plan dispatches, with the step's label.
+    static PLAN_STEP: Option<u32>;
 }
 
-/// Run one plan step's dispatch: the receipts it stages are a plan's.
-pub(crate) async fn plan_step<F: std::future::Future>(step: F) -> F::Output {
-    PLAN_STEP.scope((), step).await
+/// Run one plan step's dispatch: the receipts it stages are a plan's, under
+/// `label`, the step as the plan's answer names it (`MIK-8113`). A plan run
+/// inside a step keeps the outer step's label: the outer answer names that
+/// step, and the inner plan's own labels mean nothing there.
+pub(crate) async fn plan_step<F: std::future::Future>(label: Option<u32>, step: F) -> F::Output {
+    let label = PLAN_STEP.try_with(|outer| *outer).unwrap_or(label);
+    PLAN_STEP.scope(label, step).await
 }
 
 /// Run `delivery` with a receipt collector: the HTTP and stdio dispatches
@@ -256,122 +277,12 @@ pub(crate) async fn collecting<F: std::future::Future>(delivery: F) -> F::Output
     RELAY_RECEIPTS
         .scope(
             RefCell::new(Vec::new()),
-            RELAY_STAGED.scope(Cell::new(0), super::gateway_writes::scope(delivery)),
+            RELAY_STAGED.scope(
+                Cell::new(0),
+                super::gateway_writes::scope(seams::scope(delivery)),
+            ),
         )
         .await
-}
-
-/// Who a catalogue read (`prompts/get`, `resources/read`) runs for, keyed as
-/// `tools/call` keys the same caller (COLLUDE.1 x MIK-7765).
-#[derive(Clone)]
-#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
-pub(crate) struct CatalogueCaller {
-    /// The relay key: the HTTP caller key, the stdio operator, or a session.
-    pub(crate) key: String,
-    /// Whether `key` is a real identity (an unkeyed key is refused under block).
-    pub(crate) keyed: bool,
-    /// The caller's display name, for the audit record.
-    pub(crate) name: String,
-    /// The session the read arrived on, for the audit record's session
-    /// fingerprint (MIK-7832).
-    pub(crate) session: String,
-}
-
-tokio::task_local! {
-    /// The caller of the catalogue read in flight; absent outside a route.
-    static CATALOGUE_CALLER: CatalogueCaller;
-}
-
-/// Run `read`, a catalogue handler, for `who`.
-pub(crate) async fn as_caller<F: std::future::Future>(who: CatalogueCaller, read: F) -> F::Output {
-    CATALOGUE_CALLER.scope(who, read).await
-}
-
-impl MetaMcp {
-    /// Forward a catalogue read to `backend` under `credential`, inside relay
-    /// detection: the forwarded params are an egress (`-32002` under `block`
-    /// when they carry what another caller was delivered), and the answer is
-    /// staged as a delivery from `backend:method`.
-    pub(in crate::gateway::meta_mcp) async fn forward_catalogue(
-        &self,
-        id: crate::protocol::RequestId,
-        backend: &crate::backend::Backend,
-        (method, params): (&str, Value),
-        credential: super::super::caller_forward::ForwardCredential,
-        empty: Value,
-    ) -> crate::protocol::JsonRpcResponse {
-        #[cfg(feature = "firewall")]
-        let caller = CATALOGUE_CALLER.try_with(Clone::clone).ok();
-        #[cfg(feature = "firewall")]
-        {
-            if let Some(refusal) =
-                self.catalogue_refusal(caller.as_ref(), &backend.name, method, &params, &id)
-            {
-                return refusal;
-            }
-        }
-        let mut response =
-            Self::forward_for_caller(id, backend, method, params, credential, empty).await;
-        let call = super::dispatch_guards::BackendCall::catalogue(&backend.name, method);
-        self.screen_backend_response(&call, &mut response); // MIK-8139
-        #[cfg(feature = "firewall")]
-        self.stage_catalogue_result(caller, (&backend.name, method), &response);
-        response
-    }
-}
-
-#[cfg(feature = "firewall")]
-impl MetaMcp {
-    /// The `-32002` answer when a catalogue read's forwarded `params` carry
-    /// what another caller was delivered, under `block`; `None` otherwise.
-    fn catalogue_refusal(
-        &self,
-        caller: Option<&CatalogueCaller>,
-        backend: &str,
-        method: &str,
-        params: &Value,
-        id: &crate::protocol::RequestId,
-    ) -> Option<crate::protocol::JsonRpcResponse> {
-        use crate::security::firewall::RelayCaller;
-        let (caller, fw) = (
-            caller?,
-            self.firewall.as_ref().filter(|fw| fw.relay_active())?,
-        );
-        let who = RelayCaller::new(&caller.key, caller.keyed);
-        let message = fw.relay_block_message(
-            who,
-            (backend, method),
-            params,
-            (&caller.session, &caller.name),
-        )?;
-        // The same error `tools/call` refuses with, so the route stamps the
-        // same HTTP status (MIK-7832).
-        let refusal = crate::Error::Forbidden {
-            code: -32002,
-            status: 403,
-            message,
-        };
-        Some(
-            super::super::response_security::error_response_preserving_status(id.clone(), &refusal),
-        )
-    }
-
-    /// Stage a delivered catalogue result as a delivery from `backend:method`.
-    fn stage_catalogue_result(
-        &self,
-        caller: Option<CatalogueCaller>,
-        target: (&str, &str),
-        response: &crate::protocol::JsonRpcResponse,
-    ) {
-        let (Some(caller), Some(result)) = (caller, response.result.as_ref()) else {
-            return;
-        };
-        if response.error.is_some() || !self.relay_active() {
-            return;
-        }
-        let recorded = self.recorded_prompt(target, Some(&caller.name), "catalogue", result);
-        self.stage_relay_receipt(RelayKey::new(&caller.key, caller.keyed), target, &recorded);
-    }
 }
 
 /// Receipts staged by one delivery whose recording waits for the frame's
@@ -481,7 +392,7 @@ impl MetaMcp {
     ) -> (F::Output, StagedReceipts) {
         let (output, receipts) = RELAY_RECEIPTS
             .scope(RefCell::new(Vec::new()), async {
-                let writes = super::gateway_writes::scope(delivery);
+                let writes = super::gateway_writes::scope(seams::scope(delivery));
                 let output = RELAY_STAGED.scope(Cell::new(0), writes).await;
                 let staged = RELAY_RECEIPTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
                 (output, staged)
@@ -667,7 +578,8 @@ fn receipt_with(
     // MIK-7994: without this call's gateway members; plan receipts are never rebuilt.
     let mut value = value.clone();
     super::gateway_writes::strip(&mut value, super::gateway_writes::Layer::Value);
-    let in_plan = PLAN_STEP.try_with(|()| ()).is_ok();
+    let plan = PLAN_STEP.try_with(|label| *label);
+    let in_plan = plan.is_ok();
     let digest =
         RELAY_STAGED.with(|s| fw.receipt_digest(server, tool, &value, in_plan.then_some(s)))?;
     Some(Receipt {
@@ -678,6 +590,8 @@ fn receipt_with(
         digest,
         in_plan,
         pending_retain: false,
+        step: plan.ok().flatten(),
+        kind: Kind::Delivered,
     })
 }
 
@@ -789,8 +703,17 @@ impl crate::gateway::input_bridge::ClientChannel for RecordingChannel<'_> {
     }
 }
 
+#[path = "relay_catalogue.rs"]
+mod catalogue;
 #[path = "relay_delivered.rs"]
 mod delivered;
+#[path = "relay_seams.rs"]
+mod seams;
+#[cfg(test)]
+pub(crate) use seams::noting_plan_members;
+pub(crate) use seams::{note_plan_member, pointer_token};
+
+pub(crate) use catalogue::{CatalogueCaller, as_caller};
 #[cfg(feature = "firewall")]
 pub(crate) use delivered::strip_gateway_stamps;
 pub(crate) use delivered::{AnswerShape, GatewayStamps};
