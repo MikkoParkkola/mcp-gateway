@@ -13,6 +13,7 @@ use std::path::Path;
 use figment::providers::{Format as _, Yaml};
 use figment::value::{Dict, Value};
 
+use super::super::regular_file::read_regular_text;
 use super::CheckResult;
 
 /// Hidden config keys in inventory form: `<name>` matches any map key and a
@@ -175,45 +176,16 @@ fn is_set(map: &Dict, path: &[&str]) -> bool {
 
 /// Read the config file for its key names, never its values.
 ///
-/// `Config::load` has already read this path through the mode-checked reader.
-/// This second read opens the way that reader does, so it reads the same file:
-/// on Unix with `O_NONBLOCK | O_NOCTTY`, following a symlink (a Kubernetes
-/// `ConfigMap` mount is one), and it refuses anything the opened handle does
-/// not report as a regular file, so a FIFO is refused without blocking. Like
-/// that reader, it sets no size limit on a config file. A regular file swapped
-/// in since the first read can still be read; only its key names are
-/// reported. Every error is dropped unformatted, because a parser message can
-/// quote a line.
+/// `Config::load` has already read this path through the mode-checked reader;
+/// this second read opens it the same way (see `read_regular_text`), so a
+/// FIFO or device is refused without blocking. A regular file swapped in since
+/// the first read can still be read; only its key names are reported. Every
+/// error is dropped unformatted, because a parser message can quote a line.
 fn read_key_names(path: &Path) -> Option<(String, Dict)> {
-    use std::io::Read as _;
-
-    let mut file = open_nonblocking(path).ok()?;
-    if !file.metadata().ok()?.is_file() {
-        return None;
-    }
-    let mut text = String::new();
-    file.read_to_string(&mut text).ok()?;
+    let text = read_regular_text(path).ok()?;
     // The loader's own reader: two equal keys keep the last, as the gateway does.
     let dict = Yaml::from_str::<Dict>(&text).ok()?;
     Some((text, dict))
-}
-
-#[cfg(unix)]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(
-            (rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY)
-                .bits()
-                .cast_signed(),
-        )
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(path)
 }
 
 /// The `doctor` row listing the advanced keys the config file at `path` sets.

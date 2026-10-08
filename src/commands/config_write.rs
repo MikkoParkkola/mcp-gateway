@@ -81,7 +81,7 @@ pub(crate) enum RewriteMode {
 /// `url`, saving only when a line changed and `mode` applies. The error is a
 /// message ready to print.
 pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<UrlRewrite, String> {
-    let text = std::fs::read_to_string(path)
+    let text = super::regular_file::read_regular_text(path)
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
     let rewrite = rewrite_url_aliases(&text, None);
     if mode == RewriteMode::Apply && !rewrite.changed.is_empty() {

@@ -27,6 +27,7 @@ mod kubernetes;
 pub mod paths;
 mod protocol_import;
 mod ranking;
+mod regular_file;
 mod setup;
 mod skills;
 mod stats;
