@@ -177,7 +177,11 @@ impl Store {
         record: OutboxRecord,
         caps: OutboxCaps,
     ) -> std::io::Result<Enqueued> {
-        if !state.subs.contains_key(&record.subscription_id) {
+        // A held subscription takes no record: what it filters on or relies
+        // on is not served now (MIK-8057, MIK-8076).
+        if !state.subs.contains_key(&record.subscription_id)
+            || state.held.contains_key(&record.subscription_id)
+        {
             return Ok(Enqueued::NoSubscription);
         }
         // The same occurrence offered twice keeps the record already

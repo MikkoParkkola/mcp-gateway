@@ -62,6 +62,22 @@ pub(crate) fn is_dead_reason(reason: &str) -> bool {
 }
 
 impl EventsHub {
+    /// The held webhook subscriptions per type (MIK-8057): how many, and the
+    /// earliest and latest end among them. No subscriber, URL or secret.
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "served by the web UI router")
+    )]
+    pub(crate) fn list_held(&self) -> Vec<Value> {
+        self.store
+            .held_listing()
+            .into_iter()
+            .map(|(name, count, earliest, latest)| {
+                json!({ "type": name, "count": count, "earliestEnd": earliest, "latestEnd": latest })
+            })
+            .collect()
+    }
+
     /// The dead letters as the admin listing shows them: ids, reasons, times
     /// and sizes, never a body, a secret or a callback URL.
     pub(crate) fn list_dead_letters(

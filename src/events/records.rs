@@ -57,6 +57,18 @@ pub(crate) struct Subscription {
     pub failed_since: Option<DateTime<Utc>>,
     pub last_delivery_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+    /// The top-level payload fields its event carried when it was last
+    /// committed: a restored route without one of them holds it (MIK-8076).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub payload_fields: Vec<String>,
+    /// When the routes stopped offering or serving it (MIK-8057, MIK-8076);
+    /// cleared when they serve it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unoffered_since: Option<DateTime<Utc>>,
+    /// The latest a held row lives: `unoffered_since` plus the maximum
+    /// lease, whatever its refreshes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_until: Option<DateTime<Utc>>,
 }
 
 /// The credential a caller presented, as events keep it: never the secret.
@@ -171,9 +183,9 @@ impl std::fmt::Debug for Subscription {
 }
 
 impl Subscription {
-    /// Live at `now`: not past its expiry.
+    /// Live at `now`: not past its expiry, nor past the bound of a hold.
     pub(crate) fn live(&self, now: DateTime<Utc>) -> bool {
-        self.expires_at.is_none_or(|at| at > now)
+        self.expires_at.is_none_or(|at| at > now) && self.held_until.is_none_or(|at| at > now)
     }
 }
 

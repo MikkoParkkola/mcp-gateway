@@ -17,8 +17,11 @@ use super::records::{
     write_record,
 };
 
+#[path = "store_hold.rs"]
+mod hold;
 #[path = "store_pending.rs"]
 mod pending;
+pub(crate) use hold::{Held, Judged};
 pub(crate) use pending::{Claim, Claimed, Revived, Settle};
 
 /// Bounds on verification records whose last subscription has ended.
@@ -90,6 +93,10 @@ struct State {
     outbox: HashMap<String, OutboxRecord>,
     /// Dead letters with their file size, keyed by event id.
     dead: HashMap<String, (DeadLetter, u64)>,
+    /// Webhook subscriptions the routes do not offer or serve now, and why
+    /// (MIK-8057, MIK-8076): they take no record. Recomputed by every route
+    /// refresh, never persisted.
+    held: HashMap<String, Held>,
 }
 
 /// Per-pair facts over every subscription, built in one pass so tail

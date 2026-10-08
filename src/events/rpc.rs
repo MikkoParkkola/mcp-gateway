@@ -433,6 +433,9 @@ impl EventsHub {
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        if let Some(answer) = self.refresh_held(caller, &principal, name, &params).await? {
+            return Ok(answer);
+        }
         let descriptor = self.visible(caller, name)?;
         let delivery = &params["delivery"];
         match delivery.get("mode") {
@@ -462,7 +465,7 @@ impl EventsHub {
         if self.store.get(&id).as_ref().is_none_or(|s| !s.live(now)) {
             self.store
                 .would_admit(&principal, caps, now)
-                .map_err(cap_refusal)?;
+                .map_err(|hit| self.cap_refusal_for(&principal, hit))?;
         }
 
         // After the cheap refusals and before any callback traffic, since it
@@ -504,11 +507,14 @@ impl EventsHub {
             failed_since: None,
             last_delivery_at: None,
             last_error: None,
+            payload_fields: self.payload_fields(&descriptor.name),
+            unoffered_since: None,
+            held_until: None,
         };
         // At most two passes: a cached opt-in can vanish (tail eviction)
         // between the read above and the commit; the store then refuses
         // and the callback is challenged before a second commit.
-        let (policy, by) = ((caps, grace, tail), (caller, &url));
+        let (policy, by) = ((caps, grace, tail), (caller, &url, Commit::Checked));
         for _pass in 0..2 {
             if !verified {
                 self.challenge(caller, &descriptor.name, &url, &id, &key)
@@ -531,7 +537,7 @@ impl EventsHub {
                     ));
                 }
                 Err(CapHit::Unverified) if verified => verified = false,
-                Err(hit) => return Err(cap_refusal(hit)),
+                Err(hit) => return Err(self.cap_refusal_for(&record.principal, hit)),
             }
         }
         Err(RpcError::internal())
@@ -549,7 +555,7 @@ impl EventsHub {
         fresh: bool,
         policy: (Caps, chrono::Duration, super::store::TailPolicy),
         now: DateTime<Utc>,
-        (caller, url): (&Caller, &url::Url),
+        (caller, url, commit): (&Caller, &url::Url, Commit),
     ) -> Result<Result<super::store::Admitted, CapHit>, RpcError> {
         let attempt = record.clone();
         let mut started = self.lifecycle.lock().await;
@@ -570,7 +576,9 @@ impl EventsHub {
             // subscription is stored that its route can no longer serve
             // (MIK-8038).
             let _gate = hub.catalogue_lock();
-            if let Err(refused) = hub.still_admits(&attempt) {
+            if commit == Commit::Checked
+                && let Err(refused) = hub.still_admits(&attempt)
+            {
                 return Ok(Err(refused));
             }
             #[cfg(test)]
@@ -710,6 +718,10 @@ impl EventsHub {
         }
     }
 }
+
+#[path = "rpc_held.rs"]
+mod held;
+use held::Commit;
 
 #[cfg(test)]
 #[path = "rpc_tests.rs"]

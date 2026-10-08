@@ -182,6 +182,9 @@ fn queued_with(
         failed_since: None,
         last_delivery_at: None,
         last_error: None,
+        payload_fields: Vec::new(),
+        unoffered_since: None,
+        held_until: None,
     };
     let tail = TailPolicy {
         ttl: Duration::from_secs(3600),
