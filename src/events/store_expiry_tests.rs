@@ -167,7 +167,8 @@ fn an_unsubscribe_still_drops_a_replayed_record() {
 
 /// L16: the worker buries and removes an expired row before any synchronous
 /// sweep. The verification tail starts at the row's expiry, not at the
-/// removal: an hour after the expiry it has run out.
+/// removal or the opt-in: it still holds just under an hour after the
+/// expiry, and an hour after the expiry it has run out.
 #[test]
 fn a_row_removed_by_the_worker_stamps_its_tail_at_expiry() {
     let dir = tempfile::tempdir().expect("dir");
@@ -182,6 +183,11 @@ fn a_row_removed_by_the_worker_stamps_its_tail_at_expiry() {
     let removal = expiry + chrono::Duration::minutes(50);
     store.due(removal, &HashSet::new()).expect("io");
     assert!(store.get("s1").is_none(), "the worker removed the row");
+    let within = expiry + chrono::Duration::minutes(55);
+    assert!(
+        store.is_verified("p", "https://h/s1", within, TAIL),
+        "the tail began at expiry, not at the opt-in"
+    );
     let after = expiry + chrono::Duration::minutes(61);
     assert!(
         !store.is_verified("p", "https://h/s1", after, TAIL),
