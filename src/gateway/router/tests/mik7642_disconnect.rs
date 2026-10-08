@@ -13,7 +13,7 @@ use axum::response::IntoResponse as _;
 use serde_json::{Value, json};
 
 use crate::backend::Backend;
-use crate::config::{AuthConfig, BackendConfig, FailsafeConfig};
+use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
 use crate::transport::HttpTransport;
 
 /// Every message the backend received, in arrival order.
@@ -59,10 +59,31 @@ fn of_method(seen: &Seen, method: &str) -> Vec<Value> {
         .collect()
 }
 
+/// Auth on with one shared key for every backend, as the direct route is
+/// served in practice: a request it refuses would answer at once.
+fn auth() -> AuthConfig {
+    AuthConfig {
+        enabled: true,
+        api_keys: vec![ApiKeyConfig {
+            key: None,
+            key_sha256: Some(crate::config::api_key_digest_spec(b"k")),
+            expires_at: None,
+            name: "c2-client".to_string(),
+            rate_limit: 0,
+            backends: vec!["*".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            kind: crate::config::ApiKeyKind::Shared,
+        }],
+        ..AuthConfig::default()
+    }
+}
+
 #[tokio::test]
 async fn a_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() {
     let (backend_url, seen) = slow_backend().await;
-    let (state, _store) = super::test_router_app_state_with_auth(&AuthConfig::default()).await;
+    let (state, _store) = super::test_router_app_state_with_auth(&auth()).await;
     let backend = Arc::new(Backend::new(
         "svc",
         BackendConfig::default(),
@@ -92,20 +113,31 @@ async fn a_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() {
         "jsonrpc": "2.0", "id": "client-7", "method": "tools/call",
         "params": {"name": "act", "arguments": {}},
     });
-    // Dropping the send closes the connection while the backend still works.
-    let dropped = tokio::time::timeout(
-        Duration::from_millis(1500),
-        client
+    // Dropping the exchange closes the connection while the backend still
+    // works. The body is read inside the timeout, so headers alone don't end it.
+    let exchange = async {
+        let response = client
             .post(format!("http://{gateway}/mcp/svc"))
+            .header("authorization", "Bearer k")
             .header("content-type", "application/json")
             .header("accept", "application/json, text/event-stream")
             .body(call.to_string())
-            .send(),
-    )
-    .await;
-    assert!(dropped.is_err(), "precondition: the call was still running");
+            .send()
+            .await?;
+        let status = response.status();
+        Ok::<_, reqwest::Error>((status, response.text().await?))
+    };
+    if let Ok(answered) = tokio::time::timeout(Duration::from_millis(1500), exchange).await {
+        let seen = seen.lock().unwrap().clone();
+        panic!("precondition: the call was still running; got {answered:?}, backend saw {seen:?}");
+    }
     let calls = of_method(&seen, "tools/call");
-    assert_eq!(calls.len(), 1, "precondition: the backend got the call");
+    assert_eq!(
+        calls.len(),
+        1,
+        "precondition: the backend got the call: {:?}",
+        seen.lock().unwrap()
+    );
 
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let cancels = of_method(&seen, "notifications/cancelled");
