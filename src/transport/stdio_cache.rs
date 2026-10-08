@@ -26,32 +26,61 @@ pub fn isolated_package_manager_env<S: std::hash::BuildHasher>(
     command: &str,
     mut backend_env: HashMap<String, String, S>,
 ) -> HashMap<String, String, S> {
-    // Decided on the operator's own environment, before anything is added.
-    let unclaimed: Vec<&str> = cache_vars_for(command)
-        .iter()
-        .copied()
-        .filter(|var| !operator_names(&backend_env, var))
-        .collect();
-    if unclaimed.is_empty() {
-        return backend_env;
-    }
-    let Some(dir) = usable_cache_dir(backend_name) else {
-        warn!(
-            backend = backend_name,
-            "package cache path is not one a package manager can use as written \
-             (not UTF-8, relative, holding `..`, or holding `${{`); the backend keeps its runner's default cache"
-        );
-        return backend_env;
+    let (vars, dir) = match assignment(backend_name, command, &backend_env) {
+        Assignment::None => return backend_env,
+        Assignment::Unusable => {
+            warn!(
+                backend = backend_name,
+                "package cache path is not one a package manager can use as written \
+                 (not UTF-8, relative, holding `..`, or holding `${{`); the backend keeps its runner's default cache"
+            );
+            return backend_env;
+        }
+        Assignment::To { vars, dir } => (vars, dir),
     };
-    let berry = unclaimed.contains(&"YARN_CACHE_FOLDER")
-        && !operator_names(&backend_env, BERRY_GLOBAL_CACHE);
-    for var in unclaimed {
+    // Decided on the operator's own environment, before anything is added.
+    let berry =
+        vars.contains(&"YARN_CACHE_FOLDER") && !operator_names(&backend_env, BERRY_GLOBAL_CACHE);
+    for var in vars {
         backend_env.insert(var.to_owned(), dir.clone());
     }
     if berry {
         backend_env.insert(BERRY_GLOBAL_CACHE.to_owned(), "false".to_owned());
     }
     backend_env
+}
+
+/// What the gateway assigns one backend: the one decision the environment
+/// writer and the repair both read, so they cannot disagree.
+enum Assignment {
+    /// The runner reads no cache variable, or the operator set every one.
+    None,
+    /// Variables are left to the gateway, but no runner could use its path.
+    Unusable,
+    /// These variables, each set to this directory.
+    To {
+        vars: Vec<&'static str>,
+        dir: String,
+    },
+}
+
+fn assignment<S: std::hash::BuildHasher>(
+    backend_name: &str,
+    command: &str,
+    backend_env: &HashMap<String, String, S>,
+) -> Assignment {
+    let vars: Vec<&'static str> = cache_vars_for(command)
+        .iter()
+        .copied()
+        .filter(|var| !operator_names(backend_env, var))
+        .collect();
+    if vars.is_empty() {
+        return Assignment::None;
+    }
+    match usable_cache_dir(backend_name) {
+        Some(dir) => Assignment::To { vars, dir },
+        None => Assignment::Unusable,
+    }
 }
 
 /// The cache directory the gateway assigns to a backend, or `None` when it
@@ -74,10 +103,10 @@ pub(crate) fn assigned_package_cache_dir<S: std::hash::BuildHasher>(
     command: &str,
     backend_env: &HashMap<String, String, S>,
 ) -> Option<PathBuf> {
-    if !cache_vars_for(command).contains(&CACHE_ENV) || operator_names(backend_env, CACHE_ENV) {
-        return None;
+    match assignment(backend_name, command, backend_env) {
+        Assignment::To { vars, dir } if vars.contains(&CACHE_ENV) => Some(PathBuf::from(dir)),
+        _ => None,
     }
-    usable_cache_dir(backend_name).map(PathBuf::from)
 }
 
 /// The backend's cache directory as a runner will read it, or `None` when no

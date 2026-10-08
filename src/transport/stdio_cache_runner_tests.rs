@@ -280,19 +280,21 @@ fn relative_config_dir_scenario() {
         .expect("the scenario's working directory")
         .join("relative-state")
         .join("pkg-cache");
+    // The one directory every runner is handed: the path the repair records.
+    let exact = assigned_package_cache_dir("thing", "npx -y pkg", &HashMap::new())
+        .expect("npm's cache is recorded for repair");
+    assert!(
+        exact.is_absolute() && exact.parent() == Some(root.as_path()),
+        "the recorded cache {exact:?} is not an absolute directory in {root:?}"
+    );
     for (command, vars) in RUNNERS {
         let env = isolated_package_manager_env("thing", command, HashMap::new());
         for var in vars {
-            let value = std::path::Path::new(&env[*var]);
-            assert!(
-                value.is_absolute() && value.starts_with(&root),
-                "{command}: {var}={value:?} is not an absolute path under {root:?}"
+            assert_eq!(
+                std::path::Path::new(&env[*var]),
+                exact,
+                "{command}: {var} is not the recorded cache"
             );
-        }
-        if vars.contains(&"npm_config_cache") {
-            let recorded = assigned_package_cache_dir("thing", command, &HashMap::new())
-                .expect("npm's cache is recorded for repair");
-            assert_eq!(recorded.as_os_str(), env["npm_config_cache"].as_str());
         }
     }
 }
