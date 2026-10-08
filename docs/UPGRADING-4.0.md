@@ -4271,8 +4271,9 @@ offers.
 
 `mcp_gateway::a2a` was a public module in 3.x and is now crate-private. A program that used it to
 send messages to an agent can configure the agent as a backend, as above. A program that also
-polled or cancelled tasks itself (`get_task`, `cancel_task`) needs its own A2A client: the backend
-answers each `send_message` call with the task's final result.
+polled or cancelled tasks itself (`get_task`, `cancel_task`), or continued a conversation by its
+`context_id`, needs its own A2A client: each `send_message` call to the backend starts a new
+conversation with the agent and answers with the task's final result.
 
 ## Upgrading from 3.5.x: a walkthrough
 

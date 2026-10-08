@@ -79,6 +79,46 @@ fn a_0_3_card_is_refused_naming_its_top_level_version() {
     assert!(error.contains("offered: [JSONRPC 0.3.0]"), "{error}");
 }
 
+/// A 0.3 card's binding defaults to JSON-RPC, and an explicit one is named.
+#[test]
+fn a_0_3_card_names_its_default_or_stated_binding() {
+    for (fields, offered) in [
+        (json!({}), "offered: [JSONRPC 0.3.0]"),
+        (
+            json!({"preferredTransport": "GRPC"}),
+            "offered: [GRPC 0.3.0]",
+        ),
+    ] {
+        let mut value = json!({"name": "legacy", "protocolVersion": "0.3.0"});
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let card: AgentCard = serde_json::from_value(value).unwrap();
+        let error = client("https://agent.invalid")
+            .endpoint(&card)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(offered), "{error}");
+    }
+}
+
+/// Top-level 0.3 fields never outvote a JSON-RPC 1.x interface on the card.
+#[test]
+fn a_card_with_legacy_fields_and_a_1_x_interface_still_chooses_it() {
+    let card: AgentCard = serde_json::from_value(json!({
+        "name": "both",
+        "protocolVersion": "0.3.0",
+        "preferredTransport": "JSONRPC",
+        "supportedInterfaces": [
+            {"url": "https://agent.invalid/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
+        ]
+    }))
+    .unwrap();
+    let chosen = client("https://agent.invalid").endpoint(&card).unwrap();
+    assert_eq!(chosen.url, "https://agent.invalid/a2a");
+}
+
 #[test]
 fn a_card_path_must_be_a_path() {
     for path in ["card.json", "https://elsewhere.invalid/card.json"] {
