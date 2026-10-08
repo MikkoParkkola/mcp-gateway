@@ -631,3 +631,27 @@ async fn a_repair_read_after_shutdown_imports_nothing() {
         "a re-read after shutdown published the repaired key"
     );
 }
+
+/// A directory swapped in under the store's name never answers for the
+/// opened one, even holding a readable copy of a sealed row: the row the
+/// store sealed may still be damaged where the old directory went.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_replacement_directory_with_a_readable_copy_keeps_the_seal() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let (path, rows, _admission, service) = sealed_service(dir.path(), &["k-swap"]).await;
+    std::fs::rename(&path, dir.path().join("moved")).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let (id, original) = &rows[0];
+    let copy = path.join(format!("{id}.json"));
+    std::fs::write(&copy, original).unwrap();
+    std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o600)).unwrap();
+    service.reread_sealed().await;
+    assert_eq!(
+        service.skipped_records().sealed,
+        1,
+        "a replacement directory's copy lifted the seal"
+    );
+}
