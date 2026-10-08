@@ -157,3 +157,102 @@ async fn t02_a_re_added_backend_is_listened_to_at_once() {
         "listened to within a second of the re-add"
     );
 }
+
+/// T13 (MIK-8180 INELIG.1, design r3 D3, finding #4): a backend that turns
+/// ineligible while no listener task runs for it loses its three
+/// upstream-kind rows at the announce; `tools_changed` stays.
+#[tokio::test(start_paused = true)]
+async fn t13_an_ineligible_backend_with_no_task_loses_its_upstream_rows() {
+    let (hub, _dir) = hub();
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let refused = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&refused);
+    let ineligible: backend_source::Ineligible = Arc::new(move || {
+        if flag.load(std::sync::atomic::Ordering::SeqCst) {
+            std::iter::once("b".to_owned()).collect()
+        } else {
+            std::collections::BTreeSet::new()
+        }
+    });
+    hub.install_backend_source_with_upstream(
+        Arc::new(|| vec!["b".to_owned()]),
+        Arc::clone(&registry),
+        ineligible,
+    );
+    for kind in KINDS {
+        admit_on(&hub, "b", kind);
+    }
+    // No listener task: the rows were stored while b was unregistered.
+    assert!(registry.register(silent_backend()));
+    refused.store(true, std::sync::atomic::Ordering::SeqCst);
+    hub.backend_tools_changed("b");
+    tokio::task::yield_now().await;
+    let mut left: Vec<String> = hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        vec!["backend.b.tools_changed".to_owned()],
+        "upstream kinds withdrawn, tools_changed kept"
+    );
+}
+
+/// T07 (MIK-8178 WRECHECK.1, design r3 G3, finding #2): a withdraw deletes
+/// only the rows it judged. A client that unsubscribes and subscribes again
+/// meanwhile (the same id, a new row) keeps its new subscription.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn t07_a_row_re_made_during_a_withdraw_survives() {
+    let (hub, _dir) = hub();
+    hub.install_backend_source(Arc::new(|| vec!["x".to_owned()]));
+    admit_kind(&hub, "tools_changed");
+    let (reached, release) = hub.before_withdraw.arm();
+    let pass = tokio::task::spawn_blocking({
+        let hub = Arc::clone(&hub);
+        move || hub.withdraw(&["backend.x.tools_changed".to_owned()])
+    });
+    crate::test_pause::within("the withdraw judging", reached.notified()).await;
+    let tail = tail_policy(&hub.config);
+    hub.store
+        .remove("sub_x_tools_changed", chrono::Utc::now(), tail)
+        .expect("unsubscribed");
+    admit_kind(&hub, "tools_changed");
+    release.notify_one();
+    crate::test_pause::within("the withdraw", pass)
+        .await
+        .expect("join");
+    assert_eq!(
+        hub.store.subscriptions().len(),
+        1,
+        "the re-made row survives the stale withdraw"
+    );
+}
+
+/// T09 PIN (MIK-8179 STARTED.2, design r3 L1, findings #5/#6): at startup a
+/// row of a backend absent from the configuration starts no key and no
+/// listener, before or after the startup reconcile withdraws it. Holds on
+/// base because an absent backend's names are not offered; R1 moves replay
+/// after the reconcile and must keep it so.
+#[tokio::test(start_paused = true)]
+async fn t09_an_absent_backends_row_never_starts_at_startup() {
+    let (hub, _dir) = hub();
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let none: backend_source::Ineligible = Arc::new(std::collections::BTreeSet::new);
+    hub.install_backend_source_with_upstream(Arc::new(Vec::new), registry, none);
+    admit_on(&hub, "x", "resources_changed");
+    hub.replay_starts().await;
+    assert!(
+        hub.reconcile_catalogue(fanout::CatalogueScan::Complete),
+        "startup reconcile done"
+    );
+    tokio::task::yield_now().await;
+    let source = hub
+        .source(types::SourceKind::BackendNotification)
+        .expect("source");
+    assert_eq!(source.upstream_starts(), 0, "no listener for x");
+    assert!(hub.lifecycle.lock().await.is_empty(), "no key for x");
+    assert!(hub.store.subscriptions().is_empty(), "x's row withdrawn");
+}

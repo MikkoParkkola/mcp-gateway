@@ -112,6 +112,8 @@ impl Backend {
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),
             #[cfg(test)]
+            publish_gate: parking_lot::Mutex::new(None),
+            #[cfg(test)]
             oauth_test_seam: parking_lot::Mutex::new(None),
             instance: super::tools_nudge::next_instance(),
             nudge_feed: std::sync::OnceLock::new(),
@@ -328,10 +330,7 @@ impl Backend {
     #[cfg(test)]
     async fn hold_in_mark_window(&self) {
         let gate = self.mark_window_gate.lock().clone();
-        if let Some(gate) = gate {
-            gate.reached.notify_one();
-            gate.release.notified().await;
-        }
+        hold_at(gate).await;
     }
 
     /// The same marking for a transport built under `built_under` before it
@@ -526,6 +525,11 @@ impl Backend {
             }
             return Err(Error::BackendUnavailable(self.name.clone()));
         }
+        #[cfg(test)]
+        {
+            let gate = self.publish_gate.lock().clone();
+            hold_at(gate).await;
+        }
         *entry.listen.write() = listen;
 
         // Note: Tools are fetched lazily on first get_tools() call
@@ -581,5 +585,14 @@ pub(super) fn pre_send_start_error(backend: &str, error: Error) -> Error {
             Error::BackendUnavailable(format!("{backend}: could not start: {error}"))
         }
         other => other,
+    }
+}
+
+/// Signal `gate`'s `reached` and wait for its `release`, when a test set one.
+#[cfg(test)]
+async fn hold_at(gate: Option<Arc<super::MarkWindowGate>>) {
+    if let Some(gate) = gate {
+        gate.reached.notify_one();
+        gate.release.notified().await;
     }
 }

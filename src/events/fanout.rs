@@ -244,7 +244,10 @@ impl EventsHub {
         let tail = super::tail_policy(&self.config);
         let now = Utc::now();
         let mut all_removed = true;
-        for sub in self.store.subscriptions() {
+        let judged = self.store.subscriptions();
+        #[cfg(test)]
+        self.before_withdraw.pause_blocking();
+        for sub in judged {
             if names.contains(&sub.name)
                 && let Err(error) = self.store.remove(&sub.id, now, tail)
             {

@@ -541,3 +541,6 @@ mod hold;
 #[cfg(test)]
 #[path = "subscribe_order_tests.rs"]
 mod subscribe_order;
+
+#[path = "reconcile_table_lifecycle_tests.rs"]
+mod reconcile_table;
