@@ -134,3 +134,32 @@ fn the_earliest_delivered_sketch_is_evicted() {
         "a later one was evicted"
     );
 }
+
+/// Past the byte cap the oldest sketch goes, whichever pair holds it, and
+/// stops excusing; the rest stay. Four sketches of four pairs (so the
+/// per-pair cap never acts) in a store that fits three.
+#[test]
+fn past_the_byte_cap_the_oldest_sketch_goes() {
+    let now = Instant::now();
+    let window = Duration::from_secs(600);
+    let fps: Vec<Vec<u64>> = (0..4).map(|i| values(70 + i, 10)).collect();
+    let one = Sketch::of(&fps[0]).bytes();
+    let mut store = SketchStore::with_cap(3 * one);
+    for (i, f) in fps.iter().enumerate() {
+        let pair = (u64::try_from(i).unwrap_or(0), 9);
+        let at = now + Duration::from_secs(u64::try_from(i).unwrap_or(0));
+        store.insert(pair, Arc::new(Sketch::of(f)), at);
+    }
+    let at = now + Duration::from_secs(5);
+    assert!(
+        !store.holds((0, 9), fps[0][0], at, window),
+        "the oldest outlived the byte cap"
+    );
+    for (i, f) in fps.iter().enumerate().skip(1) {
+        let pair = (u64::try_from(i).unwrap_or(0), 9);
+        assert!(
+            store.holds(pair, f[0], at, window),
+            "sketch {i} was evicted"
+        );
+    }
+}

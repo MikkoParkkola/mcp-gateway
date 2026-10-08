@@ -87,15 +87,37 @@ type Pair = (u64, u64);
 
 /// The live sketches, by pair, with an oldest-first index for expiry and
 /// the byte cap.
-#[derive(Default)]
 pub(super) struct SketchStore {
     by_pair: std::collections::HashMap<Pair, Vec<(u64, Instant, Arc<Sketch>)>>,
     order: std::collections::BTreeMap<(Instant, u64), Pair>,
     next: u64,
     bytes: usize,
+    /// [`SKETCH_BYTES`]; smaller only in tests.
+    cap: usize,
+}
+
+impl Default for SketchStore {
+    fn default() -> Self {
+        Self {
+            by_pair: std::collections::HashMap::new(),
+            order: std::collections::BTreeMap::new(),
+            next: 0,
+            bytes: 0,
+            cap: SKETCH_BYTES,
+        }
+    }
 }
 
 impl SketchStore {
+    /// A store whose byte cap is `cap`, so a row can cross it cheaply.
+    #[cfg(test)]
+    pub(super) fn with_cap(cap: usize) -> Self {
+        Self {
+            cap,
+            ..Self::default()
+        }
+    }
+
     /// Keep `sketch` for `pair`, delivered at `at`.
     pub(super) fn insert(&mut self, pair: Pair, sketch: Arc<Sketch>, at: Instant) {
         let seq = self.next;
@@ -115,7 +137,7 @@ impl SketchStore {
             self.order.remove(&(old_at, old));
             self.bytes -= gone.bytes();
         }
-        while self.bytes > SKETCH_BYTES && self.pop_oldest().is_some() {}
+        while self.bytes > self.cap && self.pop_oldest().is_some() {}
     }
 
     /// Drop sketches older than `window` at `now`.
